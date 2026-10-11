@@ -953,6 +953,7 @@ function parseNativeChildTranscript(raw, childId, parentId, role, model, effort,
 
 const measuredLaunches = new WeakMap();
 const readerCapacities = new WeakMap();
+const readerCapacityProbes = new WeakMap();
 
 function readerSubject(manifest) {
   const canonical = value => Array.isArray(value) ? value.map(canonical) : object(value)
@@ -964,7 +965,10 @@ function readerSubject(manifest) {
 
 function readerCapacityContract(capacity, manifest) {
   const measured = readerCapacities.get(capacity);
-  if (!measured || measured.subject !== readerSubject(manifest))
+  if (!measured || measured.subject !== readerSubject(manifest)
+      || (measured.contract.schema === 'shipyard.native-reader-transport.v3'
+        && (measured.profile !== manifest.transport?.profile_sha256
+          || measured.contract.manifest_sha256 !== reviewHash(require('./model-policy-internal.cjs').stableStringify(manifest) + '\n'))))
     fail('READER_CAPACITY_UNSUPPORTED', 'reader capacity lacks original measured current-subject authority');
   readNativeParentRaw(measured.launch.session, measured.verified.native_session_evidence, measured.launch.env, measured.launch.now);
   return measured.contract;
@@ -976,6 +980,40 @@ function measureReaderCapacity(verified, prepared) {
   if (readNativeParentRaw(launch.session, verified.native_session_evidence, launch.env, launch.now) !== launch.raw)
     fail('READER_CAPACITY_UNSUPPORTED', 'original measured output changed');
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
+  if (checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
+    const candidate = checked.manifest.transport.candidate;
+    const originalRecords = launch.raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const instructions = originalRecords.flatMap(record => record.type === 'response_item' && record.payload?.role === 'developer'
+      ? (record.payload.content || []).filter(block => block.type === 'input_text' && typeof block.text === 'string'
+        && reviewHash(block.text) === candidate.instructions_sha256) : []);
+    const inputs = originalRecords.flatMap(record => record.type === 'response_item' && record.payload?.role === 'user'
+      ? (record.payload.content || []).filter(block => block.type === 'input_text' && block.text === prepared.prompt) : []);
+    if (instructions.length !== 1 || inputs.length !== 1
+        || checked.manifest.accounting.generated_instruction_bytes !== Buffer.byteLength(instructions[0].text) + 2)
+      fail('READER_CAPACITY_UNSUPPORTED', 'batch measurement lacks exact original instructions and candidate relay');
+
+    validateReviewNative(launch.raw, launch.session, { ...candidate, sandbox_mode: 'read-only', worktree: checked.manifest.snapshot.worktree });
+    const selections = verified.native_session_evidence.selections;
+    if (!selections.length || selections.some(value => value.model !== candidate.model || value.effort !== candidate.effort)
+        || checked.manifest.transport.policy_hash !== require('./model-policy.cjs').POLICY_HASH)
+      fail('READER_CAPACITY_UNSUPPORTED', 'batch candidate differs from original native selection or policy');
+    const observed = verifyCheckedFileConsumption(checked, prepared, launch.raw, verified.last_agent_message,
+      { chunk_bytes: checked.manifest.chunk_bytes, output_tokens: 10000 });
+    const contract = freeze({ schema: 'shipyard.native-reader-transport.v3',
+      profile_sha256: checked.manifest.transport.profile_sha256,
+      manifest_sha256: prepared.input_bundle.manifest_sha256, schedule_sha256: reviewHash(JSON.stringify(checked.manifest.batches)),
+      native_sha256: verified.native_session_evidence.sha256, native_session_id: launch.session,
+      native_file: originalReviewFile(launch.session, launch.env, checked.manifest.snapshot.worktree),
+      native_bytes: Buffer.byteLength(launch.raw),
+      binding_sha256: reviewHash(readerSubject(checked.manifest)), selection: selections[0], sandbox_mode: 'read-only',
+      output_tokens: 10000, largest_envelope_bytes: observed.largest_envelope_bytes,
+      largest_nested_bytes: observed.largest_nested_bytes, physical_calls: observed.physical_calls,
+      logical_ranges: observed.chunk_reads, encoded_bytes: observed.encoded_bytes, semantic_credit: false });
+    const capacity = freeze({ contract });
+    readerCapacities.set(capacity, { contract, subject: readerSubject(checked.manifest),
+      profile: checked.manifest.transport.profile_sha256, launch, verified });
+    return capacity;
+  }
   if (!checked.material.some(bytes => bytes.length >= 128 * 1024))
     fail('READER_CAPACITY_UNSUPPORTED', 'capacity requires a complete 128 KiB observed range');
   const measurement = { chunk_bytes: 128 * 1024, output_tokens: 10000 };
@@ -1066,13 +1104,19 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
 
 function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, measurement, prefix) {
   const chunkBytes = measurement?.chunk_bytes || prepared.input_bundle.chunk_bytes;
+  const v3 = checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3';
   const v2 = Boolean(measurement || prepared.input_bundle.transport);
+  if (v3 && !measurement && !prepared.input_bundle.reader_capacity)
+    fail('READER_CAPACITY_UNSUPPORTED', 'batch review requires original matching capacity');
+  let physicalCalls = 0, largestNested = 0, failedDeliveries = 0;
+  const successfulCallIds = [];
+  const successfulRangeOrdinals = [];
   let outputBytes = 0, encodedBytes = 0, nestedBytes = 0, largestEnvelope = 0, rawBytes = 0;
   if (typeof nativeRaw !== 'string' || Buffer.byteLength(nativeRaw) > 128 * 1024 * 1024)
     fail('READER_CAPACITY_UNSUPPORTED', 'native reader transcript exceeds its bounded output budget');
   const records = nativeRaw.split('\n').filter(Boolean).map(line => JSON.parse(line));
   if (prepared.input_bundle.transport && !measurement) {
-    const selection = prepared.input_bundle.transport.selection;
+    const selection = v3 ? checked.manifest.transport.candidate : prepared.input_bundle.transport.selection;
     if (!object(selection) || records.some(record => record.type === 'turn_context'
         && (record.payload?.model !== selection.model || record.payload?.effort !== selection.effort))
         || records.some(record => record.type === 'session_meta' && record.payload?.model_provider !== 'openai'))
@@ -1098,11 +1142,23 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
     bytes: checked.manifest_bytes },
     ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
-  const reads = expected.flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / chunkBytes) }, (_, index) => ({
+  let reads = expected.flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / chunkBytes) }, (_, index) => ({
     command: 'dd if=' + quote(asset.path) + ' bs=' + chunkBytes
       + ' skip=' + index + ' count=1 2>/dev/null | base64',
     bytes: asset.bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes),
   })));
+  if (v3) {
+    const collector = require('./codex-arch-review-context.cjs');
+    reads = checked.manifest.batches.flatMap(batch => {
+      const frames = collector.batchFrames(checked.manifest, checked.manifest_bytes, checked.material, batch.index);
+      const command = collector.batchCommand(prepared.input_bundle, batch.index);
+      const output = collector.batchOutput(checked.manifest, checked.manifest_bytes, checked.material, batch.index);
+      return frames.map((frame, frame_index) => ({ command, bytes: Buffer.from(frame.base64, 'base64'),
+        output, frames, frame_index, batch_index: batch.index, frame_count: batch.count, batch_start: batch.start }));
+    });
+    const start = prefix?.start || 0;
+    if (reads[start] && reads[start].frame_index !== 0) fail('REVIEW_RESTART_REQUIRED', 'resume is inside an atomic batch');
+  }
   let at = prefix?.start || 0;
   const completedRanges = [];
   const lines = nativeRaw.split('\n').filter(Boolean);
@@ -1133,8 +1189,14 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
       let args;
       if (custom) args = customArguments(item);
       else { try { args = JSON.parse(item.arguments); } catch { continue; } }
-      if (!object(args)) continue;
-      if (typeof args.cmd !== 'string' || !expected.some(asset => args.cmd.startsWith('dd if=' + quote(asset.path) + ' '))) continue;
+      if (!object(args)) {
+        if (v3 && custom && item.input?.includes('--read-batch') && !prefix)
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'batch is not one exact physical wrapper');
+        continue;
+      }
+      if (typeof args.cmd !== 'string' || !(v3
+        ? args.cmd.includes('--read-batch')
+        : expected.some(asset => args.cmd.startsWith('dd if=' + quote(asset.path) + ' ')))) continue;
       if ((prefix || item.internal_chat_message_metadata_passthrough?.turn_id !== undefined)
           && item.internal_chat_message_metadata_passthrough?.turn_id !== records[starts[0]].payload.turn_id)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native read belongs to a foreign task');
@@ -1159,52 +1221,82 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
       const read = pending.get(item.call_id);
       if (read.custom !== (item.type === 'custom_tool_call_output'))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output has a foreign transport');
-      const envelopeBytes = Buffer.byteLength(JSON.stringify(item.output));
-      largestEnvelope = Math.max(largestEnvelope, envelopeBytes);
-      if (envelopeBytes > 252 * 1024) fail('READER_CAPACITY_UNSUPPORTED', 'native reader envelope exceeds its bound');
-      if (!measurement && prepared.input_bundle.transport && envelopeBytes > prepared.input_bundle.transport.output_budget_bytes)
-        fail('READER_CAPACITY_UNSUPPORTED', 'reader exceeded its measured output envelope');
-      outputBytes += envelopeBytes;
-      if (outputBytes > 128 * 1024 * 1024) fail('READER_CAPACITY_UNSUPPORTED', 'reader output budget exceeded');
-      let output = item.output;
-      if (read.custom) {
-        if (!Array.isArray(output) || output.some(block => !['text', 'input_text'].includes(block?.type) || typeof block.text !== 'string'))
-          fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output is not the original text response');
-        if (output.length !== 2 || !/^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(output[0].text))
-          fail('RUNTIME_EVIDENCE_MISMATCH', 'native read output has surplus or unsupported text');
-        const results = output.slice(1).flatMap(block => {
-          try { const result = JSON.parse(block.text); return object(result) && typeof result.output === 'string' ? [result] : []; }
-          catch { return []; }
-        });
-        if (results.length !== 1 || results[0].exit_code !== 0 || results[0].session_id !== undefined)
-          fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
-        nestedBytes += Buffer.byteLength(output[1].text);
-        output = results[0].output;
-      } else {
-        let parsed; try { parsed = JSON.parse(output); } catch {}
-        if (!object(parsed)) fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read lacks a successful output envelope');
-        if (object(parsed)) {
-          if (parsed.exit_code !== 0 || parsed.session_id !== undefined)
+      try {
+        const envelopeBytes = Buffer.byteLength(JSON.stringify(item.output));
+        largestEnvelope = Math.max(largestEnvelope, envelopeBytes);
+        if (envelopeBytes > 252 * 1024) fail('READER_CAPACITY_UNSUPPORTED', 'native reader envelope exceeds its bound');
+        if (!measurement && prepared.input_bundle.transport && envelopeBytes > prepared.input_bundle.transport.output_budget_bytes)
+          fail('READER_CAPACITY_UNSUPPORTED', 'reader exceeded its measured output envelope');
+        outputBytes += envelopeBytes;
+        if (outputBytes > 128 * 1024 * 1024) fail('READER_CAPACITY_UNSUPPORTED', 'reader output budget exceeded');
+        let output = item.output;
+        if (read.custom) {
+          if (!Array.isArray(output) || output.some(block => !['text', 'input_text'].includes(block?.type) || typeof block.text !== 'string'))
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output is not the original text response');
+          if (output.length !== 2 || !/^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(output[0].text))
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'native read output has surplus or unsupported text');
+          const results = output.slice(1).flatMap(block => {
+            try { const result = JSON.parse(block.text); return object(result) && typeof result.output === 'string' ? [result] : []; }
+            catch { return []; }
+          });
+          if (results.length !== 1 || results[0].exit_code !== 0 || results[0].session_id !== undefined)
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
-          nestedBytes += Buffer.byteLength(output);
-          output = parsed.output ?? parsed.stdout;
+          nestedBytes += Buffer.byteLength(output[1].text);
+          largestNested = Math.max(largestNested, Buffer.byteLength(output[1].text));
+          if (v3 && (Buffer.byteLength(output[1].text) > 252 * 1024
+              || /(?:truncated|original token count|original_token_count)/i.test(output[0].text)
+              || results[0].original_token_count !== undefined || results[0].truncated === true))
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'batch nested envelope is incomplete');
+          output = results[0].output;
+        } else {
+          let parsed; try { parsed = JSON.parse(output); } catch {}
+          if (!object(parsed)) fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read lacks a successful output envelope');
+          if (object(parsed)) {
+            if (parsed.exit_code !== 0 || parsed.session_id !== undefined)
+              fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
+            nestedBytes += Buffer.byteLength(output);
+            output = parsed.output ?? parsed.stdout;
+          }
         }
+        const encoded = read.bytes.toString('base64');
+        if (v3) {
+          if (output !== read.output) fail('RUNTIME_EVIDENCE_MISMATCH', 'batch header, ordered frames or terminal differs from complete source');
+          if (!measurement && (envelopeBytes > prepared.input_bundle.reader_capacity.largest_envelope_bytes
+              || Buffer.byteLength(item.output[1].text) > prepared.input_bundle.reader_capacity.largest_nested_bytes))
+            fail('READER_CAPACITY_UNSUPPORTED', 'batch exceeded original measured envelopes');
+          encodedBytes += read.frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.base64), 0);
+          rawBytes += read.frames.reduce((sum, frame) => sum + frame.bytes, 0);
+        } else {
+          if (typeof output !== 'string' || (v2 && !/^[A-Za-z0-9+/=\r\n]*$/.test(output))
+              || output.replace(v2 ? /[\r\n]/g : /\s/g, '') !== encoded)
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'original native file read is incomplete or truncated');
+          encodedBytes += Buffer.byteLength(output);
+          rawBytes += read.bytes.length;
+        }
+        physicalCalls++; successfulCallIds.push(item.call_id);
+        credited.add(item.call_id);
+        pending.delete(item.call_id);
+        const count = v3 ? read.frame_count : 1;
+        for (let frameIndex = 0; frameIndex < count; frameIndex++) {
+          const range = reads[at + frameIndex];
+          successfulRangeOrdinals.push(at + frameIndex);
+          if (prefix) completedRanges.push({ ordinal: at + frameIndex, command: range.command,
+            sha256: crypto.createHash('sha256').update(range.bytes).digest('hex'), bytes: range.bytes.length,
+            call_id: item.call_id, native_bytes: nativeBytes, native_sha256: prefixHasher.copy().digest('hex'),
+            ...(v3 ? { batch_index: read.batch_index, batch_count: checked.manifest.batches.length, frame_index: frameIndex, frame_count: count,
+              batch_start: read.batch_start, profile_sha256: checked.manifest.transport.profile_sha256 } : {}) });
+        }
+        at += count;
+      } catch (error) {
+        if (!v3 || !prefix || !['RUNTIME_EVIDENCE_MISMATCH', 'READER_CAPACITY_UNSUPPORTED'].includes(error.code)) throw error;
+        pending.delete(item.call_id); credited.add(item.call_id); failedDeliveries++;
       }
-      const encoded = read.bytes.toString('base64');
-      if (typeof output !== 'string' || (v2 && !/^[A-Za-z0-9+/=\r\n]*$/.test(output))
-          || output.replace(v2 ? /[\r\n]/g : /\s/g, '') !== encoded)
-        fail('RUNTIME_EVIDENCE_MISMATCH', 'original native file read is incomplete or truncated');
-      encodedBytes += Buffer.byteLength(output);
-      rawBytes += read.bytes.length;
-      credited.add(item.call_id);
-      pending.delete(item.call_id); at++;
-      if (prefix) completedRanges.push({ ordinal: at - 1, command: read.command,
-        sha256: crypto.createHash('sha256').update(read.bytes).digest('hex'), bytes: read.bytes.length,
-        call_id: item.call_id, native_bytes: nativeBytes, native_sha256: prefixHasher.copy().digest('hex') });
     }
   }
   if (!prefix && (at !== reads.length || pending.size)) fail('RUNTIME_EVIDENCE_MISMATCH', 'complete original native file consumption is unproven');
-  return { ...checked, chunk_reads: at, output_bytes: outputBytes, encoded_bytes: encodedBytes, largest_envelope_bytes: largestEnvelope,
+  return { ...checked, chunk_reads: at,
+    ...(v3 ? { physical_calls: physicalCalls, failed_deliveries: failedDeliveries, largest_nested_bytes: largestNested,
+      successful_call_ids: successfulCallIds, successful_range_ordinals: successfulRangeOrdinals } : {}), output_bytes: outputBytes, encoded_bytes: encodedBytes, largest_envelope_bytes: largestEnvelope,
     ...(prefix ? { completed_ranges: completedRanges, pending_reads: pending.size } : {}),
     observed_raw_bytes: rawBytes,
     transport_accounting: { raw_bytes: expected.reduce((sum, asset) => sum + asset.bytes.length, 0),
@@ -1291,6 +1383,30 @@ function validateReviewNative(raw, sessionId, selection) {
   return { parsed, records };
 }
 
+function verifyBatchCapacityReference(prepared, checked, raw) {
+  if (checked.manifest.transport?.schema !== 'shipyard.native-reader-transport.v3') return;
+  const capacity = prepared.input_bundle.reader_capacity;
+  if (capacity?.schema !== 'shipyard.native-reader-transport.v3'
+      || capacity.profile_sha256 !== checked.manifest.transport.profile_sha256
+      || capacity.manifest_sha256 !== prepared.input_bundle.manifest_sha256 || capacity.output_tokens !== 10000
+      || capacity.binding_sha256 !== reviewHash(readerSubject(checked.manifest))
+      || capacity.schedule_sha256 !== reviewHash(JSON.stringify(checked.manifest.batches))
+      || !Number.isSafeInteger(capacity.native_bytes) || capacity.native_bytes < 1 || capacity.native_bytes > NATIVE_SESSION_MAX_BYTES)
+    fail('READER_CAPACITY_UNSUPPORTED', 'protected capacity differs from this exact finite input');
+  const original = raw || readReviewNativeFile(capacity.native_file, checked.manifest.snapshot.worktree);
+  if (Buffer.byteLength(original) !== capacity.native_bytes || reviewHash(original) !== capacity.native_sha256)
+    fail('READER_CAPACITY_UNSUPPORTED', 'original measured batch evidence changed');
+  validateReviewNative(original, capacity.native_session_id, { ...capacity.selection, sandbox_mode: capacity.sandbox_mode, worktree: checked.manifest.snapshot.worktree });
+  const records = original.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const completions = records.filter(record => record.type === 'event_msg' && record.payload?.type === 'task_complete');
+  if (completions.length !== 1) fail('READER_CAPACITY_UNSUPPORTED', 'capacity no longer has its original completed output');
+  const measured = verifyCheckedFileConsumption(checked, prepared, original, completions[0].payload.last_agent_message,
+    { chunk_bytes: checked.manifest.chunk_bytes, output_tokens: 10000 });
+  if (measured.largest_envelope_bytes !== capacity.largest_envelope_bytes || measured.largest_nested_bytes !== capacity.largest_nested_bytes
+      || measured.physical_calls !== capacity.physical_calls || measured.chunk_reads !== capacity.logical_ranges)
+    fail('READER_CAPACITY_UNSUPPORTED', 'protected capacity output bounds changed');
+}
+
 function verifyProtectedReviewPrefix(progress, prepared, raw, material) {
   const parentContext = progress.original_launch.parent_context;
   if (parentContext) {
@@ -1325,6 +1441,11 @@ function reviewOriginInactive(progress) {
 
 function readSchedule(prepared) {
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
+  if (checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
+    const collector = require('./codex-arch-review-context.cjs');
+    return checked.manifest.batches.flatMap(batch => Array.from({ length: batch.count }, () => ({
+      command: collector.batchCommand(prepared.input_bundle, batch.index) })));
+  }
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
   return [{ path: prepared.input_bundle.manifest_path, bytes: checked.manifest_bytes },
     ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))]
@@ -1364,6 +1485,15 @@ function verifyResumedReview(progress, prepared, nativeRaw, resultText, material
   if (bytes.length <= resume.native_bytes || reviewHash(bytes.subarray(0, resume.native_bytes)) !== resume.native_sha256)
     fail('REVIEW_RESTART_REQUIRED', 'original conversation differs from the protected pre-resume context');
   const newRaw = bytes.subarray(resume.native_bytes).toString('utf8');
+  if (prepared.input_bundle.transport?.schema === 'shipyard.native-reader-transport.v3') {
+    const priorCalls = new Set(bytes.subarray(0, resume.native_bytes).toString('utf8').split('\n').filter(Boolean).map(JSON.parse)
+      .filter(record => record.type === 'response_item' && batchPhysicalArguments(record.payload || {}).some(args => args.cmd?.includes('--read-batch')))
+      .map(record => record.payload.call_id));
+    if (newRaw.split('\n').filter(Boolean).map(JSON.parse).some(record => record.type === 'response_item'
+        && batchPhysicalArguments(record.payload || {}).some(args => args.cmd?.includes('--read-batch')) && priorCalls.has(record.payload.call_id)))
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'fresh batch reuses an original physical call identity');
+  }
+
   const turn = freshReviewTurn(newRaw, resultText);
   if (turn === progress.turn_id) fail('RUNTIME_EVIDENCE_MISMATCH', 'historical turn cannot become a fresh judgment');
   const contexts = newRaw.split('\n').filter(Boolean).map(line => JSON.parse(line))
@@ -1424,6 +1554,11 @@ function verifyCompletedReviewConsumption(selectors) {
     retained.push({ file, raw, stat });
     return raw;
   };
+  if (bundle.transport?.schema === 'shipyard.native-reader-transport.v3') {
+    const capacityRaw = read(bundle.reader_capacity?.native_file, { bytes: bundle.reader_capacity?.native_bytes,
+      sha256: bundle.reader_capacity?.native_sha256 });
+    verifyBatchCapacityReference(prepared, checked, capacityRaw);
+  }
   const raw = read(progress.native_file);
   if (Buffer.byteLength(raw) !== evidence.native_session_evidence?.bytes
       || evidence.native_session_evidence?.file !== path.basename(progress.native_file)
@@ -1459,12 +1594,32 @@ function verifyCompletedReviewConsumption(selectors) {
   const originalObserved = verifyCheckedFileConsumption(checked, prepared, originalRaw, null, null, { turn_id: progress.turn_id });
   if (originalObserved.chunk_reads < progress.completed_ranges)
     fail('REVIEW_RESTART_REQUIRED', 'original attempt lost its already protected physical prefix');
-  const coverage = (value, reads) => ({ successful_reads: reads, raw_bytes: value.observed_raw_bytes,
+  const v3 = checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3';
+  if (v3) {
+    let final; try { final = JSON.parse(finals[0].item.text); } catch {}
+    const finalEcho = key => final?.[key] ?? new RegExp('(?:^|\\n)' + key + '=([^\\n]+)(?:\\n|$)').exec(finals[0].item.text)?.[1];
+    if (evidence.input_consumption?.schema !== 'shipyard.native-file-consumption.v3'
+        || evidence.input_consumption.physical_calls !== checked.manifest.batches.length
+        || evidence.input_consumption.logical_ranges !== checked.chunk_reads
+        || evidence.input_consumption.profile_sha256 !== checked.manifest.transport.profile_sha256
+        || String(finalEcho('input_batch_reads')) !== String(checked.manifest.batches.length)
+        || finalEcho('input_profile_sha256') !== checked.manifest.transport.profile_sha256)
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'completed physical accounting or fresh profile echoes changed');
+  }
+  const coverage = (value, reads) => ({ successful_reads: reads,
+    ...(v3 ? { logical_ranges: reads, successful_physical_calls: value.physical_calls,
+      call_ids: value.successful_call_ids, range_ordinals: value.successful_range_ordinals } : {}), raw_bytes: value.observed_raw_bytes,
     encoded_bytes: value.encoded_bytes, nested_bytes: value.transport_accounting.nested_output_bytes,
     outer_bytes: value.output_bytes });
   const inherited = coverage(prefix, progress.completed_ranges);
   const newly = coverage(suffix, checked.chunk_reads - progress.completed_ranges);
-  const total = Object.fromEntries(Object.keys(inherited).map(key => [key, inherited[key] + newly[key]]));
+  const total = Object.fromEntries(Object.keys(inherited).map(key => [key,
+    Array.isArray(inherited[key]) ? [...inherited[key], ...newly[key]] : inherited[key] + newly[key]]));
+  if (v3 && (new Set(total.call_ids).size !== total.call_ids.length
+      || new Set(total.range_ordinals).size !== checked.chunk_reads
+      || total.range_ordinals.some((ordinal, index) => ordinal !== index)
+      || total.successful_physical_calls !== checked.manifest.batches.length))
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'completed batches and logical coverage disagree');
   const attempts = [completedReviewAttempt(originalRaw, originalCli, progress.identity.dispatch_id,
     progress.session_id, progress.turn_id, checked, bundle, 'interrupted', progress.parent_session_id || progress.session_id),
   completedReviewAttempt(freshRaw, cli, evidence.dispatch_id, progress.session_id, suffix.turn_id, checked, bundle, 'completed')];
@@ -1485,7 +1640,7 @@ function verifyCompletedReviewConsumption(selectors) {
   if (canonical(completedReviewIdentity(rechecked, bundle)) !== canonical(identity)
       || canonical(authority.authenticateCompletedReviewReferences(selectors)) !== canonical(authenticated))
     fail('REVIEW_RESTART_REQUIRED', 'protected references changed during completed accounting');
-  return freeze({ schema: 'shipyard.completed-review-consumption.v1', identity,
+  return freeze({ schema: v3 ? 'shipyard.completed-review-consumption.v3' : 'shipyard.completed-review-consumption.v1', identity,
     evidence_pins: { progress: selectors.progress, dispatch_id: evidence.dispatch_id,
       receipt_store: fs.realpathSync(selectors.receipt_store),
       receipt_reference: 'record-' + reviewHash(evidence.dispatch_id) + '.json', native_file: progress.native_file,
@@ -1493,20 +1648,59 @@ function verifyCompletedReviewConsumption(selectors) {
       receipt_sha256: reviewHash(canonical(authenticated.record)), completed_evidence_sha256: progress.state.resume.evidence_sha256,
       manifest_sha256: bundle.manifest_sha256, native_session_sha256: reviewHash(raw),
       original_transcript: originalCliPin, completed_transcript: evidence.transcript },
-    coverage: { prefix: inherited, new: newly, total }, scheduled_reads: checked.chunk_reads, attempts,
+    coverage: { prefix: inherited, new: newly, total }, scheduled_reads: checked.chunk_reads,
+    ...(v3 ? { scheduled_physical_calls: checked.manifest.batches.length, profile_sha256: checked.manifest.transport.profile_sha256 } : {}), attempts,
     semantic_credit: false, current_verdict_authority: false });
 }
 
+function batchPhysicalArguments(item) {
+  if (item.type === 'function_call' && /(?:^|[._])exec_command$/.test(item.name || '')) {
+    try { return [JSON.parse(item.arguments)]; } catch { return []; }
+  }
+  if (item.type !== 'custom_tool_call' || !['exec', 'functions.exec'].includes(item.name)) return [];
+  const argumentsList = [];
+  const operations = /tools\.exec_command\s*\(\s*(\{(?:[^"{}]|"(?:\\.|[^"\\])*")*\})\s*\)/g;
+  for (const match of (item.input || '').matchAll(operations)) {
+    try { argumentsList.push(JSON.parse(match[1])); } catch { return []; }
+  }
+  return argumentsList;
+}
+
 function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked, bundle, status, cliSessionId = sessionId) {
+  const v3 = checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3';
+  const batchReads = v3 ? checked.manifest.batches.map(batch => ({
+    command: require('./codex-arch-review-context.cjs').batchCommand(bundle, batch.index),
+    output: require('./codex-arch-review-context.cjs').batchOutput(checked.manifest, checked.manifest_bytes, checked.material, batch.index),
+    frames: require('./codex-arch-review-context.cjs').batchFrames(checked.manifest, checked.manifest_bytes, checked.material, batch.index),
+  })) : [];
+  let attemptRawBytes = 0, attemptEncodedBytes = 0, attemptNestedBytes = 0, attemptOuterBytes = 0, nestedUnavailable = false;
   const records = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
   const assets = [bundle.manifest_path, ...checked.manifest.assets.map(asset => asset.path)];
   const calls = new Map(), outputs = new Set(), commands = new Map();
-  let successful = 0, failed = 0;
+  let successful = 0, failed = 0, physicalOperations = 0;
   for (const record of records) {
     const item = record.type === 'response_item' ? record.payload : null;
     if (!item) continue;
-    if (item.type === 'custom_tool_call') {
-      const match = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([\s\S]+)\)\s*\)\s*;?\s*$/.exec(item.input || '');
+    if (v3 && ['custom_tool_call', 'function_call'].includes(item.type)) {
+      const operations = batchPhysicalArguments(item).filter(args => args?.cmd?.includes('--read-batch'));
+      if (!operations.length) continue;
+      if (item.internal_chat_message_metadata_passthrough?.turn_id !== turnId || calls.has(item.call_id)
+          || typeof item.call_id !== 'string' || !item.call_id)
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt call has a foreign or duplicate identity');
+      for (const args of operations) {
+        if (!batchReads.some(read => read.command === args.cmd) || args.max_output_tokens !== 10000
+            || Object.keys(args).some(key => !['cmd', 'max_output_tokens'].includes(key)))
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt changed its finite physical command');
+        commands.set(args.cmd, (commands.get(args.cmd) || 0) + 1);
+      }
+      physicalOperations += operations.length;
+      const single = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([^]+)\)\s*\)\s*;?\s*$/.exec(item.input || '');
+      let singleArgs; try { singleArgs = single && JSON.parse(single[1]); } catch {}
+      const exact = item.type === 'custom_tool_call' && ['exec', 'functions.exec'].includes(item.name)
+        && object(singleArgs) && operations.length === 1 && singleArgs.cmd === operations[0].cmd;
+      calls.set(item.call_id, { operations, exact });
+    } else if (!v3 && item.type === 'custom_tool_call') {
+      const match = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([^]+)\)\s*\)\s*;?\s*$/.exec(item.input || '');
       let args; try { args = match && JSON.parse(match[1]); } catch {}
       if (!args || !assets.some(file => args.cmd?.startsWith("dd if='" + file.replaceAll("'", "'\\''") + "' "))) continue;
       if (item.internal_chat_message_metadata_passthrough?.turn_id !== turnId || calls.has(item.call_id))
@@ -1514,17 +1708,51 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
       calls.set(item.call_id, args.cmd);
       commands.set(args.cmd, (commands.get(args.cmd) || 0) + 1);
     }
-    if (item.type === 'custom_tool_call_output' && calls.has(item.call_id)) {
+    if ((item.type === 'custom_tool_call_output' || (v3 && item.type === 'function_call_output')) && calls.has(item.call_id)) {
       if (outputs.has(item.call_id) || item.internal_chat_message_metadata_passthrough?.turn_id !== turnId)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt output has a foreign or repeated identity');
       outputs.add(item.call_id);
-      if (!Array.isArray(item.output) || item.output.length !== 2) fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt output is incomplete');
-      if (Buffer.byteLength(JSON.stringify(item.output)) > 252 * 1024)
-        fail('READER_CAPACITY_UNSUPPORTED', 'attempt output exceeds its original envelope bound');
-      let output; try { output = JSON.parse(item.output[1].text); } catch {}
-      if (!object(output) || !Number.isSafeInteger(output.exit_code) || output.session_id !== undefined)
-        fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt lacks an observed terminal call outcome');
-      if (output.exit_code === 0) successful++; else failed++;
+      if (v3) {
+        const outerBytes = Buffer.byteLength(JSON.stringify(item.output));
+        if (outerBytes > 252 * 1024) fail('READER_CAPACITY_UNSUPPORTED', 'attempt exceeds bounded original outer envelope');
+        attemptOuterBytes += outerBytes;
+        const call = calls.get(item.call_id);
+        const textOuter = Array.isArray(item.output)
+          && item.output.every(block => ['text', 'input_text'].includes(block?.type) && typeof block.text === 'string')
+          && /^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(item.output[0]?.text || '');
+        const completeOuter = textOuter && item.output.length === 2;
+        const associated = textOuter && item.output.length === call.operations.length + 1
+          ? item.output.slice(1).map(block => block.text)
+          : item.type === 'function_call_output' && call.operations.length === 1 && typeof item.output === 'string'
+          ? [item.output] : [];
+        const nestedResults = associated.map(value => {
+          attemptNestedBytes += Buffer.byteLength(value);
+          try { return JSON.parse(value); } catch { return null; }
+        });
+        if (!associated.length) nestedUnavailable = true;
+        const nested = nestedResults[0];
+        const expected = batchReads.find(read => read.command === call.operations[0].cmd);
+        if (call.exact && completeOuter && nested?.exit_code === 0 && nested.session_id === undefined
+            && nested.original_token_count === undefined && nested.truncated !== true
+            && outerBytes <= bundle.reader_capacity.largest_envelope_bytes
+            && Buffer.byteLength(item.output[1].text) <= Math.min(252 * 1024, bundle.reader_capacity.largest_nested_bytes)
+            && nested.output === expected.output) {
+          successful++;
+          attemptRawBytes += expected.frames.reduce((sum, frame) => sum + frame.bytes, 0);
+          attemptEncodedBytes += expected.frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.base64), 0);
+        } else {
+          // @invariant: Grouped outputs earn no credit; observed pending operations remain separate from failed delivery.
+          failed += call.operations.length - nestedResults.filter(result => object(result) && result.session_id !== undefined).length;
+        }
+      } else {
+        if (!Array.isArray(item.output) || item.output.length !== 2) fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt output is incomplete');
+        if (Buffer.byteLength(JSON.stringify(item.output)) > 252 * 1024)
+          fail('READER_CAPACITY_UNSUPPORTED', 'attempt output exceeds its original envelope bound');
+        let output; try { output = JSON.parse(item.output[1].text); } catch {}
+        if (!object(output) || !Number.isSafeInteger(output.exit_code) || output.session_id !== undefined)
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt lacks an observed terminal call outcome');
+        if (output.exit_code === 0) successful++; else failed++;
+      }
     }
   }
   const cliRecords = cli.split('\n').filter(Boolean).map(line => JSON.parse(line));
@@ -1535,7 +1763,7 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
   const usage = cliRecords.filter(record => record.type === 'turn.completed');
   const unavailable = {};
   const tokens = {};
-  for (const key of ['input_tokens', 'cached_input_tokens', 'output_tokens']) {
+  for (const key of ['input_tokens', 'cached_input_tokens', 'output_tokens', ...(v3 ? ['reasoning_output_tokens'] : [])]) {
     const observed = usage.length === 1 ? usage[0].usage?.[key] : undefined;
     tokens[key] = Number.isSafeInteger(observed) && observed >= 0 ? observed : null;
     if (tokens[key] === null) unavailable['tokens.' + key] = 'matching original CLI has no single bounded usage observation';
@@ -1546,12 +1774,16 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
   const elapsed = timestamps.length > 1 && timestamps.every(Number.isFinite)
     && timestamps.every((value, index) => !index || value >= timestamps[index - 1])
     ? timestamps.at(-1) - timestamps[0] : null;
+  if (nestedUnavailable) unavailable.observed_nested_bytes = 'original outer response does not expose one complete nested envelope';
   if (elapsed === null) unavailable.elapsed_ms = 'matching native attempt lacks complete monotonic timestamps';
   return { dispatch_id: dispatchId, session_id: sessionId, cli_session_id: cliSessionId, turn_id: turnId, status,
-    successful_calls: successful, failed_calls: failed, pending_calls: calls.size - outputs.size,
+    successful_calls: successful, failed_calls: failed,
+    pending_calls: v3 ? physicalOperations - successful - failed : calls.size - outputs.size,
     retries: [...commands.values()].reduce((sum, count) => sum + count - 1, 0), elapsed_ms: elapsed,
     read_commands: [...commands.keys()],
     call_ids: [...calls.keys()],
+    ...(v3 ? { delivered_raw_bytes: attemptRawBytes, delivered_base64_bytes: attemptEncodedBytes,
+      observed_nested_bytes: nestedUnavailable ? null : attemptNestedBytes, observed_outer_bytes: attemptOuterBytes } : {}),
     tokens, unavailable_reasons: unavailable };
 }
 
@@ -1778,6 +2010,10 @@ function createCodexCliLauncher(options = {}) {
     const typedRole = launchOptions.gsd_role;
     const agent = typedRole ? installedGsdAgent(typedRole, environment) : null;
     const fileInput = launchOptions.input_prepared;
+    const capacityProbe = readerCapacityProbes.get(launchOptions.reader_capacity_probe);
+    if (launchOptions.reader_capacity_probe && (!capacityProbe || capacityProbe !== fileInput || typedRole
+        || launchOptions.review_progress || launchOptions.resume_review))
+      fail('READER_CAPACITY_UNSUPPORTED', 'capacity probe lacks original host candidate custody');
     const resumeReview = launchOptions.resume_review ? reviewResumptions.get(launchOptions.resume_review) : null;
     if (launchOptions.resume_review && !resumeReview) fail('REVIEW_PROGRESS_INVALID', 'serialized continuation has no host claim');
     const fileTransport = launchOptions.input_transport !== undefined || launchOptions.input_bundle !== undefined || fileInput !== undefined;
@@ -1789,6 +2025,13 @@ function createCodexCliLauncher(options = {}) {
       const normalizeRelay = value => value.replace(/launch_digest=[a-f0-9]{64}/g, 'launch_digest=' + '0'.repeat(64));
       if (typeof prompt !== 'string' || normalizeRelay(prompt) !== normalizeRelay(resumeReview ? resumeReview.prompt : fileInput.prompt))
         fail('INVALID_INPUT', 'native relay differs from private prepared input');
+      if (!capacityProbe) collector.requireReaderBatchCapacity(fileInput);
+      if (fileInput.manifest.transport?.schema === 'shipyard.native-reader-transport.v3'
+          && (fileInput.manifest.transport.candidate.instructions_sha256 !== reviewHash(agent ? agent.instructions
+            : resumeReview?.progress.original_launch.agent
+            ? installedGsdAgent(resumeReview.progress.original_launch.agent.role, environment).instructions : generatedInstructions(content))
+            || fileInput.manifest.transport.candidate.model !== model || fileInput.manifest.transport.candidate.effort !== effort))
+        fail('READER_CAPACITY_UNSUPPORTED', 'review changed its measured instructions or selection');
       const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: resumeReview ? resumeReview.progress.identity.dispatch_id : launchOptions.dispatch_id,
         run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase } });
       if (checked.manifest.snapshot.worktree !== fs.realpathSync(scope.worktree))
@@ -1876,7 +2119,7 @@ function createCodexCliLauncher(options = {}) {
       applied_model: model, applied_effort: effort,
       observed_model: model, observed_effort: effort,
     });
-    const observeReview = fileTransport && !resumeReview && (launchOptions.review_progress === true
+    const observeReview = fileTransport && !resumeReview && !capacityProbe && (launchOptions.review_progress === true
       || (fileInput.manifest.binding?.ticket_set && fileInput.manifest.binding?.merge_base))
       ? createReviewObserver(fileInput, { model, effort, sandbox_mode: sandbox,
         agent_file: agent?.file || launchOptions.agent_file || null,
@@ -2008,8 +2251,8 @@ function createCodexCliLauncher(options = {}) {
     observe();
     const rawStdout = Buffer.concat(stdout).toString('utf8');
     const rawStderr = Buffer.concat(stderr).toString('utf8');
-    const transcriptScope = resumeReview || observeReview ? { ...scope, run_id: scope.run_id + '-' + launchOptions.dispatch_id } : scope;
-    if ((observeReview || resumeReview) && announcedSessionId) {
+    const transcriptScope = resumeReview || observeReview || capacityProbe ? { ...scope, run_id: scope.run_id + '-' + launchOptions.dispatch_id } : scope;
+    if ((observeReview || resumeReview || capacityProbe) && announcedSessionId) {
       const historical = writeTranscript(transcriptDir, transcriptScope, announcedSessionId, rawStdout);
       if (observeReview) observeReview.finish(exit, historical);
     }
@@ -2064,18 +2307,23 @@ function createCodexCliLauncher(options = {}) {
           ? readReviewNativeFile(originalReviewFile(verified.native_child_evidence.session_id, env, scope.worktree), scope.worktree)
           : readNativeParentRaw(parsed.session_id, nativeEvidence, env);
         const consumed = resumedConsumption || verifyFileConsumption(fileInput, semanticRaw, launchOptions.dispatch_id,
-          agent ? verified.last_agent_message : resultText);
+          agent ? verified.last_agent_message : resultText,
+          capacityProbe ? { chunk_bytes: fileInput.manifest.chunk_bytes, output_tokens: 10000 } : null);
         let result;
         try { result = JSON.parse(resultText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
         for (const [key, expected] of Object.entries({ input_manifest_sha256: fileInput.input_bundle.manifest_sha256,
           input_material_bytes: fileInput.input_bundle.total_bytes, input_asset_count: fileInput.input_bundle.asset_count,
-          input_chunk_reads: consumed.chunk_reads })) {
+          input_chunk_reads: consumed.chunk_reads,
+          ...(fileInput.manifest.transport?.schema === 'shipyard.native-reader-transport.v3' ? {
+            input_batch_reads: fileInput.manifest.batches.length,
+            input_profile_sha256: fileInput.manifest.transport.profile_sha256 } : {}) })) {
           const value = result?.[key] ?? new RegExp('(?:^|\\n)' + key + '=([^\\n]+)(?:\\n|$)').exec(resultText)?.[1];
           if (String(value) !== String(expected)) fail('RUNTIME_EVIDENCE_MISMATCH', 'original native result has a wrong file input identity echo');
         }
       }
 
 
+      if (capacityProbe) return measureReaderCapacity(verified, fileInput);
       const selection = observedSelection(parsed, model, effort, {
         model: args[args.indexOf('--model') + 1],
         effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
@@ -2129,7 +2377,11 @@ function createCodexCliLauncher(options = {}) {
         ...(fileTransport ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
           input_accounting: fileInput.manifest.accounting,
           input_consumption: { native_session_sha256: nativeEvidence.sha256,
-            manifest_sha256: fileInput.input_bundle.manifest_sha256, chunk_reads: require('./codex-arch-review-context.cjs').verifyFileInput(fileInput).chunk_reads } } : {}),
+            manifest_sha256: fileInput.input_bundle.manifest_sha256,
+            ...(fileInput.manifest.transport?.schema === 'shipyard.native-reader-transport.v3' ? {
+              schema: 'shipyard.native-file-consumption.v3', physical_calls: fileInput.manifest.batches.length,
+              logical_ranges: fileInput.manifest.ranges.length, profile_sha256: fileInput.manifest.transport.profile_sha256 } : {}),
+            chunk_reads: require('./codex-arch-review-context.cjs').verifyFileInput(fileInput).chunk_reads } } : {}),
         stream_evidence: {
           format: STREAM_FORMAT,
           records: parsed.records.length,
@@ -2352,7 +2604,9 @@ function createCodexRuntimeHost(options = {}) {
       + 'Resume at the following exact command, then continue every remaining ordered manifest/asset range under the original reader contract:\n'
       + (remaining[0]?.command || 'All required material is already authenticated; issue a fresh current judgment.') + '\n'
       + 'Use the original final judgment contract and identity echoes, with total input_chunk_reads=' + readSchedule(prepared).length + '.\n'
-      + 'INPUT_MANIFEST_SHA256=' + prepared.input_bundle.manifest_sha256;
+      + 'INPUT_MANIFEST_SHA256=' + prepared.input_bundle.manifest_sha256
+      + (prepared.manifest.transport?.schema === 'shipyard.native-reader-transport.v3'
+        ? '\nTotal input_batch_reads=' + prepared.manifest.batches.length + '\ninput_profile_sha256=' + prepared.manifest.transport.profile_sha256 : '');
     const claim = reviewObservation({ worktree: scope.worktree, reference, dispatch_id: dispatchId,
       native_bytes: Buffer.byteLength(raw), native_sha256: reviewHash(raw) }, () => {
       collector.verifyFileInput(prepared);
@@ -2366,6 +2620,25 @@ function createCodexRuntimeHost(options = {}) {
       return await launch(nativeSelection, { ...context, gsd_role: undefined, resume_review: token, input_transport: 'host-files',
         input_prepared: prepared, input_bundle: prepared.input_bundle, prompt });
     } finally { reviewResumptions.delete(token); }
+  };
+  const measureBatchReaderCapacity = async (selection, prepared) => {
+    assertOwner();
+    const collector = require('./codex-arch-review-context.cjs');
+    const checked = collector.verifyFileInput(prepared);
+    if (!collector.isPreparedFileInput(prepared) || (selection.sandbox_mode !== undefined && selection.sandbox_mode !== 'read-only')
+        || checked.manifest.transport?.schema !== 'shipyard.native-reader-transport.v3'
+        || checked.manifest.snapshot.worktree !== scope.worktree || checked.manifest.run_id !== scope.run_id
+        || checked.manifest.ticket !== scope.ticket || checked.manifest.phase !== scope.phase)
+      fail('READER_CAPACITY_UNSUPPORTED', 'probe requires the exact private host candidate and scope');
+    const token = Object.freeze({});
+    readerCapacityProbes.set(token, prepared);
+    try {
+      const capacity = await launcher(prepared.prompt, { ...selection, reader_capacity_probe: token,
+        dispatch_id: checked.manifest.dispatch_id, input_transport: 'host-files', input_bundle: prepared.input_bundle,
+        input_prepared: prepared, sandbox_mode: selection.sandbox_mode || 'read-only' });
+      assertOwner();
+      return capacity;
+    } finally { readerCapacityProbes.delete(token); }
   };
   const host = {
     schema: SCHEMA,
@@ -2381,6 +2654,7 @@ function createCodexRuntimeHost(options = {}) {
     launch: (selection, context) => launch(selection, context),
     launchStatic: (selection, context) => launch(selection, context),
     resumeReview,
+    measureBatchReaderCapacity,
     launchTypedGsd: (selection, context) => launch(selection, context),
   };
   return Object.freeze(host);
@@ -2445,6 +2719,7 @@ module.exports = Object.freeze({
     if (!require('./role-artifact.cjs').isAuthenticatedReviewProgress(progress))
       fail('REVIEW_PROGRESS_INVALID', 'restore lacks original protected progress');
     reviewOriginInactive(progress);
+    verifyBatchCapacityReference(prepared, require('./codex-arch-review-context.cjs').verifyFileInput(prepared));
     const raw = readReviewNativeFile(progress.native_file, progress.identity.worktree);
     const { records } = validateReviewNative(raw, progress.session_id, { ...progress.original_launch, worktree: progress.identity.worktree });
     const starts = records.filter(record => record.type === 'event_msg' && record.payload?.type === 'task_started');

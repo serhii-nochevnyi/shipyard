@@ -617,6 +617,73 @@ for (const scenario of [
   }
 });
 
+
+test('finite batch candidates reject serialized profiles and keep capacity separate from estimates', () => {
+  const reader = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  assert.equal(typeof reader.createReaderBatchProfile, 'function');
+  assert.throws(() => reader.createReaderBatchProfile({ chunk_bytes: 0, ranges_per_batch: 2 }),
+    error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+  assert.throws(() => reader.readBatchCli(['--read-batch', '/tmp/absent', '01', 'a'.repeat(64)]));
+  assert.throws(() => reader.readBatchCli(['--read-batch', '/tmp/absent', '0', 'a'.repeat(64), '--eval']));
+});
+
+
+test('finite batch CLI returns only its exact scheduled frames and enforces private immutable files', () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "finite batch ' custody-")));
+  const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+  try {
+    const parameters = { chunk_bytes: 8192, ranges_per_batch: 2,
+      candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+        instructions_sha256: sha('fixture instructions'), model: 'gpt-6.1-sol', effort: 'high', provider: 'openai' } };
+    const profile = contextBuilder.createReaderBatchProfile(parameters);
+    const scope = { worktree: f.root, ticket: TICKET, phase: 38 };
+    const options = { role: 'arch-review', dispatchId: 'finite-batch', storageRoot: storage, readerProfile: profile };
+    assert.throws(() => contextBuilder.prepareFileInput(scope, 'exact bytes', { ...options, readerProfile: {} }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    const foreignSource = contextBuilder.createReaderBatchProfile({ ...parameters,
+      candidate: { ...parameters.candidate, source_sha256: '0'.repeat(64) } });
+    assert.throws(() => contextBuilder.prepareFileInput(scope, 'complete', { ...options, readerProfile: foreignSource }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    assert.throws(() => contextBuilder.prepareFileInput(scope, Buffer.alloc(contextBuilder.FILE_LIMITS.material + 1), options),
+      error => error.code === 'CONTEXT_OVER_BOUND');
+    const tooManyRanges = contextBuilder.createReaderBatchProfile({ ...parameters, chunk_bytes: 1 });
+    assert.throws(() => contextBuilder.prepareFileInput(scope, 'x'.repeat(contextBuilder.FILE_LIMITS.reads + 1),
+      { ...options, readerProfile: tooManyRanges }), error => error.code === 'CONTEXT_OVER_BOUND');
+    const input = contextBuilder.prepareFileInput(scope, ['x'.repeat(8191) + '€' + 'é'.repeat(6000), 'short terminal €'], options);
+    const checked = contextBuilder.verifyFileInput(input);
+    assert.equal(input.manifest.schema, 'shipyard.host-file-input.v3');
+    assert.equal(input.input_bundle.transport.output_tokens, 10000);
+    assert.equal(checked.schedule.range_count, checked.chunk_reads);
+    assert.equal(checked.schedule.batch_count, input.manifest.batches.length);
+    assert.ok(checked.chunk_reads > checked.schedule.batch_count);
+    assert.throws(() => contextBuilder.requireReaderBatchCapacity(input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    const frames = [];
+    for (const batch of input.manifest.batches) {
+      const output = execFileSync('node', [input.manifest.transport.module_path, '--read-batch', input.input_bundle.manifest_path,
+        String(batch.index), input.manifest.transport.profile_sha256], { encoding: 'utf8' });
+      assert.equal(output, contextBuilder.batchOutput(input.manifest, checked.manifest_bytes, checked.material, batch.index));
+      const records = output.trim().split('\n').map(JSON.parse);
+      assert.equal(records[0].type, 'batch');
+      assert.equal(records.at(-1).type, 'terminal');
+      assert.equal(records[0].frame_count, batch.count);
+      assert.equal(records.length, batch.count + 2);
+      frames.push(...records.slice(1, -1));
+      assert.ok(contextBuilder.batchCommand(input.input_bundle, batch.index).includes("'\\''"));
+    }
+    assert.deepEqual(Buffer.concat(frames.map(frame => Buffer.from(frame.base64, 'base64'))),
+      Buffer.concat([checked.manifest_bytes, ...checked.material]));
+    for (const index of ['01', '-1', '1.0', String(Number.MAX_SAFE_INTEGER + 1), String(input.manifest.batches.length)])
+      assert.throws(() => contextBuilder.readBatchCli(['--read-batch', input.input_bundle.manifest_path, index, input.manifest.transport.profile_sha256]));
+    assert.throws(() => contextBuilder.readBatchCli(['--read-batch', input.input_bundle.manifest_path, '0', '0'.repeat(64)]));
+    const asset = input.manifest.assets[0];
+    fs.chmodSync(asset.path, 0o600);
+    assert.throws(() => contextBuilder.readBatchCli(['--read-batch', input.input_bundle.manifest_path,
+      String(input.manifest.batches.find(batch => input.manifest.ranges.slice(batch.start, batch.start + batch.count).some(range => range.ordinal === 0)).index),
+      input.manifest.transport.profile_sha256]));
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
 module.exports = { fixture, unitJudgment, cleanupJudgment, registerTests, registerCases, testAuthorityArgs };
 
 test('large complete architecture context is included once within final prompt capacity', () => {

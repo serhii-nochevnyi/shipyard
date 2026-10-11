@@ -1512,6 +1512,12 @@ function cliCompletion(text) {
 
 function readRecords(input) {
   const checked = collector.verifyFileInput(input);
+  if (input.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
+    return input.manifest.batches.map(batch => ({ command: collector.batchCommand(input.input_bundle, batch.index),
+      output: execFileSync('node', [input.manifest.transport.module_path, '--read-batch', input.input_bundle.manifest_path,
+        String(batch.index), input.manifest.transport.profile_sha256], { encoding: 'utf8', maxBuffer: 252 * 1024 }) }));
+  }
+
   return [{ path: input.input_bundle.manifest_path, bytes: checked.manifest_bytes },
     ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))]
     .flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / input.input_bundle.chunk_bytes) }, (_, index) => ({
@@ -1554,7 +1560,12 @@ async function fixture(action, options = {}) {
     const scope = { worktree, phase: 49, ticket: 'T-49-05', run_id: 'isolated-review' };
     const content = "developer_instructions = '''\nReview all required material.\n'''";
     const typedInstructions = 'Review all required material.\n';
-    const input = collector.prepareFileInput(scope, 'required material\n'.repeat(2000), {
+    const instructions = options.typed ? typedInstructions : runtime.generatedInstructions(content);
+    const profile = options.batch ? collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
+      candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+        instructions_sha256: sha(instructions), model: selection.model, effort: selection.effort, provider: 'openai' } }) : null;
+    let input = collector.prepareFileInput(scope, options.batch ? 'x'.repeat(8191) + '€' + 'é'.repeat(9000) + 'short €' : 'required material\n'.repeat(2000), {
+      ...(profile ? { readerProfile: profile } : {}),
       role: options.role || 'arch-review', dispatchId: 'original-review', storageRoot: path.join(root, 'inputs'),
       generatedInstructionBytes: Buffer.byteLength(options.typed ? typedInstructions : runtime.generatedInstructions(content)) + 2,
       binding: { base: head, base_ref: 'refs/heads/review-base', merge_base: head, ticket_set: ['T-49-05'], ticket_set_digest: sha(JSON.stringify(['T-49-05'])) },
@@ -1575,7 +1586,25 @@ async function fixture(action, options = {}) {
     const parent = path.join(directory, session + '.jsonl');
     const result = JSON.stringify({ verdict: 'conform', input_manifest_sha256: input.input_bundle.manifest_sha256,
       input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
-      input_chunk_reads: reads.length });
+      input_chunk_reads: collector.verifyFileInput(input).chunk_reads,
+      ...(options.batch ? { input_batch_reads: reads.length, input_profile_sha256: input.manifest.transport.profile_sha256 } : {}) });
+    if (options.batch) {
+      const probeHome = path.join(root, 'capacity-native');
+      const probeDirectory = path.join(probeHome, 'sessions', String(date.getFullYear()),
+        String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+      fs.mkdirSync(probeDirectory, { recursive: true });
+      const probe = path.join(probeDirectory, session + '.jsonl');
+      fs.writeFileSync(probe, serialize([nativeMetadata(session, worktree), nativeContext('capacity-turn', worktree),
+        message('developer', 'capacity-turn', instructions), message('user', 'capacity-turn', input.prompt),
+        event('task_started', 'capacity-turn'), ...nativeReads(reads, 'capacity-turn'), ...finish('capacity-turn', result)]));
+      fs.chmodSync(probe, 0o600);
+      const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
+        env: { CODEX_HOME: probeHome }, resultText: result });
+      const capacity = runtime.measureReaderCapacity(verified, input);
+      assert.throws(() => collector.admitReaderBatchInput(input, JSON.parse(JSON.stringify(capacity))),
+        error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+      input = collector.admitReaderBatchInput(input, capacity);
+    }
     const metadata = nativeMetadata(reviewerSession, worktree, options.typed);
     if (options.typed) { metadata.payload.agent_role = typedRole; metadata.payload.source.subagent.thread_spawn.agent_role = typedRole; }
     const context = nativeContext('original-turn', worktree);
@@ -1617,6 +1646,27 @@ async function fixture(action, options = {}) {
             }
             const prefix = [metadata, context, ...typedRecords, event('task_started', 'original-turn'),
               ...nativeReads(reads.slice(0, originalCount), 'original-turn'),
+              ...(options.pendingBatch ? nativeReads(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount).slice(0, 1) : []),
+              ...((options.groupedBatch || options.groupedPendingBatch) ? (() => {
+                const nested = nativeReads(reads.slice(originalCount, originalCount + 2), 'original-turn', originalCount);
+                const call = nested[0], output = nested[1];
+                call.payload.call_id = 'original-turn-grouped'; output.payload.call_id = call.payload.call_id;
+                call.payload.input += '\n' + nested[2].payload.input;
+                if (options.groupedPendingBatch) {
+                  const pending = JSON.parse(nested[3].payload.output[1].text);
+                  delete pending.exit_code; pending.session_id = 123;
+                  nested[3].payload.output[1].text = JSON.stringify(pending);
+                }
+                output.payload.output.push(nested[3].payload.output[1]);
+                return [call, output];
+              })() : []),
+              ...(options.incompleteBatch ? (() => {
+                const interrupted = nativeReads(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount);
+                const envelope = JSON.parse(interrupted[1].payload.output[1].text);
+                envelope.output = envelope.output.split('\n').slice(0, -2).join('\n') + '\n';
+                interrupted[1].payload.output[1].text = JSON.stringify(envelope);
+                return interrupted;
+              })() : []),
               ...(options.typed ? [event('task_aborted', 'original-turn')] : [])];
             firstRaw = serialize(options.tamperOriginal ? options.tamperOriginal(prefix) : prefix);
             fs.writeFileSync(native, options.live ? serialize(prefix.slice(0, 3)) : firstRaw);
@@ -1864,6 +1914,59 @@ for (const target of ['manifest', 'material']) {
     });
   });
 }
+
+test('v3 completed protected accounting counts shared native pins once and retains a truncated physical attempt', async () => {
+  const assert = require('node:assert/strict');
+  await fixture(async f => {
+    const { selectors } = await completedFixture(f);
+    const result = accountingChild(f, selectors);
+    assert.equal(result.schema, 'shipyard.completed-review-consumption.v3');
+    assert.equal(result.coverage.prefix.logical_ranges, 2);
+    assert.equal(result.coverage.prefix.successful_physical_calls, 1);
+    assert.equal(result.coverage.total.logical_ranges, collector.verifyFileInput(f.input).chunk_reads);
+    assert.equal(result.coverage.total.successful_physical_calls, f.reads.length);
+    assert.equal(result.scheduled_physical_calls, f.reads.length);
+    assert.equal(result.attempts[0].successful_calls, 1);
+    assert.equal(result.attempts[0].failed_calls, 1);
+    assert.equal(result.attempts[1].successful_calls, f.reads.length - 1);
+    assert.equal(result.attempts[1].retries, 1);
+    const protectedDirectory = authority.archiveAuthorityDirectory(f.worktree);
+    const before = fs.readdirSync(protectedDirectory).sort().map(file => [file, sha(fs.readFileSync(path.join(protectedDirectory, file)))]);
+    assert.deepEqual(accountingChild(f, selectors), result);
+    assert.deepEqual(fs.readdirSync(protectedDirectory).sort().map(file => [file, sha(fs.readFileSync(path.join(protectedDirectory, file)))]), before);
+    assert.equal(result.semantic_credit, false);
+    assert.equal(result.current_verdict_authority, false);
+  }, { batch: true, incompleteBatch: true });
+});
+
+
+for (const [kind, expectedFailed, expectedPending, expectedRetry] of [['groupedBatch', 2, 0, 2], ['groupedPendingBatch', 1, 1, 2], ['pendingBatch', 0, 1, 1]]) {
+  test('v3 completed cost retains ' + kind + ' physical operations independently of range coverage', async () => {
+    const assert = require('node:assert/strict');
+    await fixture(async f => {
+      const { selectors } = await completedFixture(f);
+      const result = accountingChild(f, selectors);
+      assert.equal(result.attempts[0].successful_calls, 1);
+      assert.equal(result.attempts[0].failed_calls, expectedFailed);
+      assert.equal(result.attempts[0].pending_calls, expectedPending);
+      assert.equal(result.attempts[1].retries, expectedRetry);
+      assert.equal(result.coverage.prefix.successful_physical_calls, 1);
+      assert.equal(result.coverage.total.logical_ranges, collector.verifyFileInput(f.input).chunk_reads);
+      assert.equal(result.coverage.total.successful_physical_calls, f.reads.length);
+    }, { batch: true, [kind]: true });
+  });
 }
+
+}
+
+
+
+test('v3 capacity cannot be minted from a copied contract or a success label', () => {
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  assert.throws(() => runtime.readerCapacityContract({ contract: {
+    schema: 'shipyard.native-reader-transport.v3', success: true,
+    chunk_bytes: 16384, ranges_per_batch: 2, output_tokens: 10000,
+  } }, {}), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+});
 
 done();

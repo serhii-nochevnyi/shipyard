@@ -91,6 +91,12 @@ function cliCompletion(text) {
 
 function readRecords(input) {
   const checked = collector.verifyFileInput(input);
+  if (input.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
+    return input.manifest.batches.map(batch => ({ command: collector.batchCommand(input.input_bundle, batch.index),
+      output: execFileSync('node', [input.manifest.transport.module_path, '--read-batch', input.input_bundle.manifest_path,
+        String(batch.index), input.manifest.transport.profile_sha256], { encoding: 'utf8', maxBuffer: 252 * 1024 }) }));
+  }
+
   return [{ path: input.input_bundle.manifest_path, bytes: checked.manifest_bytes },
     ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))]
     .flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / input.input_bundle.chunk_bytes) }, (_, index) => ({
@@ -132,13 +138,19 @@ async function fixture(action, options = {}) {
     const scope = { worktree, phase: 49, ticket: 'T-49-05', run_id: 'isolated-review' };
     const content = "developer_instructions = '''\nReview all required material.\n'''";
     const typedInstructions = 'Review all required material.\n';
-    const input = collector.prepareFileInput(scope, 'required material\n'.repeat(2000), {
+    const instructions = options.typed ? typedInstructions : runtime.generatedInstructions(content);
+    const profile = options.batch ? collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
+      candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+        instructions_sha256: sha(instructions), model: selection.model, effort: selection.effort, provider: 'openai' } }) : null;
+    let input = collector.prepareFileInput(scope, options.batch ? 'x'.repeat(8191) + '€' + 'é'.repeat(9000) + 'short €' : 'required material\n'.repeat(2000), {
+      ...(profile ? { readerProfile: profile } : {}),
       role: options.role || 'arch-review', dispatchId: 'original-review', storageRoot: path.join(root, 'inputs'),
       generatedInstructionBytes: Buffer.byteLength(options.typed ? typedInstructions : runtime.generatedInstructions(content)) + 2,
       binding: { base: head, base_ref: 'refs/heads/review-base', merge_base: head, ticket_set: ['T-49-05'], ticket_set_digest: sha(JSON.stringify(['T-49-05'])) },
     });
     const reads = readRecords(input);
     const home = path.join(root, 'codex');
+    let capacity;
     if (options.typed) {
       fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
       fs.writeFileSync(path.join(home, 'agents/shipyard-arch-review.toml'),
@@ -153,7 +165,25 @@ async function fixture(action, options = {}) {
     const parent = path.join(directory, session + '.jsonl');
     const result = JSON.stringify({ verdict: 'conform', input_manifest_sha256: input.input_bundle.manifest_sha256,
       input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
-      input_chunk_reads: reads.length });
+      input_chunk_reads: collector.verifyFileInput(input).chunk_reads,
+      ...(options.batch ? { input_batch_reads: reads.length, input_profile_sha256: input.manifest.transport.profile_sha256 } : {}) });
+    if (options.batch) {
+      const probeHome = path.join(root, 'capacity-native');
+      const probeDirectory = path.join(probeHome, 'sessions', String(date.getFullYear()),
+        String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+      fs.mkdirSync(probeDirectory, { recursive: true });
+      const probe = path.join(probeDirectory, session + '.jsonl');
+      fs.writeFileSync(probe, serialize([nativeMetadata(session, worktree), nativeContext('capacity-turn', worktree),
+        message('developer', 'capacity-turn', instructions), message('user', 'capacity-turn', input.prompt),
+        event('task_started', 'capacity-turn'), ...nativeReads(reads, 'capacity-turn'), ...finish('capacity-turn', result)]));
+      fs.chmodSync(probe, 0o600);
+      const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
+        env: { CODEX_HOME: probeHome }, resultText: result });
+      capacity = runtime.measureReaderCapacity(verified, input);
+      assert.throws(() => collector.admitReaderBatchInput(input, JSON.parse(JSON.stringify(capacity))),
+        error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+      input = collector.admitReaderBatchInput(input, capacity);
+    }
     const metadata = nativeMetadata(reviewerSession, worktree, options.typed);
     const context = nativeContext('original-turn', worktree);
     let progress, attempts = 0, resumedCommands = [], firstRaw, closed = false, liveCredit = false;
@@ -194,6 +224,27 @@ async function fixture(action, options = {}) {
             }
             const prefix = [metadata, context, ...typedRecords, event('task_started', 'original-turn'),
               ...nativeReads(reads.slice(0, originalCount), 'original-turn'),
+              ...(options.pendingBatch ? nativeReads(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount).slice(0, 1) : []),
+              ...((options.groupedBatch || options.groupedPendingBatch) ? (() => {
+                const nested = nativeReads(reads.slice(originalCount, originalCount + 2), 'original-turn', originalCount);
+                const call = nested[0], output = nested[1];
+                call.payload.call_id = 'original-turn-grouped'; output.payload.call_id = call.payload.call_id;
+                call.payload.input += '\n' + nested[2].payload.input;
+                if (options.groupedPendingBatch) {
+                  const pending = JSON.parse(nested[3].payload.output[1].text);
+                  delete pending.exit_code; pending.session_id = 123;
+                  nested[3].payload.output[1].text = JSON.stringify(pending);
+                }
+                output.payload.output.push(nested[3].payload.output[1]);
+                return [call, output];
+              })() : []),
+              ...(options.incompleteBatch ? (() => {
+                const interrupted = nativeReads(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount);
+                const envelope = JSON.parse(interrupted[1].payload.output[1].text);
+                envelope.output = envelope.output.split('\n').slice(0, -2).join('\n') + '\n';
+                interrupted[1].payload.output[1].text = JSON.stringify(envelope);
+                return interrupted;
+              })() : []),
               ...(options.typed ? [event('task_aborted', 'original-turn')] : [])];
             firstRaw = serialize(options.tamperOriginal ? options.tamperOriginal(prefix) : prefix);
             fs.writeFileSync(native, options.live ? serialize(prefix.slice(0, 3)) : firstRaw);
@@ -229,7 +280,7 @@ async function fixture(action, options = {}) {
     const restore = options.beforeLaunch?.({ root, worktree });
     try { await assert.rejects(host.launchStatic(staticSelection, launch)); } finally { restore?.(); }
     await action({ root, worktree, input, host, progress, calls, native, parent, reviewerSession, firstRaw, reads, result,
-      selection: staticSelection, createHost, scope, stdin, references, completions,
+      selection: staticSelection, capacity, createHost, scope, stdin, references, completions,
       liveCredit, launch, get resumedCommands() { return resumedCommands; } });
   } finally { os.homedir = oldHome; fs.rmSync(root, { recursive: true, force: true }); }
 }
@@ -540,4 +591,182 @@ test('legacy one-turn full read succeeds and unrelated extra turns remain refuse
     assert.throws(() => runtime.verifyFileConsumption(f.input, raw + serialize([event('task_started', 'foreign'),
       ...finish('foreign', f.result)]), 'original-review', f.result));
   });
+});
+
+test('v3 one physical output atomically credits two frames and resumes the original UUID', async () => {
+  await fixture(async f => {
+    const progress = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+    assert.equal(progress.schema, 'shipyard.review-progress.v3');
+    assert.equal(progress.completed_ranges, 2);
+    assert.equal(progress.chain[0].range.call_id, progress.chain[1].range.call_id);
+    assert.equal(progress.chain[0].range.native_bytes, progress.chain[1].range.native_bytes);
+    assert.equal(progress.chain[0].range.native_sha256, progress.chain[1].range.native_sha256);
+    assert.equal(progress.chain[1].range.frame_index, 1);
+    assert.throws(() => authority.readReviewProgress({ worktree: f.worktree, reference: progress.chain[1].predecessor }));
+    const completed = await f.host.resumeReview(f.selection, { progress: f.progress, dispatch_id: 'batch-resume' });
+    assert.equal(completed.runtime_evidence.session_id, session);
+    assert.equal(completed.runtime_evidence.review_continuation.inherited_ranges, 2);
+    assert.equal(completed.runtime_evidence.input_consumption.chunk_reads, collector.verifyFileInput(f.input).chunk_reads);
+    assert.equal(f.resumedCommands.length, f.reads.length - 1);
+    assert.ok(!f.resumedCommands.includes(f.reads[0].command));
+    assert.ok(f.stdin[1].includes(f.reads[1].command));
+  }, { batch: true });
+});
+
+test('v3 uncredited truncated batch remains in original history and is retried without rereading durable frames', async () => {
+  await fixture(async f => {
+    assert.equal(authority.readReviewProgress({ worktree: f.worktree, reference: f.progress }).completed_ranges, 2);
+    const failed = fs.readFileSync(f.native, 'utf8');
+    const completed = await f.host.resumeReview(f.selection, { progress: f.progress, dispatch_id: 'batch-retry' });
+    assert.ok(fs.readFileSync(f.native, 'utf8').startsWith(failed));
+    assert.equal(completed.runtime_evidence.review_continuation.inherited_ranges, 2);
+    assert.equal(f.resumedCommands[0], f.reads[1].command);
+  }, { batch: true, incompleteBatch: true });
+});
+
+const batchMutations = [
+  ['nested truncation', output => { output[1].text = output[1].text.slice(0, -2); }],
+  ['outer truncation', output => { output[0].text = 'Warning: truncated output\n'; }],
+  ['pending shell', output => { const result = JSON.parse(output[1].text); result.session_id = 123; output[1].text = JSON.stringify(result); }],
+  ['surplus nested operation', output => { output.push(structuredClone(output[1])); }],
+  ['omitted terminal', output => { const result = JSON.parse(output[1].text); result.output = result.output.split('\n').slice(0, -2).join('\n') + '\n'; output[1].text = JSON.stringify(result); }],
+  ['wrong profile', output => { const result = JSON.parse(output[1].text); result.output = result.output.replace(/"profile_sha256":"[a-f0-9]+"/, '"profile_sha256":"' + '0'.repeat(64) + '"'); output[1].text = JSON.stringify(result); }],
+  ['duplicate frame', output => { const result = JSON.parse(output[1].text); const lines = result.output.split('\n'); lines.splice(2, 0, lines[1]); result.output = lines.join('\n'); output[1].text = JSON.stringify(result); }],
+  ['reordered frames', output => { const result = JSON.parse(output[1].text); const lines = result.output.split('\n'); [lines[1], lines[2]] = [lines[2], lines[1]]; result.output = lines.join('\n'); output[1].text = JSON.stringify(result); }],
+  ['overlapping range', output => { const result = JSON.parse(output[1].text); const lines = result.output.split('\n'); const frame = JSON.parse(lines[1]); frame.offset++; lines[1] = JSON.stringify(frame); result.output = lines.join('\n'); output[1].text = JSON.stringify(result); }],
+  ['trailer digest', output => { const result = JSON.parse(output[1].text); result.output = result.output.replace(/"frames_sha256":"[a-f0-9]+"/, '"frames_sha256":"' + '0'.repeat(64) + '"'); output[1].text = JSON.stringify(result); }],
+];
+for (const [name, mutate] of batchMutations) test('v3 ' + name + ' grants zero batch credit', async () => {
+  await fixture(async f => {
+    assert.equal(f.progress, undefined);
+    const whole = [nativeMetadata(session, f.worktree), nativeContext('whole', f.worktree), event('task_started', 'whole'),
+      ...nativeReads(f.reads, 'whole'), ...finish('whole', f.result)];
+    const output = whole.find(record => record.payload?.type === 'custom_tool_call_output');
+    mutate(output.payload.output);
+    assert.throws(() => runtime.verifyFileConsumption(f.input, serialize(whole), 'original-review', f.result));
+  }, { batch: true, tamperOriginal(records) {
+    mutate(records.find(record => record.payload?.type === 'custom_tool_call_output').payload.output);
+    return records;
+  } });
+});
+
+for (const crash of ['between records', 'before tip']) test('v3 crash ' + crash + ' cannot publish partial batch credit', async () => {
+  await fixture(async f => {
+    assert.equal(f.progress, undefined);
+    const directory = authority.archiveAuthorityDirectory(f.worktree);
+    assert.ok(fs.readdirSync(directory).some(name => name.startsWith('review-progress-')));
+    assert.equal(fs.readdirSync(directory).some(name => name.startsWith('review-tip-')), false);
+    const whole = serialize([nativeMetadata(session, f.worktree), nativeContext('reread', f.worktree),
+      event('task_started', 'reread'), ...nativeReads(f.reads, 'reread'), ...finish('reread', f.result)]);
+    const checked = runtime.verifyFileConsumption(f.input, whole, 'original-review', f.result);
+    assert.equal(checked.chunk_reads, collector.verifyFileInput(f.input).chunk_reads);
+    assert.equal(checked.physical_calls, f.reads.length);
+  }, { batch: true, beforeLaunch({ root }) {
+    const link = fs.linkSync, rename = fs.renameSync;
+    let writes = 0;
+    fs.linkSync = (source, target) => {
+      if (crash === 'between records' && target.startsWith(root) && path.basename(target).startsWith('review-progress-') && ++writes === 2)
+        throw new Error('fixture crash between immutable frames');
+      return link(source, target);
+    };
+    fs.renameSync = (source, target) => {
+      if (crash === 'before tip' && target.startsWith(root) && path.basename(target).startsWith('review-tip-')) throw new Error('fixture crash before atomic tip');
+      return rename(source, target);
+    };
+    return () => { fs.linkSync = link; fs.renameSync = rename; };
+  } });
+});
+
+test('v3 logical bytes survive short terminal ranges and multibyte splits with distinct physical counts', async () => {
+  await fixture(async f => {
+    const checked = collector.verifyFileInput(f.input);
+    const frames = f.reads.flatMap(read => read.output.trim().split('\n').map(JSON.parse).filter(frame => frame.type === 'range'));
+    assert.equal(frames.length, checked.chunk_reads);
+    assert.ok(frames.length > f.reads.length);
+    assert.deepEqual(Buffer.concat(frames.filter(frame => frame.asset === 0).map(frame => Buffer.from(frame.base64, 'base64'))), checked.material[0]);
+    assert.ok(frames.some(frame => frame.bytes < 8192));
+    assert.throws(() => new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(frames.find(frame => frame.asset === 0).base64, 'base64')));
+    const restored = collector.restoreReviewInput(authority.readReviewProgress({ worktree: f.worktree, reference: f.progress }));
+    assert.equal(restored.input_bundle.transport.profile_sha256, f.input.input_bundle.transport.profile_sha256);
+  }, { batch: true });
+});
+
+for (const [name, tamperResume] of [
+  ['inherited batch reread', (records, reads) => [...nativeReads(reads.slice(0, 1), 'resumed-turn', 500), ...records]],
+  ['replayed original call identity', records => { records[0].payload.call_id = 'original-turn-0'; records[1].payload.call_id = 'original-turn-0'; return records; }],
+  ['duplicated fresh call identity', records => { records[2].payload.call_id = records[0].payload.call_id; records[3].payload.call_id = records[0].payload.call_id; return records; }],
+  ['foreign output turn', records => { records[1].payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign'; return records; }],
+  ['wrong exact batch command', records => { const args = JSON.parse(/^text\(await tools.exec_command\((.*)\)\);$/.exec(records[0].payload.input)[1]); args.cmd += ' --eval'; records[0].payload.input = 'text(await tools.exec_command(' + JSON.stringify(args) + '));'; return records; }],
+  ['late output', records => { records.push(records.splice(1, 1)[0]); return records; }],
+]) test('v3 fresh final refuses ' + name, async () => {
+  await fixture(async f => {
+    await assert.rejects(f.host.resumeReview(f.selection, { progress: f.progress, dispatch_id: 'bad-batch-final' }));
+    assert.equal(authority.readReviewProgress({ worktree: f.worktree, reference: f.progress }).state.resume.status, 'claimed');
+  }, { batch: true, tamperResume });
+});
+
+for (const [name, mutate] of [
+  ['changed subject HEAD', f => fs.writeFileSync(path.join(f.worktree, 'source.txt'), 'changed current source')],
+  ['changed original capacity output', f => fs.appendFileSync(f.input.input_bundle.reader_capacity.native_file, '\n')],
+  ['changed material', f => { const asset = f.input.manifest.assets[0]; fs.chmodSync(asset.path, 0o600); fs.writeFileSync(asset.path, 'foreign'); }],
+  ['changed governing config', f => { fs.mkdirSync(path.join(f.worktree, '.planning')); fs.writeFileSync(path.join(f.worktree, '.planning/config.json'), '{}'); }],
+]) test('v3 ' + name + ' invalidates restoration before a new process starts', async () => {
+  await fixture(async f => {
+    mutate(f);
+    await assert.rejects(f.host.resumeReview(f.selection, { progress: f.progress, dispatch_id: 'batch-drift' }));
+    assert.equal(f.calls.length, 1);
+  }, { batch: true });
+});
+
+test('v3 premature historical final remains rejected after a fresh current judgment', async () => {
+  await fixture(async f => {
+    const rejected = fs.readFileSync(f.native, 'utf8');
+    assert.ok(rejected.includes('premature'));
+    const completed = await f.host.resumeReview(f.selection, { progress: f.progress, dispatch_id: 'fresh-batch-final' });
+    assert.equal(completed.runtime_evidence.review_continuation.fresh_turn_id, 'resumed-turn');
+    assert.ok(fs.readFileSync(f.native, 'utf8').startsWith(rejected));
+  }, { batch: true, premature: true });
+});
+
+
+for (const [name, change] of [
+  ['role', options => { options.role = 'integrator'; }],
+  ['base', options => { options.binding.base = 'a'.repeat(40); }],
+  ['merge base', options => { options.binding.merge_base = 'b'.repeat(40); }],
+  ['full ticket membership', options => {
+    options.binding.ticket_set.push('T-49-16');
+    options.binding.ticket_set_digest = sha(JSON.stringify(options.binding.ticket_set));
+  }],
+  ['candidate profile', options => { options.ranges_per_batch = 3; }],
+]) test('v3 original capacity cannot be borrowed by another ' + name, async () => {
+  await fixture(async f => {
+    const options = { role: f.input.manifest.role, binding: structuredClone(f.input.manifest.binding), ranges_per_batch: 2 };
+    change(options);
+    const profile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: options.ranges_per_batch,
+      candidate: f.input.manifest.transport.candidate });
+    const other = collector.prepareFileInput(f.scope, collector.verifyFileInput(f.input).material, {
+      role: options.role, binding: options.binding, readerProfile: profile, dispatchId: 'borrowed-capacity',
+      storageRoot: path.join(f.root, 'other-inputs'), generatedInstructionBytes: f.input.manifest.accounting.generated_instruction_bytes,
+    });
+    assert.throws(() => collector.admitReaderBatchInput(other, f.capacity), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    assert.throws(() => collector.requireReaderBatchCapacity(other), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    assert.equal(f.calls.length, 1);
+  }, { batch: true });
+});
+
+
+test('v3 typed reviewer resumes the original child UUID with its installed instruction identity', async () => {
+  await fixture(async f => {
+    const progress = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+    assert.equal(progress.schema, 'shipyard.review-progress.v3');
+    assert.equal(progress.session_id, childSession);
+    assert.equal(progress.parent_session_id, session);
+    const completed = await f.host.resumeReview(f.selection, { progress: f.progress, dispatch_id: 'typed-batch-final' });
+    assert.ok(f.calls[1].includes(childSession));
+    assert.equal(completed.runtime_evidence.input_consumption.schema, 'shipyard.native-file-consumption.v3');
+    assert.equal(completed.runtime_evidence.input_consumption.physical_calls, f.reads.length);
+    assert.equal(completed.runtime_evidence.input_consumption.logical_ranges, collector.verifyFileInput(f.input).chunk_reads);
+    assert.equal(completed.runtime_evidence.native_child_evidence.parent_thread_id, session);
+    assert.equal(authority.validateReviewContinuationEvidence(completed.runtime_evidence).session_id, childSession);
+  }, { batch: true, typed: true });
 });
