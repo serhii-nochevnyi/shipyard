@@ -943,12 +943,17 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     const spawn = (_program, args) => {
       const launchIndex = ++launches, failure = failFirst && launchIndex === 1;
       const index = args.includes('resume') ? 2 : 1, turn = failure ? 'failed-complete-probe' : index === 1 ? 'original-complete-probe' : 'new-current-final';
+      if (index === 2 && mutation === 'spawn-throw') throw new Error('Original spawn setup failed');
+      if (index === 2 && mutation === 'invalid-child') return null;
       assert.equal(args[args.indexOf('--model') + 1], selected.model);
       if (index === 2) { assert.ok(args.includes('resume')); assert.ok(args.includes(session)); }
       const child = new EventEmitter(); child.pid = 45200 + index;
       child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
       let stdin = '';
-      child.stdin = { write(bytes) { stdin += String(bytes); }, end() {
+      child.stdin = { write(bytes) {
+        if (index === 2 && mutation === 'stdin-throw') throw new Error('Original stdin setup failed');
+        stdin += String(bytes);
+      }, end() {
         const prompt = index === 1 ? input.prompt : stdin.trim();
         if (index === 2) finalPrompt = prompt;
         const context = nativeContext(turn, worktree);
@@ -982,10 +987,12 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
           message('developer', turn, instructions), message('user', turn, prompt), event('task_started', turn),
           ...nativeReads(readRecords(input), turn), ...finish(turn, result)]
           : [context, message('user', turn, prompt), event('task_started', turn), ...finish(turn, result)];
-        if (index === 2 && mutation === 'incomplete-final') {
+        if (index === 2 && ['incomplete-final', 'failed-prefix', 'failed-truncated'].includes(mutation)) {
           records.splice(3, records.length - 3, event('task_aborted', turn));
           process.nextTick(() => {
             fs.appendFileSync(native, serialize(records));
+            if (mutation === 'failed-prefix') fs.writeFileSync(native, fs.readFileSync(native, 'utf8').replace('session_meta', 'foreign_meta'));
+            if (mutation === 'failed-truncated') fs.writeFileSync(native, '{}\n');
             child.stdout.emit('data', Buffer.from(serialize([cliThread(session), cliCompletion('')[0],
               { type: 'turn.failed', error: { message: 'Actual fresh final was interrupted' } }])));
             child.emit('close', 1, null);
@@ -1035,7 +1042,13 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
       host = runtime.createCodexRuntimeHost(hostOptions);
       input = collector.restoreCompletedSourceInput(authority.readCompletedReviewSource({ worktree, reference: source }));
     }
-    if (mutation === 'prefix') { const bytes = fs.readFileSync(native, 'utf8'); fs.writeFileSync(native, bytes.replace('"type":"session_meta"', '"type":"session_meta","mutated":true')); }
+    if (mutation === 'prefix') {
+      const records = fs.readFileSync(native, 'utf8').trim().split('\n').map(JSON.parse);
+      const metadata = records.find(row => row.type === 'session_meta');
+      assert.ok(metadata, 'original registered metadata is present before the prefix mutation');
+      metadata.mutated = true;
+      fs.writeFileSync(native, serialize(records));
+    }
     if (mutation === 'source') fs.writeFileSync(path.join(worktree, 'source.txt'), 'foreign source mutation\n');
     if (mutation === 'agent') fs.appendFileSync(path.join(agents, selected.agent_file), '\n# replaced\n');
     if (['profile', 'roster', 'subject'].includes(mutation)) {
@@ -1056,6 +1069,7 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
         return host.resumeCompletedSource(applied, { source, dispatch_id: context.dispatch_id,
           ...(cold ? {} : { input_prepared: input }), role,
           ...(mutation === 'subject-kind' ? { subject_kind: 'phase' } : {}),
+          ...(mutation === 'process-hook-throw' ? { onProcessSpawned() { throw new Error('Original process hook failed'); } } : {}),
           onCompleted(value) { finalCallbacks++; assert.equal(recorder.getVerifiedRecord(dispatchId), null); assert.equal(value.session_id, session); } });
       } } });
     const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
@@ -1066,8 +1080,25 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
         assert.equal(launches, 1, 'subject substitution refuses before a final native launch');
         assert.equal(finalCallbacks, 0);
         assert.ok(recorder.getVerifiedRecord(probeId));
-      } else await assert.rejects(launch, error => ['REVIEW_SOURCE_INVALID', 'REVIEW_RESTART_REQUIRED', 'STALE_CONTEXT', 'STALE_GENERATED_AGENT', 'RUNTIME_EVIDENCE_MISMATCH', 'RUNTIME_EVIDENCE_INVALID', 'RUNTIME_UNAVAILABLE', 'INPUT_BUNDLE_INVALID', 'INPUT_BUNDLE_CHANGED'].includes(error.code) || /changed|manifest|profile|base|git.*failed/i.test(error.message));
+      } else await assert.rejects(launch, error => ['REVIEW_SOURCE_INVALID', 'REVIEW_RESTART_REQUIRED', 'STALE_CONTEXT', 'STALE_GENERATED_AGENT', 'RUNTIME_EVIDENCE_MISMATCH', 'RUNTIME_EVIDENCE_INVALID', 'RUNTIME_UNAVAILABLE', 'INPUT_BUNDLE_INVALID', 'INPUT_BUNDLE_CHANGED'].includes(error.code) || /changed|manifest|profile|base|git.*failed|Original process hook failed/i.test(error.message));
       assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+      if (['spawn-throw', 'invalid-child', 'stdin-throw', 'process-hook-throw'].includes(mutation)) {
+        const failed = authority.readCompletedReviewSource({ worktree, reference: source });
+        assert.equal(failed.state.resume.status, 'failed');
+        assert.deepEqual(authority.readReviewSourceAttempts(failed).map(attempt => attempt.status), ['completed', 'failed']);
+        assert.equal(failed.state.resume.physical_snapshot.bytes, failed.snapshot.bytes);
+        const attempt = authority.readReviewSourceAttempts(failed).at(-1);
+        assert.equal(attempt.physical.native_snapshot, undefined);
+        assert.match(attempt.physical.reason, /unknown/);
+        assert.equal(attempt.setup_costs.value, null);
+        assert.ok(attempt.ended_at_ms >= attempt.started_at_ms);
+        assert.deepEqual(fs.readFileSync(native), originalRaw);
+      }
+      if (['failed-prefix', 'failed-truncated'].includes(mutation)) {
+        const failed = authority.readCompletedReviewSource({ worktree, reference: source });
+        assert.equal(failed.state.resume.status, 'claimed');
+        assert.deepEqual(authority.readReviewSourceAttempts(failed).map(attempt => attempt.status), ['completed', 'pending']);
+      }
       if (mutation === 'incomplete-final') {
         const failed = authority.readCompletedReviewSource({ worktree, reference: source });
         assert.equal(failed.state.resume.status, 'incomplete');
@@ -1133,7 +1164,7 @@ for (const role of ['arch-review', 'integrator']) {
     () => completedSourceFixture(role, cold));
   for (const cold of [false, true]) test('completed ' + role + ' source refuses subject-kind substitution ' + (cold ? 'cold' : 'live'),
     () => completedSourceFixture(role, cold, 'subject-kind'));
-  for (const mutation of ['prefix', 'source', 'agent', 'old-verdict', 'intervening-turn', 'final-reread', 'model', 'effort', 'provider', 'compaction', 'parent-child-swap', 'final-prompt', 'profile', 'roster', 'subject', 'base'])
+  for (const mutation of ['spawn-throw', 'invalid-child', 'stdin-throw', 'process-hook-throw', 'failed-prefix', 'failed-truncated', 'prefix', 'source', 'agent', 'old-verdict', 'intervening-turn', 'final-reread', 'model', 'effort', 'provider', 'compaction', 'parent-child-swap', 'final-prompt', 'profile', 'roster', 'subject', 'base'])
     test('completed ' + role + ' source refuses ' + mutation, () => completedSourceFixture(role, false, mutation));
 }
 

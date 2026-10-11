@@ -1541,12 +1541,16 @@ function retainCompletedSourceFailure(observation) {
     runtime.reviewObservationData(observation);
     const state = authorityState(failed.worktree, false, false, false);
     const bytes = Buffer.from(failed.native_raw), hash = digest(bytes);
+    if (bytes.length < source.snapshot.bytes
+        || digest(bytes.subarray(0, source.snapshot.bytes)) !== source.snapshot.sha256)
+      fail('REVIEW_SOURCE_INVALID', 'failed final no longer begins with its sealed completed source');
     const file = path.join(state.directory, 'failed-source-final-' + hash + '.jsonl');
     writeImmutableArtifactFile(fs, file, bytes, 'original incomplete source final', 128 * 1024 * 1024);
     const append = bytes.subarray(source.snapshot.bytes).toString('utf8');
     retainSourceFinalAttempt(state, source, { status: 'failed', native_status: failed.native_status, ended_at_ms: Date.now(),
       failure: { cause: failed.cause, original_exit: failed.exit },
-      physical: { native_raw: append, native: { session_id: source.session_id, bytes: Buffer.byteLength(append), sha256: digest(append) },
+      physical: append ? { native_raw: append, native: { session_id: source.session_id, bytes: Buffer.byteLength(append), sha256: digest(append) },
+        transcript: failed.exit.transcript } : { reason: 'launch failed without an appended native turn; physical work and tokens are unknown',
         transcript: failed.exit.transcript } });
     writeReviewEnvelope(state, completedSourceTip(resume.dispatch_id), { ...source.state,
       resume: { ...resume, status: ['interrupted', 'incomplete'].includes(failed.native_status) ? 'incomplete' : 'failed',

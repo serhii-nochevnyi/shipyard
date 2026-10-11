@@ -1464,7 +1464,7 @@ function completeRepairFeedback(options, prepared, pr) {
       fail('REPAIR_FEEDBACK_INVALID', 'full feedback has missing, duplicate or overflowing identities/bodies');
     seen.add(node.id);
     inventory.push({ kind, id: node.id, body: node.body, body_sha256: sha256(node.body),
-      author: node.author?.login || null, ...extra });
+      author: node.author?.login || null, author_id: node.author?.id || null, ...extra });
     if (Buffer.byteLength(canonical(inventory)) > MAX_REPAIR_FEEDBACK_BYTES)
       fail('REPAIR_FEEDBACK_OVERFLOW', 'full feedback exceeds finite bound');
   };
@@ -1488,7 +1488,7 @@ function completeRepairFeedback(options, prepared, pr) {
             fail('REPAIR_FEEDBACK_INVALID', 'review thread identity is incomplete');
           add('thread', { id: node.id, body: '' }, { resolved: node.isResolved, path: node.path || null,
             line: node.line || null, original_line: node.originalLine || null });
-          paginate('thread-comments', 'query($cursor:String,$id:ID!){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$cursor){nodes{id body author{login}} pageInfo{hasNextPage endCursor}}}}}',
+          paginate('thread-comments', 'query($cursor:String,$id:ID!){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$cursor){nodes{id body author{id login}} pageInfo{hasNextPage endCursor}}}}}',
             response => response.data?.node?.comments, { id: node.id });
         } else add(field === 'thread-comments' ? 'thread-comment' : field, node,
           field === 'thread-comments' ? { thread_id: extra.id } : field === 'review' ? { state: node.state } : {});
@@ -1507,7 +1507,7 @@ function completeRepairFeedback(options, prepared, pr) {
   if (!object(originalPr) || typeof originalPr.title !== 'string') fail('REPAIR_FEEDBACK_INVALID', 'complete original PR body/title is unavailable');
   add('pr-body', originalPr, { title: originalPr.title });
   for (const [field, nativeField, nodeFields] of [['threads', 'reviewThreads', 'id isResolved path line originalLine'],
-    ['comment', 'comments', 'id body author{login}'], ['review', 'reviews', 'id body state author{login}']]) {
+    ['comment', 'comments', 'id body author{id login}'], ['review', 'reviews', 'id body state author{id login}']]) {
     paginate(field, 'query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){'
       + nativeField + '(first:100,after:$cursor){nodes{' + nodeFields + '} pageInfo{hasNextPage endCursor}}}}}',
       value => value.data?.repository?.pullRequest?.[nativeField]);
@@ -1518,6 +1518,20 @@ function completeRepairFeedback(options, prepared, pr) {
 
 const repairPredecessors = new WeakMap();
 const repairNativeCustody = new WeakMap();
+
+function repairStreamFinal(stream) {
+  const starts = stream.records.flatMap((row, index) => row.type === 'turn.started' ? [index] : []);
+  const ends = stream.records.flatMap((row, index) => row.type === 'turn.completed' ? [index] : []);
+  const messages = stream.records.flatMap((row, index) => row.type === 'item.completed'
+    && row.item?.type === 'agent_message' ? [index] : []);
+  const ids = messages.map(index => stream.records[index].item.id);
+  if (starts.length !== 1 || ends.length !== 1 || !messages.length
+      || messages.some(index => index <= starts[0] || index >= ends[0])
+      || ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length
+      || messages.filter(index => stream.records[index].item.text === stream.records[messages.at(-1)].item.text).length !== 1)
+    fail('REPAIR_COMPLETION_INVALID', 'repair CLI lacks one uniquely completed turn and final item');
+  return stream.records[messages.at(-1)].item.text;
+}
 
 function authenticateRepairNative(receipt, custody, worktree, finalText) {
   if (!custody || custody.agent_file_digest !== receipt.agent_file_digest)
@@ -1538,6 +1552,8 @@ function authenticateRepairNative(receipt, custody, worktree, finalText) {
   const rows = raw.split('\n').filter(Boolean).map(JSON.parse);
   const starts = rows.filter(row => row.type === 'event_msg' && row.payload?.type === 'task_started');
   const complete = rows.filter(row => row.type === 'event_msg' && row.payload?.type === 'task_complete');
+  const finals = rows.filter(row => row.type === 'response_item' && row.payload?.type === 'message'
+    && row.payload.role === 'assistant' && row.payload.phase === 'final_answer');
   const users = rows.filter(row => row.type === 'response_item' && row.payload?.role === 'user');
   const instructions = rows.flatMap(row => row.type === 'response_item' && row.payload?.role === 'developer' ? row.payload.content || [] : []);
   const matching = users.filter(row => {
@@ -1547,7 +1563,10 @@ function authenticateRepairNative(receipt, custody, worktree, finalText) {
         && instructions.some(block => typeof block.text === 'string' && sha256(block.text) === custody.instructions_sha256));
   });
   if (starts.length !== 1 || complete.length !== 1 || complete[0].payload.turn_id !== starts[0].payload.turn_id
-      || complete[0].payload.last_agent_message !== finalText || matching.length !== 1
+      || complete[0].payload.last_agent_message !== finalText || matching.length !== 1 || finals.length !== 1
+      || (finals[0].payload.content || []).map(block => block.text || '').join('') !== finalText
+      || finals[0].payload.internal_chat_message_metadata_passthrough?.turn_id !== starts[0].payload.turn_id
+      || rows.indexOf(finals[0]) <= rows.indexOf(starts[0]) || rows.indexOf(finals[0]) >= rows.indexOf(complete[0])
       || rows.indexOf(starts[0]) >= rows.indexOf(complete[0])
       || matching[0].payload.internal_chat_message_metadata_passthrough?.turn_id !== starts[0].payload.turn_id
       || rows.some(row => row.type === 'response_item' && ['function_call', 'custom_tool_call'].includes(row.payload?.type)
@@ -1581,7 +1600,7 @@ function repairHistory(prepared, pr) {
       fail('REPAIR_PREDECESSOR_INVALID', 'original predecessor reasoning changed');
     if (attempt.result) {
       const pin = original.receipt.runtime_evidence.transcript, raw = fs.readFileSync(pin.path, 'utf8');
-      const final = parseCodexStream(raw).records.find(row => row.item?.type === 'agent_message')?.item.text;
+      const final = repairStreamFinal(parseCodexStream(raw));
       if (Buffer.byteLength(raw) !== pin.bytes || sha256(raw) !== pin.sha256 || canonical(JSON.parse(final)) !== canonical(attempt.result))
         fail('REPAIR_PREDECESSOR_INVALID', 'complete protected predecessor dispositions differ from its original native result');
       authenticateRepairNative(original.receipt, attempt.native_custody, prepared.commit.worktree, final);
@@ -1618,7 +1637,7 @@ function retainRepairAttempt(prepared, sealed, output, recorder, dispatchId) {
   const original = authenticatedReceipt(recorder, dispatchId, 'review-fix');
   const body = { schema: 'shipyard.codex-repair-attempt.v1', role: 'review-fix', ticket: prepared.commit.ticket,
     pr: prepared.repair.pr, worktree: prepared.commit.worktree, repository: prepared.repository, base: prepared.baseRef,
-    feedback_digest: prepared.repair.feedback.digest, signature: prepared.repair.signature, native_status: 'completed',
+    feedback_digest: prepared.repair.feedback.digest, normalized_feedback_digest: prepared.repair.actionable_feedback?.digest || prepared.repair.feedback.digest, signature: prepared.repair.signature, native_status: 'completed',
     dispatch_id: dispatchId, receipt_store: recorder.storeDir, receipt_sha256: original.digest,
     artifact_ref: sealed.artifact_ref, artifact_digest: sealed.artifact_digest,
     notes: output.notes, hypothesis: output.hypothesis, result: output, subject: prepared.repair, predecessor: history.reference,
@@ -1637,6 +1656,97 @@ function retainRepairAttempt(prepared, sealed, output, recorder, dispatchId) {
   } finally { lock.release(); }
 }
 
+function repairActor(options, prepared) {
+  const viewer = repairCommand(options, prepared.commit.worktree,
+    ['api', 'graphql', '-f', 'query=query{viewer{id login}}']).data?.viewer;
+  if (!object(viewer) || typeof viewer.id !== 'string' || !viewer.id
+      || typeof viewer.login !== 'string' || !viewer.login)
+    fail('REPAIR_ACTION_PENDING', 'authenticated remote action author is unavailable');
+  return { id: viewer.id, login: viewer.login };
+}
+
+function matchingRepairReply(reply, original, disposition, actor) {
+  const thread = original?.kind === 'thread' ? original.id : original?.thread_id;
+  return !!reply && !!disposition && !!actor && reply.body === disposition.reply
+    && reply.body_sha256 === sha256(disposition.reply) && reply.author === actor.login && reply.author_id === actor.id
+    && (thread ? reply.kind === 'thread-comment' && reply.thread_id === thread
+      : reply.kind === 'comment' && !reply.thread_id);
+}
+
+function normalizedRepairFeedback(prepared, feedback, history) {
+  const excluded = new Map(), resolutions = new Map(), coverage = [];
+  for (const { attempt, receipt } of [...history.history].reverse()) {
+    if (!receipt || !attempt.subject) continue;
+    const file = path.join(privateDirectory(prepared.stateRoot, 'repair-actions'), sha256(attempt.dispatch_id) + '.json');
+    if (!fs.existsSync(file)) continue;
+    const actionsBytes = fs.readFileSync(file), actionsSha256 = sha256(actionsBytes);
+    const actions = readSealed(file, prepared.key);
+    if (canonical(JSON.parse(actionsBytes).payload) !== canonical(actions)
+        || sha256(fs.readFileSync(file)) !== actionsSha256)
+      fail('REPAIR_ACTION_PENDING', 'original host action snapshot changed during authentication');
+    if (!actions || actions.schema !== 'shipyard.repair-actions.v1' || actions.dispatch_id !== attempt.dispatch_id
+        || !Array.isArray(actions.confirmed) || actions.pending)
+      fail('REPAIR_ACTION_PENDING', 'original host actions must be authenticated and reconciled before another repair');
+    const subject = actions.subject || attempt.subject;
+    if (actions.subject_sha256 !== sha256(canonical(subject)))
+      fail('REPAIR_PREDECESSOR_INVALID', 'confirmed host actions changed their original subject');
+    let expectedHead = attempt.preparation.commit.expectedHead;
+    if (canonical(subject) !== canonical(attempt.subject)) {
+      const transition = subject.signed_transition;
+      const candidate = transition && readSealed(candidateFile(prepared.stateRoot, transition.candidate_id), prepared.key);
+      const publication = transition && readSealed(path.join(privateDirectory(prepared.stateRoot, 'repair-publications'),
+        transition.candidate_id + '.json'), prepared.key);
+      const withoutTransition = { ...subject, live: attempt.subject.live }; delete withoutTransition.signed_transition;
+      if (!candidate || candidate.dispatch_id !== attempt.dispatch_id || candidate.expected_role !== 'review-fix'
+          || canonical(candidate.repair_subject) !== canonical(attempt.subject)
+          || transition.from !== expectedHead || !publication || publication.status !== 'confirmed'
+          || publication.commit !== transition.to || canonical(publication.subject) !== canonical(subject)
+          || canonical(withoutTransition) !== canonical(attempt.subject))
+        fail('REPAIR_PREDECESSOR_INVALID', 'confirmed action source transition lacks original signed publication custody');
+      verifySignedCommit(prepared.commit.worktree, candidate, transition.to);
+      expectedHead = transition.to;
+    }
+    if (expectedHead !== prepared.commit.expectedHead || attempt.preparation.commit.expectedBase !== prepared.commit.expectedBase
+        || attempt.preparation.graphDigest !== prepared.graphDigest || attempt.preparation.plan.sha256 !== prepared.plan.sha256
+        || attempt.preparation.commit.expectedBranch !== prepared.commit.expectedBranch
+        || subject.pr !== prepared.repairPr || feedback.repo !== subject.feedback.repo)
+      fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output belongs to another source/head/base/PR');
+    const seen = new Set();
+    for (const action of actions.confirmed) {
+      const disposition = attempt.result.review_dispositions.find(item => item.id === action.feedback_id);
+      const original = subject.feedback.inventory.find(item => item.id === action.feedback_id);
+      const reply = actions.feedback?.inventory.find(item => item.id === action.reply_id);
+      const current = feedback.inventory.find(item => item.id === action.reply_id);
+      if (!original || !disposition || disposition.action === 'escalate' || attempt.result.status === 'escalate'
+          || seen.has(action.feedback_id) || excluded.has(action.reply_id)
+          || !matchingRepairReply(reply, original, disposition, actions.actor)
+          || canonical(current) !== canonical(reply))
+        fail('REPAIR_PREDECESSOR_INVALID', 'confirmed reply identity, author, target or complete live bytes changed');
+      seen.add(action.feedback_id); excluded.set(action.reply_id, reply);
+      if (action.resolved) {
+        const threadId = original.kind === 'thread' ? original.id : original.thread_id;
+        const thread = subject.feedback.inventory.find(item => item.id === threadId);
+        const confirmed = actions.feedback.inventory.find(item => item.id === threadId);
+        const currentThread = feedback.inventory.find(item => item.id === threadId);
+        if (disposition.action !== 'reply-and-resolve' || !thread || thread.resolved
+            || canonical(confirmed) !== canonical({ ...thread, resolved: true })
+            || canonical(currentThread) !== canonical(confirmed))
+          fail('REPAIR_PREDECESSOR_INVALID', 'host resolution changed its original external thread');
+        if (!resolutions.has(threadId)) resolutions.set(threadId, thread);
+      }
+      coverage.push({ dispatch_id: attempt.dispatch_id, receipt_sha256: attempt.receipt_sha256,
+        artifact_ref: attempt.artifact_ref, artifact_digest: attempt.artifact_digest,
+        actions_sha256: actionsSha256, feedback_id: action.feedback_id,
+        reply: current, disposition_sha256: sha256(canonical(disposition)), resolved: action.resolved });
+    }
+    if (sha256(fs.readFileSync(file)) !== actionsSha256)
+      fail('REPAIR_ACTION_PENDING', 'original host actions changed during complete feedback normalization');
+  }
+  const inventory = feedback.inventory.filter(item => !excluded.has(item.id));
+  const normalized = inventory.map(item => resolutions.get(item.id) || item);
+  return Object.freeze({ inventory, digest: sha256(canonical(normalized)), coverage });
+}
+
 function prepareRepair(options, scope, context) {
   if (context.prompt !== undefined || context.task_prompt !== undefined || context.input !== undefined)
     fail('REPAIR_SUBJECT_REQUIRED', 'repair prompt is built by the host from canonical full feedback');
@@ -1651,22 +1761,23 @@ function prepareRepair(options, scope, context) {
   const live = repairLive(options, prepared, pr);
   const feedback = completeRepairFeedback(options, prepared, pr);
   if (prepared.repo && prepared.repo !== feedback.repo) fail('REPAIR_SUBJECT_CHANGED', 'feedback belongs to another repository');
+  const history = repairHistory(prepared, pr);
+  const normalized = normalizedRepairFeedback({ ...prepared, repairPr: pr }, feedback, history);
   const minimumResult = { schema: 'shipyard.repair-result.v1', id: scope.ticket, pr, status: 'fixed', pushed: false,
-    notes: 'x', hypothesis: 'x', review_dispositions: feedback.inventory.map(item => ({
+    notes: 'x', hypothesis: 'x', review_dispositions: normalized.inventory.map(item => ({
       id: item.id, action: 'reply', reply: 'x', evidence: { command: 'x', result: 'x' } })) };
   if (Buffer.byteLength(canonical(minimumResult)) > 128 * 1024)
     fail('REPAIR_FEEDBACK_OVERFLOW', 'complete disposition inventory cannot fit the unchanged native final result bound');
-  const signature = sha256(canonical({ ticket: scope.ticket, pr, repository: feedback.repo, feedback: feedback.digest }));
-  const history = repairHistory(prepared, pr);
+  const signature = sha256(canonical({ ticket: scope.ticket, pr, repository: feedback.repo, feedback: normalized.digest }));
   const previous = history.history[0];
   let signatureState = 'first';
-  if (previous?.attempt.feedback_digest === feedback.digest && previous.receipt) {
+  if ((previous?.attempt.normalized_feedback_digest || previous?.attempt.feedback_digest) === normalized.digest && previous.receipt) {
     if (previous.receipt.applied_effort === 'low') signatureState = 'repeat';
     else if (previous.receipt.applied_effort === 'high') signatureState = 'repeat_exhausted';
     else fail('REPAIR_POLICY_EXHAUSTED', 'original completed deepest repair remains unresolved');
   }
   const subject = Object.freeze({ schema: 'shipyard.codex-repair-subject.v1', role: 'review-fix',
-    pr, evidence, live, feedback, signature, signature_state: signatureState,
+    pr, evidence, live, feedback, actionable_feedback: normalized, signature, signature_state: signatureState,
     prior_attempts: history.history.map(({ attempt }) => ({ dispatch_id: attempt.dispatch_id,
       feedback_digest: attempt.feedback_digest, receipt_sha256: attempt.receipt_sha256 || null,
       artifact_ref: attempt.artifact_ref, artifact_digest: attempt.artifact_digest,
@@ -1678,7 +1789,7 @@ function prepareRepair(options, scope, context) {
     + 'Leave all source uncommitted and pushed=false. Do not restart orchestration. Only declared PLAN paths may change. '
     + 'Write complete producer evidence to .shipyard-repair-evidence.md. Return only shipyard.repair-result.v1 JSON with '
     + 'id, pr, status (fixed/no-op/escalate), pushed=false, notes, hypothesis and review_dispositions. '
-    + 'Every feedback ID requires one disposition {id, action (reply/reply-and-resolve/escalate), reply, evidence:{command,result}}. '
+    + 'Every actionable feedback ID requires one disposition; full inventory and authenticated prior host dispositions remain bound. Each disposition is {id, action (reply/reply-and-resolve/escalate), reply, evidence:{command,result}}. '
     + 'Only unresolved thread IDs can be resolved. Escalations remain unresolved.\n'
     + canonical({ subject, files_modified: prepared.commit.files_modified })
     + planDeliveryBlock(prepared.delivery, prepared.plan.path) + verificationAssignmentBlock(prepared.verificationAssignment);
@@ -1694,6 +1805,22 @@ function preparedRepairSignals(prepared) {
   if (!repairPredecessors.has(prepared)) fail('REPAIR_SUBJECT_REQUIRED', 'repair signals require original host preparation');
   return { inputTokens: Math.ceil(Buffer.byteLength(prepared.prompt) / 4), signatureState: prepared.repair.signature_state,
     ...(prepared.repair.signature_state !== 'first' ? { priorApplied: prior.receipt } : {}) };
+}
+
+
+function resolvePreparedRepair(prepared, dispatchId, options, capabilities) {
+  const previous = repairPredecessors.get(prepared)?.history[0];
+  if (!previous?.receipt || !previous.recorder || prepared.repair.signature_state === 'first')
+    fail('REPAIR_PREDECESSOR_INVALID', 'repeat selection requires its original protected predecessor');
+  const loaded = loadConfig(prepared.commit.worktree, { runtime: 'codex', env: options.env || process.env, routed: true });
+  if (loaded.valid === false) fail('INVALID_CONFIG', 'repeat repair configuration is invalid');
+  const configuration = loaded.config.dispatch_context.configuration;
+  const selected = require('./dispatch-boundary.cjs').createDispatchBoundary().resolve({
+    runtime: 'codex', role: 'review-fix', dispatch_id: dispatchId, signals: preparedRepairSignals(prepared),
+    previous_dispatch_id: previous.attempt.dispatch_id, config: configuration,
+  }, previous.recorder, prepared.commit.ticket);
+  require('./codex-model-remap.cjs').validateCodexConfiguration(selected, configuration, capabilities);
+  return selected;
 }
 
 
@@ -1716,6 +1843,12 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
   if (board[prepared.commit.ticket]?.pr !== prepared.repair.pr) fail('REPAIR_SUBJECT_CHANGED', 'canonical PR changed');
   repairLive(options, prepared, prepared.repair.pr);
   const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
+  for (const prior of prepared.repair.actionable_feedback?.coverage || []) {
+    const file = path.join(privateDirectory(prepared.stateRoot, 'repair-actions'), sha256(prior.dispatch_id) + '.json');
+    if (!readSealed(file, prepared.key) || sha256(fs.readFileSync(file)) !== prior.actions_sha256
+        || canonical(current.inventory.find(item => item.id === prior.reply.id)) !== canonical(prior.reply))
+      fail('REPAIR_PREDECESSOR_INVALID', 'authenticated prior host disposition coverage changed');
+  }
   if (current.repo !== feedback.repo || current.digest !== feedback.digest) fail('REPAIR_SUBJECT_CHANGED', 'full live feedback changed');
   const dirty = git(root, ['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean)
     .filter(entry => !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
@@ -1737,14 +1870,13 @@ function repairCompletion(completed, result, prepared, recorder) {
   if (Buffer.byteLength(raw) !== transcript.bytes || sha256(raw) !== transcript.sha256
       || stream.session_id !== completed.session_id
       || stream.records.filter(record => record.type === 'turn.completed').length !== 1
-      || stream.records.filter(record => record.item?.type === 'agent_message').length !== 1
-      || stream.records.find(record => record.item?.type === 'agent_message')?.item.text !== completed.last_agent_message)
+      || repairStreamFinal(stream) !== completed.last_agent_message)
     fail('REPAIR_COMPLETION_INVALID', 'repair completion differs from original native transcript');
   repairNativeCustody.set(prepared, authenticateRepairNative(original.receipt, repairNativeCustody.get(prepared),
     prepared.commit.worktree, completed.last_agent_message));
   let output;
   try { output = JSON.parse(completed.last_agent_message); } catch { fail('REPAIR_COMPLETION_INVALID', 'repair completion is not complete JSON'); }
-  const inventory = prepared.repair.feedback.inventory;
+  const inventory = prepared.repair.actionable_feedback?.inventory || prepared.repair.feedback.inventory;
   if (!object(output) || Object.keys(output).some(key => !['schema', 'id', 'pr', 'status', 'pushed', 'notes', 'hypothesis', 'review_dispositions'].includes(key)) || output.schema !== 'shipyard.repair-result.v1' || output.id !== prepared.commit.ticket
       || output.pr !== prepared.repair.pr || output.pushed !== false || !['fixed', 'no-op', 'escalate'].includes(output.status)
       || ['notes', 'hypothesis'].some(key => typeof output[key] !== 'string' || !output[key].trim() || Buffer.byteLength(output[key]) > 4096)
@@ -1806,7 +1938,7 @@ function performSignedRepairPublication(prepared, signed, options) {
     const actionFile = path.join(privateDirectory(prepared.stateRoot, 'repair-actions'), sha256(candidate.dispatch_id) + '.json');
     const actions = fs.existsSync(actionFile) ? readSealed(actionFile, prepared.key) : null;
     if (fs.existsSync(actionFile) && !actions) fail('REPAIR_ACTION_PENDING', 'protected action recovery authentication failed');
-    recheckRepair(restored, options, { clean: true, feedback: actions?.pending?.reply_id
+    recheckRepair(restored, options, { clean: true, feedback: actions?.pending
       ? completeRepairFeedback(options, restored, restored.repair.pr) : actions?.feedback || restored.repair.feedback });
     return Object.freeze(restored);
   }
@@ -1847,7 +1979,7 @@ function finishRepairRecovery(candidate, artifact, options, stateRoot, key, reco
   repairNativeCustody.set(prepared, attempt.native_custody);
   const original = authenticatedReceipt(recorder, candidate.dispatch_id, 'review-fix').receipt;
   const stream = parseCodexStream(fs.readFileSync(original.runtime_evidence.transcript.path, 'utf8'));
-  const text = stream.records.find(row => row.item?.type === 'agent_message')?.item.text;
+  const text = repairStreamFinal(stream);
   const output = repairCompletion({ launch_id: original.launch_id, session_id: original.runtime_evidence.session_id,
     runtime_evidence: original.runtime_evidence, last_agent_message: text }, { receipt: original }, prepared, recorder);
   if (canonical(output) !== canonical(attempt.result)) fail('REPAIR_PREDECESSOR_INVALID', 'recovery result differs from the original completed turn');
@@ -1868,21 +2000,27 @@ function performRepairActions(prepared, output, options, dispatchId) {
   const stored = readSealed(file, prepared.key);
   if (fs.existsSync(file) && !stored) fail('REPAIR_ACTION_PENDING', 'protected original action state authentication failed');
   let state = stored || { schema: 'shipyard.repair-actions.v1', dispatch_id: dispatchId,
-    subject_sha256: sha256(canonical(prepared.repair)), feedback: prepared.repair.feedback, confirmed: [], pending: null };
+    subject_sha256: sha256(canonical(prepared.repair)), subject: prepared.repair, actor: repairActor(options, prepared),
+    feedback: prepared.repair.feedback, confirmed: [], pending: null };
   if (state.dispatch_id !== dispatchId || state.subject_sha256 !== sha256(canonical(prepared.repair)))
     fail('REPAIR_SUBJECT_CHANGED', 'repair action recovery belongs to another subject');
+  if (state.actor && canonical(repairActor(options, prepared)) !== canonical(state.actor))
+    fail('REPAIR_ACTION_PENDING', 'remote action author changed from its original protected identity');
   let feedback = state.feedback || prepared.repair.feedback;
-  if (state.pending?.reply_id) {
+  if (state.pending) {
     const disposition = output.review_dispositions.find(item => item.id === state.pending.feedback_id);
     const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
-    const known = feedback.inventory.find(item => item.id === state.pending.reply_id);
     const additions = current.inventory.filter(item => !feedback.inventory.some(old => old.id === item.id));
-    const reply = current.inventory.find(item => item.id === state.pending.reply_id);
     const original = feedback.inventory.find(item => item.id === disposition?.id);
     const threadId = original?.kind === 'thread' ? original.id : original?.thread_id;
+    const matches = (state.pending.reply_id ? current.inventory.filter(item => item.id === state.pending.reply_id) : additions)
+      .filter(item => matchingRepairReply(item, original, disposition, state.actor));
+    const reply = matches.length === 1 ? matches[0] : null;
+    const known = reply && feedback.inventory.find(item => item.id === reply.id);
     const expected = feedback.inventory.map(item => state.pending.action === 'resolve' && item.id === threadId
       ? { ...item, resolved: current.inventory.find(now => now.id === threadId)?.resolved } : item);
-    if (!disposition || !reply || reply.body !== disposition.reply || sha256(reply.body) !== state.pending.body_sha256
+    if (!['reply', 'resolve'].includes(state.pending.action) || current.repo !== feedback.repo
+        || !disposition || !matchingRepairReply(reply, original, disposition, state.actor) || sha256(reply.body) !== state.pending.body_sha256
         || (known ? additions.length !== 0 : additions.length !== 1 || additions[0].id !== reply.id)
         || expected.some(item => canonical(current.inventory.find(now => now.id === item.id)) !== canonical(item)))
       fail('REPAIR_ACTION_PENDING', 'uncertain action cannot be independently reconciled with its original ID and complete inventory');
@@ -1898,7 +2036,7 @@ function performRepairActions(prepared, output, options, dispatchId) {
     const disposition = output.review_dispositions.find(item => item.id === action.feedback_id);
     const reply = feedback.inventory.find(item => item.id === action.reply_id);
     const original = feedback.inventory.find(item => item.id === action.feedback_id);
-    if (!disposition || !reply || reply.body !== disposition.reply || (action.resolved && !original?.resolved))
+    if (!matchingRepairReply(reply, original, disposition, state.actor) || (action.resolved && !original?.resolved))
       fail('REPAIR_ACTION_PENDING', 'retained confirmed action no longer matches its actual full live inventory');
   }
   for (const disposition of output.review_dispositions) {
@@ -1928,7 +2066,8 @@ function performRepairActions(prepared, output, options, dispatchId) {
       atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
       const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
       const additions = current.inventory.filter(item => !feedback.inventory.some(old => old.id === item.id));
-      if (additions.length !== 1 || additions[0].id !== posted.id || additions[0].body !== posted.body
+      if (additions.length !== 1 || additions[0].id !== posted.id
+          || !matchingRepairReply(additions[0], entry, disposition, state.actor)
           || feedback.inventory.some(old => canonical(current.inventory.find(item => item.id === old.id)) !== canonical(old)))
         fail('REPAIR_ACTION_PENDING', 'reply was not independently confirmed in the complete live inventory');
       feedback = current;
@@ -1975,13 +2114,13 @@ function resumeRepairActions(options, dispatchId, liveScopeInput) {
     fail('REPAIR_SUBJECT_CHANGED', 'action recovery changed its original approved PLAN');
   if (!prepared.repair) fail('REPAIR_PREDECESSOR_INVALID', 'original repair subject is unavailable');
   const stream = parseCodexStream(fs.readFileSync(previous.receipt.runtime_evidence.transcript.path, 'utf8'));
-  const text = stream.records.find(row => row.item?.type === 'agent_message')?.item.text;
+  const text = repairStreamFinal(stream);
   const output = repairCompletion({ launch_id: previous.receipt.launch_id,
     session_id: previous.receipt.runtime_evidence.session_id, runtime_evidence: previous.receipt.runtime_evidence,
     last_agent_message: text }, { receipt: previous.receipt }, prepared, previous.recorder);
   if (canonical(output) !== canonical(previous.attempt.result)) fail('REPAIR_PREDECESSOR_INVALID', 'original protected dispositions changed');
   const actionState = readSealed(path.join(privateDirectory(root, 'repair-actions'), sha256(dispatchId) + '.json'), key);
-  recheckRepair(prepared, options, { feedback: actionState?.pending?.reply_id
+  recheckRepair(prepared, options, { feedback: actionState?.pending
     ? completeRepairFeedback(options, prepared, prepared.repair.pr) : actionState?.feedback || prepared.repair.feedback, clean: true });
   return Object.freeze({ repair_result: output, actions: applyRepairActions(prepared, output, options, dispatchId), resumed: true });
 }
@@ -2575,8 +2714,10 @@ function createCodexDeliveryHost(options = {}) {
       }
       const dispatchAgent = (dispatchId, taskContext) => {
         if (completedSourceReference || (repairPrepared && request.signals.signatureState !== 'first')) {
-          const selection = require('./codex-agent.cjs').selectAgent(request.role, { cwd: scope.worktree, flags: new Map(),
-            signals: request.signals, dispatch_id: dispatchId, capabilities: runtimeHost.capabilities, agentDir, agentManifest, env });
+          const selection = repairPrepared
+            ? resolvePreparedRepair(repairPrepared, dispatchId, options, runtimeHost.capabilities)
+            : require('./codex-agent.cjs').selectAgent(request.role, { cwd: scope.worktree, flags: new Map(),
+              signals: request.signals, dispatch_id: dispatchId, capabilities: runtimeHost.capabilities, agentDir, agentManifest, env });
           const adapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({ agentsDir: agentDir, agentManifest,
             capabilities: runtimeHost.capabilities, host: reviewHost });
           return require('./dispatch-boundary.cjs').createDispatchBoundary({ adapters: { codex: adapter },
@@ -2883,10 +3024,10 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
   }
   const dispatchId = archDispatchId || request.dispatch_id || newDispatchId();
-  const resolution = policy.resolveDispatch({
-    runtime: 'codex', role: request.role,
-    signals: preparedRepair ? preparedRepairSignals(preparedRepair) : request.signals, dispatch_id: dispatchId,
-  });
+  const resolution = preparedRepair && preparedRepair.repair.signature_state !== 'first'
+    ? resolvePreparedRepair(preparedRepair, dispatchId, options, options.host?.capabilities || options.capabilities || {})
+    : policy.resolveDispatch({ runtime: 'codex', role: request.role,
+      signals: preparedRepair ? preparedRepairSignals(preparedRepair) : request.signals, dispatch_id: dispatchId });
   let writerLease;
   let writerHandle;
   let writerSession;

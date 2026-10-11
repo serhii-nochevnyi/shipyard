@@ -2032,7 +2032,6 @@ async function originalFixerFixture(outcome, mutation) {
   f.base = git(f.root, 'rev-parse', 'HEAD'); git(f.root, 'update-ref', 'refs/heads/main', f.base);
   approvedPlan(f, ['node check.cjs']);
   const verificationAllowList = [{ argv: ['node', 'check.cjs'], profile: 'host', timeout_s: 600 }];
-  const session = crypto.randomUUID();
   const agentManifest = agentManifestFor(f.agentDir, 'review-fix');
   const evidenceFile = path.join(f.root, '.shipyard-evidence.md');
   fs.writeFileSync(evidenceFile, 'Complete original review evidence.');
@@ -2054,7 +2053,12 @@ async function originalFixerFixture(outcome, mutation) {
       { id: 'comment-1', action: outcome === 'no-op' ? 'reply' : 'escalate', reply: 'Retain this obligation.', evidence: { command: 'inspect', result: 'complete comment reviewed' } },
       { id: 'pr-body-501', action: outcome === 'no-op' ? 'reply' : 'escalate', reply: 'Complete PR body reasoning.', evidence: { command: 'inspect PR', result: 'complete original body evaluated' } },
     ] };
-  const replies = [], prReplies = [];
+  if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) {
+    for (const disposition of output.review_dispositions) disposition.action = disposition.id === 'thread-1' ? 'reply-and-resolve' : 'reply';
+  }
+  const replies = [], prReplies = [], external = [];
+  const actor = { id: 'authenticated-host-user', login: 'delivery-host' };
+  let swapReplyTarget = false;
   let launches = 0, publishedHead = f.base, pushes = 0;
   const live = () => ({ number: mutation === 'foreign-pr' ? 502 : 501, state: mutation === 'closed-pr' ? 'CLOSED' : 'OPEN',
     headRefName: 'ticket/T-38-04', headRefOid: mutation === 'stale-head' ? '1'.repeat(40) : publishedHead,
@@ -2069,15 +2073,20 @@ async function originalFixerFixture(outcome, mutation) {
     const query = args.find(arg => arg.startsWith('query='));
     if (args[0] === 'pr') return JSON.stringify({ id: 'pr-body-501' });
     const value = key => args.find(arg => arg.startsWith(key + '='))?.slice(key.length + 1);
+    if (query.includes('viewer{id login}')) return JSON.stringify({ data: { viewer: actor } });
     if (query.includes('addPullRequestReviewThreadReply')) {
-      const comment = { id: 'reply-' + (replies.length + 1), body: value('body') }; replies.push(comment);
+      const comment = { id: 'reply-' + (replies.length + 1), body: value('body'), author: actor }; replies.push(comment);
+      if ((mutation === 'thread-response-loss' || mutation?.startsWith('pending-')) && replies.length === 1) throw new Error('Original accepted thread reply response lost');
       return JSON.stringify({ data: { addPullRequestReviewThreadReply: { comment } } });
     }
     if (query.includes('addComment(input:')) {
-      const comment = { id: 'pr-reply-' + (prReplies.length + 1), body: value('body') }; prReplies.push(comment);
+      const comment = { id: 'pr-reply-' + (prReplies.length + 1), body: value('body'), author: actor }; prReplies.push(comment);
+      if (mutation === 'comment-response-loss' && prReplies.length === 1) throw new Error('Original accepted PR reply response lost');
       return JSON.stringify({ data: { addComment: { commentEdge: { node: comment } } } });
     }
-    if (query.includes('resolveReviewThread(input:')) { feedback[0].isResolved = true; return JSON.stringify({ data: { resolveReviewThread: { thread: feedback[0] } } }); }
+    if (query.includes('resolveReviewThread(input:')) { feedback[0].isResolved = true;
+      if (mutation === 'resolve-response-loss') throw new Error('Original accepted resolve response lost');
+      return JSON.stringify({ data: { resolveReviewThread: { thread: feedback[0] } } }); }
     if (query.includes('{id body title}')) return JSON.stringify({ data: { repository: { pullRequest: { id: 'pr-body-501', body: 'Original complete PR body', title: 'Original PR title' } } } });
     const connection = nodes => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
     if (query.includes('node(id:')) {
@@ -2088,7 +2097,7 @@ async function originalFixerFixture(outcome, mutation) {
           nodes: Array.from({ length: 100 }, (_, index) => ({ id: 'bounded-obligation-' + (offset + index), body: 'x' })),
           pageInfo: { hasNextPage: offset + 100 < 2000, endCursor: String(offset + 100) } } } } });
       }
-      const comments = [{ id: 'comment-1', body: mutation === 'overflow' ? 'x'.repeat(600000) : 'Full original thread comment' }, ...replies];
+      const comments = [{ id: 'comment-1', body: mutation === 'overflow' ? 'x'.repeat(600000) : 'Full original thread comment' }, ...external, ...(swapReplyTarget ? [] : replies)];
       if (mutation === 'duplicate-feedback') comments.push(comments[0]);
       if (mutation === 'feedback-movement' && launches) comments.push({ id: 'new-obligation', body: 'New feedback after preparation.' });
       const page = connection(comments);
@@ -2096,7 +2105,7 @@ async function originalFixerFixture(outcome, mutation) {
       return JSON.stringify({ data: { node: { comments: page } } });
     }
     const field = query.includes('reviewThreads(') ? 'reviewThreads' : query.includes('reviews(') ? 'reviews' : 'comments';
-    return JSON.stringify({ data: { repository: { pullRequest: { [field]: connection(field === 'reviewThreads' ? feedback : field === 'comments' ? prReplies : []) } } } });
+    return JSON.stringify({ data: { repository: { pullRequest: { [field]: connection(field === 'reviewThreads' ? feedback : field === 'comments' ? [...prReplies, ...(swapReplyTarget ? replies : [])] : []) } } } });
   };
   const originalHome = os.homedir; os.homedir = () => fs.realpathSync(temporary);
   try {
@@ -2109,16 +2118,21 @@ async function originalFixerFixture(outcome, mutation) {
     if (mutation === 'caller-rung') nativeRequest.signals = { signatureState: 'repeat_exhausted' };
     if (mutation === 'caller-first') nativeRequest.signals = { signatureState: 'first' };
     if (mutation === 'caller-new') nativeRequest.signals = { signatureState: 'new' };
-    const final = JSON.stringify(output);
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'review-fix' });
-    const run = () => createCodexDeliveryHost({ ...cliOptions(f), host: undefined, scope: f.scope,
+    const run = () => {
+      const hostOptions = { ...cliOptions(f), host: undefined, scope: f.scope,
       agentManifest, getPullRequest: live, execFileSync: gh, verification: undefined,
       verificationAllowList, hostVerificationRunner: hostRunner(),
       probe: { status: 'available', executable: 'codex', runtime_version: 'fixture',
-        capabilities: { supportedModels: [selected.model], supportedEfforts: [selected.effort] } },
+        capabilities: { supportedModels: [selected.model], supportedEfforts: ['low', 'high', 'xhigh'] } },
       env: { CODEX_HOME: home },
       spawn(_executable, _args, options) {
         launches++;
+        const session = crypto.randomUUID();
+        const effort = JSON.parse(_args.find(value => value.startsWith('model_reasoning_effort=')).split('=')[1]);
+        const applied = { model: _args[_args.indexOf('--model') + 1], effort,
+          agent_file: effort === 'low' ? selected.agent_file : selected.agent_file.replace('.toml', effort === 'high' ? '-repeat.toml' : '-deep.toml') };
+        const final = JSON.stringify(output);
         if (outcome === 'source') fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
         if (mutation === 'foreign-dirty') fs.writeFileSync(path.join(f.root, 'outside.txt'), 'foreign mutation');
         if (mutation === 'self-commit') { git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'unauthorized producer commit'); }
@@ -2128,29 +2142,47 @@ async function originalFixerFixture(outcome, mutation) {
         const capturedRows = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
           .trim().split('\n').map(JSON.parse);
         const started = capturedRows.find(row => row.type === 'event_msg' && row.payload?.type === 'task_started');
-        const turnId = started.payload.turn_id;
-        const user = { type: 'response_item', payload: { type: 'message', role: 'user', content: [],
-          internal_chat_message_metadata_passthrough: { turn_id: turnId } } };
+        const turnId = crypto.randomUUID();
+        Object.assign(started.payload, { turn_id: turnId, root_turn_id: turnId });
+        const nativeMessage = (role, text, phase) => {
+          const row = structuredClone(capturedRows.find(row => row.type === 'response_item'
+            && row.payload?.type === 'message' && row.payload.role === role));
+          assert.ok(row, 'registered native message template is required');
+          row.payload.content = [{ ...row.payload.content[0], text }];
+          row.payload.internal_chat_message_metadata_passthrough.turn_id = turnId;
+          if (phase) row.payload.phase = phase;
+          return row;
+        };
+        const user = nativeMessage('user', '');
         const instructions = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').generatedInstructions(
-          fs.readFileSync(path.join(f.agentDir, selected.agent_file), 'utf8'));
+          fs.readFileSync(path.join(f.agentDir, applied.agent_file), 'utf8'));
         const rows = [capturedRows.find(row => row.type === 'session_meta'), capturedRows.find(row => row.type === 'turn_context'),
-          started, { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: instructions }],
-            internal_chat_message_metadata_passthrough: { turn_id: turnId } } }, user,
+          started, nativeMessage('developer', instructions), user,
           capturedRows.find(row => row.type === 'response_item' && row.payload?.phase === 'final_answer'),
           capturedRows.find(row => row.type === 'event_msg' && row.payload?.type === 'task_complete')];
-        if (mutation === 'native-delegation') rows.splice(rows.length - 2, 0, { type: 'response_item', payload: {
-          type: 'function_call', name: 'spawn_agent', call_id: 'unauthorized-fixer-child', arguments: JSON.stringify({ agent_type: 'executor' }),
-          internal_chat_message_metadata_passthrough: { turn_id: turnId } } });
+        if (mutation === 'native-delegation') {
+          const call = structuredClone(capturedRows.find(row => row.type === 'response_item' && row.payload?.type === 'function_call'));
+          Object.assign(call.payload, { name: 'spawn_agent', call_id: 'unauthorized-fixer-child', arguments: JSON.stringify({ agent_type: 'executor' }) });
+          call.payload.internal_chat_message_metadata_passthrough.turn_id = turnId;
+          rows.splice(rows.length - 2, 0, call);
+        }
         for (const row of rows) {
           if (row.type === 'session_meta') Object.assign(row.payload, { id: session, session_id: session, cwd: f.root, runtime_workspace_roots: [f.root] });
           if (row.type === 'turn_context') {
-            Object.assign(row.payload, { model: selected.model, effort: selected.effort, cwd: f.root });
+            Object.assign(row.payload, { model: applied.model, effort: applied.effort, cwd: f.root, turn_id: turnId });
             row.payload.sandbox_policy = { type: 'workspace-write' };
-            if (row.payload.collaboration_mode?.settings) Object.assign(row.payload.collaboration_mode.settings, { model: selected.model, reasoning_effort: selected.effort });
+            if (row.payload.collaboration_mode?.settings) Object.assign(row.payload.collaboration_mode.settings, { model: applied.model, reasoning_effort: applied.effort });
           }
-          if (row.payload?.type === 'task_complete') row.payload.last_agent_message = final;
-          if (row.payload?.phase === 'final_answer') row.payload.content.forEach(block => { block.text = final; });
+          if (row.payload?.type === 'task_complete') Object.assign(row.payload, { last_agent_message: final, turn_id: turnId });
+          if (row.payload?.phase === 'final_answer') {
+            row.payload.internal_chat_message_metadata_passthrough.turn_id = turnId;
+            row.payload.content.forEach(block => { block.text = final; });
+          }
         }
+        if (mutation === 'missing-native-completion') rows.pop();
+        if (mutation === 'duplicate-native-final') rows.splice(rows.length - 1, 0, structuredClone(rows.at(-2)));
+        if (mutation === 'foreign-native-final') rows.at(-2).payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign-turn';
+        if (mutation === 'mismatched-native-final') rows.at(-2).payload.content[0].text = 'foreign final JSON';
         const date = new Date();
         const directory = path.join(options.env.CODEX_HOME, 'sessions', String(date.getFullYear()),
           String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
@@ -2158,6 +2190,23 @@ async function originalFixerFixture(outcome, mutation) {
         const cli = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
           .trim().split('\n').map(JSON.parse);
         for (const row of cli) if (row.item?.type === 'agent_message') row.item.text = final;
+        const finalItem = cli.find(row => row.item?.type === 'agent_message');
+        const progress = Array.from({ length: 4 }, (_, index) => {
+          const row = structuredClone(finalItem);
+          Object.assign(row.item, { id: 'progress-' + index, text: 'Original progress ' + index });
+          return row;
+        });
+        cli.splice(cli.findIndex(row => row.item?.type === 'agent_message'), 0, ...progress);
+        rows.splice(rows.length - 2, 0, ...progress.map(row => nativeMessage('assistant', row.item.text, 'commentary')));
+        if (mutation === 'duplicate-cli-final') {
+          const duplicate = structuredClone(finalItem); duplicate.item.id = 'duplicate-final';
+          cli.splice(cli.length - 1, 0, duplicate);
+        }
+        if (mutation === 'foreign-cli-session') {
+          const foreign = structuredClone(cli.find(row => row.type === 'thread.started'));
+          foreign.thread_id = crypto.randomUUID(); cli.unshift(foreign);
+        }
+        if (mutation === 'mismatched-cli-final') cli.findLast(row => row.item?.type === 'agent_message').item.text = 'Foreign final';
         if (mutation === 'duplicate-completion') cli.push(structuredClone(cli.find(row => row.type === 'turn.completed')));
         if (mutation === 'missing-completion') cli.splice(cli.findIndex(row => row.type === 'turn.completed'), 1);
         const child = new EventEmitter(); child.pid = 45678;
@@ -2173,7 +2222,56 @@ async function originalFixerFixture(outcome, mutation) {
         } };
         return child;
       },
-    }).run(nativeRequest);
+      };
+      if (mutation?.endsWith('-callback')) {
+        const storage = path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'));
+        const actualRuntime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').createCodexRuntimeHost({
+          ...hostOptions, recorderDir: path.join(storage, 'receipts'), transcriptDir: path.join(storage, 'transcripts'),
+          additionalProtectedPaths: [stateRoot(f), require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').archiveAuthorityDirectory(f.root)],
+        });
+        hostOptions.host = { ...actualRuntime, launchStatic(selection, context) {
+          return actualRuntime.launchStatic(selection, { ...context, onCompleted(completed) {
+            if (mutation === 'missing-callback') return;
+            if (mutation === 'foreign-callback') context.onCompleted({ ...completed, session_id: crypto.randomUUID() });
+            else if (mutation === 'mismatched-callback') context.onCompleted({ ...completed, last_agent_message: 'foreign result' });
+            else { context.onCompleted(completed); context.onCompleted(completed); }
+          } });
+        } };
+      }
+      if (mutation?.startsWith('normalized-cli-') && launches) {
+        const requestFile = path.join(home, 'original-repeat-request.json');
+        fs.writeFileSync(requestFile, JSON.stringify({ scope: f.scope, ...nativeRequest }));
+        const written = [];
+        return runCli(['--args-file', requestFile], { write(chunk) { written.push(chunk); } }, hostOptions)
+          .then(result => { assert.equal(JSON.parse(written.join('')).receipt.dispatch_id, result.receipt.dispatch_id); return result; });
+      }
+      return createCodexDeliveryHost(hostOptions).run(nativeRequest);
+    };
+    if (['thread-response-loss', 'comment-response-loss', 'resolve-response-loss'].includes(mutation) || mutation?.startsWith('pending-')) {
+      await assert.rejects(run, { code: 'REPAIR_FEEDBACK_UNAVAILABLE' });
+      const records = fs.readdirSync(path.join(stateRoot(f), 'repair-actions'));
+      assert.equal(records.length, 1);
+      const dispatchId = JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-actions', records[0]))).payload.dispatch_id;
+      const recoveryHost = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: gh, verificationAllowList });
+      if (mutation?.startsWith('pending-')) {
+        if (mutation === 'pending-duplicate') replies.push({ ...replies[0], id: 'ambiguous-reply' });
+        if (mutation === 'pending-author') replies[0].author = { id: 'foreign-user', login: actor.login };
+        if (mutation === 'pending-body') replies[0].body += ' changed';
+        if (mutation === 'pending-target') swapReplyTarget = true;
+        if (mutation === 'pending-external') external.push({ id: 'unexpected-external', body: 'complete unknown feedback' });
+        if (mutation === 'pending-missing') replies.length = 0;
+        const before = replies.length + prReplies.length;
+        assert.throws(() => recoveryHost.resumeRepairActions(dispatchId, f.scope), { code: 'REPAIR_ACTION_PENDING' });
+        assert.equal(replies.length + prReplies.length, before);
+        assert.equal(launches, 1); assert.equal(feedback[0].isResolved, false);
+        return;
+      }
+      const recovered = recoveryHost.resumeRepairActions(dispatchId, f.scope);
+      assert.equal(recovered.actions.confirmed.length, 3);
+      assert.equal(replies.length + prReplies.length, 3, 'accepted replies with lost responses are not replayed');
+      assert.equal(feedback[0].isResolved, true);
+      return;
+    }
     if (mutation === 'publication-response-loss') {
       await assert.rejects(run, { code: 'REPAIR_PUBLICATION_PENDING' });
       const candidates = fs.readdirSync(path.join(stateRoot(f), 'candidates'));
@@ -2187,6 +2285,92 @@ async function originalFixerFixture(outcome, mutation) {
       assert.equal(recovered.actions.status, 'confirmed');
       assert.equal(pushes, 1, 'an independently confirmed signed push is never replayed');
       assert.equal(launches, 1);
+      return;
+    }
+    if (mutation?.startsWith('normalized-')) {
+      const first = await run();
+      assert.equal(first.actions.confirmed.length, 3);
+      assert.equal(first.resolution.signals.signatureState, 'first');
+      const firstReceipt = first.receipt;
+      const firstHead = git(f.root, 'rev-parse', 'HEAD');
+      if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) assert.equal(firstHead, first.artifact.commit);
+      const actionFile = path.join(stateRoot(f), 'repair-actions', crypto.createHash('sha256').update(first.dispatch_id).digest('hex') + '.json');
+      if (mutation === 'normalized-forged-actions') {
+        const state = JSON.parse(fs.readFileSync(actionFile)); state.payload.confirmed[0].reply_id = 'forged';
+        fs.writeFileSync(actionFile, JSON.stringify(state));
+      }
+      if (mutation === 'normalized-reply-body') replies[0].body += ' mutated';
+      if (mutation === 'normalized-reply-author') replies[0].author = { id: 'foreign-user', login: actor.login };
+      if (mutation === 'normalized-reply-id') replies[0].id = 'foreign-reply';
+      if (mutation === 'normalized-reply-target') swapReplyTarget = true;
+      if (mutation === 'normalized-missing-actions') fs.unlinkSync(actionFile);
+      if (mutation === 'normalized-reopened') feedback[0].isResolved = false;
+      if (mutation === 'normalized-source') publishedHead = '3'.repeat(40);
+      const refusal = {
+        'normalized-forged-actions': 'STATE_RECORD_INVALID', 'normalized-reply-body': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-reply-author': 'REPAIR_PREDECESSOR_INVALID', 'normalized-reply-id': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-reply-target': 'REPAIR_PREDECESSOR_INVALID', 'normalized-reopened': 'REPAIR_PREDECESSOR_INVALID', 'normalized-source': 'REPAIR_SUBJECT_CHANGED',
+      }[mutation];
+      if (refusal) {
+        await assert.rejects(run, { code: refusal });
+        assert.equal(launches, 1); assert.equal(replies.length + prReplies.length, 3);
+        return;
+      }
+      if (mutation === 'normalized-missing-actions') {
+        for (const reply of [...replies, ...prReplies]) output.review_dispositions.push({
+          ...structuredClone(output.review_dispositions[1]), id: reply.id });
+      }
+      if (mutation === 'normalized-external') {
+        external.push({ id: 'external-identical-body', body: replies[0].body, author: actor });
+        output.review_dispositions.push({ ...structuredClone(output.review_dispositions[1]), id: external[0].id });
+      }
+      for (const disposition of output.review_dispositions) disposition.action = 'reply';
+      const repeatFile = selected.agent_file.replace('.toml', '-repeat.toml');
+      const originalAgent = fs.readFileSync(path.join(f.agentDir, selected.agent_file), 'utf8');
+      const repeatAgent = originalAgent.replace('shipyard-policy-rung = "base"', 'shipyard-policy-rung = "repeat"')
+        .replace('model_reasoning_effort = "low"', 'model_reasoning_effort = "high"')
+        .replace('name = "' + selected.agent_file.replace('.toml', '') + '"', 'name = "' + repeatFile.replace('.toml', '') + '"');
+      fs.writeFileSync(path.join(f.agentDir, repeatFile), repeatAgent);
+      const manifest = JSON.parse(fs.readFileSync(agentManifest));
+      manifest.agent_files.push(repeatFile); manifest.agent_digests[repeatFile] = crypto.createHash('sha256').update(repeatAgent).digest('hex');
+      fs.writeFileSync(agentManifest, JSON.stringify(manifest));
+      const second = await run();
+      const unknown = ['normalized-external', 'normalized-missing-actions'].includes(mutation);
+      assert.equal(second.resolution.signals.signatureState, unknown ? 'first' : 'repeat');
+      assert.equal(second.receipt.applied_effort, unknown ? 'low' : 'high');
+      assert.notEqual(second.dispatch_id, first.dispatch_id);
+      assert.notEqual(second.receipt.runtime_evidence.session_id, firstReceipt.runtime_evidence.session_id);
+      assert.notEqual(second.receipt.launch_id, firstReceipt.launch_id);
+      assert.notEqual(second.receipt.runtime_evidence.transcript.sha256, firstReceipt.runtime_evidence.transcript.sha256);
+      assert.notEqual(second.receipt.runtime_evidence.native_session_evidence.sha256, firstReceipt.runtime_evidence.native_session_evidence.sha256);
+      assert.equal(second.repair_result.review_dispositions.length, mutation === 'normalized-missing-actions' ? 6 : mutation === 'normalized-external' ? 4 : 3);
+      if (mutation !== 'normalized-missing-actions') assert.ok(second.repair_result.review_dispositions.every(item => !/^reply-|^pr-reply-/.test(item.id)));
+      const attempts = fs.readdirSync(path.join(stateRoot(f), 'repair-attempts')).map(file =>
+        JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-attempts', file))).payload).filter(item => item.dispatch_id);
+      const originalSecond = attempts.find(item => item.dispatch_id === second.dispatch_id);
+      assert.equal(originalSecond.subject.feedback.inventory.length, mutation === 'normalized-external' ? 7 : 6);
+      assert.equal(originalSecond.subject.actionable_feedback.coverage.length, mutation === 'normalized-missing-actions' ? 0 : 3);
+      assert.equal(originalSecond.subject.actionable_feedback.digest === attempts.find(item => item.dispatch_id === first.dispatch_id).normalized_feedback_digest,
+        !unknown);
+      assert.equal(replies.length + prReplies.length, mutation === 'normalized-missing-actions' ? 9 : mutation === 'normalized-external' ? 7 : 6);
+      if (mutation === 'normalized-repeat') {
+        const deepFile = selected.agent_file.replace('.toml', '-deep.toml');
+        const deepAgent = repeatAgent.replace('shipyard-policy-rung = "repeat"', 'shipyard-policy-rung = "repeat_exhausted"')
+          .replace('model_reasoning_effort = "high"', 'model_reasoning_effort = "xhigh"')
+          .replace('name = "' + repeatFile.replace('.toml', '') + '"', 'name = "' + deepFile.replace('.toml', '') + '"');
+        fs.writeFileSync(path.join(f.agentDir, deepFile), deepAgent);
+        manifest.agent_files.push(deepFile); manifest.agent_digests[deepFile] = crypto.createHash('sha256').update(deepAgent).digest('hex');
+        fs.writeFileSync(agentManifest, JSON.stringify(manifest));
+        const third = await run();
+        assert.equal(third.resolution.signals.signatureState, 'repeat_exhausted');
+        assert.equal(third.receipt.applied_effort, 'xhigh');
+        assert.notEqual(third.dispatch_id, first.dispatch_id); assert.notEqual(third.dispatch_id, second.dispatch_id);
+        assert.equal(third.repair_result.review_dispositions.length, 3);
+        assert.equal(replies.length + prReplies.length, 9);
+        await assert.rejects(run, { code: 'REPAIR_POLICY_EXHAUSTED' });
+        assert.equal(launches, 3);
+      }
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), firstHead);
       return;
     }
     if (mutation) {
@@ -2203,6 +2387,12 @@ async function originalFixerFixture(outcome, mutation) {
         'foreign-dirty': 'SCOPED_TREE_UNAVAILABLE', 'self-commit': 'REPAIR_SUBJECT_CHANGED',
         'plan-movement': 'REPAIR_SUBJECT_CHANGED', 'evidence-completion': 'REPAIR_EVIDENCE_CHANGED',
         'missing-completion': 'RUNTIME_EVIDENCE_MISSING', 'duplicate-completion': 'RUNTIME_EVIDENCE_MISMATCH',
+        'missing-callback': 'REPAIR_COMPLETION_INVALID', 'foreign-callback': 'REPAIR_COMPLETION_INVALID',
+        'mismatched-callback': 'REPAIR_COMPLETION_INVALID', 'duplicate-callback': 'RUNTIME_EVIDENCE_INVALID',
+        'duplicate-cli-final': 'REPAIR_COMPLETION_INVALID', 'foreign-cli-session': 'RUNTIME_EVIDENCE_INVALID',
+        'mismatched-cli-final': 'RUNTIME_EVIDENCE_MISMATCH', 'duplicate-native-final': 'RUNTIME_EVIDENCE_MISMATCH',
+        'missing-native-completion': 'RUNTIME_EVIDENCE_MISMATCH', 'foreign-native-final': 'RUNTIME_EVIDENCE_MISMATCH',
+        'mismatched-native-final': 'RUNTIME_EVIDENCE_MISMATCH',
         'native-context': 'REPAIR_COMPLETION_INVALID', 'native-delegation': 'REPAIR_COMPLETION_INVALID',
       }[mutation];
       assert.ok(expectedCode, 'every mutation must name its intended refusal');
@@ -2219,6 +2409,12 @@ async function originalFixerFixture(outcome, mutation) {
     assert.equal(launches, 1);
     assert.equal(result.receipt.role, 'review-fix');
     assert.equal(result.receipt.compliance, 'verified');
+    const originalStream = fs.readFileSync(result.receipt.runtime_evidence.transcript.path, 'utf8');
+    assert.equal(crypto.createHash('sha256').update(originalStream).digest('hex'), result.receipt.runtime_evidence.transcript.sha256);
+    const streamRows = originalStream.trim().split('\n').map(JSON.parse);
+    assert.equal(streamRows.filter(row => row.type === 'turn.completed').length, 1);
+    assert.equal(streamRows.filter(row => row.type === 'item.completed' && row.item?.type === 'agent_message').length, 5);
+    assert.equal(streamRows.findLast(row => row.item?.type === 'agent_message').item.text, JSON.stringify(output));
     // @contract: Selection signals retain the original boundary resolution identity.
     assert.equal(result.resolution.dispatch_id, result.receipt.dispatch_id);
     assert.equal(result.resolution.role, 'review-fix');
@@ -2292,14 +2488,29 @@ async function originalFixerFixture(outcome, mutation) {
   } finally { os.homedir = originalHome; clean(f); fs.rmSync(home, { recursive: true, force: true }); }
 }
 
-for (const outcome of ['source', 'no-op', 'escalate']) test('canonical builder through original static fixer seals ' + outcome + ' with host custody',
+for (const outcome of ['source', 'no-op', 'escalate']) test('canonical builder through original static fixer seals ' + outcome + ' with host custody with four original native progress messages',
   () => withGraphDirEnv(undefined, () => originalFixerFixture(outcome)));
 test('signed fixer publication recovers a lost response without replaying its confirmed push',
   () => withGraphDirEnv(undefined, () => originalFixerFixture('source', 'publication-response-loss')));
 for (const mutation of ['foreign-pr', 'closed-pr', 'stale-head', 'stale-base', 'failed-page', 'overflow', 'disposition-budget', 'duplicate-feedback',
   'stalled-pagination', 'feedback-movement', 'missing-disposition', 'foreign-result', 'producer-push', 'evidence-symlink', 'evidence-bytes',
   'unknown-selector', 'caller-rung', 'caller-first', 'caller-new', 'foreign-dirty', 'self-commit', 'plan-movement', 'evidence-completion', 'missing-completion', 'duplicate-completion',
-  'native-context', 'native-delegation'])
+  'native-context', 'native-delegation', 'duplicate-cli-final', 'foreign-cli-session', 'mismatched-cli-final',
+  'missing-native-completion', 'duplicate-native-final', 'foreign-native-final', 'mismatched-native-final',
+  'missing-callback', 'duplicate-callback', 'foreign-callback', 'mismatched-callback'])
   test('original fixer custody refuses ' + mutation, () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
+
+for (const mutation of ['thread-response-loss', 'comment-response-loss', 'resolve-response-loss',
+  'pending-duplicate', 'pending-author', 'pending-body', 'pending-target', 'pending-external', 'pending-missing'])
+  test('original feedback action recovers ' + mutation + ' without reply replay',
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
+
+for (const mutation of ['normalized-repeat', 'normalized-cli-repeat', 'normalized-external', 'normalized-forged-actions', 'normalized-reply-body',
+  'normalized-reply-author', 'normalized-reply-id', 'normalized-reply-target', 'normalized-source', 'normalized-reopened', 'normalized-missing-actions'])
+  test('original complete feedback and authenticated host output ' + mutation,
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
+for (const mutation of ['normalized-source-repeat', 'normalized-cli-source-repeat'])
+  test('authenticated confirmed replies retain repeat policy through the original signed fixer source transition ' + mutation,
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
 
 done();

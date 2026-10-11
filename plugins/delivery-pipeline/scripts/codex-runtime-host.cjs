@@ -2602,7 +2602,32 @@ function createCodexCliLauncher(options = {}) {
         agent_file: agent?.file || launchOptions.agent_file || null,
         agent_file_digest: agent?.sha256 || launchOptions.agent_file_digest || null,
         ...(agent ? { agent, task } : {}), runtime_launch: runtimeLaunch }, env, launchOptions.onReviewProgress, () => child?.pid) : null;
-    let child;
+    let child, originalExit;
+    const stdout = [], stderr = [];
+    const retainSetupFailure = (error) => {
+      if (!resumeReview?.completedSource) return;
+      const raw = readReviewNativeFile(resumeReview.progress.native_file, scope.worktree);
+      let nativeStatus = 'unknown';
+      try {
+        const append = Buffer.from(raw).subarray(resumeReview.progress.snapshot.bytes).toString('utf8');
+        const events = append.split('\n').filter(Boolean).map(JSON.parse)
+          .filter(row => row.type === 'event_msg').map(row => row.payload?.type);
+        if (events.includes('task_complete')) nativeStatus = 'completed';
+        else if (events.includes('task_aborted')) nativeStatus = 'interrupted';
+        else if (events.includes('task_started')) nativeStatus = 'incomplete';
+      } catch {}
+      const failedTranscript = stdout.length ? writeTranscript(transcriptDir,
+        { ...scope, run_id: scope.run_id + '-' + launchOptions.dispatch_id }, resumeReview.progress.session_id,
+        Buffer.concat(stdout).toString('utf8')) : null;
+      require('./role-artifact.cjs').retainCompletedSourceFailure(reviewObservation({ worktree: scope.worktree,
+        reference: resumeReview.reference, native_raw: raw, native_status: nativeStatus,
+        exit: { code: originalExit?.code ?? null, signal: originalExit?.signal ?? null,
+          error: error.message, stderr: bounded(Buffer.concat(stderr).toString('utf8')), ended_at_ms: Date.now(), transcript: failedTranscript },
+        cause: 'original final native attempt failed before admission' }, () => {
+        if (readReviewNativeFile(resumeReview.progress.native_file, scope.worktree) !== raw)
+          fail('REVIEW_SOURCE_INVALID', 'failed launch changed during physical retention');
+      }));
+    };
     if (resumeReview?.completedSource) {
       require('./role-artifact.cjs').beginCompletedSourceLaunch(reviewObservation({ worktree: scope.worktree,
         reference: resumeReview.reference }, () => {
@@ -2611,6 +2636,7 @@ function createCodexCliLauncher(options = {}) {
           fail('REVIEW_SOURCE_INVALID', 'source changed immediately before original final launch');
       }));
     }
+    try {
     try {
       child = spawnImpl(executable, args, {
         cwd: scope.worktree,
@@ -2621,6 +2647,7 @@ function createCodexCliLauncher(options = {}) {
       fail('RUNTIME_UNAVAILABLE', 'Codex process could not start: ' + error.message);
     }
     if (!child || !child.stdout || !child.stderr || !child.stdin || typeof child.on !== 'function') {
+      try { child?.kill?.(); } catch {}
       fail('RUNTIME_UNAVAILABLE', 'Codex launcher returned an invalid child process');
     }
     if (typeof launchOptions.onProcessSpawned === 'function') {
@@ -2634,8 +2661,6 @@ function createCodexCliLauncher(options = {}) {
         throw error;
       }
     }
-    const stdout = [];
-    const stderr = [];
     let sessionLineBuffer = '';
     let announcedSessionId = null;
     let sessionCallbackError = null;
@@ -2732,6 +2757,7 @@ function createCodexCliLauncher(options = {}) {
       child.on('close', (code, signal) => finish({ code, signal }));
       child.on('exit', (code, signal) => finish({ code, signal }));
     });
+    originalExit = exit;
     if (observerTimer) clearInterval(observerTimer);
     inspectSessionRecords(Buffer.alloc(0), true);
     observe();
@@ -2991,6 +3017,11 @@ function createCodexCliLauncher(options = {}) {
     } catch (error) {
       if (error && error.name === 'CodexRuntimeHostError') throw error;
       fail('RUNTIME_EVIDENCE_INVALID', error.message);
+    }
+    } catch (error) {
+      try { child?.kill?.(); } catch {}
+      retainSetupFailure(error);
+      throw error;
     }
     } finally {
       if (task) fs.rmSync(task.path, { force: true });
