@@ -2993,9 +2993,6 @@ function authenticateInlineCoverage({ trusted, result, evidence, identity }) {
 function currentReviewRetention(worktree, trusted) {
   const runtime = trusted.receipt.runtime_evidence;
   if (trusted.receipt.runtime === 'codex' && runtime?.completed_source) {
-    // The protected claim pins the actual reviewer path, independently of the
-    // process's default CODEX_HOME. Reauthenticate the fresh append and original
-    // source consumption before retaining the final whole-transcript identity.
     const source = validateCompletedSourceEvidence(runtime);
     const originalFinal = authenticateReaderCapacityReferences({ worktree: source.identity.worktree,
       receipt_store: source.receipt_store, dispatch_id: trusted.dispatchId });

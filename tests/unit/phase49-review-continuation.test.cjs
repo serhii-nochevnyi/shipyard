@@ -888,8 +888,6 @@ for (const [name, mutate] of [
   }), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
 });
 
-// These fixtures use the original runtime, batch reader, durable recorder and
-// protected artifact authority. Only the native process transport is isolated.
 async function completedSourceFixture(role, cold, mutation, action, failFirst = false, claimRace = false, failedEnvelope = false) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'completed-review-source-')));
   const previousHome = os.homedir;
@@ -1303,7 +1301,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
         const manifestBytes = fs.readFileSync(manifestPath), manifest = JSON.parse(manifestBytes);
         assert.equal(manifest.transport.schema, 'shipyard.native-reader-transport.v3');
         assert.ok(manifest.accounting.material_bytes > 1024 * 1024, 'whole large file-reader candidate');
-        assert.match(manifest.binding.base_ref, /^refs\/(?:heads|remotes)\//);
+        assert.match(manifest.binding.base_ref, new RegExp('^refs/(?:heads|remotes)/'));
         assert.equal(helper.git(f.root, ['rev-parse', manifest.binding.base_ref + '^{commit}']), manifest.binding.base);
         assert.equal(helper.git(f.root, ['merge-base', manifest.binding.base, f.head]), manifest.binding.merge_base);
         if (ordinary) {
@@ -1354,8 +1352,6 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
             base_tree: originalPacket.diff.merge_base_tree, verdict: 'conform', findings: [], blocking_count: 0,
             summary: 'Fresh full current architectural judgment.', context_digest: originalPacket.digest,
             launch_digest: prompt.match(/launch_digest=([a-f0-9]{64})/)[1], evidence_markdown: 'Complete freshly evaluated current source evidence.' };
-          // The packet's digest is excluded by unique-content serialization; its
-          // independently host-pinned digest is also in the finalized manifest.
           result.context_digest = manifest.binding.packet_digest;
         }
         if (index === 2 && ordinary) result = { ...echo, judgment: 'Fresh complete ordinary integration judgment.' };
@@ -1480,9 +1476,6 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       if (role === 'arch-review') assert.equal(fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), 'utf8'),
         'Complete freshly evaluated current source evidence.', 'host materializes the original fresh evidence without a model tool call');
       if (integration && cold) {
-        // Revalidate the sealed judgment without the producing host's private
-        // input, runtime or CODEX_HOME. Native retention comes from the original
-        // protected completed-source claim and fresh receipt, never discovery.
         const selectors = { worktreePath: f.root, role, phase: integration.phase,
           ticket: integration.ticket, base: integration.base, ticketSet: integration.ticketSet,
           ticketSetDigest: integration.ticketSetDigest, boundaryStore: recorder.storeDir,

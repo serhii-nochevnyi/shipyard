@@ -1027,16 +1027,12 @@ function prepareIntegratorInput(scope, request, options) {
       return null;
     }
     const graphFile = path.join(options.graphDir || path.join(scope.worktree, '.planning/graph'), 'tickets.json');
-    // Existing ordinary inputs without a canonical delivery graph retain their
-    // independently checked legacy full-read contract. Canonical subjects use
-    // the automatic measured path and cannot substitute a caller's binding.
     const automatic = options.automaticReader && !options.readerCapacity && fs.existsSync(graphFile);
     let subject = {};
     if (automatic) {
       const originalGraph = graphSnapshot(graphFile, scope.ticket);
       const selectedBase = effectiveBaseRef(scope.worktree, graphFile, scope.ticket, originalGraph);
       const base = git(scope.worktree, ['rev-parse', '--verify', selectedBase + '^{commit}']);
-      // @invariant: seal the resolved branch ref and its exact commit before candidate creation.
       const baseRef = git(scope.worktree, ['rev-parse', '--symbolic-full-name', '--verify', selectedBase]);
       if (!/^refs\/(?:heads|remotes)\/[A-Za-z0-9._/-]+$/.test(baseRef)
           || git(scope.worktree, ['rev-parse', '--verify', baseRef + '^{commit}']) !== base)
@@ -1592,8 +1588,6 @@ function repairHistory(prepared, pr) {
     } else fail('REPAIR_PREDECESSOR_INVALID', 'original predecessor lacks its complete native result and canonical prompt custody');
     history.push({ attempt, recorder, receipt: original.receipt }); cursor = attempt.predecessor;
   }
-  // Existing journal references are obligations too. Unsigned or truncated
-  // repair carry cannot silently reset a previously spent repair chain.
   const journalFile = path.join(path.dirname(prepared.graphFile), 'delivery-log.jsonl');
   let journal = null;
   if (fs.existsSync(journalFile)) {
@@ -1816,8 +1810,6 @@ function performSignedRepairPublication(prepared, signed, options) {
       ? completeRepairFeedback(options, restored, restored.repair.pr) : actions?.feedback || restored.repair.feedback });
     return Object.freeze(restored);
   }
-  // The signed candidate is the only authorized HEAD transition. The remote is
-  // still pinned to the original subject until the host publishes this commit.
   const transitioned = { ...prepared, commit: { ...prepared.commit, expectedHead: artifact.commit } };
   recheckRepair(prepared, options, { clean: true, signedHead: artifact.commit });
   const feedback = completeRepairFeedback(options, prepared, prepared.repair.pr);
@@ -1880,8 +1872,6 @@ function performRepairActions(prepared, output, options, dispatchId) {
   if (state.dispatch_id !== dispatchId || state.subject_sha256 !== sha256(canonical(prepared.repair)))
     fail('REPAIR_SUBJECT_CHANGED', 'repair action recovery belongs to another subject');
   let feedback = state.feedback || prepared.repair.feedback;
-  // Recovery independently verifies every retained confirmation before skipping
-  // it. It never posts a second reply to infer whether an uncertain first ran.
   if (state.pending?.reply_id) {
     const disposition = output.review_dispositions.find(item => item.id === state.pending.feedback_id);
     const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
@@ -1990,8 +1980,6 @@ function resumeRepairActions(options, dispatchId, liveScopeInput) {
     session_id: previous.receipt.runtime_evidence.session_id, runtime_evidence: previous.receipt.runtime_evidence,
     last_agent_message: text }, { receipt: previous.receipt }, prepared, previous.recorder);
   if (canonical(output) !== canonical(previous.attempt.result)) fail('REPAIR_PREDECESSOR_INVALID', 'original protected dispositions changed');
-  // Source-change recovery goes through its signed candidate and publication
-  // transition. This action-only entry never invents an empty commit.
   const actionState = readSealed(path.join(privateDirectory(root, 'repair-actions'), sha256(dispatchId) + '.json'), key);
   recheckRepair(prepared, options, { feedback: actionState?.pending?.reply_id
     ? completeRepairFeedback(options, prepared, prepared.repair.pr) : actionState?.feedback || prepared.repair.feedback, clean: true });

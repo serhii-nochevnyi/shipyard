@@ -2193,8 +2193,6 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
           // @invariant: Grouped outputs earn no credit; observed pending operations remain separate from failed delivery.
           failed += call.operations.length - nestedResults.filter(result => object(result) && result.session_id !== undefined).length;
           if (truthfulSourceCosts) {
-            // Failed semantic delivery still has physical costs. Complete
-            // associated outputs count once; uncertain bytes stay unknown.
             if (nestedResults.length !== call.operations.length) sourceCostUnavailable = true;
             call.operations.forEach((operation, index) => {
               const output = nestedResults[index], observed = batchReads.find(read => read.command === operation.cmd);
@@ -2768,7 +2766,7 @@ function createCodexCliLauncher(options = {}) {
         if (events.includes('task_complete')) nativeStatus = 'completed';
         else if (events.includes('task_aborted')) nativeStatus = 'interrupted';
         else if (events.includes('task_started')) nativeStatus = 'incomplete';
-      } catch { /* Preserve the actual bytes and an unknown native status. */ }
+      } catch {}
       require('./role-artifact.cjs').retainCompletedSourceFailure(reviewObservation({ worktree: scope.worktree,
         reference: resumeReview.reference, native_raw: raw, native_status: nativeStatus,
         exit: { code: exit.code ?? null, signal: exit.signal ?? null, error: exit.error?.message || null,
@@ -3307,7 +3305,7 @@ function createCodexRuntimeHost(options = {}) {
           if (events.includes('task_complete')) nativeStatus = 'completed';
           else if (events.includes('task_aborted')) nativeStatus = 'interrupted';
           else if (events.includes('task_started')) nativeStatus = 'incomplete';
-        } catch { /* Original physical bytes remain retained without an invented completion. */ }
+        } catch {}
         try { originalRecord = recorder.getVerifiedRecord(probeState.association.probe_dispatch_id); } catch {}
         retain('failed', { native_status: nativeStatus, authority_status: originalRecord ? 'recorded' : 'pending',
           ...(originalRecord ? { receipt_store: recorder.storeDir,

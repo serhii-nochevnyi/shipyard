@@ -2027,8 +2027,6 @@ test('review-fix rejects caller prompt authority before any native launch', asyn
 async function originalFixerFixture(outcome, mutation) {
   const f = fixture({ physicalPaths: true });
   const home = path.join(fs.realpathSync(temporary), 'repair-native-' + path.basename(f.root));
-  // The assigned command checks the actual owned candidate bytes. It is part
-  // of the immutable fixture baseline, not an always-successful runner stub.
   fs.writeFileSync(path.join(f.root, 'check.cjs'), "require('node:assert/strict').equal(require('node:fs').readFileSync('src/owned.txt','utf8'), 'fixed by static native review-fix\\n');\n");
   git(f.root, 'add', 'check.cjs'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture: actual candidate verification');
   f.base = git(f.root, 'rev-parse', 'HEAD'); git(f.root, 'update-ref', 'refs/heads/main', f.base);
