@@ -44,8 +44,6 @@ function copyCompletedSourceRepository(worktree) {
     execFileSync('git', ['-C', baseline, 'update-ref', 'refs/heads/review-base', head]);
     completedSourceBaseline = baseline;
   }
-  // The private baseline stays unchanged. Copy source and .git without shared
-  // files; every scenario still creates its own actor authority and native state.
   fs.cpSync(completedSourceBaseline, worktree, { recursive: true });
 }
 function template(records, match) {
