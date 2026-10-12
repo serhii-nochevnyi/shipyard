@@ -31,20 +31,21 @@ function captured(name) {
 const cliRecords = captured('exec');
 const parentRecords = captured('parent');
 const childRecords = captured('child');
-let completedSourceBaseline;
-function copyCompletedSourceRepository(worktree) {
-  if (!completedSourceBaseline) {
-    const baseline = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'completed-source-baseline-')));
+const completedSourceBaselines = new Map();
+function copyCompletedSourceRepository(worktree, completed = true) {
+  let baseline = completedSourceBaselines.get(completed);
+  if (!baseline) {
+    baseline = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'completed-source-baseline-')));
     process.on('exit', () => fs.rmSync(baseline, { recursive: true, force: true }));
-    fs.writeFileSync(path.join(baseline, 'source.txt'), 'current original source\n');
-    for (const args of [['init', '-q'], ['add', '.'], ['commit', '-qm', 'original source']])
+    fs.writeFileSync(path.join(baseline, 'source.txt'), completed ? 'current original source\n' : 'fixture');
+    for (const args of [['init', '-q'], ['add', '.'], ['commit', '-qm', completed ? 'original source' : 'fixture']])
       execFileSync('git', ['-C', baseline, '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
         '-c', 'user.email=fixture@example.invalid', ...args]);
     const head = execFileSync('git', ['-C', baseline, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     execFileSync('git', ['-C', baseline, 'update-ref', 'refs/heads/review-base', head]);
-    completedSourceBaseline = baseline;
+    completedSourceBaselines.set(completed, baseline);
   }
-  fs.cpSync(completedSourceBaseline, worktree, { recursive: true });
+  fs.cpSync(baseline, worktree, { recursive: true });
 }
 function template(records, match) {
   const record = records.find(match);
@@ -107,9 +108,17 @@ function cliCompletion(text) {
 function readRecords(input) {
   const checked = collector.verifyFileInput(input);
   if (input.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
-    return input.manifest.batches.map(batch => ({ command: collector.batchCommand(input.input_bundle, batch.index),
-      output: execFileSync('node', [input.manifest.transport.module_path, '--read-batch', input.input_bundle.manifest_path,
-        String(batch.index), input.manifest.transport.profile_sha256], { encoding: 'utf8', maxBuffer: 252 * 1024 }) }));
+    return input.manifest.batches.map(batch => {
+      const args = ['--read-batch', input.input_bundle.manifest_path,
+        String(batch.index), input.manifest.transport.profile_sha256];
+      const output = collector.readBatchCli(args);
+      assert.ok(Buffer.byteLength(output) <= 252 * 1024);
+      assert.equal(output, collector.batchOutput(input.manifest, checked.manifest_bytes, checked.material, batch.index));
+      if (batch.index === 0 || batch.index === input.manifest.batches.length - 1)
+        assert.equal(output, execFileSync('node', [input.manifest.transport.module_path, ...args],
+          { encoding: 'utf8', maxBuffer: 252 * 1024 }));
+      return { command: collector.batchCommand(input.input_bundle, batch.index), output };
+    });
   }
 
   return [{ path: input.input_bundle.manifest_path, bytes: checked.manifest_bytes },
@@ -202,12 +211,8 @@ async function fixture(action, options = {}) {
   os.homedir = () => root;
   try {
     const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
-    fs.writeFileSync(path.join(worktree, 'source.txt'), 'fixture');
-    for (const args of [['init', '-q'], ['add', 'source.txt'], ['commit', '-qm', 'fixture']])
-      execFileSync('git', ['-C', worktree, '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
-        '-c', 'user.email=fixture@example.invalid', ...args], { stdio: 'pipe' });
+    copyCompletedSourceRepository(worktree, false);
     const head = execFileSync('git', ['-C', worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-    execFileSync('git', ['-C', worktree, 'update-ref', 'refs/heads/review-base', head]);
     const scope = { worktree, phase: 49, ticket: 'T-49-05', run_id: 'isolated-review' };
     const content = "developer_instructions = '''\nReview all required material.\n'''";
     const typedInstructions = 'Review all required material.\n';
@@ -1638,12 +1643,18 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
         }
         const text = JSON.stringify(result), context = nativeContext(turn, f.root);
         Object.assign(context.payload, { model, effort }); Object.assign(context.payload.collaboration_mode.settings, { model, reasoning_effort: effort });
+        const material = index === 1 ? manifest.assets.map(asset => fs.readFileSync(asset.path)) : [];
         const reads = index === 1 ? manifest.batches.map(batch => {
           physicalReads++;
           const bundle = { manifest_path: manifestPath, transport: manifest.transport };
-          return { command: collector.batchCommand(bundle, batch.index), output: execFileSync(process.execPath,
-            [manifest.transport.module_path, '--read-batch', manifestPath, String(batch.index), manifest.transport.profile_sha256],
-            { encoding: 'utf8', maxBuffer: 252 * 1024 }) };
+          const args = ['--read-batch', manifestPath, String(batch.index), manifest.transport.profile_sha256];
+          const output = collector.readBatchCli(args);
+          assert.ok(Buffer.byteLength(output) <= 252 * 1024);
+          assert.equal(output, collector.batchOutput(manifest, manifestBytes, material, batch.index));
+          if (batch.index === 0 || batch.index === manifest.batches.length - 1)
+            assert.equal(output, execFileSync(process.execPath, [manifest.transport.module_path, ...args],
+              { encoding: 'utf8', maxBuffer: 252 * 1024 }));
+          return { command: collector.batchCommand(bundle, batch.index), output };
         }) : [];
         const records = index === 1 ? [nativeMetadata(session, f.root), context, message('developer', turn, instructions),
           message('user', turn, prompt), event('task_started', turn), ...nativeReads(reads, turn), ...finish(turn, text)]

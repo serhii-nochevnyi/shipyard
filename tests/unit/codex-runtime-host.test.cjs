@@ -1513,9 +1513,17 @@ function cliCompletion(text) {
 function readRecords(input) {
   const checked = collector.verifyFileInput(input);
   if (input.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
-    return input.manifest.batches.map(batch => ({ command: collector.batchCommand(input.input_bundle, batch.index),
-      output: execFileSync('node', [input.manifest.transport.module_path, '--read-batch', input.input_bundle.manifest_path,
-        String(batch.index), input.manifest.transport.profile_sha256], { encoding: 'utf8', maxBuffer: 252 * 1024 }) }));
+    return input.manifest.batches.map(batch => {
+      const args = ['--read-batch', input.input_bundle.manifest_path,
+        String(batch.index), input.manifest.transport.profile_sha256];
+      const output = collector.readBatchCli(args);
+      assert.ok(Buffer.byteLength(output) <= 252 * 1024);
+      assert.equal(output, collector.batchOutput(input.manifest, checked.manifest_bytes, checked.material, batch.index));
+      if (batch.index === 0 || batch.index === input.manifest.batches.length - 1)
+        assert.equal(output, execFileSync('node', [input.manifest.transport.module_path, ...args],
+          { encoding: 'utf8', maxBuffer: 252 * 1024 }));
+      return { command: collector.batchCommand(input.input_bundle, batch.index), output };
+    });
   }
 
   return [{ path: input.input_bundle.manifest_path, bytes: checked.manifest_bytes },
