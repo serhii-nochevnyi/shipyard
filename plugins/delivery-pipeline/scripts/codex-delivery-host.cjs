@@ -1834,8 +1834,6 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
         const thread = subject.feedback.inventory.find(item => item.id === threadId);
         const confirmed = actions.feedback.inventory.find(item => item.id === threadId);
         const currentThread = feedback.inventory.find(item => item.id === threadId);
-        // @security: GitHub's nullable current line may remap only across authenticated covered source history.
-        // Compare every other field exactly and leave both original snapshots untouched.
         const currentIdentity = sourceTransition && currentThread
           && (currentThread.line === null || (Number.isSafeInteger(currentThread.line) && currentThread.line > 0))
           ? { ...currentThread, line: confirmed?.line } : currentThread;

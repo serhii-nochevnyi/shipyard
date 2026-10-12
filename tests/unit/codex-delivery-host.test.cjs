@@ -2627,7 +2627,6 @@ async function originalFixerFixture(outcome, mutation) {
         file: path.join(stateRoot(f), 'repair-actions', file), bytes: fs.readFileSync(path.join(stateRoot(f), 'repair-actions', file)) }));
       if (coveredSource && locationMutation) {
         const receiptDir = path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'), 'receipts');
-        // Original dispatch records stay immutable; the recorder's latest pointer advances on a fresh repair.
         const dispatchDigest = crypto.createHash('sha256').update(first.dispatch_id).digest('hex');
         for (const file of ['record-' + dispatchDigest + '.json', 'reservation-' + dispatchDigest + '.json']) {
           const original = path.join(receiptDir, file);
