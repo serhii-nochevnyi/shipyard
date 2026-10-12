@@ -65,9 +65,18 @@ cleanup() {
   emit_logs
   rm -rf "$unit_git_home"
 }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+setup_handlers() {
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+finish_workers() {
+  cleanup
+  trap - EXIT
+}
+
+setup_handlers
 
 # @invariant: Job control gives each direct Node worker and its descendants a private process group.
 set -m
@@ -119,8 +128,7 @@ while ((unit_next < ${#unit_files[@]} || unit_active_count > 0)); do
   unit_active_count=$unit_remaining_count
   if ((unit_active_count > 0)); then sleep 0.05; fi
 done
-cleanup
-trap - EXIT
+finish_workers
 
 if [[ "$failed" != 0 ]]; then
   echo

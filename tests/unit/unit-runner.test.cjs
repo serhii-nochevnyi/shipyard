@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 
 const runner = path.join(__dirname, 'run.sh');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -31,11 +31,23 @@ function fixture(bodies) {
     return `tests/unit/${name}`;
   });
   fs.mkdirSync(path.join(root, 'scratch'));
+  fs.mkdirSync(path.join(root, 'tools'));
+  if (process.platform === 'darwin') {
+    const git = execFileSync('/usr/bin/xcrun', ['--find', 'git'], { encoding: 'utf8' }).trim();
+    fs.symlinkSync(git, path.join(root, 'tools/git'));
+  }
+  fs.writeFileSync(path.join(root, 'hostile.gitconfig'), [
+    '[commit]', ' gpgsign = true', '[tag]', ' gpgsign = true',
+    '[gpg]', ' program = /nonexistent-unit-signing-program', '[user]', ' signingkey = hostile', '',
+  ].join('\n'));
   return { root, files, dispose() { fs.rmSync(root, { recursive: true, force: true }); } };
 }
 function launch(f, overrides = {}) {
   const child = spawn('/bin/bash', [path.join(f.root, 'tests/unit/run.sh')], {
-    cwd: '/', env: { ...process.env, TMPDIR: path.join(f.root, 'scratch'),
+    cwd: '/', env: { ...process.env,
+      PATH: path.join(f.root, 'tools') + path.delimiter + process.env.PATH,
+      GIT_CONFIG_GLOBAL: path.join(f.root, 'hostile.gitconfig'), GIT_CONFIG_NOSYSTEM: '0',
+      TMPDIR: path.join(f.root, 'scratch'),
       CLAUDE_PLUGIN_ROOT: 'poison', CLAUDE_CODE_ENTRYPOINT: 'poison',
       CODEX_SANDBOX: 'poison', CODEX_SANDBOX_NETWORK_DISABLED: 'poison', ...overrides },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -68,6 +80,14 @@ for(const key of keys){const dir=process.env[key];check(dir.startsWith(root+'/sc
 const {execFileSync}=require('node:child_process');
 for(const [key,value] of Object.entries({'user.name':'Shipyard Unit Tests','user.email':'unit-tests@shipyard.invalid','commit.gpgsign':'false','tag.gpgsign':'false','init.defaultBranch':'main'}))check(execFileSync('git',['config','--global','--get',key],{encoding:'utf8'}).trim(),value);
 check(process.env.GIT_CONFIG_NOSYSTEM,'1');
+const repo=path.join(process.env.TMPDIR,'repo');fs.mkdirSync(repo);
+const git=args=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
+git(['init','-q']);assert.equal(git(['symbolic-ref','--short','HEAD']),'main');
+fs.writeFileSync(path.join(repo,'file'),'worker '+id);git(['add','file']);git(['commit','-qm','unsigned worker']);
+assert.equal(git(['log','-1','--format=%an <%ae>']),'Shipyard Unit Tests <unit-tests@shipyard.invalid>');
+git(['tag','-am','unsigned tag','probe']);assert.equal(git(['cat-file','-t','probe']),'tag');
+assert.ok(!git(['cat-file','-p','probe']).includes('BEGIN PGP SIGNATURE'));
+assert.ok(!git(['cat-file','-p','HEAD']).includes('gpgsig'));
 fs.writeFileSync(path.join(root,id+'.resources'),JSON.stringify([...keys.map(key=>process.env[key]),process.env.GIT_CONFIG_GLOBAL]));
 const timer=setInterval(()=>{if(fs.existsSync(path.join(root,'release'))){clearInterval(timer);console.log('BEGIN '+id);process.stdout.write('O'.repeat(1100000)+'\\n');process.stderr.write('E'.repeat(1100000)+'\\n');console.log(checks+' passed, 0 failed');console.log('END '+id);event('end');process.exitCode=${failing && i === 2 ? 1 : 0};}},25);
 `));
