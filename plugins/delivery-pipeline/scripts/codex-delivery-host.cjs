@@ -1737,7 +1737,7 @@ function confirmRepairReply(options, prepared, feedback, current, reply, origina
 }
 
 function normalizedRepairFeedback(prepared, feedback, history, options) {
-  const excluded = new Map(), resolutions = new Map(), coverage = [];
+  const excluded = new Map(), resolutions = new Map(), coverage = [], historicalDispatches = [];
   for (const { attempt, receipt } of [...history.history].reverse()) {
     if (!receipt || !attempt.subject) continue;
     const file = path.join(privateDirectory(prepared.stateRoot, 'repair-actions'), sha256(attempt.dispatch_id) + '.json');
@@ -1769,11 +1769,45 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
       verifySignedCommit(prepared.commit.worktree, candidate, transition.to);
       expectedHead = transition.to;
     }
-    if (expectedHead !== prepared.commit.expectedHead || attempt.preparation.commit.expectedBase !== prepared.commit.expectedBase
-        || attempt.preparation.graphDigest !== prepared.graphDigest || attempt.preparation.plan.sha256 !== prepared.plan.sha256
+    if (attempt.preparation.commit.expectedBase !== prepared.commit.expectedBase
+        || attempt.preparation.plan.sha256 !== prepared.plan.sha256 || attempt.preparation.plan.path !== prepared.plan.path
         || attempt.preparation.commit.expectedBranch !== prepared.commit.expectedBranch
+        || attempt.preparation.commit.expectedSigner !== prepared.commit.expectedSigner
+        || canonical(attempt.preparation.commit.files_modified) !== canonical(prepared.commit.files_modified)
+        || attempt.preparation.baseRef !== prepared.baseRef || attempt.preparation.repository !== prepared.repository
+        || attempt.preparation.repo !== prepared.repo
+        || canonical(attempt.preparation.verificationAllowList) !== canonical(prepared.verificationAllowList)
         || subject.pr !== prepared.repairPr || feedback.repo !== subject.feedback.repo)
       fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output belongs to another source/head/base/PR');
+    let sourceTransition;
+    if (expectedHead !== prepared.commit.expectedHead) {
+      try {
+        const root = prepared.commit.worktree, authority = require('./conveyor-coverage.cjs');
+        git(root, ['merge-base', '--is-ancestor', expectedHead, prepared.commit.expectedHead]);
+        const repo = authority.repoSlug(root, prepared.repo);
+        const chain = authority.chain({ repo, worktreeOrCheckout: root, base: expectedHead, head: prepared.commit.expectedHead });
+        if (!chain.covered || !chain.links.length) throw new Error('source transition lacks complete coverage');
+        const commits = git(root, ['rev-list', '--reverse', '--max-count=501', expectedHead + '..' + prepared.commit.expectedHead])
+          .split('\n').filter(Boolean);
+        if (commits.length !== chain.links.length) throw new Error('source transition changed during authentication');
+        const records = commits.map(commit => {
+          const checked = authority.verify({ worktree: root, repo, commit });
+          if (!checked.covered || !['executor', 'fixer'].includes(checked.record.kind)
+              || checked.record.ticket !== prepared.commit.ticket || checked.record.repository_id !== prepared.repository)
+            throw new Error('source transition belongs to another producer or ticket');
+          const record = checked.record;
+          const original = authenticatedReceipt(createDurableRecorder(record.receipt_store), record.dispatch_id,
+            record.kind === 'executor' ? 'executor' : 'review-fix');
+          if (original.digest !== record.receipt_digest) throw new Error('source transition receipt changed');
+          return { commit, coverage_sha256: sha256(canonical(record)) };
+        });
+        sourceTransition = { from: expectedHead, to: prepared.commit.expectedHead, records };
+      } catch (error) {
+        fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output lacks an authenticated covered source transition: ' + error.message);
+      }
+      historicalDispatches.push(attempt.dispatch_id);
+    } else if (attempt.preparation.graphDigest !== prepared.graphDigest)
+      fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output graph changed without a covered source transition');
     const seen = new Set();
     for (const action of actions.confirmed) {
       const disposition = attempt.result.review_dispositions.find(item => item.id === action.feedback_id);
@@ -1804,12 +1838,13 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
             || canonical(confirmed) !== canonical({ ...thread, resolved: true })
             || canonical(currentThread) !== canonical(confirmed))
           fail('REPAIR_PREDECESSOR_INVALID', 'host resolution changed its original external thread');
-        if (!resolutions.has(threadId)) resolutions.set(threadId, thread);
+        if (!sourceTransition && !resolutions.has(threadId)) resolutions.set(threadId, thread);
       }
       coverage.push({ dispatch_id: attempt.dispatch_id, receipt_sha256: attempt.receipt_sha256,
         artifact_ref: attempt.artifact_ref, artifact_digest: attempt.artifact_digest,
         actions_sha256: actionsSha256, feedback_id: action.feedback_id,
         reply: current, disposition_sha256: sha256(canonical(disposition)), resolved: action.resolved,
+        ...(sourceTransition ? { historical: true, semantic_credit: false, source_transition: sourceTransition } : {}),
         ...(action.reply_review ? { reply_review: action.reply_review } : {}) });
     }
     if (sha256(fs.readFileSync(file)) !== actionsSha256)
@@ -1817,7 +1852,7 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
   }
   const inventory = feedback.inventory.filter(item => !excluded.has(item.id));
   const normalized = inventory.map(item => resolutions.get(item.id) || item);
-  return Object.freeze({ inventory, digest: sha256(canonical(normalized)), coverage });
+  return Object.freeze({ inventory, digest: sha256(canonical(normalized)), coverage, historical_dispatch_ids: historicalDispatches });
 }
 
 function prepareRepair(options, scope, context) {
@@ -1844,7 +1879,10 @@ function prepareRepair(options, scope, context) {
   const signature = sha256(canonical({ ticket: scope.ticket, pr, repository: feedback.repo, feedback: normalized.digest }));
   const previous = history.history[0];
   let signatureState = 'first';
-  if ((previous?.attempt.normalized_feedback_digest || previous?.attempt.feedback_digest) === normalized.digest && previous.receipt) {
+  if ((previous?.attempt.normalized_feedback_digest || previous?.attempt.feedback_digest) === normalized.digest && previous.receipt
+      && !normalized.historical_dispatch_ids.includes(previous.attempt.dispatch_id)
+      && (previous.attempt.preparation.commit.expectedHead === prepared.commit.expectedHead
+        || normalized.coverage.some(item => item.dispatch_id === previous.attempt.dispatch_id && !item.historical))) {
     if (previous.receipt.applied_effort === 'low') signatureState = 'repeat';
     else if (previous.receipt.applied_effort === 'high') signatureState = 'repeat_exhausted';
     else fail('REPAIR_POLICY_EXHAUSTED', 'original completed deepest repair remains unresolved');
@@ -1926,6 +1964,17 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
     if (!readSealed(file, prepared.key) || sha256(fs.readFileSync(file)) !== prior.actions_sha256
         || canonical(current.inventory.find(item => item.id === prior.reply.id)) !== canonical(prior.reply))
       fail('REPAIR_PREDECESSOR_INVALID', 'authenticated prior host disposition coverage changed');
+    if (prior.historical) {
+      const authority = require('./conveyor-coverage.cjs'), transition = prior.source_transition;
+      if (prior.semantic_credit !== false || transition?.to !== prepared.commit.expectedHead
+          || !Array.isArray(transition.records) || !transition.records.length)
+        fail('REPAIR_PREDECESSOR_INVALID', 'historical actions lost their covered current source binding');
+      for (const pin of transition.records) {
+        const checked = authority.verify({ worktree: root, repo: authority.repoSlug(root, prepared.repo), commit: pin.commit });
+        if (!checked.covered || sha256(canonical(checked.record)) !== pin.coverage_sha256)
+          fail('REPAIR_PREDECESSOR_INVALID', 'historical action source coverage changed');
+      }
+    }
     if (prior.reply_review) {
       const actions = readSealed(file, prepared.key);
       const subject = actions.subject;

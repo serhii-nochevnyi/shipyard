@@ -2236,7 +2236,8 @@ async function originalFixerFixture(outcome, mutation) {
       if (mutation === 'companion-wrong-repo') node.pullRequest.repository.nameWithOwner = 'foreign/repository';
       if (mutation === 'companion-wrong-target') node.replyTo.id = 'foreign-comment';
       if (mutation === 'companion-truncated') node.pullRequestReview.body_truncated = true;
-      if (mutation === 'normalized-companion-link' && mutateRelation) node.pullRequestReview.id = 'foreign-review';
+      if (['normalized-companion-link', 'normalized-covered-source-companion-link'].includes(mutation) && mutateRelation)
+        node.pullRequestReview.id = 'foreign-review';
       return JSON.stringify({ data: { node, target } });
     }
     if (query.includes('node(id:')) {
@@ -2291,7 +2292,9 @@ async function originalFixerFixture(outcome, mutation) {
     if (mutation === 'caller-first') nativeRequest.signals = { signatureState: 'first' };
     if (mutation === 'caller-new') nativeRequest.signals = { signatureState: 'new' };
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'review-fix' });
-    const run = () => {
+    const run = (request = nativeRequest) => {
+      const executing = request.role === 'executor';
+      const launchRole = executing ? policy.resolveDispatch({ runtime: 'codex', role: 'executor' }) : selected;
       const hostOptions = { ...cliOptions(f), host: undefined, scope: f.scope,
       agentManifest, getPullRequest: live, execFileSync: transport, verification: undefined,
       verificationAllowList, hostVerificationRunner: hostRunner(),
@@ -2304,9 +2307,11 @@ async function originalFixerFixture(outcome, mutation) {
         const session = crypto.randomUUID();
         const effort = JSON.parse(_args.find(value => value.startsWith('model_reasoning_effort=')).split('=')[1]);
         const applied = { model: _args[_args.indexOf('--model') + 1], effort,
-          agent_file: effort === 'low' ? selected.agent_file : selected.agent_file.replace('.toml', effort === 'high' ? '-repeat.toml' : '-deep.toml') };
+          agent_file: !launchRole.agent_file || effort === 'low' ? launchRole.agent_file
+            : launchRole.agent_file.replace('.toml', effort === 'high' ? '-repeat.toml' : '-deep.toml') };
+        if (executing) assert.equal(applied.agent_file, null, 'executor uses the original dynamic native launch');
         const final = JSON.stringify(output);
-        if (outcome === 'source') fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
+        if (outcome === 'source' || executing) fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
         if (mutation === 'foreign-dirty') fs.writeFileSync(path.join(f.root, 'outside.txt'), 'foreign mutation');
         if (mutation === 'self-commit') { git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'unauthorized producer commit'); }
         if (mutation === 'plan-movement') fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
@@ -2327,10 +2332,11 @@ async function originalFixerFixture(outcome, mutation) {
           return row;
         };
         const user = nativeMessage('user', '');
-        const instructions = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').generatedInstructions(
-          fs.readFileSync(path.join(f.agentDir, applied.agent_file), 'utf8'));
+        const instructions = applied.agent_file
+          ? require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').generatedInstructions(
+            fs.readFileSync(path.join(f.agentDir, applied.agent_file), 'utf8')) : null;
         const rows = [capturedRows.find(row => row.type === 'session_meta'), capturedRows.find(row => row.type === 'turn_context'),
-          started, nativeMessage('developer', instructions), user,
+          started, ...(instructions === null ? [] : [nativeMessage('developer', instructions)]), user,
           capturedRows.find(row => row.type === 'response_item' && row.payload?.phase === 'final_answer'),
           capturedRows.find(row => row.type === 'event_msg' && row.payload?.type === 'task_complete')];
         if (mutation === 'native-delegation') {
@@ -2386,6 +2392,8 @@ async function originalFixerFixture(outcome, mutation) {
         const child = new EventEmitter(); child.pid = 45678;
         child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
         child.stdin = { write(prompt) {
+          if (executing) assert.ok(String(prompt).includes('executor already dispatched'));
+          else {
           assert.ok(String(prompt).includes('full feedback') || String(prompt).includes('complete feedback'));
           const required = String(prompt).split('exactly these required fields: ')[1]?.split('. ')[0];
           assert.ok(required, 'the actual generated native prompt must enumerate the complete producer schema');
@@ -2394,6 +2402,7 @@ async function originalFixerFixture(outcome, mutation) {
           assert.ok(required.includes('schema="shipyard.repair-result.v1"'));
           assert.ok(String(prompt).includes('If status="escalate", every disposition must use reply or escalate'));
           assert.ok(String(prompt).includes('reply-and-resolve is forbidden for ALL findings in that result'));
+          }
           user.payload.content = [{ type: 'input_text', text: mutation === 'native-context' ? 'Repair a foreign subject.' : String(prompt).trim() }];
         }, end() {
           process.nextTick(() => {
@@ -2431,7 +2440,7 @@ async function originalFixerFixture(outcome, mutation) {
         return runCli(['--args-file', requestFile], { write(chunk) { written.push(chunk); } }, hostOptions)
           .then(result => { assert.equal(JSON.parse(written.join('')).receipt.dispatch_id, result.receipt.dispatch_id); return result; });
       }
-      return createCodexDeliveryHost(hostOptions).run(nativeRequest);
+      return createCodexDeliveryHost(hostOptions).run(request);
     };
     if (['thread-response-loss', 'comment-response-loss', 'resolve-response-loss', 'companion-cli-response-loss',
       'companion-cli-pending-id', 'companion-cli-reuse-response-loss', 'companion-cli-legacy-id', 'companion-cli-legacy-absent'].includes(mutation)
@@ -2608,6 +2617,36 @@ async function originalFixerFixture(outcome, mutation) {
       assert.equal(first.resolution.signals.signatureState, 'first');
       const firstReceipt = first.receipt;
       const firstHead = git(f.root, 'rev-parse', 'HEAD');
+      const coveredSource = mutation.startsWith('normalized-covered-source');
+      let sourceResult;
+      let currentHead = firstHead;
+      const retainedFiles = fs.readdirSync(path.join(stateRoot(f), 'repair-actions')).map(file => ({
+        file: path.join(stateRoot(f), 'repair-actions', file), bytes: fs.readFileSync(path.join(stateRoot(f), 'repair-actions', file)) }));
+      if (coveredSource) {
+        sourceResult = await run({ role: 'executor', context: { prompt: 'Implement the current covered source correction.' } });
+        currentHead = git(f.root, 'rev-parse', 'HEAD'); publishedHead = currentHead;
+        assert.equal(sourceResult.receipt.role, 'executor'); assert.equal(sourceResult.receipt.compliance, 'verified');
+        assert.equal(sourceResult.receipt.agent_file, undefined);
+        assert.equal(sourceResult.receipt.agent_file_digest, undefined);
+        assert.ok(sourceResult.receipt.runtime_evidence.native_session_evidence);
+        const authority = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
+        const covered = authority.verify({ worktree: f.root, repo: authority.repoSlug(f.root), commit: currentHead });
+        assert.equal(covered.covered, true); assert.equal(covered.record.kind, 'executor');
+        assert.equal(covered.record.dispatch_id, sourceResult.dispatch_id);
+        graph.synchronized_head = currentHead; fs.writeFileSync(graphFile, JSON.stringify(graph));
+        if (mutation.endsWith('-forged')) {
+          const file = path.join(authority.coverageRoot(), 'coverage', encodeURIComponent(covered.record.repo), currentHead + '.json');
+          const bytes = JSON.parse(fs.readFileSync(file)); bytes.payload.ticket = 'T-38-99';
+          fs.writeFileSync(file, JSON.stringify(bytes));
+        }
+        if (mutation.endsWith('-plan')) fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
+        if (mutation.endsWith('-owners')) { graph.tickets[f.scope.ticket].files.push('outside.txt'); fs.writeFileSync(graphFile, JSON.stringify(graph)); }
+      }
+      if (mutation === 'normalized-uncovered-source') {
+        fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'uncovered external source\n');
+        git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'uncovered external source');
+        publishedHead = git(f.root, 'rev-parse', 'HEAD');
+      }
       if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) assert.equal(firstHead, first.artifact.commit);
       const actionFile = path.join(stateRoot(f), 'repair-actions', crypto.createHash('sha256').update(first.dispatch_id).digest('hex') + '.json');
       if (mutation === 'normalized-forged-actions') {
@@ -2618,18 +2657,25 @@ async function originalFixerFixture(outcome, mutation) {
         const state = JSON.parse(fs.readFileSync(actionFile)); state.payload.confirmed[0].reply_review.response += ' ';
         fs.writeFileSync(actionFile, JSON.stringify(state));
       }
-      if (mutation === 'normalized-reply-body') replies[0].body += ' mutated';
-      if (mutation === 'normalized-reply-author') replies[0].author = { ...actor, id: 'foreign-user' };
-      if (mutation === 'normalized-reply-id') replies[0].id = 'foreign-reply';
-      if (mutation === 'normalized-reply-target') swapReplyTarget = true;
+      if (['normalized-reply-body', 'normalized-covered-source-reply-body'].includes(mutation)) replies[0].body += ' mutated';
+      if (['normalized-reply-author', 'normalized-covered-source-reply-author'].includes(mutation)) replies[0].author = { ...actor, id: 'foreign-user' };
+      if (['normalized-reply-id', 'normalized-covered-source-reply-id'].includes(mutation)) replies[0].id = 'foreign-reply';
+      if (['normalized-reply-target', 'normalized-covered-source-reply-target'].includes(mutation)) swapReplyTarget = true;
       if (mutation === 'normalized-missing-actions') fs.unlinkSync(actionFile);
       if (mutation === 'normalized-reopened') feedback[0].isResolved = false;
       if (mutation === 'normalized-source') publishedHead = '3'.repeat(40);
-      if (mutation === 'normalized-companion-link') mutateRelation = true;
+      if (['normalized-companion-link', 'normalized-covered-source-companion-link'].includes(mutation)) mutateRelation = true;
       if (mutation === 'normalized-companion-body') reviews[0].body = 'New finding on the retained companion review';
       if (mutation === 'normalized-companion-author') reviews[0].author = { ...actor, id: 'foreign-user' };
       if (mutation === 'normalized-companion-missing') reviews.length = 0;
       const refusal = {
+        'normalized-covered-source-forged': 'REPAIR_SUBJECT_CHANGED', 'normalized-uncovered-source': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-covered-source-plan': 'PLAN_DIGEST_MISMATCH', 'normalized-covered-source-owners': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-covered-source-reply-body': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-reply-author': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-reply-id': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-reply-target': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-companion-link': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-forged-actions': 'STATE_RECORD_INVALID', 'normalized-reply-body': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-reply-author': 'REPAIR_PREDECESSOR_INVALID', 'normalized-reply-id': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-reply-target': 'REPAIR_PREDECESSOR_INVALID', 'normalized-reopened': 'REPAIR_PREDECESSOR_INVALID', 'normalized-source': 'REPAIR_SUBJECT_CHANGED',
@@ -2639,7 +2685,7 @@ async function originalFixerFixture(outcome, mutation) {
       }[mutation];
       if (refusal) {
         await assert.rejects(run, { code: refusal });
-        assert.equal(launches, 1); assert.equal(replies.length + prReplies.length, 3);
+        assert.equal(launches, coveredSource ? 2 : 1); assert.equal(replies.length + prReplies.length, 3);
         return;
       }
       if (mutation === 'normalized-missing-actions') {
@@ -2670,7 +2716,7 @@ async function originalFixerFixture(outcome, mutation) {
         return;
       }
       const second = await run();
-      const unknown = ['normalized-external', 'normalized-missing-actions'].includes(mutation);
+      const unknown = coveredSource || ['normalized-external', 'normalized-missing-actions'].includes(mutation);
       assert.equal(second.resolution.signals.signatureState, unknown ? 'first' : 'repeat');
       assert.equal(second.receipt.applied_effort, unknown ? 'low' : 'high');
       assert.equal(second.receipt.agent_file_digest, crypto.createHash('sha256').update(unknown ? originalAgent : repeatAgent).digest('hex'));
@@ -2686,6 +2732,14 @@ async function originalFixerFixture(outcome, mutation) {
       const originalSecond = attempts.find(item => item.dispatch_id === second.dispatch_id);
       assert.equal(originalSecond.subject.feedback.inventory.length, mutation === 'normalized-external' ? 8 : 7);
       assert.equal(originalSecond.subject.actionable_feedback.coverage.length, mutation === 'normalized-missing-actions' ? 0 : 3);
+      if (coveredSource) {
+        assert.deepEqual(originalSecond.subject.actionable_feedback.historical_dispatch_ids, [first.dispatch_id]);
+        assert.ok(originalSecond.subject.actionable_feedback.coverage.every(item => item.historical && item.semantic_credit === false
+          && item.source_transition.from === firstHead && item.source_transition.to === currentHead));
+        assert.equal(originalSecond.subject.actionable_feedback.inventory.find(item => item.id === threadId).resolved, true);
+        for (const original of retainedFiles) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
+        assert.equal(first.receipt.dispatch_id, firstReceipt.dispatch_id);
+      }
       assert.equal(originalSecond.subject.actionable_feedback.digest === attempts.find(item => item.dispatch_id === first.dispatch_id).normalized_feedback_digest,
         !unknown);
       assert.equal(replies.length + prReplies.length, mutation === 'normalized-missing-actions' ? 10 : mutation === 'normalized-external' ? 7 : 6);
@@ -2706,7 +2760,7 @@ async function originalFixerFixture(outcome, mutation) {
         await assert.rejects(run, { code: 'REPAIR_POLICY_EXHAUSTED' });
         assert.equal(launches, 3);
       }
-      assert.equal(git(f.root, 'rev-parse', 'HEAD'), firstHead);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), currentHead);
       return;
     }
     if (mutation) {
@@ -2871,6 +2925,13 @@ for (const mutation of ['normalized-repeat', 'normalized-cli-repeat', 'normalize
 for (const mutation of ['normalized-source-repeat', 'normalized-cli-source-repeat'])
   test('authenticated confirmed replies retain repeat policy through the original signed fixer source transition ' + mutation,
     () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
+
+for (const mutation of ['normalized-covered-source', 'normalized-covered-source-forged', 'normalized-covered-source-plan',
+  'normalized-covered-source-owners', 'normalized-uncovered-source', 'normalized-covered-source-reply-body',
+  'normalized-covered-source-reply-author', 'normalized-covered-source-reply-id', 'normalized-covered-source-reply-target',
+  'normalized-covered-source-companion-link'])
+  test('confirmed no-op feedback authenticates subsequent native executor source coverage ' + mutation,
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 
 for (const mutation of ['companion-wrong-link', 'companion-wrong-pr', 'companion-wrong-review-pr', 'companion-wrong-repo',
   'companion-wrong-target', 'companion-truncated', 'companion-review-body', 'companion-review-state', 'companion-review-author',

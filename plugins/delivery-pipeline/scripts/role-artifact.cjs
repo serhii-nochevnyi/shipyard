@@ -1471,6 +1471,22 @@ function readCompletedReviewSourceLocked({ worktree, reference, dispatch_id: dis
       && fs.existsSync(path.join(state.directory, reviewAttemptLedgerName(payload.identity)))) {
     const ledger = reviewEnvelope(state, reviewAttemptLedgerName(payload.identity));
     const attempt = ledger.attempts.find(entry => entry.dispatch_id === payload.identity.dispatch_id);
+    const prelaunch = attempt?.prelaunch_failures?.at(-1);
+    const claimed = { ...tip.resume };
+    delete claimed.launch_started; delete claimed.launch_started_at; delete claimed.launch_started_id; delete claimed.prelaunch_failure;
+    if (prelaunch && (tip.resume.launch_started ? prelaunch.launch_started_id === tip.resume.launch_started_id
+      : stable(prelaunch.claim) === stable(claimed))) {
+      if (ledger.schema !== 'shipyard.review-source-attempts.v1' || ledger.original_authority !== digest(state.key)
+          || attempt.status !== 'pending' || attempt.source_resume
+          || stable(attempt.identity) !== stable(payload.identity) || stable(attempt.source) !== stable(reference)
+          || prelaunch.schema !== 'shipyard.completed-source-no-spawn.v1' || prelaunch.spawn_attempted !== false
+          || typeof prelaunch.launch_started_id !== 'string' || !prelaunch.launch_started_id
+          || tip.resume.launch_started && prelaunch.launch_started_at !== tip.resume.launch_started_at
+          || stable(prelaunch.claim) !== stable(claimed))
+        fail('REVIEW_SOURCE_INVALID', 'prelaunch failure differs from its original protected claim');
+      tip = { ...tip, resume: { ...claimed, prelaunch_failure: prelaunch } };
+      writeReviewEnvelope(state, completedSourceTip(payload.identity.dispatch_id), tip);
+    }
     if (attempt?.source_resume) {
       const retained = attempt.source_resume;
       if (ledger.schema !== 'shipyard.review-source-attempts.v1' || ledger.original_authority !== digest(state.key)
@@ -1592,9 +1608,26 @@ function beginCompletedSourceLaunch(observation) {
       fail('REVIEW_SOURCE_CLAIMED', 'original final source claim already entered native launch');
     runtime.reviewObservationData(observation);
     const state = authorityState(launch.worktree, false, false, false);
-    retainSourceFinalAttempt(state, source, { status: 'pending', started_at_ms: Date.now() });
-    writeReviewEnvelope(state, completedSourceTip(resume.dispatch_id), { ...source.state,
-      resume: { ...resume, launch_started: true, launch_started_at: new Date().toISOString() } });
+    const startedAt = new Date().toISOString();
+    const startedId = crypto.randomUUID();
+    const { prelaunch_failure: _prelaunchFailure, ...claim } = resume;
+    try {
+      retainSourceFinalAttempt(state, source, { status: 'pending', started_at_ms: Date.now() });
+      writeReviewEnvelope(state, completedSourceTip(resume.dispatch_id), { ...source.state,
+        resume: { ...claim, launch_started: true, launch_started_at: startedAt, launch_started_id: startedId } });
+    } catch (error) {
+      runtime.reviewObservationData(observation);
+      retainSourceFinalAttempt(state, source, { status: 'pending', started_at_ms: Date.now() });
+      const name = reviewAttemptLedgerName(source.identity), ledger = reviewEnvelope(state, name);
+      const attempt = ledger.attempts.find(entry => entry.dispatch_id === source.identity.dispatch_id);
+      const failures = attempt.prelaunch_failures || [];
+      if (failures.length >= 16) fail('REVIEW_SOURCE_CLAIMED', 'original prelaunch failure history reached its finite bound');
+      const failure = { schema: 'shipyard.completed-source-no-spawn.v1', spawn_attempted: false,
+        claim, launch_started_at: startedAt, launch_started_id: startedId, cause: String(error.message).slice(0, 4096) };
+      writeReviewEnvelope(state, name, { ...ledger, attempts: ledger.attempts.map(entry => entry === attempt
+        ? { ...entry, prelaunch_failures: [...failures, failure] } : entry) });
+      throw error;
+    }
   });
 }
 

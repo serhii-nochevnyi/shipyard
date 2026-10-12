@@ -913,6 +913,7 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
   const previousHome = os.homedir;
   const originalRename = fs.renameSync;
   const originalFsync = fs.fsyncSync;
+  const originalWrite = fs.writeFileSync;
   os.homedir = () => root;
   try {
     const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
@@ -939,7 +940,8 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     const profile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 8,
       candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
         instructions_sha256: sha(instructions), model: selected.model, effort: selected.effort, provider: 'openai' } });
-    let input = collector.prepareFileInput(scope, 'Complete current source, including multibyte € material.\n'.repeat(1500), {
+    let input = collector.prepareFileInput(scope, 'Complete current source, including multibyte € material.\n'
+      .repeat(mutation?.startsWith('prelaunch-') || mutation === 'started-host-exit' ? 20 : 1500), {
       role, dispatchId, readerProfile: profile, storageRoot: path.join(root, 'inputs'),
       generatedInstructionBytes: Buffer.byteLength(instructions) + 2,
       binding: { base: head, base_ref: 'refs/heads/review-base', merge_base: head, ticket_set: ['T-49-18'],
@@ -965,6 +967,10 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     const spawn = (_program, args) => {
       const launchIndex = ++launches, failure = failFirst && launchIndex === 1;
       const index = args.includes('resume') ? 2 : 1, turn = failure ? 'failed-complete-probe' : index === 1 ? 'original-complete-probe' : 'new-current-final';
+      if (index === 2 && mutation === 'started-host-exit') {
+        fs.writeFileSync(1, JSON.stringify({ root, worktree, scope, home, agents, agentManifest, source, dispatchId, role, capabilities }));
+        process.exit(0);
+      }
       if (index === 2 && mutation === 'spawn-throw') throw new Error('Original spawn setup failed');
       if (index === 2 && mutation === 'invalid-child') return null;
       assert.equal(args[args.indexOf('--model') + 1], selected.model);
@@ -1088,6 +1094,49 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
 
     const adapter = adapterModule.createCodexDispatchAdapter({ agentsDir: agents, agentManifest, capabilities,
       host: { requireRuntimeEvidence: true, async launchStatic(applied, context) {
+        if (mutation?.startsWith('prelaunch-') && !recoveryStarted) {
+          const fault = mutation.replace(/-repeat$/, '');
+          if (fault.endsWith('file-fsync')) fs.writeFileSync = (file, bytes, ...args) => {
+            originalWrite(file, bytes, ...args);
+            if (typeof file !== 'number') return;
+            let payload;
+            try { payload = JSON.parse(String(bytes)).payload; } catch { return; }
+            if (!payload) return;
+            const ledger = payload.schema === 'shipyard.review-source-attempts.v1'
+              && payload.attempts.some(attempt => attempt.kind === 'final' && attempt.status === 'pending');
+            const tip = payload.schema === 'shipyard.completed-review-source-tip.v1' && payload.resume?.launch_started;
+            if (fault.includes('ledger') ? ledger : tip) {
+              fs.writeFileSync = originalWrite; fs.renameSync = originalRename; persistenceFaults++;
+              fs.fsyncSync = fd => {
+                assert.ok(fs.fstatSync(fd).isFile(), 'fault occurs at the actual prelaunch temporary file fsync');
+                fs.fsyncSync = originalFsync;
+                throw new Error('Original prelaunch file fsync failed');
+              };
+            }
+          };
+          fs.renameSync = (from, to) => {
+            if (fault.endsWith('file-fsync')) return originalRename(from, to);
+            if (path.dirname(to) !== authority.archiveAuthorityDirectory(worktree)) return originalRename(from, to);
+            const payload = JSON.parse(fs.readFileSync(from)).payload;
+            const ledger = payload.schema === 'shipyard.review-source-attempts.v1'
+              && payload.attempts.some(attempt => attempt.kind === 'final' && attempt.status === 'pending');
+            const tip = payload.schema === 'shipyard.completed-review-source-tip.v1' && payload.resume?.launch_started;
+            if ((fault.includes('ledger') ? ledger : tip)) {
+              fs.renameSync = originalRename; persistenceFaults++;
+              if (!fault.endsWith('before-write')) originalRename(from, to);
+              if (fault.endsWith('fsync') || fault === 'prelaunch-host-exit') {
+                fs.fsyncSync = fd => {
+                  assert.ok(fs.fstatSync(fd).isDirectory(), 'fault occurs after the actual prelaunch rename');
+                  fs.fsyncSync = originalFsync;
+                  throw new Error('Original prelaunch directory fsync failed');
+                };
+                return;
+              }
+              throw new Error('Original prelaunch write failed');
+            }
+            return originalRename(from, to);
+          };
+        }
         if (mutation === 'base-after-claim') fs.renameSync = (from, to) => {
           originalRename(from, to);
           if (path.basename(to).startsWith('review-tip-')) {
@@ -1154,6 +1203,41 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
       } } });
     let boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
     const launch = async () => boundary.dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: dispatchId }, { ticket: scope.ticket });
+    if (mutation?.startsWith('prelaunch-')) {
+      await assert.rejects(launch, /Original prelaunch/);
+      assert.equal(persistenceFaults, 1);
+      assert.equal(launches, 1, 'the prelaunch failure never attempts a final spawn');
+      assert.equal(finalCallbacks, 0); assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+      assert.deepEqual(fs.readFileSync(native), originalRaw);
+      if (mutation === 'prelaunch-host-exit') {
+        fs.writeFileSync(1, JSON.stringify({ root, worktree, scope, home, agents, agentManifest, source, dispatchId, role, capabilities }));
+        process.exit(0);
+      }
+      const retained = authority.readCompletedReviewSource({ worktree, reference: source });
+      assert.equal(retained.state.resume.status, 'claimed');
+      assert.equal(retained.state.resume.launch_started, undefined);
+      assert.equal(retained.state.resume.prelaunch_failure.spawn_attempted, false);
+      assert.deepEqual(authority.readReviewSourceAttempts(retained).map(attempt => attempt.status), ['completed', 'pending']);
+      assert.equal(authority.readReviewSourceAttempts(retained).at(-1).prelaunch_failures.length, 1);
+      assert.ok(recorder.getReservation(dispatchId)); assert.ok(recorder.getVerifiedRecord(probeId));
+      if (mutation.endsWith('-repeat')) {
+        const originalFailure = stable(retained.state.resume.prelaunch_failure);
+        boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
+        await assert.rejects(launch, /Original prelaunch/);
+        const retried = authority.readCompletedReviewSource({ worktree, reference: source });
+        const failures = authority.readReviewSourceAttempts(retried).at(-1).prelaunch_failures;
+        assert.equal(failures.length, 2); assert.equal(persistenceFaults, 2);
+        assert.equal(stable(failures[0]), originalFailure);
+        assert.notEqual(failures[0].launch_started_id, failures[1].launch_started_id);
+        assert.equal(retried.state.resume.launch_started, undefined);
+        assert.equal(launches, 1); assert.equal(finalCallbacks, 0);
+        assert.deepEqual(fs.readFileSync(native), originalRaw);
+      }
+      recoveryStarted = true;
+      if (cold) host = runtime.createCodexRuntimeHost(hostOptions);
+      boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
+      mutation = null;
+    }
     if (recovery) {
       await assert.rejects(launch, { code: mutation === 'recover-record-gap' ? 'RECORD_FAILED' : 'RUNTIME_EVIDENCE_INVALID' });
       if (mutation.includes('-write') || mutation.endsWith('-fsync')) {
@@ -1327,7 +1411,104 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     assert.equal(stable(recorder.getVerifiedRecord(dispatchId).receipt), originalFinalReceipt,
       'replay preserves the original final receipt');
     if (action) await action({ input, capacity, source, final, accounting, recorder, host, root, native });
-  } finally { fs.renameSync = originalRename; fs.fsyncSync = originalFsync; os.homedir = previousHome; fs.rmSync(root, { recursive: true, force: true }); }
+  } finally { fs.renameSync = originalRename; fs.fsyncSync = originalFsync; fs.writeFileSync = originalWrite;
+    os.homedir = previousHome; fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+async function coldPrelaunchFixture(role, unknownStarted = false) {
+  const header = fs.readFileSync(__filename, 'utf8').split('async function recordedBatchApplication')[0];
+  const script = header + '\n' + completedSourceFixture.toString()
+    + '\ncompletedSourceFixture(' + JSON.stringify(role) + ', false, '
+    + JSON.stringify(unknownStarted ? 'started-host-exit' : 'prelaunch-host-exit')
+    + ').catch(error => { console.error(error); process.exitCode = 1; });';
+  const origin = JSON.parse(execFileSync(process.execPath, ['-e', script], {
+    cwd: path.dirname(__filename), encoding: 'utf8', maxBuffer: 1024 * 1024 }));
+  const previousHome = os.homedir; os.homedir = () => origin.root;
+  try {
+    const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+    const adapterModule = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
+    const recorder = boundaryModule.createDurableRecorder(path.join(origin.root, 'receipts'));
+    if (unknownStarted) {
+      const source = authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source });
+      assert.throws(() => process.kill(source.state.resume.owner_pid, 0), { code: 'ESRCH' });
+      assert.equal(source.state.resume.launch_started, true);
+      assert.equal(source.state.resume.prelaunch_failure, undefined);
+      assert.deepEqual(authority.readReviewSourceAttempts(source).map(attempt => attempt.status), ['completed', 'pending']);
+      const native = fs.readFileSync(source.native_file), state = stable(source.state);
+      assert.deepEqual(native, fs.readFileSync(source.snapshot.path));
+      const host = runtime.createCodexRuntimeHost({ scope: origin.scope, recorder, agentDir: origin.agents,
+        agentManifest: origin.agentManifest, env: { CODEX_HOME: origin.home },
+        spawn() { assert.fail('unknown started launch cannot be replayed'); },
+        probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities: origin.capabilities } });
+      const selected = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs').resolveDispatch({
+        runtime: 'codex', role, signals: {}, dispatch_id: origin.dispatchId });
+      await assert.rejects(() => host.resumeCompletedSource({ ...selected, sandbox_mode: 'read-only' }, {
+        source: origin.source, dispatch_id: origin.dispatchId, role }), { code: 'REVIEW_SOURCE_CLAIMED' });
+      assert.equal(stable(authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source }).state), state);
+      assert.deepEqual(fs.readFileSync(source.native_file), native);
+      assert.equal(recorder.getVerifiedRecord(origin.dispatchId), null);
+      assert.ok(recorder.getVerifiedRecord(source.probe_dispatch_id));
+      return;
+    }
+    const sealedFiles = fs.readdirSync(authority.archiveAuthorityDirectory(origin.worktree))
+      .filter(file => file.startsWith('review-tip-')).map(file => JSON.parse(fs.readFileSync(path.join(authority.archiveAuthorityDirectory(origin.worktree), file))).payload);
+    assert.ok(sealedFiles.some(payload => payload.schema === 'shipyard.completed-review-source-tip.v1'
+      && payload.resume.status === 'claimed' && (payload.resume.launch_started || payload.resume.prelaunch_failure?.spawn_attempted === false)));
+    assert.ok(sealedFiles.some(payload => payload.schema === 'shipyard.review-source-attempts.v1'
+      && payload.attempts.at(-1).status === 'pending' && !payload.attempts.at(-1).source_resume));
+    const source = authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source });
+    assert.throws(() => process.kill(source.state.resume.owner_pid, 0), { code: 'ESRCH' });
+    assert.equal(source.state.resume.launch_started, undefined);
+    assert.equal(source.state.resume.prelaunch_failure.spawn_attempted, false);
+    const originalNative = fs.readFileSync(source.native_file), originalProbe = stable(recorder.getVerifiedRecord(source.probe_dispatch_id));
+    const reservation = recorder.getReservation(origin.dispatchId);
+    let spawns = 0, completions = 0;
+    const input = collector.restoreCompletedSourceInput(source);
+    const host = runtime.createCodexRuntimeHost({ scope: origin.scope, recorder, agentDir: origin.agents,
+      agentManifest: origin.agentManifest, env: { CODEX_HOME: origin.home },
+      probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities: origin.capabilities },
+      spawn(_program, args) {
+        spawns++; assert.ok(args.includes('resume')); assert.ok(args.includes(source.session_id));
+        const child = new EventEmitter(); child.pid = 45678;
+        child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+        let prompt = '';
+        child.stdin = { write(bytes) { prompt += String(bytes); }, end() {
+          const turn = 'fresh-cold-prelaunch-final';
+          const result = JSON.stringify({ input_manifest_sha256: input.input_bundle.manifest_sha256,
+            input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
+            input_chunk_reads: input.manifest.ranges.length, input_batch_reads: input.manifest.batches.length,
+            input_profile_sha256: input.manifest.transport.profile_sha256, judgment: 'fresh current judgment' });
+          const context = nativeContext(turn, origin.worktree);
+          Object.assign(context.payload, { model: source.original_launch.model, effort: source.original_launch.effort });
+          Object.assign(context.payload.collaboration_mode.settings, { model: source.original_launch.model,
+            reasoning_effort: source.original_launch.effort });
+          process.nextTick(() => {
+            fs.appendFileSync(source.native_file, serialize([context, message('user', turn, prompt.trim()), event('task_started', turn),
+              message('assistant', turn, result), event('task_complete', turn, { last_agent_message: result })]));
+            child.stdout.emit('data', Buffer.from(serialize([cliThread(source.session_id), ...cliCompletion(result)])));
+            child.emit('close', 0, null);
+          });
+        } };
+        return child;
+      } });
+    const adapter = adapterModule.createCodexDispatchAdapter({ agentsDir: origin.agents, agentManifest: origin.agentManifest,
+      capabilities: origin.capabilities, host: { requireRuntimeEvidence: true, launchStatic(applied, context) {
+        return host.resumeCompletedSource(applied, { source: origin.source, dispatch_id: context.dispatch_id, role,
+          onCompleted() { completions++; } });
+      } } });
+    const dispatch = () => boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true })
+      .dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: origin.dispatchId }, { ticket: origin.scope.ticket });
+    const result = await dispatch();
+    assert.equal(spawns, 1); assert.equal(completions, 1); assert.equal(result.receipt.dispatch_id, origin.dispatchId);
+    assert.equal(result.receipt.runtime_evidence.session_id, source.session_id);
+    assert.equal(result.receipt.runtime_evidence.completed_source.semantic_credit, false);
+    assert.deepEqual(fs.readFileSync(source.native_file).subarray(0, originalNative.length), originalNative);
+    assert.equal(stable(recorder.getVerifiedRecord(source.probe_dispatch_id)), originalProbe);
+    assert.equal(recorder.getReservation(origin.dispatchId).reserved_at, reservation.reserved_at);
+    const retained = authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source });
+    assert.equal(authority.readReviewSourceAttempts(retained).at(-1).prelaunch_failures.length, 1);
+    assert.throws(dispatch, { code: 'RECOVERY_ALREADY_RECORDED' }); assert.equal(spawns, 1);
+  } finally { os.homedir = previousHome; fs.rmSync(origin.root, { recursive: true, force: true }); }
 }
 
 async function coldCompletedRecordingFixture(role) {
@@ -1383,6 +1564,15 @@ async function coldCompletedRecordingFixture(role) {
 }
 
 for (const role of ['arch-review', 'integrator']) {
+  for (const cold of [false, true])
+    for (const fault of ['ledger-before-write', 'ledger-after-write', 'ledger-fsync', 'ledger-file-fsync',
+      'tip-before-write', 'tip-after-write', 'tip-fsync', 'tip-file-fsync', 'tip-fsync-repeat'])
+      test('prelaunch ' + role + ' retains no-spawn custody after ' + fault + (cold ? ' cold' : ' live'),
+        () => completedSourceFixture(role, cold, 'prelaunch-' + fault));
+  test('prelaunch ' + role + ' recovers the original unused final after the claimant process exits',
+    () => coldPrelaunchFixture(role));
+  test('prelaunch ' + role + ' refuses an unknown started launch without append after the claimant process exits',
+    () => coldPrelaunchFixture(role, true));
   test('completed ' + role + ' records its exact original turn after the original host really exits before callbacks and receipt',
     () => coldCompletedRecordingFixture(role));
   for (const cold of [false, true]) {

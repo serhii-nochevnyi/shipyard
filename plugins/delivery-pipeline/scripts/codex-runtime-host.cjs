@@ -1720,7 +1720,10 @@ function validateCompletedSourceClaimRecovery(source) {
     fail('REVIEW_SOURCE_CLAIMED', 'only a protected uncompleted claim can be restored');
   let dead = false;
   try { process.kill(source.state.resume.owner_pid, 0); } catch (error) { dead = error.code === 'ESRCH'; }
-  if (!dead) fail('REVIEW_SOURCE_CLAIMED', 'original source claimant is active or its inactivity is uncertain');
+  if (!dead && !(source.state.resume.owner_pid === process.pid
+      && source.state.resume.prelaunch_failure?.schema === 'shipyard.completed-source-no-spawn.v1'
+      && source.state.resume.prelaunch_failure.spawn_attempted === false))
+    fail('REVIEW_SOURCE_CLAIMED', 'original source claimant is active or its inactivity is uncertain');
   const { raw, live } = completedSourceSnapshot(source);
   if (raw !== live || source.state.resume.native_bytes !== source.snapshot.bytes
       || source.state.resume.native_sha256 !== source.snapshot.sha256)
