@@ -53,11 +53,12 @@ function launch(f, overrides = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const chunks = [];
+  const stderr = [];
   child.stdout.on('data', bytes => chunks.push(bytes));
-  child.stderr.on('data', bytes => chunks.push(bytes));
+  child.stderr.on('data', bytes => { chunks.push(bytes); stderr.push(bytes); });
   const done = new Promise((resolve, reject) => {
     child.once('error', reject);
-    child.once('close', (code, signal) => resolve({ code, signal, output: Buffer.concat(chunks).toString() }));
+    child.once('close', (code, signal) => resolve({ code, signal, output: Buffer.concat(chunks).toString(), stderr: Buffer.concat(stderr).toString() }));
   });
   return { child, done };
 }
@@ -82,7 +83,7 @@ for(const [key,value] of Object.entries({'user.name':'Shipyard Unit Tests','user
 check(process.env.GIT_CONFIG_NOSYSTEM,'1');
 const repo=path.join(process.env.TMPDIR,'repo');fs.mkdirSync(repo);
 const git=args=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
-git(['init','-q']);assert.equal(git(['symbolic-ref','--short','HEAD']),'main');
+git(['init','-q','--template=']);assert.equal(git(['symbolic-ref','--short','HEAD']),'main');
 fs.writeFileSync(path.join(repo,'file'),'worker '+id);git(['add','file']);git(['commit','-qm','unsigned worker']);
 assert.equal(git(['log','-1','--format=%an <%ae>']),'Shipyard Unit Tests <unit-tests@shipyard.invalid>');
 git(['tag','-am','unsigned tag','probe']);assert.equal(git(['cat-file','-t','probe']),'tag');
@@ -102,6 +103,12 @@ const timer=setInterval(()=>{if(fs.existsSync(path.join(root,'release'))){clearI
         fs.writeFileSync(path.join(f.root, 'release'), 'go');
         const result = await run.done;
         assert.equal(result.code, failing ? 1 : 0, result.output.slice(-2000));
+        assert.equal(result.stderr, '', 'runner stderr must not leak unbuffered job notifications');
+        assert.equal(result.output, f.files.map(file => {
+          const id = path.basename(file);
+          return '═══ '+file+'\nBEGIN '+id+'\n'+'O'.repeat(1100000)+'\n'+'E'.repeat(1100000)+'\n21 passed, 0 failed\nEND '+id+'\n';
+        }).join('')+'\nunit tests '+(failing ? 'FAILED' : 'passed')+'\n',
+        'runner emits only complete buffered output in discovery order and the aggregate result');
         let active = 0, maximum = 0;
         for (const e of events(f)) { active += e.kind === 'start' ? 1 : -1; maximum = Math.max(maximum, active); }
         assert.equal(maximum, 4); assert.equal(active, 0);

@@ -78,8 +78,6 @@ finish_workers() {
 
 setup_handlers
 
-# @invariant: Job control gives each direct Node worker and its descendants a private process group.
-set -m
 while ((unit_next < ${#unit_files[@]} || unit_active_count > 0)); do
   while ((unit_next < ${#unit_files[@]} && unit_active_count < 4)); do
     unit_worker="$unit_git_home/$unit_next"
@@ -94,6 +92,8 @@ while ((unit_next < ${#unit_files[@]} || unit_active_count > 0)); do
     git config --file "$unit_worker/gitconfig" commit.gpgsign false
     git config --file "$unit_worker/gitconfig" tag.gpgsign false
     git config --file "$unit_worker/gitconfig" init.defaultBranch main
+    # @invariant: Enable private worker process groups only during launch, suppressing asynchronous job notices.
+    set -m
     HOME="$unit_worker/home" CODEX_HOME="$unit_worker/codex" \
       CLAUDE_CONFIG_DIR="$unit_worker/claude" TMPDIR="$unit_worker/tmp" \
       TMP="$unit_worker/tmp" TEMP="$unit_worker/tmp" \
@@ -103,6 +103,7 @@ while ((unit_next < ${#unit_files[@]} || unit_active_count > 0)); do
       GIT_CONFIG_NOSYSTEM=1 node "${unit_files[$unit_next]}" >"${unit_logs[$unit_next]}" 2>&1 &
     unit_pids[$unit_next]=$!
     unit_active[unit_active_count]=$!
+    set +m
     unit_active_count=$((unit_active_count + 1))
     unit_next=$((unit_next + 1))
   done
