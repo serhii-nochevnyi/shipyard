@@ -907,6 +907,7 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'completed-review-source-')));
   const previousHome = os.homedir;
   const originalRename = fs.renameSync;
+  const originalFsync = fs.fsyncSync;
   os.homedir = () => root;
   try {
     const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
@@ -951,6 +952,7 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     const recovery = mutation?.startsWith('recover-');
     const blockedRecord = path.join(recorder.storeDir, 'record-' + sha(dispatchId) + '.json');
     const concurrentClaims = [];
+    let persistenceFaults = 0;
     const echo = () => ({ input_manifest_sha256: input.input_bundle.manifest_sha256,
       input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
       input_chunk_reads: input.manifest.ranges.length, input_batch_reads: input.manifest.batches.length,
@@ -1091,6 +1093,32 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
             }
           }
         };
+        if (['recover-tip-before-write', 'recover-tip-after-write', 'recover-ledger-after-write', 'recover-tip-fsync', 'recover-ledger-fsync'].includes(mutation) && !recoveryStarted) {
+          fs.renameSync = (from, to) => {
+            if (path.dirname(to) !== authority.archiveAuthorityDirectory(worktree)
+                || !path.basename(to).startsWith('review-tip-')) return originalRename(from, to);
+            const payload = JSON.parse(fs.readFileSync(from)).payload;
+            const terminalTip = payload.schema === 'shipyard.completed-review-source-tip.v1' && payload.resume?.status === 'completed';
+            const terminalLedger = payload.schema === 'shipyard.review-source-attempts.v1'
+              && payload.attempts.some(attempt => attempt.kind === 'final' && attempt.status === 'completed');
+            if ((terminalTip && !['recover-ledger-after-write', 'recover-ledger-fsync'].includes(mutation))
+                || (terminalLedger && ['recover-ledger-after-write', 'recover-ledger-fsync'].includes(mutation))) {
+              fs.renameSync = originalRename;
+              persistenceFaults++;
+              if (mutation !== 'recover-tip-before-write') originalRename(from, to);
+              if (mutation.endsWith('-fsync')) {
+                fs.fsyncSync = fd => {
+                  assert.ok(fs.fstatSync(fd).isDirectory(), 'fault occurs at terminal directory fsync');
+                  fs.fsyncSync = originalFsync;
+                  throw new Error('Original terminal directory fsync failed');
+                };
+                return;
+              }
+              throw new Error('Original terminal state persistence failed');
+            }
+            return originalRename(from, to);
+          };
+        }
         const application = await host.resumeCompletedSource(applied, { source, dispatch_id: context.dispatch_id,
           ...(cold ? {} : { input_prepared: input }), role,
           ...(mutation === 'subject-kind' ? { subject_kind: 'phase' } : {}),
@@ -1111,7 +1139,8 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
           },
           onCompleted(value) {
             finalCallbacks++; assert.equal(recorder.getVerifiedRecord(dispatchId), null); assert.equal(value.session_id, session);
-            if (recovery && !recoveryStarted && mutation !== 'recover-record-gap') throw new Error('Original final completion callback failed');
+            if (recovery && !recoveryStarted && mutation !== 'recover-record-gap'
+                && !['recover-tip-before-write', 'recover-tip-after-write', 'recover-ledger-after-write', 'recover-tip-fsync', 'recover-ledger-fsync'].includes(mutation)) throw new Error('Original final completion callback failed');
           } });
         if (mutation === 'recover-inflight' && recoveryStarted) concurrentClaims.push(assert.rejects(() => host.resumeCompletedSource(applied, {
           source, dispatch_id: dispatchId, role, input_prepared: input }), { code: 'REVIEW_SOURCE_CLAIMED' }));
@@ -1122,6 +1151,10 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     const launch = async () => boundary.dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: dispatchId }, { ticket: scope.ticket });
     if (recovery) {
       await assert.rejects(launch, { code: mutation === 'recover-record-gap' ? 'RECORD_FAILED' : 'RUNTIME_EVIDENCE_INVALID' });
+      if (mutation.includes('-write') || mutation.endsWith('-fsync')) {
+        assert.equal(persistenceFaults, 1, 'the original terminal write fault was actually reached');
+        assert.equal(launches, 2, 'the fresh native turn completed before the persistence fault');
+      }
       if (mutation === 'recover-record-gap') {
         fs.rmdirSync(blockedRecord);
         host.retainCompletedSourceRecordingFailure(source, { code: 'RECORD_FAILED', message: 'Original durable final receipt write failed' });
@@ -1254,6 +1287,14 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     assert.deepEqual(fs.readFileSync(native).subarray(0, originalRaw.length), originalRaw);
     assert.equal(stable(input.manifest), manifestIdentity);
     authority.validateCompletedSourceEvidence(final.receipt.runtime_evidence);
+    for (const fields of [{ schema: 'foreign' }, { semantic_credit: true }, { new_physical_calls: 1 },
+      { semantic_credit: undefined }, { new_physical_calls: undefined }]) {
+      const invalid = structuredClone(final.receipt.runtime_evidence);
+      Object.assign(invalid.completed_source, fields);
+      assert.throws(() => authority.validateCompletedSourceEvidence(invalid), {
+        code: 'REVIEW_SOURCE_INVALID', message: /exact schema and zero new credit contract/ });
+    }
+
     const accounting = runtime.verifyCompletedReviewConsumption({ worktree, source, receipt_store: recorder.storeDir, dispatch_id: dispatchId });
     assert.deepEqual(accounting.attempts.map(attempt => attempt.status), failFirst ? ['failed', 'completed', 'completed'] : ['completed', 'completed']);
     assert.equal(accounting.all_attempt_denominator, failFirst ? 3 : 2);
@@ -1281,7 +1322,7 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     assert.equal(stable(recorder.getVerifiedRecord(dispatchId).receipt), originalFinalReceipt,
       'replay preserves the original final receipt');
     if (action) await action({ input, capacity, source, final, accounting, recorder, host, root, native });
-  } finally { fs.renameSync = originalRename; os.homedir = previousHome; fs.rmSync(root, { recursive: true, force: true }); }
+  } finally { fs.renameSync = originalRename; fs.fsyncSync = originalFsync; os.homedir = previousHome; fs.rmSync(root, { recursive: true, force: true }); }
 }
 
 async function coldCompletedRecordingFixture(role) {
@@ -1340,7 +1381,7 @@ for (const role of ['arch-review', 'integrator']) {
   test('completed ' + role + ' records its exact original turn after the original host really exits before callbacks and receipt',
     () => coldCompletedRecordingFixture(role));
   for (const cold of [false, true]) {
-    for (const mutation of ['recover-native-callback', 'recover-transcript-callback', 'recover-completed-callback', 'recover-record-gap', 'recover-inflight'])
+    for (const mutation of ['recover-native-callback', 'recover-transcript-callback', 'recover-completed-callback', 'recover-record-gap', 'recover-inflight', 'recover-tip-before-write', 'recover-tip-after-write', 'recover-ledger-after-write', 'recover-tip-fsync', 'recover-ledger-fsync'])
       test('completed ' + role + ' reconciles the exact original turn after ' + mutation + (cold ? ' cold' : ' live'),
         () => completedSourceFixture(role, cold, mutation));
     for (const mutation of ['recover-prefix', 'recover-truncated', 'recover-missing-cli', 'recover-foreign-cli', 'recover-base', 'recover-source', 'recover-agent', 'recover-missing-custody'])

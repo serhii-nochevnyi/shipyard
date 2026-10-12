@@ -2110,7 +2110,17 @@ test('serialized full paged feedback selects global Node IDs across Actor varian
 
 async function originalFixerFixture(outcome, mutation) {
   const f = fixture({ physicalPaths: true });
-  const home = path.join(fs.realpathSync(temporary), 'repair-native-' + path.basename(f.root));
+  const defaultAgents = mutation?.startsWith('normalized-default-') || mutation?.startsWith('normalized-cli-default-');
+  const defaultOsHome = mutation?.endsWith('-os-home');
+  const home = defaultOsHome ? path.join(fs.realpathSync(temporary), '.codex')
+    : path.join(fs.realpathSync(temporary), 'repair-native-' + path.basename(f.root));
+  if (defaultAgents) {
+    const originalDir = f.agentDir;
+    f.agentDir = path.join(home, 'agents');
+    fs.mkdirSync(f.agentDir, { recursive: true });
+    fs.cpSync(originalDir, f.agentDir, { recursive: true });
+    fs.rmSync(originalDir, { recursive: true, force: true });
+  }
   fs.writeFileSync(path.join(f.root, 'check.cjs'), "require('node:assert/strict').equal(require('node:fs').readFileSync('src/owned.txt','utf8'), 'fixed by static native review-fix\\n');\n");
   git(f.root, 'add', 'check.cjs'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture: actual candidate verification');
   f.base = git(f.root, 'rev-parse', 'HEAD'); git(f.root, 'update-ref', 'refs/heads/main', f.base);
@@ -2263,6 +2273,8 @@ async function originalFixerFixture(outcome, mutation) {
     return response;
   };
   const originalHome = os.homedir; os.homedir = () => fs.realpathSync(temporary);
+  const originalCodexHome = process.env.CODEX_HOME;
+  if (defaultOsHome) delete process.env.CODEX_HOME;
   try {
     if (mutation === 'missing-disposition') output.review_dispositions.pop();
     if (mutation === 'missing-schema') delete output.schema;
@@ -2288,6 +2300,7 @@ async function originalFixerFixture(outcome, mutation) {
       env: { CODEX_HOME: home },
       spawn(_executable, _args, options) {
         launches++;
+        if (defaultOsHome) assert.equal(options.env.CODEX_HOME, undefined);
         const session = crypto.randomUUID();
         const effort = JSON.parse(_args.find(value => value.startsWith('model_reasoning_effort=')).split('=')[1]);
         const applied = { model: _args[_args.indexOf('--model') + 1], effort,
@@ -2344,7 +2357,8 @@ async function originalFixerFixture(outcome, mutation) {
         if (mutation === 'foreign-native-final') rows.at(-2).payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign-turn';
         if (mutation === 'mismatched-native-final') rows.at(-2).payload.content[0].text = 'foreign final JSON';
         const date = new Date();
-        const directory = path.join(options.env.CODEX_HOME, 'sessions', String(date.getFullYear()),
+        const nativeHome = options.env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+        const directory = path.join(nativeHome, 'sessions', String(date.getFullYear()),
           String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
         fs.mkdirSync(directory, { recursive: true });
         const cli = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
@@ -2390,6 +2404,11 @@ async function originalFixerFixture(outcome, mutation) {
         return child;
       },
       };
+      if (defaultAgents) {
+        delete hostOptions.agentDir;
+        delete hostOptions.agentManifest;
+        if (defaultOsHome) hostOptions.env = {};
+      }
       if (mutation?.endsWith('-callback')) {
         const storage = path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'));
         const actualRuntime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').createCodexRuntimeHost({
@@ -2641,10 +2660,20 @@ async function originalFixerFixture(outcome, mutation) {
       const manifest = JSON.parse(fs.readFileSync(agentManifest));
       manifest.agent_files.push(repeatFile); manifest.agent_digests[repeatFile] = crypto.createHash('sha256').update(repeatAgent).digest('hex');
       fs.writeFileSync(agentManifest, JSON.stringify(manifest));
+      if (['normalized-default-missing-manifest', 'normalized-default-stale-manifest'].includes(mutation)) {
+        if (mutation.endsWith('-missing-manifest')) fs.unlinkSync(agentManifest);
+        else fs.appendFileSync(path.join(f.agentDir, repeatFile), '\nchanged installed repeat instructions\n');
+        await assert.rejects(run, { code: 'STALE_GENERATED_AGENT' });
+        assert.equal(launches, 1, 'invalid installed defaults refuse before the repeated native launch');
+        assert.equal(git(f.root, 'rev-parse', 'HEAD'), firstHead);
+        assert.equal(replies.length + prReplies.length, 3);
+        return;
+      }
       const second = await run();
       const unknown = ['normalized-external', 'normalized-missing-actions'].includes(mutation);
       assert.equal(second.resolution.signals.signatureState, unknown ? 'first' : 'repeat');
       assert.equal(second.receipt.applied_effort, unknown ? 'low' : 'high');
+      assert.equal(second.receipt.agent_file_digest, crypto.createHash('sha256').update(unknown ? originalAgent : repeatAgent).digest('hex'));
       assert.notEqual(second.dispatch_id, first.dispatch_id);
       assert.notEqual(second.receipt.runtime_evidence.session_id, firstReceipt.runtime_evidence.session_id);
       assert.notEqual(second.receipt.launch_id, firstReceipt.launch_id);
@@ -2795,7 +2824,11 @@ async function originalFixerFixture(outcome, mutation) {
         assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
       } else { assert.equal(feedback[0].isResolved, false); assert.equal(result.actions.confirmed.length, 0); }
     }
-  } finally { os.homedir = originalHome; clean(f); fs.rmSync(home, { recursive: true, force: true }); }
+  } finally {
+    os.homedir = originalHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome;
+    clean(f); fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 for (const outcome of ['source', 'no-op', 'escalate']) test('canonical builder through original static fixer seals ' + outcome + ' with host custody with four original native progress messages',
@@ -2828,6 +2861,8 @@ for (const mutation of ['reply-author-foreign', 'reply-author-login', 'reply-aut
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 
 for (const mutation of ['normalized-repeat', 'normalized-cli-repeat', 'normalized-external', 'normalized-forged-actions', 'normalized-reply-body',
+  'normalized-default-home', 'normalized-cli-default-home', 'normalized-default-os-home', 'normalized-cli-default-os-home',
+  'normalized-default-missing-manifest', 'normalized-default-stale-manifest',
   'normalized-reply-author', 'normalized-reply-id', 'normalized-reply-target', 'normalized-source', 'normalized-reopened', 'normalized-missing-actions',
   'normalized-companion-body', 'normalized-companion-author', 'normalized-companion-missing', 'normalized-companion-link',
   'normalized-companion-forged'])

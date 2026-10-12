@@ -715,9 +715,9 @@ function finalizer(options) {
 
 function installedAgentOptions(options, selection, capabilities) {
   const env = options.env || process.env;
-  const agentDir = options.agentDir || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents');
+  const agentDir = options.agentDir === undefined ? path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents') : options.agentDir;
   return { agentDir, agentFile: selection.agent_file,
-    agentManifest: options.agentManifest || path.join(agentDir, '.shipyard-manifest.json'),
+    agentManifest: options.agentManifest === undefined ? path.join(agentDir, '.shipyard-manifest.json') : options.agentManifest,
     capabilities, capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE,
     readerCapacity: options.readerCapacity, automaticReader: options.automaticReader === true, selection: { model: selection.model, effort: selection.effort } };
 }
@@ -2646,8 +2646,7 @@ function createCodexDeliveryHost(options = {}) {
   for (const field of ['run_id', 'ticket', 'phase', 'worktree', 'runtime', 'provider']) {
     if (runtimeHost.scope[field] !== scope[field]) fail('SCOPE_MISMATCH', 'runtime host scope differs at ' + field);
   }
-  const agentDir = options.agentDir;
-  const agentManifest = options.agentManifest;
+  const { agentDir, agentManifest } = installedAgentOptions(options, {}, runtimeHost.capabilities);
   const env = options.env || process.env;
 
   return Object.freeze({

@@ -1391,6 +1391,10 @@ function retainSourceFinalAttempt(state, source, fields) {
   const index = ledger.attempts.findIndex(attempt => attempt.dispatch_id === source.identity.dispatch_id);
   if (index < 0 && ledger.attempts.length >= 256)
     fail('REVIEW_SOURCE_INVALID', 'all original final attempt history reached its finite bound');
+  if (fields.status === 'pending' && index !== -1 && ledger.attempts[index].status === 'pending'
+      && !source.state.resume.launch_started
+      && stable(ledger.attempts[index].identity) === stable(source.identity)
+      && stable(ledger.attempts[index].source) === stable(source.state.reference)) return;
   if ((fields.status === 'pending' && index !== -1)
       || (fields.status !== 'pending' && (index < 0 || ledger.attempts[index].status !== 'pending')))
     fail('REVIEW_SOURCE_INVALID', 'fresh final lost or replayed its original cost start');
@@ -1441,7 +1445,13 @@ function sealCompletedReviewSource(observation) {
   });
 }
 
-function readCompletedReviewSource({ worktree, reference, dispatch_id: dispatchId } = {}) {
+function readCompletedReviewSource(selectors = {}) {
+  const root = fs.realpathSync(selectors.worktree);
+  authorityState(root, false, false, false);
+  return withArchiveAuthorityLock(root, () => readCompletedReviewSourceLocked(selectors));
+}
+
+function readCompletedReviewSourceLocked({ worktree, reference, dispatch_id: dispatchId } = {}) {
   const root = fs.realpathSync(worktree), state = authorityState(root, false, false, false);
   if (!reference) {
     if (typeof dispatchId !== 'string' || !dispatchId) fail('REVIEW_SOURCE_REQUIRED', 'original final dispatch selector required');
@@ -1454,9 +1464,26 @@ function readCompletedReviewSource({ worktree, reference, dispatch_id: dispatchI
   if (payload.schema !== 'shipyard.completed-review-source.v1' || digest(stable(payload)) !== reference.sha256
       || payload.original_authority !== digest(state.key) || payload.identity?.worktree !== root)
     fail('REVIEW_SOURCE_INVALID', 'completed source identity or HMAC changed');
-  const tip = reviewEnvelope(state, completedSourceTip(payload.identity.dispatch_id));
+  let tip = reviewEnvelope(state, completedSourceTip(payload.identity.dispatch_id));
   if (tip.schema !== 'shipyard.completed-review-source-tip.v1' || tip.original_authority !== digest(state.key)
       || stable(tip.reference) !== stable(reference)) fail('REVIEW_SOURCE_INVALID', 'completed source reservation changed');
+  if (tip.resume?.status === 'claimed'
+      && fs.existsSync(path.join(state.directory, reviewAttemptLedgerName(payload.identity)))) {
+    const ledger = reviewEnvelope(state, reviewAttemptLedgerName(payload.identity));
+    const attempt = ledger.attempts.find(entry => entry.dispatch_id === payload.identity.dispatch_id);
+    if (attempt?.source_resume) {
+      const retained = attempt.source_resume;
+      if (ledger.schema !== 'shipyard.review-source-attempts.v1' || ledger.original_authority !== digest(state.key)
+          || stable(attempt.identity) !== stable(payload.identity) || stable(attempt.source) !== stable(reference)
+          || stable(retained.original_claim) !== stable(tip.resume.original_claim)
+          || retained.dispatch_id !== tip.resume.dispatch_id || !retained.launch_started
+          || !['completed', 'failed', 'incomplete'].includes(retained.status)
+          || attempt.status !== (retained.status === 'completed' ? 'completed' : 'failed'))
+        fail('REVIEW_SOURCE_INVALID', 'terminal cost retention differs from its original source claim');
+      tip = { ...tip, resume: retained };
+      writeReviewEnvelope(state, completedSourceTip(payload.identity.dispatch_id), tip);
+    }
+  }
   const snapshot = authorityFile(payload.snapshot.path, 128 * 1024 * 1024);
   if (snapshot.length !== payload.snapshot.bytes || digest(snapshot) !== payload.snapshot.sha256)
     fail('REVIEW_SOURCE_INVALID', 'immutable completed source snapshot changed');
@@ -1517,14 +1544,17 @@ function completeCompletedReviewSource(observation) {
     const cliFile = path.join(state.directory, 'completed-final-cli-' + digest(cli) + '.jsonl');
     writeImmutableArtifactFile(fs, cliFile, cli, 'original completed final CLI snapshot', 128 * 1024 * 1024);
     const append = live.subarray(source.snapshot.bytes).toString('utf8');
-    retainSourceFinalAttempt(state, source, { status: 'completed', native_status: 'completed', ended_at_ms: Date.now(),
+    const completedResume = { ...resume, status: 'completed', turn_id: completed.turn_id,
+      evidence_sha256: digest(stable(completed.evidence)),
+      completion: { schema: 'shipyard.completed-source-completion.v1', application: completed.application,
+        cli_snapshot: { path: cliFile, bytes: cli.length, sha256: digest(cli) } } };
+    retainSourceFinalAttempt(state, source, { status: 'completed', source_resume: completedResume,
+      native_status: 'completed', ended_at_ms: Date.now(),
       evidence_sha256: digest(stable(completed.evidence)), receipt_store: source.receipt_store,
       physical: { native_raw: append, native: { session_id: source.session_id, bytes: Buffer.byteLength(append), sha256: digest(append) },
         transcript: completed.evidence.transcript } });
     writeReviewEnvelope(state, completedSourceTip(resume.dispatch_id), { ...source.state,
-      resume: { ...resume, status: 'completed', turn_id: completed.turn_id, evidence_sha256: digest(stable(completed.evidence)),
-        completion: { schema: 'shipyard.completed-source-completion.v1', application: completed.application,
-          cli_snapshot: { path: cliFile, bytes: cli.length, sha256: digest(cli) } } } });
+      resume: completedResume });
   });
 }
 
@@ -1595,19 +1625,26 @@ function retainCompletedSourceFailure(observation) {
     const file = path.join(state.directory, 'failed-source-final-' + hash + '.jsonl');
     writeImmutableArtifactFile(fs, file, bytes, 'original incomplete source final', 128 * 1024 * 1024);
     const append = bytes.subarray(source.snapshot.bytes).toString('utf8');
-    retainSourceFinalAttempt(state, source, { status: 'failed', native_status: failed.native_status, ended_at_ms: Date.now(),
+    const failedResume = { ...resume, status: ['interrupted', 'incomplete'].includes(failed.native_status) ? 'incomplete' : 'failed',
+      native_status: failed.native_status, original_exit: failed.exit,
+      physical_snapshot: { path: file, bytes: bytes.length, sha256: hash }, admission_failure: failed.cause };
+    retainSourceFinalAttempt(state, source, { status: 'failed', source_resume: failedResume,
+      native_status: failed.native_status, ended_at_ms: Date.now(),
       failure: { cause: failed.cause, original_exit: failed.exit },
       physical: append ? { native_raw: append, native: { session_id: source.session_id, bytes: Buffer.byteLength(append), sha256: digest(append) },
         transcript: failed.exit.transcript } : { reason: 'launch failed without an appended native turn; physical work and tokens are unknown',
         transcript: failed.exit.transcript } });
     writeReviewEnvelope(state, completedSourceTip(resume.dispatch_id), { ...source.state,
-      resume: { ...resume, status: ['interrupted', 'incomplete'].includes(failed.native_status) ? 'incomplete' : 'failed',
-        native_status: failed.native_status, original_exit: failed.exit,
-        physical_snapshot: { path: file, bytes: bytes.length, sha256: hash }, admission_failure: failed.cause } });
+      resume: failedResume });
   });
 }
 
 function validateCompletedSourceEvidence(evidence) {
+  if (!object(evidence?.completed_source)
+      || evidence.completed_source.schema !== 'shipyard.completed-source-final.v1'
+      || evidence.completed_source.semantic_credit !== false
+      || evidence.completed_source.new_physical_calls !== 0)
+    fail('REVIEW_SOURCE_INVALID', 'completed source requires its exact schema and zero new credit contract');
   const source = readCompletedReviewSource({ worktree: evidence.worktree, reference: evidence.completed_source?.source });
   if (source.state.resume?.status !== 'completed' || source.state.resume.dispatch_id !== evidence.dispatch_id
       || source.state.resume.evidence_sha256 !== digest(stable(evidence)) || evidence.session_id !== source.session_id
