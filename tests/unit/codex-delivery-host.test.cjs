@@ -2142,7 +2142,10 @@ async function originalFixerFixture(outcome, mutation) {
   const legacyActions = mutation?.startsWith('companion-cli-legacy-');
   const threadId = legacyActions ? 'PRRT_kwDOTmU9jc6rQN4b' : 'thread-1';
   const commentId = legacyActions ? 'PRRC_kwDOTmU9jc784inG' : 'comment-1';
-  const feedback = [{ id: threadId, isResolved: false }];
+  const locationMutation = mutation?.includes('-location-');
+  const feedback = [{ id: threadId, isResolved: false,
+    ...(locationMutation ? { path: 'src/owned.txt', originalLine: 1616, line: 1653 } : {}) }];
+  const originalThreadComment = { id: commentId, body: 'Full original thread comment' };
   const output = { schema: 'shipyard.repair-result.v1', id: f.scope.ticket, pr: 501,
     status: outcome === 'source' ? 'fixed' : outcome, pushed: false, notes: 'Complete repair reasoning.',
     hypothesis: 'The source condition explains the original finding.', review_dispositions: [
@@ -2226,7 +2229,7 @@ async function originalFixerFixture(outcome, mutation) {
       const pr = { id: 'pr-body-501', number: 501, repository: { nameWithOwner: 'fixture/repository' } };
       const node = reply && { ...project(reply), replyTo: { id: commentId }, pullRequest: pr,
         pullRequestReview: reviews[0] ? { ...project(reviews[0]), pullRequest: pr } : null };
-      const targetComment = [{ id: commentId, body: 'Full original thread comment' }, ...external, ...replies]
+      const targetComment = [originalThreadComment, ...external, ...replies]
         .find(item => item.id === value('target'));
       const target = targetComment ? { ...project(targetComment), pullRequest: pr,
         replyTo: targetComment.id === commentId ? null : { id: commentId } } : {};
@@ -2248,7 +2251,7 @@ async function originalFixerFixture(outcome, mutation) {
           nodes: Array.from({ length: 100 }, (_, index) => ({ id: 'bounded-obligation-' + (offset + index), body: 'x' })),
           pageInfo: { hasNextPage: offset + 100 < 2000, endCursor: String(offset + 100) } } } } });
       }
-      const comments = [{ id: commentId, body: mutation === 'overflow' ? 'x'.repeat(600000) : 'Full original thread comment' }, ...external, ...(swapReplyTarget ? [] : replies)].map(project);
+      const comments = [{ ...originalThreadComment, body: mutation === 'overflow' ? 'x'.repeat(600000) : originalThreadComment.body }, ...external, ...(swapReplyTarget ? [] : replies)].map(project);
       if (mutation === 'duplicate-feedback') comments.push(comments[0]);
       if (mutation === 'feedback-movement' && launches) comments.push({ id: 'new-obligation', body: 'New feedback after preparation.' });
       const page = connection(comments);
@@ -2622,6 +2625,22 @@ async function originalFixerFixture(outcome, mutation) {
       let currentHead = firstHead;
       const retainedFiles = fs.readdirSync(path.join(stateRoot(f), 'repair-actions')).map(file => ({
         file: path.join(stateRoot(f), 'repair-actions', file), bytes: fs.readFileSync(path.join(stateRoot(f), 'repair-actions', file)) }));
+      if (coveredSource && locationMutation) {
+        const receiptDir = path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'), 'receipts');
+        // Original dispatch records stay immutable; the recorder's latest pointer advances on a fresh repair.
+        const dispatchDigest = crypto.createHash('sha256').update(first.dispatch_id).digest('hex');
+        for (const file of ['record-' + dispatchDigest + '.json', 'reservation-' + dispatchDigest + '.json']) {
+          const original = path.join(receiptDir, file);
+          assert.ok(fs.statSync(original).isFile());
+          retainedFiles.push({ file: original, bytes: fs.readFileSync(original) });
+        }
+        const transcript = firstReceipt.runtime_evidence.transcript.path;
+        retainedFiles.push({ file: transcript, bytes: fs.readFileSync(transcript) });
+        const nativeFiles = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs')
+          .nativeSessionCandidates(path.join(home, 'sessions'), firstReceipt.runtime_evidence.session_id);
+        assert.equal(nativeFiles.length, 1);
+        retainedFiles.push({ file: nativeFiles[0], bytes: fs.readFileSync(nativeFiles[0]) });
+      }
       if (coveredSource) {
         sourceResult = await run({ role: 'executor', context: { prompt: 'Implement the current covered source correction.' } });
         currentHead = git(f.root, 'rev-parse', 'HEAD'); publishedHead = currentHead;
@@ -2642,7 +2661,7 @@ async function originalFixerFixture(outcome, mutation) {
         if (mutation.endsWith('-plan')) fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
         if (mutation.endsWith('-owners')) { graph.tickets[f.scope.ticket].files.push('outside.txt'); fs.writeFileSync(graphFile, JSON.stringify(graph)); }
       }
-      if (mutation === 'normalized-uncovered-source') {
+      if (mutation?.startsWith('normalized-uncovered-source')) {
         fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'uncovered external source\n');
         git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'uncovered external source');
         publishedHead = git(f.root, 'rev-parse', 'HEAD');
@@ -2668,7 +2687,35 @@ async function originalFixerFixture(outcome, mutation) {
       if (mutation === 'normalized-companion-body') reviews[0].body = 'New finding on the retained companion review';
       if (mutation === 'normalized-companion-author') reviews[0].author = { ...actor, id: 'foreign-user' };
       if (mutation === 'normalized-companion-missing') reviews.length = 0;
+      if (locationMutation) {
+        feedback[0].line = mutation.endsWith('-null') ? null : 1686;
+        if (mutation.endsWith('-path')) feedback[0].path = 'outside.txt';
+        if (mutation.endsWith('-original-line')) feedback[0].originalLine++;
+        if (mutation.endsWith('-thread-id')) feedback[0].id = 'foreign-thread';
+        if (mutation.endsWith('-reopened')) feedback[0].isResolved = false;
+        if (mutation.endsWith('-negative')) feedback[0].line = -1;
+        if (mutation.endsWith('-string')) feedback[0].line = '1686';
+        if (mutation.endsWith('-zero')) feedback[0].line = 0;
+        if (mutation.endsWith('-false')) feedback[0].line = false;
+        if (mutation.endsWith('-empty')) feedback[0].line = '';
+        if (mutation.endsWith('-body')) originalThreadComment.body += ' changed original feedback';
+        if (mutation.endsWith('-author')) originalThreadComment.author = { ...actor, id: 'foreign-user' };
+      }
       const refusal = {
+        'normalized-location-shift': 'REPAIR_PREDECESSOR_INVALID', 'normalized-location-null': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-uncovered-source-location-shift': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-covered-source-location-forged': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-covered-source-location-path': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-original-line': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-thread-id': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-reopened': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-negative': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-string': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-zero': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-false': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-empty': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-body': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-author': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-covered-source-forged': 'REPAIR_SUBJECT_CHANGED', 'normalized-uncovered-source': 'REPAIR_SUBJECT_CHANGED',
         'normalized-covered-source-plan': 'PLAN_DIGEST_MISMATCH', 'normalized-covered-source-owners': 'REPAIR_SUBJECT_CHANGED',
         'normalized-covered-source-reply-body': 'REPAIR_PREDECESSOR_INVALID',
@@ -2686,6 +2733,9 @@ async function originalFixerFixture(outcome, mutation) {
       if (refusal) {
         await assert.rejects(run, { code: refusal });
         assert.equal(launches, coveredSource ? 2 : 1); assert.equal(replies.length + prReplies.length, 3);
+        if (locationMutation) {
+          for (const original of retainedFiles) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
+        }
         return;
       }
       if (mutation === 'normalized-missing-actions') {
@@ -2737,6 +2787,14 @@ async function originalFixerFixture(outcome, mutation) {
         assert.ok(originalSecond.subject.actionable_feedback.coverage.every(item => item.historical && item.semantic_credit === false
           && item.source_transition.from === firstHead && item.source_transition.to === currentHead));
         assert.equal(originalSecond.subject.actionable_feedback.inventory.find(item => item.id === threadId).resolved, true);
+        if (locationMutation) {
+          const originalThread = JSON.parse(retainedFiles[0].bytes).payload.feedback.inventory.find(item => item.id === threadId);
+          const currentThread = originalSecond.subject.actionable_feedback.inventory.find(item => item.id === threadId);
+          assert.equal(originalThread.line, 1653);
+          assert.deepEqual(currentThread, { ...originalThread, line: feedback[0].line });
+          const receiptDir = path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'), 'receipts');
+          assert.equal(createDurableRecorder(receiptDir).getLatestReceipt('codex', 'review-fix').dispatch_id, second.dispatch_id);
+        }
         for (const original of retainedFiles) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
         assert.equal(first.receipt.dispatch_id, firstReceipt.dispatch_id);
       }
@@ -2919,7 +2977,7 @@ for (const mutation of ['normalized-repeat', 'normalized-cli-repeat', 'normalize
   'normalized-default-missing-manifest', 'normalized-default-stale-manifest',
   'normalized-reply-author', 'normalized-reply-id', 'normalized-reply-target', 'normalized-source', 'normalized-reopened', 'normalized-missing-actions',
   'normalized-companion-body', 'normalized-companion-author', 'normalized-companion-missing', 'normalized-companion-link',
-  'normalized-companion-forged'])
+  'normalized-companion-forged', 'normalized-location-shift', 'normalized-location-null'])
   test('original complete feedback and authenticated host output ' + mutation,
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 for (const mutation of ['normalized-source-repeat', 'normalized-cli-source-repeat'])
@@ -2929,7 +2987,13 @@ for (const mutation of ['normalized-source-repeat', 'normalized-cli-source-repea
 for (const mutation of ['normalized-covered-source', 'normalized-covered-source-forged', 'normalized-covered-source-plan',
   'normalized-covered-source-owners', 'normalized-uncovered-source', 'normalized-covered-source-reply-body',
   'normalized-covered-source-reply-author', 'normalized-covered-source-reply-id', 'normalized-covered-source-reply-target',
-  'normalized-covered-source-companion-link'])
+  'normalized-covered-source-companion-link', 'normalized-covered-source-location-shift', 'normalized-covered-source-location-null',
+  'normalized-covered-source-location-path', 'normalized-covered-source-location-original-line',
+  'normalized-covered-source-location-thread-id', 'normalized-covered-source-location-reopened',
+  'normalized-covered-source-location-negative', 'normalized-covered-source-location-string',
+  'normalized-covered-source-location-zero', 'normalized-covered-source-location-false', 'normalized-covered-source-location-empty',
+  'normalized-covered-source-location-body', 'normalized-covered-source-location-author',
+  'normalized-covered-source-location-forged', 'normalized-uncovered-source-location-shift'])
   test('confirmed no-op feedback authenticates subsequent native executor source coverage ' + mutation,
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 

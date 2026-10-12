@@ -1487,7 +1487,7 @@ function completeRepairFeedback(options, prepared, pr) {
           if (!object(node) || typeof node.id !== 'string' || typeof node.isResolved !== 'boolean')
             fail('REPAIR_FEEDBACK_INVALID', 'review thread identity is incomplete');
           add('thread', { id: node.id, body: '' }, { resolved: node.isResolved, path: node.path || null,
-            line: node.line || null, original_line: node.originalLine || null });
+            line: node.line ?? null, original_line: node.originalLine || null });
           paginate('thread-comments', 'query($cursor:String,$id:ID!){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$cursor){nodes{id body author{login ... on Node{id}}} pageInfo{hasNextPage endCursor}}}}}',
             response => response.data?.node?.comments, { id: node.id });
         } else add(field === 'thread-comments' ? 'thread-comment' : field, node,
@@ -1834,9 +1834,14 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
         const thread = subject.feedback.inventory.find(item => item.id === threadId);
         const confirmed = actions.feedback.inventory.find(item => item.id === threadId);
         const currentThread = feedback.inventory.find(item => item.id === threadId);
+        // @security: GitHub's nullable current line may remap only across authenticated covered source history.
+        // Compare every other field exactly and leave both original snapshots untouched.
+        const currentIdentity = sourceTransition && currentThread
+          && (currentThread.line === null || (Number.isSafeInteger(currentThread.line) && currentThread.line > 0))
+          ? { ...currentThread, line: confirmed?.line } : currentThread;
         if (disposition.action !== 'reply-and-resolve' || !thread || thread.resolved
             || canonical(confirmed) !== canonical({ ...thread, resolved: true })
-            || canonical(currentThread) !== canonical(confirmed))
+            || canonical(currentIdentity) !== canonical(confirmed))
           fail('REPAIR_PREDECESSOR_INVALID', 'host resolution changed its original external thread');
         if (!sourceTransition && !resolutions.has(threadId)) resolutions.set(threadId, thread);
       }
