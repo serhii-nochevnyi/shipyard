@@ -16,8 +16,6 @@ async function until(predicate) {
   }
 }
 function fixture(bodies) {
-  // Node's cwd resolves symlinks (notably macOS /var -> /private/var).
-  // Use the same physical root for the fixture and worker environment paths.
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'unit-runner-fixture-')));
   for (const dir of ['tests/unit', 'tests/smoke', 'scripts',
     'plugins/delivery-pipeline/scripts', 'capabilities/delivery-pipeline/checks']) {
