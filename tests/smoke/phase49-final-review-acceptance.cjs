@@ -12,6 +12,7 @@ const SCHEMA = 'shipyard.phase49.final-review-acceptance.v1';
 const HISTORICAL_PLAN = '3328a4c25ae4f451a6f8dcbe01b0164260f31bf294ea33e70877795ae24380e1';
 const PREVIOUS_PLAN = 'a6e2b6805cbe54f62c065a0d471a94f8517244170f177ed452987e2d1b6d3034';
 const CURRENT_PLAN = '5801571880fe2236e9491eeb2a88e4ac952ea7620f4cdb155434004ff6eac2dc';
+const FINITE_PLAN = '575c93581a5437799f12d25a8f97f6ad26ec71b06a7f5c3ba820629a453ea675';
 const MAX_BYTES = 128 * 1024 * 1024;
 const CHECKS = ['full-fallback', 'changed-base-expansion', 'shared-contract-expansion', 'forged', 'stale', 'truncated', 'replay'];
 const nativeMatrices = new WeakSet();
@@ -174,7 +175,10 @@ function inspectPublication(ref) {
   const selected = JSON.parse(bytes);
   assert.equal(selected.package.version, ref.package_version, 'candidate package version drift');
   assert.equal(selected.package.digest, ref.package_digest, 'candidate package digest drift');
-  const result = ref.mode_predecessor
+  const result = ref.finite_predecessor
+    ? inspector.inspectBatchSuccessor(bytes, ref.expected, ROOT, ref.stage,
+      original(ref.finite_predecessor.selection), ref.finite_predecessor.expected, ref.finite_predecessor.repository)
+    : ref.mode_predecessor
     ? inspector.inspectModeSuccessor(bytes, ref.expected, ROOT, ref.stage,
       original(ref.mode_predecessor.selection), ref.mode_predecessor.expected)
     : inspector.inspect(bytes, ref.expected, ROOT, ref.stage);
@@ -271,7 +275,7 @@ function verifySourceEquivalence(candidate) {
     gitBytes(candidate.publication_source.worktree, 'merge-base', '--is-ancestor', candidate.producer.commit, publication.commit);
     gitBytes(candidate.current_source.worktree, 'merge-base', '--is-ancestor', publication.commit, candidate.current_source.commit);
     assert(['executor', 'fixer'].includes(publication.kind), 'original15 signed native publication authority required');
-    assert.equal(publication.dispatch_id, 'dispatch-mv2znskv-36e55516-35d6-4859-8908-c17728324c3b', 'foreign publication actor');
+    if (!candidate.finite_predecessor) assert.equal(publication.dispatch_id, 'dispatch-mv2znskv-36e55516-35d6-4859-8908-c17728324c3b', 'foreign publication actor');
   }
   return { producer, current, canonical_inputs: inputs.length, outputs: selected.outputs.length,
     source_equivalent: true, full_ci_authenticated: false };
@@ -305,9 +309,12 @@ function verifyInstalledCandidate(candidate) {
     runtime_root: installed.runtime_root };
   const ci = verifyCI(candidate.ci, source.commit);
   assert.equal(installed.worktree, source.worktree, 'original installation source checkout differs');
-  const observation = publicationInspector(source.worktree).inspectModeInstalled(installed, authenticated,
-    original(candidate.selection), expected, () => ({ authenticated: true, expected,
-      identity: installed, binding: authenticated, ci }));
+  const inspector = publicationInspector(source.worktree);
+  if (candidate.finite_predecessor) expected.selection_root = candidate.selection_root;
+  const sourceCI = candidate.finite_predecessor ? verifyCI(candidate.source_ci, selected.source.head) : null;
+  const observation = inspector[candidate.finite_predecessor ? 'inspectBatchInstalled' : 'inspectModeInstalled'](installed, authenticated,
+    original(candidate.selection), expected, () => ({ ...candidate.installed_proof, authenticated: true, expected,
+      identity: installed, binding: authenticated, ci, ...(sourceCI ? { source_ci: sourceCI } : {}) }));
   assert.equal(installed.source_head, source.commit, 'installed current source differs');
   assert.equal(installed.policy_sha256, policy, 'installed runtime policy differs');
   verifyPrerequisites(candidate);
@@ -325,7 +332,7 @@ function verifyInstalledCandidate(candidate) {
 function verifyEvidence(ledger) {
   assert.equal(ledger.schema, SCHEMA);
   assert.equal(ledger.ticket, 'T-49-11');
-  assert([HISTORICAL_PLAN, PREVIOUS_PLAN, CURRENT_PLAN].includes(ledger.plan_sha256), 'unsupported acceptance plan');
+  assert([HISTORICAL_PLAN, PREVIOUS_PLAN, CURRENT_PLAN, FINITE_PLAN].includes(ledger.plan_sha256), 'unsupported acceptance plan');
   const historical = ledger.plan_sha256 === HISTORICAL_PLAN;
   assert.equal(ledger.benchmark.material_bytes, 6530992);
   assert.equal(ledger.benchmark.observed_successful_reads, 830);
@@ -568,7 +575,8 @@ async function verifyNativeCapacity(input, prepared) {
   const collector = require(path.join(SCRIPTS, 'codex-arch-review-context.cjs'));
   const checked = collector.verifyFileInput(prepared);
   const contract = runtime.readerCapacityContract(capacity, checked.manifest);
-  assert.equal(contract.chunk_bytes, 131072);
+  if (contract.schema !== 'shipyard.native-reader-transport.v3') assert.equal(contract.chunk_bytes, 131072);
+  else assert.equal(contract.physical_calls, checked.manifest.batches.length);
   return { capacity, contract, semantic_credit: false };
 }
 function observeNativeConsumption({ prepared, native, dispatch, result }) {
@@ -682,11 +690,17 @@ function verifyOriginalReads(record, native, chunkBytes, probeManifest) {
   assert.equal(records[finals[0]].payload.content.map(block => block.text).join(''), result, 'native/CLI final mismatch');
   assert.equal(records[ends[0]].payload.last_agent_message, result, 'native completion mismatch');
   const block = chunkBytes || bundle.chunk_bytes;
+  const batch = checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3';
   assert([8192, 131072].includes(block), 'unsupported observed block size');
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
   const assets = [{ path: bundle.manifest_path, bytes: checked.manifest_bytes },
     ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
-  const ranges = assets.flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / block) }, (_, index) => ({
+  const collector = require(path.join(SCRIPTS, 'codex-arch-review-context.cjs'));
+  const ranges = batch ? checked.manifest.batches.map(entry => ({
+    command: collector.batchCommand(bundle, entry.index),
+    output: collector.batchOutput(checked.manifest, checked.manifest_bytes, checked.material, entry.index),
+    frames: collector.batchFrames(checked.manifest, checked.manifest_bytes, checked.material, entry.index),
+  })) : assets.flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / block) }, (_, index) => ({
     command: 'dd if=' + quote(asset.path) + ' bs=' + block + ' skip=' + index + ' count=1 2>/dev/null | base64',
     bytes: asset.bytes.subarray(index * block, (index + 1) * block) })));
   assert(ranges.length > 0 && ranges.length <= 2064, 'bounded complete range inventory required');
@@ -704,14 +718,14 @@ function verifyOriginalReads(record, native, chunkBytes, probeManifest) {
       } else if (/(?:^|[._])exec_command$/.test(item.name || '')) {
         try { args = JSON.parse(item.arguments); } catch {}
       }
-      if (!args || typeof args.cmd !== 'string' || !assets.some(asset => args.cmd.startsWith('dd if=' + quote(asset.path) + ' '))) continue;
+      if (!args || typeof args.cmd !== 'string' || !(batch ? args.cmd.includes('--read-batch') : assets.some(asset => args.cmd.startsWith('dd if=' + quote(asset.path) + ' ')))) continue;
       assert(index > starts[0] && index < finals[0], 'read outside original completion');
       assert(item.internal_chat_message_metadata_passthrough?.turn_id === undefined
         || item.internal_chat_message_metadata_passthrough.turn_id === turn, 'foreign reader turn');
       assert(!pending && args.cmd === ranges[at]?.command, 'reordered or duplicate observed range');
       assert(typeof item.call_id === 'string' && !seen.has(item.call_id), 'replayed original reader call');
       assert(Object.keys(args).every(key => ['cmd', 'max_output_tokens'].includes(key)), 'unsupported reader arguments');
-      if (block === 131072) assert(item.type === 'custom_tool_call' && args.max_output_tokens === 10000, 'changed output policy');
+      if (batch || block === 131072) assert(item.type === 'custom_tool_call' && args.max_output_tokens === 10000, 'changed output policy');
       seen.add(item.call_id); pending = { id: item.call_id, custom: item.type === 'custom_tool_call' };
     }
     if (!['custom_tool_call_output', 'function_call_output'].includes(item.type) || !seen.has(item.call_id)) continue;
@@ -721,6 +735,19 @@ function verifyOriginalReads(record, native, chunkBytes, probeManifest) {
     let value = item.output, envelope;
     const outerBytes = Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value));
     assert(outerBytes <= 256 * 1024, 'outer output exceeds bound');
+    if (batch && pending.custom) {
+      const complete = Array.isArray(value) && value.length === 2 && value.every(part => part.type === 'text')
+        && /^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(value[0].text);
+      let result;
+      if (complete) { try { result = JSON.parse(value[1].text); } catch {} }
+      if (!complete || !result || Array.isArray(result) || result.truncated === true
+          || result.original_token_count !== undefined || result.session_id !== undefined
+          || result.exit_code !== 0 || result.output !== ranges[at].output) {
+        outer += outerBytes;
+        if (complete) nested += Buffer.byteLength(value[1].text);
+        failed.add(item.call_id); pending = null; continue;
+      }
+    }
     if (pending.custom) {
       assert(Array.isArray(value) && value.length === 2 && value.every(part => part.type === 'text'), 'truncated outer envelope');
       assert(/^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(value[0].text), 'unfinished outer output');
@@ -734,6 +761,13 @@ function verifyOriginalReads(record, native, chunkBytes, probeManifest) {
     outer += outerBytes;
     if (envelope.exit_code !== 0) { failed.add(item.call_id); pending = null; continue; }
     value = envelope.output ?? envelope.stdout;
+    if (batch) {
+      assert(envelope.original_token_count === undefined && envelope.truncated !== true, 'truncated batch envelope');
+      assert.equal(value, ranges[at].output, 'truncated or altered finite batch frames');
+      encoded += ranges[at].frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.base64), 0);
+      rawBytes += ranges[at].frames.reduce((sum, frame) => sum + frame.bytes, 0);
+      largest = Math.max(largest, outerBytes); at++; pending = null; continue;
+    }
     assert(typeof value === 'string' && /^[A-Za-z0-9+/=\r\n]*$/.test(value)
       && value.replace(/[\r\n]/g, '') === ranges[at].bytes.toString('base64'), 'truncated or altered encoded range');
     encoded += Buffer.byteLength(value); rawBytes += ranges[at].bytes.length;
@@ -750,7 +784,9 @@ function verifyOriginalReads(record, native, chunkBytes, probeManifest) {
     tokens: metric(null, 'Comparable review token total unavailable; original CLI usage retained separately.') };
   metrics(counters);
   return { dispatch: record.dispatch_id, session: evidence.native_session_evidence.session_id, turn, metrics: counters,
-    largest_envelope_bytes: largest, full_128k_ranges: ranges.filter(range => range.bytes.length === 131072).length,
+    largest_envelope_bytes: largest, full_128k_ranges: batch ? 0 : ranges.filter(range => range.bytes.length === 131072).length,
+    ...(batch ? { schema: 'shipyard.native-reader-capacity.v3', profile_sha256: checked.manifest.transport.profile_sha256,
+      logical_ranges: checked.manifest.ranges.length, physical_calls: at } : {}),
     checked, completed_at: Date.parse(records[ends[0]].timestamp),
     usage: cli.records.filter(row => row.type === 'turn.completed').map(row => row.usage), native };
 }
@@ -824,7 +860,8 @@ function bindNativeSubject(record, checked, subject) {
   for (const pin of manifest.binding.installed_files) original(pin);
 }
 function verifyCapacityReference(ref, subject, traces) {
-  requiredReference(ref, 'first 128KiB probe');
+  requiredReference(ref, 'original capacity probe');
+  if (ref.schema === 'shipyard.native-reader-capacity.v3') return verifyFiniteCapacityReference(ref, subject, traces);
   const record = verifiedRecord(ref.receipt), observed = verifyOriginalReads(record, ref.native, 131072, ref.probe_manifest);
   bindNativeSubject(record, observed.checked, subject);
   assert(observed.full_128k_ranges > 0, 'complete first 128KiB encoded range absent');
@@ -853,6 +890,39 @@ function verifyCapacityReference(ref, subject, traces) {
   return { block_bytes: 131072, complete: true, probe: ref.receipt, native: ref.native,
     metrics: observed.metrics, observed_encoded_bytes: observed.largest_envelope_bytes + 4096,
     required_encoded_bytes: traces.length ? Math.max(...traces.map(trace => trace.schedule.largest_envelope_bytes)) : null };
+}
+function verifyFiniteCapacityReference(ref, subject, traces) {
+  assert.equal(traces.length, 1, 'one independent finite role required');
+  const record = verifiedRecord(ref.receipt);
+  const observed = verifyOriginalReads(record, ref.native, undefined, ref.probe_manifest);
+  assert.equal(observed.schema, 'shipyard.native-reader-capacity.v3', 'finite original schedule absent');
+  bindNativeSubject(record, observed.checked, subject);
+  const trace = traces[0], manifest = observed.checked.manifest;
+  assert.equal(manifest.role, trace.role, 'borrowed finite capacity role');
+  assert.deepEqual(manifest, trace.manifest, 'finite capacity subject/material/instruction/schedule differs');
+  assert(observed.completed_at < trace.started_at, 'finite measurement must precede treatment');
+  const contract = trace.reader_capacity;
+  assert(contract && contract.schema === 'shipyard.native-reader-transport.v3', 'protected finite capacity absent');
+  const authority = require(path.join(SCRIPTS, 'role-artifact.cjs'));
+  const application = authority.authenticateReaderCapacityReferences({ worktree: manifest.snapshot.worktree,
+    receipt_store: contract.application_receipt_store, dispatch_id: contract.application_dispatch_id });
+  assert.equal(sha(canonical(application.receipt)), contract.application_receipt_sha256, 'finite capacity receipt changed');
+  assert.equal(contract.native_sha256, ref.native.sha256, 'foreign finite native measurement');
+  assert.equal(contract.native_session_id, observed.session, 'foreign finite session');
+  assert.equal(contract.profile_sha256, observed.profile_sha256, 'finite profile differs');
+  assert.equal(contract.manifest_sha256, record.receipt.runtime_evidence.input_bundle.manifest_sha256, 'finite manifest differs');
+  assert.equal(contract.schedule_sha256, sha(JSON.stringify(manifest.batches)), 'finite schedule differs');
+  assert.deepEqual(contract.selection, record.receipt.runtime_evidence.native_session_evidence.selections[0], 'finite selection differs');
+  assert.equal(contract.native_bytes, ref.native.bytes, 'finite native length differs');
+  assert.equal(contract.output_tokens, 10000, 'finite output policy changed');
+  assert.equal(contract.physical_calls, observed.physical_calls, 'invented finite calls');
+  assert.equal(contract.logical_ranges, observed.logical_ranges, 'invented finite ranges');
+  assert.equal(contract.encoded_bytes, observed.metrics.encoded_bytes.value, 'invented finite bytes');
+  assert.equal(contract.largest_envelope_bytes, observed.largest_envelope_bytes, 'invented finite envelope');
+  return { schema: ref.schema, role: trace.role, candidate: subject.candidate, policy: subject.policy,
+    complete: true, physical_calls: observed.physical_calls, logical_ranges: observed.logical_ranges,
+    profile_sha256: observed.profile_sha256, observed_encoded_bytes: observed.largest_envelope_bytes,
+    required_encoded_bytes: observed.largest_envelope_bytes, metrics: observed.metrics };
 }
 function verifyCI(ref, head) {
   requiredReference(ref, 'exact-source full CI');
@@ -887,7 +957,7 @@ function verifyBuildOrigin(candidate, selected) {
   const source = verifySourceHistory(requiredReference(candidate.publication_source, 'original15 actor native source'));
   const record = verifiedRecord({ store: source.receipt_store, dispatch: source.dispatch_id });
   assert.equal(record.receipt.role, 'executor', 'build did not follow actual native15 executor');
-  assert.equal(source.dispatch_id, 'dispatch-mv2znskv-36e55516-35d6-4859-8908-c17728324c3b');
+  if (!candidate.finite_predecessor) assert.equal(source.dispatch_id, 'dispatch-mv2znskv-36e55516-35d6-4859-8908-c17728324c3b');
   const ref = requiredReference(candidate.publication_native, 'original15 native stream');
   const evidence = record.receipt.runtime_evidence.native_session_evidence;
   assert.equal(ref.sha256, evidence.sha256); assert.equal(ref.bytes, evidence.bytes);
@@ -1098,7 +1168,15 @@ function aggregateMatrix(value, provenance) {
   assert.equal(new Set(value.traces.map(trace => trace.physical.attempts[0].session_id)).size, 2, 'borrowed semantic session');
   assert.equal(value.capacity.length, 2, 'both-role first128KiB probes required');
   for (const capacity of value.capacity) {
-    assert(capacity.complete && capacity.block_bytes === 131072, 'complete original first128KiB probe required');
+    if (capacity.schema === 'shipyard.native-reader-capacity.v3') {
+      assert.equal(capacity.role, value.traces[value.capacity.indexOf(capacity)].role, 'borrowed capacity role');
+      assert.equal(capacity.candidate, value.subject.candidate, 'foreign finite candidate');
+      assert.equal(capacity.policy, value.subject.policy, 'finite policy changed');
+      assert.match(capacity.profile_sha256, /^[a-f0-9]{64}$/, 'finite profile absent');
+      assert(Number.isSafeInteger(capacity.physical_calls) && capacity.physical_calls > 0 && capacity.physical_calls <= 83, 'finite physical target');
+      assert(Number.isSafeInteger(capacity.logical_ranges) && capacity.logical_ranges > 0, 'finite logical coverage absent');
+      assert.equal(capacity.complete, true, 'incomplete finite capacity');
+    } else assert(capacity.complete && capacity.block_bytes === 131072, 'complete original first128KiB probe required');
     assert(capacity.observed_encoded_bytes >= capacity.required_encoded_bytes, 'insufficient complete capacity');
   }
   equalSet(value.observations.map(row => row.role + ':' + row.kind), ['arch-review', 'integrator'].flatMap(role =>
@@ -1176,7 +1254,7 @@ function verifyActualMatrix(ledger, report) {
       const runtime = verifiedRecord(ref.receipt).receipt.runtime_evidence;
       const checked = require(path.join(SCRIPTS, 'codex-arch-review-context.cjs')).verifyFileInput(runtime.input_bundle, { sealed: true, historical: true });
       const schedule = require(path.join(SCRIPTS, 'codex-arch-review-context.cjs')).preflightReaderSchedule(checked.manifest, checked.manifest_bytes);
-      traces.push({ ...trace, role, transport: runtime.input_bundle.transport, assets: checked.manifest.assets.map(asset => [asset.ordinal, asset.bytes, asset.sha256]),
+      traces.push({ ...trace, role, transport: runtime.input_bundle.transport, reader_capacity: runtime.input_bundle.reader_capacity, assets: checked.manifest.assets.map(asset => [asset.ordinal, asset.bytes, asset.sha256]),
         manifest: checked.manifest, manifest_bytes: checked.manifest_bytes, schedule,
         started_at: originalAttemptStart(trace.physical) });
     }

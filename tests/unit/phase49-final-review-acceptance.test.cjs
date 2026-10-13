@@ -482,3 +482,22 @@ test('original logical inventory retains duplicate purposes and complete source 
   const omitted = clone(packet); delete omitted.retained_evidence;
   assert.equal(inventory(omitted).length, 2, 'retained original evidence is a separate required obligation');
 });
+
+
+test('finite batch aggregation retains fixture provenance and requires measured role-bound capacity', () => {
+  const { aggregateMatrix } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const value = aggregationFixture();
+  value.capacity = value.traces.map(trace => ({ schema: 'shipyard.native-reader-capacity.v3',
+    role: trace.role, candidate: value.subject.candidate, policy: value.subject.policy,
+    complete: true, physical_calls: 52, logical_ranges: 830, profile_sha256: 'a'.repeat(64),
+    observed_encoded_bytes: 9999, required_encoded_bytes: 9999 }));
+  assert.equal(aggregateMatrix(value, 'fixture-only').status, 'fixture-pass');
+  assert.equal(aggregateMatrix(value, 'fixture-only').empirical_acceptance, false);
+  for (const mutate of [v => v.capacity[0].complete = false,
+    v => v.capacity[1].role = 'arch-review', v => v.capacity[0].candidate = 'f'.repeat(64),
+    v => v.capacity[0].physical_calls = 84, v => v.capacity[0].logical_ranges = null,
+    v => v.capacity[0].observed_encoded_bytes--]) {
+    const altered = clone(value); mutate(altered);
+    assert.throws(() => aggregateMatrix(altered, 'fixture-only'));
+  }
+});
