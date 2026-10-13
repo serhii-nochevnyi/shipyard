@@ -227,14 +227,18 @@ function integrationOutput(scope, role) {
 
 function fileSnapshot(scope, options) {
   const worktree = fs.realpathSync(scope.worktree);
-  const common = fs.realpathSync(git(options, worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
-  const head = git(options, worktree, ['rev-parse', 'HEAD']);
+  const repository = git(options, worktree,
+    ['rev-parse', '--path-format=absolute', '--git-common-dir', 'HEAD', 'HEAD^{tree}']).split('\n');
+  const headTree = repository.pop(), head = repository.pop();
+  if (!repository.length || !/^[a-f0-9]{40,64}$/.test(head || '') || !/^[a-f0-9]{40,64}$/.test(headTree || ''))
+    fail('repository snapshot identity is malformed', 'STALE_CONTEXT');
+  const common = fs.realpathSync(repository.join('\n'));
   const output = integrationOutput(scope, options.role);
   const config = path.join(worktree, '.planning/config.json');
   const graph = path.resolve(options.graphDir || path.join(worktree, '.planning/graph'));
   const graphPins = ['tickets.json', 'delivery-state.json'].filter(name => fs.existsSync(path.join(graph, name)))
     .map(name => ({ path: path.join(graph, name), sha256: digest(boundedBytes(fs, path.join(graph, name), 8 * 1024 * 1024)) }));
-  return { worktree, repository: common, common, head, head_tree: git(options, worktree, ['rev-parse', 'HEAD^{tree}']),
+  return { worktree, repository: common, common, head, head_tree: headTree,
     ...(output ? { integration_output: output } : {}),
     graph: graphPins, config_sha256: fs.existsSync(config) ? digest(boundedBytes(fs, config, FILE_LIMITS.manifest)) : null,
     policy_hash: require('./model-policy.cjs').POLICY_HASH,
@@ -580,6 +584,88 @@ function restoreReviewInput(progress) {
     require('./codex-runtime-host.cjs').validateReviewRestoration(progress, result);
     return result;
   } catch (error) { preparedFileInputs.delete(result); restoredFileInputs.delete(result); fileInputOptions.delete(result); throw error; }
+}
+
+function restoreCompletedSourceInput(source) {
+  if (!roleArtifact.isAuthenticatedCompletedSource(source)) fail('completed source requires protected custody', 'REVIEW_SOURCE_REQUIRED');
+  source = roleArtifact.readCompletedReviewSource({ worktree: source.identity.worktree, reference: source.state.reference });
+  const checked = verifyFileInput(source.input.input_bundle, { sealed: true });
+  const result = deepFreeze({ ...source.input, manifest: checked.manifest });
+  preparedFileInputs.add(result); restoredFileInputs.add(result);
+  fileInputOptions.set(result, { scope: { worktree: checked.manifest.snapshot.worktree, phase: checked.manifest.phase,
+    ticket: checked.manifest.ticket, run_id: checked.manifest.run_id }, manifestIdentity: result.input_bundle.manifest_identity });
+  try {
+    verifyFileInput(result);
+    require('./codex-runtime-host.cjs').validateCompletedSourceRestoration(source, result);
+    return result;
+  } catch (error) { preparedFileInputs.delete(result); restoredFileInputs.delete(result); fileInputOptions.delete(result); throw error; }
+}
+
+const measuredInputParents = new WeakMap();
+function restoreMeasuredIntegrationInput(measurement, current) {
+  if ((!roleArtifact.isAuthenticatedSourceMeasurement(measurement) && !roleArtifact.isAuthenticatedSourceCandidate(measurement)
+      && !roleArtifact.isAuthenticatedCompletedSource(measurement)) || !isPreparedFileInput(current))
+    fail('integration restoration requires original protected and private current custody', 'REVIEW_SOURCE_REQUIRED');
+  const measured = verifyFileInput(measurement.input.input_bundle, { sealed: true });
+  if (measured.manifest.binding?.review_contract !== 'shipyard.integration-review.v2')
+    fail('original measurement is not the complete integration candidate', 'REVIEW_RESTART_REQUIRED');
+  const bundle = measured.manifest.binding.original_input_bundle;
+  const previous = verifyFileInput(bundle, { sealed: true }), checked = verifyFileInput(current);
+  const subject = manifest => ({ snapshot: manifest.snapshot, binding: manifest.binding, schema: manifest.schema,
+    role: manifest.role, ticket: manifest.ticket, phase: manifest.phase, run_id: manifest.run_id,
+    dispatch_id: manifest.dispatch_id, chunk_bytes: manifest.chunk_bytes, max_chunk_reads: manifest.max_chunk_reads,
+    generated_instruction_bytes: manifest.accounting.generated_instruction_bytes,
+    assets: manifest.assets.map(({ ordinal, bytes, sha256, chunk_count }) => ({ ordinal, bytes, sha256, chunk_count })) });
+  if (previous.manifest.schema !== 'shipyard.host-file-input.v1'
+      || JSON.stringify(canonical(subject(previous.manifest))) !== JSON.stringify(canonical(subject(checked.manifest)))
+      || previous.material.some((bytes, index) => !bytes.equals(checked.material[index])))
+    fail('complete original integration subject or installed authority changed', 'REVIEW_RESTART_REQUIRED');
+  const inputBytes = previous.manifest.accounting.material_bytes + previous.manifest.accounting.manifest_bytes
+    + previous.manifest.accounting.relay_bytes + previous.manifest.accounting.generated_instruction_bytes;
+  const result = deepFreeze({ input_transport: 'host-files', input_bundle: bundle, manifest: previous.manifest,
+    prompt: fileRelay(bundle), input_bytes: inputBytes, inputTokens: Math.ceil(inputBytes / 4) });
+  preparedFileInputs.add(result);
+  fileInputOptions.set(result, { ...fileInputOptions.get(current), manifestIdentity: bundle.manifest_identity });
+  try { verifyFileInput(result); return result; }
+  catch (error) { preparedFileInputs.delete(result); fileInputOptions.delete(result); throw error; }
+}
+
+function restoreMeasuredSourceInput(measurement, current) {
+  if ((!roleArtifact.isAuthenticatedSourceMeasurement(measurement) && !roleArtifact.isAuthenticatedSourceCandidate(measurement)
+      && !roleArtifact.isAuthenticatedCompletedSource(measurement)) || !isPreparedFileInput(current))
+    fail('measurement restoration requires original protected and private current custody', 'REVIEW_SOURCE_REQUIRED');
+  const previous = verifyFileInput(measurement.input.input_bundle, { sealed: true });
+  const checked = verifyFileInput(current);
+  const subject = manifest => {
+    const { profile_sha256: _profile, ...transport } = manifest.transport;
+    return { snapshot: manifest.snapshot, binding: manifest.binding, transport, schema: manifest.schema,
+      role: manifest.role, ticket: manifest.ticket, phase: manifest.phase, run_id: manifest.run_id,
+      dispatch_id: manifest.dispatch_id, chunk_bytes: manifest.chunk_bytes, max_chunk_reads: manifest.max_chunk_reads,
+      generated_instruction_bytes: manifest.accounting.generated_instruction_bytes,
+      assets: manifest.assets.map(({ ordinal, bytes, sha256, chunk_count }) => ({ ordinal, bytes, sha256, chunk_count })) };
+  };
+  if (JSON.stringify(canonical(subject(previous.manifest))) !== JSON.stringify(canonical(subject(checked.manifest)))
+      || previous.material.some((bytes, index) => !bytes.equals(checked.material[index])))
+    fail('current subject, profile, instructions or complete source changed before measurement restoration', 'REVIEW_RESTART_REQUIRED');
+  const result = deepFreeze({ ...measurement.input, input_transport: 'host-files', manifest: previous.manifest });
+  preparedFileInputs.add(result); restoredFileInputs.add(result);
+  fileInputOptions.set(result, { ...fileInputOptions.get(current), manifestIdentity: result.input_bundle.manifest_identity });
+  try {
+    if (JSON.stringify(canonical(reviewProgressIdentity(result))) !== JSON.stringify(canonical(measurement.identity)))
+      fail('original measured identity changed', 'REVIEW_RESTART_REQUIRED');
+    measuredInputParents.set(result, current);
+    return result;
+  } catch (error) { preparedFileInputs.delete(result); restoredFileInputs.delete(result); fileInputOptions.delete(result); throw error; }
+}
+
+function restoreInstalledMeasuredInput(value, current, restored) {
+  if (!isPreparedContext(value) || preparedOptions.get(value)?.fileInput !== current
+      || measuredInputParents.get(restored) !== current)
+    fail('installed restoration requires its exact current private candidate', 'REVIEW_SOURCE_REQUIRED');
+  verifyFileInput(restored);
+  const variants = installedFileInputs.get(value);
+  for (const [key, candidate] of variants || []) if (candidate === current) variants.set(key, restored);
+  preparedOptions.set(value, { ...preparedOptions.get(value), fileInput: restored });
 }
 
 function reviewProgressIdentity(prepared) {
@@ -1311,6 +1397,12 @@ function isPreparedContext(value) {
   return object(value) && preparedContexts.has(value);
 }
 
+function installedReaderProfile(options, instructions) {
+  return createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 12,
+    candidate: { source_sha256: digest(fs.readFileSync(__filename)), instructions_sha256: digest(instructions),
+      model: options.selection.model, effort: options.selection.effort, provider: 'openai' } });
+}
+
 function admitInstalledLaunch(value, options) {
   if (!isPreparedContext(value)) fail('capacity requires private prepared authority');
   verifyLivePullRequest(value.prepared, preparedOptions.get(value));
@@ -1336,7 +1428,7 @@ function admitInstalledLaunch(value, options) {
   if (!privateOptions.fileInput && Buffer.byteLength(value.launch.context.prompt) + instructionBytes > INPUT_MAX_BYTES) {
     privateOptions.fileInput = prepareFileInput(privateOptions.scope, JSON.stringify(require('./context-packet.cjs').encodeUniqueContent(value.prepared.packet)), {
       architecturePacket: value.prepared.packet,
-      ...privateOptions, role: 'arch-review', dispatchId: privateOptions.inflightDispatchId,
+      ...privateOptions, ...(options.automaticReader ? { readerProfile: installedReaderProfile(options, instructions) } : {}), role: 'arch-review', dispatchId: privateOptions.inflightDispatchId,
       relayPrefix: value.launch.context.prompt.slice(0, value.launch.context.prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>')),
       binding: { packet_digest: value.prepared.packet.digest,
         ticket_set: architectureMemberIds(value.prepared),
@@ -1359,8 +1451,11 @@ function admitInstalledLaunch(value, options) {
       capacityRefusal('measured_runtime_selection', JSON.stringify(transport.selection), JSON.stringify(options.selection),
         'Use the original matching runtime selection under the unchanged model policy.');
     const variants = installedFileInputs.get(value) || new Map();
-    const batch = previous.manifest.transport?.schema === 'shipyard.native-reader-transport.v3';
-    const variantTransport = batch ? { ...previous.manifest.transport, profile_sha256: null } : transport;
+    const batch = previous.manifest.transport?.schema === 'shipyard.native-reader-transport.v3' || options.automaticReader === true;
+    const batchProfile = options.automaticReader ? installedReaderProfile(options, instructions) : fileInputOptions.get(previous).readerProfile;
+    const variantTransport = options.automaticReader ? { candidate: { source_sha256: digest(fs.readFileSync(__filename)),
+      instructions_sha256: digest(instructions), model: options.selection.model, effort: options.selection.effort },
+      chunk_bytes: 8192, ranges_per_batch: 12 } : batch ? { ...previous.manifest.transport, profile_sha256: null } : transport;
     const variantKey = digest(JSON.stringify(canonical({ binding, instructionBytes, transport: variantTransport })));
     const cached = variants.get(variantKey);
     if (cached) verifyFileInput(cached);
@@ -1368,6 +1463,7 @@ function admitInstalledLaunch(value, options) {
       ticket: value.prepared.ticket, phase: value.prepared.phaseNumber, run_id: previous.manifest.run_id },
       verifyFileInput(previous).material, { ...fileInputOptions.get(previous),
         readerCapacity: batch ? undefined : readerCapacity,
+        ...(batchProfile ? { readerProfile: batchProfile } : {}),
         generatedInstructionBytes: instructionBytes,
         binding });
     if (batch && readerCapacity
@@ -1527,6 +1623,7 @@ function validateOriginalReviewContext(input) {
   const prepared = { input_bundle: recorded.input_bundle };
   preparedFileInputs.add(prepared); historicalReviewInputs.add(prepared);
   try {
+    if (recorded.completed_source) runtime.authenticateCompletedSourceInput(prepared, dispatchId);
     const consumed = runtime.verifyFileConsumption(prepared, raw, dispatchId, response.text);
     if (consumed.chunk_reads !== checked.chunk_reads) fail('original native coverage is incomplete', 'REVIEW_BASELINE_INVALID');
   } finally { preparedFileInputs.delete(prepared); historicalReviewInputs.delete(prepared); }
@@ -1853,5 +1950,5 @@ if (require.main === module) {
   catch (error) { process.stderr.write((error.code || 'INVALID_INPUT') + ': ' + error.message + '\n'); process.exitCode = 1; }
 }
 
-module.exports = Object.freeze({ createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
-  batchCommand, batchFrames, batchOutput, readBatchCli, SCHEMA, FILE_LIMITS, freezeReviewBaseline: deepFreeze, validateOriginalReviewContext, buildReviewImpactPacket, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });
+module.exports = Object.freeze({ restoreMeasuredIntegrationInput, restoreMeasuredSourceInput, restoreInstalledMeasuredInput, createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
+  batchCommand, batchFrames, batchOutput, readBatchCli, SCHEMA, FILE_LIMITS, freezeReviewBaseline: deepFreeze, validateOriginalReviewContext, buildReviewImpactPacket, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreCompletedSourceInput, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });

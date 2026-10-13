@@ -1190,6 +1190,20 @@ function build(argv, options = {}) {
     buildFail('host contract', incompleteHostReason(args.runtime, args.role));
   }
 
+  if (args.role === 'review-fix' && args.runtime === 'codex') {
+    const pr = args.pr || input.stateRow.pr;
+    if (!evidence || !Number.isSafeInteger(pr) || pr < 1 || pr !== input.stateRow.pr)
+      buildFail('--pr', 'review-fix requires canonical PR and complete review evidence');
+    if (!evidence.path.startsWith(input.worktree + path.sep)) buildFail('--review-file', 'review evidence escapes worktree');
+    const request = { scope: { run_id: 'deliver-review-fix-' + crypto.randomUUID(), ticket: args.ticket,
+      phase: phaseNumber(input.row.phase), worktree: input.worktree, runtime: 'codex', provider: 'openai' },
+      graph_dir: input.graphDir, role: 'review-fix', signals: {}, context: { pr,
+        evidence_path: evidence.path, evidence_sha256: evidence.sha256,
+        plan_sha256: crypto.createHash('sha256').update(fs.readFileSync(input.planPath)).digest('hex') } };
+    validateBuildRequest(args.role, ({ scope: _scope, graph_dir: _graphDir, ...value }) => codexHost.validateArgs(value), request);
+    return request;
+  }
+
   const request = codexCandidate(args, input, evidence);
   validateBuildRequest(args.role, (value) => codexHost.validateArgs(value), request);
   buildFail('host contract', incompleteHostReason(args.runtime, args.role));
