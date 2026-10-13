@@ -501,3 +501,41 @@ test('finite batch aggregation retains fixture provenance and requires measured 
     assert.throws(() => aggregateMatrix(altered, 'fixture-only'));
   }
 });
+
+
+test('finite squash admission requires the original merged PR identity, not equal trees or labels', () => {
+  const { validateSquashRecord } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const expected = { repository: 'serhii-nochevnyi/shipyard', number: 470,
+    ticket: 'T-49-18', head: 'a'.repeat(40), merge: 'b'.repeat(40),
+    base: 'epic/49-accelerate-authenticated-architecture-review' };
+  const record = { url: 'https://github.com/serhii-nochevnyi/shipyard/pull/470', state: 'MERGED',
+    mergedAt: '2026-10-13T16:53:45Z', headRefOid: expected.head,
+    headRefName: 'ticket/T-49-18-original-source', baseRefName: expected.base, mergeCommit: { oid: expected.merge } };
+  assert.equal(validateSquashRecord(record, expected), true);
+  for (const change of [v => v.state = 'CLOSED', v => v.mergedAt = null,
+    v => v.headRefOid = 'c'.repeat(40), v => v.mergeCommit.oid = 'c'.repeat(40),
+    v => v.url = v.url.replace('shipyard', 'foreign'), v => v.baseRefName = 'main',
+    v => v.headRefName = 'ticket/T-49-11-other']) {
+    const changed = clone(record); change(changed); assert.throws(() => validateSquashRecord(changed, expected));
+  }
+});
+
+test('finite original build actor preserves failed verification and exact one-build/eight-copy pins', () => {
+  const { validateBuildPins } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const selected = { source: { head: 'a'.repeat(40), tree: 'b'.repeat(40), worktree: '/original' }, build_calls: 1 };
+  const candidate = { selection: { sha256: 'c'.repeat(64) }, selection_root: '/stage', publication_source: { worktree: '/original' } };
+  const launch = { ticket: 'T-49-17', role: 'executor', worktree: '/original', source_head: selected.source.head,
+    baseline_tree: selected.source.tree, tracked_clean: true, head_still_pinned: true, native_process_id: 66450 };
+  const build = { root: '/stage', selection_sha256: candidate.selection.sha256, source_head: selected.source.head,
+    source_tree: selected.source.tree, outputs: 161, build_calls: 1, published: 0 };
+  const outputs = Array.from({ length: 8 }, (_, i) => 'plugins/shipyard/output' + i);
+  const copy = { selection_sha256: candidate.selection.sha256, source_head: selected.source.head,
+    build_calls: 1, canonical_inputs: 162, complete_outputs: 161, unchanged_outputs_verified: 153, published: outputs };
+  assert.equal(validateBuildPins(candidate, selected, launch, build, copy, outputs), true);
+  for (const change of [v => v[0].tracked_clean = false, v => v[0].native_process_id = 0,
+    v => v[1].build_calls = 2, v => v[1].source_tree = 'd'.repeat(40),
+    v => v[2].published.pop(), v => v[2].unchanged_outputs_verified = 154]) {
+    const rows = clone([launch, build, copy]); change(rows);
+    assert.throws(() => validateBuildPins(candidate, selected, ...rows, outputs));
+  }
+});

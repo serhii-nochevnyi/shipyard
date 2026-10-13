@@ -247,6 +247,67 @@ function verifySourceHistory(ref) {
   assert.equal(result.record.tree, gitBytes(ref.worktree, 'rev-parse', ref.commit + '^{tree}').toString().trim());
   return result.record;
 }
+function validateSquashRecord(record, expected) {
+  assert.equal(record.url, 'https://github.com/' + expected.repository + '/pull/' + expected.number, 'foreign original PR');
+  assert.equal(record.state, 'MERGED', 'unmerged original PR');
+  assert(Number.isFinite(Date.parse(record.mergedAt)), 'original merge time missing');
+  assert.equal(record.headRefOid, expected.head, 'other original PR head');
+  assert.equal(record.baseRefName, expected.base, 'foreign original PR base');
+  assert(record.headRefName.startsWith('ticket/' + expected.ticket + '-'), 'foreign original PR ticket');
+  assert.equal(record.mergeCommit?.oid, expected.merge, 'original merge identity differs');
+  return true;
+}
+function verifySourceTransition(candidate, source, target, ref) {
+  try {
+    gitBytes(target.worktree, 'merge-base', '--is-ancestor', source.commit, target.commit);
+    return;
+  } catch (error) {
+    if (error.status !== 1) throw error;
+  }
+  assert(candidate.finite_predecessor, 'normal source ancestry required');
+  requiredReference(ref, 'original squash transition');
+  const transitions = {
+    'T-49-12': [465, '26f9350731fae06635f57eafdf207097462edfa3'],
+    'T-49-13': [466, 'e914d19f066dc39720e6df6f9a03dcd7e68989e5'],
+    'T-49-14': [467, '9a44d1fec668148ca349f923757a08fece4cccde'],
+    'T-49-18': [470, 'a8261467c4be457b9d4b0640cb713b9dc60f50ef']
+  };
+  const pins = transitions[ref.ticket]; assert(pins, 'unsupported original squash transition');
+  if (source.commit === candidate.producer.commit) assert.equal(ref.ticket, 'T-49-18', 'other producer transition');
+  assert.equal(ref.repository, 'serhii-nochevnyi/shipyard');
+  assert.equal(ref.number, pins[0]); assert.equal(ref.merge, pins[1]);
+  const fields = 'url,state,mergedAt,headRefOid,headRefName,baseRefName,mergeCommit';
+  let live;
+  try {
+    live = JSON.parse(execFileSync('gh', ['pr', 'view', String(ref.number), '--repo', ref.repository, '--json', fields],
+      { timeout: 30000, maxBuffer: 1024 * 1024 }));
+  } catch (error) {
+    if (/network|connecting|authentication|timed? ?out|rate limit/i.test(String(error.stderr || error.message)))
+      error.code = 'CI_AUTHORITY_UNAVAILABLE';
+    throw error;
+  }
+  validateSquashRecord(live, { ...ref, head: ref.head, base: 'epic/49-accelerate-authenticated-architecture-review' });
+  const archived = JSON.parse(privateOriginal(requiredReference(ref.original, 'original merged PR custody')));
+  for (const key of Object.keys(archived)) assert.deepEqual(live[key], archived[key], 'live original PR differs');
+  gitBytes(target.worktree, 'merge-base', '--is-ancestor', source.commit, live.headRefOid);
+  gitBytes(target.worktree, 'merge-base', '--is-ancestor', live.mergeCommit.oid, target.commit);
+  assert.equal(gitBytes(target.worktree, 'rev-parse', live.mergeCommit.oid + '^{tree}').toString().trim(), ref.tree,
+    'expected original merge tree differs');
+  assert.equal(gitBytes(target.worktree, 'rev-parse', live.headRefOid + '^{tree}').toString().trim(), ref.tree,
+    'original squash head tree differs');
+  compareCanonicalInputs(sourceInputs(source.worktree, source.commit), sourceInputs(target.worktree, live.mergeCommit.oid));
+  const record = verifiedRecord({ store: source.receipt_store, dispatch: source.dispatch_id });
+  assert.equal(record.receipt.role, 'executor');
+  assert.equal(record.receipt.runtime, 'codex');
+  const native = requiredReference(ref.native, 'original signed source native stream');
+  const evidence = record.receipt.runtime_evidence.native_session_evidence;
+  assert.equal(native.sha256, evidence.sha256); assert.equal(native.bytes, evidence.bytes);
+  assert.equal(path.basename(native.path), evidence.file);
+  const parsed = require(path.join(SCRIPTS, 'codex-runtime-host.cjs')).parseNativeCodexTranscript(
+    privateOriginal(native).toString('utf8'), evidence.session_id);
+  assert(parsed.selections.length > 0 && parsed.selections.every(row =>
+    row.model === record.receipt.applied_model && row.effort === record.receipt.applied_effort), 'original source native selection differs');
+}
 function verifySourceEquivalence(candidate) {
   const selected = JSON.parse(original(candidate.selection));
   assert.equal(selected.inputs.length, 162, 'complete original 162 inputs required');
@@ -267,12 +328,12 @@ function verifySourceEquivalence(candidate) {
   assert.equal(selected.builder_sha256, inputs.find(row => row.path === 'scripts/package-shipyard-codex.cjs').sha256,
     'builder equality required');
   if (candidate.current_source.commit !== candidate.producer.commit)
-    gitBytes(candidate.current_source.worktree, 'merge-base', '--is-ancestor', candidate.producer.commit, candidate.current_source.commit);
+    verifySourceTransition(candidate, { ...producer, worktree: candidate.producer.worktree }, { ...current, worktree: candidate.current_source.worktree }, candidate.source_transition);
   if (candidate.publication_source) {
     const publication = verifySourceHistory(candidate.publication_source);
     assert.equal(publication.repository_id, producer.repository_id, 'foreign publication source repository');
     compareCanonicalInputs(inputs, sourceInputs(candidate.publication_source.worktree, candidate.publication_source.commit));
-    gitBytes(candidate.publication_source.worktree, 'merge-base', '--is-ancestor', candidate.producer.commit, publication.commit);
+    verifySourceTransition(candidate, { ...producer, worktree: candidate.producer.worktree }, { ...publication, worktree: candidate.publication_source.worktree }, candidate.source_transition);
     gitBytes(candidate.current_source.worktree, 'merge-base', '--is-ancestor', publication.commit, candidate.current_source.commit);
     assert(['executor', 'fixer'].includes(publication.kind), 'original15 signed native publication authority required');
     if (!candidate.finite_predecessor) assert.equal(publication.dispatch_id, 'dispatch-mv2znskv-36e55516-35d6-4859-8908-c17728324c3b', 'foreign publication actor');
@@ -296,7 +357,7 @@ function verifyInstalledCandidate(candidate) {
   verifySourceEquivalence(candidate);
   const binding = { outputs: selected.outputs, source_content_sha256: content.digest('hex'),
     package_sha256: selected.package.digest, version: selected.package.version,
-    source: { head: selected.source.head, common: fs.realpathSync(gitBytes(source.worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir').toString().trim()),
+    source: { head: candidate.finite_predecessor ? source.commit : selected.source.head, common: fs.realpathSync(gitBytes(source.worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir').toString().trim()),
       identities: selected.inputs, policy_sha256: policy } };
   const authenticated = {
     selection: { candidate_sha256: candidate.selection.sha256 }, binding,
@@ -953,29 +1014,94 @@ function verifyCI(ref, head) {
   assert.deepEqual(gh(['--log']), log, 'full original CI log differs from live original run');
   return { ...ci, original_full_log: ref.original_full_log };
 }
+function validateBuildPins(candidate, selected, launch, build, copy, outputs) {
+  assert.equal(launch.ticket, 'T-49-17'); assert.equal(launch.role, 'executor');
+  assert.equal(launch.worktree, candidate.publication_source.worktree);
+  assert.equal(launch.source_head, selected.source.head); assert.equal(launch.baseline_tree, selected.source.tree);
+  assert.equal(launch.tracked_clean, true); assert.equal(launch.head_still_pinned, true);
+  assert(Number.isSafeInteger(launch.native_process_id) && launch.native_process_id > 0);
+  assert.equal(build.root, candidate.selection_root); assert.equal(build.selection_sha256, candidate.selection.sha256);
+  assert.equal(build.source_head, selected.source.head); assert.equal(build.source_tree, selected.source.tree);
+  assert.equal(build.outputs, 161); assert.equal(build.build_calls, 1); assert.equal(build.published, 0);
+  assert.equal(selected.build_calls, 1);
+  assert.equal(copy.selection_sha256, candidate.selection.sha256); assert.equal(copy.source_head, selected.source.head);
+  assert.equal(copy.build_calls, 1); assert.equal(copy.canonical_inputs, 162); assert.equal(copy.complete_outputs, 161);
+  assert.equal(copy.unchanged_outputs_verified, 153); equalSet(copy.published, outputs, 'original eight generated copies');
+  return true;
+}
+function verifyInitialBuildActor(candidate, selected, publication) {
+  const custody = JSON.parse(privateOriginal(requiredReference(candidate.build_origin, 'original initial build custody')));
+  const pins = {
+    original_native: '691d5cd1b171645cf745701a1a97ecbd5a1fb5d673fa658f3acda10e3d721700',
+    original_cli: '8b5741a32b28c4a0006ae0af098a328050e0072777068ca998869259f6beccbc',
+    clean_launch: 'b84faa5ac72c5beac9b96b91f17682cd1607bbed216ef01fc88160c13fc0b367',
+    original_once_build: '32277e866710550faaeffd0334599299b6dd7eafdf02c370a3a2de99b6732cef',
+    original_eight_output_copy: '6e186575670e53d73b28219c37863b2d61a20d9c2fc298ade853f057d69d33a5',
+    original_failed_result: 'd56539439e46982bdb4fdbb73409bb76bb95e9200e25f8248ab2237717aed9f4'
+  };
+  const bytes = {};
+  for (const [key, digest] of Object.entries(pins)) {
+    assert.equal(custody[key]?.sha256, digest, 'other original build record');
+    bytes[key] = privateOriginal(custody[key]);
+  }
+  assert.equal(custody.receipt.dispatch, 'dispatch-mv6xft2r-583b45a2-8996-4290-9914-5319654faaba');
+  const record = verifiedRecord(custody.receipt), runtime = record.receipt.runtime_evidence;
+  assert.equal(record.receipt.role, 'executor'); assert.equal(runtime.ticket, 'T-49-17');
+  assert.equal(runtime.runtime, 'codex'); assert.equal(runtime.provider, 'openai');
+  assert.equal(record.receipt.policy_hash, publication.receipt.policy_hash, 'initial build policy differs');
+  assert.equal(runtime.native_session_evidence.session_id, '01a13635-4dc2-7cc3-8355-9b1976aba60e');
+  assert.equal(runtime.native_session_evidence.sha256, custody.original_native.sha256);
+  assert.equal(runtime.native_session_evidence.bytes, bytes.original_native.length);
+  assert.equal(runtime.transcript.sha256, custody.original_cli.sha256);
+  assert.equal(runtime.transcript.bytes, bytes.original_cli.length);
+  const launch = JSON.parse(bytes.clean_launch);
+  assert.equal(runtime.process_id, launch.native_process_id); assert.equal(runtime.process_id, 66450);
+  assert.equal(runtime.worktree, launch.worktree);
+  assert.equal(sha(JSON.stringify(runtime.command.args)), runtime.command_digest, 'original native command digest differs');
+  assert.equal(runtime.command.executable, 'codex');
+  assert(runtime.command.args.includes('exec') && runtime.command.args.includes(launch.worktree), 'original native command scope differs');
+  privateOriginal(launch.prelaunch_observation);
+  validateBuildPins(candidate, selected, launch, JSON.parse(bytes.original_once_build),
+    JSON.parse(bytes.original_eight_output_copy), publicationInspector().BATCH_OUTPUTS.map(name => 'plugins/shipyard/' + name));
+  const failed = bytes.original_failed_result.toString('utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+  assert(failed.length > 0 && failed.length <= 1000);
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].status, 'verification_failed', 'failed initial verification relabeled');
+  assert.equal(failed[0].dispatch_id, 'dispatch-mv6yc1d6-9040c03a-51c6-423d-8645-ad7260a741ee');
+  return { record, ref: custody.original_native, bytes: bytes.original_native, worktree: launch.worktree,
+    failed_verification: custody.original_failed_result };
+}
 function verifyBuildOrigin(candidate, selected) {
   const source = verifySourceHistory(requiredReference(candidate.publication_source, 'original15 actor native source'));
   const record = verifiedRecord({ store: source.receipt_store, dispatch: source.dispatch_id });
   assert.equal(record.receipt.role, 'executor', 'build did not follow actual native15 executor');
   if (!candidate.finite_predecessor) assert.equal(source.dispatch_id, 'dispatch-mv2znskv-36e55516-35d6-4859-8908-c17728324c3b');
-  const ref = requiredReference(candidate.publication_native, 'original15 native stream');
-  const evidence = record.receipt.runtime_evidence.native_session_evidence;
+  const initial = candidate.finite_predecessor ? verifyInitialBuildActor(candidate, selected, record) : null;
+  const actor = initial?.record || record;
+  const finalNative = requiredReference(candidate.publication_native, 'original successful publication native stream');
+  const finalEvidence = record.receipt.runtime_evidence.native_session_evidence;
+  assert.equal(finalNative.sha256, finalEvidence.sha256); assert.equal(finalNative.bytes, finalEvidence.bytes);
+  assert.equal(path.basename(finalNative.path), finalEvidence.file);
+  privateOriginal(finalNative);
+  const ref = initial?.ref || finalNative;
+  const evidence = actor.receipt.runtime_evidence.native_session_evidence;
   assert.equal(ref.sha256, evidence.sha256); assert.equal(ref.bytes, evidence.bytes);
   assert.equal(path.basename(ref.path), evidence.file);
   const bytes = privateOriginal(ref);
   const parsed = require(path.join(SCRIPTS, 'codex-runtime-host.cjs')).parseNativeCodexTranscript(bytes.toString('utf8'), evidence.session_id);
-  assert(parsed.selections.every(row => row.model === record.receipt.applied_model && row.effort === record.receipt.applied_effort));
+  assert(parsed.selections.length > 0 && parsed.selections.every(row => row.model === actor.receipt.applied_model && row.effort === actor.receipt.applied_effort));
   const rows = bytes.toString('utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
   assert(rows.length <= 100000, 'bounded original actor stream required');
   const meta = rows.filter(row => row.type === 'session_meta'); assert.equal(meta.length, 1);
-  assert.equal(fs.realpathSync(meta[0].payload.cwd), candidate.publication_source.worktree);
+  assert.equal(fs.realpathSync(meta[0].payload.cwd), initial?.worktree || candidate.publication_source.worktree);
   const started = Date.parse(meta[0].timestamp || meta[0].payload.timestamp);
   const stage = fs.lstatSync(candidate.stage), selection = fs.lstatSync(candidate.selection.path);
   assert(stage.isDirectory() && fs.realpathSync(candidate.stage) === candidate.stage, 'nonphysical immutable stage');
   assert(Number.isFinite(started) && stage.birthtimeMs > started && selection.birthtimeMs >= stage.birthtimeMs,
     'old stage or selection preceded actual native15 actor');
   assert.equal(selected.build_calls, 1, 'signed original once-built selection required');
-  return { dispatch: source.dispatch_id, original_native: ref, source_commit: source.commit,
+  return { dispatch: actor.dispatch_id, publication_dispatch: source.dispatch_id,
+    failed_initial_verification: initial?.failed_verification || null, semantic_credit: false, original_native: ref, source_commit: source.commit,
     selection_sha256: candidate.selection.sha256, signed_build_calls: selected.build_calls,
     original_actor_started_ms: started, original_stage_created_ms: stage.birthtimeMs };
 }
@@ -1001,9 +1127,11 @@ function verifyPrerequisites(candidate) {
   const refs = requiredReference(candidate.prerequisites, '12/13/14 original source and CI');
   for (const ticket of ['T-49-12', 'T-49-13', 'T-49-14']) {
     const ref = requiredReference(refs[ticket], ticket);
+    if (ref.source_transition) assert.equal(ref.source_transition.ticket, ticket, 'other prerequisite transition');
     const source = verifySourceHistory(requiredReference(ref.source, ticket + ' signed source')); verifyCI(ref.ci, ref.source.commit);
     assert.equal(source.repository_id, verifySourceHistory(candidate.current_source).repository_id, 'foreign prerequisite repository');
-    gitBytes(candidate.current_source.worktree, 'merge-base', '--is-ancestor', ref.source.commit, candidate.current_source.commit);
+    verifySourceTransition(candidate, { ...source, worktree: ref.source.worktree },
+      { ...verifySourceHistory(candidate.current_source), worktree: candidate.current_source.worktree }, ref.source_transition);
   }
   const historical = JSON.parse(original(candidate.mode_predecessor.selection));
   compareCanonicalInputs(historical.inputs, sourceInputs(historical.source.worktree, historical.source.head));
@@ -1291,7 +1419,7 @@ function main(argv) {
   const report = verifyEvidence(ledger);
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
 }
-module.exports = { SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
+module.exports = { validateSquashRecord, validateBuildPins, SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(JSON.stringify({ status: 'refused', code: error.code || 'EVIDENCE_INVALID', reason: error.message }) + '\n'); process.exitCode = 1; }
