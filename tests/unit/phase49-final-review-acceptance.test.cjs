@@ -539,3 +539,64 @@ test('finite original build actor preserves failed verification and exact one-bu
     assert.throws(() => validateBuildPins(candidate, selected, ...rows, outputs));
   }
 });
+
+test('covered base-merge carries the genuine native first parent without inventing an executor receipt', () => {
+  const { validateSourceCarry } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const parent = { kind: 'executor', ticket: 'T-49-13', repo: 'serhii-nochevnyi/shipyard',
+    repository_id: 'original-repository', commit: 'ecf450bf21bb7532e050989d74fde2ba9bc24c79',
+    tree: '0c11564f6dbed0c68096e7f139c61390ee5ce3d2' };
+  const source = { ...parent, kind: 'base-merge', commit: '8d95c9d4d9ae027d761336fbbbdeaec562268515',
+    parents: [parent.commit, '26f9350731fae06635f57eafdf207097462edfa3'],
+    base_merge: { base: 'origin/ticket/T-49-12-original', requested_base: 'ticket/T-49-12-original', taken_from_base: [] } };
+  assert.equal(validateSourceCarry(source, parent), true);
+  for (const change of [v => v[0].kind = 'executor', v => v[1].kind = 'base-merge',
+    v => v[0].ticket = 'T-49-12', v => v[0].repository_id = 'foreign', v => v[0].repo = 'foreign/repo',
+    v => v[0].parents.reverse(), v => v[0].parents.pop(), v => v[0].parents.push('a'.repeat(40)),
+    v => v[0].parents[1] = parent.commit, v => v[0].tree = 'b'.repeat(40),
+    v => delete v[0].base_merge, v => v[0].base_merge.taken_from_base.push('source'),
+    v => v[0].base_merge.requested_base = '', v => v[0].dispatch_id = 'invented',
+    v => v[0].receipt_store = '/invented']) {
+    const records = clone([source, parent]); change(records);
+    assert.throws(() => validateSourceCarry(...records));
+  }
+  assert.throws(() => require('../smoke/phase49-final-review-acceptance.cjs').verifiedRecord({ dispatch: 'invented' }),
+    /original recorder reference required/);
+});
+
+test('private prelaunch copy preserves the public deep reference bytes and complete original launch scope', t => {
+  const { verifyPrelaunchCopy } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-prelaunch-copy-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const prelaunch = { ticket: 'T-49-17', role: 'executor', worktree: '/original', baseline_head: 'a'.repeat(40),
+    baseline_tree: 'b'.repeat(40), source_head: 'c'.repeat(40), merge_proof: '/original/merge.json', tracked_clean: true };
+  const bytes = Buffer.from(JSON.stringify(prelaunch)), hash = value => crypto.createHash('sha256').update(value).digest('hex');
+  const publicPath = path.join(root, 'original.json'), privatePath = path.join(root, 'private.json');
+  fs.writeFileSync(publicPath, bytes, { mode: 0o644 }); fs.writeFileSync(privatePath, bytes, { mode: 0o600 });
+  fs.chmodSync(publicPath, 0o644);
+  const launch = { ...prelaunch, native_process_id: 66450,
+    prelaunch_observation: { path: publicPath, sha256: hash(bytes) } };
+  const copy = { path: privatePath, sha256: hash(bytes), bytes: bytes.length };
+  assert.throws(() => verifyPrelaunchCopy(launch), /must be private/);
+  assert.deepEqual(verifyPrelaunchCopy(launch, copy), prelaunch);
+  assert.equal(fs.statSync(publicPath).mode & 0o777, 0o644);
+  assert.deepEqual(fs.readFileSync(publicPath), bytes);
+  fs.chmodSync(publicPath, 0o600);
+  assert.deepEqual(verifyPrelaunchCopy(launch), prelaunch);
+  fs.chmodSync(publicPath, 0o644);
+  for (const change of [v => v[1].sha256 = 'd'.repeat(64), v => v[1].bytes--,
+    v => delete v[1].bytes, v => v[1].path = publicPath,
+    v => v[0].ticket = 'T-49-11', v => v[0].role = 'review-fix', v => v[0].worktree = '/foreign',
+    v => v[0].source_head = 'd'.repeat(40), v => v[0].baseline_tree = 'd'.repeat(40),
+    v => v[0].baseline_head = 'd'.repeat(40), v => v[0].merge_proof = '/foreign',
+    v => v[0].tracked_clean = false]) {
+    const refs = clone([launch, copy]); change(refs);
+    assert.throws(() => verifyPrelaunchCopy(...refs));
+  }
+  fs.chmodSync(privatePath, 0o644); assert.throws(() => verifyPrelaunchCopy(launch, copy), /must be private/);
+  fs.chmodSync(privatePath, 0o600);
+  fs.writeFileSync(privatePath, Buffer.concat([bytes, Buffer.from(' ')]));
+  assert.throws(() => verifyPrelaunchCopy(launch, copy), /altered original/);
+  fs.writeFileSync(privatePath, bytes); fs.unlinkSync(privatePath); fs.symlinkSync(publicPath, privatePath);
+  assert.throws(() => verifyPrelaunchCopy(launch, copy), /symlinked evidence/);
+});

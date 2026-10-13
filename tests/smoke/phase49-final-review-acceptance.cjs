@@ -131,7 +131,7 @@ function unavailable(error) {
   return ['ENOENT', 'EACCES', 'EPERM', 'MISSING_RECEIPT', 'ARCHIVE_AUTHORITY_MISSING', 'SOURCE_AUTHORITY_MISSING', 'CI_AUTHORITY_UNAVAILABLE', 'CI_PREREQUISITE_UNMET'].includes(error.code);
 }
 function verifiedRecord(ref) {
-  assert(ref && path.isAbsolute(ref.store) && typeof ref.dispatch === 'string', 'original recorder reference required');
+  assert(ref && typeof ref.store === 'string' && path.isAbsolute(ref.store) && typeof ref.dispatch === 'string', 'original recorder reference required');
   const record = require('./phase47-runtime-acceptance.cjs').originalReceipt({ store: ref.store, dispatch_id: ref.dispatch }, SCRIPTS);
   assert(record && record.dispatch_id === ref.dispatch && record.receipt?.dispatch_id === ref.dispatch, 'original authority missing');
   assert.equal(record.receipt.compliance, 'verified');
@@ -257,6 +257,47 @@ function validateSquashRecord(record, expected) {
   assert.equal(record.mergeCommit?.oid, expected.merge, 'original merge identity differs');
   return true;
 }
+function validateSourceCarry(source, parent) {
+  assert.equal(source.kind, 'base-merge', 'original protected base-merge required');
+  assert(['executor', 'fixer'].includes(parent.kind), 'original native parent required');
+  assert.equal(source.ticket, parent.ticket, 'foreign carry ticket');
+  assert.equal(source.repository_id, parent.repository_id, 'foreign carry repository');
+  assert.equal(source.repo, parent.repo, 'foreign carry repo');
+  assert(Array.isArray(source.parents) && source.parents.length === 2, 'exact two merge parents required');
+  assert.equal(source.parents[0], parent.commit, 'other native first parent');
+  assert.notEqual(source.parents[1], parent.commit, 'duplicate merge parent');
+  assert.equal(source.tree, parent.tree, 'base-merge changed whole source tree');
+  assert(source.base_merge && typeof source.base_merge.base === 'string' && source.base_merge.base
+    && typeof source.base_merge.requested_base === 'string' && source.base_merge.requested_base,
+  'original protected merge scope required');
+  assert.deepEqual(source.base_merge.taken_from_base, [], 'base-merge imported source changes');
+  assert.equal(source.dispatch_id, undefined, 'base-merge cannot mint native dispatch');
+  assert.equal(source.receipt_store, undefined, 'base-merge cannot mint native receipt');
+  return true;
+}
+function nativeTransitionSource(candidate, source, ref) {
+  if (['executor', 'fixer'].includes(source.kind)) return source;
+  assert(candidate.finite_predecessor, 'normal native source authority required');
+  assert.equal(ref.ticket, 'T-49-13', 'unsupported native source carry');
+  assert.equal(source.commit, '8d95c9d4d9ae027d761336fbbbdeaec562268515', 'other original base-merge');
+  const selector = requiredReference(ref.native_source, 'original covered native first parent');
+  assert.equal(selector.worktree, source.worktree, 'native carry checkout differs');
+  assert.equal(selector.commit, 'ecf450bf21bb7532e050989d74fde2ba9bc24c79', 'other original native parent');
+  const parent = verifySourceHistory(selector);
+  validateSourceCarry(source, parent);
+  assert.equal(source.ticket, ref.ticket);
+  assert.equal(source.parents[1], '26f9350731fae06635f57eafdf207097462edfa3', 'other original imported base');
+  gitBytes(source.worktree, 'verify-commit', source.commit);
+  const signer = commit => gitBytes(source.worktree, 'show', '-s', '--format=%GF', commit).toString().trim();
+  const fingerprint = signer(parent.commit);
+  assert(/^[A-Fa-f0-9]{40,64}$/.test(fingerprint), 'original native signer required');
+  assert.equal(signer(source.commit), fingerprint, 'foreign base-merge signer');
+  gitBytes(source.worktree, 'merge-base', '--is-ancestor', '22f0064d2123f7ab72362396bb9ea1800c5b3655', parent.commit);
+  gitBytes(source.worktree, 'merge-base', '--is-ancestor', parent.commit, source.commit);
+  compareCanonicalInputs(sourceInputs(source.worktree, parent.commit), sourceInputs(source.worktree, source.commit));
+  assert.equal(sourceInputs(source.worktree, source.commit).length, 162, 'complete carry inputs required');
+  return { ...parent, worktree: source.worktree };
+}
 function verifySourceTransition(candidate, source, target, ref) {
   try {
     gitBytes(target.worktree, 'merge-base', '--is-ancestor', source.commit, target.commit);
@@ -296,8 +337,10 @@ function verifySourceTransition(candidate, source, target, ref) {
   assert.equal(gitBytes(target.worktree, 'rev-parse', live.headRefOid + '^{tree}').toString().trim(), ref.tree,
     'original squash head tree differs');
   compareCanonicalInputs(sourceInputs(source.worktree, source.commit), sourceInputs(target.worktree, live.mergeCommit.oid));
-  const record = verifiedRecord({ store: source.receipt_store, dispatch: source.dispatch_id });
-  assert.equal(record.receipt.role, 'executor');
+  const nativeSource = nativeTransitionSource(candidate, source, ref);
+  const record = verifiedRecord({ store: nativeSource.receipt_store, dispatch: nativeSource.dispatch_id });
+  assert(nativeSource.kind === 'executor' ? record.receipt.role === 'executor'
+    : ['ci-fix', 'review-fix'].includes(record.receipt.role), 'original native source role differs');
   assert.equal(record.receipt.runtime, 'codex');
   const native = requiredReference(ref.native, 'original signed source native stream');
   const evidence = record.receipt.runtime_evidence.native_session_evidence;
@@ -1029,6 +1072,29 @@ function validateBuildPins(candidate, selected, launch, build, copy, outputs) {
   assert.equal(copy.unchanged_outputs_verified, 153); equalSet(copy.published, outputs, 'original eight generated copies');
   return true;
 }
+function verifyPrelaunchCopy(launch, copy) {
+  const ref = requiredReference(launch.prelaunch_observation, 'original prelaunch observation');
+  let bytes;
+  if (copy !== undefined) {
+    requiredReference(copy, 'private original prelaunch copy');
+    assert.equal(copy.sha256, ref.sha256, 'other prelaunch copy digest');
+    assert(Number.isSafeInteger(copy.bytes) && copy.bytes > 0 && copy.bytes <= 1024 * 1024,
+      'complete bounded prelaunch copy length required');
+    bytes = privateOriginal(copy);
+    assert.deepEqual(bytes, original(ref), 'prelaunch copy differs from original deep reference');
+  } else bytes = privateOriginal(ref);
+  assert(bytes.length <= 1024 * 1024, 'bounded original prelaunch metadata required');
+  const prelaunch = JSON.parse(bytes);
+  for (const key of ['ticket', 'role', 'worktree', 'baseline_head', 'baseline_tree', 'source_head', 'merge_proof']) {
+    assert(typeof launch[key] === 'string' && launch[key], 'original launch scope missing');
+    assert.equal(prelaunch[key], launch[key], 'prelaunch scope differs: ' + key);
+  }
+  assert.equal(prelaunch.tracked_clean, true, 'original prelaunch was dirty');
+  assert.equal(launch.tracked_clean, true, 'original clean launch was dirty');
+  for (const key of ['baseline_head', 'baseline_tree', 'source_head'])
+    assert(/^[a-f0-9]{40}$/.test(prelaunch[key]), 'original prelaunch identity missing');
+  return prelaunch;
+}
 function verifyInitialBuildActor(candidate, selected, publication) {
   const custody = JSON.parse(privateOriginal(requiredReference(candidate.build_origin, 'original initial build custody')));
   const pins = {
@@ -1060,7 +1126,11 @@ function verifyInitialBuildActor(candidate, selected, publication) {
   assert.equal(sha(JSON.stringify(runtime.command.args)), runtime.command_digest, 'original native command digest differs');
   assert.equal(runtime.command.executable, 'codex');
   assert(runtime.command.args.includes('exec') && runtime.command.args.includes(launch.worktree), 'original native command scope differs');
-  privateOriginal(launch.prelaunch_observation);
+  assert.equal(launch.prelaunch_observation?.sha256, '04f772e4cb92a8e26334ec07a130b1719b08d468f87568aa6e45c03d5f7e73a1',
+    'other original prelaunch observation');
+  const prelaunch = verifyPrelaunchCopy(launch, candidate.build_origin.prelaunch_copy);
+  assert.equal(gitBytes(launch.worktree, 'rev-parse', prelaunch.baseline_head + '^{tree}').toString().trim(), prelaunch.baseline_tree);
+  gitBytes(launch.worktree, 'merge-base', '--is-ancestor', prelaunch.baseline_head, launch.source_head);
   validateBuildPins(candidate, selected, launch, JSON.parse(bytes.original_once_build),
     JSON.parse(bytes.original_eight_output_copy), publicationInspector().BATCH_OUTPUTS.map(name => 'plugins/shipyard/' + name));
   const failed = bytes.original_failed_result.toString('utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
@@ -1419,7 +1489,7 @@ function main(argv) {
   const report = verifyEvidence(ledger);
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
 }
-module.exports = { validateSquashRecord, validateBuildPins, SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
+module.exports = { validateSourceCarry, verifyPrelaunchCopy, validateSquashRecord, validateBuildPins, SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(JSON.stringify({ status: 'refused', code: error.code || 'EVIDENCE_INVALID', reason: error.message }) + '\n'); process.exitCode = 1; }
