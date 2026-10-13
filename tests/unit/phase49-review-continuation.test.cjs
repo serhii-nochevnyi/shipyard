@@ -406,7 +406,7 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
       candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
         instructions_sha256: sha(instructions), model: selected.model, effort: selected.effort, provider: 'openai' } });
     let input = collector.prepareFileInput(scope, 'Complete current source, including multibyte € material.\n'
-      .repeat(mutation?.startsWith('prelaunch-') || mutation?.startsWith('seal-') || mutation === 'started-host-exit' ? 20 : 1500), {
+      .repeat(mutation?.startsWith('prelaunch-') || mutation?.startsWith('seal-') || mutation === 'started-host-exit' || mutation?.startsWith('unmeasured-') ? 20 : 1500), {
       role, dispatchId, readerProfile: profile, storageRoot: path.join(root, 'inputs'),
       generatedInstructionBytes: Buffer.byteLength(instructions) + 2,
       binding: { base: head, base_ref: 'refs/heads/review-base', merge_base: head, ticket_set: ['T-49-18'],
@@ -431,6 +431,13 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
       input_profile_sha256: input.manifest.transport.profile_sha256 });
     const spawn = (_program, args) => {
       const launchIndex = ++launches, failure = failFirst && launchIndex === 1;
+      if (mutation === 'concurrent-probe' && launchIndex === 1) concurrentClaims.push(assert.rejects(() =>
+        host.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only' }, input), { code: 'REVIEW_SOURCE_INVALID' }));
+      if (mutation === 'unmeasured-pending') {
+        fs.writeFileSync(1, JSON.stringify({ root, worktree, scope, home, agents, agentManifest, dispatchId, role, capabilities,
+          native, manifestBytes: manifestBytes.toString('base64'), producer_pid: process.pid }));
+        process.exit(0);
+      }
       const index = args.includes('resume') ? 2 : 1, turn = failure ? 'failed-complete-probe' : index === 1 ? 'original-complete-probe' : 'new-current-final';
       if (index === 2 && mutation === 'started-host-exit') {
         fs.writeFileSync(1, JSON.stringify({ root, worktree, scope, home, agents, agentManifest, source, dispatchId, role, capabilities }));
@@ -522,8 +529,14 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     host.reserveCompletedSourceCandidate(input);
     if (failFirst) await assert.rejects(() => host.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only' }, input),
       { code: 'RUNTIME_UNAVAILABLE' });
+    if (mutation?.startsWith('unmeasured-') && mutation !== 'unmeasured-pending') {
+      fs.writeFileSync(1, JSON.stringify({ root, worktree, scope, home, agents, agentManifest, dispatchId, role, capabilities,
+        native, manifestBytes: manifestBytes.toString('base64'), producer_pid: process.pid }));
+      process.exit(0);
+    }
     let capacity = await host.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only' }, input, {
       onCompleted(value) { probeCallbacks++; assert.equal(recorder.getVerifiedRecord(value.runtime_evidence.dispatch_id), null); } });
+    if (mutation === 'concurrent-probe') { await Promise.all(concurrentClaims); mutation = null; }
     const probeId = capacity.contract.application_dispatch_id;
     assert.notEqual(probeId, dispatchId); assert.equal(probeCallbacks, 1); assert.equal(recorder.getVerifiedRecord(dispatchId), null);
     input = collector.admitReaderBatchInput(input, capacity);
@@ -989,8 +1002,8 @@ async function coldMeasuredSourceFixture(role, fault, mutation = null) {
   const script = header + '\ncompletedSourceBaselines.set(true, ' + JSON.stringify(copyCompletedSourceRepository()) + ');\n'
     + completedSourceFixture.toString()
     + '\ncompletedSourceFixture(' + JSON.stringify(role) + ', false, '
-    + JSON.stringify('seal-' + fault + '-host-exit')
-    + ').catch(error => { console.error(error); process.exitCode = 1; });';
+    + JSON.stringify(fault.startsWith('unmeasured-') ? fault : 'seal-' + fault + '-host-exit')
+    + ', undefined, ' + String(fault === 'unmeasured-failed') + ').catch(error => { console.error(error); process.exitCode = 1; });';
   const origin = JSON.parse(execFileSync(process.execPath, ['-e', script], {
     cwd: path.dirname(__filename), encoding: 'utf8', maxBuffer: 1024 * 1024 }));
   const previousHome = os.homedir; os.homedir = () => origin.root;
@@ -1000,9 +1013,13 @@ async function coldMeasuredSourceFixture(role, fault, mutation = null) {
     const adapterModule = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
     const recorder = boundary.createDurableRecorder(path.join(origin.root, 'receipts'));
-    const originalRecord = stable(recorder.getVerifiedRecord(origin.probeId));
+    const unmeasured = fault.startsWith('unmeasured-');
+    const originalRecord = origin.probeId ? stable(recorder.getVerifiedRecord(origin.probeId)) : null;
+    const originalAttempts = (fs.existsSync(authority.archiveAuthorityDirectory(origin.worktree)) ? fs.readdirSync(authority.archiveAuthorityDirectory(origin.worktree)) : []).filter(name => name.startsWith('review-tip-'))
+      .map(name => ({ file: path.join(authority.archiveAuthorityDirectory(origin.worktree), name) }))
+      .map(pin => ({ ...pin, bytes: fs.readFileSync(pin.file) }));
     const reservation = stable(recorder.getReservation(origin.dispatchId));
-    const originalRaw = fs.readFileSync(origin.native);
+    const originalRaw = fs.existsSync(origin.native) ? fs.readFileSync(origin.native) : null;
     const selected = policy.resolveDispatch({ runtime: 'codex', role, signals: {} });
     const content = fs.readFileSync(path.join(origin.agents, selected.agent_file), 'utf8');
     const instructions = runtime.generatedInstructions(content);
@@ -1022,30 +1039,36 @@ async function coldMeasuredSourceFixture(role, fault, mutation = null) {
       agentManifest: origin.agentManifest, env: { CODEX_HOME: origin.home },
       probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities: origin.capabilities },
       spawn(_program, args) {
-        spawns++; assert.ok(args.includes('resume')); assert.ok(args.includes(source.session_id));
+        spawns++;
+        const probing = !args.includes('resume');
+        if (probing) assert.ok(unmeasured && spawns === 1, 'only an authentically unmeasured candidate launches a new probe');
+        else assert.ok(args.includes(source.session_id));
         const child = new EventEmitter(); child.pid = 45678;
         child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
         let prompt = '';
         child.stdin = { write(bytes) { prompt += String(bytes); }, end() {
-          const turn = 'fresh-cold-measured-final';
+          const turn = probing ? 'original-cold-replacement-probe' : 'fresh-cold-measured-final';
           const result = JSON.stringify({ input_manifest_sha256: input.input_bundle.manifest_sha256,
             input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
             input_chunk_reads: input.manifest.ranges.length, input_batch_reads: input.manifest.batches.length,
-            input_profile_sha256: input.manifest.transport.profile_sha256, judgment: 'fresh current judgment' });
+            input_profile_sha256: input.manifest.transport.profile_sha256, judgment: probing ? 'obsolete cold probe' : 'fresh current judgment' });
           const context = nativeContext(turn, origin.worktree);
           Object.assign(context.payload, { model: selected.model, effort: selected.effort });
           Object.assign(context.payload.collaboration_mode.settings, { model: selected.model, reasoning_effort: selected.effort });
           process.nextTick(() => {
-            fs.appendFileSync(source.native_file, serialize([context, message('user', turn, prompt.trim()), event('task_started', turn),
+            if (probing) fs.writeFileSync(origin.native, serialize([nativeMetadata(session, origin.worktree), context,
+              message('developer', turn, instructions), message('user', turn, input.prompt), event('task_started', turn),
+              ...nativeReads(readRecords(input), turn), ...finish(turn, result)]), { mode: 0o600 });
+            else fs.appendFileSync(source.native_file, serialize([context, message('user', turn, prompt.trim()), event('task_started', turn),
               message('assistant', turn, result), event('task_complete', turn, { last_agent_message: result })]));
-            child.stdout.emit('data', Buffer.from(serialize([cliThread(source.session_id), ...cliCompletion(result)])));
+            child.stdout.emit('data', Buffer.from(serialize([cliThread(probing ? session : source.session_id), ...cliCompletion(result)])));
             child.emit('close', 0, null);
           });
         } };
         return child;
       } });
     if (mutation) {
-      const receipt = recorder.getVerifiedRecord(origin.probeId).receipt;
+      const receipt = origin.probeId ? recorder.getVerifiedRecord(origin.probeId).receipt : null;
       if (mutation === 'native') fs.writeFileSync(origin.native, '{}\n');
       if (mutation === 'truncated') fs.writeFileSync(origin.native, originalRaw.subarray(0, originalRaw.length - 10));
       if (mutation === 'cli') fs.writeFileSync(receipt.runtime_evidence.transcript.path, '{}\n');
@@ -1074,6 +1097,15 @@ async function coldMeasuredSourceFixture(role, fault, mutation = null) {
         else envelope.payload.attempts.at(-1).capacity_contract.logical_ranges++;
         fs.writeFileSync(file, JSON.stringify(envelope), { mode: 0o600 });
       }
+      if (mutation === 'missing-ledger') {
+        const pin = originalAttempts.find(pin => JSON.parse(pin.bytes).payload.schema === 'shipyard.review-source-attempts.v1');
+        assert.ok(pin); fs.unlinkSync(pin.file);
+      }
+      if (mutation === 'candidate-custody') {
+        const file = originalAttempts.find(pin => JSON.parse(pin.bytes).payload.schema === 'shipyard.review-source-candidate.v1').file;
+        const envelope = JSON.parse(fs.readFileSync(file)); envelope.payload.input.input_bytes++;
+        fs.writeFileSync(file, JSON.stringify(envelope), { mode: 0o600 });
+      }
       if (mutation === 'agent') fs.appendFileSync(path.join(origin.agents, selected.agent_file), '\nChanged instructions.\n');
       if (mutation === 'subject') {
         assert.equal(input.manifest.ticket, 'T-49-19');
@@ -1095,17 +1127,20 @@ async function coldMeasuredSourceFixture(role, fault, mutation = null) {
       assert.equal(spawns, 0); assert.equal(callbacks, 0, 'refusal grants no fresh turn, read or semantic credit');
       assert.equal(recorder.getVerifiedRecord(origin.dispatchId), null);
       assert.equal(stable(recorder.getReservation(origin.dispatchId)), reservation);
-      if (mutation !== 'receipt') assert.equal(stable(recorder.getVerifiedRecord(origin.probeId)), originalRecord);
-      if (!['native', 'truncated'].includes(mutation)) assert.deepEqual(fs.readFileSync(origin.native), originalRaw);
+      if (origin.probeId && mutation !== 'receipt') assert.equal(stable(recorder.getVerifiedRecord(origin.probeId)), originalRecord);
+      if (originalRaw && !['native', 'truncated'].includes(mutation)) assert.deepEqual(fs.readFileSync(origin.native), originalRaw);
       return;
     }
     input = host.reserveCompletedSourceCandidate(input);
     const capacity = await host.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only' }, input, {
-      onCompleted() { assert.fail('cold successful measurement cannot issue another probe completion'); } });
-    assert.equal(stable(capacity.contract), origin.contract);
-    assert.equal(spawns, 0); assert.equal(stable(recorder.getVerifiedRecord(origin.probeId)), originalRecord);
+      onCompleted() { assert.ok(unmeasured, 'cold successful measurement cannot issue another probe completion'); } });
+    if (!unmeasured) assert.equal(stable(capacity.contract), origin.contract);
+    assert.equal(spawns, unmeasured ? 1 : 0);
+    if (!unmeasured) assert.equal(stable(recorder.getVerifiedRecord(origin.probeId)), originalRecord);
     assert.equal(stable(recorder.getReservation(origin.dispatchId)), reservation);
-    assert.deepEqual(fs.readFileSync(origin.native), originalRaw);
+    if (originalRaw) assert.deepEqual(fs.readFileSync(origin.native), originalRaw);
+    const probeBytes = fs.readFileSync(origin.native);
+    const failedOriginal = originalAttempts.flatMap(pin => JSON.parse(pin.bytes).payload.attempts || []);
     input = collector.admitReaderBatchInput(input, capacity);
     const reference = runtime.prepareCompletedSource(capacity, input);
     source = authority.readCompletedReviewSource({ worktree: origin.worktree, reference });
@@ -1118,13 +1153,16 @@ async function coldMeasuredSourceFixture(role, fault, mutation = null) {
     const result = await boundary.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true })
       .dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: origin.dispatchId }, { ticket: origin.scope.ticket });
     host.completeCompletedSourceRecording(reference);
-    assert.equal(spawns, 1); assert.equal(callbacks, 1);
-    assert.equal(result.receipt.runtime_evidence.completed_source.original_dispatch_id, origin.probeId);
-    assert.equal(stable(recorder.getVerifiedRecord(origin.probeId)), originalRecord);
-    assert.deepEqual(fs.readFileSync(source.native_file).subarray(0, originalRaw.length), originalRaw);
+    assert.equal(spawns, unmeasured ? 2 : 1); assert.equal(callbacks, 1);
+    assert.equal(result.receipt.runtime_evidence.completed_source.original_dispatch_id, capacity.contract.application_dispatch_id);
+    if (!unmeasured) assert.equal(stable(recorder.getVerifiedRecord(origin.probeId)), originalRecord);
+    assert.deepEqual(fs.readFileSync(source.native_file).subarray(0, probeBytes.length), probeBytes);
+    const ledger = authority.readReviewSourceAttempts(authority.readCompletedReviewSource({ worktree: origin.worktree, reference }));
+    for (const attempt of failedOriginal) assert.equal(stable(ledger.find(entry => entry.dispatch_id === attempt.dispatch_id)), stable(attempt));
     const accounting = runtime.verifyCompletedReviewConsumption({ worktree: origin.worktree, source: reference,
       receipt_store: recorder.storeDir, dispatch_id: origin.dispatchId });
-    assert.deepEqual(accounting.attempts.map(attempt => attempt.status), ['completed', 'completed']);
+    assert.deepEqual(accounting.attempts.map(attempt => attempt.status), fault === 'unmeasured-failed' ? ['failed', 'completed', 'completed'] : ['completed', 'completed']);
+    assert.equal(accounting.all_attempt_denominator, fault === 'unmeasured-failed' ? 3 : 2);
     assert.equal(accounting.attempts.at(-1).successful_calls, 0);
   } finally { os.homedir = previousHome; fs.rmSync(origin.root, { recursive: true, force: true }); }
 }
@@ -1603,7 +1641,9 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
     }
     if (recordingFailure?.startsWith('seal-')) {
       fs.linkSync = (from, to) => {
-        if (!failedWrites && path.basename(to).startsWith(recordingFailure === 'seal-envelope' ? 'review-progress-' : 'review-tip-')) {
+        if (!failedWrites && path.basename(to).startsWith(recordingFailure === 'seal-envelope' ? 'review-progress-' : 'review-tip-')
+            && JSON.parse(fs.readFileSync(from)).payload.schema === (recordingFailure === 'seal-envelope'
+              ? 'shipyard.completed-review-source.v1' : 'shipyard.completed-review-source-tip.v1')) {
           failedWrites++; throw new Error('Original automatic post-measure source seal failed');
         }
         return originalLink(from, to);
@@ -1698,7 +1738,114 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
   } finally { fs.linkSync = originalLink; os.homedir = previousHome; fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
 }
 
-module.exports = { assert, fs, path, runtime, authority, completedSourceFixture, coldMeasuredSourceFixture, coldPrelaunchFixture, coldCompletedRecordingFixture, automaticCompletedReviewFixture };
+async function partialFailedSourceFixture(role, fault) {
+  await completedSourceFixture(role, false, null, async original => {
+    const { recorder, root } = original;
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const boundary = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+    const adapterModule = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
+    const firstSource = authority.readCompletedReviewSource({ worktree: original.input.manifest.snapshot.worktree, reference: original.source });
+    const scope = { worktree: firstSource.identity.worktree, run_id: firstSource.identity.run_id,
+      ticket: firstSource.identity.ticket, phase: firstSource.identity.phase, repository: 'fixture/repository', runtime: 'codex', provider: 'openai' };
+    const home = path.join(root, 'codex'), agents = path.join(home, 'agents'), agentManifest = path.join(agents, '.shipyard-manifest.json');
+    const selected = policy.resolveDispatch({ runtime: 'codex', role, signals: {} });
+    const capabilities = { supportedModels: [selected.model], supportedEfforts: [selected.effort] };
+    const content = fs.readFileSync(path.join(agents, selected.agent_file), 'utf8'), instructions = runtime.generatedInstructions(content);
+    const originalPins = [original.native, original.final.receipt.runtime_evidence.transcript.path,
+      recorder.getVerifiedRecord(original.capacity.contract.application_dispatch_id).receipt.runtime_evidence.transcript.path]
+      .map(file => ({ file, bytes: fs.readFileSync(file) }));
+    let failedEntry, failedPin, failedSource;
+    for (const failed of [true, false]) {
+      const dispatchId = 'partial-cost-final-' + crypto.randomUUID(), reviewer = crypto.randomUUID();
+      const native = path.join(path.dirname(original.native), reviewer + '.jsonl');
+      const profile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 8,
+        candidate: { ...original.input.manifest.transport.candidate } });
+      let input = collector.prepareFileInput(scope, 'Complete current source, including multibyte € material.\n'.repeat(20), {
+        role, dispatchId, readerProfile: profile, storageRoot: path.join(root, 'inputs'),
+        generatedInstructionBytes: Buffer.byteLength(instructions) + 2, binding: original.input.manifest.binding });
+      let spawns = 0;
+      const host = runtime.createCodexRuntimeHost({ scope, recorder, agentDir: agents, agentManifest, env: { CODEX_HOME: home },
+        probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities },
+        spawn(_program, args) {
+          spawns++;
+          const probing = !args.includes('resume'), turn = crypto.randomUUID();
+          const child = new EventEmitter(); child.pid = 45789;
+          child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+          let prompt = '';
+          child.stdin = { write(bytes) { prompt += String(bytes); }, end() {
+            const context = nativeContext(turn, scope.worktree);
+            Object.assign(context.payload, { model: selected.model, effort: selected.effort });
+            Object.assign(context.payload.collaboration_mode.settings, { model: selected.model, reasoning_effort: selected.effort });
+            const result = JSON.stringify({ input_manifest_sha256: input.input_bundle.manifest_sha256,
+              input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
+              input_chunk_reads: input.manifest.ranges.length, input_batch_reads: input.manifest.batches.length,
+              input_profile_sha256: input.manifest.transport.profile_sha256, judgment: probing ? 'obsolete probe' : 'fresh judgment' });
+            if (!probing && failed && fault === 'missing-cli') {
+              fs.appendFileSync(native, serialize([context, message('user', turn, prompt.trim()), event('task_started', turn)]));
+              throw new Error('Original process exited before CLI output');
+            }
+            process.nextTick(() => {
+              if (probing) fs.writeFileSync(native, serialize([nativeMetadata(reviewer, scope.worktree), context,
+                message('developer', turn, instructions), message('user', turn, input.prompt), event('task_started', turn),
+                ...nativeReads(readRecords(input), turn), ...finish(turn, result)]), { mode: 0o600 });
+              else fs.appendFileSync(native, serialize([context, message('user', turn, prompt.trim()), event('task_started', turn),
+                ...(failed ? [] : finish(turn, result))]) + (failed && fault !== 'missing-cli' ? '{"type":"response_item","payload":' : ''));
+              if (!probing && failed && fault === 'missing-cli') child.emit('error', new Error('Original process exited before CLI output'));
+              else {
+                child.stdout.emit('data', Buffer.from(serialize([cliThread(reviewer), ...(failed && !probing
+                  ? [{ type: 'turn.failed', error: { message: 'Original partial native output' } }] : cliCompletion(result))])));
+                child.emit('close', failed && !probing ? 1 : 0, null);
+              }
+            });
+          } };
+          return child;
+        } });
+      input = host.reserveCompletedSourceCandidate(input);
+      const capacity = await host.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only' }, input);
+      input = collector.admitReaderBatchInput(input, capacity);
+      const reference = runtime.prepareCompletedSource(capacity, input);
+      const adapter = adapterModule.createCodexDispatchAdapter({ agentsDir: agents, agentManifest, capabilities,
+        host: { requireRuntimeEvidence: true, launchStatic(applied, context) {
+          return host.resumeCompletedSource(applied, { source: reference, dispatch_id: context.dispatch_id, role, input_prepared: input });
+        } } });
+      const launch = () => boundary.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true })
+        .dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: dispatchId });
+      if (failed) {
+        await assert.rejects(launch);
+        failedSource = authority.readCompletedReviewSource({ worktree: scope.worktree, reference });
+        failedEntry = authority.readReviewSourceAttempts(failedSource).at(-1);
+        assert.equal(failedEntry.status, 'failed');
+        assert.ok(failedEntry.physical.native_snapshot.bytes > 0);
+        if (fault === 'missing-cli') assert.equal(failedEntry.physical.transcript, null);
+        failedPin = { file: failedEntry.physical.native_snapshot.path, bytes: fs.readFileSync(failedEntry.physical.native_snapshot.path) };
+      } else {
+        const result = await launch(); host.completeCompletedSourceRecording(reference);
+        const accounting = runtime.verifyCompletedReviewConsumption({ worktree: scope.worktree, source: reference,
+          receipt_store: recorder.storeDir, dispatch_id: dispatchId });
+        assert.equal(accounting.all_attempt_denominator, 6);
+        const attempt = accounting.attempts.find(entry => entry.dispatch_id === failedEntry.dispatch_id);
+        for (const key of ['delivered_raw_bytes', 'delivered_base64_bytes', 'observed_nested_bytes', 'observed_outer_bytes']) {
+          assert.equal(attempt[key], null); assert.ok(attempt.unavailable_reasons[key]);
+        }
+        assert.equal(attempt.successful_calls, null);
+        assert.equal(accounting.physical_bytes.raw, null);
+        assert.equal(accounting.semantic_credit, false); assert.equal(accounting.current_verdict_authority, false);
+        assert.equal(accounting.successful_physical_calls, input.manifest.batches.length);
+        assert.equal(authority.readReviewSourceAttempts(failedSource).find(entry => entry.dispatch_id === failedEntry.dispatch_id).status, 'failed');
+        for (const pin of [...originalPins, failedPin]) assert.deepEqual(fs.readFileSync(pin.file), pin.bytes);
+        if (fault === 'tampered-snapshot') {
+          fs.appendFileSync(failedPin.file, 'changed');
+          assert.throws(() => runtime.verifyCompletedReviewConsumption({ worktree: scope.worktree, source: reference,
+            receipt_store: recorder.storeDir, dispatch_id: dispatchId }), { code: 'REVIEW_SOURCE_INVALID' });
+        }
+        assert.ok(result.receipt.runtime_evidence.completed_source);
+      }
+      assert.equal(spawns, 2);
+    }
+  });
+}
+
+module.exports = { assert, fs, path, runtime, authority, completedSourceFixture, coldMeasuredSourceFixture, coldPrelaunchFixture, coldCompletedRecordingFixture, automaticCompletedReviewFixture, partialFailedSourceFixture };
 
 if (require.main === module) {
 test('interrupted observed prefix rehydrates and resumes the exact session with fresh final evidence', async () => {

@@ -1355,6 +1355,10 @@ function recordReviewSourceAttempt(observation) {
     if (previous.original_authority !== digest(state.key) || previous.attempts.length > 256)
       fail('REVIEW_SOURCE_INVALID', 'original all-attempt ledger is invalid or overflowing');
     runtime.reviewObservationData(observation);
+    if (observed.attempt.status === 'pending' && previous.attempts.some(attempt =>
+      attempt.identity?.dispatch_id === observed.identity.dispatch_id && (attempt.status === 'pending'
+        || attempt.status === 'completed' || attempt.native_status === 'completed' || attempt.authority_status === 'recorded')))
+      fail('REVIEW_SOURCE_INVALID', 'original candidate already has an active, completed or ambiguous probe');
     const index = previous.attempts.findIndex(attempt => attempt.dispatch_id === observed.attempt.dispatch_id);
     if (index < 0 && previous.attempts.length >= 256)
       fail('REVIEW_SOURCE_INVALID', 'all original attempt history reached its finite bound');
@@ -1388,15 +1392,74 @@ function readReviewSourceAttempts(source) {
   return require('./codex-runtime-host.cjs').freezeReviewProgress(ledger.attempts);
 }
 
+const authenticatedSourceCandidates = new WeakSet();
+function isAuthenticatedSourceCandidate(value) { return authenticatedSourceCandidates.has(value); }
+function sourceCandidateName(dispatchId) { return reviewTipName(digest('unmeasured-source-candidate:' + dispatchId)); }
+function registerReviewSourceCandidate(observation) {
+  const runtime = require('./codex-runtime-host.cjs'), observed = runtime.reviewObservationData(observation);
+  return withArchiveAuthorityLock(observed.identity.worktree, () => {
+    const state = authorityState(observed.identity.worktree, true, false, false);
+    const payload = { schema: 'shipyard.review-source-candidate.v1', original_authority: digest(state.key),
+      identity: observed.identity, input: observed.input, final_reservation: observed.final_reservation,
+      receipt_store: observed.receipt_store };
+    runtime.reviewObservationData(observation);
+    writeReviewEnvelope(state, sourceCandidateName(observed.identity.dispatch_id), payload, true);
+  });
+}
+
 function readCompletedSourceMeasurement(observation) {
   const runtime = require('./codex-runtime-host.cjs'), observed = runtime.reviewObservationData(observation);
   return withArchiveAuthorityLock(observed.identity.worktree, () => {
     const state = authorityState(observed.identity.worktree, false, false, false);
-    const ledger = reviewEnvelope(state, reviewAttemptLedgerName(observed.identity));
-    const matching = ledger.attempts.filter(attempt => attempt.identity?.dispatch_id === observed.identity.dispatch_id
+    const ledgerFile = path.join(state.directory, reviewAttemptLedgerName(observed.identity));
+    const ledger = fs.existsSync(ledgerFile) ? reviewEnvelope(state, path.basename(ledgerFile)) : null;
+    if (ledger && (ledger.schema !== 'shipyard.review-source-attempts.v1' || ledger.original_authority !== digest(state.key)
+        || !Array.isArray(ledger.attempts) || ledger.attempts.length > 256))
+      fail('REVIEW_SOURCE_INVALID', 'original candidate attempt ledger is invalid');
+    const matching = (ledger?.attempts || []).filter(attempt => attempt.identity?.dispatch_id === observed.identity.dispatch_id
       && attempt.dispatch_id !== observed.identity.dispatch_id);
     const completed = matching.filter(attempt => attempt.status === 'completed');
-    if (ledger.schema !== 'shipyard.review-source-attempts.v1' || ledger.original_authority !== digest(state.key)
+    const candidateFile = path.join(state.directory, sourceCandidateName(observed.identity.dispatch_id));
+    const candidate = fs.existsSync(candidateFile) ? reviewEnvelope(state, path.basename(candidateFile)) : null;
+    if (candidate && (candidate.schema !== 'shipyard.review-source-candidate.v1' || candidate.original_authority !== digest(state.key)
+        || candidate.identity.dispatch_id !== observed.identity.dispatch_id
+        || ['worktree', 'run_id', 'ticket', 'role', 'phase'].some(key => candidate.identity[key] !== observed.identity[key])
+        || candidate.receipt_store !== (observed.receipt_store || completed[0]?.receipt_store)
+        || stable(candidate.final_reservation) !== stable(observed.final_reservation)))
+      fail('REVIEW_SOURCE_INVALID', 'original candidate reservation subject changed');
+    if (observed.allow_unmeasured === true && completed.length === 0) {
+      const recorder = require('./dispatch-boundary.cjs').createDurableRecorder(observed.receipt_store);
+      const reservation = recorder.getReservation(observed.identity.dispatch_id);
+      if (!reservation || reservation.recorded || !reservation.reserved_at
+          || stable(reservation) !== stable(observed.final_reservation)
+          || fs.existsSync(path.join(state.directory, completedSourceTip(observed.identity.dispatch_id)))
+          || matching.some(attempt => attempt.status !== 'failed'
+            || attempt.native_status === 'completed' || attempt.authority_status === 'recorded'
+            || ['worktree', 'run_id', 'ticket', 'role', 'phase', 'dispatch_id'].some(key => attempt.identity[key] !== observed.identity[key])
+            || stable(attempt.identity) !== stable(candidate?.identity || matching[0].identity)
+            || stable(attempt.final_reservation) !== stable(reservation)))
+        fail('REVIEW_SOURCE_INVALID', 'unmeasured candidate has live, ambiguous, stale or consumed original attempts');
+      const records = fs.readdirSync(recorder.storeDir).filter(name => /^record-[a-f0-9]{64}\.json$/.test(name));
+      if (records.length > 4096) fail('REVIEW_SOURCE_INVALID', 'original receipt inventory exceeds its finite bound');
+      for (const name of records) {
+        let selector;
+        try { selector = JSON.parse(authorityFile(path.join(recorder.storeDir, name))).payload?.dispatch_id; }
+        catch { fail('REVIEW_SOURCE_INVALID', 'original receipt inventory contains corrupt custody'); }
+        const record = selector && recorder.getVerifiedRecord(selector);
+        if (!record || name !== 'record-' + digest(selector) + '.json')
+          fail('REVIEW_SOURCE_INVALID', 'original receipt inventory cannot be authenticated');
+        if (record.receipt.runtime_evidence?.reader_capacity_probe?.review_dispatch_id === observed.identity.dispatch_id)
+          fail('REVIEW_SOURCE_INVALID', 'unmeasured candidate already has an original recorded probe');
+      }
+      runtime.reviewObservationData(observation);
+      const original = candidate || matching[0];
+      if (!original) return null;
+      if (!object(original.input)) fail('REVIEW_SOURCE_INVALID', 'unmeasured original input custody is missing');
+      const result = runtime.freezeReviewProgress(original);
+      authenticatedSourceCandidates.add(result);
+      return result;
+    }
+    if (!ledger || ledger.schema !== 'shipyard.review-source-attempts.v1' || ledger.original_authority !== digest(state.key)
         || ledger.attempts.length > 256 || completed.length !== 1
         || matching.some(attempt => attempt.status === 'pending')
         || completed[0].native_status !== 'completed' || completed[0].authority_status !== 'recorded'
@@ -5815,6 +5878,8 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   recordReviewSourceAttempt,
   readReviewSourceAttempts,
   readCompletedSourceMeasurement,
+  registerReviewSourceCandidate,
+  isAuthenticatedSourceCandidate,
   isAuthenticatedSourceMeasurement,
   sealCompletedReviewSource,
   readCompletedReviewSource,

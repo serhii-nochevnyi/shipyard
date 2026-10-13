@@ -2289,6 +2289,28 @@ for (const mutation of ['missing-recorder', 'stale-agent', 'requested-model', 'r
   });
 }
 
+for (const role of ['arch-review', 'integrator']) {
+  for (const fault of ['unmeasured-empty', 'unmeasured-failed']) test('cold unused original reservation recovers ' + role + ' ' + fault, async () => {
+    await require('./phase49-review-continuation.test.cjs').coldMeasuredSourceFixture(role, fault);
+  });
+  test('unmeasured candidate refuses a concurrent physical probe ' + role, async () => {
+    await require('./phase49-review-continuation.test.cjs').completedSourceFixture(role, false, 'concurrent-probe');
+  });
+  test('missing ledger never replays an original recorded measurement ' + role, async () => {
+    await require('./phase49-review-continuation.test.cjs').coldMeasuredSourceFixture(role, 'envelope-write', 'missing-ledger');
+  });
+  for (const mutation of ['profile', 'material', 'roster', 'subject', 'candidate-custody'])
+    test('cold unmeasured candidate refuses substitution ' + role + ' ' + mutation, async () => {
+      await require('./phase49-review-continuation.test.cjs').coldMeasuredSourceFixture(role, 'unmeasured-failed', mutation);
+    });
+  test('cold unmeasured candidate refuses original pending probe ' + role, async () => {
+    await require('./phase49-review-continuation.test.cjs').coldMeasuredSourceFixture(role, 'unmeasured-pending', 'pending');
+  });
+  for (const fault of ['missing-cli', 'partial-native', 'tampered-snapshot']) test('retained partial failed final costs remain unknown ' + role + ' ' + fault, async () => {
+    await require('./phase49-review-continuation.test.cjs').partialFailedSourceFixture(role, fault);
+  });
+}
+
 }
 
 

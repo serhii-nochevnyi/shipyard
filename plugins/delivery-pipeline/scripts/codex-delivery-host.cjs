@@ -1590,7 +1590,7 @@ function repairHistory(prepared, pr) {
     const attempt = readSealed(path.join(directory, cursor + '.json'), prepared.key);
     if (!attempt || sha256(canonical(attempt)) !== cursor || attempt.ticket !== prepared.commit.ticket
         || attempt.pr !== pr || attempt.worktree !== prepared.commit.worktree || attempt.role !== 'review-fix'
-        || attempt.repository !== prepared.repository || attempt.base !== prepared.baseRef)
+        || attempt.repository !== prepared.repository || attempt.base !== attempt.preparation?.baseRef)
       fail('REPAIR_PREDECESSOR_INVALID', 'repair predecessor subject or original custody changed');
     const recorder = createDurableRecorder(attempt.receipt_store);
     const original = authenticatedReceipt(recorder, attempt.dispatch_id, 'review-fix');
@@ -1738,6 +1738,89 @@ function confirmRepairReply(options, prepared, feedback, current, reply, origina
   return relation ? { ...relation, created: !!created } : null;
 }
 
+function repairRevisionSigner(root, commit, expectedSigner = null) {
+  git(root, ['verify-commit', commit]);
+  const [code, signer] = git(root, ['show', '-s', '--format=%G?%x00%GF', commit]).split('\0');
+  if (!['G', 'U'].includes(code) || !signer || (expectedSigner && signer !== expectedSigner))
+    throw new Error('revision lacks its authenticated signer');
+  return signer;
+}
+
+function repairBaseMerge(root, commit, sourceParent, currentBase) {
+  const [parentText, tree] = git(root, ['show', '-s', '--format=%P%x00%T', commit]).split('\0');
+  const parents = parentText.split(' ');
+  if (parents.length !== 2 || parents[0] !== sourceParent) throw new Error('base import changed its source parent');
+  git(root, ['merge-base', '--is-ancestor', parents[1], currentBase]);
+  const expected = git(root, ['merge-tree', '--write-tree', parents[0], parents[1]]);
+  if (!/^[a-f0-9]{40,64}$/.test(expected) || tree !== expected)
+    throw new Error('base import differs from the exact conflict-free merge tree');
+  return { parents, tree };
+}
+
+function repairScopeIdentity(value) {
+  return { base: value.commit.expectedBase, base_ref: value.baseRef,
+    plan: { path: value.plan.path, sha256: value.plan.sha256 }, owners: value.commit.files_modified,
+    allow_list: value.verificationAllowList };
+}
+
+function recheckHistoricalRepair(prepared, prior, originalHead) {
+  try {
+    const root = prepared.commit.worktree, scope = prior.scope_transition, transition = prior.source_transition;
+    if (prior.semantic_credit !== false || (!scope && !transition)) throw new Error('missing zero-credit transition');
+    if (scope && (canonical(scope.to) !== canonical(repairScopeIdentity(prepared))
+        || canonical(scope.from) === canonical(scope.to)
+        || (canonical(scope.from.owners) !== canonical(scope.to.owners) && scope.from.plan.sha256 === scope.to.plan.sha256)))
+      throw new Error('historical scope no longer binds the current canonical scope');
+    const base = scope?.base_transition;
+    if (scope && (scope.from.base !== scope.to.base) !== !!base) throw new Error('missing original base evolution');
+    if (base) {
+      if (base.from !== scope.from.base || base.to !== scope.to.base) throw new Error('base evolution changed its scope');
+      git(root, ['merge-base', '--is-ancestor', base.from, base.to]);
+      const commits = git(root, ['rev-list', '--reverse', '--max-count=501', base.from + '..' + base.to]).split('\n').filter(Boolean);
+      if (!commits.length || commits.length > 500 || canonical(commits.map(commit => ({
+        commit, signer: repairRevisionSigner(root, commit) }))) !== canonical(base.commits))
+        throw new Error('historical base signatures or ancestry changed');
+    }
+    if (!transition) {
+      if (originalHead !== prepared.commit.expectedHead) throw new Error('scope evolution lost its original source head');
+      return;
+    }
+    if (transition.from !== originalHead || transition.to !== prepared.commit.expectedHead
+        || !Array.isArray(transition.records) || !transition.records.length || transition.records.length > 500)
+      throw new Error('historical source no longer binds the current head');
+    git(root, ['merge-base', '--is-ancestor', transition.from, transition.to]);
+    const commits = git(root, ['rev-list', '--reverse', '--max-count=501', transition.from + '..' + transition.to]).split('\n').filter(Boolean);
+    if (canonical(commits) !== canonical(transition.records.map(pin => pin.commit))) throw new Error('historical source ancestry changed');
+    const authority = require('./conveyor-coverage.cjs'), repo = authority.repoSlug(root, prepared.repo);
+    const imported = new Map((base?.commits || []).map(pin => [pin.commit, pin]));
+    let sourceParent = transition.from;
+    for (const pin of transition.records) {
+      if (pin.base_import) {
+        if (canonical(pin) !== canonical({ ...imported.get(pin.commit), base_import: true, semantic_credit: false }))
+          throw new Error('historical base import changed');
+      } else if (pin.base_merge) {
+        if (!base || pin.semantic_credit !== false
+            || pin.signer !== repairRevisionSigner(root, pin.commit, prepared.commit.expectedSigner)
+            || canonical(pin.base_merge) !== canonical(repairBaseMerge(root, pin.commit, sourceParent, base.to)))
+          throw new Error('historical base merge changed');
+        sourceParent = pin.commit;
+      } else {
+        const checked = authority.verify({ worktree: root, repo, commit: pin.commit });
+        if (!checked.covered || !['executor', 'fixer'].includes(checked.record.kind)
+            || checked.record.ticket !== prepared.commit.ticket || checked.record.repository_id !== prepared.repository
+            || canonical(checked.record.parents) !== canonical([sourceParent])
+            || sha256(canonical(checked.record)) !== pin.coverage_sha256)
+          throw new Error('historical action source coverage changed');
+        const original = authenticatedReceipt(createDurableRecorder(checked.record.receipt_store), checked.record.dispatch_id,
+          checked.record.kind === 'executor' ? 'executor' : 'review-fix');
+        if (original.digest !== checked.record.receipt_digest) throw new Error('historical source receipt changed');
+        sourceParent = pin.commit;
+      }
+    }
+    if (sourceParent !== transition.to) throw new Error('historical source lacks its authenticated current tip');
+  } catch (error) { fail('REPAIR_PREDECESSOR_INVALID', 'historical action provenance changed: ' + error.message); }
+}
+
 function normalizedRepairFeedback(prepared, feedback, history, options) {
   const excluded = new Map(), resolutions = new Map(), coverage = [], historicalDispatches = [];
   for (const { attempt, receipt } of [...history.history].reverse()) {
@@ -1771,45 +1854,68 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
       verifySignedCommit(prepared.commit.worktree, candidate, transition.to);
       expectedHead = transition.to;
     }
-    if (attempt.preparation.commit.expectedBase !== prepared.commit.expectedBase
-        || attempt.preparation.plan.sha256 !== prepared.plan.sha256 || attempt.preparation.plan.path !== prepared.plan.path
-        || attempt.preparation.commit.expectedBranch !== prepared.commit.expectedBranch
+    if (attempt.preparation.commit.expectedBranch !== prepared.commit.expectedBranch
         || attempt.preparation.commit.expectedSigner !== prepared.commit.expectedSigner
-        || canonical(attempt.preparation.commit.files_modified) !== canonical(prepared.commit.files_modified)
-        || attempt.preparation.baseRef !== prepared.baseRef || attempt.preparation.repository !== prepared.repository
-        || attempt.preparation.repo !== prepared.repo
-        || canonical(attempt.preparation.verificationAllowList) !== canonical(prepared.verificationAllowList)
+        || attempt.preparation.repository !== prepared.repository || attempt.preparation.repo !== prepared.repo
         || subject.pr !== prepared.repairPr || feedback.repo !== subject.feedback.repo)
-      fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output belongs to another source/head/base/PR');
+      fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output belongs to another repository/branch/signer/PR');
+    const priorScope = repairScopeIdentity(attempt.preparation), currentScope = repairScopeIdentity(prepared);
+    const scopeChanged = canonical(priorScope) !== canonical(currentScope);
+    if (canonical(priorScope.owners) !== canonical(currentScope.owners)
+        && priorScope.plan.sha256 === currentScope.plan.sha256)
+      fail('REPAIR_SUBJECT_CHANGED', 'changed owners lack a fresh canonical PLAN');
+    let baseTransition;
+    if (priorScope.base !== currentScope.base) {
+      try {
+        const root = prepared.commit.worktree;
+        git(root, ['merge-base', '--is-ancestor', priorScope.base, currentScope.base]);
+        const commits = git(root, ['rev-list', '--reverse', '--max-count=501', priorScope.base + '..' + currentScope.base])
+          .split('\n').filter(Boolean);
+        if (!commits.length || commits.length > 500) throw new Error('base evolution exceeds its finite bound');
+        baseTransition = { from: priorScope.base, to: currentScope.base,
+          commits: commits.map(commit => ({ commit, signer: repairRevisionSigner(root, commit) })) };
+      } catch (error) { fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output lacks authenticated base evolution: ' + error.message); }
+    }
     let sourceTransition;
     if (expectedHead !== prepared.commit.expectedHead) {
       try {
         const root = prepared.commit.worktree, authority = require('./conveyor-coverage.cjs');
         git(root, ['merge-base', '--is-ancestor', expectedHead, prepared.commit.expectedHead]);
         const repo = authority.repoSlug(root, prepared.repo);
-        const chain = authority.chain({ repo, worktreeOrCheckout: root, base: expectedHead, head: prepared.commit.expectedHead });
-        if (!chain.covered || !chain.links.length) throw new Error('source transition lacks complete coverage');
         const commits = git(root, ['rev-list', '--reverse', '--max-count=501', expectedHead + '..' + prepared.commit.expectedHead])
           .split('\n').filter(Boolean);
-        if (commits.length !== chain.links.length) throw new Error('source transition changed during authentication');
+        if (!commits.length || commits.length > 500) throw new Error('source transition exceeds its finite bound');
+        const imported = new Map((baseTransition?.commits || []).map(record => [record.commit, record]));
+        let sourceParent = expectedHead;
         const records = commits.map(commit => {
           const checked = authority.verify({ worktree: root, repo, commit });
           if (!checked.covered || !['executor', 'fixer'].includes(checked.record.kind)
-              || checked.record.ticket !== prepared.commit.ticket || checked.record.repository_id !== prepared.repository)
-            throw new Error('source transition belongs to another producer or ticket');
+              || checked.record.ticket !== prepared.commit.ticket || checked.record.repository_id !== prepared.repository) {
+            if (imported.has(commit)) return { ...imported.get(commit), base_import: true, semantic_credit: false };
+            if (!baseTransition) throw new Error('source transition belongs to another producer or ticket');
+            const merge = repairBaseMerge(root, commit, sourceParent, currentScope.base);
+            const signer = repairRevisionSigner(root, commit, prepared.commit.expectedSigner);
+            sourceParent = commit;
+            return { commit, signer, base_merge: merge, semantic_credit: false };
+          }
           const record = checked.record;
+          if (canonical(record.parents) !== canonical([sourceParent]))
+            throw new Error('source transition changed its exact native producer parent');
           const original = authenticatedReceipt(createDurableRecorder(record.receipt_store), record.dispatch_id,
             record.kind === 'executor' ? 'executor' : 'review-fix');
           if (original.digest !== record.receipt_digest) throw new Error('source transition receipt changed');
+          sourceParent = commit;
           return { commit, coverage_sha256: sha256(canonical(record)) };
         });
+        if (sourceParent !== prepared.commit.expectedHead) throw new Error('source transition lacks a current authenticated tip');
         sourceTransition = { from: expectedHead, to: prepared.commit.expectedHead, records };
       } catch (error) {
         fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output lacks an authenticated covered source transition: ' + error.message);
       }
-      historicalDispatches.push(attempt.dispatch_id);
-    } else if (attempt.preparation.graphDigest !== prepared.graphDigest)
+    } else if (!scopeChanged && attempt.preparation.graphDigest !== prepared.graphDigest)
       fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output graph changed without a covered source transition');
+    const historical = !!sourceTransition || scopeChanged;
+    if (historical) historicalDispatches.push(attempt.dispatch_id);
     const seen = new Set();
     for (const action of actions.confirmed) {
       const disposition = attempt.result.review_dispositions.find(item => item.id === action.feedback_id);
@@ -1821,6 +1927,9 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
           || !matchingRepairReply(reply, original, disposition, actions.actor)
           || canonical(current) !== canonical(reply))
         fail('REPAIR_PREDECESSOR_INVALID', 'confirmed reply identity, author, target or complete live bytes changed');
+      if (original.kind === 'thread-comment'
+          && canonical(feedback.inventory.find(item => item.id === original.id)) !== canonical(original))
+        fail('REPAIR_PREDECESSOR_INVALID', 'confirmed reply original comment context changed');
       seen.add(action.feedback_id); excluded.set(action.reply_id, reply);
       if (action.reply_review) {
         repairReplyReview(options, { ...prepared, repair: subject }, feedback, reply, original, actions.actor,
@@ -1843,13 +1952,16 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
             || canonical(confirmed) !== canonical({ ...thread, resolved: true })
             || canonical(currentIdentity) !== canonical(confirmed))
           fail('REPAIR_PREDECESSOR_INVALID', 'host resolution changed its original external thread');
-        if (!sourceTransition && !resolutions.has(threadId)) resolutions.set(threadId, thread);
+        if (!historical && !resolutions.has(threadId)) resolutions.set(threadId, thread);
       }
       coverage.push({ dispatch_id: attempt.dispatch_id, receipt_sha256: attempt.receipt_sha256,
         artifact_ref: attempt.artifact_ref, artifact_digest: attempt.artifact_digest,
         actions_sha256: actionsSha256, feedback_id: action.feedback_id,
         reply: current, disposition_sha256: sha256(canonical(disposition)), resolved: action.resolved,
-        ...(sourceTransition ? { historical: true, semantic_credit: false, source_transition: sourceTransition } : {}),
+        ...(historical ? { historical: true, semantic_credit: false,
+          ...(sourceTransition ? { source_transition: sourceTransition } : {}),
+          ...(scopeChanged ? { scope_transition: { from: priorScope, to: currentScope,
+            ...(baseTransition ? { base_transition: baseTransition } : {}) } } : {}) } : {}),
         ...(action.reply_review ? { reply_review: action.reply_review } : {}) });
     }
     if (sha256(fs.readFileSync(file)) !== actionsSha256)
@@ -1970,15 +2082,8 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
         || canonical(current.inventory.find(item => item.id === prior.reply.id)) !== canonical(prior.reply))
       fail('REPAIR_PREDECESSOR_INVALID', 'authenticated prior host disposition coverage changed');
     if (prior.historical) {
-      const authority = require('./conveyor-coverage.cjs'), transition = prior.source_transition;
-      if (prior.semantic_credit !== false || transition?.to !== prepared.commit.expectedHead
-          || !Array.isArray(transition.records) || !transition.records.length)
-        fail('REPAIR_PREDECESSOR_INVALID', 'historical actions lost their covered current source binding');
-      for (const pin of transition.records) {
-        const checked = authority.verify({ worktree: root, repo: authority.repoSlug(root, prepared.repo), commit: pin.commit });
-        if (!checked.covered || sha256(canonical(checked.record)) !== pin.coverage_sha256)
-          fail('REPAIR_PREDECESSOR_INVALID', 'historical action source coverage changed');
-      }
+      const actions = readSealed(file, prepared.key);
+      recheckHistoricalRepair(prepared, prior, actions.subject?.live?.headRefOid);
     }
     if (prior.reply_review) {
       const actions = readSealed(file, prepared.key);

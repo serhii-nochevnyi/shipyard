@@ -603,7 +603,7 @@ function restoreCompletedSourceInput(source) {
 
 const measuredInputParents = new WeakMap();
 function restoreMeasuredIntegrationInput(measurement, current) {
-  if (!roleArtifact.isAuthenticatedSourceMeasurement(measurement) || !isPreparedFileInput(current))
+  if ((!roleArtifact.isAuthenticatedSourceMeasurement(measurement) && !roleArtifact.isAuthenticatedSourceCandidate(measurement)) || !isPreparedFileInput(current))
     fail('integration restoration requires original protected and private current custody', 'REVIEW_SOURCE_REQUIRED');
   const measured = verifyFileInput(measurement.input.input_bundle, { sealed: true });
   if (measured.manifest.binding?.review_contract !== 'shipyard.integration-review.v2')
@@ -630,7 +630,7 @@ function restoreMeasuredIntegrationInput(measurement, current) {
 }
 
 function restoreMeasuredSourceInput(measurement, current) {
-  if (!roleArtifact.isAuthenticatedSourceMeasurement(measurement) || !isPreparedFileInput(current))
+  if ((!roleArtifact.isAuthenticatedSourceMeasurement(measurement) && !roleArtifact.isAuthenticatedSourceCandidate(measurement)) || !isPreparedFileInput(current))
     fail('measurement restoration requires original protected and private current custody', 'REVIEW_SOURCE_REQUIRED');
   const previous = verifyFileInput(measurement.input.input_bundle, { sealed: true });
   const checked = verifyFileInput(current);

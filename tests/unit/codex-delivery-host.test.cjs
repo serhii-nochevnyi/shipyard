@@ -2108,7 +2108,7 @@ test('serialized full paged feedback selects global Node IDs across Actor varian
   assert.equal(result.digest, crypto.createHash('sha256').update(canonicalInventory).digest('hex'));
 });
 
-async function originalFixerFixture(outcome, mutation) {
+async function originalFixerFixture(outcome, mutation, evolution = null) {
   const f = fixture({ physicalPaths: true });
   const defaultAgents = mutation?.startsWith('normalized-default-') || mutation?.startsWith('normalized-cli-default-');
   const defaultOsHome = mutation?.endsWith('-os-home');
@@ -2625,7 +2625,7 @@ async function originalFixerFixture(outcome, mutation) {
       let currentHead = firstHead;
       const retainedFiles = fs.readdirSync(path.join(stateRoot(f), 'repair-actions')).map(file => ({
         file: path.join(stateRoot(f), 'repair-actions', file), bytes: fs.readFileSync(path.join(stateRoot(f), 'repair-actions', file)) }));
-      if (coveredSource && locationMutation) {
+      if ((coveredSource && locationMutation) || evolution) {
         const receiptDir = path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'), 'receipts');
         const dispatchDigest = crypto.createHash('sha256').update(first.dispatch_id).digest('hex');
         for (const file of ['record-' + dispatchDigest + '.json', 'reservation-' + dispatchDigest + '.json']) {
@@ -2659,6 +2659,43 @@ async function originalFixerFixture(outcome, mutation) {
         }
         if (mutation.endsWith('-plan')) fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
         if (mutation.endsWith('-owners')) { graph.tickets[f.scope.ticket].files.push('outside.txt'); fs.writeFileSync(graphFile, JSON.stringify(graph)); }
+      }
+      if (evolution) {
+        if (['owners', 'all'].includes(evolution)) {
+          graph.tickets[f.scope.ticket].files.push('outside.txt');
+          fs.writeFileSync(graphFile, JSON.stringify(graph));
+        }
+        if (['allowlist', 'all'].includes(evolution)) {
+          verificationAllowList.push({ argv: ['node', '--version'], profile: 'host', timeout_s: 600 });
+          approvedPlan(f, ['node check.cjs', 'node --version']);
+        }
+        fs.appendFileSync(f.plan, '\nCurrent approved scope: ' + JSON.stringify(graph.tickets[f.scope.ticket].files) + '\n');
+        if (['base', 'all'].includes(evolution)) {
+          f.base = currentHead;
+          git(f.root, 'update-ref', 'refs/heads/main', currentHead);
+        }
+        if (['base-merge', 'base-merge-extra'].includes(evolution)) {
+          git(f.root, 'checkout', '-q', 'main');
+          fs.writeFileSync(path.join(f.root, 'base-only.txt'), 'Current approved base material.\n');
+          git(f.root, 'add', 'base-only.txt'); git(f.root, 'commit', '-q', '-S', '-m', 'Current signed base evolution');
+          f.base = git(f.root, 'rev-parse', 'HEAD');
+          git(f.root, 'checkout', '-q', graph.tickets[f.scope.ticket].branch);
+          git(f.root, 'merge', '--no-ff', '-S', '-m', 'Import current signed base', 'main');
+          if (evolution === 'base-merge-extra') {
+            fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'Unverified merge edit.\n');
+            git(f.root, 'add', 'src/owned.txt'); git(f.root, 'commit', '--amend', '-q', '-S', '--no-edit');
+          }
+          currentHead = git(f.root, 'rev-parse', 'HEAD'); publishedHead = currentHead;
+          graph.synchronized_head = currentHead; fs.writeFileSync(graphFile, JSON.stringify(graph));
+        }
+        if (evolution === 'unsigned-base') {
+          f.base = git(f.root, '-c', 'commit.gpgsign=false', 'commit-tree', git(f.root, 'rev-parse', 'HEAD^{tree}'),
+            '-p', f.base, '-m', 'Unsigned base evolution');
+          git(f.root, 'update-ref', 'refs/heads/main', f.base);
+        }
+        const fresh = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').build(['review-fix', f.scope.ticket,
+          '--runtime', 'codex', '--pr', '501', '--review-file', evidenceFile, '--graph', f.graphDir], { cwd: f.root });
+        if (evolution !== 'stale-plan') nativeRequest.context = fresh.context;
       }
       if (mutation?.startsWith('normalized-uncovered-source')) {
         fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'uncovered external source\n');
@@ -2729,8 +2766,9 @@ async function originalFixerFixture(outcome, mutation) {
         'normalized-companion-missing': 'REPAIR_PREDECESSOR_INVALID', 'normalized-companion-link': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-companion-forged': 'STATE_RECORD_INVALID',
       }[mutation];
-      if (refusal) {
-        await assert.rejects(run, { code: refusal });
+      if (refusal || ['stale-plan', 'unsigned-base', 'base-merge-extra'].includes(evolution)) {
+        await assert.rejects(run, { code: evolution === 'stale-plan' ? 'PLAN_DIGEST_MISMATCH'
+          : ['unsigned-base', 'base-merge-extra'].includes(evolution) ? 'REPAIR_SUBJECT_CHANGED' : refusal });
         assert.equal(launches, coveredSource ? 2 : 1); assert.equal(replies.length + prReplies.length, 3);
         if (locationMutation) {
           for (const original of retainedFiles) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
@@ -2765,7 +2803,7 @@ async function originalFixerFixture(outcome, mutation) {
         return;
       }
       const second = await run();
-      const unknown = coveredSource || ['normalized-external', 'normalized-missing-actions'].includes(mutation);
+      const unknown = !!evolution || coveredSource || ['normalized-external', 'normalized-missing-actions'].includes(mutation);
       assert.equal(second.resolution.signals.signatureState, unknown ? 'first' : 'repeat');
       assert.equal(second.receipt.applied_effort, unknown ? 'low' : 'high');
       assert.equal(second.receipt.agent_file_digest, crypto.createHash('sha256').update(unknown ? originalAgent : repeatAgent).digest('hex'));
@@ -2781,11 +2819,32 @@ async function originalFixerFixture(outcome, mutation) {
       const originalSecond = attempts.find(item => item.dispatch_id === second.dispatch_id);
       assert.equal(originalSecond.subject.feedback.inventory.length, mutation === 'normalized-external' ? 8 : 7);
       assert.equal(originalSecond.subject.actionable_feedback.coverage.length, mutation === 'normalized-missing-actions' ? 0 : 3);
-      if (coveredSource) {
+      if (coveredSource || evolution) {
         assert.deepEqual(originalSecond.subject.actionable_feedback.historical_dispatch_ids, [first.dispatch_id]);
         assert.ok(originalSecond.subject.actionable_feedback.coverage.every(item => item.historical && item.semantic_credit === false
-          && item.source_transition.from === firstHead && item.source_transition.to === currentHead));
+          && (!coveredSource || (item.source_transition.from === firstHead && item.source_transition.to === currentHead))));
         assert.equal(originalSecond.subject.actionable_feedback.inventory.find(item => item.id === threadId).resolved, true);
+        if (evolution) {
+          assert.ok(originalSecond.subject.actionable_feedback.coverage.every(item => item.scope_transition
+            && item.scope_transition.from.plan.sha256 !== item.scope_transition.to.plan.sha256));
+          assert.equal(originalSecond.preparation.plan.sha256, nativeRequest.context.plan_sha256);
+          assert.deepEqual(originalSecond.preparation.commit.files_modified, graph.tickets[f.scope.ticket].files);
+          assert.deepEqual(originalSecond.preparation.verificationAllowList, verificationAllowList);
+          assert.equal(originalSecond.preparation.commit.expectedBase, f.base);
+          if (!coveredSource) assert.ok(originalSecond.subject.actionable_feedback.coverage.every(item =>
+            !Object.hasOwn(item, 'source_transition')), 'PLAN-only provenance must not invent a source transition');
+          if (evolution === 'base-merge') {
+            for (const item of originalSecond.subject.actionable_feedback.coverage) {
+              const records = item.source_transition.records;
+              assert.equal(records.filter(pin => pin.coverage_sha256).length, 1);
+              assert.equal(records.filter(pin => pin.base_import && pin.semantic_credit === false).length, 1);
+              const merge = records.find(pin => pin.base_merge);
+              assert.equal(merge.commit, currentHead); assert.equal(merge.semantic_credit, false);
+              assert.deepEqual(merge.base_merge.parents, [sourceResult.artifact.commit, f.base]);
+              assert.equal(merge.base_merge.tree, git(f.root, 'rev-parse', currentHead + '^{tree}'));
+            }
+          }
+        }
         if (locationMutation) {
           const originalThread = JSON.parse(retainedFiles[0].bytes).payload.feedback.inventory.find(item => item.id === threadId);
           const currentThread = originalSecond.subject.actionable_feedback.inventory.find(item => item.id === threadId);
@@ -2800,7 +2859,7 @@ async function originalFixerFixture(outcome, mutation) {
       assert.equal(originalSecond.subject.actionable_feedback.digest === attempts.find(item => item.dispatch_id === first.dispatch_id).normalized_feedback_digest,
         !unknown);
       assert.equal(replies.length + prReplies.length, mutation === 'normalized-missing-actions' ? 10 : mutation === 'normalized-external' ? 7 : 6);
-      if (mutation === 'normalized-repeat') {
+      if (mutation === 'normalized-repeat' && !evolution) {
         const deepFile = selected.agent_file.replace('.toml', '-deep.toml');
         const deepAgent = repeatAgent.replace('shipyard-policy-rung = "repeat"', 'shipyard-policy-rung = "repeat_exhausted"')
           .replace('model_reasoning_effort = "high"', 'model_reasoning_effort = "xhigh"')
@@ -2995,6 +3054,12 @@ for (const mutation of ['normalized-covered-source', 'normalized-covered-source-
   'normalized-covered-source-location-forged', 'normalized-uncovered-source-location-shift'])
   test('confirmed no-op feedback authenticates subsequent native executor source coverage ' + mutation,
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
+
+for (const evolution of ['plan', 'owners', 'allowlist', 'base', 'all', 'stale-plan', 'unsigned-base', 'base-merge', 'base-merge-extra'])
+  test('historical confirmed action provenance permits a fresh current signed scope ' + evolution,
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', 'normalized-covered-source', evolution)));
+test('historical scope alone starts a fresh current round without prior semantic approval',
+  () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', 'normalized-repeat', 'plan')));
 
 for (const mutation of ['companion-wrong-link', 'companion-wrong-pr', 'companion-wrong-review-pr', 'companion-wrong-repo',
   'companion-wrong-target', 'companion-truncated', 'companion-review-body', 'companion-review-state', 'companion-review-author',
