@@ -1080,7 +1080,8 @@ function readerCapacityContract(capacity, manifest) {
 function measureReaderCapacity(verified, prepared, application) {
   const launch = measuredLaunches.get(verified);
   if (!launch) fail('READER_CAPACITY_UNSUPPORTED', 'capacity requires original verified native launch');
-  if (!recordedCapacityLaunches.get(verified)?.completedSource && readNativeParentRaw(launch.session, verified.native_session_evidence, launch.env, launch.now) !== launch.raw)
+  if (launch.completedSource ? completedSourceSnapshot(launch.completedSource).raw !== launch.raw
+    : readNativeParentRaw(launch.session, verified.native_session_evidence, launch.env, launch.now) !== launch.raw)
     fail('READER_CAPACITY_UNSUPPORTED', 'original measured output changed');
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
   if (checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
@@ -1122,7 +1123,8 @@ function measureReaderCapacity(verified, prepared, application) {
       logical_ranges: observed.chunk_reads, encoded_bytes: observed.encoded_bytes, semantic_credit: false });
     const capacity = freeze({ contract });
     readerCapacities.set(capacity, { contract, subject: readerSubject(checked.manifest),
-      profile: checked.manifest.transport.profile_sha256, launch, verified });
+      profile: checked.manifest.transport.profile_sha256, launch, verified,
+      ...(launch.completedSource ? { completedSource: launch.completedSource } : {}) });
     return capacity;
   }
   if (!checked.material.some(bytes => bytes.length >= 128 * 1024))
@@ -1549,6 +1551,7 @@ const completedSourceInputs = new WeakMap();
 const completedSourceCapacities = new WeakMap();
 const completedSourceCandidates = new Map();
 const completedSourceOperations = new Set();
+const completedSourceRecordingClaims = new Map();
 function fileCapacityForSource(prepared) { return completedSourceCapacities.get(prepared); }
 function completedSourceSnapshot(source) {
   const raw = readReviewNativeFile(source.snapshot.path, source.identity.worktree);
@@ -1599,7 +1602,8 @@ function prepareCompletedSource(capacity, prepared, finalPrompt = prepared.promp
       call_ids: consumed.successful_call_ids, range_ordinals: consumed.successful_range_ordinals } };
   const observation = reviewObservation(source, () => {
     collector.verifyFileInput(prepared);
-    if (readReviewNativeFile(source.native_file, source.identity.worktree) !== raw)
+    if (measured.completedSource ? completedSourceSnapshot(measured.completedSource).raw !== raw
+      : readReviewNativeFile(source.native_file, source.identity.worktree) !== raw)
       fail('REVIEW_SOURCE_INVALID', 'original completed reviewer changed before snapshot sealing');
     capacityApplication(measured.verified, checked.manifest);
   });
@@ -3251,6 +3255,20 @@ function createCodexRuntimeHost(options = {}) {
         input_prepared: prepared, input_bundle: prepared.input_bundle, prompt });
     } finally { reviewResumptions.delete(token); }
   };
+  const finishRecording = (reference, status, failure) => {
+    const authority = require('./role-artifact.cjs');
+    const source = authority.readCompletedReviewSource({ worktree: scope.worktree, reference });
+    if (['run_id', 'ticket', 'phase', 'worktree'].some(key => source.identity[key] !== scope[key])
+        || source.receipt_store !== recorder.storeDir)
+      fail('REVIEW_SOURCE_INVALID', 'recording outcome belongs to another original review scope or recorder');
+    const key = source.receipt_store + ':' + source.identity.dispatch_id;
+    const claim = completedSourceRecordingClaims.get(key);
+    if (!claim) return;
+    authority.finishCompletedSourceReconciliation(reviewObservation({ worktree: scope.worktree, reference, claim,
+      status, ...(failure ? { failure: { code: failure.code || 'UNKNOWN', message: String(failure.message).slice(0, 4096) } } : {}) },
+    () => { assertOwner(); }));
+    completedSourceRecordingClaims.delete(key);
+  };
   const resumeCompletedSource = async (selection, context = {}) => {
     assertOwner();
     validateContext(context);
@@ -3284,7 +3302,8 @@ function createCodexRuntimeHost(options = {}) {
         assertOwner();
         validateCompletedSourceReconciliation(source, prepared);
       });
-      authority.claimCompletedSourceReconciliation(observation);
+      completedSourceRecordingClaims.set(source.receipt_store + ':' + source.identity.dispatch_id,
+        authority.claimCompletedSourceReconciliation(observation));
       return application;
     }
     const { raw, live } = completedSourceSnapshot(source);
@@ -3311,6 +3330,24 @@ function createCodexRuntimeHost(options = {}) {
         input_transport: 'host-files', input_bundle: prepared.input_bundle, prompt });
     } finally { reviewResumptions.delete(token); completedSourceOperations.delete(context.dispatch_id); }
   };
+  const restoreIntegrationSourceInput = (prepared) => {
+    assertOwner();
+    const collector = require('./codex-arch-review-context.cjs');
+    const identity = collector.reviewProgressIdentity(prepared);
+    if (!collector.isPreparedFileInput(prepared) || prepared.manifest.schema !== 'shipyard.host-file-input.v1'
+        || identity.role !== 'integrator' || prepared.manifest.binding?.review_contract !== 'shipyard.integration-review.v2'
+        || ['worktree', 'run_id', 'ticket', 'phase'].some(key => identity[key] !== scope[key])
+        || !require('./dispatch-boundary.cjs').isDurableRecorder(recorder))
+      fail('REVIEW_SOURCE_REQUIRED', 'integration input restoration requires original private scope and recorder');
+    const reservation = recorder.getReservation(identity.dispatch_id);
+    if (!reservation) return prepared;
+    if (reservation.recorded) fail('REVIEW_SOURCE_CLAIMED', 'original integration dispatch was already recorded');
+    const measurement = require('./role-artifact.cjs').readCompletedSourceMeasurement(reviewObservation({ identity,
+      final_reservation: reservation }, () => { collector.verifyFileInput(prepared); }));
+    if (measurement.receipt_store !== recorder.storeDir)
+      fail('REVIEW_SOURCE_INVALID', 'integration measurement belongs to another original recorder');
+    return collector.restoreMeasuredIntegrationInput(measurement, prepared);
+  };
   const reserveCompletedSourceCandidate = (prepared) => {
     assertOwner();
     const collector = require('./codex-arch-review-context.cjs');
@@ -3322,17 +3359,28 @@ function createCodexRuntimeHost(options = {}) {
     const hash = reviewHash(require('./model-policy-internal.cjs').stableStringify(identity));
     const previous = completedSourceCandidates.get(identity.dispatch_id);
     if (previous) {
-      if (previous.identity_sha256 !== hash || previous.recorder !== recorder.storeDir)
+      if ((!previous.measured && previous.identity_sha256 !== hash) || previous.recorder !== recorder.storeDir)
         fail('REVIEW_SOURCE_INVALID', 'pre-measurement candidate reservation changed');
       const reservation = recorder.getReservation(identity.dispatch_id);
-      if (!reservation || reservation.recorded || reservation.reserved_at !== previous.reserved_at || previous.measured)
-        fail('REVIEW_SOURCE_CLAIMED', 'original candidate reservation was consumed or already measured');
-      return;
+      if (!reservation || reservation.recorded || reservation.reserved_at !== previous.reserved_at)
+        fail('REVIEW_SOURCE_CLAIMED', 'original candidate reservation was consumed');
+      if (!previous.measured) return prepared;
     }
-    if (recorder.reserve(identity.dispatch_id).reserved !== true)
+    const reservation = recorder.getReservation(identity.dispatch_id);
+    let measurement;
+    if (reservation) {
+      if (reservation.recorded) fail('REVIEW_SOURCE_CLAIMED', 'final candidate dispatch was already recorded');
+      measurement = require('./role-artifact.cjs').readCompletedSourceMeasurement(reviewObservation({ identity,
+        final_reservation: reservation }, () => { collector.verifyFileInput(prepared); }));
+      if (measurement.receipt_store !== recorder.storeDir)
+        fail('REVIEW_SOURCE_INVALID', 'measurement belongs to another original recorder');
+      prepared = collector.restoreMeasuredSourceInput(measurement, prepared);
+    } else if (recorder.reserve(identity.dispatch_id).reserved !== true)
       fail('REVIEW_SOURCE_CLAIMED', 'final candidate dispatch was already reserved');
-    completedSourceCandidates.set(identity.dispatch_id, { identity_sha256: hash, recorder: recorder.storeDir,
-      reserved_at: recorder.getReservation(identity.dispatch_id).reserved_at, measured: false });
+    completedSourceCandidates.set(identity.dispatch_id, { identity_sha256: reviewHash(require('./model-policy-internal.cjs')
+      .stableStringify(collector.reviewProgressIdentity(prepared))), recorder: recorder.storeDir,
+      reserved_at: recorder.getReservation(identity.dispatch_id).reserved_at, measured: !!measurement });
+    return prepared;
   };
   const measureBatchReaderCapacity = async (selection, prepared, callbacks = {}) => {
     assertOwner();
@@ -3349,12 +3397,43 @@ function createCodexRuntimeHost(options = {}) {
     const callbackNames = ['onProcessSpawned', 'onSessionStarted', 'onNativeCompleted', 'onTranscriptWritten', 'onCompleted'];
     if (!object(callbacks) || Object.keys(callbacks).some(key => !callbackNames.includes(key) || typeof callbacks[key] !== 'function'))
       fail('INVALID_INPUT', 'capacity probe accepts only host completion callbacks');
+    const tracked = completedSourceCandidates.has(checked.manifest.dispatch_id);
+    const identity = tracked ? collector.reviewProgressIdentity(prepared) : null;
+    if (tracked && completedSourceCandidates.get(checked.manifest.dispatch_id).measured) {
+      const reservation = recorder.getReservation(identity.dispatch_id);
+      if (!reservation || reservation.recorded
+          || reservation.reserved_at !== completedSourceCandidates.get(identity.dispatch_id).reserved_at)
+        fail('REVIEW_SOURCE_CLAIMED', 'measurement recovery lost its unused original final reservation');
+      const attempt = require('./role-artifact.cjs').readCompletedSourceMeasurement(reviewObservation({ identity,
+        final_reservation: reservation }, () => { collector.verifyFileInput(prepared); }));
+      if (attempt.receipt_store !== recorder.storeDir || selection.model !== checked.manifest.transport.candidate.model
+          || (selection.effort || selection.reasoning_effort) !== checked.manifest.transport.candidate.effort)
+        fail('REVIEW_SOURCE_INVALID', 'measurement recovery changed recorder or selection');
+      const receipt = recorder.getVerifiedRecord(attempt.dispatch_id).receipt;
+      const resultText = parseCodexStream(readReviewNativeFile(receipt.runtime_evidence.transcript.path, scope.worktree))
+        .records.find(record => record.item?.type === 'agent_message')?.item.text;
+      let source;
+      try { source = require('./role-artifact.cjs').readCompletedReviewSource({ worktree: scope.worktree,
+        dispatch_id: identity.dispatch_id }); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      let verified;
+      if (source) {
+        const originalInput = collector.restoreCompletedSourceInput(source);
+        if (originalInput.input_bundle.manifest_sha256 !== prepared.input_bundle.manifest_sha256)
+          fail('REVIEW_SOURCE_INVALID', 'measurement recovery changed the sealed source candidate');
+        const { raw } = completedSourceSnapshot(source);
+        if (completionMessage(raw) !== resultText) fail('REVIEW_SOURCE_INVALID', 'measurement recovery changed its original result');
+        verified = freeze({ native_session_evidence: attempt.native, last_agent_message: resultText });
+        measuredLaunches.set(verified, { raw, session: attempt.native.session_id, env: options.env || {}, completedSource: source });
+      } else verified = await verifyCompletedNativeLaunch({ session_id: attempt.native.session_id,
+        selection, env: options.env || {}, resultText });
+      const capacity = measureReaderCapacity(verified, prepared, { recorder, receipt });
+      if (require('./model-policy-internal.cjs').stableStringify(capacity.contract)
+          !== require('./model-policy-internal.cjs').stableStringify(attempt.capacity_contract))
+        fail('REVIEW_SOURCE_INVALID', 'recovered capacity differs from its original durable successful measurement');
+      return capacity;
+    }
     const token = Object.freeze({});
     const probeState = { prepared, association: capacityProbeAssociation(checked.manifest, 'capacity-probe-' + crypto.randomUUID()) };
-    const tracked = completedSourceCandidates.has(checked.manifest.dispatch_id);
-    if (tracked && completedSourceCandidates.get(checked.manifest.dispatch_id).measured)
-      fail('REVIEW_SOURCE_CLAIMED', 'one original successful probe already measured this final candidate');
-    const identity = tracked ? collector.reviewProgressIdentity(prepared) : null;
     const attemptStart = Date.now();
     let retainedCompletion = false;
     const retain = (status, more = {}) => {
@@ -3362,6 +3441,9 @@ function createCodexRuntimeHost(options = {}) {
       require('./role-artifact.cjs').recordReviewSourceAttempt(reviewObservation({ identity,
         attempt: { dispatch_id: probeState.association.probe_dispatch_id, status, started_at_ms: attemptStart,
           input_bundle: prepared.input_bundle,
+          input: { prompt: prepared.prompt, input_bundle: prepared.input_bundle, input_bytes: prepared.input_bytes,
+            inputTokens: prepared.inputTokens },
+          final_reservation: recorder.getReservation(identity.dispatch_id),
           setup_costs: { value: null, reason: 'external setup not present in original native transcript' }, ...more } },
       () => { collector.verifyFileInput(prepared); }));
     };
@@ -3398,7 +3480,7 @@ function createCodexRuntimeHost(options = {}) {
         const capacity = measureReaderCapacity(probeState.verified, prepared, { recorder, receipt });
         retain('completed', { native_status: 'completed', authority_status: 'recorded', ended_at_ms: Date.now(), receipt_store: recorder.storeDir,
           receipt_sha256: reviewHash(stable(receipt)), native: receipt.runtime_evidence.native_session_evidence,
-          transcript: receipt.runtime_evidence.transcript, physical: probeState.physicalAttempt });
+          transcript: receipt.runtime_evidence.transcript, physical: probeState.physicalAttempt, capacity_contract: capacity.contract });
         retainedCompletion = true;
         if (tracked) completedSourceCandidates.get(checked.manifest.dispatch_id).measured = true;
         return capacity;
@@ -3439,8 +3521,14 @@ function createCodexRuntimeHost(options = {}) {
     launchStatic: (selection, context) => launch(selection, context),
     resumeReview,
     resumeCompletedSource,
+    completeCompletedSourceRecording(reference) {
+      assertOwner();
+      finishRecording(reference, 'recorded');
+    },
     retainCompletedSourceRecordingFailure(reference, error) {
       assertOwner();
+      if (error?.code === 'REVIEW_SOURCE_CLAIMED')
+        fail('REVIEW_SOURCE_CLAIMED', 'a refused claimant cannot release the active original recording');
       const authority = require('./role-artifact.cjs'), collector = require('./codex-arch-review-context.cjs');
       const source = authority.readCompletedReviewSource({ worktree: scope.worktree, reference });
       if (['run_id', 'ticket', 'phase', 'worktree'].some(key => source.identity[key] !== scope[key]))
@@ -3456,8 +3544,10 @@ function createCodexRuntimeHost(options = {}) {
           reason: 'recording recovery has no additional native process exit', ended_at_ms: Date.now() } }, () => {
         validateCompletedSourceReconciliation(source, prepared);
       }));
+      finishRecording(reference, 'failed', error);
     },
     reserveCompletedSourceCandidate,
+    restoreIntegrationSourceInput,
     measureBatchReaderCapacity,
     launchTypedGsd: (selection, context) => launch(selection, context),
   };

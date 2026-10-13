@@ -786,8 +786,10 @@ function prepareIntegrationLineage(scope, prepared, options) {
     storageRoot: options.storageRoot, graphDir: prepared.graph.directory,
     generatedInstructionBytes: options.generatedInstructionBytes, readerCapacity: options.readerCapacity, readerProfile: options.readerProfile };
   const original = encodeUniqueContent(prepared.packet);
-  const currentInput = archReviewContext.prepareFileInput(scope, JSON.stringify(original), {
+  let currentInput = archReviewContext.prepareFileInput(scope, JSON.stringify(original), {
     ...fileOptions, readerCapacity: undefined, readerProfile: undefined, binding: { ...binding, packet_digest: integrationDigest(original) } });
+  if (options.nativeRuntime === 'codex' && options.readerProfile && typeof options.host?.restoreIntegrationSourceInput === 'function')
+    currentInput = options.host.restoreIntegrationSourceInput(currentInput);
   let selection = roleArtifact.selectReviewBaseline({ currentInput });
   if (options.nativeRuntime !== 'codex') selection = { schema: selection.schema, mode: 'full',
     role: selection.role, current: selection.current, baseline: null,
@@ -2741,18 +2743,26 @@ function createCodexDeliveryHost(options = {}) {
         if (fileInput) Object.assign(request.context, { input_transport: 'host-files', input_bundle: fileInput.input_bundle });
         request.context.prompt = archReviewContext.admittedPrompt(prepared);
       }
-      if (request.role !== 'arch-review') fileInput = prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
+      if (request.role !== 'arch-review') fileInput = prepareIntegratorInput(scope, request, { ...options, host: runtimeHost, automaticReader: !options.readerCapacity });
       let completedSourceReference;
       if (fileInput?.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
         if (options.readerCapacity || options.readerProfile) fail('READER_CAPACITY_UNSUPPORTED', 'automatic candidate accepts no caller profile or capacity');
         if (typeof runtimeHost.measureBatchReaderCapacity !== 'function' || typeof runtimeHost.resumeCompletedSource !== 'function'
-            || typeof runtimeHost.reserveCompletedSourceCandidate !== 'function')
+            || typeof runtimeHost.reserveCompletedSourceCandidate !== 'function'
+            || typeof runtimeHost.completeCompletedSourceRecording !== 'function'
+            || typeof runtimeHost.retainCompletedSourceRecordingFailure !== 'function')
           fail('READER_CAPACITY_UNSUPPORTED', 'automatic review requires original probe and fresh-source runtime seams');
         const selected = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals: request.signals });
         if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
         if (integrationInputs.has(fileInput)) recheckIntegrationReview(integrationInputs.get(fileInput));
         archReviewContext.verifyFileInput(fileInput);
-        runtimeHost.reserveCompletedSourceCandidate(fileInput);
+        const currentInput = fileInput;
+        fileInput = runtimeHost.reserveCompletedSourceCandidate(fileInput);
+        if (fileInput !== currentInput) {
+          if (request.role === 'arch-review') archReviewContext.restoreInstalledMeasuredInput(options.archReviewContext, currentInput, fileInput);
+          const review = integrationInputs.get(currentInput);
+          if (review) integrationInputs.set(fileInput, Object.freeze({ ...review, input: fileInput }));
+        }
         const capacity = await runtimeHost.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only', signals: request.signals }, fileInput);
         const previous = fileInput;
         if (request.role === 'arch-review') {
@@ -2934,18 +2944,34 @@ function createCodexDeliveryHost(options = {}) {
           ? { ...taskContext, preRecordValidation } : taskContext,
         });
       };
+      const recordCompletedSource = async () => {
+        try {
+          const recorded = await dispatchAgent(request.dispatch_id, context);
+          if (completedSourceReference) runtimeHost.completeCompletedSourceRecording(completedSourceReference);
+          return recorded;
+        } catch (error) {
+          if (error.code === 'REVIEW_SOURCE_CLAIMED') throw error;
+          if (completedSourceReference) {
+            const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, reference: completedSourceReference });
+            if (source.state.resume?.status === 'completed' && source.state.resume.completion
+                && !runtimeHost.recorder.getVerifiedRecord(request.dispatch_id))
+              runtimeHost.retainCompletedSourceRecordingFailure(completedSourceReference, error);
+          }
+          throw error;
+        }
+      };
       if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
       if (request.role === 'integrator') recheckInlineIntegrator(scope, request);
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
       let result;
-      try { result = await dispatchAgent(request.dispatch_id, context); }
+      try { result = await recordCompletedSource(); }
       catch (error) {
+        if (error.code === 'REVIEW_SOURCE_CLAIMED') throw error;
         if (!completedSourceReference || typeof runtimeHost.retainCompletedSourceRecordingFailure !== 'function') throw error;
         const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, reference: completedSourceReference });
         if (source.state.resume?.status !== 'completed' || !source.state.resume.completion
             || runtimeHost.recorder.getVerifiedRecord(request.dispatch_id)) throw error;
-        runtimeHost.retainCompletedSourceRecordingFailure(completedSourceReference, error);
-        result = await dispatchAgent(request.dispatch_id, context);
+        result = await recordCompletedSource();
       }
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
       options.controller?.assertOwner(scope.run_id);
