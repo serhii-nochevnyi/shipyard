@@ -32,17 +32,35 @@ test('no file under tests/unit/ calls mkdtempSync with a literal /tmp argument',
 
 suite('test-hermeticity — run.sh is hermetic against a signing global git config');
 
-test('run.sh exports GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM before the test loop, with commit.gpgsign off', () => {
+test('run.sh snapshots every unit file and configures each private Git environment before direct launch', () => {
   const content = fs.readFileSync(RUN_SH, 'utf8');
-  const loopIndex = content.indexOf('for t in tests/unit/*.test.cjs');
-  assert.ok(loopIndex > 0, 'run.sh must still contain the unit test loop');
-  const before = content.slice(0, loopIndex);
-  assert.ok(/export\s+GIT_CONFIG_GLOBAL=/.test(before),
-    'GIT_CONFIG_GLOBAL must be exported before the test loop');
-  assert.ok(/export\s+GIT_CONFIG_NOSYSTEM=1/.test(before),
-    'GIT_CONFIG_NOSYSTEM must be exported before the test loop');
-  assert.ok(/commit\.gpgsign\s+false/.test(before),
-    'the config run.sh writes must set commit.gpgsign to false');
+  const inventory = content.indexOf('unit_files=(tests/unit/*.test.cjs)');
+  const queue = content.indexOf('while ((unit_next < ${#unit_files[@]} || unit_active_count > 0))');
+  const worker = content.indexOf('unit_worker="$unit_git_home/$unit_next"', queue);
+  const launch = content.indexOf('node "${unit_files[$unit_next]}"', worker);
+  assert.ok(inventory > 0 && queue > inventory && worker > queue && launch > worker,
+    'complete inventory must be snapshotted before the queue and each direct worker launch');
+  assert.equal((content.match(/unit_files=\(/g) || []).length, 1,
+    'the snapshotted inventory must not be replaced while scheduling');
+  assert.ok(content.slice(queue, worker).includes('unit_active_count < 4'),
+    'the queue must bound direct workers to four');
+  const beforeLaunch = content.slice(worker, launch);
+  assert.ok(beforeLaunch.includes('cp /dev/null "$unit_worker/gitconfig"'),
+    'each worker must start with a fresh private Git config');
+  for (const [key, value] of [
+    ['user.name', "'Shipyard Unit Tests'"],
+    ['user.email', "'unit-tests@shipyard.invalid'"],
+    ['commit.gpgsign', 'false'], ['tag.gpgsign', 'false'], ['init.defaultBranch', 'main'],
+  ]) {
+    assert.ok(beforeLaunch.includes(`git config --file "$unit_worker/gitconfig" ${key} ${value}`),
+      `${key} must be configured privately before the worker starts`);
+  }
+  assert.ok(beforeLaunch.includes('GIT_CONFIG_GLOBAL="$unit_worker/gitconfig"'),
+    'the direct Node command must receive its worker config');
+  assert.ok(/GIT_CONFIG_NOSYSTEM=1\s*$/.test(beforeLaunch),
+    'the direct Node command must disable system Git configuration');
+  assert.ok(content.slice(launch).includes('unit_next=$((unit_next + 1))'),
+    'the queue must advance through the snapshotted inventory');
 });
 
 suite('test-hermeticity — assert-harness.cjs is hermetic when a test file is run directly');
