@@ -1821,7 +1821,6 @@ function recheckHistoricalRepair(prepared, prior, originalHead) {
   } catch (error) { fail('REPAIR_PREDECESSOR_INVALID', 'historical action provenance changed: ' + error.message); }
 }
 
-// Content-address complete transition bytes once; action-specific custody stays inline.
 function shareRepairTransitions(coverage) {
   const historical_transitions = {};
   const shared = coverage.map(prior => {
@@ -1843,7 +1842,7 @@ function shareRepairTransitions(coverage) {
 }
 
 function repairCoverageTransition(prior, normalized) {
-  if (!Object.hasOwn(prior, 'transition_sha256')) return prior; // Original sealed subjects remain valid.
+  if (!Object.hasOwn(prior, 'transition_sha256')) return prior;
   const reference = prior.transition_sha256;
   const transition = normalized.historical_transitions?.[reference];
   if (!prior.historical || prior.semantic_credit !== false || !/^[a-f0-9]{64}$/.test(reference || '')

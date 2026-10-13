@@ -1789,7 +1789,9 @@ async function partialFailedSourceFixture(role, fault) {
                 message('developer', turn, instructions), message('user', turn, input.prompt), event('task_started', turn),
                 ...nativeReads(readRecords(input), turn), ...finish(turn, result)]), { mode: 0o600 });
               else fs.appendFileSync(native, serialize([context, message('user', turn, prompt.trim()), event('task_started', turn),
-                ...(failed ? [] : finish(turn, result))]) + (failed && fault !== 'missing-cli' ? '{"type":"response_item","payload":' : ''));
+                ...(failed ? [] : finish(turn, result))]) + (failed && fault !== 'missing-cli'
+                  ? JSON.stringify({ type: template(childRecords, record => record.type === 'response_item').type,
+                    payload: null }).slice(0, -5) : ''));
               if (!probing && failed && fault === 'missing-cli') child.emit('error', new Error('Original process exited before CLI output'));
               else {
                 child.stdout.emit('data', Buffer.from(serialize([cliThread(reviewer), ...(failed && !probing

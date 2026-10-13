@@ -3139,7 +3139,6 @@ function sharedRepairTransitionRegression() {
     { ...first, source_transition }, { ...first, historical: false }])
     assert.throws(() => repairCoverageTransition(altered, shared), { code: 'REPAIR_PREDECESSOR_INVALID' });
   assert.deepEqual(repairCoverageTransition(coverage[0], {}), coverage[0], 'original sealed inline subjects remain readable');
-  // Even correctly hashed shared bytes cannot authorize a different current source/scope.
   const sourceOnly = shareRepairTransitions([{ ...coverage[0], scope_transition: undefined }]);
   const sourcePrior = repairCoverageTransition(sourceOnly.coverage[0], sourceOnly);
   assert.throws(() => recheckHistoricalRepair({ commit: { expectedHead: oid(999) } }, sourcePrior, source_transition.from),
