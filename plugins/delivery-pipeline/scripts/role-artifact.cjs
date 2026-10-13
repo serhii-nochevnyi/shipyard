@@ -1453,7 +1453,7 @@ function readCompletedSourceMeasurement(observation) {
       }
       runtime.reviewObservationData(observation);
       const original = candidate || matching[0];
-      if (!original) return null;
+      if (!original) fail('REVIEW_SOURCE_INVALID', 'existing reservation lacks authenticated original candidate custody');
       if (!object(original.input)) fail('REVIEW_SOURCE_INVALID', 'unmeasured original input custody is missing');
       const result = runtime.freezeReviewProgress(original);
       authenticatedSourceCandidates.add(result);
@@ -1663,7 +1663,7 @@ function completeCompletedReviewSource(observation) {
     const cliFile = path.join(state.directory, 'completed-final-cli-' + digest(cli) + '.jsonl');
     writeImmutableArtifactFile(fs, cliFile, cli, 'original completed final CLI snapshot', 128 * 1024 * 1024);
     const append = live.subarray(source.snapshot.bytes).toString('utf8');
-    const completedResume = { ...resume, status: 'completed', turn_id: completed.turn_id,
+    const completedResume = { ...resume, status: 'completed', delivery_pending: true, turn_id: completed.turn_id,
       evidence_sha256: digest(stable(completed.evidence)),
       completion: { schema: 'shipyard.completed-source-completion.v1', application: completed.application,
         cli_snapshot: { path: cliFile, bytes: cli.length, sha256: digest(cli) } } };
@@ -1677,6 +1677,12 @@ function completeCompletedReviewSource(observation) {
   });
 }
 
+function completedSourceReconciliationIdentity(claim) {
+  if (!object(claim)) return null;
+  const { status: _status, ended_at: _ended, receipt_sha256: _receipt, delivery_pending: _pending, ...identity } = claim;
+  return identity;
+}
+
 function claimCompletedSourceReconciliation(observation) {
   const runtime = require('./codex-runtime-host.cjs'), observed = runtime.reviewObservationData(observation);
   return withArchiveAuthorityLock(observed.worktree, () => {
@@ -1685,17 +1691,34 @@ function claimCompletedSourceReconciliation(observation) {
       fail('REVIEW_SOURCE_INVALID', 'reconciliation requires original retained completed evidence');
     if (resume.owner_pid === process.pid && !resume.completion_failures?.length)
       fail('REVIEW_SOURCE_CLAIMED', 'live reconciliation requires its original recording failure');
-    const recorder = require('./dispatch-boundary.cjs').createDurableRecorder(source.receipt_store);
-    if (recorder.getVerifiedRecord(source.identity.dispatch_id))
-      fail('REVIEW_SOURCE_CLAIMED', 'original completed receipt already exists; no record is replayed');
+    const record = authenticateOptionalCompletedSourceRecord(source);
     const attempts = resume.reconciliations || [];
+    if (resume.delivered || (record && !attempts.length && !resume.completion_failures?.length && resume.delivery_pending !== true))
+      fail('REVIEW_SOURCE_CLAIMED', 'original completed receipt already delivered; no result is replayed');
     if (attempts.length >= 16) fail('REVIEW_SOURCE_CLAIMED', 'original reconciliation history reached its finite bound');
-    if (attempts.at(-1)?.status === 'recorded')
+    if (attempts.at(-1)?.status === 'recorded' && attempts.at(-1).delivery_pending !== true)
       fail('REVIEW_SOURCE_CLAIMED', 'original reconciliation already recorded its receipt');
-    if (attempts.length && attempts.at(-1).status !== 'failed') {
+    const active = attempts.at(-1);
+    if (active && active.status !== 'failed') {
       let dead = false;
-      try { process.kill(attempts.at(-1).owner_pid, 0); } catch (error) { dead = error.code === 'ESRCH'; }
-      if (!dead) fail('REVIEW_SOURCE_CLAIMED', 'original reconciliation is active or its custody is unknown');
+      try { process.kill(active.owner_pid, 0); } catch (error) { dead = error.code === 'ESRCH'; }
+      const sameOwner = active.owner_pid === process.pid && observed.claim
+        && stable(completedSourceReconciliationIdentity(observed.claim))
+          === stable(completedSourceReconciliationIdentity(active));
+      if (!dead && !(record && sameOwner))
+        fail('REVIEW_SOURCE_CLAIMED', 'original reconciliation is active or its custody is unknown');
+      if (record) {
+        runtime.reviewObservationData(observation);
+        if (sameOwner) return Object.freeze(active);
+        const recoveries = active.recoveries || [];
+        if (recoveries.length >= 16) fail('REVIEW_SOURCE_CLAIMED', 'original receipt recovery reached its finite bound');
+        const claimed = { ...active, owner_pid: process.pid,
+          recoveries: [...recoveries, { owner_pid: active.owner_pid, recovered_at: new Date().toISOString() }] };
+        const state = authorityState(observed.worktree, false, false, false);
+        writeReviewEnvelope(state, completedSourceTip(source.identity.dispatch_id), { ...source.state,
+          resume: { ...resume, reconciliations: [...attempts.slice(0, -1), claimed] } });
+        return Object.freeze(claimed);
+      }
     }
     runtime.reviewObservationData(observation);
     const state = authorityState(observed.worktree, false, false, false);
@@ -1712,15 +1735,24 @@ function finishCompletedSourceReconciliation(observation) {
   return withArchiveAuthorityLock(observed.worktree, () => {
     const source = readCompletedReviewSource(observed), resume = source.state.resume;
     const attempts = resume?.reconciliations || [], claim = attempts.at(-1);
-    if (!claim || claim.status !== 'pending' || claim.owner_pid !== process.pid
-        || stable(claim) !== stable(observed.claim) || claim.evidence_sha256 !== resume.evidence_sha256)
+    if (!claim || !['pending', 'recorded'].includes(claim.status) || claim.owner_pid !== process.pid
+        || stable(completedSourceReconciliationIdentity(observed.claim))
+          !== stable(completedSourceReconciliationIdentity(claim))
+        || claim.evidence_sha256 !== resume.evidence_sha256)
       fail('REVIEW_SOURCE_CLAIMED', 'recording outcome differs from the exact active reconciliation');
     const record = authenticateOptionalCompletedSourceRecord(source);
     if (observed.status === 'recorded' ? !record : observed.status !== 'failed' || record)
       fail('REVIEW_SOURCE_INVALID', 'reconciliation outcome differs from original durable recording');
     runtime.reviewObservationData(observation);
+    if (claim.status === 'recorded') {
+      if (claim.delivery_pending !== true || observed.status !== 'recorded'
+          || claim.receipt_sha256 !== digest(stable(record.receipt)))
+        fail('REVIEW_SOURCE_CLAIMED', 'original reconciliation result already delivered or changed');
+      return;
+    }
     const state = authorityState(observed.worktree, false, false, false);
     const outcome = { ...claim, status: observed.status, ended_at: new Date().toISOString(),
+      ...(record ? { delivery_pending: true } : {}),
       ...(record ? { receipt_sha256: digest(stable(record.receipt)) } : { failure: observed.failure }) };
     writeReviewEnvelope(state, completedSourceTip(source.identity.dispatch_id), { ...source.state,
       resume: { ...resume, reconciliations: [...attempts.slice(0, -1), outcome] } });
@@ -1728,15 +1760,45 @@ function finishCompletedSourceReconciliation(observation) {
 }
 
 function authenticateOptionalCompletedSourceRecord(source) {
+  if (!isAuthenticatedCompletedSource(source) || !source.state.resume?.completion)
+    fail('REVIEW_SOURCE_INVALID', 'original completed application required for receipt authentication');
   const recorder = require('./dispatch-boundary.cjs').createDurableRecorder(source.receipt_store);
-  if (!recorder.getVerifiedRecord(source.identity.dispatch_id)) return null;
+  if (!recorder.getReservation(source.identity.dispatch_id)?.recorded) return null;
   const record = authenticateReaderCapacityReferences({ worktree: source.identity.worktree,
     receipt_store: source.receipt_store, dispatch_id: source.identity.dispatch_id });
-  if (record.receipt.role !== source.identity.role || record.receipt.policy_hash !== source.identity.policy_hash
+  const application = source.state.resume.completion.application;
+  if (record.dispatch_id !== source.identity.dispatch_id || record.receipt.dispatch_id !== source.identity.dispatch_id
+      || ['applied_model', 'applied_effort', 'observed_model', 'observed_effort', 'agent_file', 'agent_file_digest', 'launch_id']
+        .some(key => record.receipt[key] !== application[key])
+      || record.receipt.requested_model !== source.original_launch.model
+      || record.receipt.requested_effort !== source.original_launch.effort
+      || record.receipt.runtime !== 'codex' || record.receipt.role !== source.identity.role
+      || record.receipt.policy_hash !== source.identity.policy_hash
       || record.receipt.launch_id !== source.state.resume.completion.application.launch_id
       || stable(record.receipt.runtime_evidence) !== stable(source.state.resume.completion.application.runtime_evidence))
     fail('REVIEW_SOURCE_INVALID', 'recorded reconciliation changed the original application');
   return record;
+}
+
+function completeCompletedSourceDelivery(observation) {
+  const runtime = require('./codex-runtime-host.cjs'), observed = runtime.reviewObservationData(observation);
+  return withArchiveAuthorityLock(observed.worktree, () => {
+    const source = readCompletedReviewSource(observed), resume = source.state.resume;
+    const attempts = resume?.reconciliations || [], claim = attempts.at(-1);
+    const record = authenticateOptionalCompletedSourceRecord(source);
+    if (!record || resume.delivered || (claim
+      ? claim.status !== 'recorded' || claim.delivery_pending !== true || claim.owner_pid !== process.pid
+        || stable(completedSourceReconciliationIdentity(claim))
+          !== stable(completedSourceReconciliationIdentity(observed.claim))
+        || claim.receipt_sha256 !== digest(stable(record.receipt))
+      : observed.claim !== undefined || resume.delivery_pending !== true || resume.owner_pid !== process.pid))
+      fail('REVIEW_SOURCE_CLAIMED', 'delivery requires its exact original completed recording');
+    runtime.reviewObservationData(observation);
+    const state = authorityState(observed.worktree, false, false, false);
+    writeReviewEnvelope(state, completedSourceTip(source.identity.dispatch_id), { ...source.state,
+      resume: { ...resume, delivered: true, delivery_pending: false,
+        ...(claim ? { reconciliations: [...attempts.slice(0, -1), { ...claim, delivery_pending: false }] } : {}) } });
+  });
 }
 
 function beginCompletedSourceLaunch(observation) {
@@ -5887,6 +5949,8 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   completeCompletedReviewSource,
   claimCompletedSourceReconciliation,
   finishCompletedSourceReconciliation,
+  completeCompletedSourceDelivery,
+  authenticateOptionalCompletedSourceRecord,
   beginCompletedSourceLaunch,
   retainCompletedSourceFailure,
   validateCompletedSourceEvidence,

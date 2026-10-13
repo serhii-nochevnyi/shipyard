@@ -2311,6 +2311,27 @@ for (const role of ['arch-review', 'integrator']) {
   });
 }
 
+for (const role of ['arch-review', 'integrator']) {
+  for (const cold of [false, true])
+    test('completed ' + role + ' authenticates and accounts for progress before the last final ' + (cold ? 'cold' : 'live'),
+      () => require('./phase49-review-continuation.test.cjs').completedSourceFixture(role, cold, null, null, false, false, false, true));
+  test('completed ' + role + ' refuses an orphan reservation before any native launch',
+    () => require('./phase49-review-continuation.test.cjs').completedSourceFixture(role, false, 'orphan-reservation'));
+  for (const cold of [false, true]) for (const fault of ['initial-record-link-response', 'initial-record-directory-fsync',
+    'record-link-response', 'record-directory-fsync',
+    'outcome-write', 'outcome-file-fsync', 'outcome-rename-response', 'outcome-directory-fsync'])
+    test('original recorded ' + role + ' reconciles ' + fault + ' ' + (cold ? 'cold' : 'live'),
+      () => require('./phase49-review-continuation.test.cjs').completedSourceReceiptRecoveryFixture(role, cold, fault));
+  for (const cold of [false, true]) for (const fault of ['record-link-response', 'outcome-write', 'outcome-file-fsync'])
+    test('automatic original recorded ' + role + ' completes unchanged consumers after ' + fault + ' ' + (cold ? 'restored' : 'live'),
+      () => require('./phase49-review-continuation.test.cjs').automaticCompletedReviewFixture(role, cold, false, false, fault));
+  test('automatic original recorded ' + role + ' cold controller releases only its actually dead owner',
+    () => require('./phase49-review-continuation.test.cjs').coldRecordedSourceControllerFixture(role));
+  for (const mutation of ['tampered-receipt', 'foreign-receipt', 'source', 'base', 'agent', 'native', 'unknown-pid', 'live-pid'])
+    test('original recorded ' + role + ' refuses ' + mutation + ' cold',
+      () => require('./phase49-review-continuation.test.cjs').completedSourceReceiptRecoveryFixture(role, true, 'outcome-write', mutation));
+}
+
 }
 
 

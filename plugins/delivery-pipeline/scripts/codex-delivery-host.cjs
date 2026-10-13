@@ -2872,6 +2872,14 @@ function createCodexDeliveryHost(options = {}) {
       }
       let repairCompleted;
       let fileInput;
+      if (['arch-review', 'integrator'].includes(request.role)
+          && runtimeHost.recorder.getVerifiedRecord(request.dispatch_id)?.receipt.runtime_evidence?.completed_source) {
+        const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, dispatch_id: request.dispatch_id });
+        const resume = source.state.resume, last = resume?.reconciliations?.at(-1);
+        if (resume?.delivered || (last?.status === 'recorded' && last.delivery_pending !== true)
+            || (!last && !resume?.completion_failures?.length && resume?.delivery_pending !== true))
+          fail('REVIEW_SOURCE_CLAIMED', 'original completed source result was already delivered');
+      }
       if (request.role === 'arch-review') {
         const prepared = options.archReviewContext;
         if (!archReviewContext.isPreparedContext(prepared)
@@ -2893,6 +2901,8 @@ function createCodexDeliveryHost(options = {}) {
         if (typeof runtimeHost.measureBatchReaderCapacity !== 'function' || typeof runtimeHost.resumeCompletedSource !== 'function'
             || typeof runtimeHost.reserveCompletedSourceCandidate !== 'function'
             || typeof runtimeHost.completeCompletedSourceRecording !== 'function'
+            || typeof runtimeHost.completeCompletedSourceDelivery !== 'function'
+            || typeof runtimeHost.recoverCompletedSourceRecording !== 'function'
             || typeof runtimeHost.retainCompletedSourceRecordingFailure !== 'function')
           fail('READER_CAPACITY_UNSUPPORTED', 'automatic review requires original probe and fresh-source runtime seams');
         const selected = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals: request.signals });
@@ -2906,28 +2916,44 @@ function createCodexDeliveryHost(options = {}) {
           const review = integrationInputs.get(currentInput);
           if (review) integrationInputs.set(fileInput, Object.freeze({ ...review, input: fileInput }));
         }
-        const capacity = await runtimeHost.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only', signals: request.signals }, fileInput);
-        const previous = fileInput;
-        if (request.role === 'arch-review') {
-          archReviewContext.admitInstalledLaunch(options.archReviewContext,
-            installedAgentOptions({ ...options, automaticReader: !options.readerCapacity, readerCapacity: capacity }, selected, runtimeHost.capabilities));
-          fileInput = archReviewContext.admittedFileInput(options.archReviewContext);
-          request.context.prompt = archReviewContext.admittedPrompt(options.archReviewContext);
-        } else {
-          fileInput = archReviewContext.admitReaderBatchInput(fileInput, capacity);
-          const review = integrationInputs.get(previous);
-          if (review) {
-            const admitted = Object.freeze({ ...review, input: fileInput });
-            integrationInputs.set(fileInput, admitted);
-            recheckIntegrationReview(admitted);
+        if (runtimeHost.recorder.getReservation(request.dispatch_id)?.recorded) {
+          const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, dispatch_id: request.dispatch_id });
+          completedSourceReference = source.state.reference;
+          if (request.role === 'arch-review') {
+            archReviewContext.admitInstalledLaunch(options.archReviewContext,
+              installedAgentOptions({ ...options, automaticReader: true }, selected, runtimeHost.capabilities));
+            fileInput = archReviewContext.admittedFileInput(options.archReviewContext);
           }
-          request.context.prompt = fileInput.prompt;
+          request.context.prompt = request.role === 'arch-review'
+            ? archReviewContext.admittedPrompt(options.archReviewContext) : fileInput.prompt;
+          if (request.context.prompt !== source.final_prompt)
+            fail('REVIEW_SOURCE_INVALID', 'recorded recovery changed its exact original admitted final prompt');
+          request.context.input_bundle = fileInput.input_bundle;
+          request.context.input_transport = 'host-files';
+        } else {
+          const capacity = await runtimeHost.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only', signals: request.signals }, fileInput);
+          const previous = fileInput;
+          if (request.role === 'arch-review') {
+            archReviewContext.admitInstalledLaunch(options.archReviewContext,
+              installedAgentOptions({ ...options, automaticReader: !options.readerCapacity, readerCapacity: capacity }, selected, runtimeHost.capabilities));
+            fileInput = archReviewContext.admittedFileInput(options.archReviewContext);
+            request.context.prompt = archReviewContext.admittedPrompt(options.archReviewContext);
+          } else {
+            fileInput = archReviewContext.admitReaderBatchInput(fileInput, capacity);
+            const review = integrationInputs.get(previous);
+            if (review) {
+              const admitted = Object.freeze({ ...review, input: fileInput });
+              integrationInputs.set(fileInput, admitted);
+              recheckIntegrationReview(admitted);
+            }
+            request.context.prompt = fileInput.prompt;
+          }
+          if (previous.input_bundle.manifest_sha256 !== fileInput.input_bundle.manifest_sha256
+              || canonical(previous.manifest) !== canonical(fileInput.manifest)) fail('READER_CAPACITY_UNSUPPORTED', 'admission changed finalized measurement candidate');
+          request.context.input_bundle = fileInput.input_bundle;
+          request.context.input_transport = 'host-files';
+          completedSourceReference = require('./codex-runtime-host.cjs').prepareCompletedSource(capacity, fileInput, request.context.prompt);
         }
-        if (previous.input_bundle.manifest_sha256 !== fileInput.input_bundle.manifest_sha256
-            || canonical(previous.manifest) !== canonical(fileInput.manifest)) fail('READER_CAPACITY_UNSUPPORTED', 'admission changed finalized measurement candidate');
-        request.context.input_bundle = fileInput.input_bundle;
-        request.context.input_transport = 'host-files';
-        completedSourceReference = require('./codex-runtime-host.cjs').prepareCompletedSource(capacity, fileInput, request.context.prompt);
       }
       const context = request.context;
       if (fileInput) context.input_prepared = fileInput;
@@ -3013,6 +3039,23 @@ function createCodexDeliveryHost(options = {}) {
             ? resolvePreparedRepair(repairPrepared, dispatchId, options, runtimeHost.capabilities)
             : require('./codex-agent.cjs').selectAgent(request.role, { cwd: scope.worktree, flags: new Map(),
               signals: request.signals, dispatch_id: dispatchId, capabilities: runtimeHost.capabilities, agentDir, agentManifest, env });
+          if (completedSourceReference && runtimeHost.recorder.getReservation(dispatchId)?.recorded) {
+            if (typeof runtimeHost.recoverCompletedSourceRecording !== 'function')
+              fail('REVIEW_SOURCE_INVALID', 'original recorded source recovery is unavailable');
+            if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
+            if (fileInput && integrationInputs.has(fileInput)) recheckIntegrationReview(integrationInputs.get(fileInput));
+            archReviewContext.verifyFileInput(fileInput);
+            const { review_contract: _reviewContract, ...recoveryContext } = taskContext;
+            const recoveryAdapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
+              agentsDir: agentDir, agentManifest, capabilities: runtimeHost.capabilities });
+            const agent = recoveryAdapter.validateGeneratedAgent(selection);
+            const content = fs.readFileSync(path.join(agentDir, selection.agent_file), 'utf8');
+            if (sha256(content) !== agent.agent_file_digest) fail('STALE_GENERATED_AGENT', 'original recovery instructions changed');
+            return runtimeHost.recoverCompletedSourceRecording({ model: selection.model, effort: selection.effort,
+              sandbox_mode: 'read-only', agent_file: selection.agent_file, agent_file_digest: agent.agent_file_digest,
+              agent_file_content: content }, { ...recoveryContext,
+              source: completedSourceReference, dispatch_id: dispatchId, role: request.role, input_prepared: fileInput });
+          }
           const adapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({ agentsDir: agentDir, agentManifest,
             capabilities: runtimeHost.capabilities, host: reviewHost });
           return require('./dispatch-boundary.cjs').createDispatchBoundary({ adapters: { codex: adapter },
@@ -3096,8 +3139,7 @@ function createCodexDeliveryHost(options = {}) {
           if (error.code === 'REVIEW_SOURCE_CLAIMED') throw error;
           if (completedSourceReference) {
             const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, reference: completedSourceReference });
-            if (source.state.resume?.status === 'completed' && source.state.resume.completion
-                && !runtimeHost.recorder.getVerifiedRecord(request.dispatch_id))
+            if (source.state.resume?.status === 'completed' && source.state.resume.completion)
               runtimeHost.retainCompletedSourceRecordingFailure(completedSourceReference, error);
           }
           throw error;
@@ -3112,18 +3154,23 @@ function createCodexDeliveryHost(options = {}) {
         if (error.code === 'REVIEW_SOURCE_CLAIMED') throw error;
         if (!completedSourceReference || typeof runtimeHost.retainCompletedSourceRecordingFailure !== 'function') throw error;
         const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, reference: completedSourceReference });
-        if (source.state.resume?.status !== 'completed' || !source.state.resume.completion
-            || runtimeHost.recorder.getVerifiedRecord(request.dispatch_id)) throw error;
+        if (source.state.resume?.status !== 'completed' || !source.state.resume.completion) throw error;
         result = await recordCompletedSource();
       }
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
       options.controller?.assertOwner(scope.run_id);
       if (request.role === 'arch-review') {
         writeCompletedArchitectureEvidence(options.archReviewContext, result, runtimeHost.recorder);
-        return archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
+        const completed = archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
+        if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
+        return completed;
       }
-      if (fileInput && integrationInputs.has(fileInput))
-        return finishIntegrationReview(integrationInputs.get(fileInput), result, runtimeHost.recorder);
+      if (fileInput && integrationInputs.has(fileInput)) {
+        const completed = finishIntegrationReview(integrationInputs.get(fileInput), result, runtimeHost.recorder);
+        if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
+        return completed;
+      }
+      if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
       if (repairPrepared) {
         const repairRecorder = request.signals.signatureState === 'first' ? runtimeHost.recorder : repairPredecessors.get(repairPrepared).history[0].recorder;
         recheckRepair(repairPrepared, options);

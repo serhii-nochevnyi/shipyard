@@ -371,7 +371,7 @@ async function fixture(action, options = {}) {
 }
 
 
-async function completedSourceFixture(role, cold, mutation, action, failFirst = false, claimRace = false, failedEnvelope = false) {
+async function completedSourceFixture(role, cold, mutation, action, failFirst = false, claimRace = false, failedEnvelope = false, progressMessages = false, receiptFault = null) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'completed-review-source-')));
   const previousHome = os.homedir;
   const originalRename = fs.renameSync;
@@ -516,7 +516,10 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
         process.nextTick(() => {
           if (index === 1) fs.writeFileSync(native, serialize(records), { mode: 0o600 });
           else fs.appendFileSync(native, serialize(records));
-          child.stdout.emit('data', Buffer.from(serialize([cliThread(session), ...cliCompletion(result)])));
+          child.stdout.emit('data', Buffer.from(serialize([cliThread(session),
+            ...(progressMessages ? [cliCompletion(result)[0],
+              cliCompletion('Review in progress.')[1],
+              ...cliCompletion(result).slice(1)] : cliCompletion(result))])));
           child.emit('close', 0, null);
         });
       } };
@@ -526,6 +529,16 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     const hostOptions = { scope, recorder, agentDir: agents, agentManifest, env: { CODEX_HOME: home }, spawn,
       probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities } };
     let host = runtime.createCodexRuntimeHost(hostOptions);
+    if (mutation === 'orphan-reservation') {
+      assert.equal(recorder.reserve(dispatchId).reserved, true);
+      const originalReservation = stable(recorder.getReservation(dispatchId));
+      assert.throws(() => host.reserveCompletedSourceCandidate(input), {
+        code: 'REVIEW_SOURCE_INVALID', message: /lacks authenticated original candidate custody/ });
+      assert.equal(stable(recorder.getReservation(dispatchId)), originalReservation);
+      assert.equal(launches, 0);
+      assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+      return;
+    }
     host.reserveCompletedSourceCandidate(input);
     if (failFirst) await assert.rejects(() => host.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only' }, input),
       { code: 'RUNTIME_UNAVAILABLE' });
@@ -756,7 +769,8 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
         host.completeCompletedSourceRecording(source);
         return result;
       } catch (error) {
-        if (error.code === 'RECORD_FAILED' && !fs.existsSync(blockedRecord)) host.retainCompletedSourceRecordingFailure(source, error);
+        if (error.code === 'RECORD_FAILED' && !receiptFault?.initial && !fs.existsSync(blockedRecord))
+          host.retainCompletedSourceRecordingFailure(source, error);
         throw error;
       }
     };
@@ -794,6 +808,46 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
       if (cold) host = runtime.createCodexRuntimeHost(hostOptions);
       boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
       mutation = null;
+    }
+    if (receiptFault?.initial) {
+      let recordLinks = 0;
+      fs.linkSync = (from, to) => {
+        const value = originalLink(from, to);
+        if (to === blockedRecord) {
+          recordLinks++;
+          if (receiptFault.fault.endsWith('link-response')) throw new Error('Original initial receipt acknowledgement lost');
+          fs.fsyncSync = fd => {
+            assert.ok(fs.fstatSync(fd).isDirectory()); fs.fsyncSync = originalFsync;
+            throw new Error('Original initial receipt directory fsync failed');
+          };
+        }
+        return value;
+      };
+      await assert.rejects(launch, { code: 'RECORD_FAILED' });
+      fs.linkSync = originalLink; fs.fsyncSync = originalFsync;
+      assert.equal(recordLinks, 1); assert.equal(launches, 2); assert.equal(finalCallbacks, 1);
+      const pending = authority.readCompletedReviewSource({ worktree, reference: source });
+      assert.equal(pending.state.resume.status, 'completed');
+      assert.equal(pending.state.resume.delivery_pending, true);
+      assert.equal(pending.state.resume.completion_failures, undefined);
+      assert.equal(pending.state.resume.reconciliations, undefined);
+      assert.ok(recorder.getVerifiedRecord(dispatchId));
+      if (receiptFault.exit) {
+        fs.writeFileSync(1, JSON.stringify({ root, worktree, scope, home, agents, agentManifest, source, dispatchId, role,
+          capabilities, producer_pid: process.pid, record_links: recordLinks }));
+        process.exit(0);
+      }
+      const recordBytes = fs.readFileSync(blockedRecord), raw = fs.readFileSync(native);
+      host.retainCompletedSourceRecordingFailure(source, { code: 'RECORD_FAILED', message: 'Original initial receipt acknowledgement lost' });
+      const applied = { ...selected, sandbox_mode: 'read-only', agent_file_content: content, agent_file_digest: sha(content) };
+      const recovered = await host.recoverCompletedSourceRecording(applied, { source, dispatch_id: dispatchId, role });
+      host.completeCompletedSourceDelivery(source);
+      assert.equal(recovered.receipt.launch_id, pending.state.resume.completion.application.launch_id);
+      assert.deepEqual(fs.readFileSync(blockedRecord), recordBytes); assert.deepEqual(fs.readFileSync(native), raw);
+      assert.equal(launches, 2); assert.equal(finalCallbacks, 1);
+      await assert.rejects(() => host.recoverCompletedSourceRecording(applied, { source, dispatch_id: dispatchId, role }),
+        { code: 'REVIEW_SOURCE_CLAIMED' });
+      return;
     }
     if (recovery) {
       await assert.rejects(launch, { code: ['recover-record-gap', 'recover-record-repeat'].includes(mutation) ? 'RECORD_FAILED' : 'RUNTIME_EVIDENCE_INVALID' });
@@ -871,6 +925,98 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
         assert.equal(failures, 2, 'both failures occur at the actual original recorder');
         fs.linkSync = originalLink;
         boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
+      }
+      if (receiptFault) {
+        let faults = 0, recordLinks = 0;
+        const descriptors = new Map();
+        const fail = () => { faults++; throw new Error('Original receipt outcome fault: ' + receiptFault.fault); };
+        const outcome = bytes => {
+          try {
+            const payload = JSON.parse(String(bytes)).payload;
+            return payload?.schema === 'shipyard.completed-review-source-tip.v1'
+              && payload.resume?.reconciliations?.at(-1)?.status === 'recorded';
+          } catch { return false; }
+        };
+        fs.openSync = (file, ...args) => {
+          const fd = originalOpen(file, ...args); descriptors.set(fd, file); return fd;
+        };
+        fs.linkSync = (from, to) => {
+          const value = originalLink(from, to);
+          if (to === blockedRecord) {
+            recordLinks++;
+            if (receiptFault.fault === 'record-link-response') fail();
+            if (receiptFault.fault === 'record-directory-fsync') fs.fsyncSync = fd => {
+              assert.ok(fs.fstatSync(fd).isDirectory()); fs.fsyncSync = originalFsync; fail();
+            };
+          }
+          return value;
+        };
+        fs.writeFileSync = (file, bytes, ...args) => {
+          if (typeof file === 'number' && outcome(bytes)) {
+            if (receiptFault.fault === 'outcome-write') fail();
+            if (receiptFault.fault === 'outcome-file-fsync') fs.fsyncSync = fd => {
+              assert.ok(fs.fstatSync(fd).isFile()); fs.fsyncSync = originalFsync; fail();
+            };
+          }
+          return originalWrite(file, bytes, ...args);
+        };
+        fs.renameSync = (from, to) => {
+          const targeted = path.dirname(to) === authority.archiveAuthorityDirectory(worktree)
+            && outcome(fs.readFileSync(from));
+          const value = originalRename(from, to);
+          if (targeted && receiptFault.fault === 'outcome-rename-response') fail();
+          if (targeted && receiptFault.fault === 'outcome-directory-fsync') fs.fsyncSync = fd => {
+            assert.ok(fs.fstatSync(fd).isDirectory()); fs.fsyncSync = originalFsync; fail();
+          };
+          return value;
+        };
+        await assert.rejects(launch, /Original receipt outcome fault/);
+        fs.openSync = originalOpen; fs.linkSync = originalLink; fs.fsyncSync = originalFsync;
+        fs.writeFileSync = originalWrite; fs.renameSync = originalRename;
+        assert.equal(faults, 1); assert.equal(recordLinks, 1);
+        const recordBytes = fs.readFileSync(blockedRecord);
+        const durable = recorder.getVerifiedRecord(dispatchId);
+        assert.ok(durable, 'the actual original final receipt exists before outcome recovery');
+        assert.equal(stable(durable.receipt.runtime_evidence), stable(originalApplication.runtime_evidence));
+        assert.deepEqual(fs.readFileSync(native), completeNative);
+        assert.equal(launches, 2);
+        if (receiptFault.exit) {
+          fs.writeFileSync(1, JSON.stringify({ root, worktree, scope, home, agents, agentManifest, source, dispatchId, role,
+            capabilities, producer_pid: process.pid }));
+          process.exit(0);
+        }
+        const pending = authority.readCompletedReviewSource({ worktree, reference: source });
+        assert.ok(['pending', 'recorded'].includes(pending.state.resume.reconciliations.at(-1).status));
+        const applied = { ...selected, sandbox_mode: 'read-only', agent_file_content: content, agent_file_digest: sha(content) };
+        await assert.rejects(() => runtime.createCodexRuntimeHost(hostOptions).recoverCompletedSourceRecording(applied,
+          { source, dispatch_id: dispatchId, role, input_prepared: input }), { code: 'REVIEW_SOURCE_CLAIMED' });
+        assert.equal(stable(authority.readCompletedReviewSource({ worktree, reference: source }).state), stable(pending.state));
+        let recoveredLinks = 0;
+        fs.linkSync = (from, to) => { if (to === blockedRecord) recoveredLinks++; return originalLink(from, to); };
+        const recovering = host.recoverCompletedSourceRecording(applied, { source, dispatch_id: dispatchId, role, input_prepared: input });
+        await assert.rejects(() => host.recoverCompletedSourceRecording(applied, { source, dispatch_id: dispatchId, role }),
+          { code: 'REVIEW_SOURCE_CLAIMED' });
+        await assert.rejects(() => host.resumeCompletedSource(applied, { source, dispatch_id: dispatchId, role }),
+          { code: 'REVIEW_SOURCE_CLAIMED' });
+        const recovered = await recovering;
+        await assert.rejects(() => host.recoverCompletedSourceRecording(applied, { source, dispatch_id: dispatchId, role }),
+          { code: 'REVIEW_SOURCE_CLAIMED' });
+        host.completeCompletedSourceDelivery(source);
+        fs.linkSync = originalLink;
+        assert.equal(recoveredLinks, 0, 'receipt recovery cannot record twice');
+        assert.deepEqual(fs.readFileSync(blockedRecord), recordBytes);
+        assert.deepEqual(fs.readFileSync(native), completeNative);
+        assert.equal(stable(recovered), stable(durable), 'recovery returns the verified original record');
+        const finalized = authority.readCompletedReviewSource({ worktree, reference: source });
+        assert.equal(finalized.state.resume.reconciliations.at(-1).status, 'recorded');
+        assert.equal(finalized.state.resume.delivered, true);
+        assert.equal(stable(authority.readReviewSourceAttempts(finalized)), originalCosts);
+        assert.deepEqual([nativeCallbacks, transcriptCallbacks, finalCallbacks], callbackCounts);
+        assert.equal(launches, 2);
+        await assert.rejects(() => host.recoverCompletedSourceRecording(applied, { source, dispatch_id: dispatchId, role }),
+          { code: 'REVIEW_SOURCE_CLAIMED' });
+        assert.deepEqual(fs.readFileSync(blockedRecord), recordBytes);
+        return;
       }
       const recovered = await launch();
       assert.equal(authority.readCompletedReviewSource({ worktree, reference: source }).state.resume.reconciliations.at(-1).status, 'recorded');
@@ -1331,6 +1477,86 @@ async function coldCompletedRecordingFixture(role, reconciliationExit = false) {
   } finally { os.homedir = previousHome; fs.rmSync(origin.root, { recursive: true, force: true }); }
 }
 
+async function completedSourceReceiptRecoveryFixture(role, cold, fault, mutation = null) {
+  if (!cold) return completedSourceFixture(role, false, fault.startsWith('initial-') ? null : 'recover-record-gap', null, false, false, false, false, { fault, initial: fault.startsWith('initial-') });
+  const header = fs.readFileSync(__filename, 'utf8').split('async function recordedBatchApplication')[0];
+  const script = header + '\ncompletedSourceBaselines.set(true, ' + JSON.stringify(copyCompletedSourceRepository()) + ');\n'
+    + completedSourceFixture.toString()
+    + '\ncompletedSourceFixture(' + JSON.stringify(role) + ', false, ' + JSON.stringify(fault.startsWith('initial-') ? null : 'recover-record-gap')
+    + ', null, false, false, false, false, ' + JSON.stringify({ fault, exit: true, initial: fault.startsWith('initial-') }) + ').catch(error => { console.error(error); process.exitCode = 1; });';
+  const origin = JSON.parse(execFileSync(process.execPath, ['-e', script], {
+    cwd: path.dirname(__filename), encoding: 'utf8', maxBuffer: 1024 * 1024 }));
+  const previousHome = os.homedir, originalKill = process.kill, originalLink = fs.linkSync;
+  os.homedir = () => origin.root;
+  try {
+    assert.notEqual(origin.producer_pid, process.pid);
+    assert.throws(() => process.kill(origin.producer_pid, 0), { code: 'ESRCH' });
+    const boundary = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+    const recorder = boundary.createDurableRecorder(path.join(origin.root, 'receipts'));
+    const source = authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source });
+    const native = fs.readFileSync(source.native_file), attempts = stable(authority.readReviewSourceAttempts(source));
+    const file = path.join(recorder.storeDir, 'record-' + sha(origin.dispatchId) + '.json');
+    const bytes = fs.readFileSync(file), originalRecord = recorder.getVerifiedRecord(origin.dispatchId);
+    const cli = fs.readFileSync(source.state.resume.completion.application.runtime_evidence.transcript.path);
+    const selected = { model: source.original_launch.model, effort: source.original_launch.effort, sandbox_mode: 'read-only',
+      agent_file: source.original_launch.agent_file, agent_file_digest: source.original_launch.agent_file_digest,
+      agent_file_content: fs.readFileSync(path.join(origin.agents, source.original_launch.agent_file), 'utf8') };
+    const host = runtime.createCodexRuntimeHost({ scope: origin.scope, recorder, agentDir: origin.agents,
+      agentManifest: origin.agentManifest, env: { CODEX_HOME: origin.home }, spawn() { assert.fail('recorded recovery cannot launch'); },
+      probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities: origin.capabilities } });
+    const context = { source: origin.source, dispatch_id: origin.dispatchId, role,
+      onCompleted() { assert.fail('recorded recovery cannot repeat native completion'); } };
+    const recover = () => host.recoverCompletedSourceRecording(selected, context);
+    if (mutation === 'tampered-receipt') {
+      const value = JSON.parse(bytes); value.payload.receipt.applied_model = 'foreign-model'; fs.writeFileSync(file, JSON.stringify(value));
+    }
+    if (mutation === 'foreign-receipt') fs.copyFileSync(path.join(recorder.storeDir, 'record-' + sha(source.probe_dispatch_id) + '.json'), file);
+    if (mutation === 'source') fs.writeFileSync(path.join(origin.worktree, 'source.txt'), 'moved current source\n');
+    if (mutation === 'base') execFileSync('git', ['-C', origin.worktree, 'update-ref', '-d', 'refs/heads/review-base']);
+    if (mutation === 'agent') fs.appendFileSync(path.join(origin.agents, selected.agent_file), '\nchanged instructions\n');
+    if (mutation === 'native') fs.writeFileSync(source.native_file, '{}\n');
+    if (['unknown-pid', 'live-pid'].includes(mutation)) process.kill = () => {
+      if (mutation === 'live-pid') return true;
+      const error = new Error('Original owner custody is unknown'); error.code = 'EPERM'; throw error;
+    };
+    if (mutation) {
+      await assert.rejects(recover);
+      assert.equal(stable(authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source }).state), stable(source.state));
+      assert.equal(stable(authority.readReviewSourceAttempts(source)), attempts);
+      return;
+    }
+    let recordLinks = 0;
+    fs.linkSync = (from, to) => { if (to === file) recordLinks++; return originalLink(from, to); };
+    const result = await recover();
+    host.completeCompletedSourceDelivery(origin.source);
+    assert.equal(recordLinks, 0);
+    assert.equal(stable(result), stable(originalRecord));
+    assert.deepEqual(fs.readFileSync(file), bytes);
+    assert.deepEqual(fs.readFileSync(source.native_file), native);
+    assert.deepEqual(fs.readFileSync(source.state.resume.completion.application.runtime_evidence.transcript.path), cli);
+    const restored = authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source });
+    assert.equal(restored.state.resume.reconciliations.at(-1).status, 'recorded');
+    assert.equal(restored.state.resume.delivered, true);
+    assert.equal(restored.state.resume.reconciliations.at(-1).owner_pid, process.pid);
+    if (source.state.resume.reconciliations?.length)
+      assert.equal(restored.state.resume.reconciliations.at(-1).recoveries[0].owner_pid, origin.producer_pid);
+    else {
+      assert.equal(source.state.resume.completion_failures, undefined);
+      assert.equal(origin.record_links, 1);
+    }
+    assert.equal(stable(authority.readReviewSourceAttempts(restored)), attempts);
+    await assert.rejects(recover, { code: 'REVIEW_SOURCE_CLAIMED' });
+    assert.deepEqual(fs.readFileSync(file), bytes);
+    const accounting = runtime.verifyCompletedReviewConsumption({ worktree: origin.worktree, source: origin.source,
+      receipt_store: recorder.storeDir, dispatch_id: origin.dispatchId });
+    assert.equal(accounting.all_attempt_denominator, 2);
+    assert.equal(accounting.attempts.at(-1).successful_calls, 0);
+  } finally {
+    process.kill = originalKill; fs.linkSync = originalLink; os.homedir = previousHome;
+    fs.rmSync(origin.root, { recursive: true, force: true });
+  }
+}
+
 async function automaticCompletedReviewFixture(role, cold, ordinary = false, moveBase = false, recordingFailure = null, beforeRecovery = null) {
   const helper = require('./helpers/codex-arch-review-fixtures.cjs');
   const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -1340,7 +1566,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
   const f = helper.fixture();
   const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'automatic-completed-review-')));
   const previousHome = os.homedir; os.homedir = () => store;
-  const originalLink = fs.linkSync;
+  const originalLink = fs.linkSync, originalWrite = fs.writeFileSync, originalFsync = fs.fsyncSync, originalRename = fs.renameSync;
   try {
     const ticket = 'T-38-01', branch = 'ticket/' + ticket;
     const graphDir = path.join(f.root, '.planning/graph');
@@ -1577,7 +1803,20 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities } };
     const nativeHost = runtime.createCodexRuntimeHost(hostOptions);
     let probeCallbacks = 0, finalCallbacks = 0;
+    let coldHost;
     const host = { ...nativeHost,
+      completeCompletedSourceRecording(reference) {
+        return (coldHost || nativeHost).completeCompletedSourceRecording(reference);
+      },
+      completeCompletedSourceDelivery(reference) {
+        return (coldHost || nativeHost).completeCompletedSourceDelivery(reference);
+      },
+      retainCompletedSourceRecordingFailure(reference, error) {
+        return (coldHost || nativeHost).retainCompletedSourceRecordingFailure(reference, error);
+      },
+      recoverCompletedSourceRecording(applied, context) {
+        return (coldHost || nativeHost).recoverCompletedSourceRecording(applied, context);
+      },
       async measureBatchReaderCapacity(applied, input) {
         const capacity = await nativeHost.measureBatchReaderCapacity(applied, input, { onCompleted(completion) {
           probeCallbacks++; originalProbeCompletion = completion;
@@ -1607,7 +1846,8 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
         } };
         if (!cold) return nativeHost.resumeCompletedSource(applied, observed);
         const { input_prepared: _privateInput, ...selectors } = observed;
-        return runtime.createCodexRuntimeHost(hostOptions).resumeCompletedSource(applied, selectors);
+        coldHost = runtime.createCodexRuntimeHost(hostOptions);
+        return coldHost.resumeCompletedSource(applied, selectors);
       },
     };
     const options = { ...canonicalOptions, scope, storageRoot: store, host, agentDir: agents, agentManifest,
@@ -1628,6 +1868,50 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       }
       return originalLink(from, to);
     };
+    let outcomeFaults = 0;
+    const outcomeFault = recordingFailure?.startsWith('outcome-');
+    if (recordingFailure === 'record-link-response' || outcomeFault) {
+      fs.linkSync = (from, to) => {
+        const target = to === path.join(recorder.storeDir, 'record-' + sha(request.dispatch_id) + '.json');
+        if (outcomeFault && target && !failedWrites) {
+          failedWrites++; throw new Error('Original automatic recording before outcome fault failed');
+        }
+        const value = originalLink(from, to);
+        if (recordingFailure === 'record-link-response' && target && !failedWrites) {
+          failedWrites++; throw new Error('Original automatic record acknowledgement lost');
+        }
+        return value;
+      };
+      fs.writeFileSync = (file, bytes, ...args) => {
+        let payload;
+        try { payload = JSON.parse(String(bytes)).payload; } catch {}
+        if (outcomeFault && !outcomeFaults && typeof file === 'number'
+            && payload?.schema === 'shipyard.completed-review-source-tip.v1'
+            && payload.resume?.reconciliations?.at(-1)?.status === 'recorded') {
+          outcomeFaults++;
+          if (recordingFailure.startsWith('outcome-write')) throw new Error('Original automatic outcome persistence failed');
+          fs.fsyncSync = fd => {
+            assert.ok(fs.fstatSync(fd).isFile()); fs.fsyncSync = originalFsync;
+            throw new Error('Original automatic outcome file fsync failed');
+          };
+        }
+        return originalWrite(file, bytes, ...args);
+      };
+    }
+    if (outcomeFault) {
+      await assert.rejects(run, /Original automatic outcome/);
+      assert.equal(outcomeFaults, 1); assert.equal(failedWrites, 1);
+      const retained = authority.readCompletedReviewSource({ worktree: f.root, dispatch_id: request.dispatch_id });
+      assert.equal(retained.state.resume.reconciliations.at(-1).status, 'pending');
+      assert.ok(recorder.getVerifiedRecord(request.dispatch_id));
+      assert.equal(launches, 2); assert.equal(probeCallbacks, 1); assert.equal(finalCallbacks, 1);
+      if (recordingFailure.endsWith('-host-exit')) {
+        fs.writeFileSync(1, JSON.stringify({ root: f.root, pr: f.pr, scope, store, agents, agentManifest, home, capabilities,
+          graphDir, request, role, source: retained.state.reference, producer_pid: process.pid }));
+        process.exit(0);
+      }
+      fs.writeFileSync = originalWrite; fs.fsyncSync = originalFsync;
+    }
     if (moveBase) {
       await assert.rejects(run, error => ['REVIEW_RESTART_REQUIRED', 'BASE_MISMATCH', 'STALE_CONTEXT'].includes(error.code)
         && /base/i.test(error.message));
@@ -1664,7 +1948,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
     if (beforeRecovery) await beforeRecovery({ root: f.root, agents, recorder, request,
       statistics: () => ({ launches, probeCallbacks, finalCallbacks }) });
     const final = await run();
-    fs.linkSync = originalLink;
+    fs.linkSync = originalLink; fs.writeFileSync = originalWrite; fs.fsyncSync = originalFsync;
     assert.equal(launches, 2);
     assert.equal(probeCallbacks, 1, 'one original probe completion');
     assert.equal(finalCallbacks, 1, 'one original fresh final completion');
@@ -1724,7 +2008,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
     assert.equal(accounting.attempts[1].successful_calls, 0);
     assert.ok(accounting.successful_source_bytes.raw >= final.receipt.runtime_evidence.input_bundle.total_bytes,
       'zero fresh reads retain the full original material cost');
-    if (recordingFailure && !recordingFailure.startsWith('seal-')) {
+    if (['callback', 'record', 'record-repeat'].includes(recordingFailure)) {
       const source = authority.readCompletedReviewSource({ worktree: f.root, reference: final.receipt.runtime_evidence.completed_source.source });
       assert.equal(source.state.resume.status, 'completed');
       assert.equal(source.state.resume.launch_started, true);
@@ -1735,7 +2019,77 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       assert.equal(failedWrites, recordingFailure === 'record-repeat' ? 2 : recordingFailure === 'record' ? 1 : 0);
       assert.equal(stable(source.state.resume.completion.application.runtime_evidence), stable(final.receipt.runtime_evidence));
     }
-  } finally { fs.linkSync = originalLink; os.homedir = previousHome; fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
+    if (recordingFailure === 'record-link-response' || outcomeFault) {
+      const source = authority.readCompletedReviewSource({ worktree: f.root,
+        reference: final.receipt.runtime_evidence.completed_source.source });
+      assert.equal(source.state.resume.delivered, true);
+      assert.equal(source.state.resume.reconciliations.at(-1).status, 'recorded');
+      assert.equal(failedWrites, 1);
+      assert.equal(stable(source.state.resume.completion.application.runtime_evidence), stable(final.receipt.runtime_evidence));
+    }
+  } finally { fs.linkSync = originalLink; fs.writeFileSync = originalWrite; fs.fsyncSync = originalFsync; fs.renameSync = originalRename; os.homedir = previousHome; fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
+}
+
+async function coldRecordedSourceControllerFixture(role) {
+  const header = fs.readFileSync(__filename, 'utf8').split('async function recordedBatchApplication')[0];
+  const script = header + '\n' + automaticCompletedReviewFixture.toString()
+    + '\nautomaticCompletedReviewFixture(' + JSON.stringify(role)
+    + ", false, false, false, 'outcome-write-host-exit').catch(error => { console.error(error); process.exitCode = 1; });";
+  const origin = JSON.parse(execFileSync(process.execPath, ['-e', script], {
+    cwd: path.dirname(__filename), encoding: 'utf8', maxBuffer: 1024 * 1024 }));
+  const previousHome = os.homedir; os.homedir = () => origin.store;
+  try {
+    assert.throws(() => process.kill(origin.producer_pid, 0), { code: 'ESRCH' });
+    const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+    const boundary = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+    const recorder = boundary.createDurableRecorder(path.join(origin.store, 'receipts'));
+    const source = authority.readCompletedReviewSource({ worktree: origin.root, reference: origin.source });
+    assert.equal(source.state.resume.owner_pid, origin.producer_pid);
+    const record = recorder.getVerifiedRecord(origin.request.dispatch_id);
+    assert.ok(record);
+    const recordFile = path.join(recorder.storeDir, 'record-' + sha(origin.request.dispatch_id) + '.json');
+    const recordBytes = fs.readFileSync(recordFile), native = fs.readFileSync(source.native_file);
+    const attempts = stable(authority.readReviewSourceAttempts(source));
+    const canonical = { graphDir: origin.graphDir, refreshGit: false, getPullRequest: () => origin.pr,
+      listPullRequests: () => [origin.pr], execFileSync(program, args, options) {
+        if (program === 'git' && args.includes('fetch')) return '';
+        if (program === 'gh') return JSON.stringify(origin.pr);
+        return execFileSync(program, args, options);
+      } };
+    const controller = { assertOwner(id) { assert.equal(id, origin.scope.run_id); },
+      markUnavailable() { assert.fail('recorded cold recovery cannot create another dispatch'); } };
+    const host = runtime.createCodexRuntimeHost({ scope: origin.scope, recorder, controller,
+      agentDir: origin.agents, agentManifest: origin.agentManifest, env: { CODEX_HOME: origin.home },
+      spawn() { assert.fail('recorded cold controller cannot launch a model'); },
+      probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities: origin.capabilities } });
+    const options = { ...canonical, scope: origin.scope, storageRoot: origin.store, host,
+      agentDir: origin.agents, agentManifest: origin.agentManifest, env: { CODEX_HOME: origin.home } };
+    let request = origin.request;
+    if (role === 'arch-review') {
+      const prepared = collector.prepare(origin.scope, { role, context: {}, signals: {} }, {
+        ...canonical, inflightDispatchId: request.dispatch_id, storageRoot: path.join(origin.store, 'inputs') });
+      options.archReviewContext = prepared;
+      request = { ...prepared.launch, signals: { ...prepared.launch.signals }, context: { ...prepared.launch.context },
+        dispatch_id: request.dispatch_id };
+    } else options.integrationContext = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
+      .prepareIntegratorContext(canonical, { worktree: origin.root, phase: '38' });
+    const recovered = await delivery.createCodexDeliveryHost(options).run(request);
+    assert.equal(stable(recovered.receipt), stable(record.receipt));
+    assert.ok(recovered.artifact);
+    assert.deepEqual(fs.readFileSync(recordFile), recordBytes);
+    assert.deepEqual(fs.readFileSync(source.native_file), native);
+    const restored = authority.readCompletedReviewSource({ worktree: origin.root, reference: origin.source });
+    assert.equal(restored.state.resume.delivered, true);
+    assert.equal(restored.state.resume.reconciliations.at(-1).status, 'recorded');
+    assert.equal(restored.state.resume.reconciliations.at(-1).recoveries[0].owner_pid, origin.producer_pid);
+    assert.equal(stable(authority.readReviewSourceAttempts(restored)), attempts);
+    await assert.rejects(() => delivery.createCodexDeliveryHost(options).run(request), { code: 'REVIEW_SOURCE_CLAIMED' });
+    assert.deepEqual(fs.readFileSync(recordFile), recordBytes);
+    assert.deepEqual(fs.readFileSync(source.native_file), native);
+  } finally {
+    os.homedir = previousHome; fs.rmSync(origin.root, { recursive: true, force: true });
+    fs.rmSync(origin.store, { recursive: true, force: true });
+  }
 }
 
 async function partialFailedSourceFixture(role, fault) {
@@ -1847,7 +2201,7 @@ async function partialFailedSourceFixture(role, fault) {
   });
 }
 
-module.exports = { assert, fs, path, runtime, authority, completedSourceFixture, coldMeasuredSourceFixture, coldPrelaunchFixture, coldCompletedRecordingFixture, automaticCompletedReviewFixture, partialFailedSourceFixture };
+module.exports = { coldRecordedSourceControllerFixture, completedSourceReceiptRecoveryFixture, assert, fs, path, runtime, authority, completedSourceFixture, coldMeasuredSourceFixture, coldPrelaunchFixture, coldCompletedRecordingFixture, automaticCompletedReviewFixture, partialFailedSourceFixture };
 
 if (require.main === module) {
 test('interrupted observed prefix rehydrates and resumes the exact session with fresh final evidence', async () => {
