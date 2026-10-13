@@ -1819,8 +1819,13 @@ function aggregateRuntimeFixture({ host: fixtureHost, parsed, storage, capabilit
             Object.assign(context.payload.collaboration_mode.settings, { model: selected.model, reasoning_effort: selected.effort });
             const reads = index === 1 ? manifest.batches.flatMap(batch => {
               const call_id = turn + '-read-' + batch.index;
-              const output = execFileSync(process.execPath, [manifest.transport.module_path, '--read-batch', manifestPath,
-                String(batch.index), manifest.transport.profile_sha256], { encoding: 'utf8', maxBuffer: 252 * 1024 });
+              const args = ['--read-batch', manifestPath, String(batch.index), manifest.transport.profile_sha256];
+              const output = contextBuilder.readBatchCli(args);
+              assert.ok(Buffer.byteLength(output) <= 252 * 1024);
+              assert.equal(output, contextBuilder.batchOutput(manifest, checked.manifest_bytes, checked.material, batch.index));
+              if (batch.index === 0 || batch.index === manifest.batches.length - 1)
+                assert.equal(output, execFileSync(process.execPath, [manifest.transport.module_path, ...args],
+                  { encoding: 'utf8', maxBuffer: 252 * 1024 }));
               return [response('custom_tool_call', { name: 'exec', call_id,
                 input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: contextBuilder.batchCommand(descriptor, batch.index), max_output_tokens: 10000 }) + '));' }),
               response('custom_tool_call_output', { call_id, output: [
@@ -2219,11 +2224,17 @@ test('installed v3 admission measures the finalized input and retains its privat
     Object.assign(nativeContext.payload, { turn_id: turn, root_turn_id: turn, ...selection, cwd: f.root, workspace_roots: [f.root] });
     nativeContext.payload.sandbox_policy.type = 'read-only';
     Object.assign(nativeContext.payload.collaboration_mode.settings, { model: selection.model, reasoning_effort: selection.effort });
+    const checked = contextBuilder.verifyFileInput(candidate);
     const reads = candidate.manifest.batches.flatMap(batch => {
       const call_id = 'installed-batch-' + batch.index;
-      const output = execFileSync('node', [candidate.manifest.transport.module_path, '--read-batch',
-        candidate.input_bundle.manifest_path, String(batch.index), candidate.manifest.transport.profile_sha256],
-      { encoding: 'utf8', maxBuffer: 252 * 1024 });
+      const args = ['--read-batch', candidate.input_bundle.manifest_path,
+        String(batch.index), candidate.manifest.transport.profile_sha256];
+      const output = contextBuilder.readBatchCli(args);
+      assert.ok(Buffer.byteLength(output) <= 252 * 1024);
+      assert.equal(output, contextBuilder.batchOutput(candidate.manifest, checked.manifest_bytes, checked.material, batch.index));
+      if (batch.index === 0 || batch.index === candidate.manifest.batches.length - 1)
+        assert.equal(output, execFileSync('node', [candidate.manifest.transport.module_path, ...args],
+          { encoding: 'utf8', maxBuffer: 252 * 1024 }));
       return [response('custom_tool_call', { name: 'exec', call_id,
         input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: contextBuilder.batchCommand(candidate.input_bundle, batch.index),
           max_output_tokens: 10000 }) + '));' }),
@@ -2751,6 +2762,28 @@ test('automatic installed candidate retains its exact finite profile and cached 
     assert.throws(() => contextBuilder.restoreCompletedSourceInput(JSON.parse(JSON.stringify({ input: first }))),
       { code: 'REVIEW_SOURCE_REQUIRED' });
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
+for (const cold of [false, true]) for (const mutation of ['source', 'instructions'])
+  test('automatic integration measurement restoration refuses changed ' + mutation + (cold ? ' cold' : ' live'), async () => {
+    const { automaticCompletedReviewFixture } = require('./phase49-review-continuation.test.cjs');
+    let observed;
+    await assert.rejects(() => automaticCompletedReviewFixture('integrator', cold, false, false, 'seal-envelope', state => {
+      observed = state;
+      assert.deepEqual(state.statistics(), { launches: 1, probeCallbacks: 1, finalCallbacks: 0 });
+      if (mutation === 'source') fs.appendFileSync(path.join(state.root, 'src/reviewed.txt'), '\nChanged current source.\n');
+      else for (const name of fs.readdirSync(state.agents).filter(name => name.endsWith('.toml')))
+        fs.appendFileSync(path.join(state.agents, name), '\nChanged installed instructions.\n');
+    }), error => mutation === 'source'
+      ? error.code === 'INVALID_HOST' && error.message === 'claude-role-host: worktree has local changes before role dispatch'
+      : ['STALE_CONTEXT', 'REVIEW_RESTART_REQUIRED', 'UNBOUND_AGENT'].includes(error.code));
+    assert.ok(observed);
+    assert.deepEqual(observed.statistics(), { launches: 1, probeCallbacks: 1, finalCallbacks: 0 });
+  });
+
+test('integration measurement restoration refuses caller-created measurement custody', () => {
+  assert.throws(() => contextBuilder.restoreMeasuredIntegrationInput({ input: {}, identity: {} }, {}),
+    { code: 'REVIEW_SOURCE_REQUIRED' });
 });
 
 if (require.main === module) registerTests(require('node:test'));

@@ -21,6 +21,9 @@ const {
   readRequestFile,
   requestValue,
   completeRepairFeedback,
+  shareRepairTransitions,
+  repairCoverageTransition,
+  recheckHistoricalRepair,
   runCli,
   validateArgs,
   verificationFailureContext,
@@ -2108,9 +2111,19 @@ test('serialized full paged feedback selects global Node IDs across Actor varian
   assert.equal(result.digest, crypto.createHash('sha256').update(canonicalInventory).digest('hex'));
 });
 
-async function originalFixerFixture(outcome, mutation) {
+async function originalFixerFixture(outcome, mutation, evolution = null) {
   const f = fixture({ physicalPaths: true });
-  const home = path.join(fs.realpathSync(temporary), 'repair-native-' + path.basename(f.root));
+  const defaultAgents = mutation?.startsWith('normalized-default-') || mutation?.startsWith('normalized-cli-default-');
+  const defaultOsHome = mutation?.endsWith('-os-home');
+  const home = defaultOsHome ? path.join(fs.realpathSync(temporary), '.codex')
+    : path.join(fs.realpathSync(temporary), 'repair-native-' + path.basename(f.root));
+  if (defaultAgents) {
+    const originalDir = f.agentDir;
+    f.agentDir = path.join(home, 'agents');
+    fs.mkdirSync(f.agentDir, { recursive: true });
+    fs.cpSync(originalDir, f.agentDir, { recursive: true });
+    fs.rmSync(originalDir, { recursive: true, force: true });
+  }
   fs.writeFileSync(path.join(f.root, 'check.cjs'), "require('node:assert/strict').equal(require('node:fs').readFileSync('src/owned.txt','utf8'), 'fixed by static native review-fix\\n');\n");
   git(f.root, 'add', 'check.cjs'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture: actual candidate verification');
   f.base = git(f.root, 'rev-parse', 'HEAD'); git(f.root, 'update-ref', 'refs/heads/main', f.base);
@@ -2132,7 +2145,10 @@ async function originalFixerFixture(outcome, mutation) {
   const legacyActions = mutation?.startsWith('companion-cli-legacy-');
   const threadId = legacyActions ? 'PRRT_kwDOTmU9jc6rQN4b' : 'thread-1';
   const commentId = legacyActions ? 'PRRC_kwDOTmU9jc784inG' : 'comment-1';
-  const feedback = [{ id: threadId, isResolved: false }];
+  const locationMutation = mutation?.includes('-location-');
+  const feedback = [{ id: threadId, isResolved: false,
+    ...(locationMutation ? { path: 'src/owned.txt', originalLine: 1616, line: 1653 } : {}) }];
+  const originalThreadComment = { id: commentId, body: 'Full original thread comment' };
   const output = { schema: 'shipyard.repair-result.v1', id: f.scope.ticket, pr: 501,
     status: outcome === 'source' ? 'fixed' : outcome, pushed: false, notes: 'Complete repair reasoning.',
     hypothesis: 'The source condition explains the original finding.', review_dispositions: [
@@ -2216,7 +2232,7 @@ async function originalFixerFixture(outcome, mutation) {
       const pr = { id: 'pr-body-501', number: 501, repository: { nameWithOwner: 'fixture/repository' } };
       const node = reply && { ...project(reply), replyTo: { id: commentId }, pullRequest: pr,
         pullRequestReview: reviews[0] ? { ...project(reviews[0]), pullRequest: pr } : null };
-      const targetComment = [{ id: commentId, body: 'Full original thread comment' }, ...external, ...replies]
+      const targetComment = [originalThreadComment, ...external, ...replies]
         .find(item => item.id === value('target'));
       const target = targetComment ? { ...project(targetComment), pullRequest: pr,
         replyTo: targetComment.id === commentId ? null : { id: commentId } } : {};
@@ -2226,7 +2242,8 @@ async function originalFixerFixture(outcome, mutation) {
       if (mutation === 'companion-wrong-repo') node.pullRequest.repository.nameWithOwner = 'foreign/repository';
       if (mutation === 'companion-wrong-target') node.replyTo.id = 'foreign-comment';
       if (mutation === 'companion-truncated') node.pullRequestReview.body_truncated = true;
-      if (mutation === 'normalized-companion-link' && mutateRelation) node.pullRequestReview.id = 'foreign-review';
+      if (['normalized-companion-link', 'normalized-covered-source-companion-link'].includes(mutation) && mutateRelation)
+        node.pullRequestReview.id = 'foreign-review';
       return JSON.stringify({ data: { node, target } });
     }
     if (query.includes('node(id:')) {
@@ -2237,7 +2254,7 @@ async function originalFixerFixture(outcome, mutation) {
           nodes: Array.from({ length: 100 }, (_, index) => ({ id: 'bounded-obligation-' + (offset + index), body: 'x' })),
           pageInfo: { hasNextPage: offset + 100 < 2000, endCursor: String(offset + 100) } } } } });
       }
-      const comments = [{ id: commentId, body: mutation === 'overflow' ? 'x'.repeat(600000) : 'Full original thread comment' }, ...external, ...(swapReplyTarget ? [] : replies)].map(project);
+      const comments = [{ ...originalThreadComment, body: mutation === 'overflow' ? 'x'.repeat(600000) : originalThreadComment.body }, ...external, ...(swapReplyTarget ? [] : replies)].map(project);
       if (mutation === 'duplicate-feedback') comments.push(comments[0]);
       if (mutation === 'feedback-movement' && launches) comments.push({ id: 'new-obligation', body: 'New feedback after preparation.' });
       const page = connection(comments);
@@ -2263,6 +2280,8 @@ async function originalFixerFixture(outcome, mutation) {
     return response;
   };
   const originalHome = os.homedir; os.homedir = () => fs.realpathSync(temporary);
+  const originalCodexHome = process.env.CODEX_HOME;
+  if (defaultOsHome) delete process.env.CODEX_HOME;
   try {
     if (mutation === 'missing-disposition') output.review_dispositions.pop();
     if (mutation === 'missing-schema') delete output.schema;
@@ -2279,7 +2298,9 @@ async function originalFixerFixture(outcome, mutation) {
     if (mutation === 'caller-first') nativeRequest.signals = { signatureState: 'first' };
     if (mutation === 'caller-new') nativeRequest.signals = { signatureState: 'new' };
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'review-fix' });
-    const run = () => {
+    const run = (request = nativeRequest) => {
+      const executing = request.role === 'executor';
+      const launchRole = executing ? policy.resolveDispatch({ runtime: 'codex', role: 'executor' }) : selected;
       const hostOptions = { ...cliOptions(f), host: undefined, scope: f.scope,
       agentManifest, getPullRequest: live, execFileSync: transport, verification: undefined,
       verificationAllowList, hostVerificationRunner: hostRunner(),
@@ -2288,12 +2309,15 @@ async function originalFixerFixture(outcome, mutation) {
       env: { CODEX_HOME: home },
       spawn(_executable, _args, options) {
         launches++;
+        if (defaultOsHome) assert.equal(options.env.CODEX_HOME, undefined);
         const session = crypto.randomUUID();
         const effort = JSON.parse(_args.find(value => value.startsWith('model_reasoning_effort=')).split('=')[1]);
         const applied = { model: _args[_args.indexOf('--model') + 1], effort,
-          agent_file: effort === 'low' ? selected.agent_file : selected.agent_file.replace('.toml', effort === 'high' ? '-repeat.toml' : '-deep.toml') };
+          agent_file: !launchRole.agent_file || effort === 'low' ? launchRole.agent_file
+            : launchRole.agent_file.replace('.toml', effort === 'high' ? '-repeat.toml' : '-deep.toml') };
+        if (executing) assert.equal(applied.agent_file, null, 'executor uses the original dynamic native launch');
         const final = JSON.stringify(output);
-        if (outcome === 'source') fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
+        if (outcome === 'source' || executing) fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
         if (mutation === 'foreign-dirty') fs.writeFileSync(path.join(f.root, 'outside.txt'), 'foreign mutation');
         if (mutation === 'self-commit') { git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'unauthorized producer commit'); }
         if (mutation === 'plan-movement') fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
@@ -2314,10 +2338,11 @@ async function originalFixerFixture(outcome, mutation) {
           return row;
         };
         const user = nativeMessage('user', '');
-        const instructions = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').generatedInstructions(
-          fs.readFileSync(path.join(f.agentDir, applied.agent_file), 'utf8'));
+        const instructions = applied.agent_file
+          ? require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').generatedInstructions(
+            fs.readFileSync(path.join(f.agentDir, applied.agent_file), 'utf8')) : null;
         const rows = [capturedRows.find(row => row.type === 'session_meta'), capturedRows.find(row => row.type === 'turn_context'),
-          started, nativeMessage('developer', instructions), user,
+          started, ...(instructions === null ? [] : [nativeMessage('developer', instructions)]), user,
           capturedRows.find(row => row.type === 'response_item' && row.payload?.phase === 'final_answer'),
           capturedRows.find(row => row.type === 'event_msg' && row.payload?.type === 'task_complete')];
         if (mutation === 'native-delegation') {
@@ -2344,7 +2369,8 @@ async function originalFixerFixture(outcome, mutation) {
         if (mutation === 'foreign-native-final') rows.at(-2).payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign-turn';
         if (mutation === 'mismatched-native-final') rows.at(-2).payload.content[0].text = 'foreign final JSON';
         const date = new Date();
-        const directory = path.join(options.env.CODEX_HOME, 'sessions', String(date.getFullYear()),
+        const nativeHome = options.env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+        const directory = path.join(nativeHome, 'sessions', String(date.getFullYear()),
           String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
         fs.mkdirSync(directory, { recursive: true });
         const cli = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
@@ -2372,6 +2398,8 @@ async function originalFixerFixture(outcome, mutation) {
         const child = new EventEmitter(); child.pid = 45678;
         child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
         child.stdin = { write(prompt) {
+          if (executing) assert.ok(String(prompt).includes('executor already dispatched'));
+          else {
           assert.ok(String(prompt).includes('full feedback') || String(prompt).includes('complete feedback'));
           const required = String(prompt).split('exactly these required fields: ')[1]?.split('. ')[0];
           assert.ok(required, 'the actual generated native prompt must enumerate the complete producer schema');
@@ -2380,6 +2408,7 @@ async function originalFixerFixture(outcome, mutation) {
           assert.ok(required.includes('schema="shipyard.repair-result.v1"'));
           assert.ok(String(prompt).includes('If status="escalate", every disposition must use reply or escalate'));
           assert.ok(String(prompt).includes('reply-and-resolve is forbidden for ALL findings in that result'));
+          }
           user.payload.content = [{ type: 'input_text', text: mutation === 'native-context' ? 'Repair a foreign subject.' : String(prompt).trim() }];
         }, end() {
           process.nextTick(() => {
@@ -2390,6 +2419,11 @@ async function originalFixerFixture(outcome, mutation) {
         return child;
       },
       };
+      if (defaultAgents) {
+        delete hostOptions.agentDir;
+        delete hostOptions.agentManifest;
+        if (defaultOsHome) hostOptions.env = {};
+      }
       if (mutation?.endsWith('-callback')) {
         const storage = path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'));
         const actualRuntime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').createCodexRuntimeHost({
@@ -2412,7 +2446,7 @@ async function originalFixerFixture(outcome, mutation) {
         return runCli(['--args-file', requestFile], { write(chunk) { written.push(chunk); } }, hostOptions)
           .then(result => { assert.equal(JSON.parse(written.join('')).receipt.dispatch_id, result.receipt.dispatch_id); return result; });
       }
-      return createCodexDeliveryHost(hostOptions).run(nativeRequest);
+      return createCodexDeliveryHost(hostOptions).run(request);
     };
     if (['thread-response-loss', 'comment-response-loss', 'resolve-response-loss', 'companion-cli-response-loss',
       'companion-cli-pending-id', 'companion-cli-reuse-response-loss', 'companion-cli-legacy-id', 'companion-cli-legacy-absent'].includes(mutation)
@@ -2589,6 +2623,88 @@ async function originalFixerFixture(outcome, mutation) {
       assert.equal(first.resolution.signals.signatureState, 'first');
       const firstReceipt = first.receipt;
       const firstHead = git(f.root, 'rev-parse', 'HEAD');
+      const coveredSource = mutation.startsWith('normalized-covered-source');
+      let sourceResult;
+      let currentHead = firstHead;
+      const retainedFiles = fs.readdirSync(path.join(stateRoot(f), 'repair-actions')).map(file => ({
+        file: path.join(stateRoot(f), 'repair-actions', file), bytes: fs.readFileSync(path.join(stateRoot(f), 'repair-actions', file)) }));
+      if ((coveredSource && locationMutation) || evolution) {
+        const receiptDir = path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'), 'receipts');
+        const dispatchDigest = crypto.createHash('sha256').update(first.dispatch_id).digest('hex');
+        for (const file of ['record-' + dispatchDigest + '.json', 'reservation-' + dispatchDigest + '.json']) {
+          const original = path.join(receiptDir, file);
+          assert.ok(fs.statSync(original).isFile());
+          retainedFiles.push({ file: original, bytes: fs.readFileSync(original) });
+        }
+        const transcript = firstReceipt.runtime_evidence.transcript.path;
+        retainedFiles.push({ file: transcript, bytes: fs.readFileSync(transcript) });
+        const nativeFiles = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs')
+          .nativeSessionCandidates(path.join(home, 'sessions'), firstReceipt.runtime_evidence.session_id);
+        assert.equal(nativeFiles.length, 1);
+        retainedFiles.push({ file: nativeFiles[0], bytes: fs.readFileSync(nativeFiles[0]) });
+      }
+      if (coveredSource) {
+        sourceResult = await run({ role: 'executor', context: { prompt: 'Implement the current covered source correction.' } });
+        currentHead = git(f.root, 'rev-parse', 'HEAD'); publishedHead = currentHead;
+        assert.equal(sourceResult.receipt.role, 'executor'); assert.equal(sourceResult.receipt.compliance, 'verified');
+        assert.equal(sourceResult.receipt.agent_file, undefined);
+        assert.equal(sourceResult.receipt.agent_file_digest, undefined);
+        assert.ok(sourceResult.receipt.runtime_evidence.native_session_evidence);
+        const authority = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
+        const covered = authority.verify({ worktree: f.root, repo: authority.repoSlug(f.root), commit: currentHead });
+        assert.equal(covered.covered, true); assert.equal(covered.record.kind, 'executor');
+        assert.equal(covered.record.dispatch_id, sourceResult.dispatch_id);
+        graph.synchronized_head = currentHead; fs.writeFileSync(graphFile, JSON.stringify(graph));
+        if (mutation.endsWith('-forged')) {
+          const file = path.join(authority.coverageRoot(), 'coverage', encodeURIComponent(covered.record.repo), currentHead + '.json');
+          const bytes = JSON.parse(fs.readFileSync(file)); bytes.payload.ticket = 'T-38-99';
+          fs.writeFileSync(file, JSON.stringify(bytes));
+        }
+        if (mutation.endsWith('-plan')) fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
+        if (mutation.endsWith('-owners')) { graph.tickets[f.scope.ticket].files.push('outside.txt'); fs.writeFileSync(graphFile, JSON.stringify(graph)); }
+      }
+      if (evolution) {
+        if (['owners', 'all'].includes(evolution)) {
+          graph.tickets[f.scope.ticket].files.push('outside.txt');
+          fs.writeFileSync(graphFile, JSON.stringify(graph));
+        }
+        if (['allowlist', 'all'].includes(evolution)) {
+          verificationAllowList.push({ argv: ['node', '--version'], profile: 'host', timeout_s: 600 });
+          approvedPlan(f, ['node check.cjs', 'node --version']);
+        }
+        fs.appendFileSync(f.plan, '\nCurrent approved scope: ' + JSON.stringify(graph.tickets[f.scope.ticket].files) + '\n');
+        if (['base', 'all'].includes(evolution)) {
+          f.base = currentHead;
+          git(f.root, 'update-ref', 'refs/heads/main', currentHead);
+        }
+        if (['base-merge', 'base-merge-extra'].includes(evolution)) {
+          git(f.root, 'checkout', '-q', 'main');
+          fs.writeFileSync(path.join(f.root, 'base-only.txt'), 'Current approved base material.\n');
+          git(f.root, 'add', 'base-only.txt'); git(f.root, 'commit', '-q', '-S', '-m', 'Current signed base evolution');
+          f.base = git(f.root, 'rev-parse', 'HEAD');
+          git(f.root, 'checkout', '-q', graph.tickets[f.scope.ticket].branch);
+          git(f.root, 'merge', '--no-ff', '-S', '-m', 'Import current signed base', 'main');
+          if (evolution === 'base-merge-extra') {
+            fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'Unverified merge edit.\n');
+            git(f.root, 'add', 'src/owned.txt'); git(f.root, 'commit', '--amend', '-q', '-S', '--no-edit');
+          }
+          currentHead = git(f.root, 'rev-parse', 'HEAD'); publishedHead = currentHead;
+          graph.synchronized_head = currentHead; fs.writeFileSync(graphFile, JSON.stringify(graph));
+        }
+        if (evolution === 'unsigned-base') {
+          f.base = git(f.root, '-c', 'commit.gpgsign=false', 'commit-tree', git(f.root, 'rev-parse', 'HEAD^{tree}'),
+            '-p', f.base, '-m', 'Unsigned base evolution');
+          git(f.root, 'update-ref', 'refs/heads/main', f.base);
+        }
+        const fresh = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').build(['review-fix', f.scope.ticket,
+          '--runtime', 'codex', '--pr', '501', '--review-file', evidenceFile, '--graph', f.graphDir], { cwd: f.root });
+        if (evolution !== 'stale-plan') nativeRequest.context = fresh.context;
+      }
+      if (mutation?.startsWith('normalized-uncovered-source')) {
+        fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'uncovered external source\n');
+        git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'uncovered external source');
+        publishedHead = git(f.root, 'rev-parse', 'HEAD');
+      }
       if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) assert.equal(firstHead, first.artifact.commit);
       const actionFile = path.join(stateRoot(f), 'repair-actions', crypto.createHash('sha256').update(first.dispatch_id).digest('hex') + '.json');
       if (mutation === 'normalized-forged-actions') {
@@ -2599,18 +2715,53 @@ async function originalFixerFixture(outcome, mutation) {
         const state = JSON.parse(fs.readFileSync(actionFile)); state.payload.confirmed[0].reply_review.response += ' ';
         fs.writeFileSync(actionFile, JSON.stringify(state));
       }
-      if (mutation === 'normalized-reply-body') replies[0].body += ' mutated';
-      if (mutation === 'normalized-reply-author') replies[0].author = { ...actor, id: 'foreign-user' };
-      if (mutation === 'normalized-reply-id') replies[0].id = 'foreign-reply';
-      if (mutation === 'normalized-reply-target') swapReplyTarget = true;
+      if (['normalized-reply-body', 'normalized-covered-source-reply-body'].includes(mutation)) replies[0].body += ' mutated';
+      if (['normalized-reply-author', 'normalized-covered-source-reply-author'].includes(mutation)) replies[0].author = { ...actor, id: 'foreign-user' };
+      if (['normalized-reply-id', 'normalized-covered-source-reply-id'].includes(mutation)) replies[0].id = 'foreign-reply';
+      if (['normalized-reply-target', 'normalized-covered-source-reply-target'].includes(mutation)) swapReplyTarget = true;
       if (mutation === 'normalized-missing-actions') fs.unlinkSync(actionFile);
       if (mutation === 'normalized-reopened') feedback[0].isResolved = false;
       if (mutation === 'normalized-source') publishedHead = '3'.repeat(40);
-      if (mutation === 'normalized-companion-link') mutateRelation = true;
+      if (['normalized-companion-link', 'normalized-covered-source-companion-link'].includes(mutation)) mutateRelation = true;
       if (mutation === 'normalized-companion-body') reviews[0].body = 'New finding on the retained companion review';
       if (mutation === 'normalized-companion-author') reviews[0].author = { ...actor, id: 'foreign-user' };
       if (mutation === 'normalized-companion-missing') reviews.length = 0;
+      if (locationMutation) {
+        feedback[0].line = mutation.endsWith('-null') ? null : 1686;
+        if (mutation.endsWith('-path')) feedback[0].path = 'outside.txt';
+        if (mutation.endsWith('-original-line')) feedback[0].originalLine++;
+        if (mutation.endsWith('-thread-id')) feedback[0].id = 'foreign-thread';
+        if (mutation.endsWith('-reopened')) feedback[0].isResolved = false;
+        if (mutation.endsWith('-negative')) feedback[0].line = -1;
+        if (mutation.endsWith('-string')) feedback[0].line = '1686';
+        if (mutation.endsWith('-zero')) feedback[0].line = 0;
+        if (mutation.endsWith('-false')) feedback[0].line = false;
+        if (mutation.endsWith('-empty')) feedback[0].line = '';
+        if (mutation.endsWith('-body')) originalThreadComment.body += ' changed original feedback';
+        if (mutation.endsWith('-author')) originalThreadComment.author = { ...actor, id: 'foreign-user' };
+      }
       const refusal = {
+        'normalized-location-shift': 'REPAIR_PREDECESSOR_INVALID', 'normalized-location-null': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-uncovered-source-location-shift': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-covered-source-location-forged': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-covered-source-location-path': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-original-line': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-thread-id': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-reopened': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-negative': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-string': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-zero': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-false': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-empty': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-body': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-location-author': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-forged': 'REPAIR_SUBJECT_CHANGED', 'normalized-uncovered-source': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-covered-source-plan': 'PLAN_DIGEST_MISMATCH', 'normalized-covered-source-owners': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-covered-source-reply-body': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-reply-author': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-reply-id': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-reply-target': 'REPAIR_PREDECESSOR_INVALID',
+        'normalized-covered-source-companion-link': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-forged-actions': 'STATE_RECORD_INVALID', 'normalized-reply-body': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-reply-author': 'REPAIR_PREDECESSOR_INVALID', 'normalized-reply-id': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-reply-target': 'REPAIR_PREDECESSOR_INVALID', 'normalized-reopened': 'REPAIR_PREDECESSOR_INVALID', 'normalized-source': 'REPAIR_SUBJECT_CHANGED',
@@ -2618,9 +2769,13 @@ async function originalFixerFixture(outcome, mutation) {
         'normalized-companion-missing': 'REPAIR_PREDECESSOR_INVALID', 'normalized-companion-link': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-companion-forged': 'STATE_RECORD_INVALID',
       }[mutation];
-      if (refusal) {
-        await assert.rejects(run, { code: refusal });
-        assert.equal(launches, 1); assert.equal(replies.length + prReplies.length, 3);
+      if (refusal || ['stale-plan', 'unsigned-base', 'base-merge-extra'].includes(evolution)) {
+        await assert.rejects(run, { code: evolution === 'stale-plan' ? 'PLAN_DIGEST_MISMATCH'
+          : ['unsigned-base', 'base-merge-extra'].includes(evolution) ? 'REPAIR_SUBJECT_CHANGED' : refusal });
+        assert.equal(launches, coveredSource ? 2 : 1); assert.equal(replies.length + prReplies.length, 3);
+        if (locationMutation) {
+          for (const original of retainedFiles) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
+        }
         return;
       }
       if (mutation === 'normalized-missing-actions') {
@@ -2641,10 +2796,20 @@ async function originalFixerFixture(outcome, mutation) {
       const manifest = JSON.parse(fs.readFileSync(agentManifest));
       manifest.agent_files.push(repeatFile); manifest.agent_digests[repeatFile] = crypto.createHash('sha256').update(repeatAgent).digest('hex');
       fs.writeFileSync(agentManifest, JSON.stringify(manifest));
+      if (['normalized-default-missing-manifest', 'normalized-default-stale-manifest'].includes(mutation)) {
+        if (mutation.endsWith('-missing-manifest')) fs.unlinkSync(agentManifest);
+        else fs.appendFileSync(path.join(f.agentDir, repeatFile), '\nchanged installed repeat instructions\n');
+        await assert.rejects(run, { code: 'STALE_GENERATED_AGENT' });
+        assert.equal(launches, 1, 'invalid installed defaults refuse before the repeated native launch');
+        assert.equal(git(f.root, 'rev-parse', 'HEAD'), firstHead);
+        assert.equal(replies.length + prReplies.length, 3);
+        return;
+      }
       const second = await run();
-      const unknown = ['normalized-external', 'normalized-missing-actions'].includes(mutation);
+      const unknown = !!evolution || coveredSource || ['normalized-external', 'normalized-missing-actions'].includes(mutation);
       assert.equal(second.resolution.signals.signatureState, unknown ? 'first' : 'repeat');
       assert.equal(second.receipt.applied_effort, unknown ? 'low' : 'high');
+      assert.equal(second.receipt.agent_file_digest, crypto.createHash('sha256').update(unknown ? originalAgent : repeatAgent).digest('hex'));
       assert.notEqual(second.dispatch_id, first.dispatch_id);
       assert.notEqual(second.receipt.runtime_evidence.session_id, firstReceipt.runtime_evidence.session_id);
       assert.notEqual(second.receipt.launch_id, firstReceipt.launch_id);
@@ -2657,10 +2822,49 @@ async function originalFixerFixture(outcome, mutation) {
       const originalSecond = attempts.find(item => item.dispatch_id === second.dispatch_id);
       assert.equal(originalSecond.subject.feedback.inventory.length, mutation === 'normalized-external' ? 8 : 7);
       assert.equal(originalSecond.subject.actionable_feedback.coverage.length, mutation === 'normalized-missing-actions' ? 0 : 3);
+      if (coveredSource || evolution) {
+        const historicalCoverage = originalSecond.subject.actionable_feedback.coverage.map(item =>
+          repairCoverageTransition(item, originalSecond.subject.actionable_feedback));
+        assert.deepEqual(originalSecond.subject.actionable_feedback.historical_dispatch_ids, [first.dispatch_id]);
+        assert.ok(historicalCoverage.every(item => item.historical && item.semantic_credit === false
+          && (!coveredSource || (item.source_transition.from === firstHead && item.source_transition.to === currentHead))));
+        assert.equal(originalSecond.subject.actionable_feedback.inventory.find(item => item.id === threadId).resolved, true);
+        if (evolution) {
+          assert.ok(historicalCoverage.every(item => item.scope_transition
+            && item.scope_transition.from.plan.sha256 !== item.scope_transition.to.plan.sha256));
+          assert.equal(originalSecond.preparation.plan.sha256, nativeRequest.context.plan_sha256);
+          assert.deepEqual(originalSecond.preparation.commit.files_modified, graph.tickets[f.scope.ticket].files);
+          assert.deepEqual(originalSecond.preparation.verificationAllowList, verificationAllowList);
+          assert.equal(originalSecond.preparation.commit.expectedBase, f.base);
+          if (!coveredSource) assert.ok(historicalCoverage.every(item =>
+            !Object.hasOwn(item, 'source_transition')), 'PLAN-only provenance must not invent a source transition');
+          if (evolution === 'base-merge') {
+            for (const item of historicalCoverage) {
+              const records = item.source_transition.records;
+              assert.equal(records.filter(pin => pin.coverage_sha256).length, 1);
+              assert.equal(records.filter(pin => pin.base_import && pin.semantic_credit === false).length, 1);
+              const merge = records.find(pin => pin.base_merge);
+              assert.equal(merge.commit, currentHead); assert.equal(merge.semantic_credit, false);
+              assert.deepEqual(merge.base_merge.parents, [sourceResult.artifact.commit, f.base]);
+              assert.equal(merge.base_merge.tree, git(f.root, 'rev-parse', currentHead + '^{tree}'));
+            }
+          }
+        }
+        if (locationMutation) {
+          const originalThread = JSON.parse(retainedFiles[0].bytes).payload.feedback.inventory.find(item => item.id === threadId);
+          const currentThread = originalSecond.subject.actionable_feedback.inventory.find(item => item.id === threadId);
+          assert.equal(originalThread.line, 1653);
+          assert.deepEqual(currentThread, { ...originalThread, line: feedback[0].line });
+          const receiptDir = path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'), 'receipts');
+          assert.equal(createDurableRecorder(receiptDir).getLatestReceipt('codex', 'review-fix').dispatch_id, second.dispatch_id);
+        }
+        for (const original of retainedFiles) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
+        assert.equal(first.receipt.dispatch_id, firstReceipt.dispatch_id);
+      }
       assert.equal(originalSecond.subject.actionable_feedback.digest === attempts.find(item => item.dispatch_id === first.dispatch_id).normalized_feedback_digest,
         !unknown);
       assert.equal(replies.length + prReplies.length, mutation === 'normalized-missing-actions' ? 10 : mutation === 'normalized-external' ? 7 : 6);
-      if (mutation === 'normalized-repeat') {
+      if (mutation === 'normalized-repeat' && !evolution) {
         const deepFile = selected.agent_file.replace('.toml', '-deep.toml');
         const deepAgent = repeatAgent.replace('shipyard-policy-rung = "repeat"', 'shipyard-policy-rung = "repeat_exhausted"')
           .replace('model_reasoning_effort = "high"', 'model_reasoning_effort = "xhigh"')
@@ -2677,7 +2881,7 @@ async function originalFixerFixture(outcome, mutation) {
         await assert.rejects(run, { code: 'REPAIR_POLICY_EXHAUSTED' });
         assert.equal(launches, 3);
       }
-      assert.equal(git(f.root, 'rev-parse', 'HEAD'), firstHead);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), currentHead);
       return;
     }
     if (mutation) {
@@ -2795,7 +2999,11 @@ async function originalFixerFixture(outcome, mutation) {
         assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
       } else { assert.equal(feedback[0].isResolved, false); assert.equal(result.actions.confirmed.length, 0); }
     }
-  } finally { os.homedir = originalHome; clean(f); fs.rmSync(home, { recursive: true, force: true }); }
+  } finally {
+    os.homedir = originalHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome;
+    clean(f); fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 for (const outcome of ['source', 'no-op', 'escalate']) test('canonical builder through original static fixer seals ' + outcome + ' with host custody with four original native progress messages',
@@ -2828,14 +3036,35 @@ for (const mutation of ['reply-author-foreign', 'reply-author-login', 'reply-aut
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 
 for (const mutation of ['normalized-repeat', 'normalized-cli-repeat', 'normalized-external', 'normalized-forged-actions', 'normalized-reply-body',
+  'normalized-default-home', 'normalized-cli-default-home', 'normalized-default-os-home', 'normalized-cli-default-os-home',
+  'normalized-default-missing-manifest', 'normalized-default-stale-manifest',
   'normalized-reply-author', 'normalized-reply-id', 'normalized-reply-target', 'normalized-source', 'normalized-reopened', 'normalized-missing-actions',
   'normalized-companion-body', 'normalized-companion-author', 'normalized-companion-missing', 'normalized-companion-link',
-  'normalized-companion-forged'])
+  'normalized-companion-forged', 'normalized-location-shift', 'normalized-location-null'])
   test('original complete feedback and authenticated host output ' + mutation,
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 for (const mutation of ['normalized-source-repeat', 'normalized-cli-source-repeat'])
   test('authenticated confirmed replies retain repeat policy through the original signed fixer source transition ' + mutation,
     () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
+
+for (const mutation of ['normalized-covered-source', 'normalized-covered-source-forged', 'normalized-covered-source-plan',
+  'normalized-covered-source-owners', 'normalized-uncovered-source', 'normalized-covered-source-reply-body',
+  'normalized-covered-source-reply-author', 'normalized-covered-source-reply-id', 'normalized-covered-source-reply-target',
+  'normalized-covered-source-companion-link', 'normalized-covered-source-location-shift', 'normalized-covered-source-location-null',
+  'normalized-covered-source-location-path', 'normalized-covered-source-location-original-line',
+  'normalized-covered-source-location-thread-id', 'normalized-covered-source-location-reopened',
+  'normalized-covered-source-location-negative', 'normalized-covered-source-location-string',
+  'normalized-covered-source-location-zero', 'normalized-covered-source-location-false', 'normalized-covered-source-location-empty',
+  'normalized-covered-source-location-body', 'normalized-covered-source-location-author',
+  'normalized-covered-source-location-forged', 'normalized-uncovered-source-location-shift'])
+  test('confirmed no-op feedback authenticates subsequent native executor source coverage ' + mutation,
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
+
+for (const evolution of ['plan', 'owners', 'allowlist', 'base', 'all', 'stale-plan', 'unsigned-base', 'base-merge', 'base-merge-extra'])
+  test('historical confirmed action provenance permits a fresh current signed scope ' + evolution,
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', 'normalized-covered-source', evolution)));
+test('historical scope alone starts a fresh current round without prior semantic approval',
+  () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', 'normalized-repeat', 'plan')));
 
 for (const mutation of ['companion-wrong-link', 'companion-wrong-pr', 'companion-wrong-review-pr', 'companion-wrong-repo',
   'companion-wrong-target', 'companion-truncated', 'companion-review-body', 'companion-review-state', 'companion-review-author',
@@ -2853,5 +3082,119 @@ test('action-only CLI accepts a bounded original dispatch selector and refuses c
     ['--resume-repair-actions', 'x'.repeat(161), '--scope-file', '/tmp/scope.json']])
     assert.throws(() => parseRepairActionResumeArguments(args), { code: 'INVALID_INPUT' });
 });
+
+
+function sharedRepairTransitionRegression() {
+  const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const oid = index => index.toString(16).padStart(40, '0');
+  const source_transition = { from: oid(1), to: oid(97), records: Array.from({ length: 96 }, (_, i) => ({
+    commit: oid(i + 2), coverage_sha256: digest({ commit: oid(i + 2), original_receipt: i }),
+  })) };
+  const owners = Array.from({ length: 14 }, (_, i) => 'plugins/delivery-pipeline/scripts/original-source-owner-' + i + '.cjs');
+  const scope_transition = { from: { base: oid(200), base_ref: 'epic/phase49',
+    plan: { path: '49-18-PLAN.md', sha256: digest('original-plan') }, owners,
+    allow_list: Array.from({ length: 4 }, (_, i) => ({ argv: ['node', '--test', ...owners.slice(i, i + 5)],
+      profile: 'host', timeout_ms: 600000 })) },
+  to: { base: oid(201), base_ref: 'epic/phase49',
+    plan: { path: '49-18-PLAN.md', sha256: digest('current-plan') }, owners },
+  base_transition: { from: oid(200), to: oid(201), commits: [{ commit: oid(201), signer: 'A'.repeat(40) }] } };
+  const coverage = Array.from({ length: 49 }, (_, i) => {
+    const reply = { id: 'reply-' + i, kind: 'thread-comment', thread_id: 'thread-' + i,
+      author: 'native-fixer', author_id: 'original-author', body: 'Complete reasoning Ω ' + 'evidence '.repeat(80) };
+    reply.body_sha256 = digest(reply.body);
+    const response = JSON.stringify({ data: { node: reply, target: { id: 'finding-' + i },
+      review: { id: 'review-' + i, body: '', state: 'COMMENTED' } } });
+    return { dispatch_id: 'original-dispatch-' + Math.floor(i / 7), receipt_sha256: digest('receipt-' + i),
+      artifact_ref: '/original/artifact-' + i, artifact_digest: digest('artifact-' + i),
+      actions_sha256: digest('original-action-bytes-' + i), feedback_id: 'finding-' + i,
+      disposition_sha256: digest('complete-disposition-' + i), reply, resolved: true,
+      reply_review: { response, sha256: digest(response), created: true,
+        review: { id: 'review-' + i, body: '', state: 'COMMENTED' } },
+      historical: true, semantic_credit: false, source_transition, scope_transition };
+  });
+  const feedback = { inventory: coverage.flatMap(item => [item.reply, item.reply_review.review]), digest: digest('full-live-feedback') };
+  const prior_attempts = Array.from({ length: 7 }, (_, i) => ({ dispatch_id: 'original-dispatch-' + i,
+    notes: 'Complete prior notes '.repeat(180), hypothesis: 'Complete prior hypothesis '.repeat(150) }));
+  const subject = { feedback, actionable_feedback: { coverage, inventory: feedback.inventory }, prior_attempts,
+    hypotheses: prior_attempts.map(item => item.hypothesis) };
+  const shared = shareRepairTransitions(coverage);
+  const compact = { ...subject, actionable_feedback: { ...subject.actionable_feedback, ...shared } };
+  const bytes = value => Buffer.byteLength(JSON.stringify(value));
+  assert.ok(bytes(subject) > 512 * 1024, 'realistic repeated historical inventory exceeds unchanged subject bound');
+  assert.ok(bytes(compact) < 512 * 1024, 'complete shared subject fits unchanged custody bound');
+  assert.ok(bytes({ subject: compact, files_modified: owners }) < 1024 * 1024, 'complete native prompt material fits unchanged prompt bound');
+  assert.equal(Object.keys(shared.historical_transitions).length, 1);
+  assert.deepEqual(shared.coverage.map(item => repairCoverageTransition(item, shared)), coverage);
+  assert.deepEqual(compact.feedback, subject.feedback);
+  assert.deepEqual(compact.prior_attempts, prior_attempts);
+  assert.deepEqual(compact.hypotheses, subject.hypotheses);
+  const first = shared.coverage[0], reference = first.transition_sha256;
+  for (const mutate of [value => { delete value.historical_transitions[reference]; },
+    value => { value.historical_transitions[reference].source_transition.to = oid(999); },
+    value => { value.historical_transitions[reference].scope_transition.to.plan.sha256 = digest('foreign-current-plan'); }]) {
+    const altered = JSON.parse(JSON.stringify(shared)); mutate(altered);
+    assert.throws(() => repairCoverageTransition(first, altered), { code: 'REPAIR_PREDECESSOR_INVALID' });
+  }
+  for (const altered of [{ ...first, semantic_credit: true }, { ...first, transition_sha256: '0'.repeat(64) },
+    { ...first, source_transition }, { ...first, historical: false }])
+    assert.throws(() => repairCoverageTransition(altered, shared), { code: 'REPAIR_PREDECESSOR_INVALID' });
+  assert.deepEqual(repairCoverageTransition(coverage[0], {}), coverage[0], 'original sealed inline subjects remain readable');
+  const sourceOnly = shareRepairTransitions([{ ...coverage[0], scope_transition: undefined }]);
+  const sourcePrior = repairCoverageTransition(sourceOnly.coverage[0], sourceOnly);
+  assert.throws(() => recheckHistoricalRepair({ commit: { expectedHead: oid(999) } }, sourcePrior, source_transition.from),
+    { code: 'REPAIR_PREDECESSOR_INVALID' });
+  const currentScope = scope_transition.to;
+  const prepared = { commit: { expectedBase: currentScope.base, files_modified: currentScope.owners },
+    baseRef: currentScope.base_ref, plan: currentScope.plan, verificationAllowList: currentScope.allow_list };
+  assert.throws(() => recheckHistoricalRepair({ ...prepared, plan: { ...prepared.plan, sha256: digest('foreign-current-plan') } },
+    repairCoverageTransition(first, shared), source_transition.from), { code: 'REPAIR_PREDECESSOR_INVALID' });
+
+  return { inline_bytes: bytes(subject), shared_bytes: bytes(compact),
+    repeated_transition_bytes: bytes(coverage.map(item => ({ source_transition: item.source_transition, scope_transition: item.scope_transition }))),
+    shared_transition_bytes: bytes(shared.historical_transitions) };
+}
+
+test('49 complete historical actions share authenticated transition bytes within unchanged custody bounds',
+  sharedRepairTransitionRegression);
+
+function operationalEscalationHistoryRegression(mutation) {
+  const root = fs.mkdtempSync(path.join(temporary, 'operational-history-'));
+  const journalFile = path.join(root, 'delivery-log.jsonl');
+  const row = { ts: '2026-10-13T12:20:09.994Z', event: 'escalation', ticket: 'T-49-18', pr: 470,
+    reason: 'partial native fixer/escalated recovery', by: 'escalation-record' };
+  const variants = {
+    attempt: { event: 'attempt' }, 'fix-round': { event: 'fix_round' },
+    'native-escalation': { role: 'review-fix', native_status: 'completed' },
+    'marker-extra-fields': { model: 'gpt-6.1-sol', status: 'passed', hypothesis: 'claimed completion',
+      artifact_ref: 'claimed-artifact', dispatch_id: 'claimed-dispatch' },
+    'foreign-pr': { pr: 471 }, 'foreign-identity': { repository: 'foreign/repository' },
+  };
+  Object.assign(row, variants[mutation] || {});
+  const bytes = mutation === 'corrupt-journal' ? JSON.stringify(row) + '\n{broken\n' : JSON.stringify(row) + '\n';
+  fs.writeFileSync(journalFile, bytes);
+  const source = fs.readFileSync(path.join(__dirname, '../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs'), 'utf8');
+  const body = source.slice(source.indexOf('function repairHistory('), source.indexOf('function retainRepairAttempt('));
+  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+  const history = new Function('fs', 'path', 'sha256', 'privateDirectory', 'MAX_GRAPH_BYTES', 'fail',
+    body + '; return repairHistory;')(fs, path, digest, () => root, 1024 * 1024,
+    (code, message) => { throw Object.assign(new Error(message), { code }); });
+  const prepared = { stateRoot: root, graphFile: path.join(root, 'tickets.json'), commit: { ticket: 'T-49-18' } };
+  try {
+    if (mutation) assert.throws(() => history(prepared, 470), { code: 'REPAIR_PREDECESSOR_INVALID' });
+    else {
+      const result = history(prepared, 470);
+      assert.deepEqual(result.history, []);
+      assert.equal(result.reference, null);
+      assert.deepEqual(result.journal, { path: journalFile, sha256: digest(bytes), bytes: Buffer.byteLength(bytes) });
+    }
+    assert.equal(fs.readFileSync(journalFile, 'utf8'), bytes);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+test('49 ordinary operator escalation is nonsemantic context in the complete bound journal',
+  () => operationalEscalationHistoryRegression());
+for (const mutation of ['attempt', 'fix-round', 'native-escalation', 'marker-extra-fields', 'foreign-pr', 'foreign-identity', 'corrupt-journal'])
+  test('49 operational escalation classification refuses ' + mutation,
+    () => operationalEscalationHistoryRegression(mutation));
 
 done();

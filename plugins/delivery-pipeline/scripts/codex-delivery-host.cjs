@@ -715,9 +715,9 @@ function finalizer(options) {
 
 function installedAgentOptions(options, selection, capabilities) {
   const env = options.env || process.env;
-  const agentDir = options.agentDir || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents');
+  const agentDir = options.agentDir === undefined ? path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents') : options.agentDir;
   return { agentDir, agentFile: selection.agent_file,
-    agentManifest: options.agentManifest || path.join(agentDir, '.shipyard-manifest.json'),
+    agentManifest: options.agentManifest === undefined ? path.join(agentDir, '.shipyard-manifest.json') : options.agentManifest,
     capabilities, capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE,
     readerCapacity: options.readerCapacity, automaticReader: options.automaticReader === true, selection: { model: selection.model, effort: selection.effort } };
 }
@@ -786,8 +786,10 @@ function prepareIntegrationLineage(scope, prepared, options) {
     storageRoot: options.storageRoot, graphDir: prepared.graph.directory,
     generatedInstructionBytes: options.generatedInstructionBytes, readerCapacity: options.readerCapacity, readerProfile: options.readerProfile };
   const original = encodeUniqueContent(prepared.packet);
-  const currentInput = archReviewContext.prepareFileInput(scope, JSON.stringify(original), {
+  let currentInput = archReviewContext.prepareFileInput(scope, JSON.stringify(original), {
     ...fileOptions, readerCapacity: undefined, readerProfile: undefined, binding: { ...binding, packet_digest: integrationDigest(original) } });
+  if (options.nativeRuntime === 'codex' && options.readerProfile && typeof options.host?.restoreIntegrationSourceInput === 'function')
+    currentInput = options.host.restoreIntegrationSourceInput(currentInput);
   let selection = roleArtifact.selectReviewBaseline({ currentInput });
   if (options.nativeRuntime !== 'codex') selection = { schema: selection.schema, mode: 'full',
     role: selection.role, current: selection.current, baseline: null,
@@ -1487,7 +1489,7 @@ function completeRepairFeedback(options, prepared, pr) {
           if (!object(node) || typeof node.id !== 'string' || typeof node.isResolved !== 'boolean')
             fail('REPAIR_FEEDBACK_INVALID', 'review thread identity is incomplete');
           add('thread', { id: node.id, body: '' }, { resolved: node.isResolved, path: node.path || null,
-            line: node.line || null, original_line: node.originalLine || null });
+            line: node.line ?? null, original_line: node.originalLine || null });
           paginate('thread-comments', 'query($cursor:String,$id:ID!){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$cursor){nodes{id body author{login ... on Node{id}}} pageInfo{hasNextPage endCursor}}}}}',
             response => response.data?.node?.comments, { id: node.id });
         } else add(field === 'thread-comments' ? 'thread-comment' : field, node,
@@ -1588,7 +1590,7 @@ function repairHistory(prepared, pr) {
     const attempt = readSealed(path.join(directory, cursor + '.json'), prepared.key);
     if (!attempt || sha256(canonical(attempt)) !== cursor || attempt.ticket !== prepared.commit.ticket
         || attempt.pr !== pr || attempt.worktree !== prepared.commit.worktree || attempt.role !== 'review-fix'
-        || attempt.repository !== prepared.repository || attempt.base !== prepared.baseRef)
+        || attempt.repository !== prepared.repository || attempt.base !== attempt.preparation?.baseRef)
       fail('REPAIR_PREDECESSOR_INVALID', 'repair predecessor subject or original custody changed');
     const recorder = createDurableRecorder(attempt.receipt_store);
     const original = authenticatedReceipt(recorder, attempt.dispatch_id, 'review-fix');
@@ -1619,6 +1621,12 @@ function repairHistory(prepared, pr) {
       if (row.ticket !== prepared.commit.ticket || !['attempt', 'fix_round', 'escalation'].includes(row.event)
           || !['review-fix', undefined].includes(row.artifact_role || row.role)) continue;
       if (row.pr !== undefined && row.pr !== pr) fail('REPAIR_PREDECESSOR_INVALID', 'journal predecessor belongs to a foreign PR');
+      const operationalDeclaration = row.event === 'escalation' && row.by === 'escalation-record'
+        && Object.keys(row).sort().join(',') === 'by,event,pr,reason,ticket,ts'
+        && row.pr === pr && typeof row.reason === 'string' && row.reason.trim().length > 0
+        && typeof row.ts === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.ts)
+        && Number.isFinite(Date.parse(row.ts)) && new Date(row.ts).toISOString() === row.ts;
+      if (operationalDeclaration) continue;
       if (!row.artifact_ref || !row.artifact_digest || !row.dispatch_id || !(row.boundary_store || row.boundary_store_path))
         fail('REPAIR_PREDECESSOR_INVALID', 'unsigned repair carry cannot authorize another attempt');
       const artifact = roleArtifact.read({ role: 'review-fix', ticket: prepared.commit.ticket, pr, base: prepared.baseRef,
@@ -1736,8 +1744,126 @@ function confirmRepairReply(options, prepared, feedback, current, reply, origina
   return relation ? { ...relation, created: !!created } : null;
 }
 
+function repairRevisionSigner(root, commit, expectedSigner = null) {
+  git(root, ['verify-commit', commit]);
+  const [code, signer] = git(root, ['show', '-s', '--format=%G?%x00%GF', commit]).split('\0');
+  if (!['G', 'U'].includes(code) || !signer || (expectedSigner && signer !== expectedSigner))
+    throw new Error('revision lacks its authenticated signer');
+  return signer;
+}
+
+function repairBaseMerge(root, commit, sourceParent, currentBase) {
+  const [parentText, tree] = git(root, ['show', '-s', '--format=%P%x00%T', commit]).split('\0');
+  const parents = parentText.split(' ');
+  if (parents.length !== 2 || parents[0] !== sourceParent) throw new Error('base import changed its source parent');
+  git(root, ['merge-base', '--is-ancestor', parents[1], currentBase]);
+  const expected = git(root, ['merge-tree', '--write-tree', parents[0], parents[1]]);
+  if (!/^[a-f0-9]{40,64}$/.test(expected) || tree !== expected)
+    throw new Error('base import differs from the exact conflict-free merge tree');
+  return { parents, tree };
+}
+
+function repairScopeIdentity(value) {
+  return { base: value.commit.expectedBase, base_ref: value.baseRef,
+    plan: { path: value.plan.path, sha256: value.plan.sha256 }, owners: value.commit.files_modified,
+    allow_list: value.verificationAllowList };
+}
+
+function recheckHistoricalRepair(prepared, prior, originalHead) {
+  try {
+    const root = prepared.commit.worktree, scope = prior.scope_transition, transition = prior.source_transition;
+    if (prior.semantic_credit !== false || (!scope && !transition)) throw new Error('missing zero-credit transition');
+    if (scope && (canonical(scope.to) !== canonical(repairScopeIdentity(prepared))
+        || canonical(scope.from) === canonical(scope.to)
+        || (canonical(scope.from.owners) !== canonical(scope.to.owners) && scope.from.plan.sha256 === scope.to.plan.sha256)))
+      throw new Error('historical scope no longer binds the current canonical scope');
+    const base = scope?.base_transition;
+    if (scope && (scope.from.base !== scope.to.base) !== !!base) throw new Error('missing original base evolution');
+    if (base) {
+      if (base.from !== scope.from.base || base.to !== scope.to.base) throw new Error('base evolution changed its scope');
+      git(root, ['merge-base', '--is-ancestor', base.from, base.to]);
+      const commits = git(root, ['rev-list', '--reverse', '--max-count=501', base.from + '..' + base.to]).split('\n').filter(Boolean);
+      if (!commits.length || commits.length > 500 || canonical(commits.map(commit => ({
+        commit, signer: repairRevisionSigner(root, commit) }))) !== canonical(base.commits))
+        throw new Error('historical base signatures or ancestry changed');
+    }
+    if (!transition) {
+      if (originalHead !== prepared.commit.expectedHead) throw new Error('scope evolution lost its original source head');
+      return;
+    }
+    if (transition.from !== originalHead || transition.to !== prepared.commit.expectedHead
+        || !Array.isArray(transition.records) || !transition.records.length || transition.records.length > 500)
+      throw new Error('historical source no longer binds the current head');
+    git(root, ['merge-base', '--is-ancestor', transition.from, transition.to]);
+    const commits = git(root, ['rev-list', '--reverse', '--max-count=501', transition.from + '..' + transition.to]).split('\n').filter(Boolean);
+    if (canonical(commits) !== canonical(transition.records.map(pin => pin.commit))) throw new Error('historical source ancestry changed');
+    const authority = require('./conveyor-coverage.cjs'), repo = authority.repoSlug(root, prepared.repo);
+    const imported = new Map((base?.commits || []).map(pin => [pin.commit, pin]));
+    let sourceParent = transition.from;
+    for (const pin of transition.records) {
+      if (pin.base_import) {
+        if (canonical(pin) !== canonical({ ...imported.get(pin.commit), base_import: true, semantic_credit: false }))
+          throw new Error('historical base import changed');
+      } else if (pin.base_merge) {
+        if (!base || pin.semantic_credit !== false
+            || pin.signer !== repairRevisionSigner(root, pin.commit, prepared.commit.expectedSigner)
+            || canonical(pin.base_merge) !== canonical(repairBaseMerge(root, pin.commit, sourceParent, base.to)))
+          throw new Error('historical base merge changed');
+        sourceParent = pin.commit;
+      } else {
+        const checked = authority.verify({ worktree: root, repo, commit: pin.commit });
+        if (!checked.covered || !['executor', 'fixer'].includes(checked.record.kind)
+            || checked.record.ticket !== prepared.commit.ticket || checked.record.repository_id !== prepared.repository
+            || canonical(checked.record.parents) !== canonical([sourceParent])
+            || sha256(canonical(checked.record)) !== pin.coverage_sha256)
+          throw new Error('historical action source coverage changed');
+        const original = authenticatedReceipt(createDurableRecorder(checked.record.receipt_store), checked.record.dispatch_id,
+          checked.record.kind === 'executor' ? 'executor' : 'review-fix');
+        if (original.digest !== checked.record.receipt_digest) throw new Error('historical source receipt changed');
+        sourceParent = pin.commit;
+      }
+    }
+    if (sourceParent !== transition.to) throw new Error('historical source lacks its authenticated current tip');
+  } catch (error) { fail('REPAIR_PREDECESSOR_INVALID', 'historical action provenance changed: ' + error.message); }
+}
+
+function shareRepairTransitions(coverage) {
+  const historical_transitions = {};
+  const shared = coverage.map(prior => {
+    if (!prior.historical) return prior;
+    const transition = {
+      ...(prior.source_transition ? { source_transition: prior.source_transition } : {}),
+      ...(prior.scope_transition ? { scope_transition: prior.scope_transition } : {}),
+    };
+    const reference = sha256(canonical(transition));
+    historical_transitions[reference] = transition;
+    const action = { ...prior, transition_sha256: reference };
+    delete action.source_transition;
+    delete action.scope_transition;
+    return action;
+  });
+  const compact = { coverage: shared, historical_transitions };
+  return Buffer.byteLength(canonical(compact)) < Buffer.byteLength(canonical({ coverage }))
+    ? compact : { coverage };
+}
+
+function repairCoverageTransition(prior, normalized) {
+  if (!Object.hasOwn(prior, 'transition_sha256')) return prior;
+  const reference = prior.transition_sha256;
+  const transition = normalized.historical_transitions?.[reference];
+  if (!prior.historical || prior.semantic_credit !== false || !/^[a-f0-9]{64}$/.test(reference || '')
+      || !object(transition) || sha256(canonical(transition)) !== reference
+      || Object.keys(transition).some(key => !['source_transition', 'scope_transition'].includes(key))
+      || (!transition.source_transition && !transition.scope_transition)
+      || Object.hasOwn(prior, 'source_transition') || Object.hasOwn(prior, 'scope_transition'))
+    fail('REPAIR_PREDECESSOR_INVALID', 'shared historical transition bytes or action reference changed');
+  const expanded = { ...prior, ...transition };
+  delete expanded.transition_sha256;
+  return expanded;
+}
+
 function normalizedRepairFeedback(prepared, feedback, history, options) {
-  const excluded = new Map(), resolutions = new Map(), coverage = [];
+  const excluded = new Map(), resolutions = new Map(), coverage = [], historicalDispatches = [];
   for (const { attempt, receipt } of [...history.history].reverse()) {
     if (!receipt || !attempt.subject) continue;
     const file = path.join(privateDirectory(prepared.stateRoot, 'repair-actions'), sha256(attempt.dispatch_id) + '.json');
@@ -1769,11 +1895,68 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
       verifySignedCommit(prepared.commit.worktree, candidate, transition.to);
       expectedHead = transition.to;
     }
-    if (expectedHead !== prepared.commit.expectedHead || attempt.preparation.commit.expectedBase !== prepared.commit.expectedBase
-        || attempt.preparation.graphDigest !== prepared.graphDigest || attempt.preparation.plan.sha256 !== prepared.plan.sha256
-        || attempt.preparation.commit.expectedBranch !== prepared.commit.expectedBranch
+    if (attempt.preparation.commit.expectedBranch !== prepared.commit.expectedBranch
+        || attempt.preparation.commit.expectedSigner !== prepared.commit.expectedSigner
+        || attempt.preparation.repository !== prepared.repository || attempt.preparation.repo !== prepared.repo
         || subject.pr !== prepared.repairPr || feedback.repo !== subject.feedback.repo)
-      fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output belongs to another source/head/base/PR');
+      fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output belongs to another repository/branch/signer/PR');
+    const priorScope = repairScopeIdentity(attempt.preparation), currentScope = repairScopeIdentity(prepared);
+    const scopeChanged = canonical(priorScope) !== canonical(currentScope);
+    if (canonical(priorScope.owners) !== canonical(currentScope.owners)
+        && priorScope.plan.sha256 === currentScope.plan.sha256)
+      fail('REPAIR_SUBJECT_CHANGED', 'changed owners lack a fresh canonical PLAN');
+    let baseTransition;
+    if (priorScope.base !== currentScope.base) {
+      try {
+        const root = prepared.commit.worktree;
+        git(root, ['merge-base', '--is-ancestor', priorScope.base, currentScope.base]);
+        const commits = git(root, ['rev-list', '--reverse', '--max-count=501', priorScope.base + '..' + currentScope.base])
+          .split('\n').filter(Boolean);
+        if (!commits.length || commits.length > 500) throw new Error('base evolution exceeds its finite bound');
+        baseTransition = { from: priorScope.base, to: currentScope.base,
+          commits: commits.map(commit => ({ commit, signer: repairRevisionSigner(root, commit) })) };
+      } catch (error) { fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output lacks authenticated base evolution: ' + error.message); }
+    }
+    let sourceTransition;
+    if (expectedHead !== prepared.commit.expectedHead) {
+      try {
+        const root = prepared.commit.worktree, authority = require('./conveyor-coverage.cjs');
+        git(root, ['merge-base', '--is-ancestor', expectedHead, prepared.commit.expectedHead]);
+        const repo = authority.repoSlug(root, prepared.repo);
+        const commits = git(root, ['rev-list', '--reverse', '--max-count=501', expectedHead + '..' + prepared.commit.expectedHead])
+          .split('\n').filter(Boolean);
+        if (!commits.length || commits.length > 500) throw new Error('source transition exceeds its finite bound');
+        const imported = new Map((baseTransition?.commits || []).map(record => [record.commit, record]));
+        let sourceParent = expectedHead;
+        const records = commits.map(commit => {
+          const checked = authority.verify({ worktree: root, repo, commit });
+          if (!checked.covered || !['executor', 'fixer'].includes(checked.record.kind)
+              || checked.record.ticket !== prepared.commit.ticket || checked.record.repository_id !== prepared.repository) {
+            if (imported.has(commit)) return { ...imported.get(commit), base_import: true, semantic_credit: false };
+            if (!baseTransition) throw new Error('source transition belongs to another producer or ticket');
+            const merge = repairBaseMerge(root, commit, sourceParent, currentScope.base);
+            const signer = repairRevisionSigner(root, commit, prepared.commit.expectedSigner);
+            sourceParent = commit;
+            return { commit, signer, base_merge: merge, semantic_credit: false };
+          }
+          const record = checked.record;
+          if (canonical(record.parents) !== canonical([sourceParent]))
+            throw new Error('source transition changed its exact native producer parent');
+          const original = authenticatedReceipt(createDurableRecorder(record.receipt_store), record.dispatch_id,
+            record.kind === 'executor' ? 'executor' : 'review-fix');
+          if (original.digest !== record.receipt_digest) throw new Error('source transition receipt changed');
+          sourceParent = commit;
+          return { commit, coverage_sha256: sha256(canonical(record)) };
+        });
+        if (sourceParent !== prepared.commit.expectedHead) throw new Error('source transition lacks a current authenticated tip');
+        sourceTransition = { from: expectedHead, to: prepared.commit.expectedHead, records };
+      } catch (error) {
+        fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output lacks an authenticated covered source transition: ' + error.message);
+      }
+    } else if (!scopeChanged && attempt.preparation.graphDigest !== prepared.graphDigest)
+      fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output graph changed without a covered source transition');
+    const historical = !!sourceTransition || scopeChanged;
+    if (historical) historicalDispatches.push(attempt.dispatch_id);
     const seen = new Set();
     for (const action of actions.confirmed) {
       const disposition = attempt.result.review_dispositions.find(item => item.id === action.feedback_id);
@@ -1785,6 +1968,9 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
           || !matchingRepairReply(reply, original, disposition, actions.actor)
           || canonical(current) !== canonical(reply))
         fail('REPAIR_PREDECESSOR_INVALID', 'confirmed reply identity, author, target or complete live bytes changed');
+      if (original.kind === 'thread-comment'
+          && canonical(feedback.inventory.find(item => item.id === original.id)) !== canonical(original))
+        fail('REPAIR_PREDECESSOR_INVALID', 'confirmed reply original comment context changed');
       seen.add(action.feedback_id); excluded.set(action.reply_id, reply);
       if (action.reply_review) {
         repairReplyReview(options, { ...prepared, repair: subject }, feedback, reply, original, actions.actor,
@@ -1800,16 +1986,23 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
         const thread = subject.feedback.inventory.find(item => item.id === threadId);
         const confirmed = actions.feedback.inventory.find(item => item.id === threadId);
         const currentThread = feedback.inventory.find(item => item.id === threadId);
+        const currentIdentity = sourceTransition && currentThread
+          && (currentThread.line === null || (Number.isSafeInteger(currentThread.line) && currentThread.line > 0))
+          ? { ...currentThread, line: confirmed?.line } : currentThread;
         if (disposition.action !== 'reply-and-resolve' || !thread || thread.resolved
             || canonical(confirmed) !== canonical({ ...thread, resolved: true })
-            || canonical(currentThread) !== canonical(confirmed))
+            || canonical(currentIdentity) !== canonical(confirmed))
           fail('REPAIR_PREDECESSOR_INVALID', 'host resolution changed its original external thread');
-        if (!resolutions.has(threadId)) resolutions.set(threadId, thread);
+        if (!historical && !resolutions.has(threadId)) resolutions.set(threadId, thread);
       }
       coverage.push({ dispatch_id: attempt.dispatch_id, receipt_sha256: attempt.receipt_sha256,
         artifact_ref: attempt.artifact_ref, artifact_digest: attempt.artifact_digest,
         actions_sha256: actionsSha256, feedback_id: action.feedback_id,
         reply: current, disposition_sha256: sha256(canonical(disposition)), resolved: action.resolved,
+        ...(historical ? { historical: true, semantic_credit: false,
+          ...(sourceTransition ? { source_transition: sourceTransition } : {}),
+          ...(scopeChanged ? { scope_transition: { from: priorScope, to: currentScope,
+            ...(baseTransition ? { base_transition: baseTransition } : {}) } } : {}) } : {}),
         ...(action.reply_review ? { reply_review: action.reply_review } : {}) });
     }
     if (sha256(fs.readFileSync(file)) !== actionsSha256)
@@ -1817,7 +2010,7 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
   }
   const inventory = feedback.inventory.filter(item => !excluded.has(item.id));
   const normalized = inventory.map(item => resolutions.get(item.id) || item);
-  return Object.freeze({ inventory, digest: sha256(canonical(normalized)), coverage });
+  return Object.freeze({ inventory, digest: sha256(canonical(normalized)), ...shareRepairTransitions(coverage), historical_dispatch_ids: historicalDispatches });
 }
 
 function prepareRepair(options, scope, context) {
@@ -1844,7 +2037,10 @@ function prepareRepair(options, scope, context) {
   const signature = sha256(canonical({ ticket: scope.ticket, pr, repository: feedback.repo, feedback: normalized.digest }));
   const previous = history.history[0];
   let signatureState = 'first';
-  if ((previous?.attempt.normalized_feedback_digest || previous?.attempt.feedback_digest) === normalized.digest && previous.receipt) {
+  if ((previous?.attempt.normalized_feedback_digest || previous?.attempt.feedback_digest) === normalized.digest && previous.receipt
+      && !normalized.historical_dispatch_ids.includes(previous.attempt.dispatch_id)
+      && (previous.attempt.preparation.commit.expectedHead === prepared.commit.expectedHead
+        || normalized.coverage.some(item => item.dispatch_id === previous.attempt.dispatch_id && !item.historical))) {
     if (previous.receipt.applied_effort === 'low') signatureState = 'repeat';
     else if (previous.receipt.applied_effort === 'high') signatureState = 'repeat_exhausted';
     else fail('REPAIR_POLICY_EXHAUSTED', 'original completed deepest repair remains unresolved');
@@ -1865,6 +2061,8 @@ function prepareRepair(options, scope, context) {
     + 'status (fixed/no-op/escalate), pushed=false (boolean), notes, hypothesis and review_dispositions. '
     + 'notes and hypothesis must be nonempty strings of at most 4096 bytes each; no additional fields are allowed. '
     + 'The complete final JSON must fit within 128 KiB without truncation. '
+    + 'Historical action transition_sha256 references the complete entry in actionable_feedback.historical_transitions; '
+    + 'these historical transitions grant no semantic credit. '
     + 'Every actionable feedback ID requires one disposition; full inventory and authenticated prior host dispositions remain bound. Each disposition is {id, action (reply/reply-and-resolve/escalate), reply, evidence:{command,result}}. '
     + 'Each reply, evidence.command and evidence.result must be a nonempty string of at most 4096 bytes; no additional disposition or evidence fields are allowed. '
     + 'Only unresolved thread IDs can be resolved. If status="escalate", every disposition must use reply or escalate; '
@@ -1926,6 +2124,11 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
     if (!readSealed(file, prepared.key) || sha256(fs.readFileSync(file)) !== prior.actions_sha256
         || canonical(current.inventory.find(item => item.id === prior.reply.id)) !== canonical(prior.reply))
       fail('REPAIR_PREDECESSOR_INVALID', 'authenticated prior host disposition coverage changed');
+    if (prior.historical) {
+      const actions = readSealed(file, prepared.key);
+      recheckHistoricalRepair(prepared, repairCoverageTransition(prior, prepared.repair.actionable_feedback),
+        actions.subject?.live?.headRefOid);
+    }
     if (prior.reply_review) {
       const actions = readSealed(file, prepared.key);
       const subject = actions.subject;
@@ -2646,8 +2849,7 @@ function createCodexDeliveryHost(options = {}) {
   for (const field of ['run_id', 'ticket', 'phase', 'worktree', 'runtime', 'provider']) {
     if (runtimeHost.scope[field] !== scope[field]) fail('SCOPE_MISMATCH', 'runtime host scope differs at ' + field);
   }
-  const agentDir = options.agentDir;
-  const agentManifest = options.agentManifest;
+  const { agentDir, agentManifest } = installedAgentOptions(options, {}, runtimeHost.capabilities);
   const env = options.env || process.env;
 
   return Object.freeze({
@@ -2676,6 +2878,14 @@ function createCodexDeliveryHost(options = {}) {
       }
       let repairCompleted;
       let fileInput;
+      if (['arch-review', 'integrator'].includes(request.role)
+          && runtimeHost.recorder.getVerifiedRecord(request.dispatch_id)?.receipt.runtime_evidence?.completed_source) {
+        const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, dispatch_id: request.dispatch_id });
+        const resume = source.state.resume, last = resume?.reconciliations?.at(-1);
+        if (resume?.delivered || (last?.status === 'recorded' && last.delivery_pending !== true)
+            || (!last && !resume?.completion_failures?.length && resume?.delivery_pending !== true))
+          fail('REVIEW_SOURCE_CLAIMED', 'original completed source result was already delivered');
+      }
       if (request.role === 'arch-review') {
         const prepared = options.archReviewContext;
         if (!archReviewContext.isPreparedContext(prepared)
@@ -2690,40 +2900,66 @@ function createCodexDeliveryHost(options = {}) {
         if (fileInput) Object.assign(request.context, { input_transport: 'host-files', input_bundle: fileInput.input_bundle });
         request.context.prompt = archReviewContext.admittedPrompt(prepared);
       }
-      if (request.role !== 'arch-review') fileInput = prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
+      if (request.role !== 'arch-review') fileInput = prepareIntegratorInput(scope, request, { ...options, host: runtimeHost, automaticReader: !options.readerCapacity });
       let completedSourceReference;
       if (fileInput?.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
         if (options.readerCapacity || options.readerProfile) fail('READER_CAPACITY_UNSUPPORTED', 'automatic candidate accepts no caller profile or capacity');
         if (typeof runtimeHost.measureBatchReaderCapacity !== 'function' || typeof runtimeHost.resumeCompletedSource !== 'function'
-            || typeof runtimeHost.reserveCompletedSourceCandidate !== 'function')
+            || typeof runtimeHost.reserveCompletedSourceCandidate !== 'function'
+            || typeof runtimeHost.completeCompletedSourceRecording !== 'function'
+            || typeof runtimeHost.completeCompletedSourceDelivery !== 'function'
+            || typeof runtimeHost.recoverCompletedSourceRecording !== 'function'
+            || typeof runtimeHost.retainCompletedSourceRecordingFailure !== 'function')
           fail('READER_CAPACITY_UNSUPPORTED', 'automatic review requires original probe and fresh-source runtime seams');
         const selected = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals: request.signals });
         if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
         if (integrationInputs.has(fileInput)) recheckIntegrationReview(integrationInputs.get(fileInput));
         archReviewContext.verifyFileInput(fileInput);
-        runtimeHost.reserveCompletedSourceCandidate(fileInput);
-        const capacity = await runtimeHost.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only', signals: request.signals }, fileInput);
-        const previous = fileInput;
-        if (request.role === 'arch-review') {
-          archReviewContext.admitInstalledLaunch(options.archReviewContext,
-            installedAgentOptions({ ...options, automaticReader: !options.readerCapacity, readerCapacity: capacity }, selected, runtimeHost.capabilities));
-          fileInput = archReviewContext.admittedFileInput(options.archReviewContext);
-          request.context.prompt = archReviewContext.admittedPrompt(options.archReviewContext);
-        } else {
-          fileInput = archReviewContext.admitReaderBatchInput(fileInput, capacity);
-          const review = integrationInputs.get(previous);
-          if (review) {
-            const admitted = Object.freeze({ ...review, input: fileInput });
-            integrationInputs.set(fileInput, admitted);
-            recheckIntegrationReview(admitted);
-          }
-          request.context.prompt = fileInput.prompt;
+        const currentInput = fileInput;
+        fileInput = runtimeHost.reserveCompletedSourceCandidate(fileInput);
+        if (fileInput !== currentInput) {
+          if (request.role === 'arch-review') archReviewContext.restoreInstalledMeasuredInput(options.archReviewContext, currentInput, fileInput);
+          const review = integrationInputs.get(currentInput);
+          if (review) integrationInputs.set(fileInput, Object.freeze({ ...review, input: fileInput }));
         }
-        if (previous.input_bundle.manifest_sha256 !== fileInput.input_bundle.manifest_sha256
-            || canonical(previous.manifest) !== canonical(fileInput.manifest)) fail('READER_CAPACITY_UNSUPPORTED', 'admission changed finalized measurement candidate');
-        request.context.input_bundle = fileInput.input_bundle;
-        request.context.input_transport = 'host-files';
-        completedSourceReference = require('./codex-runtime-host.cjs').prepareCompletedSource(capacity, fileInput, request.context.prompt);
+        if (runtimeHost.recorder.getReservation(request.dispatch_id)?.recorded) {
+          const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, dispatch_id: request.dispatch_id });
+          completedSourceReference = source.state.reference;
+          if (request.role === 'arch-review') {
+            archReviewContext.admitInstalledLaunch(options.archReviewContext,
+              installedAgentOptions({ ...options, automaticReader: true }, selected, runtimeHost.capabilities));
+            fileInput = archReviewContext.admittedFileInput(options.archReviewContext);
+          }
+          request.context.prompt = request.role === 'arch-review'
+            ? archReviewContext.admittedPrompt(options.archReviewContext) : fileInput.prompt;
+          if (request.context.prompt !== source.final_prompt)
+            fail('REVIEW_SOURCE_INVALID', 'recorded recovery changed its exact original admitted final prompt');
+          request.context.input_bundle = fileInput.input_bundle;
+          request.context.input_transport = 'host-files';
+        } else {
+          const capacity = await runtimeHost.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only', signals: request.signals }, fileInput);
+          const previous = fileInput;
+          if (request.role === 'arch-review') {
+            archReviewContext.admitInstalledLaunch(options.archReviewContext,
+              installedAgentOptions({ ...options, automaticReader: !options.readerCapacity, readerCapacity: capacity }, selected, runtimeHost.capabilities));
+            fileInput = archReviewContext.admittedFileInput(options.archReviewContext);
+            request.context.prompt = archReviewContext.admittedPrompt(options.archReviewContext);
+          } else {
+            fileInput = archReviewContext.admitReaderBatchInput(fileInput, capacity);
+            const review = integrationInputs.get(previous);
+            if (review) {
+              const admitted = Object.freeze({ ...review, input: fileInput });
+              integrationInputs.set(fileInput, admitted);
+              recheckIntegrationReview(admitted);
+            }
+            request.context.prompt = fileInput.prompt;
+          }
+          if (previous.input_bundle.manifest_sha256 !== fileInput.input_bundle.manifest_sha256
+              || canonical(previous.manifest) !== canonical(fileInput.manifest)) fail('READER_CAPACITY_UNSUPPORTED', 'admission changed finalized measurement candidate');
+          request.context.input_bundle = fileInput.input_bundle;
+          request.context.input_transport = 'host-files';
+          completedSourceReference = require('./codex-runtime-host.cjs').prepareCompletedSource(capacity, fileInput, request.context.prompt);
+        }
       }
       const context = request.context;
       if (fileInput) context.input_prepared = fileInput;
@@ -2809,6 +3045,23 @@ function createCodexDeliveryHost(options = {}) {
             ? resolvePreparedRepair(repairPrepared, dispatchId, options, runtimeHost.capabilities)
             : require('./codex-agent.cjs').selectAgent(request.role, { cwd: scope.worktree, flags: new Map(),
               signals: request.signals, dispatch_id: dispatchId, capabilities: runtimeHost.capabilities, agentDir, agentManifest, env });
+          if (completedSourceReference && runtimeHost.recorder.getReservation(dispatchId)?.recorded) {
+            if (typeof runtimeHost.recoverCompletedSourceRecording !== 'function')
+              fail('REVIEW_SOURCE_INVALID', 'original recorded source recovery is unavailable');
+            if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
+            if (fileInput && integrationInputs.has(fileInput)) recheckIntegrationReview(integrationInputs.get(fileInput));
+            archReviewContext.verifyFileInput(fileInput);
+            const { review_contract: _reviewContract, ...recoveryContext } = taskContext;
+            const recoveryAdapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
+              agentsDir: agentDir, agentManifest, capabilities: runtimeHost.capabilities });
+            const agent = recoveryAdapter.validateGeneratedAgent(selection);
+            const content = fs.readFileSync(path.join(agentDir, selection.agent_file), 'utf8');
+            if (sha256(content) !== agent.agent_file_digest) fail('STALE_GENERATED_AGENT', 'original recovery instructions changed');
+            return runtimeHost.recoverCompletedSourceRecording({ model: selection.model, effort: selection.effort,
+              sandbox_mode: 'read-only', agent_file: selection.agent_file, agent_file_digest: agent.agent_file_digest,
+              agent_file_content: content }, { ...recoveryContext,
+              source: completedSourceReference, dispatch_id: dispatchId, role: request.role, input_prepared: fileInput });
+          }
           const adapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({ agentsDir: agentDir, agentManifest,
             capabilities: runtimeHost.capabilities, host: reviewHost });
           return require('./dispatch-boundary.cjs').createDispatchBoundary({ adapters: { codex: adapter },
@@ -2883,27 +3136,47 @@ function createCodexDeliveryHost(options = {}) {
           ? { ...taskContext, preRecordValidation } : taskContext,
         });
       };
+      const recordCompletedSource = async () => {
+        try {
+          const recorded = await dispatchAgent(request.dispatch_id, context);
+          if (completedSourceReference) runtimeHost.completeCompletedSourceRecording(completedSourceReference);
+          return recorded;
+        } catch (error) {
+          if (error.code === 'REVIEW_SOURCE_CLAIMED') throw error;
+          if (completedSourceReference) {
+            const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, reference: completedSourceReference });
+            if (source.state.resume?.status === 'completed' && source.state.resume.completion)
+              runtimeHost.retainCompletedSourceRecordingFailure(completedSourceReference, error);
+          }
+          throw error;
+        }
+      };
       if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
       if (request.role === 'integrator') recheckInlineIntegrator(scope, request);
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
       let result;
-      try { result = await dispatchAgent(request.dispatch_id, context); }
+      try { result = await recordCompletedSource(); }
       catch (error) {
+        if (error.code === 'REVIEW_SOURCE_CLAIMED') throw error;
         if (!completedSourceReference || typeof runtimeHost.retainCompletedSourceRecordingFailure !== 'function') throw error;
         const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, reference: completedSourceReference });
-        if (source.state.resume?.status !== 'completed' || !source.state.resume.completion
-            || runtimeHost.recorder.getVerifiedRecord(request.dispatch_id)) throw error;
-        runtimeHost.retainCompletedSourceRecordingFailure(completedSourceReference, error);
-        result = await dispatchAgent(request.dispatch_id, context);
+        if (source.state.resume?.status !== 'completed' || !source.state.resume.completion) throw error;
+        result = await recordCompletedSource();
       }
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
       options.controller?.assertOwner(scope.run_id);
       if (request.role === 'arch-review') {
         writeCompletedArchitectureEvidence(options.archReviewContext, result, runtimeHost.recorder);
-        return archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
+        const completed = archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
+        if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
+        return completed;
       }
-      if (fileInput && integrationInputs.has(fileInput))
-        return finishIntegrationReview(integrationInputs.get(fileInput), result, runtimeHost.recorder);
+      if (fileInput && integrationInputs.has(fileInput)) {
+        const completed = finishIntegrationReview(integrationInputs.get(fileInput), result, runtimeHost.recorder);
+        if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
+        return completed;
+      }
+      if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
       if (repairPrepared) {
         const repairRecorder = request.signals.signatureState === 'first' ? runtimeHost.recorder : repairPredecessors.get(repairPrepared).history[0].recorder;
         recheckRepair(repairPrepared, options);
@@ -3287,6 +3560,9 @@ module.exports = Object.freeze({
   MAX_ARGS_BYTES,
   requestValue,
   prepareRepair,
+  shareRepairTransitions,
+  repairCoverageTransition,
+  recheckHistoricalRepair,
   completeRepairFeedback,
   recheckRepair,
   prepareIntegratorInput,

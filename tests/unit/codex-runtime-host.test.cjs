@@ -1513,9 +1513,17 @@ function cliCompletion(text) {
 function readRecords(input) {
   const checked = collector.verifyFileInput(input);
   if (input.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
-    return input.manifest.batches.map(batch => ({ command: collector.batchCommand(input.input_bundle, batch.index),
-      output: execFileSync('node', [input.manifest.transport.module_path, '--read-batch', input.input_bundle.manifest_path,
-        String(batch.index), input.manifest.transport.profile_sha256], { encoding: 'utf8', maxBuffer: 252 * 1024 }) }));
+    return input.manifest.batches.map(batch => {
+      const args = ['--read-batch', input.input_bundle.manifest_path,
+        String(batch.index), input.manifest.transport.profile_sha256];
+      const output = collector.readBatchCli(args);
+      assert.ok(Buffer.byteLength(output) <= 252 * 1024);
+      assert.equal(output, collector.batchOutput(input.manifest, checked.manifest_bytes, checked.material, batch.index));
+      if (batch.index === 0 || batch.index === input.manifest.batches.length - 1)
+        assert.equal(output, execFileSync('node', [input.manifest.transport.module_path, ...args],
+          { encoding: 'utf8', maxBuffer: 252 * 1024 }));
+      return { command: collector.batchCommand(input.input_bundle, batch.index), output };
+    });
   }
 
   return [{ path: input.input_bundle.manifest_path, bytes: checked.manifest_bytes },
@@ -2279,6 +2287,49 @@ for (const mutation of ['missing-recorder', 'stale-agent', 'requested-model', 'r
   test('v3 production capacity refuses ' + mutation + ' without authority', async () => {
     await fixture(f => productionBatchProbeFixture(f, mutation), { batch: true });
   });
+}
+
+for (const role of ['arch-review', 'integrator']) {
+  for (const fault of ['unmeasured-empty', 'unmeasured-failed']) test('cold unused original reservation recovers ' + role + ' ' + fault, async () => {
+    await require('./phase49-review-continuation.test.cjs').coldMeasuredSourceFixture(role, fault);
+  });
+  test('unmeasured candidate refuses a concurrent physical probe ' + role, async () => {
+    await require('./phase49-review-continuation.test.cjs').completedSourceFixture(role, false, 'concurrent-probe');
+  });
+  test('missing ledger never replays an original recorded measurement ' + role, async () => {
+    await require('./phase49-review-continuation.test.cjs').coldMeasuredSourceFixture(role, 'envelope-write', 'missing-ledger');
+  });
+  for (const mutation of ['profile', 'material', 'roster', 'subject', 'candidate-custody'])
+    test('cold unmeasured candidate refuses substitution ' + role + ' ' + mutation, async () => {
+      await require('./phase49-review-continuation.test.cjs').coldMeasuredSourceFixture(role, 'unmeasured-failed', mutation);
+    });
+  test('cold unmeasured candidate refuses original pending probe ' + role, async () => {
+    await require('./phase49-review-continuation.test.cjs').coldMeasuredSourceFixture(role, 'unmeasured-pending', 'pending');
+  });
+  for (const fault of ['missing-cli', 'partial-native', 'tampered-snapshot']) test('retained partial failed final costs remain unknown ' + role + ' ' + fault, async () => {
+    await require('./phase49-review-continuation.test.cjs').partialFailedSourceFixture(role, fault);
+  });
+}
+
+for (const role of ['arch-review', 'integrator']) {
+  for (const cold of [false, true])
+    test('completed ' + role + ' authenticates and accounts for progress before the last final ' + (cold ? 'cold' : 'live'),
+      () => require('./phase49-review-continuation.test.cjs').completedSourceFixture(role, cold, null, null, false, false, false, true));
+  test('completed ' + role + ' refuses an orphan reservation before any native launch',
+    () => require('./phase49-review-continuation.test.cjs').completedSourceFixture(role, false, 'orphan-reservation'));
+  for (const cold of [false, true]) for (const fault of ['initial-record-link-response', 'initial-record-directory-fsync',
+    'record-link-response', 'record-directory-fsync',
+    'outcome-write', 'outcome-file-fsync', 'outcome-rename-response', 'outcome-directory-fsync'])
+    test('original recorded ' + role + ' reconciles ' + fault + ' ' + (cold ? 'cold' : 'live'),
+      () => require('./phase49-review-continuation.test.cjs').completedSourceReceiptRecoveryFixture(role, cold, fault));
+  for (const cold of [false, true]) for (const fault of ['record-link-response', 'outcome-write', 'outcome-file-fsync'])
+    test('automatic original recorded ' + role + ' completes unchanged consumers after ' + fault + ' ' + (cold ? 'restored' : 'live'),
+      () => require('./phase49-review-continuation.test.cjs').automaticCompletedReviewFixture(role, cold, false, false, fault));
+  test('automatic original recorded ' + role + ' cold controller releases only its actually dead owner',
+    () => require('./phase49-review-continuation.test.cjs').coldRecordedSourceControllerFixture(role));
+  for (const mutation of ['tampered-receipt', 'foreign-receipt', 'source', 'base', 'agent', 'native', 'unknown-pid', 'live-pid'])
+    test('original recorded ' + role + ' refuses ' + mutation + ' cold',
+      () => require('./phase49-review-continuation.test.cjs').completedSourceReceiptRecoveryFixture(role, true, 'outcome-write', mutation));
 }
 
 }
