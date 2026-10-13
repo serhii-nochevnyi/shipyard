@@ -2373,11 +2373,20 @@ loop:
        boundary adapter that explicitly applies the resolved model and effort
        and returns a concrete application receipt. Otherwise hard-refuse
        before constructing a prompt, spawning, or recording. The released
-       Claude fix-round and Codex delivery paths do not authenticate the builder's
-       supplied review-file digest, so they return the named refusal until that
-       host contract exists. Then
-       the agent either fixes (push → step d), or replies to invalid feedback (no push → mark the
-       threads processed, b again).
+       Claude fix-round retains its named host-contract refusal. The Codex
+       review-fix host builds its prompt from the canonical graph, PLAN, ownership,
+       live OPEN PR and complete paginated feedback, and authenticates the regular
+       review evidence file by its original path and SHA-256 immediately before
+       static launch. The producer leaves source uncommitted and pushed=false.
+       Exactly one original native completion and its durable current-policy
+       receipt are required for the sealed repair result and complete dispositions.
+       Source changes receive the assigned host verification and signed fixer
+       coverage through the existing resumable finalizer before host publication.
+       Feedback-only results require no commit: the host rechecks full feedback,
+       performs replies/resolutions and independently confirms their actual IDs.
+       Escalated findings remain unresolved; uncertain actions retain pending
+       recovery. Continue at step d after confirmed source publication, or b
+       after confirmed feedback-only actions.
 
   c. arch-review agent — host-bound judgment, required only for a live integration-branch target. Skip this step for epic/stacked targets. Read the canonical
      `references/pr-sentinel.md` procedure: MEASURE the complete judged input

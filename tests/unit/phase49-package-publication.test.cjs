@@ -462,6 +462,419 @@ const MODE_TREE = '3ad781d746cb28c4097633d10054a0eac977ecd9';
 const MODE_INPUT = 'plugins/delivery-pipeline/scripts/ticket-worktree.sh';
 const MODE_OUTPUT = 'host/' + MODE_INPUT;
 
+
+const BATCH_INPUTS = ['codex-arch-review-context.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs',
+  'deliver-dispatch.cjs', 'codex-delivery-host.cjs'].map(name => 'plugins/delivery-pipeline/scripts/' + name)
+  .concat('plugins/delivery-pipeline/commands/deliver.md');
+const BATCH_OUTPUTS = BATCH_INPUTS.map(relative => 'host/' + relative)
+  .concat('.codex-plugin/plugin.json', 'package-build.json');
+
+test('combined batch successor admits only the six-source/eight-output union and preserves modes', () => {
+  const historical = { source: { head: 'original15', tree: 'original15-tree' }, stage: '/original15',
+    build_calls: 1, builder_sha256: 'builder', package: { digest: 'original15' },
+    inputs: canonicalInputs(ROOT), outputs: inventory(path.join(ROOT, 'plugins/shipyard'))
+      .map(row => ({ ...row, publication_mode: row.mode })) };
+  const selected = structuredClone(historical);
+  selected.source = { head: 'combined17', tree: 'combined17-tree' };
+  selected.stage = '/combined17'; selected.package.digest = 'combined17';
+  for (const row of selected.inputs) if (BATCH_INPUTS.includes(row.path)) row.sha256 = 'a'.repeat(64);
+  for (const row of selected.outputs) if (BATCH_OUTPUTS.includes(row.path)) row.sha256 = 'b'.repeat(64);
+  const observed = inspectBatchDelta(selected, historical);
+  assert.deepEqual(observed.changed_inputs, [...BATCH_INPUTS].sort());
+  assert.deepEqual(observed.changed_outputs, [...BATCH_OUTPUTS].sort());
+  assert.equal(observed.unchanged_inputs, 156); assert.equal(observed.unchanged_outputs, 153);
+  for (const mutate of [
+    value => { value.inputs.pop(); },
+    value => { value.outputs.pop(); },
+    value => { value.inputs[0].path = value.inputs[1].path; },
+    value => { value.outputs.find(row => row.path === 'skills/shipyard-deliver/SKILL.md').sha256 = 'c'.repeat(64); },
+    value => { value.inputs.find(row => row.path === MODE_INPUT).mode = 0o644; },
+    value => { value.outputs.find(row => row.path === MODE_OUTPUT).publication_mode = 0o644; },
+    value => { value.outputs.find(row => !BATCH_OUTPUTS.includes(row.path)).sha256 = 'd'.repeat(64); },
+    value => { value.stage = historical.stage; },
+    value => { value.build_calls = 2; },
+    value => { value.builder_sha256 = 'foreign'; },
+  ]) {
+    const altered = structuredClone(selected); mutate(altered);
+    assert.throws(() => inspectBatchDelta(altered, historical));
+  }
+  const unchanged = structuredClone(selected);
+  for (const field of ['inputs', 'outputs']) {
+    const row = unchanged[field].find(item => item.path === (field === 'inputs' ? BATCH_INPUTS[0] : 'host/' + BATCH_INPUTS[0]));
+    row.sha256 = historical[field].find(item => item.path === row.path).sha256;
+  }
+  assert.equal(inspectBatchDelta(unchanged, historical).unchanged_inputs, 157);
+  assert.equal(inspectBatchDelta(unchanged, historical).unchanged_outputs, 154);
+});
+
+function inspectBatchDelta(selected, historical) {
+  assert.notEqual(selected.source.head, historical.source.head, 'old producer substituted');
+  assert.notEqual(selected.source.tree, historical.source.tree, 'old source tree substituted');
+  assert.notEqual(selected.stage, historical.stage, 'historical stage reused');
+  assert.equal(selected.build_calls, 1); assert.equal(historical.build_calls, 1);
+  assert.equal(selected.builder_sha256, historical.builder_sha256, 'builder changed');
+  assert.notEqual(selected.package.digest, historical.package.digest, 'old package substituted');
+  const result = {};
+  for (const [field, count, mode, allowed] of [
+    ['inputs', 162, 'mode', BATCH_INPUTS], ['outputs', 161, 'publication_mode', BATCH_OUTPUTS],
+  ]) {
+    const rows = selected[field], oldRows = historical[field];
+    assert.equal(rows.length, count); assert.equal(oldRows.length, count);
+    for (const list of [rows, oldRows]) {
+      assert.equal(new Set(list.map(row => row.path)).size, count, 'duplicate inventory credit');
+      list.forEach(row => safeRelative(row.path));
+    }
+    assert.deepEqual(rows.map(row => row.path).sort(), oldRows.map(row => row.path).sort(),
+      'complete inventory paths changed');
+    const changed = [];
+    for (const row of rows) {
+      const old = oldRows.find(previous => previous.path === row.path);
+      assert.equal(row[mode], old[mode], 'batch successor mode changed');
+      if (row.sha256 !== old.sha256 || row.bytes !== old.bytes) changed.push(row.path);
+    }
+    assert.deepEqual(changed.filter(relative => !allowed.includes(relative)), [],
+      'unexpected delta requires ownership amendment');
+    result['changed_' + field] = changed.sort();
+    result['unchanged_' + field] = count - changed.length;
+  }
+  assert.equal(selected.inputs.find(row => row.path === MODE_INPUT).mode, 0o755);
+  assert.equal(selected.outputs.find(row => row.path === MODE_OUTPUT).publication_mode, 0o755);
+  assert.deepEqual(result.changed_outputs.filter(relative => relative.startsWith('host/')),
+    result.changed_inputs.map(relative => 'host/' + relative).sort(), 'mixed source/output generation');
+  assert(result.changed_outputs.includes('.codex-plugin/plugin.json'), 'missing derived version delta');
+  assert(result.changed_outputs.includes('package-build.json'), 'missing derived digest delta');
+  return result;
+}
+
+function inspectBatchSuccessor(bytes, expected, repository, stage, historicalBytes, historicalExpected, historicalRepository) {
+  assert.equal(sha(bytes), expected.selection_sha256, 'selected bytes changed');
+  assert.equal(sha(historicalBytes), historicalExpected.selection_sha256, 'historical selection changed');
+  const historical = JSON.parse(historicalBytes), selected = JSON.parse(bytes);
+  assert.equal(historical.source.head, historicalExpected.head);
+  assert.equal(historical.source.tree, historicalExpected.tree);
+  const delta = inspectBatchDelta(selected, historical);
+  assert.deepEqual(inventory(historical.stage, '', true), historical.outputs.map(row => ({
+    path: row.path, sha256: row.sha256, bytes: row.bytes,
+    mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })), 'original15 physical inventory changed');
+  equalInputs(historical.inputs, canonicalInputs(historicalRepository));
+  const observed = inspect(bytes, expected, repository, stage);
+  for (const relative of BATCH_INPUTS) {
+    const input = selected.inputs.find(row => row.path === relative);
+    const output = selected.outputs.find(row => row.path === 'host/' + relative);
+    assert.equal(output.sha256, input.sha256, 'combined canonical/stage drift');
+    assert.equal(output.publication_mode, input.mode);
+  }
+  inspectBatchAPIs(path.join(repository, 'plugins/shipyard/host/plugins/delivery-pipeline'));
+  inspectRuntimeConsumers(repository);
+  return { ...observed, ...delta, installed_acceptance: false, empirical_acceptance: false };
+}
+
+function inspectBatchAPIs(hostRoot) {
+  inspectAccountingAPIs(hostRoot);
+  const runtime = require(path.join(hostRoot, 'scripts/codex-runtime-host.cjs'));
+  const dispatch = require(path.join(hostRoot, 'scripts/deliver-dispatch.cjs'));
+  const delivery = require(path.join(hostRoot, 'scripts/codex-delivery-host.cjs'));
+  for (const method of ['validateCompletedSourceRestoration', 'validateCompletedSourceClaimRecovery',
+    'prepareCompletedSource', 'validateCompletedSourceConsumption']) assert.equal(typeof runtime[method], 'function');
+  for (const method of ['buildCodexExecutorRequest', 'parseBuildArgs']) assert.equal(typeof dispatch[method], 'function');
+  for (const method of ['prepareRepair', 'completeRepairFeedback', 'parseRepairActionResumeArguments'])
+    assert.equal(typeof delivery[method], 'function');
+}
+
+function inspectBatchInstalled(identity, authenticated, selectionBytes, expected, authenticate) {
+  assert.equal(typeof authenticate, 'function', 'protected installed verifier missing');
+  const proof = authenticate(expected);
+  assert(proof && proof.authenticated === true, 'installed authority missing or forged');
+  assert.deepEqual(proof.expected, expected, 'independent installed references differ');
+  assert.deepEqual(proof.identity, identity, 'installed identity substitution');
+  assert.deepEqual(proof.binding, authenticated, 'installed binding substitution');
+  for (const field of ['source_head', 'source_tree', 'publication_head', 'publication_tree'])
+    assert.match(expected[field], /^[a-f0-9]{40}$/, 'missing exact installed subject');
+  assert.equal(sha(selectionBytes), expected.selection_sha256, 'foreign installed selection');
+  assert(![MODE_SHA, ACCOUNTING_SHA, CURRENT_SHA, SELECTION_SHA].includes(expected.selection_sha256),
+    'old installed selection');
+  assert.equal(typeof expected.runtime_root, 'string');
+  assert(path.isAbsolute(expected.runtime_root), 'missing isolated runtime reference');
+  inspectBatchCI(proof.source_ci, expected.source_head);
+  inspectBatchCI(proof.ci, expected.publication_head);
+  assert.equal(expected.selection_sha256, BATCH_SHA, 'old or foreign batch selection');
+  assert.equal(expected.selection_root, BATCH_ROOT, 'foreign combined stage root');
+  assert.equal(expected.source_head, BATCH_HEAD); assert.equal(expected.source_tree, BATCH_TREE);
+  const signedBytes = authenticatePublicSelection(expected.selection_root, expected.selection_sha256, 'public-key.asc');
+  assert.deepEqual(selectionBytes, signedBytes, 'installed unsigned selection substitution');
+  const historicalBytes = authenticatePublicSelection(MODE_ROOT, MODE_SHA, 'public-key.asc');
+  const selected = JSON.parse(selectionBytes);
+  const sourceReceipt = authenticateBatchSource(selected, 'T-49-18', BATCH_HEAD, BATCH_TREE);
+  assert(proof.publication_result && typeof proof.publication_result.path === 'string',
+    'original publication native result missing');
+  assert.match(proof.publication_dispatch, /^dispatch-[a-zA-Z0-9-]+$/, 'original publication dispatch missing');
+  const publicationReceipt = authenticateBatchSource({ ...selected, source: { ...selected.source,
+    head: expected.publication_head, tree: expected.publication_tree,
+    original_result: proof.publication_result.path, original_result_sha256: proof.publication_result.sha256,
+    original_dispatch: proof.publication_dispatch } }, 'T-49-17', expected.publication_head, expected.publication_tree);
+  assert.equal(publicationReceipt.policy_hash, sourceReceipt.policy_hash, 'publication runtime policy changed');
+  assert(proof.publication_native && typeof proof.publication_native.path === 'string',
+    'original publication native session reference missing');
+  inspectBatchNative(publicationReceipt, proof.publication_native.path);
+  inspectBatchNative(sourceReceipt, '/Users/serhii/.codex/sessions/2026/10/13/'
+    + 'rollout-2026-10-13T16-43-23-01a13580-e767-75f2-afed-fee49aa2d65e.jsonl');
+  authenticateBatchSource(JSON.parse(historicalBytes), 'T-49-14', MODE_HEAD, MODE_TREE);
+  historicalAccountingRepository(JSON.parse(historicalBytes), historicalRepository => withoutWrites(() =>
+    inspectBatchSuccessor(selectionBytes, { selection_sha256: expected.selection_sha256,
+      head: expected.source_head, tree: expected.source_tree }, ROOT, selected.stage,
+    historicalBytes, { selection_sha256: MODE_SHA, head: MODE_HEAD, tree: MODE_TREE }, historicalRepository)));
+  assert.equal(selected.stage, path.join(expected.selection_root, 'candidate'));
+  assert.deepEqual(authenticated.binding.outputs, selected.outputs, 'installed inventory differs');
+  assert.equal(authenticated.binding.version, selected.package.version);
+  assert.equal(authenticated.binding.package_sha256, selected.package.digest);
+  equalInputs(selected.inputs, authenticated.binding.source.identities);
+  assert.equal(identity.source_head, expected.publication_head, 'stale installed source');
+  assert.equal(identity.source_tree, expected.publication_tree, 'foreign installed source tree');
+  assert.equal(identity.runtime_root, expected.runtime_root, 'same-version cache substitution');
+  assert.equal(authenticated.identity.head, expected.publication_head);
+  assert.equal(authenticated.identity.tree, expected.publication_tree);
+  const observed = require('../smoke/phase47-runtime-acceptance.cjs').inspectInstalled(identity, authenticated);
+  inspectBatchAPIs(identity.host_root);
+  const physicalIdentity = inspectBatchInstalledPhysical(identity, selected, proof);
+  return { ...observed, ...physicalIdentity, empirical_acceptance: false };
+}
+
+function authenticateBatchSource(selected, ticket, head, tree) {
+  assert.equal(selected.source.head, head); assert.equal(selected.source.tree, tree);
+  const git = (...args) => execFileSync('git', ['-C', ROOT, ...args],
+    { encoding: 'utf8', timeout: 10000, maxBuffer: 32 * 1024 * 1024 }).trim();
+  assert.equal(git('rev-parse', head + '^{tree}'), tree);
+  for (const row of selected.inputs) {
+    const original = execFileSync('git', ['-C', ROOT, 'show', head + ':' + row.path],
+      { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
+    assert.equal(sha(original), row.sha256, 'original canonical source drift');
+    assert.equal(git('ls-tree', head, '--', row.path).split(' ')[0], row.mode === 0o755 ? '100755' : '100644');
+  }
+  const builder = execFileSync('git', ['-C', ROOT, 'show', head + ':scripts/package-shipyard-codex.cjs'],
+    { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
+  assert.equal(sha(builder), selected.builder_sha256, 'original builder identity drift');
+  const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
+  const verified = coverage.verify({ commit: head, repo: coverage.repoSlug(ROOT), worktree: ROOT });
+  assert.equal(verified.covered, true, 'protected original source authority: ' + verified.reason);
+  assert.equal(verified.record.tree, tree);
+  const original = JSON.parse(read(selected.source.original_result, selected.source.original_result_sha256));
+  assert.equal(original.ticket, ticket); assert.equal(original.role, 'executor');
+  assert.equal(original.dispatch_id, selected.source.original_dispatch);
+  const stored = coverage.validateFinalizationEvidence(verified.record);
+  assert.deepEqual(stored.receipt, original.receipt, 'original source recorder equality');
+  assert.equal(original.receipt.compliance, 'verified');
+  const stream = original.receipt.runtime_evidence.transcript;
+  assert.equal(read(stream.path, stream.sha256).length, stream.bytes);
+  return stored.receipt;
+}
+
+function inspectBatchNative(receipt, nativePath) {
+  const evidence = receipt.runtime_evidence, pin = evidence.native_session_evidence;
+  assert(pin && typeof nativePath === 'string', 'original native source reference missing');
+  assert.equal(path.basename(nativePath), pin.file, 'native source path substitution');
+  const native = read(nativePath, pin.sha256);
+  assert.equal(native.length, pin.bytes);
+  const runtime = require('../../plugins/shipyard/host/plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const parsed = runtime.parseNativeCodexTranscript(native.toString('utf8'), evidence.session_id);
+  for (const field of ['session_id', 'provider', 'models', 'efforts', 'selections', 'turn_contexts', 'records', 'sha256'])
+    assert.deepEqual(parsed[field], pin[field], 'original native source association changed');
+  assert.deepEqual(parsed.models, [receipt.requested_model]);
+  assert.deepEqual(parsed.efforts, [receipt.requested_effort]);
+  const stream = evidence.transcript;
+  assert.equal(runtime.parseCodexStream(read(stream.path, stream.sha256).toString('utf8')).session_id,
+    parsed.session_id, 'stream/native source session association changed');
+  return parsed;
+}
+
+function inspectBatchCI(ci, head) {
+  assert(ci, 'separate exact source/publication CI missing');
+  assert.equal(ci.headSha, head, 'stale full CI');
+  assert.equal(ci.status, 'completed'); assert.equal(ci.conclusion, 'success');
+  const job = ci.jobs.find(row => row.name === 'test-fast');
+  assert(job && job.status === 'completed' && job.conclusion === 'success', 'incomplete full CI');
+  for (const name of ['publish gate', 'runtime digest trailer', 'make test-fast']) {
+    const step = job.steps.find(row => row.name === name);
+    assert(step && step.status === 'completed' && step.conclusion === 'success', 'incomplete full CI');
+  }
+  const log = ci.original_full_log;
+  assert(log && typeof log.path === 'string', 'original full CI log missing');
+  assert.equal(read(log.path, log.sha256).length, log.bytes, 'full CI log changed');
+}
+
+test('batch installed admission retains separate source/publication CI and refuses forged authority', () => {
+  const temporary = temporaryDirectory('phase49-batch-ci-refusal-');
+  try {
+    const logPath = path.join(temporary, 'fixture-only-full-ci.log');
+    const logBytes = Buffer.from('fixture-only CI log; no actual source or publication acceptance\n');
+    fs.writeFileSync(logPath, logBytes);
+    const expected = { selection_sha256: sha(Buffer.from('{}')), source_head: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+      publication_head: 'd'.repeat(40), publication_tree: 'e'.repeat(40), runtime_root: '/fixture-only-runtime' };
+    const identity = {}, binding = {};
+    const ci = head => ({ headSha: head, status: 'completed', conclusion: 'success', jobs: [
+      { name: 'test-fast', status: 'completed', conclusion: 'success', steps:
+        ['publish gate', 'runtime digest trailer', 'make test-fast'].map(name =>
+          ({ name, status: 'completed', conclusion: 'success' })) },
+    ], original_full_log: { path: logPath, sha256: sha(logBytes), bytes: logBytes.length } });
+    const proof = { authenticated: true, expected, identity, binding,
+      source_ci: ci(expected.source_head), ci: ci(expected.publication_head) };
+    assert.throws(() => inspectBatchInstalled(identity, binding, Buffer.from('{}'), expected), /verifier missing/);
+    for (const [mutate, refusal] of [
+      [value => { value.authenticated = false; }, /authority missing or forged/],
+      [value => { value.expected.publication_head = expected.source_head; }, /independent installed references differ/],
+      [value => { value.identity.source_head = null; }, /installed identity substitution/],
+      [value => { value.binding.identity = null; }, /installed binding substitution/],
+      [value => { delete value.source_ci; }, /separate exact source/],
+      [value => { value.source_ci.headSha = expected.publication_head; }, /stale full CI/],
+      [value => { value.ci.headSha = expected.source_head; }, /stale full CI/],
+      [value => { value.source_ci.status = 'cancelled'; }, /strictly equal/],
+      [value => { value.ci.conclusion = 'failure'; }, /strictly equal/],
+      [value => { value.source_ci.jobs[0].steps[2].conclusion = 'skipped'; }, /incomplete full CI/],
+      [value => { value.ci.jobs[0].steps.pop(); }, /incomplete full CI/],
+      [value => { delete value.source_ci.original_full_log; }, /original full CI log missing/],
+      [value => { value.ci.original_full_log.sha256 = '0'.repeat(64); }, /digest|hash|changed/],
+      [() => {}, /old or foreign batch selection/],
+    ]) {
+      const altered = structuredClone(proof); mutate(altered);
+      assert.throws(() => inspectBatchInstalled(identity, binding, Buffer.from('{}'), expected, () => altered), refusal);
+    }
+    fs.appendFileSync(logPath, 'tampered');
+    assert.throws(() => inspectBatchCI(proof.source_ci, expected.source_head));
+    assert.throws(() => inspectBatchCI(proof.ci, expected.publication_head));
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+const BATCH_ROOT = '/Users/serhii/.local/state/shipyard/phase49-selected-package-23c54b703811';
+const BATCH_SHA = 'ba4be421f42a856091e11d8347ff698a8abfb33dd32ff1427ca855d0926769b7';
+const BATCH_HEAD = '23c54b703811d4ebdebe23b260fd00e12e8c227b';
+const BATCH_TREE = '5998044394d6021e07c7ebebe2d9469f6c9cd03e';
+const BATCH_OBSERVATION = '/Users/serhii/.local/state/shipyard/phase49-T49-17-combined-stage-ready-observation.json';
+
+test('original combined stage independently pins all162/all161 and exact same-stage publication', t => {
+  if (!fs.existsSync(BATCH_OBSERVATION) || !fs.existsSync(path.join(BATCH_ROOT, 'selection.json'))) {
+    t.skip('HOLD: original combined stage unavailable; no installed or empirical acceptance');
+    return;
+  }
+  const marker = JSON.parse(read(BATCH_OBSERVATION,
+    'f8c6eef922fbf703c82cf43902c8fa3d8df327af839e4d3a365f27e27a634ae6'));
+  assert.equal(marker.ready, true); assert.equal(marker.build_calls, 1);
+  assert.equal(marker.root, BATCH_ROOT); assert.equal(marker.selection_sha256, BATCH_SHA);
+  assert.equal(marker.source_head, BATCH_HEAD); assert.equal(marker.source_tree, BATCH_TREE);
+  const copies = JSON.parse(read(marker.original_copies,
+    '6e186575670e53d73b28219c37863b2d61a20d9c2fc298ade853f057d69d33a5'));
+  assert.equal(copies.selection_sha256, BATCH_SHA); assert.equal(copies.source_head, BATCH_HEAD);
+  assert.equal(copies.build_calls, 1); assert.equal(copies.canonical_inputs, 162);
+  assert.equal(copies.complete_outputs, 161);
+  assert.deepEqual(copies.published, BATCH_OUTPUTS.map(relative => 'plugins/shipyard/' + relative).sort());
+  const launch = JSON.parse(read(marker.actual_clean_launch,
+    'b84faa5ac72c5beac9b96b91f17682cd1607bbed216ef01fc88160c13fc0b367'));
+  assert.equal(launch.tracked_clean, true); assert.equal(launch.head_still_pinned, true);
+  assert.equal(launch.baseline_head, '099d92d0d7cff9445e67c06d5a02e777741f5155');
+  assert.equal(launch.baseline_tree, BATCH_TREE); assert.equal(launch.source_head, BATCH_HEAD);
+  assert.equal(launch.worktree, ROOT); assert.equal(launch.ticket, 'T-49-17');
+  assert(Number.isSafeInteger(launch.native_process_id) && launch.native_process_id > 0);
+  read(launch.prelaunch_observation.path, launch.prelaunch_observation.sha256);
+  const gitHistory = (...args) => execFileSync('git', ['-C', ROOT, ...args],
+    { timeout: 10000, encoding: 'utf8' }).trim();
+  const mergedModeSource = '9a44d1fec668148ca349f923757a08fece4cccde';
+  const originalModePublication = '7d39c7e7e85d42b75daa05cd4d0affce96aa0d48';
+  const mergedModePublication = '424cc6dd3c7e2b85376ca493586a0fe5f03a626e';
+  assert.equal(gitHistory('rev-parse', mergedModeSource + '^{tree}'), MODE_TREE);
+  assert.equal(gitHistory('rev-parse', MODE_HEAD + '^{tree}'), MODE_TREE);
+  assert.equal(gitHistory('rev-parse', mergedModeSource + '^'), gitHistory('rev-parse', MODE_HEAD + '^'));
+  assert.equal(gitHistory('rev-parse', originalModePublication + '^'), MODE_HEAD);
+  assert.equal(gitHistory('rev-parse', mergedModePublication + '^'), mergedModeSource);
+  assert.equal(gitHistory('rev-parse', originalModePublication + '^{tree}'),
+    gitHistory('rev-parse', mergedModePublication + '^{tree}'));
+  gitHistory('merge-base', '--is-ancestor', mergedModePublication, BATCH_HEAD);
+  const mergedBatchSource = 'a8261467c4be457b9d4b0640cb713b9dc60f50ef';
+  assert.equal(gitHistory('rev-parse', BATCH_HEAD + '^{tree}'), BATCH_TREE);
+  assert.equal(gitHistory('rev-parse', mergedBatchSource + '^{tree}'), BATCH_TREE);
+  gitHistory('merge-base', '--is-ancestor', mergedModePublication, mergedBatchSource);
+  gitHistory('merge-base', '--is-ancestor', mergedBatchSource, 'HEAD');
+  const bytes = authenticatePublicSelection(BATCH_ROOT, BATCH_SHA, 'public-key.asc');
+  const historicalBytes = authenticatePublicSelection(MODE_ROOT, MODE_SHA, 'public-key.asc');
+  const selected = JSON.parse(bytes), historical = JSON.parse(historicalBytes);
+  const sourceReceipt = authenticateBatchSource(selected, 'T-49-18', BATCH_HEAD, BATCH_TREE);
+  const modeReceipt = authenticateBatchSource(historical, 'T-49-14', MODE_HEAD, MODE_TREE);
+  assert.equal(sourceReceipt.policy_hash, modeReceipt.policy_hash, 'original runtime policy changed');
+  const custody = JSON.parse(read('/Users/serhii/.local/state/shipyard/phase49-T49-18-23c54b7-original-native-custody.json',
+    '798e83b17e188bd4a40ea3da522a7e0a2b31428524eea773128979ddfe600f5c'));
+  assert.equal(custody.length, 2);
+  for (const row of custody) assert.equal(read(row.path, row.sha256).length, row.bytes);
+  const originalNative = custody.find(row => row.sha256 === sourceReceipt.runtime_evidence.native_session_evidence.sha256);
+  assert(originalNative, 'original native SOURCE18 custody association missing');
+  inspectBatchNative(sourceReceipt, originalNative.path);
+  inspectBatchNative(modeReceipt, '/Users/serhii/.codex/sessions/2026/10/11/'
+    + 'rollout-2026-10-11T01-29-19-01a127ef-553a-7b60-9f6a-44b06f65dcd6.jsonl');
+  assert.equal(selected.source.original_dispatch, 'dispatch-mv6qeery-c845642f-c8af-4b56-bb04-b0777b47b944');
+  const producer = JSON.parse(read(marker.source_original_producer,
+    '84b7042fe4feabf504cd0965c5374d22054e6915b314ec4b50dd896789bc643a'));
+  assert.equal(producer.artifact_digest, selected.source.artifact_digest);
+  assert.equal(producer.envelope.role, 'executor'); assert.equal(producer.envelope.ticket, 'T-49-18');
+  const sourceCI = JSON.parse(read(marker.source_full_ci,
+    '87d5a8d6b1236ca243086afba80e08f6198245eb71fd18d79d719d547d71272d'));
+  inspectBatchCI(sourceCI, BATCH_HEAD);
+  const result = historicalAccountingRepository(JSON.parse(historicalBytes), historicalRepository =>
+    withoutWrites(() => inspectBatchSuccessor(bytes,
+      { selection_sha256: BATCH_SHA, head: BATCH_HEAD, tree: BATCH_TREE }, ROOT,
+      path.join(BATCH_ROOT, 'candidate'), historicalBytes,
+      { selection_sha256: MODE_SHA, head: MODE_HEAD, tree: MODE_TREE }, historicalRepository)));
+  assert.deepEqual(result.changed_inputs, [...BATCH_INPUTS].sort());
+  assert.deepEqual(result.changed_outputs, [...BATCH_OUTPUTS].sort());
+  assert.equal(result.unchanged_inputs, 156); assert.equal(result.unchanged_outputs, 153);
+  assert.equal(result.inspector_build_calls, 0); assert.equal(result.installed_acceptance, false);
+  assert.equal(result.empirical_acceptance, false);
+  assert.deepEqual(read(path.join(MODE_ROOT, 'selection.json'), MODE_SHA), historicalBytes);
+  t.diagnostic('Original combined publication inspected. Supported actual isolated installation and exact publication17 CI remain separate; native11 empirical acceptance stays HOLD.');
+});
+
+function inspectBatchInstalledPhysical(identity, selected, proof) {
+  assert.equal(identity.source_dirty, false, 'dirty installed source');
+  for (const [reference, root] of [[proof.package_manifest, identity.package_root],
+    [proof.bundle_manifest, identity.host_root]]) {
+    assert(reference && typeof reference.path === 'string', 'original complete installed manifest missing');
+    const manifest = JSON.parse(read(reference.path, reference.sha256));
+    assert.equal(manifest.root, root, 'installed physical manifest root substitution');
+    assert.deepEqual(manifest.files, inventory(root), 'complete installed physical manifest drift');
+  }
+  assert(proof.installer_log && typeof proof.installer_log.path === 'string', 'original installer log missing');
+  assert.equal(read(proof.installer_log.path, proof.installer_log.sha256).length, proof.installer_log.bytes);
+  assert(proof.gsd_version && typeof proof.gsd_version.path === 'string', 'actual isolated GSD version missing');
+  assert(proof.gsd_version.path.startsWith(identity.runtime_root + path.sep), 'foreign isolated GSD version');
+  assert.equal(read(proof.gsd_version.path, proof.gsd_version.sha256).toString('utf8').trim(), proof.gsd_version.version);
+  assert.match(proof.gsd_version.version, /^\d+\.\d+\.\d+(?:[-+].*)?$/);
+  const bundlePrefix = 'host/plugins/delivery-pipeline/';
+  const bundleRows = selected.outputs.filter(row => row.path.startsWith(bundlePrefix)
+    && (['scripts', 'references', 'templates', 'workflows'].some(directory =>
+      row.path.startsWith(bundlePrefix + directory + '/'))
+    || row.path.startsWith(bundlePrefix + 'skills/delivery-rules/'))).map(row => ({
+    path: row.path.slice(bundlePrefix.length), sha256: row.sha256, bytes: row.bytes, mode: row.publication_mode }));
+  const capabilities = read(identity.native_capabilities.path, identity.native_capabilities.sha256);
+  bundleRows.push({ path: 'codex-capabilities.json', sha256: sha(capabilities), bytes: capabilities.length, mode: 0o644 });
+  assert.deepEqual(inventory(identity.host_root), bundleRows.sort((a, b) => a.path.localeCompare(b.path)),
+    'selected complete BUNDLE identity differs');
+  assert(proof.native_deliver && typeof proof.native_deliver.path === 'string', 'actual converted native deliver workflow missing');
+  assert(proof.native_deliver.path.startsWith(identity.runtime_root + path.sep), 'foreign installed native workflow');
+  assert(proof.converter && typeof proof.converter.path === 'string', 'original installed converter missing');
+  assert(proof.converter.path.startsWith(identity.runtime_root + path.sep), 'foreign installed converter');
+  read(proof.converter.path, proof.converter.sha256);
+  const converter = require(proof.converter.path);
+  const originalCommand = read(path.join(identity.package_root, 'host/plugins/delivery-pipeline/commands/deliver.md'));
+  const converted = require('../../scripts/gen-codex-shipyard.cjs').shipyardRewrites(
+    converter.convertClaudeCommandToCodexSkill(originalCommand.toString('utf8'), 'shipyard-deliver'),
+    identity.host_root).replace(/\$shipyard-(route|investigate|decompose|deliver|bench|delivery-rules)\b/g,
+    '$shipyard:shipyard-$1');
+  assert.equal(read(proof.native_deliver.path, proof.native_deliver.sha256).toString('utf8'), converted,
+    'installed secure fixer native workflow drift');
+  read(proof.converter.path, proof.converter.sha256);
+  assert.match(converted, /build review-fix/);
+  assert.match(converted, /complete paginated feedback/);
+  assert.match(converted, /Exactly one original native completion/);
+  assert.match(converted, /Feedback-only results require no commit/);
+  return { package_files: selected.outputs.length, bundle_files: bundleRows.length,
+    actual_isolated_gsd_version: proof.gsd_version.version, empirical_acceptance: false };
+}
+
 function inspectModeDelta(selected, historical) {
   assert.notEqual(selected.source.head, historical.source.head, 'old producer substituted');
   assert.notEqual(selected.source.tree, historical.source.tree, 'old source tree substituted');
@@ -743,8 +1156,9 @@ test('distinct signed mode successor independently inspects full162/all161 witho
   const bytes = authenticatePublicSelection(MODE_ROOT, digest, 'public-key.asc');
   const historicalBytes = authenticatePublicSelection(ACCOUNTING_ROOT, ACCOUNTING_SHA, 'public-key.asc');
   const expected = { selection_sha256: digest, head: MODE_HEAD, tree: MODE_TREE };
-  const result = withoutWrites(() => inspectModeSuccessor(bytes, expected, ROOT, path.join(MODE_ROOT, 'candidate'),
-    historicalBytes, { selection_sha256: ACCOUNTING_SHA, head: ACCOUNTING_HEAD, tree: ACCOUNTING_TREE }));
+  const result = historicalAccountingRepository(JSON.parse(bytes), repository => withoutWrites(() =>
+    inspectModeSuccessor(bytes, expected, repository, path.join(MODE_ROOT, 'candidate'),
+      historicalBytes, { selection_sha256: ACCOUNTING_SHA, head: ACCOUNTING_HEAD, tree: ACCOUNTING_TREE })));
   assert.equal(result.unchanged_outputs, 160); assert.equal(result.inspector_build_calls, 0);
   const accountingBaseline = JSON.parse(authenticatePublicSelection(CURRENT_ROOT, CURRENT_SHA, 'public-key.asc'));
   const historical = JSON.parse(historicalBytes);
@@ -1176,4 +1590,102 @@ test('packaged role APIs authenticate full and v2 current reviews with original 
   });
 });
 
-module.exports = { inspect, inspectAccountingSuccessor, inspectAccountingInstalled, inspectModeSuccessor, inspectModeInstalled, inventory, read, canonicalInputs, admitSuccessor, OWNED: COMPLETE_OWNED };
+function packagedBatchFixtures(repository) {
+  const Module = require('node:module');
+  const file = path.join(ROOT, 'tests/unit/phase49-review-continuation.test.cjs');
+  const fixtureModule = new Module(file, module);
+  fixtureModule.filename = file; fixtureModule.paths = Module._nodeModulePaths(path.dirname(file));
+  const registered = new Map(), originalRequire = fixtureModule.require.bind(fixtureModule);
+  fixtureModule.require = request => {
+    if (request === 'node:test') return { test(name, callback) { registered.set(name, callback); } };
+    const prefix = '../../plugins/delivery-pipeline/';
+    if (request.startsWith(prefix)) return require(path.join(repository,
+      'plugins/shipyard/host/plugins/delivery-pipeline', request.slice(prefix.length)));
+    return originalRequire(request);
+  };
+  const source = read(file).toString('utf8');
+  const seam = 'if (require.main === module) {';
+  assert.equal(source.split(seam).length, 2, 'original continuation registration seam changed');
+  fixtureModule._compile(source.replace(seam, 'if (true) {'), file);
+  return { registered, completedSourceFixture: fixtureModule.exports.completedSourceFixture };
+}
+
+test('packaged v3 framed producer and protected continuation preserve original refusal and legacy contracts', async () => {
+  const { registered, completedSourceFixture } = packagedBatchFixtures(ROOT);
+  for (const name of [
+    'v3 one physical output atomically credits two frames and resumes the original UUID',
+    'v3 uncredited truncated batch remains in original history and is retried without rereading durable frames',
+    'legacy one-turn full read succeeds and unrelated extra turns remain refused',
+    'a bare serialized descriptor or observation cannot publish protected authority',
+    'v3 typed reviewer resumes the original child UUID with its installed instruction identity',
+    'v3 protected arch-review continuation reauthenticates the separate probe association',
+    'v3 protected integrator continuation reauthenticates the separate probe association',
+    ...['nested truncation', 'outer truncation', 'pending shell', 'surplus nested operation', 'omitted terminal',
+      'wrong profile', 'duplicate frame', 'reordered frames', 'overlapping range', 'trailer digest']
+      .map(name => 'v3 ' + name + ' grants zero batch credit'),
+  ]) {
+    const exercise = registered.get(name);
+    assert.equal(typeof exercise, 'function', 'missing original batch fixture: ' + name);
+    await exercise();
+  }
+  assert.equal(typeof completedSourceFixture, 'function');
+  for (const role of ['arch-review', 'integrator']) {
+    await completedSourceFixture(role, false, null, null, true);
+    for (const mutation of ['subject-kind', 'source', 'profile', 'roster', 'base'])
+      await completedSourceFixture(role, true, mutation);
+  }
+});
+
+test('packaged secure fixer retains action-only parser and refuses caller launch fields', () => {
+  const host = require('../../plugins/shipyard/host/plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const dispatch = require('../../plugins/shipyard/host/plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
+  const id = 'dispatch-mv4c0jmr-b408925c-a4b3-439e-9509-1f8b34c00850';
+  assert.deepEqual(host.parseRepairActionResumeArguments(['--resume-repair-actions', id,
+    '--scope-file', '/tmp/original-scope.json']), { dispatchId: id, scopeFile: '/tmp/original-scope.json' });
+  for (const args of [[], ['--resume-repair-actions', '../foreign', '--scope-file', '/tmp/scope.json'],
+    ['--resume-repair-actions', id, '--args-file', '/tmp/scope.json'],
+    ['--resume-repair-actions', id, '--scope-file', '/tmp/scope.json', '--force-first'],
+    ['--resume-repair-actions', 'x'.repeat(161), '--scope-file', '/tmp/scope.json']])
+    assert.throws(() => host.parseRepairActionResumeArguments(args), { code: 'INVALID_INPUT' });
+  for (const args of [['review-fix', 'T-49-17', '--prompt', 'forged'],
+    ['review-fix', 'T-49-17', '--prepared', '{}'], ['review-fix', 'T-49-17', '--model', 'gpt-6.1-sol']])
+    assert.throws(() => dispatch.parseBuildArgs(args));
+});
+
+test('same-generation packaged fixer authenticates source publication and complete feedback-only actions', () => {
+  const names = [
+    ...['source', 'no-op', 'escalate'].map(outcome =>
+      'canonical builder through original static fixer seals ' + outcome + ' with host custody with four original native progress messages'),
+    ...['evidence-symlink', 'evidence-bytes', 'caller-rung', 'self-commit', 'duplicate-completion', 'foreign-native-final']
+      .map(mutation => 'original fixer custody refuses ' + mutation),
+    'signed fixer publication recovers a lost response without replaying its confirmed push',
+    'original feedback action recovers resolve-response-loss without reply replay',
+  ];
+  const exercise = `
+    const fs = require('node:fs'), path = require('node:path'), Module = require('node:module');
+    const file = path.join(process.argv[1], 'tests/unit/codex-delivery-host.test.cjs');
+    const entry = new Module(file); entry.filename = file;
+    entry.paths = Module._nodeModulePaths(path.dirname(file));
+    const registered = new Map(), originalRequire = entry.require.bind(entry);
+    entry.require = request => request === './assert-harness.cjs'
+      ? { assert: require('node:assert'), suite() {}, done() {}, test(name, callback) { registered.set(name, callback); } }
+      : originalRequire(request);
+    const source = fs.readFileSync(file, 'utf8');
+    const prefix = '../../plugins/delivery-pipeline/';
+    if (!source.includes(prefix)) throw new Error('original fixer package import seam changed');
+    entry._compile(source.split(prefix).join('../../plugins/shipyard/host/plugins/delivery-pipeline/'), file);
+    (async () => {
+      for (const name of JSON.parse(process.argv[2])) {
+        const callback = registered.get(name);
+        if (typeof callback !== 'function') throw new Error('missing original fixer fixture: ' + name);
+        await callback();
+      }
+      process.stdout.write('packaged-original-fixer-contracts-pass\\n');
+    })().catch(error => { process.stderr.write(error.stack + '\\n'); process.exitCode = 1; });
+  `;
+  const observed = execFileSync(process.execPath, ['-e', exercise, ROOT, JSON.stringify(names)],
+    { timeout: 420000, maxBuffer: 1024 * 1024, encoding: 'utf8', stdio: 'pipe' });
+  assert.match(observed, /packaged-original-fixer-contracts-pass/);
+});
+
+module.exports = { inspectBatchNative, inspectBatchInstalledPhysical, BATCH_ROOT, BATCH_SHA, BATCH_HEAD, BATCH_TREE, authenticateBatchSource, inspectBatchCI, inspectBatchDelta, inspectBatchSuccessor, inspectBatchInstalled, inspectBatchAPIs, BATCH_INPUTS, BATCH_OUTPUTS, inspect, inspectAccountingSuccessor, inspectAccountingInstalled, inspectModeSuccessor, inspectModeInstalled, inventory, read, canonicalInputs, admitSuccessor, OWNED: COMPLETE_OWNED };
