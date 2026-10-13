@@ -600,3 +600,63 @@ test('private prelaunch copy preserves the public deep reference bytes and compl
   fs.writeFileSync(privatePath, bytes); fs.unlinkSync(privatePath); fs.symlinkSync(publicPath, privatePath);
   assert.throws(() => verifyPrelaunchCopy(launch, copy), /symlinked evidence/);
 });
+
+
+test('initial build ancestry follows selected squash source to covered baseline to final publication', () => {
+  const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
+  const filename = path.resolve(__dirname, '../smoke/phase49-final-review-acceptance.cjs');
+  const selected = { source: { head: 'a'.repeat(40), tree: 'b'.repeat(40), worktree: '/original' },
+    inputs: Array.from({ length: 162 }, (_, i) => ({ path: 'scripts/input' + i, sha256: 'c'.repeat(64), bytes: 1, mode: 0o644 })) };
+  const candidate = { finite_predecessor: {}, producer: { commit: selected.source.head, worktree: '/original' },
+    publication_source: { commit: 'd'.repeat(40), worktree: '/original' }, source_transition: { ticket: 'T-49-18' } };
+  const launch = { ticket: 'T-49-17', worktree: '/original', source_head: selected.source.head };
+  const prelaunch = { baseline_head: 'e'.repeat(40), baseline_tree: selected.source.tree };
+  const producer = { commit: selected.source.head, kind: 'executor', ticket: 'T-49-18', repository_id: 'repo', tree: selected.source.tree };
+  const baseline = { commit: prelaunch.baseline_head, kind: 'base-merge', ticket: 'T-49-17', repository_id: 'repo', tree: selected.source.tree };
+  const publication = { commit: candidate.publication_source.commit, kind: 'executor', ticket: 'T-49-17', repository_id: 'repo' };
+  const run = (change = () => {}) => {
+    const value = clone({ candidate, selected, launch, prelaunch, producer, baseline, publication }); change(value);
+    const calls = [];
+    const sandbox = { require, module: { exports: {} }, __dirname: path.dirname(filename), Buffer, process,
+      value, calls, assert };
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8') + `
+      verifySourceHistory = ref => {
+        calls.push(['coverage', ref.commit]);
+        const record = [value.producer, value.baseline, value.publication].find(row => row.commit === ref.commit);
+        assert(record, 'missing protected coverage'); return record;
+      };
+      verifySourceTransition = (candidate, source, target, ref) => {
+        calls.push(['transition', source.commit, target.commit]);
+        assert.equal(ref.ticket, 'T-49-18');
+        assert.equal(source.commit, value.producer.commit);
+        assert.equal(target.commit, value.baseline.commit);
+        assert.equal(value.transitionValid, undefined, 'forged or missing original squash');
+      };
+      gitBytes = (worktree, ...args) => {
+        calls.push(args);
+        if (args[0] === 'merge-base') {
+          assert.equal(args[2], value.baseline.commit);
+          assert.equal(args[3], value.publication.commit);
+          assert.equal(value.descendantInvalid, undefined, 'publication not descended from initial baseline');
+        }
+        return Buffer.from('');
+      };
+      sourceInputs = (worktree, commit) => {
+        assert.equal(worktree, '/original');
+        return value.changedInputs && commit === value.baseline.commit ? [] : value.selected.inputs;
+      };
+      verifyInitialBuildAncestry(value.candidate, value.selected, value.launch, value.prelaunch);
+    `, sandbox, { filename });
+    return calls;
+  };
+  const calls = run();
+  assert(calls.some(row => row[0] === 'transition' && row[1] === selected.source.head && row[2] === prelaunch.baseline_head));
+  assert(calls.some(row => row[0] === 'merge-base' && row[2] === prelaunch.baseline_head && row[3] === publication.commit));
+  assert(calls.some(row => row[0] === 'verify-commit' && row[1] === prelaunch.baseline_head));
+  for (const change of [v => v.baseline.kind = 'executor', v => v.baseline.ticket = 'T-49-18',
+    v => v.baseline.repository_id = 'foreign', v => v.baseline.tree = 'f'.repeat(40),
+    v => v.launch.source_head = 'f'.repeat(40), v => v.candidate.producer.commit = 'f'.repeat(40),
+    v => v.candidate.source_transition.ticket = 'T-49-13', v => v.transitionValid = false,
+    v => v.descendantInvalid = true, v => v.changedInputs = true,
+    v => v.publication.repository_id = 'foreign']) assert.throws(() => run(change));
+});

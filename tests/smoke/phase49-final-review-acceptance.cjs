@@ -1095,6 +1095,28 @@ function verifyPrelaunchCopy(launch, copy) {
     assert(/^[a-f0-9]{40}$/.test(prelaunch[key]), 'original prelaunch identity missing');
   return prelaunch;
 }
+function verifyInitialBuildAncestry(candidate, selected, launch, prelaunch) {
+  assert.equal(launch.source_head, selected.source.head, 'other selected build source');
+  assert.equal(candidate.producer.commit, selected.source.head, 'other original producer');
+  assert.equal(candidate.producer.worktree, selected.source.worktree, 'other producer checkout');
+  assert.equal(launch.worktree, candidate.publication_source.worktree, 'other initial actor checkout');
+  const producer = verifySourceHistory(candidate.producer);
+  const baseline = verifySourceHistory({ worktree: launch.worktree, commit: prelaunch.baseline_head });
+  const publication = verifySourceHistory(candidate.publication_source);
+  assert.equal(baseline.kind, 'base-merge', 'original protected initial base-merge required');
+  assert.equal(baseline.ticket, 'T-49-17', 'foreign initial baseline ticket');
+  assert.equal(baseline.repository_id, producer.repository_id, 'foreign initial baseline repository');
+  assert.equal(publication.repository_id, producer.repository_id, 'foreign publication repository');
+  assert.equal(baseline.tree, prelaunch.baseline_tree, 'other covered baseline tree');
+  assert.equal(baseline.tree, selected.source.tree, 'initial baseline changed selected whole tree');
+  gitBytes(launch.worktree, 'verify-commit', baseline.commit);
+  verifySourceTransition(candidate, { ...producer, worktree: candidate.producer.worktree },
+    { ...baseline, worktree: launch.worktree }, candidate.source_transition);
+  gitBytes(candidate.publication_source.worktree, 'merge-base', '--is-ancestor', baseline.commit, publication.commit);
+  assert.equal(selected.inputs.length, 162, 'complete selected build inputs required');
+  compareCanonicalInputs(selected.inputs, sourceInputs(launch.worktree, baseline.commit));
+  compareCanonicalInputs(selected.inputs, sourceInputs(candidate.publication_source.worktree, publication.commit));
+}
 function verifyInitialBuildActor(candidate, selected, publication) {
   const custody = JSON.parse(privateOriginal(requiredReference(candidate.build_origin, 'original initial build custody')));
   const pins = {
@@ -1130,7 +1152,7 @@ function verifyInitialBuildActor(candidate, selected, publication) {
     'other original prelaunch observation');
   const prelaunch = verifyPrelaunchCopy(launch, candidate.build_origin.prelaunch_copy);
   assert.equal(gitBytes(launch.worktree, 'rev-parse', prelaunch.baseline_head + '^{tree}').toString().trim(), prelaunch.baseline_tree);
-  gitBytes(launch.worktree, 'merge-base', '--is-ancestor', prelaunch.baseline_head, launch.source_head);
+  verifyInitialBuildAncestry(candidate, selected, launch, prelaunch);
   validateBuildPins(candidate, selected, launch, JSON.parse(bytes.original_once_build),
     JSON.parse(bytes.original_eight_output_copy), publicationInspector().BATCH_OUTPUTS.map(name => 'plugins/shipyard/' + name));
   const failed = bytes.original_failed_result.toString('utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
