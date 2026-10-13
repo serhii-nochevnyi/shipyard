@@ -1621,6 +1621,12 @@ function repairHistory(prepared, pr) {
       if (row.ticket !== prepared.commit.ticket || !['attempt', 'fix_round', 'escalation'].includes(row.event)
           || !['review-fix', undefined].includes(row.artifact_role || row.role)) continue;
       if (row.pr !== undefined && row.pr !== pr) fail('REPAIR_PREDECESSOR_INVALID', 'journal predecessor belongs to a foreign PR');
+      const operationalDeclaration = row.event === 'escalation' && row.by === 'escalation-record'
+        && Object.keys(row).sort().join(',') === 'by,event,pr,reason,ticket,ts'
+        && row.pr === pr && typeof row.reason === 'string' && row.reason.trim().length > 0
+        && typeof row.ts === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.ts)
+        && Number.isFinite(Date.parse(row.ts)) && new Date(row.ts).toISOString() === row.ts;
+      if (operationalDeclaration) continue;
       if (!row.artifact_ref || !row.artifact_digest || !row.dispatch_id || !(row.boundary_store || row.boundary_store_path))
         fail('REPAIR_PREDECESSOR_INVALID', 'unsigned repair carry cannot authorize another attempt');
       const artifact = roleArtifact.read({ role: 'review-fix', ticket: prepared.commit.ticket, pr, base: prepared.baseRef,

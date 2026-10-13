@@ -3157,4 +3157,44 @@ function sharedRepairTransitionRegression() {
 test('49 complete historical actions share authenticated transition bytes within unchanged custody bounds',
   sharedRepairTransitionRegression);
 
+function operationalEscalationHistoryRegression(mutation) {
+  const root = fs.mkdtempSync(path.join(temporary, 'operational-history-'));
+  const journalFile = path.join(root, 'delivery-log.jsonl');
+  const row = { ts: '2026-10-13T12:20:09.994Z', event: 'escalation', ticket: 'T-49-18', pr: 470,
+    reason: 'partial native fixer/escalated recovery', by: 'escalation-record' };
+  const variants = {
+    attempt: { event: 'attempt' }, 'fix-round': { event: 'fix_round' },
+    'native-escalation': { role: 'review-fix', native_status: 'completed' },
+    'marker-extra-fields': { model: 'gpt-6.1-sol', status: 'passed', hypothesis: 'claimed completion',
+      artifact_ref: 'claimed-artifact', dispatch_id: 'claimed-dispatch' },
+    'foreign-pr': { pr: 471 }, 'foreign-identity': { repository: 'foreign/repository' },
+  };
+  Object.assign(row, variants[mutation] || {});
+  const bytes = mutation === 'corrupt-journal' ? JSON.stringify(row) + '\n{broken\n' : JSON.stringify(row) + '\n';
+  fs.writeFileSync(journalFile, bytes);
+  const source = fs.readFileSync(path.join(__dirname, '../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs'), 'utf8');
+  const body = source.slice(source.indexOf('function repairHistory('), source.indexOf('function retainRepairAttempt('));
+  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+  const history = new Function('fs', 'path', 'sha256', 'privateDirectory', 'MAX_GRAPH_BYTES', 'fail',
+    body + '; return repairHistory;')(fs, path, digest, () => root, 1024 * 1024,
+    (code, message) => { throw Object.assign(new Error(message), { code }); });
+  const prepared = { stateRoot: root, graphFile: path.join(root, 'tickets.json'), commit: { ticket: 'T-49-18' } };
+  try {
+    if (mutation) assert.throws(() => history(prepared, 470), { code: 'REPAIR_PREDECESSOR_INVALID' });
+    else {
+      const result = history(prepared, 470);
+      assert.deepEqual(result.history, []);
+      assert.equal(result.reference, null);
+      assert.deepEqual(result.journal, { path: journalFile, sha256: digest(bytes), bytes: Buffer.byteLength(bytes) });
+    }
+    assert.equal(fs.readFileSync(journalFile, 'utf8'), bytes);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+test('49 ordinary operator escalation is nonsemantic context in the complete bound journal',
+  () => operationalEscalationHistoryRegression());
+for (const mutation of ['attempt', 'fix-round', 'native-escalation', 'marker-extra-fields', 'foreign-pr', 'foreign-identity', 'corrupt-journal'])
+  test('49 operational escalation classification refuses ' + mutation,
+    () => operationalEscalationHistoryRegression(mutation));
+
 done();
