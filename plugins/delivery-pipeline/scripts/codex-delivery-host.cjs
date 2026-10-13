@@ -1821,6 +1821,42 @@ function recheckHistoricalRepair(prepared, prior, originalHead) {
   } catch (error) { fail('REPAIR_PREDECESSOR_INVALID', 'historical action provenance changed: ' + error.message); }
 }
 
+// Content-address complete transition bytes once; action-specific custody stays inline.
+function shareRepairTransitions(coverage) {
+  const historical_transitions = {};
+  const shared = coverage.map(prior => {
+    if (!prior.historical) return prior;
+    const transition = {
+      ...(prior.source_transition ? { source_transition: prior.source_transition } : {}),
+      ...(prior.scope_transition ? { scope_transition: prior.scope_transition } : {}),
+    };
+    const reference = sha256(canonical(transition));
+    historical_transitions[reference] = transition;
+    const action = { ...prior, transition_sha256: reference };
+    delete action.source_transition;
+    delete action.scope_transition;
+    return action;
+  });
+  const compact = { coverage: shared, historical_transitions };
+  return Buffer.byteLength(canonical(compact)) < Buffer.byteLength(canonical({ coverage }))
+    ? compact : { coverage };
+}
+
+function repairCoverageTransition(prior, normalized) {
+  if (!Object.hasOwn(prior, 'transition_sha256')) return prior; // Original sealed subjects remain valid.
+  const reference = prior.transition_sha256;
+  const transition = normalized.historical_transitions?.[reference];
+  if (!prior.historical || prior.semantic_credit !== false || !/^[a-f0-9]{64}$/.test(reference || '')
+      || !object(transition) || sha256(canonical(transition)) !== reference
+      || Object.keys(transition).some(key => !['source_transition', 'scope_transition'].includes(key))
+      || (!transition.source_transition && !transition.scope_transition)
+      || Object.hasOwn(prior, 'source_transition') || Object.hasOwn(prior, 'scope_transition'))
+    fail('REPAIR_PREDECESSOR_INVALID', 'shared historical transition bytes or action reference changed');
+  const expanded = { ...prior, ...transition };
+  delete expanded.transition_sha256;
+  return expanded;
+}
+
 function normalizedRepairFeedback(prepared, feedback, history, options) {
   const excluded = new Map(), resolutions = new Map(), coverage = [], historicalDispatches = [];
   for (const { attempt, receipt } of [...history.history].reverse()) {
@@ -1969,7 +2005,7 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
   }
   const inventory = feedback.inventory.filter(item => !excluded.has(item.id));
   const normalized = inventory.map(item => resolutions.get(item.id) || item);
-  return Object.freeze({ inventory, digest: sha256(canonical(normalized)), coverage, historical_dispatch_ids: historicalDispatches });
+  return Object.freeze({ inventory, digest: sha256(canonical(normalized)), ...shareRepairTransitions(coverage), historical_dispatch_ids: historicalDispatches });
 }
 
 function prepareRepair(options, scope, context) {
@@ -2020,6 +2056,8 @@ function prepareRepair(options, scope, context) {
     + 'status (fixed/no-op/escalate), pushed=false (boolean), notes, hypothesis and review_dispositions. '
     + 'notes and hypothesis must be nonempty strings of at most 4096 bytes each; no additional fields are allowed. '
     + 'The complete final JSON must fit within 128 KiB without truncation. '
+    + 'Historical action transition_sha256 references the complete entry in actionable_feedback.historical_transitions; '
+    + 'these historical transitions grant no semantic credit. '
     + 'Every actionable feedback ID requires one disposition; full inventory and authenticated prior host dispositions remain bound. Each disposition is {id, action (reply/reply-and-resolve/escalate), reply, evidence:{command,result}}. '
     + 'Each reply, evidence.command and evidence.result must be a nonempty string of at most 4096 bytes; no additional disposition or evidence fields are allowed. '
     + 'Only unresolved thread IDs can be resolved. If status="escalate", every disposition must use reply or escalate; '
@@ -2083,7 +2121,8 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
       fail('REPAIR_PREDECESSOR_INVALID', 'authenticated prior host disposition coverage changed');
     if (prior.historical) {
       const actions = readSealed(file, prepared.key);
-      recheckHistoricalRepair(prepared, prior, actions.subject?.live?.headRefOid);
+      recheckHistoricalRepair(prepared, repairCoverageTransition(prior, prepared.repair.actionable_feedback),
+        actions.subject?.live?.headRefOid);
     }
     if (prior.reply_review) {
       const actions = readSealed(file, prepared.key);
@@ -3469,6 +3508,9 @@ module.exports = Object.freeze({
   MAX_ARGS_BYTES,
   requestValue,
   prepareRepair,
+  shareRepairTransitions,
+  repairCoverageTransition,
+  recheckHistoricalRepair,
   completeRepairFeedback,
   recheckRepair,
   prepareIntegratorInput,

@@ -21,6 +21,9 @@ const {
   readRequestFile,
   requestValue,
   completeRepairFeedback,
+  shareRepairTransitions,
+  repairCoverageTransition,
+  recheckHistoricalRepair,
   runCli,
   validateArgs,
   verificationFailureContext,
@@ -2820,21 +2823,23 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
       assert.equal(originalSecond.subject.feedback.inventory.length, mutation === 'normalized-external' ? 8 : 7);
       assert.equal(originalSecond.subject.actionable_feedback.coverage.length, mutation === 'normalized-missing-actions' ? 0 : 3);
       if (coveredSource || evolution) {
+        const historicalCoverage = originalSecond.subject.actionable_feedback.coverage.map(item =>
+          repairCoverageTransition(item, originalSecond.subject.actionable_feedback));
         assert.deepEqual(originalSecond.subject.actionable_feedback.historical_dispatch_ids, [first.dispatch_id]);
-        assert.ok(originalSecond.subject.actionable_feedback.coverage.every(item => item.historical && item.semantic_credit === false
+        assert.ok(historicalCoverage.every(item => item.historical && item.semantic_credit === false
           && (!coveredSource || (item.source_transition.from === firstHead && item.source_transition.to === currentHead))));
         assert.equal(originalSecond.subject.actionable_feedback.inventory.find(item => item.id === threadId).resolved, true);
         if (evolution) {
-          assert.ok(originalSecond.subject.actionable_feedback.coverage.every(item => item.scope_transition
+          assert.ok(historicalCoverage.every(item => item.scope_transition
             && item.scope_transition.from.plan.sha256 !== item.scope_transition.to.plan.sha256));
           assert.equal(originalSecond.preparation.plan.sha256, nativeRequest.context.plan_sha256);
           assert.deepEqual(originalSecond.preparation.commit.files_modified, graph.tickets[f.scope.ticket].files);
           assert.deepEqual(originalSecond.preparation.verificationAllowList, verificationAllowList);
           assert.equal(originalSecond.preparation.commit.expectedBase, f.base);
-          if (!coveredSource) assert.ok(originalSecond.subject.actionable_feedback.coverage.every(item =>
+          if (!coveredSource) assert.ok(historicalCoverage.every(item =>
             !Object.hasOwn(item, 'source_transition')), 'PLAN-only provenance must not invent a source transition');
           if (evolution === 'base-merge') {
-            for (const item of originalSecond.subject.actionable_feedback.coverage) {
+            for (const item of historicalCoverage) {
               const records = item.source_transition.records;
               assert.equal(records.filter(pin => pin.coverage_sha256).length, 1);
               assert.equal(records.filter(pin => pin.base_import && pin.semantic_credit === false).length, 1);
@@ -3077,5 +3082,80 @@ test('action-only CLI accepts a bounded original dispatch selector and refuses c
     ['--resume-repair-actions', 'x'.repeat(161), '--scope-file', '/tmp/scope.json']])
     assert.throws(() => parseRepairActionResumeArguments(args), { code: 'INVALID_INPUT' });
 });
+
+
+function sharedRepairTransitionRegression() {
+  const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const oid = index => index.toString(16).padStart(40, '0');
+  const source_transition = { from: oid(1), to: oid(97), records: Array.from({ length: 96 }, (_, i) => ({
+    commit: oid(i + 2), coverage_sha256: digest({ commit: oid(i + 2), original_receipt: i }),
+  })) };
+  const owners = Array.from({ length: 14 }, (_, i) => 'plugins/delivery-pipeline/scripts/original-source-owner-' + i + '.cjs');
+  const scope_transition = { from: { base: oid(200), base_ref: 'epic/phase49',
+    plan: { path: '49-18-PLAN.md', sha256: digest('original-plan') }, owners,
+    allow_list: Array.from({ length: 4 }, (_, i) => ({ argv: ['node', '--test', ...owners.slice(i, i + 5)],
+      profile: 'host', timeout_ms: 600000 })) },
+  to: { base: oid(201), base_ref: 'epic/phase49',
+    plan: { path: '49-18-PLAN.md', sha256: digest('current-plan') }, owners },
+  base_transition: { from: oid(200), to: oid(201), commits: [{ commit: oid(201), signer: 'A'.repeat(40) }] } };
+  const coverage = Array.from({ length: 49 }, (_, i) => {
+    const reply = { id: 'reply-' + i, kind: 'thread-comment', thread_id: 'thread-' + i,
+      author: 'native-fixer', author_id: 'original-author', body: 'Complete reasoning Ω ' + 'evidence '.repeat(80) };
+    reply.body_sha256 = digest(reply.body);
+    const response = JSON.stringify({ data: { node: reply, target: { id: 'finding-' + i },
+      review: { id: 'review-' + i, body: '', state: 'COMMENTED' } } });
+    return { dispatch_id: 'original-dispatch-' + Math.floor(i / 7), receipt_sha256: digest('receipt-' + i),
+      artifact_ref: '/original/artifact-' + i, artifact_digest: digest('artifact-' + i),
+      actions_sha256: digest('original-action-bytes-' + i), feedback_id: 'finding-' + i,
+      disposition_sha256: digest('complete-disposition-' + i), reply, resolved: true,
+      reply_review: { response, sha256: digest(response), created: true,
+        review: { id: 'review-' + i, body: '', state: 'COMMENTED' } },
+      historical: true, semantic_credit: false, source_transition, scope_transition };
+  });
+  const feedback = { inventory: coverage.flatMap(item => [item.reply, item.reply_review.review]), digest: digest('full-live-feedback') };
+  const prior_attempts = Array.from({ length: 7 }, (_, i) => ({ dispatch_id: 'original-dispatch-' + i,
+    notes: 'Complete prior notes '.repeat(180), hypothesis: 'Complete prior hypothesis '.repeat(150) }));
+  const subject = { feedback, actionable_feedback: { coverage, inventory: feedback.inventory }, prior_attempts,
+    hypotheses: prior_attempts.map(item => item.hypothesis) };
+  const shared = shareRepairTransitions(coverage);
+  const compact = { ...subject, actionable_feedback: { ...subject.actionable_feedback, ...shared } };
+  const bytes = value => Buffer.byteLength(JSON.stringify(value));
+  assert.ok(bytes(subject) > 512 * 1024, 'realistic repeated historical inventory exceeds unchanged subject bound');
+  assert.ok(bytes(compact) < 512 * 1024, 'complete shared subject fits unchanged custody bound');
+  assert.ok(bytes({ subject: compact, files_modified: owners }) < 1024 * 1024, 'complete native prompt material fits unchanged prompt bound');
+  assert.equal(Object.keys(shared.historical_transitions).length, 1);
+  assert.deepEqual(shared.coverage.map(item => repairCoverageTransition(item, shared)), coverage);
+  assert.deepEqual(compact.feedback, subject.feedback);
+  assert.deepEqual(compact.prior_attempts, prior_attempts);
+  assert.deepEqual(compact.hypotheses, subject.hypotheses);
+  const first = shared.coverage[0], reference = first.transition_sha256;
+  for (const mutate of [value => { delete value.historical_transitions[reference]; },
+    value => { value.historical_transitions[reference].source_transition.to = oid(999); },
+    value => { value.historical_transitions[reference].scope_transition.to.plan.sha256 = digest('foreign-current-plan'); }]) {
+    const altered = JSON.parse(JSON.stringify(shared)); mutate(altered);
+    assert.throws(() => repairCoverageTransition(first, altered), { code: 'REPAIR_PREDECESSOR_INVALID' });
+  }
+  for (const altered of [{ ...first, semantic_credit: true }, { ...first, transition_sha256: '0'.repeat(64) },
+    { ...first, source_transition }, { ...first, historical: false }])
+    assert.throws(() => repairCoverageTransition(altered, shared), { code: 'REPAIR_PREDECESSOR_INVALID' });
+  assert.deepEqual(repairCoverageTransition(coverage[0], {}), coverage[0], 'original sealed inline subjects remain readable');
+  // Even correctly hashed shared bytes cannot authorize a different current source/scope.
+  const sourceOnly = shareRepairTransitions([{ ...coverage[0], scope_transition: undefined }]);
+  const sourcePrior = repairCoverageTransition(sourceOnly.coverage[0], sourceOnly);
+  assert.throws(() => recheckHistoricalRepair({ commit: { expectedHead: oid(999) } }, sourcePrior, source_transition.from),
+    { code: 'REPAIR_PREDECESSOR_INVALID' });
+  const currentScope = scope_transition.to;
+  const prepared = { commit: { expectedBase: currentScope.base, files_modified: currentScope.owners },
+    baseRef: currentScope.base_ref, plan: currentScope.plan, verificationAllowList: currentScope.allow_list };
+  assert.throws(() => recheckHistoricalRepair({ ...prepared, plan: { ...prepared.plan, sha256: digest('foreign-current-plan') } },
+    repairCoverageTransition(first, shared), source_transition.from), { code: 'REPAIR_PREDECESSOR_INVALID' });
+
+  return { inline_bytes: bytes(subject), shared_bytes: bytes(compact),
+    repeated_transition_bytes: bytes(coverage.map(item => ({ source_transition: item.source_transition, scope_transition: item.scope_transition }))),
+    shared_transition_bytes: bytes(shared.historical_transitions) };
+}
+
+test('49 complete historical actions share authenticated transition bytes within unchanged custody bounds',
+  sharedRepairTransitionRegression);
 
 done();
