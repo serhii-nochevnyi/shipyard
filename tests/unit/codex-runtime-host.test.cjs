@@ -1642,7 +1642,7 @@ async function fixture(action, options = {}) {
     const content = "developer_instructions = '''\nReview all required material.\n'''";
     const typedInstructions = 'Review all required material.\n';
     const instructions = options.typed ? typedInstructions : runtime.generatedInstructions(content);
-    const profile = options.batch ? collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
+    const profile = options.batch ? collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: options.rangesPerBatch || 2,
       candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
         instructions_sha256: sha(instructions), model: selection.model, effort: selection.effort, provider: 'openai' } }) : null;
     let input = collector.prepareFileInput(scope, options.batch ? 'x'.repeat(8191) + '€' + 'é'.repeat(9000) + 'short €' : 'required material\n'.repeat(2000), {
@@ -2029,6 +2029,34 @@ test('v3 completed protected accounting counts shared native pins once and retai
 });
 
 
+for (const layer of ['outer', 'nested']) test('v3 three-range ' + layer + ' truncation preserves atomic credit and failed costs', async () => {
+  await fixture(async f => {
+    const original = fs.readFileSync(f.native);
+    const { selectors } = await completedFixture(f);
+    const result = accountingChild(f, selectors);
+    assert.equal(result.coverage.prefix.logical_ranges, 3);
+    assert.equal(result.coverage.prefix.successful_physical_calls, 1);
+    assert.equal(result.attempts[0].successful_calls, 1);
+    assert.equal(result.attempts[0].failed_calls, 1);
+    assert.equal(result.attempts[1].retries, 1);
+    assert.equal(result.coverage.total.logical_ranges, collector.verifyFileInput(f.input).chunk_reads);
+    assert.ok(result.attempts[0].observed_outer_bytes > 0);
+    assert.ok(result.attempts[0].unavailable_reasons['tokens.input_tokens']);
+    assert.deepEqual(fs.readFileSync(f.native).subarray(0, original.length), original);
+  }, { batch: true, rangesPerBatch: 3, incompleteBatch: true, tamperOriginal(records) {
+    const output = records.filter(record => record.payload?.type === 'custom_tool_call_output').at(-1).payload.output;
+    if (layer === 'outer') {
+      output[0].text = 'Script completed\nWall time 0.1 seconds\nOriginal token count: 12000\nWarning: output truncated\nOutput:';
+      output[1].text = '{"exit_code":0,"output":"clipped';
+    } else {
+      const value = JSON.parse(output[1].text);
+      value.truncated = true; value.original_token_count = 12000;
+      output[1].text = JSON.stringify(value);
+    }
+    return records;
+  } });
+});
+
 for (const [kind, expectedFailed, expectedPending, expectedRetry] of [['groupedBatch', 2, 0, 2], ['groupedPendingBatch', 1, 1, 2], ['pendingBatch', 0, 1, 1]]) {
   test('v3 completed cost retains ' + kind + ' physical operations independently of range coverage', async () => {
     const assert = require('node:assert/strict');
@@ -2146,7 +2174,7 @@ async function productionBatchProbeFixture(f, mutation, role = 'arch-review', co
     policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH,
     agent_files: [resolved.agent_file], agent_digests: { [resolved.agent_file]: sha(content) },
   }));
-  const profile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
+  const profile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 3,
     candidate: f.input.manifest.transport.candidate });
   const input = collector.prepareFileInput(f.scope, collector.verifyFileInput(f.input).material, {
     readerProfile: profile, role, dispatchId: resolved.dispatch_id, storageRoot: path.join(root, 'inputs'),
@@ -2179,9 +2207,23 @@ async function productionBatchProbeFixture(f, mutation, role = 'arch-review', co
       if (mutation === 'native-effort') {
         context.payload.effort = 'low'; context.payload.collaboration_mode.settings.reasoning_effort = 'low';
       }
+      let reads = nativeReads(readRecords(activeInput), turn);
+      if (['outer-truncation', 'nested-truncation', 'direct-truncation', 'malformed-output'].includes(mutation)) {
+        const output = reads.find(record => record.payload?.type === 'custom_tool_call_output').payload;
+        if (mutation === 'outer-truncation') {
+          output.output[0].text = 'Script completed\nWall time 0.1 seconds\nOriginal token count: 12000\nWarning: output truncated\nOutput:';
+          output.output[1].text = '{"exit_code":0,"output":"clipped';
+        } else if (mutation === 'malformed-output') output.output[1].text = '{"exit_code":0';
+        else {
+          const nested = JSON.parse(output.output[1].text);
+          nested.truncated = true; nested.original_token_count = 12000;
+          output.output[1].text = JSON.stringify(nested);
+          if (mutation === 'direct-truncation') reads = directBatchReads(reads);
+        }
+      }
       fs.writeFileSync(path.join(directory, activeSession + '.jsonl'), serialize([nativeMetadata(activeSession, f.worktree), context,
         message('developer', turn, runtime.generatedInstructions(content)), message('user', turn, activeInput.prompt),
-        event('task_started', turn), ...nativeReads(readRecords(activeInput), turn), ...finish(turn, resultText)]), { mode: 0o600 });
+        event('task_started', turn), ...reads, ...finish(turn, resultText)]), { mode: 0o600 });
       return childFor(serialize([cliThread(activeSession), ...cliCompletion(resultText)]));
     },
   };
@@ -2206,14 +2248,29 @@ async function productionBatchProbeFixture(f, mutation, role = 'arch-review', co
       },
     });
     if (mutation) {
-      await assert.rejects(run, error => mutation === 'native-model' || mutation === 'native-effort'
+      await assert.rejects(run, error => {
+        if (['outer-truncation', 'nested-truncation', 'direct-truncation', 'malformed-output'].includes(mutation)) {
+          assert.equal(error.code, 'RUNTIME_EVIDENCE_MISMATCH');
+          if (mutation === 'malformed-output') assert.equal(error.details.reason, undefined);
+          else {
+            assert.equal(error.details.reason, 'reader-output-truncation');
+            assert.equal(error.details.envelope_layer, mutation === 'outer-truncation' ? 'outer' : 'nested');
+            assert.equal(error.details.original_token_count, 12000);
+            assert.equal(error.details.batch_index, 0);
+            assert.ok(error.details.call_id.length <= 256);
+            assert.ok(JSON.stringify(error.details).length < 1024);
+          }
+          return true;
+        }
+        return mutation === 'native-model' || mutation === 'native-effort'
         ? error.code === 'RUNTIME_EVIDENCE_MISMATCH'
         : mutation === 'missing-recorder' ? error.code === 'READER_CAPACITY_UNSUPPORTED'
         : mutation === 'stale-agent' ? error.code === 'STALE_GENERATED_AGENT'
         : mutation === 'recorder-failure' ? /record|fsync/i.test(error.message)
-        : ['CONFLICTING_OVERRIDE', 'UNSUPPORTED_SELECTION', 'INVALID_RESOLUTION'].includes(error.code));
+        : ['CONFLICTING_OVERRIDE', 'UNSUPPORTED_SELECTION', 'INVALID_RESOLUTION'].includes(error.code);
+      });
       assert.equal(completed, mutation === 'recorder-failure' ? 1 : 0);
-      assert.equal(spawned, ['native-model', 'native-effort', 'recorder-failure'].includes(mutation) ? 1 : 0);
+      assert.equal(spawned, ['native-model', 'native-effort', 'recorder-failure', 'outer-truncation', 'nested-truncation', 'direct-truncation', 'malformed-output'].includes(mutation) ? 1 : 0);
       assert.throws(() => collector.requireReaderBatchCapacity(input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
       return;
     }
@@ -2283,7 +2340,7 @@ for (const role of ['arch-review', 'integrator']) for (const configured of [fals
   });
 }
 for (const mutation of ['missing-recorder', 'stale-agent', 'requested-model', 'requested-effort',
-  'native-model', 'native-effort', 'recorder-failure']) {
+  'native-model', 'native-effort', 'recorder-failure', 'outer-truncation', 'nested-truncation', 'direct-truncation', 'malformed-output']) {
   test('v3 production capacity refuses ' + mutation + ' without authority', async () => {
     await fixture(f => productionBatchProbeFixture(f, mutation), { batch: true });
   });

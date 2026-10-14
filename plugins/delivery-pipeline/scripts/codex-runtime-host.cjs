@@ -1347,15 +1347,30 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
         outputBytes += envelopeBytes;
         if (outputBytes > 128 * 1024 * 1024) fail('READER_CAPACITY_UNSUPPORTED', 'reader output budget exceeded');
         let output = item.output;
+        const truncation = (layer, envelope, text) => {
+          const details = { reason: 'reader-output-truncation', envelope_layer: layer,
+            call_id: item.call_id.slice(0, 256), batch_index: read.batch_index,
+            observed_envelope_bytes: envelopeBytes };
+          for (const key of ['original_token_count', 'original_byte_count', 'original_bytes'])
+            if (Number.isSafeInteger(envelope?.[key]) && envelope[key] >= 0) details[key] = envelope[key];
+          const tokens = /original[ _]token[ _]count\s*:\s*([0-9]{1,16})/i.exec(text || '');
+          if (tokens && Number.isSafeInteger(Number(tokens[1]))) details.original_token_count = Number(tokens[1]);
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'native reader output is truncated', details);
+        };
         if (read.custom) {
           if (!Array.isArray(output) || output.some(block => !['text', 'input_text'].includes(block?.type) || typeof block.text !== 'string'))
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output is not the original text response');
+          if (v3 && /(?:truncated|original token count|original_token_count)/i.test(output[0]?.text || ''))
+            truncation('outer', null, output[0].text);
           if (output.length !== 2 || !/^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(output[0].text))
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native read output has surplus or unsupported text');
           const results = output.slice(1).flatMap(block => {
             try { const result = JSON.parse(block.text); return object(result) && typeof result.output === 'string' ? [result] : []; }
             catch { return []; }
           });
+          if (v3 && results.length === 1 && (results[0].original_token_count !== undefined
+              || results[0].truncated === true || /(?:truncated|original token count|original_token_count)/i.test(results[0].output)))
+            truncation('nested', results[0], results[0].output);
           if (results.length !== 1 || results[0].exit_code !== 0 || results[0].session_id !== undefined)
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
           nestedBytes += Buffer.byteLength(output[1].text);
@@ -1368,6 +1383,9 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
         } else {
           let parsed; try { parsed = JSON.parse(output); } catch {}
           if (!object(parsed)) fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read lacks a successful output envelope');
+          if (v3 && (parsed.original_token_count !== undefined || parsed.truncated === true
+              || /(?:truncated|original token count|original_token_count)/i.test(parsed.output || '')))
+            truncation('nested', parsed, parsed.output);
           if (object(parsed)) {
             if (parsed.exit_code !== 0 || parsed.session_id !== undefined)
               fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');

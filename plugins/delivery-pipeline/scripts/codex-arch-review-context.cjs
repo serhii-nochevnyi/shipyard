@@ -1397,8 +1397,10 @@ function isPreparedContext(value) {
   return object(value) && preparedContexts.has(value);
 }
 
+const installedReaderParameters = Object.freeze({ chunk_bytes: 8192, ranges_per_batch: 3 });
+
 function installedReaderProfile(options, instructions) {
-  return createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 12,
+  return createReaderBatchProfile({ ...installedReaderParameters,
     candidate: { source_sha256: digest(fs.readFileSync(__filename)), instructions_sha256: digest(instructions),
       model: options.selection.model, effort: options.selection.effort, provider: 'openai' } });
 }
@@ -1454,8 +1456,8 @@ function admitInstalledLaunch(value, options) {
     const batch = previous.manifest.transport?.schema === 'shipyard.native-reader-transport.v3' || options.automaticReader === true;
     const batchProfile = options.automaticReader ? installedReaderProfile(options, instructions) : fileInputOptions.get(previous).readerProfile;
     const variantTransport = options.automaticReader ? { candidate: { source_sha256: digest(fs.readFileSync(__filename)),
-      instructions_sha256: digest(instructions), model: options.selection.model, effort: options.selection.effort },
-      chunk_bytes: 8192, ranges_per_batch: 12 } : batch ? { ...previous.manifest.transport, profile_sha256: null } : transport;
+      instructions_sha256: digest(instructions), model: options.selection.model, effort: options.selection.effort, provider: 'openai' },
+      ...installedReaderParameters } : batch ? { ...previous.manifest.transport, profile_sha256: null } : transport;
     const variantKey = digest(JSON.stringify(canonical({ binding, instructionBytes, transport: variantTransport })));
     const cached = variants.get(variantKey);
     if (cached) verifyFileInput(cached);

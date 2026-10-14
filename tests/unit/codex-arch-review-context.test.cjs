@@ -650,7 +650,7 @@ test('finite batch CLI returns only its exact scheduled frames and enforces priv
   const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "finite batch ' custody-")));
   const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
   try {
-    const parameters = { chunk_bytes: 8192, ranges_per_batch: 2,
+    const parameters = { chunk_bytes: 8192, ranges_per_batch: 3,
       candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
         instructions_sha256: sha('fixture instructions'), model: 'gpt-6.1-sol', effort: 'high', provider: 'openai' } };
     const profile = contextBuilder.createReaderBatchProfile(parameters);
@@ -2751,6 +2751,21 @@ test('automatic installed candidate retains its exact finite profile and cached 
     contextBuilder.admitInstalledLaunch(value, admission);
     const first = contextBuilder.admittedFileInput(value), bytes = fs.readFileSync(first.input_bundle.manifest_path);
     assert.equal(first.manifest.transport.schema, 'shipyard.native-reader-transport.v3');
+    assert.equal(first.manifest.transport.chunk_bytes, 8192);
+    assert.equal(first.manifest.transport.ranges_per_batch, 3);
+    const checked = contextBuilder.verifyFileInput(first), frames = [];
+    for (const batch of first.manifest.batches) {
+      const output = execFileSync('node', [first.manifest.transport.module_path, '--read-batch',
+        first.input_bundle.manifest_path, String(batch.index), first.manifest.transport.profile_sha256], { encoding: 'utf8' });
+      assert.equal(output, contextBuilder.batchOutput(first.manifest, checked.manifest_bytes, checked.material, batch.index));
+      const records = output.trim().split('\n').map(JSON.parse);
+      assert.equal(records[0].type, 'batch');
+      assert.equal(records.at(-1).type, 'terminal');
+      assert.equal(records.length, batch.count + 2);
+      frames.push(...records.slice(1, -1));
+    }
+    assert.deepEqual(Buffer.concat(frames.map(frame => Buffer.from(frame.base64, 'base64'))),
+      Buffer.concat([checked.manifest_bytes, ...checked.material]));
     assert.equal(first.manifest.transport.candidate.effort, selection.effort);
     assert.equal(first.manifest.dispatch_id, 'automatic-cache-final');
     assert.throws(() => contextBuilder.requireReaderBatchCapacity(first), { code: 'READER_CAPACITY_UNSUPPORTED' });
@@ -2758,6 +2773,13 @@ test('automatic installed candidate retains its exact finite profile and cached 
     const second = contextBuilder.admittedFileInput(value);
     assert.equal(second.manifest, first.manifest);
     assert.deepEqual(fs.readFileSync(second.input_bundle.manifest_path), bytes);
+    contextBuilder.admitInstalledLaunch(value, { ...admission,
+      capabilities: { ...capabilities, candidate_identity: 'changed' } });
+    const foreign = contextBuilder.admittedFileInput(value);
+    assert.notEqual(foreign.manifest, first.manifest);
+    assert.throws(() => contextBuilder.requireReaderBatchCapacity(foreign), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    contextBuilder.admitInstalledLaunch(value, admission);
+    assert.equal(contextBuilder.admittedFileInput(value).manifest, first.manifest);
     contextBuilder.recheckInstalledLaunch(value);
     assert.throws(() => contextBuilder.restoreCompletedSourceInput(JSON.parse(JSON.stringify({ input: first }))),
       { code: 'REVIEW_SOURCE_REQUIRED' });
