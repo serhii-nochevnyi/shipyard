@@ -1347,15 +1347,32 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
         outputBytes += envelopeBytes;
         if (outputBytes > 128 * 1024 * 1024) fail('READER_CAPACITY_UNSUPPORTED', 'reader output budget exceeded');
         let output = item.output;
+        const truncation = (layer, envelope, text) => {
+          const details = { reason: 'reader-output-truncation', envelope_layer: layer,
+            call_id: item.call_id.slice(0, 256), batch_index: read.batch_index,
+            observed_envelope_bytes: envelopeBytes };
+          for (const key of ['original_token_count', 'original_byte_count', 'original_bytes'])
+            if (Number.isSafeInteger(envelope?.[key]) && envelope[key] >= 0) details[key] = envelope[key];
+          const tokens = /original[ _]token[ _]count\s*:\s*([0-9]{1,16})/i.exec(text || '');
+          if (tokens && Number.isSafeInteger(Number(tokens[1]))) details.original_token_count = Number(tokens[1]);
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'native reader output is truncated', details);
+        };
         if (read.custom) {
           if (!Array.isArray(output) || output.some(block => !['text', 'input_text'].includes(block?.type) || typeof block.text !== 'string'))
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output is not the original text response');
+          if (v3 && /(?:truncated|original token count|original_token_count)/i.test(output[0]?.text || ''))
+            truncation('outer', null, output[0].text);
           if (output.length !== 2 || !/^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(output[0].text))
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native read output has surplus or unsupported text');
+          if (v3 && /^Warning: truncated output \(original token count: [0-9]{1,16}\)(?:\r?\n|$)/.test(output[1].text))
+            truncation('outer', null, output[1].text);
           const results = output.slice(1).flatMap(block => {
             try { const result = JSON.parse(block.text); return object(result) && typeof result.output === 'string' ? [result] : []; }
             catch { return []; }
           });
+          if (v3 && results.length === 1 && (results[0].original_token_count !== undefined
+              || results[0].truncated === true || /(?:truncated|original token count|original_token_count)/i.test(results[0].output)))
+            truncation('nested', results[0], results[0].output);
           if (results.length !== 1 || results[0].exit_code !== 0 || results[0].session_id !== undefined)
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
           nestedBytes += Buffer.byteLength(output[1].text);
@@ -1368,6 +1385,9 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
         } else {
           let parsed; try { parsed = JSON.parse(output); } catch {}
           if (!object(parsed)) fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read lacks a successful output envelope');
+          if (v3 && (parsed.original_token_count !== undefined || parsed.truncated === true
+              || /(?:truncated|original token count|original_token_count)/i.test(parsed.output || '')))
+            truncation('nested', parsed, parsed.output);
           if (object(parsed)) {
             if (parsed.exit_code !== 0 || parsed.session_id !== undefined)
               fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
@@ -2568,6 +2588,12 @@ function createCodexCliLauncher(options = {}) {
     const typedRole = launchOptions.gsd_role;
     const agent = typedRole ? installedGsdAgent(typedRole, environment) : null;
     const fileInput = launchOptions.input_prepared;
+    const focused = launchOptions.focused_prepared === undefined ? null
+      : require('./codex-arch-review-context.cjs').authenticateFocusedLaunch(launchOptions.focused_prepared, prompt, {
+        ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree, dispatch_id: launchOptions.dispatch_id,
+        agent_file: launchOptions.agent_file, agent_file_digest: launchOptions.agent_file_digest });
+    if (focused && (typedRole || launchOptions.resume_review || launchOptions.review_progress || launchOptions.reader_capacity_probe))
+      fail('INVALID_INPUT', 'focused original launch cannot use measured continuation');
     const probeState = readerCapacityProbes.get(launchOptions.reader_capacity_probe);
     const capacityProbe = probeState?.prepared;
     if (launchOptions.reader_capacity_probe && (!capacityProbe || capacityProbe !== fileInput || typedRole
@@ -2585,7 +2611,10 @@ function createCodexCliLauncher(options = {}) {
       const normalizeRelay = value => value.replace(/launch_digest=[a-f0-9]{64}/g, 'launch_digest=' + '0'.repeat(64));
       if (typeof prompt !== 'string' || normalizeRelay(prompt) !== normalizeRelay(resumeReview ? resumeReview.prompt : fileInput.prompt))
         fail('INVALID_INPUT', 'native relay differs from private prepared input');
-      if (!capacityProbe) collector.requireReaderBatchCapacity(fileInput);
+      if (!capacityProbe && !focused) collector.requireReaderBatchCapacity(fileInput);
+      if (focused && (fileInput !== collector.admittedFileInput(launchOptions.focused_prepared)
+          || fileInput.manifest.binding?.review_contract !== collector.FOCUSED_CONTRACT))
+        fail('INVALID_INPUT', 'focused files differ from private launch custody');
       if (fileInput.manifest.transport?.schema === 'shipyard.native-reader-transport.v3'
           && (fileInput.manifest.transport.candidate.instructions_sha256 !== reviewHash(agent ? agent.instructions
             : resumeReview?.progress.original_launch.agent
@@ -2680,7 +2709,7 @@ function createCodexCliLauncher(options = {}) {
       applied_model: model, applied_effort: effort,
       observed_model: model, observed_effort: effort,
     });
-    const observeReview = fileTransport && !resumeReview && !capacityProbe && (launchOptions.review_progress === true
+    const observeReview = fileTransport && !focused && !resumeReview && !capacityProbe && (launchOptions.review_progress === true
       || (fileInput.manifest.binding?.ticket_set && fileInput.manifest.binding?.merge_base))
       ? createReviewObserver(fileInput, { model, effort, sandbox_mode: sandbox,
         agent_file: agent?.file || launchOptions.agent_file || null,
@@ -2929,7 +2958,7 @@ function createCodexCliLauncher(options = {}) {
         allowTimedOutWait: false, startedAt, task,
       });
       const nativeEvidence = verified.native_session_evidence;
-      if (fileTransport) {
+      if (fileTransport && !focused) {
         const message = parsed.records.filter(record => record.type === 'item.completed'
           && record.item?.type === 'agent_message').at(-1);
         if (!message || parsed.records.indexOf(message) > parsed.records.findLastIndex(record => record.type === 'turn.completed'))
@@ -2960,6 +2989,18 @@ function createCodexCliLauncher(options = {}) {
         model: args[args.indexOf('--model') + 1],
         effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
       }, nativeEvidence);
+      if (focused) {
+        const collector = require('./codex-arch-review-context.cjs');
+        collector.authenticateFocusedLaunch(launchOptions.focused_prepared, prompt, {
+          ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree, dispatch_id: launchOptions.dispatch_id });
+        if (Buffer.byteLength(parsed.records[cliFinal].item.text) > 128 * 1024)
+          fail('INVALID_RESULT', 'focused native completion exceeds its bounded envelope');
+        let result;
+        try { result = JSON.parse(parsed.records[cliFinal].item.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
+        if (!object(result)) fail('INVALID_RESULT', 'focused native completion requires bounded JSON');
+        collector.validateFocusedResult(result, focused);
+        if (result.launch_digest !== focused.launch_digest) fail('RUNTIME_EVIDENCE_MISMATCH', 'focused native launch digest differs');
+      }
       const typedEvidence = verified.native_child_evidence || (resumeReview?.progress.original_launch.native_child_evidence
         ? { ...resumeReview.progress.original_launch.native_child_evidence, schema: 'shipyard.codex-native-child-evidence.v1', sha256: nativeEvidence.sha256,
           fresh_turn_id: resumedConsumption.turn_id } : null);
@@ -3010,7 +3051,10 @@ function createCodexCliLauncher(options = {}) {
           source: resumeReview.reference, original_dispatch_id: resumeReview.progress.probe_dispatch_id,
           fresh_turn_id: resumedConsumption.turn_id, semantic_credit: false, new_physical_calls: 0 } } : {}),
         ...(typedEvidence ? { native_child_evidence: typedEvidence } : {}),
-        ...(fileTransport ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
+        ...(focused ? { focused_review: focused } : {}),
+        ...(fileTransport && focused ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
+          input_accounting: fileInput.manifest.accounting } : {}),
+        ...(fileTransport && !focused ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
           input_accounting: fileInput.manifest.accounting,
           input_consumption: { native_session_sha256: nativeEvidence.sha256,
             manifest_sha256: fileInput.input_bundle.manifest_sha256,
@@ -3199,6 +3243,7 @@ function createCodexRuntimeHost(options = {}) {
         input_transport: input.input_transport,
         input_bundle: input.input_bundle,
         input_prepared: input.input_prepared,
+        focused_prepared: input.focused_prepared,
         sandbox_mode: selection.sandbox_mode || input.sandbox_mode,
         gsd_role: input.gsd_role,
         resume_review: input.resume_review,
