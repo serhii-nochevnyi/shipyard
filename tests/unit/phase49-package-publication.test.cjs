@@ -770,7 +770,8 @@ test('original combined stage independently pins all162/all161 and exact same-st
   assert.equal(launch.tracked_clean, true); assert.equal(launch.head_still_pinned, true);
   assert.equal(launch.baseline_head, '099d92d0d7cff9445e67c06d5a02e777741f5155');
   assert.equal(launch.baseline_tree, BATCH_TREE); assert.equal(launch.source_head, BATCH_HEAD);
-  assert.equal(launch.worktree, ROOT); assert.equal(launch.ticket, 'T-49-17');
+  assert.equal(launch.worktree, '/Volumes/KINGSTON/worktrees/phase47-1-investigation/.wt-claude-shipyard/T-49-17');
+  assert.equal(launch.ticket, 'T-49-17');
   assert(Number.isSafeInteger(launch.native_process_id) && launch.native_process_id > 0);
   read(launch.prelaunch_observation.path, launch.prelaunch_observation.sha256);
   const gitHistory = (...args) => execFileSync('git', ['-C', ROOT, ...args],
@@ -814,11 +815,15 @@ test('original combined stage independently pins all162/all161 and exact same-st
   const sourceCI = JSON.parse(read(marker.source_full_ci,
     '87d5a8d6b1236ca243086afba80e08f6198245eb71fd18d79d719d547d71272d'));
   inspectBatchCI(sourceCI, BATCH_HEAD);
-  const result = historicalAccountingRepository(JSON.parse(historicalBytes), historicalRepository =>
-    withoutWrites(() => inspectBatchSuccessor(bytes,
-      { selection_sha256: BATCH_SHA, head: BATCH_HEAD, tree: BATCH_TREE }, ROOT,
-      path.join(BATCH_ROOT, 'candidate'), historicalBytes,
-      { selection_sha256: MODE_SHA, head: MODE_HEAD, tree: MODE_TREE }, historicalRepository)));
+  assert.deepEqual(withoutWrites(() => inventory(path.join(ROOT, 'plugins/shipyard'))),
+    selected.outputs.map(row => ({ path: row.path, sha256: row.sha256,
+      bytes: row.bytes, mode: row.publication_mode })), 'original same-stage publication changed');
+  const result = historicalAccountingRepository(selected, originalRepository =>
+    historicalAccountingRepository(JSON.parse(historicalBytes), historicalRepository =>
+      withoutWrites(() => inspectBatchSuccessor(bytes,
+        { selection_sha256: BATCH_SHA, head: BATCH_HEAD, tree: BATCH_TREE }, originalRepository,
+        path.join(BATCH_ROOT, 'candidate'), historicalBytes,
+        { selection_sha256: MODE_SHA, head: MODE_HEAD, tree: MODE_TREE }, historicalRepository))));
   assert.deepEqual(result.changed_inputs, [...BATCH_INPUTS].sort());
   assert.deepEqual(result.changed_outputs, [...BATCH_OUTPUTS].sort());
   assert.equal(result.unchanged_inputs, 156); assert.equal(result.unchanged_outputs, 153);
@@ -984,7 +989,11 @@ function inspectModeInstalled(identity, authenticated, selectionBytes, expected,
 function historicalAccountingRepository(selected, callback) {
   const repository = temporaryDirectory('phase49-historical-accounting-');
   try {
+    const tree = execFileSync('git', ['-C', ROOT, 'rev-parse', selected.source.head + '^{tree}'],
+      { encoding: 'utf8', timeout: 10000 }).trim();
+    assert.equal(tree, selected.source.tree, 'historical producer tree drift');
     for (const input of selected.inputs) {
+      safeRelative(input.path);
       const bytes = execFileSync('git', ['-C', ROOT, 'show', selected.source.head + ':' + input.path],
         { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
       assert.equal(sha(bytes), input.sha256, 'historical committed input drift');
@@ -1603,7 +1612,21 @@ function packagedBatchFixtures(repository) {
       'plugins/shipyard/host/plugins/delivery-pipeline', request.slice(prefix.length)));
     return originalRequire(request);
   };
-  const source = read(file).toString('utf8');
+  const origin = '0724e437d8ca42d87adb8d3421a15a13edd1ead2';
+  const relative = 'plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs';
+  const originalReader = execFileSync('git', ['-C', ROOT, 'show', origin + ':' + relative],
+    { maxBuffer: 16 * 1024 * 1024 });
+  assert.equal(sha(originalReader), 'beee1e2e6ea746687414b0c05ff87487c66f595ed1e732b33f63098644d4eb2f');
+  assert.deepEqual(originalReader, read(path.join(repository, 'plugins/shipyard/host', relative)),
+    'legacy capacity candidate belongs to the immutable packaged producer');
+  const originalDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-package-producer-'));
+  process.on('exit', () => fs.rmSync(originalDirectory, { recursive: true, force: true }));
+  const originalPath = path.join(originalDirectory, 'codex-arch-review-context.cjs');
+  fs.writeFileSync(originalPath, originalReader);
+  const resolver = "require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs')";
+  const originalSource = read(file).toString('utf8');
+  assert.ok(originalSource.includes(resolver), 'original candidate source resolver seam is required');
+  const source = originalSource.replaceAll(resolver, JSON.stringify(originalPath));
   const seam = 'if (require.main === module) {';
   assert.equal(source.split(seam).length, 2, 'original continuation registration seam changed');
   fixtureModule._compile(source.replace(seam, 'if (true) {'), file);

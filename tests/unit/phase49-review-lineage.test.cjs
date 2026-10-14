@@ -8,12 +8,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+let authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+let collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+let runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
 const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const boundary = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+let boundary = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const serialize = records => records.map(record => JSON.stringify(record) + '\n').join('');
@@ -46,8 +46,8 @@ function commit(f, message) {
   f.head = git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
 }
 
-test('independent original role successes survive a later repair with complete contributor impact', async () => {
-  await fixture(async f => {
+test('retained legacy independent original role successes survive a later repair with complete contributor impact', async () => {
+  await legacyFixture(async f => {
     const integration = await successfulReview(f, 'integrator');
     write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n'); commit(f, 'another contributor');
     const architecture = await successfulReview(f, 'arch-review');
@@ -82,10 +82,20 @@ test('independent original role successes survive a later repair with complete c
   });
 });
 
+async function legacyFixture(action) {
+  await fixture(async f => {
+    const original = { authority, collector, runtime, boundary };
+    const retained = require('./helpers/codex-arch-review-fixtures.cjs').retainedLegacyReviewModules(f.root);
+    ({ authority, collector, runtime, boundary } = retained);
+    try { await action(f); } finally { ({ authority, collector, runtime, boundary } = original); }
+  });
+}
+
 async function fixture(action) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-lineage-')));
   const originalHome = os.homedir, originalCodex = process.env.CODEX_HOME;
   os.homedir = () => root; process.env.CODEX_HOME = path.join(root, '.codex');
+  let f;
   try {
     const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
     git(worktree, 'init', '-qb', 'main');
@@ -110,7 +120,7 @@ async function fixture(action) {
     git(worktree, 'update-ref', 'refs/remotes/origin/main', base);
     git(worktree, 'switch', '-qc', 'epic/' + phase);
     write(worktree, 'src/provider.cjs', 'exports.value = 1;\n');
-    const f = { root, worktree, base, graphDir, phase, rows, state, count: 0, agents: {}, reviews: [] };
+    f = { root, worktree, base, graphDir, phase, rows, state, count: 0, agents: {}, reviews: [] };
     f.pr = { number: 301, state: 'OPEN', isDraft: false, headRefName: 'epic/' + phase, headRefOid: '',
       baseRefName: 'main', baseRefOid: base, reviewDecision: 'REVIEW_REQUIRED' };
     commit(f, 'original implementation');
@@ -123,6 +133,7 @@ async function fixture(action) {
   } finally {
     os.homedir = originalHome;
     if (originalCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodex;
+    for (const storage of f?.focusedStorages || []) fs.rmSync(storage, { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -227,6 +238,20 @@ function nativeRecords(scope, input, session, selection, resultText, legacy = fa
 }
 
 async function successfulReview(f, role, options = {}) {
+  if (role === 'arch-review' && collector.FOCUSED_CONTRACT) {
+    const helper = require('./helpers/codex-arch-review-fixtures.cjs');
+    const source = { root: f.worktree, ticket: phaseBinding(f).subject, phase: 49, phaseName: f.phase, pr: f.pr };
+    const original = await helper.unitJudgment(source);
+    f.focusedStorages ??= [];
+    f.focusedStorages.push(source.storage);
+    const artifact = original.result.artifact.ref;
+    const review = { head: f.head, artifact, original: fs.readFileSync(artifact),
+      dispatched: original.result, recorder: original.recorder, role, value: original.value };
+    assert.equal(original.result.result.review_contract, collector.FOCUSED_CONTRACT);
+    assert.equal(original.result.receipt.runtime_evidence.input_consumption, undefined);
+    f.reviews.push(review);
+    return review;
+  }
   const dispatchId = 'original-' + role + '-' + ++f.count;
   const input = currentInput(f, role, dispatchId);
   const value = role === 'arch-review' ? f.lastArchitecture : null;
@@ -298,8 +323,8 @@ async function successfulReview(f, role, options = {}) {
   f.reviews.push(review); return review;
 }
 
-test('authenticated baseline authority cannot be borrowed by another role', async () => {
-  await fixture(async f => {
+test('retained legacy authenticated baseline authority cannot be borrowed by another role', async () => {
+  await legacyFixture(async f => {
     await successfulReview(f, 'integrator');
     await successfulReview(f, 'arch-review');
     const i = currentInput(f, 'integrator'), a = currentInput(f, 'arch-review');
@@ -498,4 +523,33 @@ test('unparsed semantic assumptions and explicit limitations force the independe
       assert.ok(selected.rejected.some(entry => entry.code === 'REVIEW_BASELINE_UNSUPPORTED'));
       assert.deepEqual(fs.readFileSync(original.artifact), original.original);
     });
+});
+
+test('focused current architecture covers the complete repaired diff without borrowing legacy lineage', async () => {
+  await fixture(async f => {
+    write(f.worktree, 'src/consumer.cjs', "module.exports = require('./provider.cjs').value + 1;\n");
+    commit(f, 'another contributor focused repair');
+    const helper = require('./helpers/codex-arch-review-fixtures.cjs');
+    const reviewFixture = { root: f.worktree, ticket: phaseBinding(f).subject, phase: 49, phaseName: f.phase, pr: f.pr };
+    try {
+      const original = await helper.unitJudgment(reviewFixture);
+      assert.equal(original.result.result.review_contract, collector.FOCUSED_CONTRACT);
+      assert.equal(original.result.result.review_completeness, 'complete');
+      assert.equal(original.result.receipt.runtime_evidence.input_consumption, undefined);
+      assert.match(original.value.prepared.packet.diff.content, /exports.value = 1/);
+      assert.match(original.value.prepared.packet.diff.content, /value \+ 1/);
+      assert.ok(original.value.prepared.packet.adr_selection.some(ref => ref.selected && ref.path.endsWith('ADR-014-original.md')));
+      const current = { worktreePath: f.worktree, pr: f.pr.number, head: f.head, baseName: 'main',
+        baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName };
+      assert.equal(authority.currentArchitectureVerdict(current).authenticated, true);
+      assert.equal(authority.currentArchitectureVerdict({ ...current, head: '0'.repeat(40) }), null);
+      assert.equal(authority.currentArchitectureVerdict({ ...current, baseCommit: '0'.repeat(40) }), null);
+    } finally {
+      if (reviewFixture.originalCodexHome) {
+        if (reviewFixture.originalCodexHome.value === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = reviewFixture.originalCodexHome.value;
+      }
+      if (reviewFixture.storage) fs.rmSync(reviewFixture.storage, { recursive: true, force: true });
+    }
+  });
 });

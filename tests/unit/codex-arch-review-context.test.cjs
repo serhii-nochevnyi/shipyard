@@ -2590,7 +2590,17 @@ test('complete development inventory preserves Unicode, quotes, tabs and newline
   try {
     const paths = ['docs/audits/é.md', 'docs/audits/quote".md', 'docs/audits/tab\t.md', 'docs/audits/line\n.md'];
     paths.forEach((name, index) => write(f.root, name, 'development evidence ' + index));
-    git(f.root, ['add', '-A']); git(f.root, ['commit', '-m', 'unusual development paths']);
+    const objectDirectory = path.resolve(f.root, git(f.root, ['rev-parse', '--git-path', 'objects']));
+    assert.ok(fs.statSync(objectDirectory).isDirectory(), 'fixture object directory exists before unusual-path indexing');
+    try { git(f.root, ['add', '-A']); } catch (error) {
+      error.fixture_git_environment = { root: f.root, objectDirectory,
+        objects_present: fs.existsSync(objectDirectory), tmpdir: os.tmpdir(),
+        tmpdir_present: fs.existsSync(os.tmpdir()),
+        inherited: Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+          /^(?:TMPDIR|TMP|TEMP|GIT_DIR|GIT_WORK_TREE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_INDEX_FILE|GIT_CONFIG_GLOBAL|GIT_CONFIG_NOSYSTEM)$/.test(key))) };
+      throw error;
+    }
+    git(f.root, ['commit', '-m', 'unusual development paths']);
     f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
     const value = prepared(f);
     for (const [index, name] of paths.entries()) {

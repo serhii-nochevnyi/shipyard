@@ -88,8 +88,8 @@ async function unitJudgment(f, afterLaunch) {
   const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-arch-unit-')));
   f.storage = storage;
   const builder = require('../../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
-  const request = builder.build(['arch-review', ticket, '--runtime', 'codex', '--pr', String(f.pr.number),
-    '--graph', graphDir], { cwd: worktree });
+  const request = builder.build(['arch-review', ...(f.phaseName ? [f.phaseName, '--phase', String(f.phase)] : [ticket]), '--runtime', 'codex', '--pr', String(f.pr.number),
+    '--graph', graphDir], { cwd: worktree, refreshGit: false, getPullRequest: () => f.pr, defaultBranch: f.pr.baseRefName });
   const requestPath = path.join(storage, 'request.json');
   fs.writeFileSync(requestPath, JSON.stringify(request));
   const parsed = require('../../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').readRequestFile(requestPath);
@@ -134,8 +134,10 @@ async function unitJudgment(f, afterLaunch) {
     launchStatic(selection, launchContext) {
       const session = crypto.randomUUID();
       const judgment = { ...contextBuilder.authenticateFocusedLaunch(launchContext.focused_prepared, launchContext.prompt, {
-        ticket, phase: 38, worktree, dispatch_id: launchContext.dispatch_id }),
+        ticket, phase: scope.phase, worktree, dispatch_id: launchContext.dispatch_id }),
         review_completeness: 'complete', limitations: [], unresolved_sources: [],
+        ...(value.prepared.binding ? { ticket_set: value.prepared.binding.ticketSet,
+          ticket_set_digest: value.prepared.binding.membership } : {}),
         id: ticket, pr: f.pr.number, head: value.prepared.canonical.head,
         base_tree: value.prepared.mergeBaseTree, verdict: 'conform', summary: 'Unit adapter judgment',
         findings: [], blocking_count: 0, context_digest: launchContext.focused_prepared.prepared.packet.digest,
@@ -205,6 +207,23 @@ async function unitJudgment(f, afterLaunch) {
   return { result, value, recorder, transcript, validationInput, scope };
 }
 
+function retainedLegacyReviewModules(root, revision = 'b3eab6c12ecebed1b14947fe5e037f93b549c524') {
+  const directory = path.join(root, 'retained-original-producer');
+  const repository = path.resolve(__dirname, '../../..');
+  const files = git(repository, ['ls-tree', '-r', '--name-only', revision, '--',
+    'plugins/delivery-pipeline/scripts', 'plugins/delivery-pipeline/references']).split('\n').filter(Boolean);
+  assert.ok(files.length > 0, 'retained original producer tree is required');
+  for (const file of files) {
+    const bytes = execFileSync('git', ['-C', repository, 'show', revision + ':' + file], { maxBuffer: 16 * 1024 * 1024 });
+    assert.equal(require('node:crypto').createHash('sha1').update(Buffer.from('blob ' + bytes.length + '\0'))
+      .update(bytes).digest('hex'), git(repository, ['rev-parse', revision + ':' + file]));
+    write(directory, file, bytes);
+  }
+  const load = name => require(path.join(directory, 'plugins/delivery-pipeline/scripts', name + '.cjs'));
+  return { collector: load('codex-arch-review-context'), runtime: load('codex-runtime-host'),
+    authority: load('role-artifact'), boundary: load('dispatch-boundary'), directory, revision };
+}
+
 async function legacyUnitJudgment(f, afterLaunch) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-legacy-producer-')));
   f.legacyProducerRoot = root;
@@ -264,4 +283,4 @@ function cleanupJudgment(f) {
   if (f.storage) fs.rmSync(f.storage, { recursive: true, force: true });
 }
 
-module.exports = { TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, legacyUnitJudgment, focusedNativeSession, cleanupJudgment };
+module.exports = { retainedLegacyReviewModules, TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, legacyUnitJudgment, focusedNativeSession, cleanupJudgment };
