@@ -4,6 +4,171 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { verifyFixture, validateTrace, metric, SCHEMA } = require('../smoke/phase49-final-review-acceptance.cjs');
 const clone = value => JSON.parse(JSON.stringify(value));
+// Archived pre-focused HOLD fixture: legacy controls retain their original schema and assertions.
+const historicalLedger = () => ({
+  "schema": "shipyard.phase49.final-review-acceptance.v1",
+  "ticket": "T-49-11",
+  "plan_sha256": "3328a4c25ae4f451a6f8dcbe01b0164260f31bf294ea33e70877795ae24380e1",
+  "status": "hold",
+  "empirical_acceptance": false,
+  "fixture_evidence": false,
+  "subject_observation": {
+    "parent_head": "17e38e440d8626f00002f3a33e7136fe893bcbd5",
+    "parent_tree": "dc5464682abdab8834a1090568a4c53a21b1288d",
+    "current_native_subject": null,
+    "reason": "Trusted coordinator must pin actual treatment HEAD/base/merge-base/full membership before launch and admission."
+  },
+  "benchmark": {
+    "coordinator_status": "authenticated-original-historical-benchmark",
+    "material_bytes": 6530992,
+    "observed_successful_reads": 830,
+    "manifest_bytes": 254494,
+    "authority": {
+      "store": "/Users/serhii/.local/state/shipyard/codex/8c79ca16f40abbef3fbfd987a60d54ca44d1258966d76cdc04a1eab04e4fb2b9/receipts",
+      "dispatch": "dispatch-muzom0nn-78fe1c5c-db9d-417f-a1b6-fb221743d9c5"
+    },
+    "assessment": {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-original-830-verified-authority.json",
+      "sha256": "7ea5c4c54f04a3b6c976c6a3050f79f9b8884b03635a6f1e74bfe954fb203790"
+    },
+    "manifest": {
+      "path": "/Users/serhii/.local/state/shipyard/codex/8c79ca16f40abbef3fbfd987a60d54ca44d1258966d76cdc04a1eab04e4fb2b9/input-B3jIH0/manifest.json",
+      "sha256": "a7a8f430bf055bb3336b18a561c9b00a30448b83b4e1453a51ee0b039dc5a20e"
+    },
+    "material_sha256": "f0f59f70ccef33f48dad09608443cc9cd9df5f07e6568e2aa4cd56c7ac57bf3b",
+    "transcript": {
+      "path": "/Users/serhii/.local/state/shipyard/codex/8c79ca16f40abbef3fbfd987a60d54ca44d1258966d76cdc04a1eab04e4fb2b9/transcripts/deliver-R2-final27-arch-retry-f4cb450b-6fff-46b2-9e96-e5b02c1ff677-01a11c18-aa81-7842-a5de-6b7f6cf48271.jsonl",
+      "bytes": 11376658,
+      "sha256": "16547079674515090828a9b3ae61c6e3d9a30b12d9c781b17412c057a4efe025"
+    },
+    "native_session_sha256": "2723ae13d2257b9a317e33a461b6b66346620065572f91159d3f3823ee46aa97",
+    "historical_subject": {
+      "pr": 421,
+      "head": "265110621c8097a83867a9e9dd7958c0e7830cb2",
+      "base": "7eebae4812b3c67ccdbbb63c8c1603f7767b1466",
+      "ticket_set_digest": "852213d91329315d8156df00997666a917c5fee50ed7162f28357b81621da5fb"
+    },
+    "current_verdict": false
+  },
+  "distinct_later_packet": {
+    "material_bytes": 6813351,
+    "scheduled_reads": 864,
+    "observed_successful_reads": null,
+    "reason": "Distinct historical packet; never substitutes for selected original authority."
+  },
+  "candidate": {
+    "selection": {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-selected-package-bd18893c6948/selection.json",
+      "sha256": "b09e4ab44ee00bd8600fb34774994a37e46dc2c98d1b311d163b881b939c65db"
+    },
+    "expected": {
+      "selection_sha256": "b09e4ab44ee00bd8600fb34774994a37e46dc2c98d1b311d163b881b939c65db",
+      "head": "bd18893c69484c47db9b6d1b0613b4bac962b237",
+      "tree": "60dc53b466502e62a33d8e8d48233e8469e1c60c"
+    },
+    "stage": "/Users/serhii/.local/state/shipyard/phase49-selected-package-bd18893c6948/candidate",
+    "package_version": "0.71.0+codex.ef7442fb18b62c15",
+    "package_digest": "b73f80329f02f2dd004a5a65a4d72b9c10e32fa06c1b0cbecb1e7a1c97555ab0",
+    "coordinator_publication_status": "exact original 161 outputs published; original build_calls=1",
+    "installed_identity": null,
+    "installed_reason": "Global installation unchanged; no installed candidate authentication claimed."
+  },
+  "runtime": {
+    "runtime": "codex",
+    "provider": "openai",
+    "policy": "unchanged supported policy; actual treatment policy pin pending",
+    "capacity": null,
+    "capacity_reason": "Complete actual encoded 128 KiB native output not collected by this executor."
+  },
+  "metrics": {
+    "successful_reads": {
+      "value": null,
+      "reason": "No genuine phase49 treatment observation collected."
+    },
+    "scheduled_reads": {
+      "value": null,
+      "reason": "No genuine phase49 treatment observation collected."
+    },
+    "failed_calls": {
+      "value": null,
+      "reason": "No genuine phase49 treatment observation collected."
+    },
+    "raw_bytes": {
+      "value": null,
+      "reason": "No genuine phase49 treatment observation collected."
+    },
+    "encoded_bytes": {
+      "value": null,
+      "reason": "No genuine phase49 treatment observation collected."
+    },
+    "retries": {
+      "value": null,
+      "reason": "No genuine phase49 treatment observation collected."
+    },
+    "elapsed_ms": {
+      "value": null,
+      "reason": "No genuine phase49 treatment observation collected."
+    },
+    "tokens": {
+      "value": null,
+      "reason": "No genuine phase49 treatment observation collected."
+    }
+  },
+  "baseline_setup": {
+    "successful_reads": {
+      "value": null,
+      "reason": "Independent genuine role baseline setup not collected."
+    },
+    "failed_calls": {
+      "value": null,
+      "reason": "Independent genuine role baseline setup not collected."
+    },
+    "raw_bytes": {
+      "value": null,
+      "reason": "Independent genuine role baseline setup not collected."
+    },
+    "encoded_bytes": {
+      "value": null,
+      "reason": "Independent genuine role baseline setup not collected."
+    },
+    "retries": {
+      "value": null,
+      "reason": "Independent genuine role baseline setup not collected."
+    },
+    "elapsed_ms": {
+      "value": null,
+      "reason": "Independent genuine role baseline setup not collected."
+    },
+    "tokens": {
+      "value": null,
+      "reason": "Independent genuine role baseline setup not collected."
+    }
+  },
+  "native_traces": [],
+  "history": {
+    "preservation": "Original failed/interrupted receipts, logs and transcripts unchanged; no historical status promoted.",
+    "drift": {
+      "dispatch": "dispatch-mv2bp1aj-ee1aae26-fa89-45f9-97d5-66224af7d0a1",
+      "original_result": "/Users/serhii/.local/state/shipyard/phase49-T49-11-drift-result.jsonl",
+      "coordinator_status": "verified/sealed/live fresh",
+      "historical_unknown_benchmark": "Superseded by coordinator original-830 authentication, not rewritten."
+    }
+  },
+  "holds": [
+    "Installed immutable candidate and unchanged runtime policy must be authenticated by trusted coordinator.",
+    "Actual complete encoded 128 KiB capacity and schedule admission are pending.",
+    "Equivalent original logical obligations and at most 83 observed successful treatment reads are pending.",
+    "Genuine original-session interruption/continuation is pending independently for both roles.",
+    "Independent successful baseline, another contributor repair, complete endpoint impact and fresh exact-current native final are pending for both roles.",
+    "Native full fallback, changed-base/shared-contract expansion and forged/stale/truncated/replay refusal matrix is pending.",
+    "Comparable latency/token observations are unavailable; no savings claimed."
+  ],
+  "host_verification": {
+    "status": "pending",
+    "commands_executed_in_sandbox": false,
+    "reason": "Both exact commands assigned host profile; executor must not run or retry in sandbox."
+  }
+});
 function fixture() {
   const subject = { head: 'a'.repeat(40), base: 'b'.repeat(40), merge_base: 'c'.repeat(40),
     ticket_set: ['T-49-01', 'T-49-11'], policy: 'd'.repeat(64), candidate: 'e'.repeat(64), runtime: 'codex', provider: 'openai' };
@@ -111,7 +276,7 @@ test('original protected boundary fixture is admitted read-only and altered rece
 test('production pending ledger refuses invented counters, fixture admission and completion labels', () => {
   const fs = require('node:fs'), path = require('node:path');
   const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
-  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  const ledger = historicalLedger();
   for (const mutate of [v => v.status = 'passed', v => v.empirical_acceptance = true,
     v => v.fixture_evidence = true, v => v.metrics.successful_reads = metric(52),
     v => v.candidate.installed_identity = { installed: true }, v => v.benchmark.observed_successful_reads = 864]) {
@@ -121,7 +286,7 @@ test('production pending ledger refuses invented counters, fixture admission and
 test('historical HOLD selection supplies no current publication or installed credit', t => {
   const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
   const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
-  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  const ledger = historicalLedger();
   if (!fs.existsSync(ledger.candidate.selection.path)) return t.skip('original historical selection unavailable');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-historical-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -140,7 +305,7 @@ test('isolated unavailable originals validate an honest HOLD without writes or n
   const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-hold-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  const ledger = historicalLedger();
   ledger.benchmark.authority.store = path.join(root, 'unavailable-receipts');
   ledger.candidate.selection.path = path.join(root, 'unavailable-selection.json');
   const report = verifyEvidence(ledger);
@@ -171,7 +336,7 @@ test('current preparation admits a new plan identity without relabeling the hist
   const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-current-hold-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  const ledger = historicalLedger();
   ledger.plan_sha256 = 'a6e2b6805cbe54f62c065a0d471a94f8517244170f177ed452987e2d1b6d3034';
   ledger.candidate.expected = { selection_sha256: '9'.repeat(64), head: '8'.repeat(40), tree: '7'.repeat(40) };
   ledger.candidate.selection = { path: path.join(root, 'selection.json'), sha256: '9'.repeat(64) };
@@ -186,7 +351,7 @@ test('current preparation admits a new plan identity without relabeling the hist
 test('historical plan cannot authenticate a substituted historical selection', () => {
   const fs = require('node:fs'), path = require('node:path');
   const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
-  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  const ledger = historicalLedger();
   ledger.candidate.expected.head = 'f'.repeat(40);
   assert.throws(() => verifyEvidence(ledger), /historical source/);
 });
@@ -197,7 +362,7 @@ test('current installed evidence is independently inspected instead of requiring
   const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-installed-hold-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  const ledger = historicalLedger();
   ledger.plan_sha256 = 'a6e2b6805cbe54f62c065a0d471a94f8517244170f177ed452987e2d1b6d3034';
   ledger.candidate.selection.path = path.join(root, 'selection.json');
   ledger.benchmark.authority.store = path.join(root, 'receipts');
@@ -659,4 +824,39 @@ test('initial build ancestry follows selected squash source to covered baseline 
     v => v.candidate.source_transition.ticket = 'T-49-13', v => v.transitionValid = false,
     v => v.descendantInvalid = true, v => v.changedInputs = true,
     v => v.publication.repository_id = 'foreign']) assert.throws(() => run(change));
+});
+
+test('focused candidate exercises original installed consumers and independent integration safeguards', async () => {
+  const acceptance = require('../smoke/phase49-final-review-acceptance.cjs');
+  const path = require('node:path');
+  const observed = await acceptance.exerciseFocusedCandidate(path.resolve(__dirname,
+    '../../plugins/shipyard/host/plugins/delivery-pipeline'));
+  assert(observed.fixture_cases >= 13);
+  assert.equal(observed.empirical_acceptance, false);
+});
+
+test('focused preparation keeps missing native evidence HOLD and historical ledger immutable', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const acceptance = require('../smoke/phase49-final-review-acceptance.cjs');
+  const ledger = JSON.parse(fs.readFileSync(path.resolve(__dirname,
+    '../../docs/audits/phase49-final-review-acceptance.json'), 'utf8'));
+  const report = acceptance.verifyEvidence(ledger);
+  assert.equal(report.status, 'hold'); assert.equal(report.empirical_acceptance, false);
+  assert.equal(report.holds.length, 3);
+  for (const mutate of [v => v.empirical_acceptance = true, v => v.status = 'acceptance',
+    v => v.fixture_evidence = true, v => v.focused_metrics.tokens.reason = null,
+    v => v.focused_metrics.calls.value = 0.5,
+    v => v.candidate.selection.sha256 = 'f'.repeat(64),
+    v => v.final_epic.status = 'accepted',
+    v => v.current_admission = { authenticated: true },
+    v => v.replays = [{ authenticated: true, verdict: 'detected' }]]) {
+    const altered = clone(ledger); mutate(altered);
+    assert.throws(() => acceptance.verifyEvidence(altered));
+  }
+});
+
+test('replay source verification rejects synthetic historical fixes before any reviewer verdict', () => {
+  const acceptance = require('../smoke/phase49-final-review-acceptance.cjs');
+  assert.throws(() => acceptance.verifyReplaySources({ case: 'recovery', fixed: 'a'.repeat(40) }),
+    /authentic replay fix required/);
 });

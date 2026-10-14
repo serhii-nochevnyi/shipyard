@@ -434,6 +434,7 @@ function verifyInstalledCandidate(candidate) {
   return result;
 }
 function verifyEvidence(ledger) {
+  if (ledger.plan_sha256 === FOCUSED_PLAN) return verifyFocusedEvidence(ledger);
   assert.equal(ledger.schema, SCHEMA);
   assert.equal(ledger.ticket, 'T-49-11');
   assert([HISTORICAL_PLAN, PREVIOUS_PLAN, CURRENT_PLAN, FINITE_PLAN].includes(ledger.plan_sha256), 'unsupported acceptance plan');
@@ -1504,6 +1505,85 @@ function verifyActualMatrix(ledger, report) {
   return report;
 }
 
+const FOCUSED_PLAN = 'c1820e81c7725aad0f62d19fd43d595ae43c2554ce1022f95443217aa4fa2ce0';
+const FOCUSED_CONTRACT = 'shipyard.focused-architecture-review.v1';
+function verifyFocusedCurrent(ref, hostRoot) {
+  const record = verifiedRecord(ref.receipt);
+  assert.equal(record.receipt.role, 'arch-review', 'foreign focused role');
+  const binding = record.receipt.runtime_evidence.focused_review;
+  assert.equal(binding?.review_contract, FOCUSED_CONTRACT, 'original focused contract required');
+  nativeRecords(record, ref.native);
+  const response = JSON.parse(original(ref.response));
+  const runtime = require(path.join(hostRoot, 'scripts/codex-runtime-host.cjs'));
+  const cli = runtime.parseCodexStream(original(record.receipt.runtime_evidence.transcript).toString('utf8'));
+  const finals = cli.records.filter(row => row.type === 'item.completed' && row.item?.type === 'agent_message');
+  assert.equal(finals.length, 1, 'unique original focused response required');
+  assert.deepEqual(response, JSON.parse(finals[0].item.text), 'tampered original focused response');
+  assert(record.receipt.agent_file.startsWith(path.dirname(hostRoot) + path.sep), 'foreign installed focused agent');
+  const context = require(path.join(hostRoot, 'scripts/codex-arch-review-context.cjs'));
+  context.validateFocusedResult(response, binding);
+  const authority = require(path.join(hostRoot, 'scripts/role-artifact.cjs'));
+  const verdict = authority.currentArchitectureVerdict(ref.current);
+  const ready = !!(verdict?.authenticated && verdict.dispatch_id === record.dispatch_id);
+  if (response.review_completeness === 'incomplete') assert.equal(ready, false, 'incomplete focused judgment admitted');
+  return { ready, dispatch: record.dispatch_id, review_completeness: response.review_completeness,
+    findings: response.findings, limitations: response.limitations, empirical_acceptance: false };
+}
+async function exerciseFocusedCandidate(hostRoot) {
+  return publicationInspector().inspectFocusedConsumers(hostRoot);
+}
+function verifyReplaySources(ref) {
+  const fixes = { recovery: '2ce85b86de1d7ec1c08e5d699b3e08b7dfea5bf9',
+    stop: '9e7870d9c8c699f89979f3f035467a524677b24b' };
+  assert.equal(ref.fixed, fixes[ref.case], 'authentic replay fix required');
+  const parent = gitBytes(ROOT, 'rev-parse', ref.fixed + '^').toString().trim();
+  assert.equal(ref.defective, parent, 'authentic pre-fix parent required');
+  const diff = gitBytes(ROOT, 'diff', '--binary', parent, ref.fixed);
+  assert.equal(sha(diff), ref.diff_sha256, 'authentic complete replay diff differs');
+  assert(Array.isArray(ref.adrs) && ref.adrs.length > 0, 'affected governing ADRs required');
+  for (const adr of ref.adrs) {
+    assert(/^\.planning\/architecture\/ADR-[^\\]+\.md$/.test(adr.path)
+      && !adr.path.split('/').includes('..'), 'replay ADR path escape');
+    assert.equal(sha(gitBytes(ROOT, 'show', ref.fixed + ':' + adr.path)), adr.sha256, 'replay governing source differs');
+  }
+  return { case: ref.case, fixed: ref.fixed, defective: parent, diff_sha256: sha(diff), empirical_acceptance: false };
+}
+function verifyFocusedEvidence(ledger) {
+  assert.equal(ledger.schema, SCHEMA); assert.equal(ledger.ticket, 'T-49-11');
+  assert.equal(ledger.review_contract, FOCUSED_CONTRACT);
+  assert.equal(ledger.status, 'hold', 'prepared focused evidence cannot grant acceptance');
+  assert.equal(ledger.empirical_acceptance, false, 'original installed/replay acceptance still owed');
+  assert.equal(ledger.fixture_evidence, false);
+  assert.equal(ledger.final_epic.status, 'pending-coordinator-postmerge');
+  assert.equal(ledger.final_epic.empirical_acceptance, false);
+  metrics(ledger.focused_metrics);
+  const history = JSON.parse(original(ledger.historical_ledger));
+  assert.equal(history.status, 'hold'); assert.equal(history.empirical_acceptance, false);
+  assert.equal(history.plan_sha256, HISTORICAL_PLAN);
+  const report = { status: 'hold', empirical_acceptance: false, verified: [], holds: [] };
+  assert.equal(ledger.candidate.selection.sha256, publicationInspector().FOCUSED_SHA, 'foreign focused generation');
+  for (const key of ['installed_identity', 'current_admission', 'replays'])
+    if (ledger[key] == null) report.holds.push(key + ': original supported host evidence unavailable');
+  if (ledger.current_admission != null) {
+    assert(ledger.installed_identity != null, 'current result requires installed candidate authentication');
+    const c = ledger.candidate, i = ledger.installed_identity;
+    const inspector = publicationInspector();
+    const proof = i.proof;
+    assert(proof && i.expected && i.binding, 'complete original installed custody required');
+    const installed = inspector.inspectFocusedInstalled(i.identity, i.binding, original(c.selection), i.expected, expected => {
+      const sourceCI = verifyCI(c.source_ci, expected.source_head);
+      const ci = verifyCI(c.ci, expected.publication_head);
+      verifySourceHistory(c.current_source);
+      return { ...proof, authenticated: true, expected, identity: i.identity, binding: i.binding, source_ci: sourceCI, ci };
+    });
+    assert.equal(installed.installed_acceptance, true);
+    report.verified.push(verifyFocusedCurrent(ledger.current_admission, i.identity.host_root));
+  }
+  assert(ledger.replays == null, 'original replay assessment admission is pending coordinator custody');
+  assert(ledger.holds.length > 0, 'explicit pending evidence required');
+  return report;
+}
+
 function main(argv) {
   assert(argv.length === 2 && argv[0] === '--verify-evidence' && argv[1] && !argv[1].startsWith('--'),
     'usage: phase49-final-review-acceptance.cjs --verify-evidence <explicit-json-path>');
@@ -1511,7 +1591,7 @@ function main(argv) {
   const report = verifyEvidence(ledger);
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
 }
-module.exports = { validateSourceCarry, verifyPrelaunchCopy, validateSquashRecord, validateBuildPins, SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
+module.exports = { verifyFocusedEvidence, verifyFocusedCurrent, verifyReplaySources, exerciseFocusedCandidate, FOCUSED_PLAN, validateSourceCarry, verifyPrelaunchCopy, validateSquashRecord, validateBuildPins, SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(JSON.stringify({ status: 'refused', code: error.code || 'EVIDENCE_INVALID', reason: error.message }) + '\n'); process.exitCode = 1; }
