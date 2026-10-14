@@ -1505,7 +1505,7 @@ function verifyActualMatrix(ledger, report) {
   return report;
 }
 
-const FOCUSED_PLAN = 'c1820e81c7725aad0f62d19fd43d595ae43c2554ce1022f95443217aa4fa2ce0';
+const FOCUSED_PLAN = '8dfe51834b583ffcd56683fe6ec11bda88b914bcd18d967e6ee8bcc6d59a874b';
 const FOCUSED_CONTRACT = 'shipyard.focused-architecture-review.v1';
 function verifyFocusedCurrent(ref, hostRoot) {
   const record = verifiedRecord(ref.receipt);
@@ -1600,39 +1600,92 @@ function verifyReplayAssessment(ref) {
   return { outcome: assessment.outcome, review_completeness: response.review_completeness,
     empirical_acceptance: false, status: 'assessment-bytes-bound-not-native-authenticated' };
 }
-function verifyFocusedEvidence(ledger) {
-  assert.equal(ledger.schema, SCHEMA); assert.equal(ledger.ticket, 'T-49-11');
-  assert.equal(ledger.review_contract, FOCUSED_CONTRACT);
-  assert.equal(ledger.status, 'hold', 'prepared focused evidence cannot grant acceptance');
-  assert.equal(ledger.empirical_acceptance, false, 'original installed/replay acceptance still owed');
+function verifyFocusedDisposition(ledger) {
+  assert.equal(ledger.status, 'hold');
+  assert.equal(ledger.empirical_acceptance, false);
   assert.equal(ledger.fixture_evidence, false);
   assert.equal(ledger.final_epic.status, 'pending-coordinator-postmerge');
   assert.equal(ledger.final_epic.empirical_acceptance, false);
-  metrics(ledger.focused_metrics);
-  const history = JSON.parse(original(ledger.historical_ledger));
-  assert.equal(history.status, 'hold'); assert.equal(history.empirical_acceptance, false);
-  assert.equal(history.plan_sha256, HISTORICAL_PLAN);
-  const report = { status: 'hold', empirical_acceptance: false, verified: [], holds: [] };
-  assert.equal(ledger.candidate.selection.sha256, publicationInspector().FOCUSED_SHA, 'foreign focused generation');
-  for (const key of ['installed_identity', 'current_admission', 'replays'])
-    if (ledger[key] == null) report.holds.push(key + ': original supported host evidence unavailable');
-  if (ledger.current_admission != null) {
-    assert(ledger.installed_identity != null, 'current result requires installed candidate authentication');
-    const c = ledger.candidate, i = ledger.installed_identity;
-    const inspector = publicationInspector();
-    const proof = i.proof;
-    assert(proof && i.expected && i.binding, 'complete original installed custody required');
-    const installed = inspector.inspectFocusedInstalled(i.identity, i.binding, original(c.selection), i.expected, expected => {
-      const sourceCI = verifyCI(c.source_ci, expected.source_head);
-      const ci = verifyCI(c.ci, expected.publication_head);
-      verifySourceHistory(c.current_source);
-      return { ...proof, authenticated: true, expected, identity: i.identity, binding: i.binding, source_ci: sourceCI, ci };
-    });
-    assert.equal(installed.installed_acceptance, true);
-    report.verified.push(verifyFocusedCurrent(ledger.current_admission, i.identity.host_root));
+  assert.equal(ledger.source_handoff.status, 'pending-current-source-HOST-CI-review-merge');
+  equalSet(Object.keys(ledger.deferred), ['historical_native_execution', 'independent_usefulness', 'additional_native_admission'], 'deferred experiment inventory');
+  for (const item of Object.values(ledger.deferred)) {
+    assert.equal(item.status, 'deferred-unverified');
+    assert.equal(item.empirical_acceptance, false);
+    assert.equal(item.response, null); assert.equal(item.assessment, null);
+    assert(typeof item.reason === 'string' && item.reason.trim().length > 0);
   }
-  assert(ledger.replays == null, 'original replay assessment admission is pending coordinator custody');
-  assert(ledger.holds.length > 0, 'explicit pending evidence required');
+  for (const item of Object.values(ledger.focused_metrics)) assert.equal(item.value, null, 'unperformed experiment has observed counters');
+  metrics(ledger.focused_metrics);
+  assert.equal(ledger.replays, null, 'prepared inputs cannot supply replay results');
+  return { status: 'hold', bounded_closeout: 'pending', installed_acceptance: false,
+    empirical_acceptance: false, final_epic: 'pending-coordinator-postmerge', verified: [], holds: [] };
+}
+function verifyFocusedEvidence(ledger) {
+  assert.equal(ledger.schema, SCHEMA); assert.equal(ledger.ticket, 'T-49-11');
+  assert.equal(ledger.review_contract, FOCUSED_CONTRACT);
+  const report = verifyFocusedDisposition(ledger);
+  for (const ref of [ledger.historical_ledger, ledger.pre_amendment_ledger]) {
+    const history = JSON.parse(original(ref));
+    assert.equal(history.status, 'hold'); assert.equal(history.empirical_acceptance, false);
+    if (ref === ledger.historical_ledger) assert.equal(history.plan_sha256, HISTORICAL_PLAN);
+  }
+  assert.equal(ledger.historical_ledger.sha256, 'f461880d2719d951df4e7381f450fa3fa24770a0494cadae0b055fdbd3640ef8');
+  assert.equal(ledger.pre_amendment_ledger.sha256, 'eb17bb1ae9025e23b84105ff70705a0b4334dec07cd34734ae2ec13e40ce2846');
+  const c = ledger.candidate;
+  assert.equal(ledger.installed_identity.proof.sha256, '9a33c22009446ee637057afb5af20729e5fffdc4ccdb1c5659e33ba9bbbd68fd');
+  const proof = JSON.parse(original(ledger.installed_identity.proof));
+  assert.equal(proof.expected.publication_head, '259acd68c29fc4b9f6e5d044aaa607f66cffc5eb');
+  const inspector = publicationInspector(proof.identity.worktree);
+  assert.equal(c.selection.sha256, inspector.FOCUSED_SHA, 'foreign focused generation');
+  const installed = inspector.inspectFocusedInstalled(proof.identity, proof.binding, original(c.selection), proof.expected, () => proof);
+  assert.equal(installed.installed_acceptance, true);
+  original(proof.ci.original_full_log); original(proof.source_ci.original_full_log);
+  const squash = JSON.parse(original(c.squash));
+  assert.equal(squash.state, 'MERGED');
+  assert.equal(squash.headRefOid, proof.expected.publication_head);
+  assert.equal(squash.mergeCommit.oid, '2d6d1323ac52568a08ab0a60d0bf1e727c750a86');
+  equalSet(ledger.prepared_source_custody.map(ref => ref.sha256),
+    ['9fa10ee7c8002277e89e202a52701be74dc5a2f593eefeff589cdf6307e06669', '01f466656fa35915188d9f5260d6f115c9b9738d35f028edfe33428ff9d914b3'], 'original prepared source custody');
+  for (const ref of ledger.prepared_source_custody) {
+    const custody = JSON.parse(original(ref));
+    assert(custody.dispatch_id && custody.covered_finalization, 'original preparation source custody missing');
+    const source = verifySourceHistory({ worktree: ROOT, commit: custody.artifact.commit });
+    assert.equal(source.dispatch_id, custody.dispatch_id);
+    assert.equal(source.tree, custody.artifact.tree);
+    assert.equal(source.verification_digest, custody.covered_finalization.record.verification_digest);
+    const record = verifiedRecord({ store: source.receipt_store, dispatch: source.dispatch_id });
+    assert.equal(record.receipt.role, 'executor');
+    assert.equal(record.receipt.runtime, 'codex');
+    const evidence = record.receipt.runtime_evidence.native_session_evidence;
+    const native = custody.refs[2];
+    assert.equal(native.sha256, evidence.sha256); assert.equal(native.bytes, evidence.bytes);
+    assert.equal(path.basename(native.path), evidence.file);
+    const runtime = require(path.join(SCRIPTS, 'codex-runtime-host.cjs'));
+    const parsed = runtime.parseNativeCodexTranscript(original(native).toString('utf8'), evidence.session_id);
+    assert.equal(parsed.provider, 'openai');
+    assert(parsed.selections.length > 0 && parsed.selections.every(row =>
+      row.model === record.receipt.applied_model && row.effort === record.receipt.applied_effort),
+    'original preparation source selection differs');
+    const transcript = record.receipt.runtime_evidence.transcript;
+    assert.equal(custody.refs[1].sha256, transcript.sha256);
+    assert.equal(custody.refs[1].bytes, transcript.bytes);
+    const cli = runtime.parseCodexStream(original(transcript).toString('utf8'));
+    assert.equal(cli.session_id, evidence.session_id, 'foreign preparation native/CLI session');
+    for (const value of Object.values(custody.refs)) {
+      if (value && typeof value.path === 'string' && value.sha256) original(value);
+    }
+  }
+  assert.equal(ledger.prepared_source_custody.length, 2);
+  assert.equal(ledger.replay_preparations.length, 4);
+  const preparations = ledger.replay_preparations.map(ref => verifyReplayPreparation(JSON.parse(original(ref))));
+  equalSet(preparations.map(item => item.case + ':' + item.variant),
+    ['recovery:defective', 'recovery:fixed', 'stop:defective', 'stop:fixed'], 'authentic replay preparation coverage');
+  if (ledger.current_admission != null)
+    report.verified.push(verifyFocusedCurrent(ledger.current_admission, proof.identity.host_root));
+  report.verified.push({ installed, preparations });
+  assert(Array.isArray(ledger.holds) && ledger.holds.length > 0, 'historical and current pending holds required');
+  report.bounded_closeout = 'passed'; report.installed_acceptance = true;
+  report.holds = ledger.holds;
   return report;
 }
 
@@ -1643,7 +1696,7 @@ function main(argv) {
   const report = verifyEvidence(ledger);
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
 }
-module.exports = { verifyReplayPreparation, verifyReplayAssessment, verifyFocusedEvidence, verifyFocusedCurrent, verifyReplaySources, exerciseFocusedCandidate, FOCUSED_PLAN, validateSourceCarry, verifyPrelaunchCopy, validateSquashRecord, validateBuildPins, SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
+module.exports = { verifyFocusedDisposition, verifyReplayPreparation, verifyReplayAssessment, verifyFocusedEvidence, verifyFocusedCurrent, verifyReplaySources, exerciseFocusedCandidate, FOCUSED_PLAN, validateSourceCarry, verifyPrelaunchCopy, validateSquashRecord, validateBuildPins, SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(JSON.stringify({ status: 'refused', code: error.code || 'EVIDENCE_INVALID', reason: error.message }) + '\n'); process.exitCode = 1; }

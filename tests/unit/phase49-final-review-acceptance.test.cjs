@@ -835,14 +835,20 @@ test('focused candidate exercises original installed consumers and independent i
   assert.equal(observed.empirical_acceptance, false);
 });
 
-test('focused preparation keeps missing native evidence HOLD and historical ledger immutable', () => {
+test('bounded focused closeout validates original delivery while empirical and final epic stay pending', t => {
   const fs = require('node:fs'), path = require('node:path');
   const acceptance = require('../smoke/phase49-final-review-acceptance.cjs');
   const ledger = JSON.parse(fs.readFileSync(path.resolve(__dirname,
     '../../docs/audits/phase49-final-review-acceptance.json'), 'utf8'));
+  if (!fs.existsSync(ledger.installed_identity.proof.path)) {
+    t.skip('HOLD: original external coordinator custody unavailable; no installed or bounded acceptance observed');
+    return;
+  }
   const report = acceptance.verifyEvidence(ledger);
   assert.equal(report.status, 'hold'); assert.equal(report.empirical_acceptance, false);
-  assert.equal(report.holds.length, 3);
+  assert.equal(report.bounded_closeout, 'passed');
+  assert.equal(report.installed_acceptance, true);
+  assert.equal(report.final_epic, 'pending-coordinator-postmerge');
   for (const mutate of [v => v.empirical_acceptance = true, v => v.status = 'acceptance',
     v => v.fixture_evidence = true, v => v.focused_metrics.tokens.reason = null,
     v => v.focused_metrics.calls.value = 0.5,
@@ -852,6 +858,146 @@ test('focused preparation keeps missing native evidence HOLD and historical ledg
     v => v.replays = [{ authenticated: true, verdict: 'detected' }]]) {
     const altered = clone(ledger); mutate(altered);
     assert.throws(() => acceptance.verifyEvidence(altered));
+  }
+});
+
+test('portable existing verifier composition requires installation and source custody without native experiments', () => {
+  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+  const filename = path.resolve(__dirname, '../smoke/phase49-final-review-acceptance.cjs');
+  const ledger = JSON.parse(fs.readFileSync(path.resolve(__dirname,
+    '../../docs/audits/phase49-final-review-acceptance.json'), 'utf8'));
+  const context = { require: require('node:module').createRequire(filename), module: { exports: {} },
+    __dirname: path.dirname(filename), __filename: filename, process, Buffer, console };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(filename, 'utf8'), context);
+  context.ledgerFixture = ledger;
+  vm.runInContext(`
+    const supplied = new Map();
+    const fixtureProof = { expected: { publication_head: '259acd68c29fc4b9f6e5d044aaa607f66cffc5eb' },
+      identity: { worktree: '/original-producer-fixture' }, binding: {}, ci: { original_full_log: {} }, source_ci: { original_full_log: {} } };
+    for (const ref of [ledgerFixture.historical_ledger, ledgerFixture.pre_amendment_ledger])
+      supplied.set(ref.path, { status: 'hold', empirical_acceptance: false, plan_sha256: HISTORICAL_PLAN });
+    supplied.set(ledgerFixture.installed_identity.proof.path, fixtureProof);
+    supplied.set(ledgerFixture.candidate.selection.path, {});
+    supplied.set(ledgerFixture.candidate.squash.path, { state: 'MERGED',
+      headRefOid: fixtureProof.expected.publication_head,
+      mergeCommit: { oid: '2d6d1323ac52568a08ab0a60d0bf1e727c750a86' } });
+    ledgerFixture.prepared_source_custody.forEach((ref, index) => supplied.set(ref.path,
+      { artifact: { commit: 'fixture', tree: 'fixture' }, dispatch_id: 'fixture', refs: [{}, { sha256: 'fixture-cli', bytes: 1 }, { path: '/fixture-native', sha256: 'fixture-native', bytes: 1 }],
+        covered_finalization: { record: { verification_digest: 'fixture' } } }));
+    ledgerFixture.replay_preparations.forEach((ref, index) => supplied.set(ref.path,
+      { case: index < 2 ? 'recovery' : 'stop', variant: index % 2 ? 'fixed' : 'defective' }));
+    original = ref => {
+      if (ref && Object.keys(ref).length === 0) return Buffer.from('fixture log');
+      assert(ref && supplied.has(ref.path), 'missing fixture original');
+      return Buffer.from(JSON.stringify(supplied.get(ref.path)));
+    };
+    publicationInspector = repository => {
+      assert.equal(repository, fixtureProof.identity.worktree, 'original producer inspector binding');
+      return { FOCUSED_SHA: ledgerFixture.candidate.selection.sha256,
+      inspectFocusedInstalled: (identity, binding, bytes, expected, authenticate) => {
+        assert.deepEqual(authenticate(expected), fixtureProof);
+        return { installed_acceptance: true, empirical_acceptance: false };
+      } };
+    };
+    verifySourceHistory = () => ({ dispatch_id: 'fixture', tree: 'fixture', verification_digest: 'fixture', receipt_store: 'fixture' });
+    supplied.set('/fixture-native', { type: 'session_meta', payload: { id: 'session', model_provider: 'openai' } });
+    const readFixture = original;
+    original = ref => ref.path === '/fixture-native' ? Buffer.from([
+      supplied.get(ref.path),
+      { type: 'turn_context', payload: { model: 'model', effort: 'effort' } },
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'one' } },
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'two' } }
+    ].map(row => JSON.stringify(row)).join('\\n') + '\\n') : ref.path === '/fixture-cli' ? Buffer.from([
+      { type: 'thread.started', thread_id: 'session' },
+      { type: 'turn.completed', usage: {} }
+    ].map(row => JSON.stringify(row)).join('\\n') + '\\n') : readFixture(ref);
+    verifiedRecord = () => ({ receipt: { role: 'executor', runtime: 'codex',
+      applied_model: 'model', applied_effort: 'effort', runtime_evidence: {
+        transcript: { path: '/fixture-cli', sha256: 'fixture-cli', bytes: 1 }, native_session_evidence: {
+          file: 'fixture-native', sha256: 'fixture-native', bytes: 1, session_id: 'session'
+        }
+      } } });
+    verifyReplayPreparation = ref => ref;
+  `, context);
+  const report = context.module.exports.verifyEvidence(ledger);
+  assert.equal(report.bounded_closeout, 'passed');
+  assert.equal(report.empirical_acceptance, false);
+  assert.equal(report.final_epic, 'pending-coordinator-postmerge');
+  for (const mutate of [v => v.empirical_acceptance = true, v => v.status = 'acceptance',
+    v => v.fixture_evidence = true, v => v.candidate.selection.sha256 = '0'.repeat(64),
+    v => v.installed_identity.proof.sha256 = '0'.repeat(64),
+    v => v.pre_amendment_ledger.sha256 = '0'.repeat(64),
+    v => v.final_epic.status = 'accepted', v => v.prepared_source_custody = [],
+    v => v.replay_preparations = [], v => v.replays = [{ verdict: 'detected' }]]) {
+    const altered = clone(ledger); mutate(altered);
+    assert.throws(() => context.module.exports.verifyEvidence(altered));
+  }
+  // Historical executor source may contain several turns; it is not a review verdict.
+  // Exercise the real runtime parsers while receipt/coverage authority stays fixture-only.
+  for (const expression of [
+    "supplied.get('/fixture-native').payload.model_provider = 'foreign'",
+    "supplied.get('/fixture-native').payload.id = 'foreign'"
+  ]) {
+    vm.runInContext(expression, context);
+    assert.throws(() => context.module.exports.verifyEvidence(ledger));
+    vm.runInContext("supplied.get('/fixture-native').payload = { id: 'session', model_provider: 'openai' };", context);
+  }
+  vm.runInContext('globalThis.originalRecordFixture = verifiedRecord;', context);
+  for (const field of ['applied_model', 'applied_effort']) {
+    context.selectionField = field;
+    vm.runInContext("verifiedRecord = () => { const value = originalRecordFixture(); value.receipt[selectionField] = 'foreign'; return value; };", context);
+    assert.throws(() => context.module.exports.verifyEvidence(ledger), /selection differs/);
+  }
+  vm.runInContext('verifiedRecord = originalRecordFixture;', context);
+  const missing = clone(ledger); missing.installed_identity.proof.path = '/missing-fixture';
+  assert.throws(() => context.module.exports.verifyEvidence(missing), /missing fixture original/);
+  for (const ref of [ledger.historical_ledger, ledger.pre_amendment_ledger, ledger.candidate.selection,
+    ledger.candidate.squash, ...ledger.prepared_source_custody, ...ledger.replay_preparations]) {
+    context.missingPath = ref.path;
+    vm.runInContext('globalThis.retainedFixture = supplied.get(missingPath); supplied.delete(missingPath);', context);
+    assert.throws(() => context.module.exports.verifyEvidence(ledger), /missing fixture original/);
+    vm.runInContext('supplied.set(missingPath, retainedFixture);', context);
+  }
+  vm.runInContext('publicationInspector = () => ({ FOCUSED_SHA: ledgerFixture.candidate.selection.sha256, inspectFocusedInstalled: () => ({ installed_acceptance: false }) });', context);
+  assert.throws(() => context.module.exports.verifyEvidence(ledger));
+});
+
+test('portable deferred disposition refuses empirical, counter and final authority fabrication', () => {
+  const acceptance = require('../smoke/phase49-final-review-acceptance.cjs');
+  const ledger = JSON.parse(require('node:fs').readFileSync(require('node:path').resolve(__dirname,
+    '../../docs/audits/phase49-final-review-acceptance.json'), 'utf8'));
+  const report = acceptance.verifyFocusedDisposition(ledger);
+  assert.equal(report.empirical_acceptance, false);
+  assert.equal(report.bounded_closeout, 'pending'); assert.equal(report.installed_acceptance, false);
+  for (const mutate of [v => delete v.deferred.historical_native_execution,
+    v => v.deferred.independent_usefulness.status = 'passed',
+    v => v.deferred.additional_native_admission.response = { verdict: 'conform' },
+    v => v.deferred.independent_usefulness.assessment = { outcome: 'detected' },
+    v => v.focused_metrics.calls.value = 1,
+    v => v.source_handoff.status = 'passed', v => v.final_epic.empirical_acceptance = true]) {
+    const altered = clone(ledger); mutate(altered);
+    assert.throws(() => acceptance.verifyFocusedDisposition(altered));
+  }
+});
+
+test('bounded closeout rejects missing or corrupt required delivery references', t => {
+  const acceptance = require('../smoke/phase49-final-review-acceptance.cjs');
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-originals-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const name of ['installed-proof', 'selection', 'squash', 'historical-ledger',
+    'pre-amendment-ledger', 'source-custody', 'replay-preparation', 'CI-log']) {
+    const file = path.join(root, name), bytes = Buffer.from(JSON.stringify({ fixture: name }));
+    fs.writeFileSync(file, bytes);
+    const ref = { path: file, bytes: bytes.length,
+      sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+    assert.deepEqual(acceptance.original(ref), bytes);
+    assert.throws(() => acceptance.original({ ...ref, sha256: '0'.repeat(64) }), /altered original/);
+    fs.writeFileSync(file, Buffer.from('corrupt required evidence'));
+    assert.throws(() => acceptance.original(ref), /altered original/);
+    fs.unlinkSync(file);
+    assert.throws(() => acceptance.original(ref));
   }
 });
 

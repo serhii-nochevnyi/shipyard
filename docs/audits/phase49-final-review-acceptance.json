@@ -1,7 +1,7 @@
 {
   "schema": "shipyard.phase49.final-review-acceptance.v1",
   "ticket": "T-49-11",
-  "plan_sha256": "c1820e81c7725aad0f62d19fd43d595ae43c2554ce1022f95443217aa4fa2ce0",
+  "plan_sha256": "8dfe51834b583ffcd56683fe6ec11bda88b914bcd18d967e6ee8bcc6d59a874b",
   "review_contract": "shipyard.focused-architecture-review.v1",
   "status": "hold",
   "empirical_acceptance": false,
@@ -17,9 +17,20 @@
       "sha256": "a807ba249697875b7fd94981133044a80a850b5f91640264f3646abe262bbe59"
     },
     "source_status": "coordinator-reported-complete",
-    "publication_status": "coordinator-reported-signed-CI-pending"
+    "publication_status": "original-signed-source-CI-success-authentic-squash",
+    "squash": {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-T21-original-actual-squash-proof.json",
+      "sha256": "77e4743de75403eeab47dd0d4e312fe2914826088974c760f598da4a17898849",
+      "bytes": 174
+    }
   },
-  "installed_identity": null,
+  "installed_identity": {
+    "proof": {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-focused-review-T49-21-259acd6-original-installed-proof.json",
+      "sha256": "9a33c22009446ee637057afb5af20729e5fffdc4ccdb1c5659e33ba9bbbd68fd",
+      "bytes": 64645
+    }
+  },
   "current_admission": null,
   "replays": null,
   "final_epic": {
@@ -53,9 +64,75 @@
     }
   },
   "holds": [
-    "Actual supported isolated installation and current native admission unavailable",
-    "Original blinded replay/control responses and independent assessments unavailable",
-    "Assigned HOST checks pending trusted verification"
+    "Historical empirical HOLD retained; deferred experiments unverified, not passed",
+    "Current amended T-49-11 HOST/currentCI/review/squash pending coordinator",
+    "Final independent epic architecture and integrator pending actual postmerge successor"
   ],
-  "historical_disposition": "Architecture transport/read-count/consumption/continuation requirements superseded, not passed; original HOLD and failures retained. Integration contracts unchanged."
+  "historical_disposition": "Architecture transport/read-count/consumption/continuation requirements superseded, not passed; original HOLD and failures retained. Integration contracts unchanged.",
+  "pre_amendment_ledger": {
+    "path": "/Users/serhii/.local/state/shipyard/phase49-T11-original-before-deferred-closeout-ledger/phase49-final-review-acceptance.json",
+    "sha256": "eb17bb1ae9025e23b84105ff70705a0b4334dec07cd34734ae2ec13e40ce2846",
+    "bytes": 2343
+  },
+  "prepared_source_custody": [
+    {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-focused-review-T49-11-197d1ad-original-preparation-custody.json",
+      "sha256": "9fa10ee7c8002277e89e202a52701be74dc5a2f593eefeff589cdf6307e06669",
+      "bytes": 2301
+    },
+    {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-focused-review-T49-11-614d743-original-replay-preparation-custody.json",
+      "sha256": "01f466656fa35915188d9f5260d6f115c9b9738d35f028edfe33428ff9d914b3",
+      "bytes": 2284
+    }
+  ],
+  "replay_preparations": [
+    {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-focused-review-original-replay-inputs/sample-1-a-preparation.json",
+      "sha256": "c2b6ce19592857b3cedf04f63ce778b93d1e4454d0f18ab781f8d0ecc60c5463",
+      "bytes": 1538
+    },
+    {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-focused-review-original-replay-inputs/sample-1-b-preparation.json",
+      "sha256": "08a68e5731ac76a03d55e17290123cfbd78c41301c89278cff7ae14e1e3b29b0",
+      "bytes": 1534
+    },
+    {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-focused-review-original-replay-inputs/sample-2-a-preparation.json",
+      "sha256": "0f1e05a7b09b0895f472af6ce726165894fc59331b6701e8e20b8c2463fe4d0e",
+      "bytes": 1679
+    },
+    {
+      "path": "/Users/serhii/.local/state/shipyard/phase49-focused-review-original-replay-inputs/sample-2-b-preparation.json",
+      "sha256": "e3bb9070dfadbf2f9f891ad0225466951962e87cadc099655eba0165b599c0c5",
+      "bytes": 1677
+    }
+  ],
+  "deferred": {
+    "historical_native_execution": {
+      "status": "deferred-unverified",
+      "empirical_acceptance": false,
+      "response": null,
+      "assessment": null,
+      "reason": "D-25: experiment not performed; authentic preparation grants no execution or usefulness credit"
+    },
+    "independent_usefulness": {
+      "status": "deferred-unverified",
+      "empirical_acceptance": false,
+      "response": null,
+      "assessment": null,
+      "reason": "D-25: experiment not performed; authentic preparation grants no execution or usefulness credit"
+    },
+    "additional_native_admission": {
+      "status": "deferred-unverified",
+      "empirical_acceptance": false,
+      "response": null,
+      "assessment": null,
+      "reason": "D-25: experiment not performed; authentic preparation grants no execution or usefulness credit"
+    }
+  },
+  "source_handoff": {
+    "status": "pending-current-source-HOST-CI-review-merge",
+    "reason": "Amended T-49-11 source requires ordinary external coordinator source/native/HOST/currentCI and squash gates; historical 60/60 is not refreshed authority"
+  }
 }
