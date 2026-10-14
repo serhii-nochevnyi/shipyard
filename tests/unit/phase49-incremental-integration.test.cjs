@@ -8,12 +8,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+let authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+let collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+let runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
 const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const boundary = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+let boundary = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const serialize = records => records.map(record => JSON.stringify(record) + '\n').join('');
@@ -157,10 +157,16 @@ async function runIntegration(f, edit = {}) {
   return { ...prepared, result: dispatched };
 }
 
-test('missing integration lineage remains full while independently eligible architecture lineage exists', async () => {
+test('missing current integration lineage remains full while retained legacy architecture lineage exists', async () => {
   await fixture(async f => {
-    const architecture = await successfulReview(f, 'arch-review');
-    const selected = authority.selectReviewBaseline({ currentInput: currentInput(f, 'arch-review') });
+    const currentModules = { authority, collector, runtime, boundary };
+    const retained = require('./helpers/codex-arch-review-fixtures.cjs').retainedLegacyReviewModules(f.root);
+    let architecture, selected;
+    ({ authority, collector, runtime, boundary } = retained);
+    try {
+      architecture = await successfulReview(f, 'arch-review');
+      selected = authority.selectReviewBaseline({ currentInput: currentInput(f, 'arch-review') });
+    } finally { ({ authority, collector, runtime, boundary } = currentModules); }
     assert.equal(selected.mode, 'incremental', JSON.stringify(selected));
     assert.equal(selected.baseline.dispatch_id, architecture.dispatched.dispatch_id);
     write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n'); commit(f, 'independent contributor repair');
@@ -422,6 +428,7 @@ async function fixture(action) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-lineage-')));
   const originalHome = os.homedir, originalCodex = process.env.CODEX_HOME;
   os.homedir = () => root; process.env.CODEX_HOME = path.join(root, '.codex');
+  let f;
   try {
     const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
     git(worktree, 'init', '-qb', 'main');
@@ -446,7 +453,7 @@ async function fixture(action) {
     git(worktree, 'update-ref', 'refs/remotes/origin/main', base);
     git(worktree, 'switch', '-qc', 'epic/' + phase);
     write(worktree, 'src/provider.cjs', 'exports.value = 1;\n');
-    const f = { root, worktree, base, graphDir, phase, rows, state, count: 0, agents: {}, reviews: [] };
+    f = { root, worktree, base, graphDir, phase, rows, state, count: 0, agents: {}, reviews: [] };
     f.pr = { number: 301, state: 'OPEN', isDraft: false, headRefName: 'epic/' + phase, headRefOid: '',
       baseRefName: 'main', baseRefOid: base, reviewDecision: 'REVIEW_REQUIRED' };
     commit(f, 'original implementation'); f.memberHead = f.head;
@@ -459,6 +466,7 @@ async function fixture(action) {
   } finally {
     os.homedir = originalHome;
     if (originalCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodex;
+    for (const storage of f?.focusedStorages || []) fs.rmSync(storage, { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -575,6 +583,20 @@ function nativeRecords(scope, input, session, selection, resultText, legacy = fa
 }
 
 async function successfulReview(f, role, options = {}) {
+  if (role === 'arch-review' && collector.FOCUSED_CONTRACT) {
+    const helper = require('./helpers/codex-arch-review-fixtures.cjs');
+    const source = { root: f.worktree, ticket: phaseBinding(f).subject, phase: 49, phaseName: f.phase, pr: f.pr };
+    const original = await helper.unitJudgment(source);
+    f.focusedStorages ??= [];
+    f.focusedStorages.push(source.storage);
+    const artifact = original.result.artifact.ref;
+    const review = { head: f.head, artifact, original: fs.readFileSync(artifact),
+      dispatched: original.result, recorder: original.recorder, role, value: original.value };
+    assert.equal(original.result.result.review_contract, collector.FOCUSED_CONTRACT);
+    assert.equal(original.result.receipt.runtime_evidence.input_consumption, undefined);
+    f.reviews.push(review);
+    return review;
+  }
   const dispatchId = 'original-' + role + '-' + ++f.count;
   const input = currentInput(f, role, dispatchId);
   const value = role === 'arch-review' ? f.lastArchitecture : null;
@@ -647,3 +669,34 @@ async function successfulReview(f, role, options = {}) {
     dispatched, nativeFile, input, recorder, role };
   f.reviews.push(review); return review;
 }
+
+test('complete focused architecture success cannot supply missing current integration lineage', async () => {
+  await fixture(async f => {
+    const helper = require('./helpers/codex-arch-review-fixtures.cjs');
+    const reviewFixture = { root: f.worktree, ticket: phaseBinding(f).subject, phase: 49, phaseName: f.phase, pr: f.pr };
+    try {
+      const architecture = await helper.unitJudgment(reviewFixture);
+      assert.equal(architecture.result.result.review_contract, collector.FOCUSED_CONTRACT);
+      assert.equal(architecture.result.result.review_completeness, 'complete');
+      assert.equal(architecture.result.receipt.runtime_evidence.input_consumption, undefined);
+      assert.match(architecture.value.prepared.packet.diff.content, /exports.value = 1/);
+      assert.ok(architecture.value.prepared.packet.adr_selection.some(ref => ref.selected));
+      const current = { worktreePath: f.worktree, graphDir: f.graphDir, pr: f.pr.number, head: f.head,
+        headBranch: f.pr.headRefName, baseName: 'main', baseCommit: f.base };
+      assert.equal(authority.currentArchitectureVerdict(current).authenticated, true);
+      write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n'); commit(f, 'independent repair after focused review');
+      assert.equal(authority.currentArchitectureVerdict({ ...current, head: f.head }), null);
+      const fresh = await runIntegration(f);
+      assert.equal(fresh.coverage.mode, 'full');
+      assert.equal(fresh.coverage.baseline, null);
+      assert.deepEqual(fresh.coverage.inherited, []);
+      assert.ok(fresh.coverage.current_logical_obligations.every(item => item.coverage !== 'inherited'));
+    } finally {
+      if (reviewFixture.originalCodexHome) {
+        if (reviewFixture.originalCodexHome.value === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = reviewFixture.originalCodexHome.value;
+      }
+      if (reviewFixture.storage) fs.rmSync(reviewFixture.storage, { recursive: true, force: true });
+    }
+  });
+});

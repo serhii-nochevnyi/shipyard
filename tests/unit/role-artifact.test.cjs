@@ -2164,4 +2164,21 @@ test('completed reference authentication rejects caller authority with no filesy
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+
+
+test('focused completeness and subject declarations fail closed without consumption inference', () => {
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const binding = { review_contract: context.FOCUSED_CONTRACT, repository: '/repo/.git', id: 'T-49-20',
+    pr: 473, head: 'a'.repeat(40), base_commit: 'b'.repeat(40), merge_base: 'c'.repeat(40),
+    base_tree: 'd'.repeat(40), ticket_set_digest: 'e'.repeat(64), context_digest: 'f'.repeat(64) };
+  const result = { ...binding, launch_digest: '1'.repeat(64), review_completeness: 'complete', limitations: [], unresolved_sources: [] };
+  assert.equal(context.validateFocusedResult(result, binding), true);
+  for (const edit of [{ review_contract: 'forged' }, { review_completeness: 'maybe' },
+    { unresolved_sources: ['src/missing.cjs'] }, { limitations: ['unresolved boundary'] },
+    { limitations: ['x'.repeat(1025)] }, { base_commit: '9'.repeat(40) }])
+    assert.throws(() => context.validateFocusedResult({ ...result, ...edit }, binding));
+  assert.equal(context.validateFocusedResult({ ...result, review_completeness: 'incomplete',
+    unresolved_sources: ['src/missing.cjs'] }, binding), true);
+});
+
 done();

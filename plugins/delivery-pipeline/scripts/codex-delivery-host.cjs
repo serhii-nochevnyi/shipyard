@@ -102,7 +102,7 @@ function requestValue(input) {
     fail('INVALID_INPUT', 'repair rungs are derived only from original protected repair history');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
   for (const key of Object.keys(input.context || {})) {
-    if (key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment' || key === 'input_prepared') {
+    if (key === 'focused_prepared' || key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment' || key === 'input_prepared') {
       fail('INVALID_INPUT', 'request context cannot supply host authority');
     }
     if (key.startsWith('plan') && key !== 'plan_sha256') {
@@ -2962,6 +2962,8 @@ function createCodexDeliveryHost(options = {}) {
         }
       }
       const context = request.context;
+      if (request.role === 'arch-review' && archReviewContext.isFocusedContext(options.archReviewContext))
+        context.focused_prepared = options.archReviewContext;
       if (fileInput) context.input_prepared = fileInput;
       const prompt = context.prompt || context.task_prompt || context.input;
       if (typeof prompt !== 'string' || !prompt.trim()) fail('INVALID_INPUT', 'context requires a task prompt');

@@ -1590,7 +1590,13 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       for (const name of ['role-artifact', 'codex-runtime-host', 'codex-delivery-host', 'codex-arch-review-context', 'context-packet']) {
         const relative = 'src/' + name + '.cjs';
         const canonical = path.join(fixtureRoot, 'plugins/delivery-pipeline/scripts', name + '.cjs');
-        const previous = fs.readFileSync(canonical, 'utf8');
+        const retainedPath = 'plugins/delivery-pipeline/scripts/' + name + '.cjs';
+        const retainedRevision = 'b3eab6c12ecebed1b14947fe5e037f93b549c524:' + retainedPath;
+        const previous = helper.git(fixtureRoot, ['show', retainedRevision]) + '\n';
+        const previousBytes = Buffer.from(previous);
+        assert.equal(crypto.createHash('sha1').update(Buffer.from('blob ' + previousBytes.length + '\0'))
+          .update(previousBytes).digest('hex'), helper.git(fixtureRoot, ['rev-parse', retainedRevision]),
+        'complete retained baseline module bytes: ' + retainedPath);
         previousProductSources.set(relative, previous); helper.write(f.root, relative, previous);
         const content = "'use strict';\n// Delegate to the canonical implementation instead of retaining a divergent copy.\n"
           + 'module.exports = require(' + JSON.stringify(canonical) + ');\n';
@@ -1647,6 +1653,9 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       .prepareIntegratorContext(canonicalOptions, { worktree: f.root, phase: '38' }) : null;
     const subject = integration ? integration.ticket : ticket;
     if (integration) {
+      const completeDiff = helper.git(f.root, ['diff', '--no-ext-diff', '--unified=50', 'HEAD~1...HEAD']) + '\n';
+      assert.ok(Buffer.byteLength(completeDiff) > 850 * 1024, 'complete fixture Git diff remains large');
+      assert.ok(Buffer.byteLength(completeDiff) < 1024 * 1024, 'complete fixture Git diff retains the integration bound');
       assert.ok([...governingSources].filter(([relative]) => relative.startsWith('.planning/architecture/'))
         .reduce((bytes, [, content]) => bytes + Buffer.byteLength(content), 0) < 768 * 1024,
       'complete governing corpus retains the existing aggregate limit');
@@ -1854,8 +1863,14 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       env: { CODEX_HOME: home } };
     let request = { role, context: ordinary ? { prompt: ordinaryMaterial } : { review_contract: 'shipyard.integration-review.v2' }, signals: {}, dispatch_id: 'automatic-final-' + crypto.randomUUID() };
     if (role === 'arch-review') {
+      const selected = selectedFiles[0];
+      const readerProfile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 3,
+        candidate: { source_sha256: sha(fs.readFileSync(path.join(fixtureRoot, 'plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+          instructions_sha256: sha(runtime.generatedInstructions(contents.get(selected.agent_file))),
+          model: selected.model, effort: selected.effort, provider: 'openai' } });
       const preparation = collector.prepare(scope, { role, context: {}, signals: {} }, {
-        ...canonicalOptions, inflightDispatchId: request.dispatch_id, storageRoot: path.join(store, 'inputs') });
+        ...canonicalOptions, readerProfile, inflightDispatchId: request.dispatch_id, storageRoot: path.join(store, 'inputs') });
+      assert.equal(preparation.prepared.packet.review_contract, undefined, 'this retained probe recovery fixture selects legacy architecture');
       options.archReviewContext = preparation;
       request = { ...preparation.launch, signals: { ...preparation.launch.signals }, context: { ...preparation.launch.context }, dispatch_id: request.dispatch_id };
     }
@@ -2066,8 +2081,15 @@ async function coldRecordedSourceControllerFixture(role) {
       agentDir: origin.agents, agentManifest: origin.agentManifest, env: { CODEX_HOME: origin.home } };
     let request = origin.request;
     if (role === 'arch-review') {
+      const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+      const selected = policy.resolveDispatch({ runtime: 'codex', role, signals: {} });
+      const readerProfile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 3,
+        candidate: { source_sha256: sha(fs.readFileSync(path.join(fixtureRoot, 'plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+          instructions_sha256: sha(runtime.generatedInstructions(fs.readFileSync(path.join(origin.agents, selected.agent_file), 'utf8'))),
+          model: selected.model, effort: selected.effort, provider: 'openai' } });
       const prepared = collector.prepare(origin.scope, { role, context: {}, signals: {} }, {
-        ...canonical, inflightDispatchId: request.dispatch_id, storageRoot: path.join(origin.store, 'inputs') });
+        ...canonical, readerProfile, inflightDispatchId: request.dispatch_id, storageRoot: path.join(origin.store, 'inputs') });
+      assert.equal(prepared.prepared.packet.review_contract, undefined, 'cold recovery preserves the original legacy architecture contract');
       options.archReviewContext = prepared;
       request = { ...prepared.launch, signals: { ...prepared.launch.signals }, context: { ...prepared.launch.context },
         dispatch_id: request.dispatch_id };
