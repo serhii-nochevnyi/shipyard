@@ -2147,8 +2147,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
   const commentId = legacyActions ? 'PRRC_kwDOTmU9jc784inG' : 'comment-1';
   const locationMutation = mutation?.includes('-location-');
   const feedback = [{ id: threadId, isResolved: false,
-    ...(locationMutation ? { path: 'src/owned.txt', originalLine: 1616, line: 1653 } : {}) }];
-  const originalThreadComment = { id: commentId, body: 'Full original thread comment' };
+    ...((locationMutation || mutation?.startsWith('issue-')) ? { path: 'src/owned.txt', originalLine: 1616, line: 1653 } : {}) }];
+  const originalThreadComment = { id: commentId, body: mutation?.startsWith('issue-') ? '[rule-a] Full original thread comment' : 'Full original thread comment' };
   const output = { schema: 'shipyard.repair-result.v1', id: f.scope.ticket, pr: 501,
     status: outcome === 'source' ? 'fixed' : outcome, pushed: false, notes: 'Complete repair reasoning.',
     hypothesis: 'The source condition explains the original finding.', review_dispositions: [
@@ -2157,6 +2157,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
       { id: 'pr-body-501', action: outcome === 'no-op' ? 'reply' : 'escalate', reply: 'Complete PR body reasoning.', evidence: { command: 'inspect PR', result: 'complete original body evaluated' } },
     ] };
   if (outcome === 'escalate') output.review_dispositions[1].action = 'reply';
+  if (mutation?.startsWith('issue-')) for (const item of output.review_dispositions) item.action = 'escalate';
   if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) {
     for (const disposition of output.review_dispositions) disposition.action = disposition.id === threadId ? 'reply-and-resolve' : 'reply';
   }
@@ -2615,6 +2616,64 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
       assert.equal(recovered.actions.status, 'confirmed');
       assert.equal(pushes, 1, 'an independently confirmed signed push is never replayed');
       assert.equal(launches, 1);
+      return;
+    }
+    if (mutation?.startsWith('issue-')) {
+      if (mutation === 'issue-unknown') feedback[0].line = feedback[0].originalLine = null;
+      if (mutation === 'issue-ambiguous') originalThreadComment.body = '[rule-a] rule:other class:conflicting';
+      const first = await run();
+      assert.equal(first.receipt.applied_effort, 'low');
+      const installRung = (suffix, rung, effort) => {
+        const file = selected.agent_file.replace('.toml', suffix + '.toml');
+        const original = fs.readFileSync(path.join(f.agentDir, selected.agent_file), 'utf8');
+        const agent = original.replace('shipyard-policy-rung = "base"', 'shipyard-policy-rung = "' + rung + '"')
+          .replace('model_reasoning_effort = "low"', 'model_reasoning_effort = "' + effort + '"')
+          .replace('name = "' + selected.agent_file.replace('.toml', '') + '"', 'name = "' + file.replace('.toml', '') + '"');
+        fs.writeFileSync(path.join(f.agentDir, file), agent);
+        const manifest = JSON.parse(fs.readFileSync(agentManifest));
+        manifest.agent_files.push(file); manifest.agent_digests[file] = crypto.createHash('sha256').update(agent).digest('hex');
+        fs.writeFileSync(agentManifest, JSON.stringify(manifest));
+      };
+      installRung('-repeat', 'repeat', 'high'); installRung('-deep', 'repeat_exhausted', 'xhigh');
+      const repost = (id, rule) => {
+        originalThreadComment.id = id;
+        originalThreadComment.body = '[' + rule + '] Reposted current finding';
+        output.review_dispositions[1].id = id;
+      };
+      if (mutation === 'issue-shift') feedback[0].line++;
+      repost('comment-b', ['issue-repost', 'issue-shift'].includes(mutation) ? 'rule-a' : 'rule-b');
+      const second = await run();
+      assert.equal(second.receipt.applied_effort, mutation === 'issue-repost' ? 'high' : 'low');
+      assert.equal(second.resolution.signals.signatureState, mutation === 'issue-repost' ? 'repeat' : 'first');
+      if (['issue-unknown', 'issue-ambiguous', 'issue-shift'].includes(mutation)) {
+        assert.equal(second.resolution.signals.signatureState, 'first');
+        assert.equal(second.receipt.applied_effort, 'low');
+        return;
+      }
+      if (mutation !== 'issue-repost') {
+        repost('comment-a-again', 'rule-a');
+        const third = await run();
+        assert.equal(third.resolution.signals.signatureState, 'repeat');
+        assert.equal(third.receipt.applied_effort, 'high');
+        assert.equal(third.resolution.signals.priorApplied.dispatch_id, first.dispatch_id);
+        const attempts = fs.readdirSync(path.join(stateRoot(f), 'repair-attempts')).map(file =>
+          JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-attempts', file))).payload);
+        const originalThird = attempts.find(item => item.dispatch_id === third.dispatch_id);
+        const originalSecond = attempts.find(item => item.dispatch_id === second.dispatch_id);
+        const secondFile = fs.readdirSync(path.join(stateRoot(f), 'repair-attempts')).find(file =>
+          JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-attempts', file))).payload.dispatch_id === second.dispatch_id);
+        assert.equal(originalThird.predecessor, secondFile.replace(/\.json$/, ''));
+        assert.equal(originalSecond.dispatch_id, second.dispatch_id);
+        repost('comment-b-again', 'rule-b');
+        assert.equal((await run()).receipt.applied_effort, 'high');
+        repost('comment-a-deep', 'rule-a');
+        const fifth = await run();
+        assert.equal(fifth.resolution.signals.signatureState, 'repeat_exhausted');
+        assert.equal(fifth.receipt.applied_effort, 'xhigh');
+        assert.equal(fifth.resolution.signals.priorApplied.dispatch_id, third.dispatch_id);
+        repost('comment-a-exhausted', 'rule-a');
+        await assert.rejects(run, { code: 'REPAIR_POLICY_EXHAUSTED' });
+      }
       return;
     }
     if (mutation?.startsWith('normalized-')) {
@@ -3208,5 +3267,96 @@ test('focused prepared custody is forbidden in caller delivery request context',
     assert.throws(() => host.readRequestFile(request), /host authority/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+
+for (const mutation of ['issue-repost', 'issue-oscillation', 'issue-unknown', 'issue-ambiguous', 'issue-shift'])
+test('known issue history uses the original applied predecessor across reposts: ' + mutation,
+  () => withGraphDirEnv(undefined, () => originalFixerFixture('escalate', mutation)));
+
+for (const full of [false, true])
+for (const mutation of ['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal', 'incomplete-turn', 'failed-turn', 'foreign-session'])
+test('original integration boundary completes and retains one terminal contract: ' + mutation + ' full=' + full, () => withGraphDirEnv(undefined, async () => {
+  const Module = require('node:module');
+  const file = require.resolve('./phase49-incremental-integration.test.cjs');
+  const fixtureModule = new Module(file, module);
+  fixtureModule.filename = file; fixtureModule.paths = Module._nodeModulePaths(path.dirname(file));
+  const load = Module._load;
+  const emit = require('node:events').EventEmitter.prototype.emit;
+  let observed = 0, executeFixture;
+  Module._load = function(name, ...args) {
+    if (name === 'node:test') return { test(name, callback) {
+      if (name === 'owned integration original stream regression') executeFixture = callback;
+    } };
+    return load.call(this, name, ...args);
+  };
+  try {
+    fixtureModule._compile(fs.readFileSync(file, 'utf8')
+      + '\ntest("owned integration original stream regression", () => fixture(f => module.regression(f, runIntegration, successfulReview)));\n', file);
+  } finally { Module._load = load; }
+  require('node:events').EventEmitter.prototype.emit = function(event, bytes, ...args) {
+    if (event === 'data' && Buffer.isBuffer(bytes) && (bytes.toString().includes('shipyard.integration-coverage-result.v1')
+      || (full && bytes.toString().includes('Complete original role review.')))) {
+      const rows = bytes.toString().trim().split('\n').map(JSON.parse);
+      const at = rows.findIndex(row => row.item?.type === 'agent_message');
+      const progress = structuredClone(rows[at]); progress.item.id += '-progress';
+      progress.item.text = 'Checking complete integration membership and interactions.';
+      rows.splice(at, 0, progress); observed++;
+      if (['duplicate-contract', 'corrupt-terminal'].includes(mutation)) {
+        const extra = structuredClone(rows[at + 1]); extra.item.id += '-extra';
+        if (mutation === 'corrupt-terminal') extra.item.text = '{"coverage":';
+        rows.splice(at + 2, 0, extra);
+      }
+      if (mutation === 'duplicate-item') rows[at].item.id = rows[at + 1].item.id;
+      if (mutation === 'incomplete-turn') rows.splice(rows.findIndex(row => row.type === 'turn.completed'), 1);
+      if (mutation === 'failed-turn') rows.find(row => row.type === 'turn.completed').type = 'turn.failed';
+      if (mutation === 'foreign-session') rows.find(row => row.type === 'thread.started').thread_id = crypto.randomUUID();
+      bytes = Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    }
+    return emit.call(this, event, bytes, ...args);
+  };
+  try {
+    fixtureModule.regression = async (f, runIntegration, successfulReview) => {
+      const run = () => full ? successfulReview(f, 'integrator', { legacy: true }) : runIntegration(f);
+      if (mutation === 'progress') {
+        const fresh = await run();
+        const dispatched = full ? fresh.dispatched : fresh.result;
+        assert.equal(dispatched.receipt.role, 'integrator');
+        assert.ok(full ? fresh.artifact : fresh.result.artifact.artifact_path);
+        const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+        const currentVerdict = () => authority.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head,
+          baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName });
+        assert.equal(currentVerdict()?.dispatch_id, dispatched.dispatch_id);
+        const foreign = path.join(f.root, 'foreign-current-discovery');
+        execFileSync('git', ['-C', f.worktree, 'worktree', 'add', '--detach', foreign, f.base], { stdio: 'pipe' });
+        const catalogue = path.join(authority.archiveAuthorityDirectory(fs.realpathSync(foreign)), 'catalogue.json');
+        fs.mkdirSync(path.dirname(catalogue), { recursive: true });
+        fs.writeFileSync(catalogue, 'unrelated corrupt authority');
+        const read = fs.readFileSync;
+        let foreignReads = 0;
+        const lookup = currentVerdict;
+        fs.readFileSync = function(file, ...args) {
+          if (String(file) === catalogue) { foreignReads++; throw new Error('foreign catalogue was opened'); }
+          return read.call(this, file, ...args);
+        };
+        try { assert.equal(lookup()?.dispatch_id, dispatched.dispatch_id); assert.equal(foreignReads, 0); }
+        finally { fs.readFileSync = read; }
+        const manifest = full ? fresh.artifact : fresh.result.artifact.artifact_path;
+        fs.appendFileSync(manifest, 'changed relevant manifest');
+        assert.throws(lookup);
+
+      } else if (full && ['duplicate-contract', 'duplicate-item'].includes(mutation)) {
+        const fresh = await run();
+        assert.equal(fresh.dispatched.receipt.role, 'integrator');
+        assert.ok(observed > 0);
+        assert.equal(require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').currentIntegrationVerdict({
+          worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
+          graphDir: f.graphDir, headBranch: f.pr.headRefName }), null);
+      } else await assert.rejects(run);
+    };
+    assert.equal(typeof executeFixture, 'function');
+    await executeFixture();
+    assert.equal(observed, 1);
+  } finally { require('node:events').EventEmitter.prototype.emit = emit; }
+}));
 
 done();

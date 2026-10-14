@@ -785,6 +785,51 @@ suite('role-artifact — Codex sealed architecture context');
 
 const codexJudgmentFixtures = require('./helpers/codex-arch-review-fixtures.cjs');
 
+for (const mutation of ['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal', 'failed-turn', 'incomplete-turn', 'foreign-session'])
+test('original focused CLI retains progress and rejects invalid terminal results: ' + mutation, async () => {
+  const f = codexJudgmentFixtures.fixture();
+  const prototype = require('node:events').EventEmitter.prototype;
+  const emit = prototype.emit;
+  let observed = false;
+  prototype.emit = function(event, bytes, ...args) {
+    if (event === 'data' && Buffer.isBuffer(bytes) && bytes.toString().includes('shipyard.focused-architecture-review.v1')) {
+      const rows = bytes.toString().trim().split('\n').map(JSON.parse);
+      const index = rows.findIndex(row => row.item?.type === 'agent_message');
+      if (index >= 0 && rows[index].item.text.includes('shipyard.focused-architecture-review.v1')) {
+        observed = true;
+        const progress = structuredClone(rows[index]);
+        progress.item.id += '-progress'; progress.item.text = 'Inspecting the current diff and governing ADRs.';
+        rows.splice(index, 0, progress);
+        if (mutation === 'duplicate-contract') {
+          const duplicate = structuredClone(rows[index + 1]); duplicate.item.id += '-duplicate';
+          rows.splice(index + 1, 0, duplicate);
+        }
+        if (mutation === 'duplicate-item') progress.item.id = rows[index + 1].item.id;
+        if (mutation === 'corrupt-terminal') {
+          const corrupt = structuredClone(progress); corrupt.item.id += '-corrupt'; corrupt.item.text = '{"review_contract":';
+          rows.splice(index + 2, 0, corrupt);
+        }
+        if (mutation === 'failed-turn') rows.splice(rows.length - 1, 0, { type: 'turn.failed', error: { message: 'original failed turn' } });
+        if (mutation === 'incomplete-turn') rows.splice(rows.findIndex(row => row.type === 'turn.completed'), 1);
+        if (mutation === 'foreign-session') rows.unshift({ ...rows[0], thread_id: 'foreign-session' });
+        bytes = Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+      }
+    }
+    return emit.call(this, event, bytes, ...args);
+  };
+  try {
+    if (mutation === 'progress') {
+      const { validationInput } = await codexJudgmentFixtures.unitJudgment(f);
+      assert.equal(roleArtifact.validateJudgmentManifest(validationInput).envelope.verdict, 'conform');
+      assert.equal(roleArtifact.read(validationInput).envelope.verdict, 'conform');
+      assert.equal(roleArtifact.currentArchitectureVerdict({ worktreePath: f.root, pr: f.pr.number,
+        head: f.head, baseName: 'main', baseCommit: f.base, headBranch: f.pr.headRefName,
+        graphDir: path.join(f.root, '.planning/graph') })?.dispatch_id, validationInput.dispatchId);
+    } else await assert.rejects(() => codexJudgmentFixtures.unitJudgment(f));
+    assert.ok(observed, 'original registered native CLI boundary was exercised');
+  } finally { prototype.emit = emit; codexJudgmentFixtures.cleanupJudgment(f); }
+});
+
 test('fresh Codex architecture artifact remains valid after CLI inflight cleanup', async () => {
   const f = codexJudgmentFixtures.fixture();
   try {
@@ -2179,6 +2224,26 @@ test('focused completeness and subject declarations fail closed without consumpt
     assert.throws(() => context.validateFocusedResult({ ...result, ...edit }, binding));
   assert.equal(context.validateFocusedResult({ ...result, review_completeness: 'incomplete',
     unresolved_sources: ['src/missing.cjs'] }, binding), true);
+});
+
+
+for (const corrupt of [false, true]) test('current integration excludes foreign catalogue before authority reads: ' + corrupt, () => {
+  const value = phaseScopeFixture({ second: true });
+  const read = fs.readFileSync;
+  try {
+    const foreign = path.join(roleArtifact.archiveAuthorityDirectory(fs.realpathSync(value.second)), 'catalogue.json');
+    if (corrupt) fs.writeFileSync(foreign, 'corrupt foreign catalogue'.repeat(800000));
+    let opened = 0;
+    fs.readFileSync = function(file, ...args) {
+      if (String(file) === foreign) { opened++; throw new Error('foreign catalogue must not be opened'); }
+      return read.call(this, file, ...args);
+    };
+    const head = git(value.root, ['rev-parse', 'HEAD']);
+    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: value.root, head,
+      baseName: 'main', baseCommit: git(value.root, ['rev-parse', 'main']),
+      graphDir: value.input.graphDir, headBranch: 'epic/47-scope' }), null);
+    assert.equal(opened, 0);
+  } finally { fs.readFileSync = read; cleanPhaseScope(value); }
 });
 
 done();

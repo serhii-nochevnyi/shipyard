@@ -2642,7 +2642,7 @@ function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
   const rows = require('./architecture-target.cjs').phaseRows(JSON.parse(graphBytes), Number(current.phase), repo);
   if (stable(rows.map(([id]) => id)) !== stable([...current.ticket_set].sort()))
     return fallback('incomplete-current-phase-membership');
-  const worktrees = registeredPhaseWorktrees(current.worktree);
+  const worktrees = admissionReviewInputs.get(currentInput)?.selectionWorktrees || registeredPhaseWorktrees(current.worktree);
   if (worktrees.length > 1000) return fallback('baseline-discovery-over-bound');
   const verification = phaseSelectionVerification();
   const eligible = [], rejected = [], unresolved = [];
@@ -3061,6 +3061,38 @@ function currentClaudeSemanticPin(trusted) {
   return { ...pin, path: path.join(root, ...parts) };
 }
 
+function completedCurrentContract(parsed, allowContinuation = false) {
+  const records = parsed.records;
+  const starts = records.flatMap((row, index) => row.type === 'turn.started' ? [index] : []);
+  const ends = records.flatMap((row, index) => row.type === 'turn.completed' ? [index] : []);
+  const messages = records.flatMap((row, index) => row.type === 'item.completed'
+    && row.item?.type === 'agent_message' ? [index] : []);
+  const ids = messages.map(index => records[index].item.id);
+  if (!starts.length || starts.length !== ends.length || (!allowContinuation && starts.length !== 1)
+      || starts.some((start, index) => start >= ends[index] || (index && start <= ends[index - 1]))
+      || messages.some(index => !starts.some((start, turn) => index > start && index < ends[turn]))
+      || ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length)
+    fail('REVIEW_NATIVE_INVALID', 'current CLI lacks uniquely completed ordered turns and items');
+  const current = messages.filter(index => index > starts.at(-1) && index < ends.at(-1));
+  let contracts = 0;
+  for (const index of current) {
+    const text = records[index].item.text;
+    if (typeof text !== 'string') fail('REVIEW_NATIVE_INVALID', 'current CLI message is not text');
+    let value;
+    try { value = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
+    if (object(value) && (value.review_contract !== undefined || value.verdict !== undefined || value.status !== undefined || value.outcome !== undefined)) contracts++;
+  }
+  const text = records[current.at(-1)]?.item.text;
+  if (contracts !== 1 || typeof text !== 'string' || Buffer.byteLength(text) > 128 * 1024)
+    fail('REVIEW_NATIVE_INVALID', 'one bounded terminal current contract is required');
+  let result;
+  try { result = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
+  catch { fail('REVIEW_NATIVE_INVALID', 'terminal current contract is incomplete'); }
+  if (!object(result) || (result.review_contract === undefined && result.verdict === undefined && result.status === undefined && result.outcome === undefined))
+    fail('REVIEW_NATIVE_INVALID', 'terminal current result is not a role contract');
+  return { text, result };
+}
+
 function originalCurrentResponse(trusted, result, evidence, retained) {
   const receipt = trusted.receipt, runtime = currentRuntimeEvidence(trusted);
   const pin = runtime?.transcript;
@@ -3073,14 +3105,9 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
   let original, text;
   if (receipt.runtime === 'codex') {
     const parsed = require('./codex-runtime-host.cjs').parseCodexStream(raw.toString('utf8'));
-    const finals = parsed.records.filter(row => row.type === 'item.completed' && row.item?.type === 'agent_message');
-    if (parsed.session_id !== runtime.session_id || finals.length !== 1
-        || parsed.records.indexOf(finals[0]) > parsed.records.findLastIndex(row => row.type === 'turn.completed'))
-      fail('REVIEW_NATIVE_INVALID', 'one original completed current result is required');
-    text = finals[0].item.text;
-    if (typeof text !== 'string' || Buffer.byteLength(text) > 128 * 1024)
-      fail('REVIEW_NATIVE_INVALID', 'current result exceeds its bounded envelope');
-    original = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+    if (parsed.session_id !== runtime.session_id)
+      fail('REVIEW_NATIVE_INVALID', 'original current session differs');
+    ({ text, result: original } = completedCurrentContract(parsed, !!(runtime.completed_source || runtime.review_continuation)));
     const nativePin = retained?.native;
     if (!object(nativePin) || nativePin.sha256 !== runtime.native_session_evidence?.sha256
         || (!(receipt.role === 'arch-review' && runtime.focused_review?.review_contract === require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT)
@@ -3166,7 +3193,7 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
   return original;
 }
 
-function authenticateCurrentCoverage({ trusted, result, evidence, identity, retained }) {
+function authenticateCurrentCoverage({ trusted, result, evidence, identity, retained, selectionWorktrees }) {
   const runtime = trusted.receipt.runtime_evidence;
   const context = require('./codex-arch-review-context.cjs');
   if (trusted.receipt.role === 'arch-review' && trusted.receipt.runtime === 'claude'
@@ -3305,7 +3332,7 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
     authenticateArchitectureSources(subject.worktree, path.resolve(directory, '../..'), originalPacket.refs.filter(ref =>
       /^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(ref.path)));
   }
-  admissionReviewInputs.set(input, { checked: source, identity: subject });
+  admissionReviewInputs.set(input, { checked: source, identity: subject, selectionWorktrees });
   let expected;
   try {
     const selection = selectReviewBaseline({ currentInput: input, excludeDispatchId: trusted.dispatchId });
@@ -3557,7 +3584,7 @@ function originalArchitectureTicketSet(trusted, manifest, findings, evidence, id
   return binding.ticketSet;
 }
 
-function authenticatedCurrentArchive(worktree, record, manifest, findings, identity, currentBinding) {
+function authenticatedCurrentArchive(worktree, record, manifest, findings, identity, currentBinding, selectionWorktrees) {
   const retention = record.review_current || record.review_baseline;
   const trusted = retention?.receipt_store
     ? trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: retention.receipt_store })
@@ -3585,7 +3612,7 @@ function authenticatedCurrentArchive(worktree, record, manifest, findings, ident
         evidence: { relative: manifest.files.evidence.path, content: evidence },
         findings: { relative: manifest.files.findings.path, content: findingBytes } })))
     fail('REVIEW_COVERAGE_INVALID', 'original complete current judgment envelope differs');
-  const contract = authenticateCurrentCoverage({ trusted, result: findings, evidence, identity, retained: retention });
+  const contract = authenticateCurrentCoverage({ trusted, result: findings, evidence, identity, retained: retention, selectionWorktrees });
   if (stable(contract) !== stable(manifest.current_review || null))
     fail('REVIEW_COVERAGE_INVALID', 'declared original current contract differs');
   if (!contract && manifest.role === 'integrator' && record.receipt.runtime === 'codex') {
@@ -3598,10 +3625,11 @@ function authenticatedCurrentArchive(worktree, record, manifest, findings, ident
       const bytes = readImmutableFile(fs, pin.path, 'original full integration result', 128 * 1024 * 1024);
       if (bytes.length !== pin.bytes || digest(bytes) !== pin.sha256) fail('REVIEW_NATIVE_INVALID', 'original integration stream changed');
       const parsed = require('./codex-runtime-host.cjs').parseCodexStream(bytes.toString('utf8'));
-      const messages = parsed.records.filter(row => row.type === 'item.completed' && row.item?.type === 'agent_message');
-      if (messages.length !== 1 || parsed.session_id !== record.receipt.runtime_evidence.session_id)
+      if (parsed.session_id !== record.receipt.runtime_evidence.session_id)
         fail('REVIEW_NATIVE_INVALID', 'original full integration completion differs');
-      const { evidence_markdown: markdown, host_context: _context, ...original } = JSON.parse(messages[0].item.text);
+      const { result } = completedCurrentContract(parsed,
+        !!(record.receipt.runtime_evidence.completed_source || record.receipt.runtime_evidence.review_continuation));
+      const { evidence_markdown: markdown, host_context: _context, ...original } = result;
       const { host_context: _sealed, ...sealed } = findings;
       if (stable(original) !== stable(sealed) || markdown?.trim() !== evidence.toString('utf8').trim())
         fail('REVIEW_NATIVE_INVALID', 'original full integration contract differs');
@@ -3639,8 +3667,25 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
   const phase = [...phases][0], rows = require('./architecture-target.cjs').phaseRows(graph, phase, repo);
   const ids = rows.map(([id]) => id);
   let current = null, count = 0, catalogueBytes = 0;
-  const candidates = registeredPhaseWorktrees(root);
-  if (candidates.length > 1000) fail('REVIEW_COVERAGE_INVALID', 'current integration worktrees exceed their bound');
+  const project = fs.realpathSync(path.resolve(directory, '../..'));
+  const phaseNames = new Set(rows.map(([, row]) => path.posix.basename(path.posix.dirname(row.plan || ''))));
+  if (phaseNames.size !== 1 || !/^\d+-[A-Za-z0-9._-]+$/.test([...phaseNames][0]))
+    fail('REVIEW_COVERAGE_INVALID', 'current integration requires one canonical phase');
+  const currentEpics = reviewGit(root, ['worktree', 'list', '--porcelain']).split('\n\n')
+    .map(block => Object.fromEntries(block.split('\n').map(line => {
+      const at = line.indexOf(' '); return at < 0 ? [line, true] : [line.slice(0, at), line.slice(at + 1)];
+    }))).filter(row => row.branch === 'refs/heads/' + headBranch && row.HEAD === head && !row.prunable);
+  if (currentEpics.length > 1000) fail('REVIEW_COVERAGE_INVALID', 'current integration worktrees exceed their bound');
+  const candidates = new Set([root, project]);
+  for (const row of currentEpics) {
+    const checkout = fs.realpathSync(row.worktree);
+    if (checkout !== path.resolve(row.worktree)
+        || fs.realpathSync(reviewGit(checkout, ['rev-parse', '--path-format=absolute', '--git-common-dir'])) !== common
+        || reviewGit(checkout, ['rev-parse', 'HEAD']) !== head
+        || reviewGit(checkout, ['symbolic-ref', '--quiet', 'HEAD']) !== 'refs/heads/' + headBranch)
+      fail('REVIEW_COVERAGE_INVALID', 'current integration checkout identity changed');
+    candidates.add(checkout);
+  }
   for (const candidate of candidates) {
     const worktree = fs.realpathSync(candidate);
     if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
@@ -3649,10 +3694,22 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
     const state = authorityState(worktree);
     for (const record of Object.values(state.payload.records)) {
       if (record.receipt?.role !== 'integrator') continue;
+      const subject = /^phase=([^;]+);repository=([^;]+);tickets=([a-f0-9]{64})$/.exec(authenticatedRecordSubject(record));
+      if (!subject || subject[1] !== [...phaseNames][0] || subject[2] !== common) continue;
+      const runtime = record.receipt.runtime_evidence;
+      const checkedInput = runtime?.input_bundle
+        ? require('./codex-arch-review-context.cjs').verifyFileInput(runtime.input_bundle, { sealed: true, historical: true }) : null;
+      if (checkedInput && (checkedInput.manifest.snapshot.repository !== common
+          || checkedInput.manifest.snapshot.head !== head || checkedInput.manifest.binding?.base !== baseCommit
+          || checkedInput.manifest.ticket !== subject[0]
+          || checkedInput.manifest.binding.ticket_set_digest !== subject[3]
+          || stable(checkedInput.manifest.binding.ticket_set) !== stable(ids))) continue;
+
       if (++count > 1000) fail('REVIEW_COVERAGE_INVALID', 'current integration discovery exceeds its bound');
       const pin = record.pins.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
       const manifest = JSON.parse(readPinnedArchiveFile(worktree, pin, 'current integration manifest'));
-      if (manifest.role !== 'integrator' || manifest.head !== head || manifest.base_commit !== baseCommit
+      if (manifest.boundary_subject !== authenticatedRecordSubject(record) || manifest.subject !== subject[0]
+          || manifest.ticket_set_digest !== subject[3] || manifest.role !== 'integrator' || manifest.head !== head || manifest.base_commit !== baseCommit
           || manifest.repository_identity !== common || manifest.envelope?.outcome !== 'passed'
           || manifest.base.replace(/^(?:refs\/remotes\/origin\/|origin\/)/, '') !== baseName) continue;
       try {
@@ -3663,10 +3720,9 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
           base_tree: reviewGit(root, ['rev-parse', baseCommit + '^{tree}']),
           merge_base: reviewGit(root, ['merge-base', baseCommit, head]), merge_base_tree: manifest.merge_base_tree };
         if (reviewGit(root, ['rev-parse', identity.merge_base + '^{tree}']) !== identity.merge_base_tree) continue;
-        const contract = authenticatedCurrentArchive(worktree, record, manifest, findings, identity);
-        const runtime = record.receipt.runtime_evidence;
+        const contract = authenticatedCurrentArchive(worktree, record, manifest, findings, identity, undefined, [...candidates]);
         if (runtime?.input_bundle) {
-          const checked = require('./codex-arch-review-context.cjs').verifyFileInput(runtime.input_bundle, { sealed: true, historical: true });
+          const checked = checkedInput;
           for (const graphPin of checked.manifest.snapshot.graph) {
             const live = path.join(directory, path.basename(graphPin.path));
             if (digest(readImmutableFile(fs, live, 'current whole-phase membership', 8 * 1024 * 1024)) !== graphPin.sha256)
@@ -3687,7 +3743,7 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
         current = Object.freeze({ authenticated: true, role: 'integrator', outcome: 'passed', head, base: baseName,
           base_commit: baseCommit, subject: manifest.subject, ticket_set_digest: manifest.ticket_set_digest,
           dispatch_id: record.dispatch_id, contract: contract?.contract || 'shipyard.integration-review.v1' });
-      } catch { continue; }
+      } catch { return null; }
     }
   }
   return exactCurrentGitSubject(root, headBranch, head, baseName, baseCommit) ? current : null;
