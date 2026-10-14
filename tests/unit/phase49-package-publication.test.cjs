@@ -1617,10 +1617,15 @@ function packagedBatchFixtures(repository) {
   const originalReader = execFileSync('git', ['-C', ROOT, 'show', origin + ':' + relative],
     { maxBuffer: 16 * 1024 * 1024 });
   assert.equal(sha(originalReader), 'beee1e2e6ea746687414b0c05ff87487c66f595ed1e732b33f63098644d4eb2f');
-  const historical = JSON.parse(read(path.join(BATCH_ROOT, 'selection.json'), BATCH_SHA));
-  const historicalOutput = historical.outputs.find(row => row.path === 'host/' + relative);
-  assert(historicalOutput, 'historical producer inventory missing');
-  assert.deepEqual(originalReader, read(path.join(historical.stage, 'host', relative), historicalOutput.sha256),
+  const historicalPath = 'plugins/shipyard/host/' + relative;
+  const historicalOutput = execFileSync('git', ['-C', ROOT, 'show', origin + ':' + historicalPath],
+    { maxBuffer: 16 * 1024 * 1024 });
+  const historicalMode = execFileSync('git', ['-C', ROOT, 'ls-tree', origin, '--', historicalPath],
+    { encoding: 'utf8' });
+  assert.match(historicalMode, /^100644 blob [0-9a-f]+\t/,
+    'original packaged producer must be a regular non-executable Git blob');
+  assert.equal(sha(historicalOutput), 'beee1e2e6ea746687414b0c05ff87487c66f595ed1e732b33f63098644d4eb2f');
+  assert.deepEqual(originalReader, historicalOutput,
     'original producer history changed');
   const originalPath = path.join(repository, 'plugins/shipyard/host', relative);
   assert.deepEqual(read(originalPath), read(path.join(repository, relative)),
