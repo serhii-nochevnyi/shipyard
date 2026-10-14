@@ -1871,15 +1871,29 @@ module.exports = { ...module.exports, inspectFocusedDelta, inspectFocusedPublica
 
 if (require.main === module) {
   test('focused generation admits only the complete source/reference union and derived metadata', () => {
-    const bytes = read(path.join(FOCUSED_ROOT, 'selection.json'), FOCUSED_SHA);
-    const selected = JSON.parse(bytes), historical = JSON.parse(read(path.join(BATCH_ROOT, 'selection.json'), BATCH_SHA));
+    // Portable behavior fixture: complete physical repository inventories, never native custody.
+    const selected = { source: { head: 'fixture-focused' }, stage: '/fixture-focused',
+      build_calls: 1, builder_sha256: sha(read(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))),
+      inputs: canonicalInputs(ROOT), outputs: inventory(path.join(ROOT, 'plugins/shipyard'))
+        .map(row => ({ ...row, publication_mode: row.mode })) };
+    const historical = structuredClone(selected);
+    historical.source.head = 'fixture-historical'; historical.stage = '/fixture-historical';
+    for (const relative of FOCUSED_INPUTS) {
+      const oldHash = sha(Buffer.from('fixture predecessor: ' + relative));
+      historical.inputs.find(row => row.path === relative).sha256 = oldHash;
+      historical.outputs.find(row => row.path === 'host/' + relative).sha256 = oldHash;
+    }
+    for (const relative of ['.codex-plugin/plugin.json', 'package-build.json'])
+      historical.outputs.find(row => row.path === relative).sha256 = sha(Buffer.from('fixture predecessor: ' + relative));
     const observed = inspectFocusedDelta(selected, historical);
     assert.equal(observed.unchanged_inputs, selected.inputs.length - observed.changed_inputs.length);
     assert.equal(observed.unchanged_outputs, selected.outputs.length - observed.changed_outputs.length);
     for (const mutate of [value => { value.inputs.pop(); }, value => { value.outputs.pop(); },
       value => { value.outputs[0].publication_mode ^= 0o100; },
       value => { value.outputs.find(row => !FOCUSED_OUTPUTS.includes(row.path)).sha256 = '0'.repeat(64); },
-      value => { value.inputs.push(value.inputs[0]); }, value => { value.stage = historical.stage; },
+      value => { value.inputs.push(value.inputs[0]); },
+      value => { value.outputs.push(value.outputs[0]); },
+      value => { value.inputs[0].mode ^= 0o100; }, value => { value.stage = historical.stage; },
       value => { value.build_calls = 2; }, value => { value.builder_sha256 = '0'.repeat(64); },
       value => { value.outputs.find(row => row.path === 'host/' + FOCUSED_INPUTS[0]).sha256 = '0'.repeat(64); }]) {
       const altered = structuredClone(selected); mutate(altered);
@@ -1891,9 +1905,36 @@ if (require.main === module) {
       Object.assign(unchanged[field].find(row => row.path === relative), historical[field].find(row => row.path === relative));
     }
     assert.doesNotThrow(() => inspectFocusedDelta(unchanged, historical));
+    // macOS may expose /tmp as an alias for /private/tmp. Resolve only our new
+    // fixture root; inventory must still reject symlinks in inspected payloads.
+    const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'focused-publication-fixture-')));
+    try {
+      const fixturePackage = path.join(temporary, 'package');
+      fs.cpSync(path.join(ROOT, 'plugins/shipyard'), fixturePackage, { recursive: true });
+      const expected = inventory(fixturePackage);
+      const unchangedPhysical = () => assert.deepEqual(inventory(fixturePackage), expected);
+      unchangedPhysical();
+      const member = path.join(fixturePackage, FOCUSED_OUTPUTS[0]);
+      const original = fs.readFileSync(member), mode = fs.statSync(member).mode & 0o7777;
+      fs.appendFileSync(member, '\nfixture tamper');
+      assert.throws(unchangedPhysical); fs.writeFileSync(member, original);
+      fs.chmodSync(member, mode ^ 0o100);
+      assert.throws(unchangedPhysical); fs.chmodSync(member, mode);
+      const extra = path.join(fixturePackage, 'unassigned-output');
+      fs.writeFileSync(extra, 'fixture'); assert.throws(unchangedPhysical); fs.unlinkSync(extra);
+      fs.unlinkSync(member); assert.throws(unchangedPhysical);
+      fs.symlinkSync(path.join(ROOT, 'plugins/shipyard', FOCUSED_OUTPUTS[0]), member);
+      assert.throws(unchangedPhysical);
+    } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
   });
 
-  test('focused original signed source and stage remain distinct from publication and installation', () => {
+  test('focused original signed source and stage remain distinct from publication and installation', async t => {
+    try { fs.accessSync(path.join(FOCUSED_ROOT, 'selection.json')); }
+    catch (error) {
+      if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
+      t.skip('HOLD: original focused host custody unavailable; no native or installed acceptance');
+      return;
+    }
     const bytes = authenticatePublicSelection(FOCUSED_ROOT, FOCUSED_SHA, 'public-key.asc');
     const selected = JSON.parse(bytes);
     const receipt = authenticateBatchSource(selected, 'T-49-20', FOCUSED_HEAD, FOCUSED_TREE);
@@ -1923,15 +1964,16 @@ if (require.main === module) {
     assert.equal(merge.mergeCommit.oid, FOCUSED_BASE);
     assert.equal(execFileSync('git', ['-C', ROOT, 'rev-parse', FOCUSED_BASE + '^{tree}'], { encoding: 'utf8' }).trim(), FOCUSED_TREE);
     assert.equal(inspectFocusedPublication(bytes).empirical_acceptance, false);
+    await inspectFocusedConsumers(path.join(FOCUSED_ROOT, 'candidate/host/plugins/delivery-pipeline'));
   });
 
-  test('same-stage focused producers reach original complete/incomplete and current consumers without read proof', async () => {
-    await inspectFocusedConsumers(path.join(FOCUSED_ROOT, 'candidate/host/plugins/delivery-pipeline'));
+  test('packaged focused producers reach original complete/incomplete and current consumers without read proof', async () => {
     await inspectFocusedConsumers(path.join(ROOT, 'plugins/shipyard/host/plugins/delivery-pipeline'));
   });
 
   test('focused installed admission refuses absent, forged and foreign-generation authority', () => {
-    const bytes = read(path.join(FOCUSED_ROOT, 'selection.json'), FOCUSED_SHA);
+    // Rejected before external custody access; these bytes confer no selection authority.
+    const bytes = Buffer.from('{}');
     const expected = { selection_sha256: FOCUSED_SHA, selection_root: FOCUSED_ROOT,
       source_head: FOCUSED_HEAD, source_tree: FOCUSED_TREE, runtime_root: '/private/tmp/focused-isolated' };
     assert.throws(() => inspectFocusedInstalled({}, {}, bytes, expected), /protected focused installed verifier/);
