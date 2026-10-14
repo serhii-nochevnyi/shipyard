@@ -1364,6 +1364,10 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
             truncation('outer', null, output[0].text);
           if (output.length !== 2 || !/^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(output[0].text))
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native read output has surplus or unsupported text');
+          // Native wrapper truncation can prefix the JSON in the second text block.
+          // Inspect only the wrapper warning before parsing; nested markers remain below.
+          if (v3 && /^Warning: truncated output \(original token count: [0-9]{1,16}\)(?:\r?\n|$)/.test(output[1].text))
+            truncation('outer', null, output[1].text);
           const results = output.slice(1).flatMap(block => {
             try { const result = JSON.parse(block.text); return object(result) && typeof result.output === 'string' ? [result] : []; }
             catch { return []; }
