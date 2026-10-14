@@ -860,3 +860,32 @@ test('replay source verification rejects synthetic historical fixes before any r
   assert.throws(() => acceptance.verifyReplaySources({ case: 'recovery', fixed: 'a'.repeat(40) }),
     /authentic replay fix required/);
 });
+
+test('replay assessment binds every original finding and never grants native acceptance', () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), crypto = require('node:crypto');
+  const acceptance = require('../smoke/phase49-final-review-acceptance.cjs');
+  // macOS temporary roots may use /var aliases; original evidence requires
+  // the canonical physical path, including in this isolated fixture.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'replay-assessment-')));
+  const save = (name, value) => {
+    const bytes = Buffer.from(typeof value === 'string' ? value : JSON.stringify(value));
+    const file = path.join(root, name); fs.writeFileSync(file, bytes);
+    return { path: file, bytes: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+  };
+  try {
+    const prompt = save('prompt', 'Neutral source input');
+    const response = save('response', { review_completeness: 'complete', findings: [{ text: 'Observed consequence' }] });
+    const value = { response_sha256: response.sha256, prompt_sha256: prompt.sha256, outcome: 'detected',
+      findings: [{ index: 0, finding: { text: 'Observed consequence' }, outcome: 'grounded', source_consequence: 'Ordering changes' }] };
+    const run = change => { const altered = clone(value); change?.(altered);
+      return acceptance.verifyReplayAssessment({ prompt, response, assessment: save('assessment', altered) }); };
+    assert.equal(run().empirical_acceptance, false);
+    for (const change of [v => v.response_sha256 = 'f'.repeat(64), v => v.prompt_sha256 = 'f'.repeat(64),
+      v => v.findings = [], v => v.findings[0].finding.text = 'Expected oracle',
+      v => v.findings[0].source_consequence = '', v => v.outcome = 'pass']) assert.throws(() => run(change));
+    for (const outcome of ['missed', 'false-positive', 'incomplete'])
+      assert.equal(run(v => v.outcome = outcome).outcome, outcome);
+    fs.appendFileSync(response.path, ' ');
+    assert.throws(() => run(), /altered original/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

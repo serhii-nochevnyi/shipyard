@@ -1548,6 +1548,58 @@ function verifyReplaySources(ref) {
   }
   return { case: ref.case, fixed: ref.fixed, defective: parent, diff_sha256: sha(diff), empirical_acceptance: false };
 }
+// Preparation is deliberately separate from native admission: no public historical
+// focused-preparation capability exists in the installed production API.
+function verifyReplayPreparation(ref) {
+  const source = verifyReplaySources(ref.source);
+  assert(['defective', 'fixed'].includes(ref.variant), 'explicit replay variant required');
+  const revision = ref.variant === 'defective' ? source.defective : source.fixed;
+  assert.equal(ref.head, revision, 'historical replay head differs');
+  assert.equal(ref.base, source.defective, 'historical replay base differs');
+  assert.equal(ref.merge_base, gitBytes(ROOT, 'merge-base', ref.base, ref.head).toString().trim(), 'replay merge base differs');
+  assert(Array.isArray(ref.paths) && ref.paths.length > 0 && ref.paths.length <= 64, 'bounded complete replay sources required');
+  equalSet(ref.paths.map(item => item.path), ref.paths.map(item => item.path), 'replay source inventory');
+  const changed = gitBytes(ROOT, 'diff', '--name-only', source.defective, source.fixed).toString().trim().split('\n')
+    .filter(name => name.startsWith('plugins/') || name.startsWith('scripts/'));
+  equalSet(ref.paths.map(item => item.path), changed, 'complete changed production source inventory');
+  const parts = ['Review the following source and governing decisions independently. Report grounded findings and limitations.'];
+  for (const item of ref.paths) {
+    assert(typeof item.path === 'string' && !item.path.startsWith('-') && !path.isAbsolute(item.path)
+      && !item.path.split('/').includes('..') && !item.path.includes('\\'), 'replay source path escape');
+    const bytes = gitBytes(ROOT, 'show', revision + ':' + item.path);
+    assert.equal(sha(bytes), item.sha256, 'historical replay source differs');
+    parts.push(item.path + '\n' + bytes.toString('utf8'));
+  }
+  const diff = gitBytes(ROOT, 'diff', '--binary', ref.base, ref.head);
+  assert.equal(sha(diff), ref.reviewed_diff_sha256, 'reviewed replay diff differs');
+  parts.push('Diff\n' + diff.toString('utf8'));
+  for (const adr of ref.source.adrs) parts.push(adr.path + '\n' + gitBytes(ROOT, 'show', source.fixed + ':' + adr.path).toString('utf8'));
+  // Exact neutral framing prevents caller-added labels, rubric or expected findings.
+  assert.equal(original(ref.prompt).toString('utf8'), parts.join('\n\n'), 'blinded replay prompt differs or contains oracle');
+  assert.equal(ref.empirical_acceptance, false, 'preparation is not native evidence');
+  metrics(ref.metrics);
+  return { ...source, variant: ref.variant, status: 'prepared', empirical_acceptance: false };
+}
+function verifyReplayAssessment(ref) {
+  original(ref.prompt);
+  const response = JSON.parse(original(ref.response));
+  const assessment = JSON.parse(original(ref.assessment));
+  assert.equal(assessment.response_sha256, ref.response.sha256, 'unbound assessor response');
+  assert.equal(assessment.prompt_sha256, ref.prompt.sha256, 'unbound assessor prompt');
+  assert(['complete', 'incomplete'].includes(response.review_completeness), 'explicit reviewer completeness required');
+  assert(Array.isArray(response.findings) && Array.isArray(assessment.findings), 'original findings required');
+  equalSet(assessment.findings.map(item => item.index), response.findings.map((_, index) => index), 'complete independent finding assessment');
+  for (const item of assessment.findings) {
+    assert.deepEqual(item.finding, response.findings[item.index], 'assessor finding differs from original response');
+    assert(['grounded', 'false-positive', 'unresolved'].includes(item.outcome), 'explicit finding outcome required');
+    assert(typeof item.source_consequence === 'string' && item.source_consequence.trim().length > 0, 'source consequence required');
+  }
+  assert(['detected', 'missed', 'clean', 'false-positive', 'incomplete'].includes(assessment.outcome), 'explicit assessment outcome required');
+  // These byte bindings support independent host assessment; they cannot authenticate
+  // a reviewer, its prompt delivery, or the correctness of the assessor's reasoning.
+  return { outcome: assessment.outcome, review_completeness: response.review_completeness,
+    empirical_acceptance: false, status: 'assessment-bytes-bound-not-native-authenticated' };
+}
 function verifyFocusedEvidence(ledger) {
   assert.equal(ledger.schema, SCHEMA); assert.equal(ledger.ticket, 'T-49-11');
   assert.equal(ledger.review_contract, FOCUSED_CONTRACT);
@@ -1591,7 +1643,7 @@ function main(argv) {
   const report = verifyEvidence(ledger);
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
 }
-module.exports = { verifyFocusedEvidence, verifyFocusedCurrent, verifyReplaySources, exerciseFocusedCandidate, FOCUSED_PLAN, validateSourceCarry, verifyPrelaunchCopy, validateSquashRecord, validateBuildPins, SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
+module.exports = { verifyReplayPreparation, verifyReplayAssessment, verifyFocusedEvidence, verifyFocusedCurrent, verifyReplaySources, exerciseFocusedCandidate, FOCUSED_PLAN, validateSourceCarry, verifyPrelaunchCopy, validateSquashRecord, validateBuildPins, SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, aggregateMatrix, verifyCapacityReference, verifyFocusedObservations, verifyOriginalReads, equivalentObligations, logicalInventory, main };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(JSON.stringify({ status: 'refused', code: error.code || 'EVIDENCE_INVALID', reason: error.message }) + '\n'); process.exitCode = 1; }
