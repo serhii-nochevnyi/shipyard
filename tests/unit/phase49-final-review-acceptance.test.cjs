@@ -869,6 +869,17 @@ test('portable existing verifier composition requires installation and source cu
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(filename, 'utf8'), context);
   context.ledgerFixture = ledger;
+  const cliCapture = fs.readFileSync(path.resolve(__dirname,
+    '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  context.cliFixture = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
+    .map(type => structuredClone(cliCapture.find(row => row.type === type)));
+  context.cliFixture[0].thread_id = 'session';
+  const { focusedNativeSession } = require('./helpers/codex-arch-review-fixtures.cjs');
+  const nativeCapture = focusedNativeSession({ session: 'session', worktree: '/original-producer-fixture',
+    model: 'model', effort: 'effort', text: 'Portable source fixture only' }).trim().split('\n').map(JSON.parse);
+  context.nativeMetaFixture = nativeCapture.find(row => row.type === 'session_meta');
+  context.nativeContextFixture = nativeCapture.find(row => row.type === 'turn_context');
+  context.nativeStartFixture = nativeCapture.find(row => row.payload?.type === 'task_started');
   vm.runInContext(`
     const supplied = new Map();
     const fixtureProof = { expected: { publication_head: '259acd68c29fc4b9f6e5d044aaa607f66cffc5eb' },
@@ -899,17 +910,14 @@ test('portable existing verifier composition requires installation and source cu
       } };
     };
     verifySourceHistory = () => ({ dispatch_id: 'fixture', tree: 'fixture', verification_digest: 'fixture', receipt_store: 'fixture' });
-    supplied.set('/fixture-native', { type: 'session_meta', payload: { id: 'session', model_provider: 'openai' } });
+    supplied.set('/fixture-native', nativeMetaFixture);
     const readFixture = original;
     original = ref => ref.path === '/fixture-native' ? Buffer.from([
-      supplied.get(ref.path),
-      { type: 'turn_context', payload: { model: 'model', effort: 'effort' } },
-      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'one' } },
-      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'two' } }
-    ].map(row => JSON.stringify(row)).join('\\n') + '\\n') : ref.path === '/fixture-cli' ? Buffer.from([
-      { type: 'thread.started', thread_id: 'session' },
-      { type: 'turn.completed', usage: {} }
-    ].map(row => JSON.stringify(row)).join('\\n') + '\\n') : readFixture(ref);
+      supplied.get(ref.path), nativeContextFixture,
+      { ...nativeStartFixture, payload: { ...nativeStartFixture.payload, turn_id: 'one' } },
+      { ...nativeStartFixture, payload: { ...nativeStartFixture.payload, turn_id: 'two' } }
+    ].map(row => JSON.stringify(row)).join('\\n') + '\\n') : ref.path === '/fixture-cli'
+      ? Buffer.from(cliFixture.map(row => JSON.stringify(row)).join('\\n') + '\\n') : readFixture(ref);
     verifiedRecord = () => ({ receipt: { role: 'executor', runtime: 'codex',
       applied_model: 'model', applied_effort: 'effort', runtime_evidence: {
         transcript: { path: '/fixture-cli', sha256: 'fixture-cli', bytes: 1 }, native_session_evidence: {
