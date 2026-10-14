@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const { execFileSync } = require('node:child_process');
 const contextBuilder = require('../../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
 
@@ -87,14 +88,15 @@ async function unitJudgment(f, afterLaunch) {
   const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-arch-unit-')));
   f.storage = storage;
   const builder = require('../../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
-  const request = builder.build(['arch-review', ticket, '--runtime', 'codex', '--pr', String(f.pr.number),
-    '--graph', graphDir], { cwd: worktree });
+  const request = builder.build(['arch-review', ...(f.phaseName ? [f.phaseName, '--phase', String(f.phase)] : [ticket]), '--runtime', 'codex', '--pr', String(f.pr.number),
+    '--graph', graphDir], { cwd: worktree, refreshGit: false, getPullRequest: () => f.pr, defaultBranch: f.pr.baseRefName });
   const requestPath = path.join(storage, 'request.json');
   fs.writeFileSync(requestPath, JSON.stringify(request));
   const parsed = require('../../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').readRequestFile(requestPath);
   const { scope, launch } = parsed;
   assert.equal(parsed.graphDir, graphDir);
-  const value = contextBuilder.prepare(scope, launch, { graphDir: parsed.graphDir,
+  const dispatchId = 'unit-focused-' + crypto.randomUUID();
+  const value = contextBuilder.prepare(scope, launch, { inflightDispatchId: dispatchId, storageRoot: storage, graphDir: parsed.graphDir,
     refreshGit: false, getPullRequest: () => f.pr });
   const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: value.launch.signals });
   const agentDir = path.join(storage, 'agents');
@@ -131,42 +133,66 @@ async function unitJudgment(f, afterLaunch) {
     scope, recorder, capabilities,
     launchStatic(selection, launchContext) {
       const session = crypto.randomUUID();
-      const judgment = { id: ticket, pr: f.pr.number, head: value.prepared.canonical.head,
+      const judgment = { ...contextBuilder.authenticateFocusedLaunch(launchContext.focused_prepared, launchContext.prompt, {
+        ticket, phase: scope.phase, worktree, dispatch_id: launchContext.dispatch_id }),
+        review_completeness: 'complete', limitations: [], unresolved_sources: [],
+        ...(value.prepared.binding ? { ticket_set: value.prepared.binding.ticketSet,
+          ticket_set_digest: value.prepared.binding.membership } : {}),
+        id: ticket, pr: f.pr.number, head: value.prepared.canonical.head,
         base_tree: value.prepared.mergeBaseTree, verdict: 'conform', summary: 'Unit adapter judgment',
-        findings: [], blocking_count: 0, context_digest: value.prepared.packet.digest,
+        findings: [], blocking_count: 0, context_digest: launchContext.focused_prepared.prepared.packet.digest,
         launch_digest: launchContext.prompt.match(/launch_digest=([a-f0-9]{64})/)[1],
         evidence_markdown: 'Complete evidence from the unit adapter.' };
       write(worktree, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
       const capture = fs.readFileSync(path.join(__dirname,
         '../../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
         .trim().split('\n').map(line => JSON.parse(line));
-      const records = ['thread.started', 'item.completed', 'turn.completed']
+      const records = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
         .map(type => structuredClone(capture.find(record => record.type === type)));
       records[0].thread_id = session;
-      records[1].item.text = JSON.stringify(judgment);
-      records[2].usage.input_tokens = 1;
-      records[2].usage.cached_input_tokens = 0;
-      records[2].usage.output_tokens = 1;
-      if (f.resultAfterCompletion) [records[1], records[2]] = [records[2], records[1]];
+      records[2].item.text = JSON.stringify(judgment);
+      records[3].usage.input_tokens = 1;
+      records[3].usage.cached_input_tokens = 0;
+      records[3].usage.output_tokens = 1;
+      if (f.resultAfterCompletion) [records[2], records[3]] = [records[3], records[2]];
       const stream = records.map(x => JSON.stringify(x)).join('\n') + '\n';
-      transcript = path.join(storage, 'transcript.jsonl');
-      fs.writeFileSync(transcript, stream);
-      const runtimeEvidence = { schema: 'shipyard.codex-runtime-evidence.v1', version: 1,
-        runtime: 'codex', provider: 'openai', session_id: session,
-        worktree: worktree, ticket: ticket, phase: 38,
-        transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: hash(stream) } };
-      if (afterLaunch) afterLaunch(f);
-      return { launch_id: 'codex-' + session, applied_model: selection.model,
-        applied_effort: selection.reasoning_effort, observed_model: selection.model,
-        observed_effort: selection.reasoning_effort, agent_file_digest: selection.agent_file_digest,
-        runtime_evidence: runtimeEvidence };
+      f.originalCodexHome ??= { value: process.env.CODEX_HOME };
+      process.env.CODEX_HOME = path.join(storage, 'codex-home');
+      const native = focusedNativeSession({ session, worktree, model: selection.model,
+        effort: selection.reasoning_effort, text: JSON.stringify(judgment), prompt: launchContext.prompt });
+      const now = new Date();
+      const nativeDir = path.join(process.env.CODEX_HOME, 'sessions', String(now.getFullYear()),
+        String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+      fs.mkdirSync(nativeDir, { recursive: true });
+      fs.writeFileSync(path.join(nativeDir, session + '.jsonl'), native);
+      const runtime = require('../../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs')
+        .createCodexRuntimeHost({ scope, recorder, capabilities, env: { CODEX_HOME: process.env.CODEX_HOME },
+          transcriptDir: path.join(storage, 'runtime-transcripts'),
+          probe: { status: 'available', executable: 'codex', runtime_version: 'fixture', capabilities },
+          spawn() {
+            const child = new EventEmitter(); child.pid = process.pid;
+            child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+            child.stdin = { write() {}, end() { process.nextTick(() => {
+              child.stdout.emit('data', Buffer.from(stream)); child.emit('close', 0);
+            }); } };
+            return child;
+          } });
+      const launched = runtime.launchStatic({ model: selection.model, effort: selection.reasoning_effort,
+        sandbox_mode: 'read-only', agent_file: file, agent_file_content: content, agent_file_digest: agentDigest },
+        launchContext);
+      return launched.then(result => {
+        transcript = result.runtime_evidence.transcript.path;
+        f.transcript = transcript;
+        if (afterLaunch) afterLaunch(f);
+        return result;
+      });
     },
   };
   let relay = '';
   await require('../../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').runCli(
     ['--args-file', requestPath], { write: text => { relay += text; } }, {
       host, capabilities, recorder, agentDir, agentManifest: manifest,
-      storageRoot: storage, refreshGit: false, getPullRequest: () => f.pr,
+      dispatchId, storageRoot: storage, refreshGit: false, getPullRequest: () => f.pr,
     });
   const result = JSON.parse(relay);
   const validationInput = { worktreePath: worktree, role: 'arch-review', ticket: ticket,
@@ -181,11 +207,80 @@ async function unitJudgment(f, afterLaunch) {
   return { result, value, recorder, transcript, validationInput, scope };
 }
 
+function retainedLegacyReviewModules(root, revision = 'b3eab6c12ecebed1b14947fe5e037f93b549c524') {
+  const directory = path.join(root, 'retained-original-producer');
+  const repository = path.resolve(__dirname, '../../..');
+  const files = git(repository, ['ls-tree', '-r', '--name-only', revision, '--',
+    'plugins/delivery-pipeline/scripts', 'plugins/delivery-pipeline/references']).split('\n').filter(Boolean);
+  assert.ok(files.length > 0, 'retained original producer tree is required');
+  for (const file of files) {
+    const bytes = execFileSync('git', ['-C', repository, 'show', revision + ':' + file], { maxBuffer: 16 * 1024 * 1024 });
+    assert.equal(require('node:crypto').createHash('sha1').update(Buffer.from('blob ' + bytes.length + '\0'))
+      .update(bytes).digest('hex'), git(repository, ['rev-parse', revision + ':' + file]));
+    write(directory, file, bytes);
+  }
+  const load = name => require(path.join(directory, 'plugins/delivery-pipeline/scripts', name + '.cjs'));
+  return { collector: load('codex-arch-review-context'), runtime: load('codex-runtime-host'),
+    authority: load('role-artifact'), boundary: load('dispatch-boundary'), directory, revision };
+}
+
+async function legacyUnitJudgment(f, afterLaunch) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-legacy-producer-')));
+  f.legacyProducerRoot = root;
+  const revision = 'b3eab6c12ecebed1b14947fe5e037f93b549c524';
+  const repository = path.resolve(__dirname, '../../..');
+  const names = git(repository, ['ls-tree', '-r', '--name-only', revision, '--',
+    'plugins/delivery-pipeline/scripts', 'tests/unit/helpers/codex-arch-review-fixtures.cjs',
+    'tests/fixtures/captured/codex-agent-stream-exec.jsonl']).split('\n');
+  for (const name of names) {
+    const bytes = execFileSync('git', ['-C', repository, 'show', revision + ':' + name], { maxBuffer: 16 * 1024 * 1024 });
+    const target = path.join(root, name); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, bytes);
+  }
+  const original = require(path.join(root, 'tests/unit/helpers/codex-arch-review-fixtures.cjs'));
+  const result = await original.unitJudgment(f, afterLaunch);
+  result.recorder = require('../../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs')
+    .createDurableRecorder(path.join(f.storage, 'receipts'));
+  result.validationInput.recorder = result.recorder;
+  assert.equal(result.result.result.review_contract, undefined);
+  assert.equal(result.result.receipt.runtime_evidence.focused_review, undefined);
+  return result;
+}
+
+function focusedNativeSession({ session, worktree, model, effort, text, prompt }) {
+  const capture = fs.readFileSync(path.join(__dirname, '../../fixtures/captured/codex-agent-stream-parent.jsonl'), 'utf8')
+    .trim().split('\n').map(JSON.parse);
+  const get = predicate => structuredClone(capture.find(predicate));
+  const meta = get(row => row.type === 'session_meta');
+  Object.assign(meta.payload, { id: session, session_id: session, cwd: worktree, runtime_workspace_roots: [worktree] });
+  const context = get(row => row.type === 'turn_context');
+  Object.assign(context.payload, { model, effort, cwd: worktree, workspace_roots: [worktree] });
+  context.payload.sandbox_policy.type = 'read-only';
+  Object.assign(context.payload.collaboration_mode.settings, { model, reasoning_effort: effort });
+  const start = get(row => row.payload?.type === 'task_started');
+  context.payload.turn_id = start.payload.turn_id;
+  const final = get(row => row.type === 'response_item' && row.payload.phase === 'final_answer');
+  final.payload.content.forEach(block => { block.text = text; });
+  final.payload.internal_chat_message_metadata_passthrough.turn_id = start.payload.turn_id;
+  const completion = get(row => row.payload?.type === 'task_complete');
+  Object.assign(completion.payload, { turn_id: start.payload.turn_id, last_agent_message: text });
+  const user = prompt === undefined ? [] : [get(row => row.type === 'response_item' && row.payload?.type === 'message' && row.payload.role === 'user')];
+  if (user.length) {
+    user[0].payload.content = [{ type: 'input_text', text: prompt }];
+    user[0].payload.internal_chat_message_metadata_passthrough.turn_id = start.payload.turn_id;
+  }
+  return [meta, context, ...user, start, final, completion].map(row => JSON.stringify(row) + '\n').join('');
+}
+
 function cleanupJudgment(f) {
+  if (f.originalCodexHome) {
+    if (f.originalCodexHome.value === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = f.originalCodexHome.value;
+  }
   if (fs.existsSync(f.root)) fs.rmSync(require('../../../plugins/delivery-pipeline/scripts/role-artifact.cjs')
     .archiveAuthorityDirectory(f.root), { recursive: true, force: true });
   fs.rmSync(f.root, { recursive: true, force: true });
+  if (f.legacyProducerRoot) fs.rmSync(f.legacyProducerRoot, { recursive: true, force: true });
   if (f.storage) fs.rmSync(f.storage, { recursive: true, force: true });
 }
 
-module.exports = { TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, cleanupJudgment };
+module.exports = { retainedLegacyReviewModules, TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, legacyUnitJudgment, focusedNativeSession, cleanupJudgment };
