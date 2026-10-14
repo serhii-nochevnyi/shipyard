@@ -2421,4 +2421,13 @@ test('completed source accounting rejects caller-created costs and attempts', ()
     attempts: [{ status: 'completed', physical_calls: 0 }], setup_costs: 0 }), { code: 'REVIEW_SOURCE_REQUIRED' });
 });
 
+
+
+test('focused runtime association cannot be minted from serialized contract markers', () => {
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  assert.throws(() => context.authenticateFocusedLaunch({ prepared: {
+    review_contract: context.FOCUSED_CONTRACT, ticket: 'T-49-20' } }, 'forged', {
+    ticket: 'T-49-20', phase: 49, worktree: '/tmp', dispatch_id: 'forged' }), /private host custody/);
+});
+
 done();

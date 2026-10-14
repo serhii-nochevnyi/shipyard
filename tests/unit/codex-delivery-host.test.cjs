@@ -3197,4 +3197,16 @@ for (const mutation of ['attempt', 'fix-round', 'native-escalation', 'marker-ext
   test('49 operational escalation classification refuses ' + mutation,
     () => operationalEscalationHistoryRegression(mutation));
 
+
+
+test('focused prepared custody is forbidden in caller delivery request context', () => {
+  const host = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'focused-request-'));
+  try {
+    const request = path.join(root, 'request.json');
+    fs.writeFileSync(request, JSON.stringify({ scope: {}, role: 'arch-review', context: { focused_prepared: {} } }));
+    assert.throws(() => host.readRequestFile(request), /host authority/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 done();
