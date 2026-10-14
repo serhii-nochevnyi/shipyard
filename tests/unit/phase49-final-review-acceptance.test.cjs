@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { verifyFixture, validateTrace, metric, SCHEMA } = require('../smoke/phase49-final-review-acceptance.cjs');
 const clone = value => JSON.parse(JSON.stringify(value));
-// Archived pre-focused HOLD fixture: legacy controls retain their original schema and assertions.
 const historicalLedger = () => ({
   "schema": "shipyard.phase49.final-review-acceptance.v1",
   "ticket": "T-49-11",
@@ -573,7 +572,6 @@ test('read-only original envelope observer derives complete costs and rejects ta
   assert.equal(observed.metrics.tokens.value, null); assert.equal(observed.metrics.elapsed_ms.value, rows.length - 3);
   assert.equal(observed.full_128k_ranges, 0);
   assert.equal(acceptance.verifyFixture(authority(fixture())).empirical_acceptance, false);
-  // Preserve the registered native shapes; the observer sees the real nested object contract.
   const wrapped = [clone(meta), clone(selection), clone(start)]; let wrappedOrdinal = 0;
   for (const asset of [{ path: prepared.input_bundle.manifest_path, bytes: checked.manifest_bytes },
     ...checked.manifest.assets.map((asset, i) => ({ path: asset.path, bytes: checked.material[i] }))]) {
@@ -933,8 +931,6 @@ test('portable existing verifier composition requires installation and source cu
     const altered = clone(ledger); mutate(altered);
     assert.throws(() => context.module.exports.verifyEvidence(altered));
   }
-  // Historical executor source may contain several turns; it is not a review verdict.
-  // Exercise the real runtime parsers while receipt/coverage authority stays fixture-only.
   for (const expression of [
     "supplied.get('/fixture-native').payload.model_provider = 'foreign'",
     "supplied.get('/fixture-native').payload.id = 'foreign'"
@@ -1010,8 +1006,6 @@ test('replay source verification rejects synthetic historical fixes before any r
 test('replay assessment binds every original finding and never grants native acceptance', () => {
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), crypto = require('node:crypto');
   const acceptance = require('../smoke/phase49-final-review-acceptance.cjs');
-  // macOS temporary roots may use /var aliases; original evidence requires
-  // the canonical physical path, including in this isolated fixture.
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'replay-assessment-')));
   const save = (name, value) => {
     const bytes = Buffer.from(typeof value === 'string' ? value : JSON.stringify(value));

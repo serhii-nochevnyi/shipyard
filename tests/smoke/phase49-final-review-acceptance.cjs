@@ -219,7 +219,7 @@ function sourceInputs(repository, commit) {
   for (const entry of entries) {
     const match = /^(\d{6}) (\w+) ([a-f0-9]{40})\t(.+)$/.exec(entry); assert(match, 'malformed source tree member');
     const [, mode, type, object, relative] = match;
-    if (!/^scripts\//.test(relative) && !/^(plugins|capabilities)\/delivery-pipeline\//.test(relative)) continue;
+    if (!relative.startsWith('scripts/') && !relative.startsWith('plugins/delivery-pipeline/') && !relative.startsWith('capabilities/delivery-pipeline/')) continue;
     if (/\.(bak|orig|rej|swp)$|(?:^|\/)\.DS_Store$|~$/.test(relative)) continue;
     assert(type === 'blob' && ['100644', '100755'].includes(mode), 'canonical nonregular source');
     const size = Number(gitBytes(repository, 'cat-file', '-s', object).toString().trim());
@@ -1548,8 +1548,6 @@ function verifyReplaySources(ref) {
   }
   return { case: ref.case, fixed: ref.fixed, defective: parent, diff_sha256: sha(diff), empirical_acceptance: false };
 }
-// Preparation is deliberately separate from native admission: no public historical
-// focused-preparation capability exists in the installed production API.
 function verifyReplayPreparation(ref) {
   const source = verifyReplaySources(ref.source);
   assert(['defective', 'fixed'].includes(ref.variant), 'explicit replay variant required');
@@ -1574,7 +1572,6 @@ function verifyReplayPreparation(ref) {
   assert.equal(sha(diff), ref.reviewed_diff_sha256, 'reviewed replay diff differs');
   parts.push('Diff\n' + diff.toString('utf8'));
   for (const adr of ref.source.adrs) parts.push(adr.path + '\n' + gitBytes(ROOT, 'show', source.fixed + ':' + adr.path).toString('utf8'));
-  // Exact neutral framing prevents caller-added labels, rubric or expected findings.
   assert.equal(original(ref.prompt).toString('utf8'), parts.join('\n\n'), 'blinded replay prompt differs or contains oracle');
   assert.equal(ref.empirical_acceptance, false, 'preparation is not native evidence');
   metrics(ref.metrics);
@@ -1595,8 +1592,6 @@ function verifyReplayAssessment(ref) {
     assert(typeof item.source_consequence === 'string' && item.source_consequence.trim().length > 0, 'source consequence required');
   }
   assert(['detected', 'missed', 'clean', 'false-positive', 'incomplete'].includes(assessment.outcome), 'explicit assessment outcome required');
-  // These byte bindings support independent host assessment; they cannot authenticate
-  // a reviewer, its prompt delivery, or the correctness of the assessor's reasoning.
   return { outcome: assessment.outcome, review_completeness: response.review_completeness,
     empirical_acceptance: false, status: 'assessment-bytes-bound-not-native-authenticated' };
 }
