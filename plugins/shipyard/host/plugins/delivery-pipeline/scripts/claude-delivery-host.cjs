@@ -415,9 +415,15 @@ function driftPreflight(options, entry, args) {
   return deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree });
 }
 
+// @contract: an investigation may precede the first graph; a named or invalid graph still refuses.
+function investigationProject(options, worktree) {
+  if (!options.graphDir && !process.env.SHIPYARD_GRAPH_DIR && resolveGraphDir([], worktree).how === 'none') return worktree;
+  return path.resolve(graphDirectory(options, worktree), '..', '..');
+}
+
 function investigationPreflight(options, args, scope) {
   const worktree = fs.realpathSync(args.worktreePath);
-  const project = path.resolve(graphDirectory(options, worktree), '..', '..');
+  const project = investigationProject(options, worktree);
   if (git(worktree, ['rev-parse', '--show-toplevel']) !== worktree || worktree !== project) {
     reject('investigation worktree differs from the canonical graph repository');
   }
