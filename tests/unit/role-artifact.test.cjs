@@ -785,6 +785,51 @@ suite('role-artifact — Codex sealed architecture context');
 
 const codexJudgmentFixtures = require('./helpers/codex-arch-review-fixtures.cjs');
 
+for (const mutation of ['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal', 'failed-turn', 'incomplete-turn', 'foreign-session'])
+test('original focused CLI retains progress and rejects invalid terminal results: ' + mutation, async () => {
+  const f = codexJudgmentFixtures.fixture();
+  const prototype = require('node:events').EventEmitter.prototype;
+  const emit = prototype.emit;
+  let observed = false;
+  prototype.emit = function(event, bytes, ...args) {
+    if (event === 'data' && Buffer.isBuffer(bytes) && bytes.toString().includes('shipyard.focused-architecture-review.v1')) {
+      const rows = bytes.toString().trim().split('\n').map(JSON.parse);
+      const index = rows.findIndex(row => row.item?.type === 'agent_message');
+      if (index >= 0 && rows[index].item.text.includes('shipyard.focused-architecture-review.v1')) {
+        observed = true;
+        const progress = structuredClone(rows[index]);
+        progress.item.id += '-progress'; progress.item.text = 'Inspecting the current diff and governing ADRs.';
+        rows.splice(index, 0, progress);
+        if (mutation === 'duplicate-contract') {
+          const duplicate = structuredClone(rows[index + 1]); duplicate.item.id += '-duplicate';
+          rows.splice(index + 1, 0, duplicate);
+        }
+        if (mutation === 'duplicate-item') progress.item.id = rows[index + 1].item.id;
+        if (mutation === 'corrupt-terminal') {
+          const corrupt = structuredClone(progress); corrupt.item.id += '-corrupt'; corrupt.item.text = '{"review_contract":';
+          rows.splice(index + 2, 0, corrupt);
+        }
+        if (mutation === 'failed-turn') rows.splice(rows.length - 1, 0, { type: 'turn.failed', error: { message: 'original failed turn' } });
+        if (mutation === 'incomplete-turn') rows.splice(rows.findIndex(row => row.type === 'turn.completed'), 1);
+        if (mutation === 'foreign-session') rows.unshift({ ...rows[0], thread_id: 'foreign-session' });
+        bytes = Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+      }
+    }
+    return emit.call(this, event, bytes, ...args);
+  };
+  try {
+    if (mutation === 'progress') {
+      const { validationInput } = await codexJudgmentFixtures.unitJudgment(f);
+      assert.equal(roleArtifact.validateJudgmentManifest(validationInput).envelope.verdict, 'conform');
+      assert.equal(roleArtifact.read(validationInput).envelope.verdict, 'conform');
+      assert.equal(roleArtifact.currentArchitectureVerdict({ worktreePath: f.root, pr: f.pr.number,
+        head: f.head, baseName: 'main', baseCommit: f.base, headBranch: f.pr.headRefName,
+        graphDir: path.join(f.root, '.planning/graph') })?.dispatch_id, validationInput.dispatchId);
+    } else await assert.rejects(() => codexJudgmentFixtures.unitJudgment(f));
+    assert.ok(observed, 'original registered native CLI boundary was exercised');
+  } finally { prototype.emit = emit; codexJudgmentFixtures.cleanupJudgment(f); }
+});
+
 test('fresh Codex architecture artifact remains valid after CLI inflight cleanup', async () => {
   const f = codexJudgmentFixtures.fixture();
   try {
@@ -2179,6 +2224,87 @@ test('focused completeness and subject declarations fail closed without consumpt
     assert.throws(() => context.validateFocusedResult({ ...result, ...edit }, binding));
   assert.equal(context.validateFocusedResult({ ...result, review_completeness: 'incomplete',
     unresolved_sources: ['src/missing.cjs'] }, binding), true);
+});
+
+
+for (const corrupt of [false, true]) test('current integration excludes foreign catalogue before authority reads: ' + corrupt, () => {
+  const value = phaseScopeFixture({ second: true });
+  const read = fs.readFileSync;
+  try {
+    const foreign = path.join(roleArtifact.archiveAuthorityDirectory(fs.realpathSync(value.second)), 'catalogue.json');
+    if (corrupt) fs.writeFileSync(foreign, 'corrupt foreign catalogue'.repeat(800000));
+    let opened = 0;
+    fs.readFileSync = function(file, ...args) {
+      if (String(file) === foreign) { opened++; throw new Error('foreign catalogue must not be opened'); }
+      return read.call(this, file, ...args);
+    };
+    const head = git(value.root, ['rev-parse', 'HEAD']);
+    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: value.root, head,
+      baseName: 'main', baseCommit: git(value.root, ['rev-parse', 'main']),
+      graphDir: value.input.graphDir, headBranch: 'epic/47-scope' }), null);
+    assert.equal(opened, 0);
+  } finally { fs.readFileSync = read; cleanPhaseScope(value); }
+});
+
+for (const runtime of ['codex', 'claude']) test('aggregate original subject reconciles retained and legacy ' + runtime, () => {
+  const value = judgmentFixture();
+  try {
+    const subject = 'phase=47-scope;repository=/fixture;tickets=' + 'a'.repeat(64);
+    const launch = resolution => ({ ...judgmentReceipt(resolution),
+      ...(resolution.agent_file ? { agent_file: resolution.agent_file,
+        agent_file_digest: resolution.agent_file_digest } : {}) });
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const selected = policy.resolveDispatch({ runtime, role: 'integrator', signals: {} });
+    const agentsDir = path.join(value.root, 'agents');
+    if (runtime === 'codex') {
+      fs.mkdirSync(agentsDir);
+      const content = [
+        '# shipyard-policy-id = "' + policy.POLICY.id + '"',
+        '# shipyard-policy-version = "' + selected.policy_version + '"',
+        '# shipyard-policy-hash = "' + selected.policy_hash + '"',
+        '# shipyard-policy-runtime = "codex"',
+        '# shipyard-policy-role = "' + selected.role + '"',
+        '# shipyard-policy-rung = "' + selected.rung + '"',
+        'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"',
+        'model = "' + selected.model + '"',
+        'model_reasoning_effort = "' + selected.effort + '"',
+        "developer_instructions = '''\nAuthenticate the original integration subject.\n'''", '',
+      ].join('\n');
+      fs.writeFileSync(path.join(agentsDir, selected.agent_file), content);
+      fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
+        policy_id: policy.POLICY.id, policy_version: selected.policy_version, policy_hash: selected.policy_hash,
+        agent_files: [selected.agent_file], agent_digests: {
+          [selected.agent_file]: require('node:crypto').createHash('sha256').update(content).digest('hex'),
+        },
+      }));
+    }
+    const boundary = createDispatchBoundary({ adapters: { [runtime]: {
+      ...(runtime === 'codex' ? { agentsDir } : {}), launch, launchStatic: launch,
+    } }, recorder: value.recorder });
+    const dispatch = boundary.dispatch({ runtime, role: 'integrator', signals: {} }, { ticket: subject });
+    if (runtime === 'codex') {
+      assert.equal(dispatch.receipt.agent_file, selected.agent_file);
+      assert.equal(dispatch.receipt.agent_file_digest,
+      require('node:crypto').createHash('sha256')
+        .update(fs.readFileSync(path.join(agentsDir, selected.agent_file))).digest('hex'));
+    }
+    const Module = require('node:module');
+    const isolated = new Module(ROLE_ARTIFACT, module);
+    isolated.filename = ROLE_ARTIFACT;
+    isolated.paths = Module._nodeModulePaths(path.dirname(ROLE_ARTIFACT));
+    isolated._compile(fs.readFileSync(ROLE_ARTIFACT, 'utf8')
+      + '\nmodule.exports = { authenticatedRecordSubject };', ROLE_ARTIFACT);
+    const record = { dispatch_id: dispatch.receipt.dispatch_id, receipt: dispatch.receipt,
+      review_current: { receipt_store: value.recorder.storeDir } };
+    const read = isolated.exports.authenticatedRecordSubject;
+    assert.equal(read(record), subject);
+    assert.equal(read({ ...record, review_current: undefined, receipt_store: value.recorder.storeDir }), subject);
+    assert.equal(read({ ...record, ticket: subject }), subject);
+    assert.throws(() => read({ ...record, ticket: subject + '-foreign' }));
+    assert.throws(() => read({ ...record, receipt: { ...record.receipt, ticket: 'foreign' } }));
+    assert.throws(() => read({ ...record, review_current: {} }));
+    assert.throws(() => read({ ...record, dispatch_id: 'missing-original' }));
+  } finally { clean(value); }
 });
 
 done();
