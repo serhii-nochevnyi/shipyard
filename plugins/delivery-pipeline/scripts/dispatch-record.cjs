@@ -1299,7 +1299,6 @@ function authenticateBookkeeping(cwd, fn, writtenPaths, required = false) {
   return authority.trustedBookkeepingMutation(worktree, fn, writtenPaths);
 }
 
-// @contract: Register a fresh linked worker before provenance exists; never adopt external legacy history.
 function inflightBookkeepingRequired(input, cwd) {
   if (typeof input.worktree !== 'string') return false;
   const project = fs.realpathSync(path.resolve(graphDir(cwd), '../..'));
