@@ -451,6 +451,23 @@ test('graph-less fallback does not relax a graph that was named or that exists b
   }
 }));
 
+test('the decomposition builder carries the ADR path to both runtimes and refuses an investigation with no linked ADR', () => {
+  const fixture = planningBuilderFixture('INV-43-17');
+  try {
+    for (const runtime of ['claude', 'codex']) {
+      const request = deliverDispatch.build(['decomposition', fixture.invId, '--phase', '44', '--runtime', runtime],
+        { cwd: fixture.root, graphDir: fixture.graphDir });
+      assert.equal(request.adr, '.planning/architecture/ADR-TEST.md', runtime);
+    }
+    fs.writeFileSync(path.join(fixture.invPath, 'PROBLEM.md'), '# Problem\n');
+    assert.throws(() => deliverDispatch.build(['decomposition', fixture.invId, '--phase', '44', '--runtime', 'claude'],
+      { cwd: fixture.root, graphDir: fixture.graphDir }),
+    (error) => error.code === 'BUILD_REFUSED' && /link its accepted ADR/.test(error.message));
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
 test('planning builders preserve context with distinct fresh run ids and missing PROBLEM.md exits 2', () => {
   const fixture = planningBuilderFixture('INV-43-16');
   const args = ['research', fixture.invId, '--runtime', 'codex'];
