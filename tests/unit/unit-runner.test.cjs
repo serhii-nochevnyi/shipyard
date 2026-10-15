@@ -49,7 +49,7 @@ function launch(f, overrides = {}) {
       GIT_CONFIG_GLOBAL: path.join(f.root, 'hostile.gitconfig'), GIT_CONFIG_NOSYSTEM: '0',
       TMPDIR: path.join(f.root, 'scratch'),
       CLAUDE_PLUGIN_ROOT: 'poison', CLAUDE_CODE_ENTRYPOINT: 'poison',
-      CODEX_SANDBOX: 'poison', CODEX_SANDBOX_NETWORK_DISABLED: 'poison', ...overrides },
+      CODEX_SANDBOX: 'poison', CODEX_SANDBOX_NETWORK_DISABLED: 'poison', UNIT_SHARD: '', UNIT_WORKERS: '', ...overrides },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const chunks = [];
