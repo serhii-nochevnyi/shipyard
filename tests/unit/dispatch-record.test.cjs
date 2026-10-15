@@ -2178,6 +2178,35 @@ test('dispatch records run scope and telemetry treatment metadata', () => {
   assert.equal(event.telemetry.provider, 'anthropic');
 });
 
+test('fresh linked-worker provenance remains authenticated when the next host runs at the project root', () => {
+  const { project, graph, worktree } = scratch({ 'T-01-01': { ...READY } });
+  const authorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-fresh-authority-')));
+  const originalHomedir = os.homedir;
+  os.homedir = () => authorityHome;
+  const authority = require(path.join(SCRIPTS, 'role-artifact.cjs'));
+  try {
+    const worker = { graphDir: graph, worktree, ticket: 'T-01-01', role: 'executor',
+      dispatch_id: 'fresh-linked-worker', pid: process.pid, host: 'claude', refreshBoard: false };
+    recordInflight(worker);
+    assert.ok(authority.historicalBookkeepingPins(project).some(pin =>
+      pin.path === '.planning/graph/provenance/fresh-linked-worker.json'));
+    assert.equal(clearInflight(worker), true);
+    const guard = { ...worker, worktree: project, role: 'pr-sentinel', dispatch_id: 'fresh-project-guard' };
+    assert.doesNotThrow(() => recordInflight(guard));
+    assert.equal(clearInflight(guard), true);
+    const before = fs.readFileSync(path.join(graph, 'dispatches.json'));
+    const forged = path.join(graph, 'provenance', 'unknown.json');
+    fs.writeFileSync(forged, '{}');
+    assert.throws(() => recordInflight({ ...guard, dispatch_id: 'after-forgery' }), /unknown host provenance/);
+    assert.ok(fs.readFileSync(path.join(graph, 'dispatches.json')).equals(before));
+    assert.equal(fs.readFileSync(forged, 'utf8'), '{}');
+  } finally {
+    os.homedir = originalHomedir;
+    fs.rmSync(authorityHome, { recursive: true, force: true });
+    fs.rmSync(path.dirname(project), { recursive: true, force: true });
+  }
+});
+
 test('external canonical graph history is not admitted as ticket-local archive bookkeeping', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const ticketWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-external-ticket-'));
