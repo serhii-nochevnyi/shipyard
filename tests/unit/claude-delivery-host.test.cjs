@@ -228,6 +228,9 @@ for (const outcome of ['success', 'failure']) {
       assert.equal(during[0].pid, process.pid);
       assert.equal(during[0].host, 'claude');
       assert.deepEqual(inflightRows(fixture.graphDir), {});
+      const pins = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs')
+        .historicalBookkeepingPins(fs.realpathSync(fixture.root));
+      assert.ok(pins.some(pin => pin.path === `.planning/graph/provenance/${during[0].dispatch_id}.json`));
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }

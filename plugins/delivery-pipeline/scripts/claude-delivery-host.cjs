@@ -1130,7 +1130,7 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   });
   controller.begin(scope);
   const graphDir = inflightGraphDir(hostOptions, worktree);
-  const inflight = graphDir ? { graphDir, dispatch_id: dispatch.dispatch_id, pid: process.pid } : null;
+  const inflight = graphDir ? { graphDir, worktree, dispatch_id: dispatch.dispatch_id, pid: process.pid } : null;
   let heartbeatError;
   const heartbeat = setInterval(() => {
     try { controller.heartbeat(scope.run_id); } catch (error) { heartbeatError = error; }

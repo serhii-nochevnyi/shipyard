@@ -1299,9 +1299,12 @@ function authenticateBookkeeping(cwd, fn, writtenPaths, required = false) {
   return authority.trustedBookkeepingMutation(worktree, fn, writtenPaths);
 }
 
-function localInflightBookkeeping(input, cwd) {
-  return typeof input.worktree === 'string'
-    && fs.realpathSync(input.worktree) === fs.realpathSync(path.resolve(graphDir(cwd), '../..'));
+function inflightBookkeepingRequired(input, cwd) {
+  if (typeof input.worktree !== 'string') return false;
+  const project = fs.realpathSync(path.resolve(graphDir(cwd), '../..'));
+  if (fs.realpathSync(input.worktree) === project) return true;
+  const provenance = path.join(project, '.planning', 'graph', 'provenance');
+  return !fs.existsSync(provenance) || fs.readdirSync(provenance).length === 0;
 }
 
 function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false, authenticate = false) {
@@ -1548,8 +1551,8 @@ function recordInflight(input) {
     }
     store.inflight[dispatchId] = row;
     return null;
-  }, undefined, true, localInflightBookkeeping(input, cwd));
-  writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at }, localInflightBookkeeping(input, cwd));
+  }, undefined, true, inflightBookkeepingRequired(input, cwd));
+  writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at }, inflightBookkeepingRequired(input, cwd));
   if (input.refreshBoard !== false) refreshFront(cwd);
   return Object.freeze({ ...row });
 }
@@ -1603,7 +1606,7 @@ function clearInflight(input) {
     delete store.inflight[dispatchId];
     cleared = true;
     return null;
-  }, undefined, true, localInflightBookkeeping(input, cwd));
+  }, undefined, true, inflightBookkeepingRequired(input, cwd));
   if (cleared && input.refreshBoard !== false) refreshFront(cwd);
   return cleared;
 }
