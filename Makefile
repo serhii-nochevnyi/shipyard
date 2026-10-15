@@ -16,7 +16,7 @@ install-shipyard-marketplace-claude:
         install-shipyard-claude-statusline remove-shipyard-claude-statusline test-statusline \
         install-shipyard-capability ensure-gsd-core-claude ensure-gsd-core-codex \
         gsd-tune gsd-tune-apply doctor \
-        test test-fast test-unit test-graph test-worktree test-worktree-gates \
+        test test-fast test-fast-rest test-unit test-graph test-worktree test-worktree-gates \
         test-sentinel test-docs test-hooks test-comment-policy test-codex-shipyard test-releases
 
 # Install or refresh the conveyor on a host OpenAI Codex CLI setup.
@@ -61,7 +61,12 @@ doctor:
 	node scripts/shipyard-doctor.cjs
 
 # Fast, deterministic checks for every local edit and every pull request.
-test-fast: test-unit test-graph test-worktree test-worktree-gates test-sentinel test-docs test-hooks test-comment-policy test-model-ladder-runtime test-statusline
+# @contract: test-fast is test-unit plus TEST_FAST_REST; CI runs test-unit as shards and test-fast-rest apart.
+TEST_FAST_REST = test-graph test-worktree test-worktree-gates test-sentinel test-docs test-hooks test-comment-policy test-model-ladder-runtime test-statusline
+
+test-fast: test-unit $(TEST_FAST_REST)
+
+test-fast-rest: $(TEST_FAST_REST)
 
 # The complete host-side suite. The Codex smoke additionally exercises the
 # network-backed gsd-core conversion and therefore stays out of test-fast.

@@ -11,15 +11,34 @@ unset CLAUDE_PLUGIN_ROOT CLAUDE_CODE_ENTRYPOINT CODEX_SANDBOX CODEX_SANDBOX_NETW
 
 command -v node >/dev/null 2>&1 || { echo "node not found on PATH"; exit 1; }
 
-# Every .cjs in the deterministic layer must at least parse.
-for f in plugins/delivery-pipeline/scripts/*.cjs capabilities/delivery-pipeline/checks/*.cjs scripts/*.cjs; do
-  node --check "$f" || { echo "syntax error in $f"; exit 1; }
-done
-for f in plugins/delivery-pipeline/scripts/*.sh scripts/*.sh tests/smoke/*.sh tests/unit/*.sh; do
-  bash -n "$f" || { echo "syntax error in $f"; exit 1; }
-done
+# UNIT_SHARD=<i>/<n> runs one balanced slice of the suite (CI runs four of them in parallel);
+# @contract: UNIT_SHARD=<i>/<n> runs one slice; UNIT_WORKERS=<n|auto> sets concurrency, default 4.
+unit_workers="${UNIT_WORKERS:-4}"
+if [[ "$unit_workers" == auto ]]; then
+  unit_workers="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+fi
+[[ "$unit_workers" =~ ^[1-9][0-9]*$ ]] || { echo "UNIT_WORKERS must be a positive integer or auto, got '${UNIT_WORKERS:-}'"; exit 2; }
 
 unit_files=(tests/unit/*.test.cjs)
+unit_sweep=1
+if [[ -n "${UNIT_SHARD:-}" ]]; then
+  unit_files=()
+  while IFS= read -r unit_file; do
+    unit_files+=("$unit_file")
+  done < <(node tests/unit/shard-files.cjs "$UNIT_SHARD")
+  [[ ${#unit_files[@]} -gt 0 ]] || { echo "UNIT_SHARD=$UNIT_SHARD selected no unit tests"; exit 1; }
+  [[ "${UNIT_SHARD%%/*}" == 1 ]] || unit_sweep=0
+fi
+
+if [[ "$unit_sweep" == 1 ]]; then
+  for f in plugins/delivery-pipeline/scripts/*.cjs capabilities/delivery-pipeline/checks/*.cjs scripts/*.cjs; do
+    node --check "$f" || { echo "syntax error in $f"; exit 1; }
+  done
+  for f in plugins/delivery-pipeline/scripts/*.sh scripts/*.sh tests/smoke/*.sh tests/unit/*.sh; do
+    bash -n "$f" || { echo "syntax error in $f"; exit 1; }
+  done
+fi
+
 unit_git_home="$(mktemp -d "${TMPDIR:-/tmp}/shipyard-unit.XXXXXX")"
 unit_pids=()
 unit_active=()
@@ -79,7 +98,7 @@ finish_workers() {
 setup_handlers
 
 while ((unit_next < ${#unit_files[@]} || unit_active_count > 0)); do
-  while ((unit_next < ${#unit_files[@]} && unit_active_count < 4)); do
+  while ((unit_next < ${#unit_files[@]} && unit_active_count < unit_workers)); do
     unit_worker="$unit_git_home/$unit_next"
     mkdir -p "$unit_worker"/{home,tmp,codex,config,cache,state,data,runtime,claude}
     unit_logs[$unit_next]="$unit_worker/output"

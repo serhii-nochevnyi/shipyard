@@ -1,0 +1,20 @@
+name: product change scope
+description: Whether the change touches product files, or only development artifacts.
+outputs:
+  product_changes:
+    description: "'true' when the change touches product files"
+    value: ${{ steps.scope.outputs.product_changes }}
+runs:
+  using: composite
+  steps:
+    - name: product change scope
+      id: scope
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      run: |
+        BASE="$BASE_SHA"
+        if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+          BASE=$(git hash-object -t tree /dev/null)
+        fi
+        node plugins/delivery-pipeline/scripts/development-artifacts.cjs "$BASE" HEAD >> "$GITHUB_OUTPUT"
