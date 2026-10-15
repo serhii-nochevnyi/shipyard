@@ -1,0 +1,11 @@
+{
+  "git": { "branching_strategy": "none" },
+  "delivery_pipeline": {
+    "verification_commands": {
+      "default": [
+        { "argv": ["node", "--test"], "profile": "sandbox", "timeout_s": 120 },
+        { "argv": ["node", "-e"], "profile": "sandbox", "timeout_s": 120 }
+      ]
+    }
+  }
+}
