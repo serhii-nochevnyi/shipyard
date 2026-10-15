@@ -546,7 +546,9 @@ function parseBuildArgs(argv) {
     buildFail('<INV-id>', `invalid investigation id ${ticket}`);
   }
   if (role === 'decomposition' && !args.phase) buildFail('--phase', 'decomposition requires --phase <N>');
-  if (!['decomposition', 'arch-review'].includes(role) && args.phase) buildFail('--phase', '--phase is only valid for decomposition');
+  if (!['decomposition', 'arch-review', 'research'].includes(role) && args.phase) {
+    buildFail('--phase', '--phase is only valid for research, decomposition, or phase architecture review');
+  }
   if (role === 'decomposition' && !/^INV-[A-Za-z0-9-]+$/.test(ticket)
       && !/^ADR-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(ticket)) {
     buildFail('<INV-id|ADR-id>', `invalid planning input id ${ticket}`);
@@ -558,7 +560,7 @@ function parseBuildArgs(argv) {
   return args;
 }
 
-function resolveBuildGraphDir(worktree, options) {
+function resolveBuildGraphDir(worktree, options, { optional = false } = {}) {
   if (!options.graphDir && process.env.SHIPYARD_GRAPH_DIR)
     options = { ...options, graphDir: process.env.SHIPYARD_GRAPH_DIR };
   if (options.graphDir) {
@@ -573,6 +575,10 @@ function resolveBuildGraphDir(worktree, options) {
     catch (error) { buildFail('graph', error.message.replace(/^deliver-dispatch: /, '')); }
   }
   const resolved = resolveGraphDir([], worktree);
+  // A planning build that precedes the first decomposition has no graph to find: decompose
+  // is what creates it. Only that case may proceed graph-less; a graph that was named but is
+  // missing, or one that exists but is invalid, still refuses.
+  if (optional && resolved.how === 'none') return null;
   if (resolved.how === 'none' || !fs.existsSync(path.join(resolved.dir, 'tickets.json'))) {
     buildFail('graph', `no canonical ticket graph found (looked in ${resolved.dir}); set SHIPYARD_GRAPH_DIR`);
   }
@@ -639,12 +645,34 @@ function validateBuildRequest(role, validator, request) {
   }
 }
 
+// The project root for a planning build with no graph. The project's own `.planning/` may sit
+// in the checkout or, for a linked worktree that keeps it untracked, in the repository that
+// owns the worktree; take the first of the two that has one.
+function graphlessProjectRoot(worktree) {
+  const candidates = [];
+  try { candidates.push(fs.realpathSync(git(worktree, ['rev-parse', '--show-toplevel']))); } catch { /* not a checkout */ }
+  try {
+    const common = git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    if (common) candidates.push(fs.realpathSync(path.dirname(common)));
+  } catch { /* no owning repository */ }
+  const root = candidates.find((candidate) => fs.existsSync(path.join(candidate, '.planning'))) || candidates[0];
+  if (!root) buildFail('worktree', `planning worktree ${worktree} is not inside a git repository`);
+  return root;
+}
+
 function planningBuildContext(options) {
   const cwd = options.cwd || process.cwd();
   let worktree;
   try { worktree = fs.realpathSync(cwd); }
   catch { buildFail('worktree', `planning worktree ${cwd} does not exist`); }
-  const graphDir = resolveBuildGraphDir(worktree, options);
+  const graphDir = resolveBuildGraphDir(worktree, options, { optional: true });
+  if (graphDir === null) {
+    const projectRoot = graphlessProjectRoot(worktree);
+    return {
+      worktree, graphless: true, graph: { tickets: {} }, graphRef: null, projectRoot,
+      graphDir: path.join(projectRoot, '.planning', 'graph'),
+    };
+  }
   const graph = readJsonBounded(path.join(graphDir, 'tickets.json'));
   if (!object(graph) || !object(graph.tickets)) {
     buildFail('graph', `canonical ticket graph is invalid: ${path.join(graphDir, 'tickets.json')}`);
@@ -653,7 +681,7 @@ function planningBuildContext(options) {
   try { projectRoot = fs.realpathSync(path.resolve(graphDir, '..', '..')); }
   catch { buildFail('graph', `canonical project root is unavailable for ${graphDir}`); }
   const graphRef = planningSource(projectRoot, path.relative(projectRoot, path.join(graphDir, 'tickets.json')));
-  return { worktree, graphDir, graph, graphRef, projectRoot };
+  return { worktree, graphDir, graph, graphRef, projectRoot, graphless: false };
 }
 
 function planningSource(projectRoot, relativePath) {
@@ -730,10 +758,10 @@ function phasePlanningInputs(projectRoot, phase) {
   };
 }
 
-function decompositionPlanningInputs(projectRoot, inputId, phase) {
+function decompositionPlanningInputs(projectRoot, inputId, phase, { graphless = false } = {}) {
   const shared = optionalPlanningSources(projectRoot, ['.planning/REQUIREMENTS.md', '.planning/ROADMAP.md']);
   const phaseInputs = phasePlanningInputs(projectRoot, phase);
-  const graphRef = planningSource(projectRoot, path.join('.planning', 'graph', 'tickets.json'));
+  const graphRefs = graphless ? [] : [planningSource(projectRoot, path.join('.planning', 'graph', 'tickets.json'))];
   if (/^INV-/.test(inputId)) {
     const inputs = investigationPlanningInputs(projectRoot, inputId);
     const invRelative = path.join('.planning', 'investigations', inputId);
@@ -748,12 +776,12 @@ function decompositionPlanningInputs(projectRoot, inputId, phase) {
     } catch { /* The accepted investigation may not have a research fan-out yet. */ }
     const requiredRefs = [...inputs.sourceRefs, ...linkedAdr, ...phaseInputs.requiredRefs];
     const optionalRefs = [...optionalPlanningSources(projectRoot, [...topLevel, ...researchFiles]),
-      ...shared, ...phaseInputs.optionalRefs, graphRef];
+      ...shared, ...phaseInputs.optionalRefs, ...graphRefs];
     return { requiredRefs, optionalRefs, sourceRefs: [...requiredRefs, ...optionalRefs] };
   }
   const selected = adrPlanningInputs(projectRoot, inputId);
   const requiredRefs = [...selected.sourceRefs, ...phaseInputs.requiredRefs];
-  const optionalRefs = [...shared, ...phaseInputs.optionalRefs, graphRef];
+  const optionalRefs = [...shared, ...phaseInputs.optionalRefs, ...graphRefs];
   return { requiredRefs, optionalRefs, sourceRefs: [...requiredRefs, ...optionalRefs] };
 }
 
@@ -869,7 +897,9 @@ function buildPlanningRequest(args, options) {
   const context = planningBuildContext(options);
   if (args.role === 'research') {
     const { invPath, sourceRefs: investigationRefs } = investigationPlanningInputs(context.projectRoot, args.ticket);
-    const sourceRefs = [...investigationRefs, context.graphRef];
+    const sourceRefs = [...investigationRefs, ...(context.graphRef ? [context.graphRef] : [])];
+    // With no graph yet there is no ticket phase to inherit; the investigation precedes phase 1.
+    const phase = args.phase || (context.graphless ? 1 : latestGraphPhase(context.graph));
     const requiredRefs = investigationRefs.filter((source) => ['PROBLEM.md', 'RESEARCH-CONTRACT.md', 'DECISIONS.md']
       .includes(path.basename(source.path)));
     const requiredPaths = new Set(requiredRefs.map((source) => source.path));
@@ -896,7 +926,6 @@ function buildPlanningRequest(args, options) {
       }),
     }));
     if (args.runtime === 'claude') {
-      const phase = latestGraphPhase(context.graph);
       const request = {
         schema: claudeHost.REQUEST_SCHEMA,
         scope: {
@@ -941,7 +970,7 @@ function buildPlanningRequest(args, options) {
       scope: {
         run_id: `deliver-build-research-${crypto.randomUUID()}`,
         ticket: args.ticket,
-        phase: latestGraphPhase(context.graph),
+        phase,
         worktree: context.projectRoot,
         runtime: 'codex',
         provider: 'openai',
@@ -968,7 +997,7 @@ function buildPlanningRequest(args, options) {
     return request;
   }
 
-  const inputs = decompositionPlanningInputs(context.projectRoot, args.ticket, args.phase);
+  const inputs = decompositionPlanningInputs(context.projectRoot, args.ticket, args.phase, { graphless: context.graphless });
   const sourceRefs = inputs.sourceRefs;
   const prompt = planningPrompt({
     operation: 'decomposition', inputId: args.ticket, phase: args.phase, sourceRefs,

@@ -99,7 +99,11 @@ Read `.planning/investigations/` (may not exist):
    canonical graph and investigation files with
    `deliver-dispatch.cjs build research <INV-id>`. The builder reads
    `PROBLEM.md`, `RESEARCH-CONTRACT.md`, `DECISIONS.md`, and the canonical
-   ticket graph, then attaches a verified context packet with required source
+   ticket graph when the project has one. A repository's first investigation
+   has none, because decompose creates it: the builder then works from the
+   investigation files alone and scopes the request to phase 1 (pass
+   `--phase <N>` to choose another). A graph that is named but missing, or
+   that exists but is invalid, still refuses. The builder attaches a verified context packet with required source
    content and digest-bound optional references. The packet has an explicit
    empty backlog; when optional file bodies exceed the token ceiling, it keeps
    their paths and hashes and the researcher reads only relevant files on
