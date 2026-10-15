@@ -10,7 +10,7 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 const SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/phase-integrator-preflight.cjs');
 const pre = require(SCRIPT);
 
-const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-'));
+const ROOT = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-')));
 const ENV = { ...process.env, HOME: ROOT, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(ROOT, 'gitconfig'),
   GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 fs.writeFileSync(ENV.GIT_CONFIG_GLOBAL, '');
@@ -213,6 +213,42 @@ test('verify refuses a changed ticket set, a mismatched digest, a tampered proof
   assert.throws(() => pre.verifyProof({ proofFile, worktree: f.wt }), /not at the proof-pinned epic/);
   git(f.wt, 'reset', '--quiet', '--hard', 'HEAD~1');
   assert.throws(() => pre.verifyProof({ proofFile, worktree: f.wt }), /moved since the proof/);
+});
+
+test('focused semantic scope retains every current member and refuses a hidden unmerged contributor', () => {
+  const f = fixture();
+  const input = { phase: '41', graphDir: f.graphDir, worktree: f.wt,
+    semanticTicketSet: ['T-41-01'], reviewMode: 'incremental' };
+  assert.deepStrictEqual(pre.preflight(input, stubs(f)).ticket_set.map(entry => entry.id), ['T-41-01', 'T-41-02']);
+  f.prs['T-41-02'].mergedAt = null; f.prs['T-41-02'].state = 'OPEN';
+  assert.throws(() => pre.preflight(input, stubs(f)), /T-41-02 has no merged PR/);
+});
+
+test('proof admission rechecks complete live branch, base, HEAD, merge and graph membership', () => {
+  const edits = [
+    [f => { f.prs['T-41-02'].headRefName = 'ticket/foreign'; }, /no merged PR|head branch/],
+    [f => { f.prs['T-41-02'].baseRefName = 'main'; }, /targets main/],
+    [f => { f.prs['T-41-02'].headRefOid = 'a'.repeat(40); }, /complete current/],
+    [f => { f.prs['T-41-02'].mergeCommit.oid = 'b'.repeat(40); }, /not an ancestor/],
+    [f => { fs.writeFileSync(path.join(f.wt, PLAN_DIR, '41-03-PLAN.md'), 'new contributor'); }, /does not match/],
+  ];
+  for (const [edit, pattern] of edits) {
+    const f = fixture(), options = stubs(f), proof = run(f, options);
+    const proofFile = path.join(f.dir, 'current-proof.json'); fs.writeFileSync(proofFile, JSON.stringify(proof));
+    assert.strictEqual(pre.verifyProof({ worktree: f.wt, proofFile }, options).proof_digest, proof.proof_digest);
+    edit(f);
+    assert.throws(() => pre.verifyProof({ worktree: f.wt, proofFile }, options), pattern);
+  }
+});
+
+test('complete membership refuses graph changes while live PRs are being read', () => {
+  const f = fixture(), options = stubs(f), get = options.getPullRequest;
+  options.getPullRequest = input => {
+    const live = get(input);
+    fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), JSON.stringify({ tickets: { 'T-41-01': f.tickets['T-41-01'] } }));
+    return live;
+  };
+  refuses(f, /graph or delivery membership changed/, options);
 });
 
 done();

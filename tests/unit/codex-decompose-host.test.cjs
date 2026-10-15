@@ -2518,7 +2518,23 @@ const containmentMutations = {
   lease(s, r) { r.lease_epoch++; },
   leaseIdentity(s, r) { r.containment_lease_sha256 = '0'.repeat(64); },
   leaseFile(s, r) { r.writer_lease_file += '-other'; },
-  launchTime(s, r) { r.launched_at = '2026-10-08T00:00:00.000Z'; },
+  launchTime(s, r) {
+    const original = new Date(r.launched_at);
+    const originalMs = original.getTime();
+    assert.ok(Number.isFinite(originalMs));
+    const nativeDay = date => [date.getFullYear(), date.getMonth(), date.getDate()];
+    let changed = new Date(originalMs + 1);
+    if (nativeDay(changed).some((value, index) => value !== nativeDay(original)[index])) {
+      changed = new Date(originalMs - 1);
+    }
+    assert.ok(Number.isFinite(changed.getTime()));
+    assert.notEqual(changed.getTime(), originalMs);
+    assert.equal(Math.abs(changed.getTime() - originalMs), 1);
+    assert.deepEqual(nativeDay(changed), nativeDay(original));
+    const changedIso = changed.toISOString();
+    assert.notEqual(changedIso, r.launched_at);
+    r.launched_at = changedIso;
+  },
   snapshot(s, r) { r.tree_snapshot.digests['forged'] = '0'.repeat(64); },
   legacy(s, r) { delete r.containment_baseline; },
   payload(s, r) { alterProtectedContainment(s, r, e => { e.payload.snapshot.head = '0'.repeat(40); }); },

@@ -49,6 +49,34 @@ const contextBuilder = require('../../plugins/delivery-pipeline/scripts/codex-ar
 const { TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, cleanupJudgment } = require('./helpers/codex-arch-review-fixtures.cjs');
 
 
+test('focused selector includes uncited governing modules and companions, excluding unrelated bodies', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'focused-selection-')));
+  try {
+    write(root, '.planning/architecture/ADR-101-governing.md', '# ADR-101\nGoverns `src/payments/`.\n');
+    write(root, '.planning/architecture/ADR-101-INTERFACES.md', '# Contract\nPayment interface.\n');
+    write(root, '.planning/architecture/ADR-102-unrelated.md', '# ADR-102\nUnrelated domain.\n');
+    const selected = contextBuilder.selectFocusedArchitecture({ root, changedPaths: ['src/payments/api.cjs'] });
+    assert.deepEqual(selected.refs.map(ref => ref.path), [
+      '.planning/architecture/ADR-101-INTERFACES.md', '.planning/architecture/ADR-101-governing.md']);
+    assert.equal(selected.inventory.find(ref => ref.path.includes('102')).selected, false);
+    assert.ok(selected.inventory.every(ref => /^[a-f0-9]{64}$/.test(ref.sha256) && ref.reasons.length));
+    assert.throws(() => contextBuilder.selectFocusedArchitecture({ root, changedPaths: [],
+      plans: [{ content: 'ADR-999' }] }), /required architecture record is missing/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('focused change inventory preserves binary, deletion and exact rename paths', () => {
+  const inventory = contextBuilder.focusedChangeInventory(
+    'R100\0src/old name.cjs\0src/new\nname.cjs\0D\0config/old.json\0A\0assets/logo.bin\0',
+    '0\t0\t\0src/old name.cjs\0src/new\nname.cjs\0' + '5\t0\tconfig/old.json\0-\t-\tassets/logo.bin\0');
+  assert.equal(inventory[0].old_path, 'src/old name.cjs');
+  assert.equal(inventory[0].new_path, 'src/new\nname.cjs');
+  assert.equal(inventory[1].new_path, null);
+  assert.equal(inventory[2].binary, true);
+  assert.equal(inventory[2].old_path, null);
+  assert.throws(() => contextBuilder.focusedChangeInventory('M\0src/missing.cjs\0', ''), /lacks statistics/);
+});
+
 test('Codex arch-review builds and binds a complete graph- and PR-authenticated packet', () => {
   const f = fixture();
   try {
@@ -75,7 +103,8 @@ test('Codex arch-review builds and binds a complete graph- and PR-authenticated 
     });
     assert.match(result.launch.context.prompt, /reviewed implementation change/);
     assert.match(result.launch.context.prompt, /The judge must review the exact live PR diff and this decision/);
-    assert(result.evidence.selected_refs.some((ref) => ref.path === planPath()));
+    assert.equal(result.prepared.packet.review_contract, contextBuilder.FOCUSED_CONTRACT);
+    assert(!result.evidence.selected_refs.some((ref) => ref.path === planPath()));
     assert(result.evidence.selected_refs.some((ref) => ref.path === '.planning/architecture/ADR-014-host-bound-review.md'));
     assert.equal(Object.isFrozen(result.prepared), true);
     assert.equal(Object.isFrozen(result.prepared.packet.required_refs[0]), true);
@@ -85,6 +114,40 @@ test('Codex arch-review builds and binds a complete graph- and PR-authenticated 
   }
 });
 
+
+test('architecture collector and authenticated reader retain every duplicate governing obligation', () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'unique-reader-')));
+  const api = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  try {
+    const originalPath = '.planning/architecture/ADR-014-host-bound-review.md';
+    const duplicatePath = '.planning/architecture/ADR-015-duplicate-governing.md';
+    write(f.root, duplicatePath, fs.readFileSync(path.join(f.root, originalPath), 'utf8'));
+    git(f.root, ['add', '.']); git(f.root, ['commit', '-m', 'fixture: duplicate governing source']);
+    f.pr.headRefOid = git(f.root, ['rev-parse', 'HEAD']);
+    const result = prepared(f);
+    const encoded = api.encodeUniqueContent(result.prepared.packet);
+    const original = result.prepared.packet.refs.find(ref => ref.path === originalPath);
+    const duplicate = result.prepared.packet.refs.find(ref => ref.path === duplicatePath);
+    assert.equal(original.content, duplicate.content);
+    assert.equal(encoded.dictionary.filter(entry => entry.sha256 === original.sha256).length, 1);
+    assert.equal(encoded.obligations.filter(ref => ref.content_sha256 === original.sha256).length, 2);
+    const input = contextBuilder.prepareFileInput({ worktree: f.root, ticket: TICKET, phase: 38 },
+      JSON.stringify(encoded), { role: 'arch-review', dispatchId: 'unique-content-reader', storageRoot: storage,
+        binding: { packet_digest: result.prepared.packet.digest } });
+    const checked = contextBuilder.verifyFileInput(input);
+    assert.deepEqual(api.decodeUniqueContent(JSON.parse(Buffer.concat(checked.material).toString())),
+      api.decodeUniqueContent(encoded));
+    assert(checked.chunk_reads > 0);
+    assert.equal(fs.readFileSync(path.join(f.root, originalPath), 'utf8'), original.content);
+    const broken = JSON.parse(JSON.stringify(encoded)); broken.obligations.pop();
+    assert.throws(() => contextBuilder.prepareFileInput({ worktree: f.root, ticket: TICKET, phase: 38 },
+      JSON.stringify(broken), { role: 'arch-review', dispatchId: 'missing-obligation', storageRoot: storage,
+        binding: { packet_digest: result.prepared.packet.digest } }));
+    write(f.root, duplicatePath, 'changed after collection');
+    assert.throws(() => contextBuilder.verifyFileInput(input));
+  } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }
+});
 
 test('Codex arch-review refuses caller prompts and caller-selected signals', () => {
   const f = fixture();
@@ -235,7 +298,7 @@ function registerAggregateRoster(f, original, graphDir, storage) {
     state: raw.tickets || raw, phase: 38, repository: git(f.root, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
     branch: f.pr.headRefName, pr: f.pr.number, head: f.head, base: f.base });
   const pins = role.authenticatedArchivePins(f.root);
-  const inventory = { rows: [{ worktree: f.root, ticket: TICKET,
+  const inventory = { rows: [{ worktree: f.root, ticket: f.ticket || TICKET,
     dispatch_id: original.result.receipt.dispatch_id, receipt: original.result.receipt,
     receipt_store: path.join(f.storage, 'receipts'), pins }] };
   const inventoryPath = path.join(storage, 'phase-inventory.json');
@@ -244,9 +307,72 @@ function registerAggregateRoster(f, original, graphDir, storage) {
     expectedInventoryDigest: require('node:crypto').createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
 }
 
+function canonicalReviewMember(f, aggregate = false) {
+  const ticket = 'T-38-01';
+  const branch = 'ticket/' + ticket;
+  const graphPath = '.planning/graph/tickets.json';
+  const statePath = '.planning/graph/delivery-state.json';
+  const graph = JSON.parse(fs.readFileSync(path.join(f.root, graphPath)));
+  const state = JSON.parse(fs.readFileSync(path.join(f.root, statePath)));
+  graph.tickets[ticket] = { ...graph.tickets[TICKET], id: ticket, branch };
+  delete graph.tickets[TICKET];
+  state[ticket] = state[TICKET]; delete state[TICKET];
+  if (aggregate) {
+    graph.tickets[ticket].epic = 'epic/38-codex-arch-review';
+    graph.tickets['T-38-02'] = { ...graph.tickets[ticket], id: 'T-38-02',
+      plan: '.planning/phases/38-codex-arch-review/38-02-PLAN.md', branch: 'ticket/T-38-02-corrective',
+      depends_on: [ticket] };
+    write(f.root, graph.tickets['T-38-02'].plan, '# Corrective member\nADR-014\n');
+  }
+  write(f.root, graphPath, JSON.stringify(graph));
+  write(f.root, statePath, JSON.stringify(state));
+  git(f.root, ['branch', '-m', branch]);
+  git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'fixture: canonical original review member']);
+  f.ticket = ticket; f.head = git(f.root, ['rev-parse', 'HEAD']);
+  Object.assign(f.pr, { headRefName: branch, headRefOid: f.head,
+    title: 'feat(' + ticket + '): change reviewed source', body: 'Implements ' + ticket + '.' });
+  return ticket;
+}
+
+function assertArchitectureIdentity(input, value) {
+  const identity = contextBuilder.reviewProgressIdentity(input);
+  const prepared = value.prepared;
+  const members = prepared.binding ? prepared.binding.ticketSet.map(record => record.id) : [prepared.ticket];
+  const membership = prepared.binding?.membership
+    || require('node:crypto').createHash('sha256').update(JSON.stringify(members)).digest('hex');
+  assert.equal(input.manifest.role, 'arch-review');
+  assert.equal(input.manifest.binding.packet_digest, prepared.packet.digest);
+  assert.equal(identity.role, 'arch-review');
+  assert.equal(identity.head, prepared.canonical.head);
+  assert.equal(input.manifest.snapshot.head, prepared.packet.pr.head);
+  assert.equal(identity.base, prepared.baseCommit);
+  assert.equal(identity.base_ref, prepared.base);
+  assert.equal(identity.merge_base, prepared.packet.diff.merge_base);
+  assert.equal(input.manifest.binding.merge_base_tree, prepared.mergeBaseTree);
+  assert.deepEqual(input.manifest.binding.retained_evidence, prepared.packet.retained_evidence || []);
+  assert.deepEqual(identity.ticket_set, members);
+  assert.equal(identity.ticket_set_digest, membership);
+  assert.deepEqual(input.manifest.binding.ticket_set, members);
+  assert.equal(input.manifest.binding.ticket_set_digest, membership);
+  const content = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const encoded = content.encodeUniqueContent(prepared.packet);
+  const checked = contextBuilder.verifyFileInput(input);
+  const bytes = (contextBuilder.isFocusedContext(value) ? checked.material[0] : Buffer.concat(checked.material)).toString('utf8');
+  assert.equal(bytes, JSON.stringify(encoded));
+  const actual = JSON.parse(bytes);
+  assert.equal(actual.dictionary_sha256, encoded.dictionary_sha256);
+  assert.equal(actual.obligations_sha256, encoded.obligations_sha256);
+  assert.deepEqual(actual.dictionary, JSON.parse(JSON.stringify(encoded.dictionary)));
+  assert.deepEqual(actual.obligations, JSON.parse(JSON.stringify(encoded.obligations)));
+  assert.deepEqual(actual.accounting, encoded.accounting);
+  assert.deepEqual(content.decodeUniqueContent(actual), content.decodeUniqueContent(encoded));
+  return identity;
+}
+
 for (const scenario of [
   { productBytes: 0, name: 'small packet' },
   { productBytes: 2600000, name: 'large packet' },
+  { instructionBytes: 900000, contextBytes: 250000, name: 'instruction-promoted aggregate packet' },
   { scoped: true, mutation: 'foreign', name: '1001 foreign families per worktree preserve current evidence' },
   { scoped: true, mutation: 'bytes', name: 'selected bytes refuse' },
   { scoped: true, mutation: 'membership', name: 'selected membership refuses' },
@@ -255,31 +381,35 @@ for (const scenario of [
   { scoped: true, mutation: 'roster', name: 'missing protected roster refuses public aggregate preparation' },
 ]) test((scenario.scoped ? 'phase-local archive scope: ' : 'fixture: ') +
     'public Codex host seals and consumes a complete aggregate phase architecture verdict (' + scenario.name + ')', async () => {
-  const { scoped = false, productBytes = 0, mutation } = scenario;
+  const { scoped = false, productBytes = 0, instructionBytes = 0, contextBytes = 0, mutation } = scenario;
+  const fileReview = Boolean(productBytes || instructionBytes);
   let restoreForeignGuard;
   const f = fixture();
-  const storage = fs.mkdtempSync(path.join(os.tmpdir(), 'phase-architecture-host-'));
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase-architecture-host-')));
   try {
+    const member = fileReview ? canonicalReviewMember(f, true) : TICKET;
+    if (contextBytes) {
+      write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', ADR + 'a'.repeat(contextBytes));
+      git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'fixture: complete promotion context']);
+      f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
+    }
     const originalTicketReview = await unitJudgment(f);
+    assert.equal(originalTicketReview.result.subject, member);
+    assert.equal(originalTicketReview.result.receipt.runtime_evidence.ticket, member);
     const graphDir = path.join(f.root, '.planning/graph');
     const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
-    graph.tickets[TICKET].epic = 'epic/38-codex-arch-review';
-    if (productBytes) {
-      graph.tickets['T-38-02'] = { ...graph.tickets[TICKET], id: 'T-38-02',
-        plan: '.planning/phases/38-codex-arch-review/38-02-PLAN.md', branch: 'ticket/T-38-02-corrective',
-        depends_on: [TICKET] };
-      write(f.root, graph.tickets['T-38-02'].plan, '# Corrective member\nADR-014\n');
-    }
+    graph.tickets[member].epic = 'epic/38-codex-arch-review';
+    if (fileReview) assert.deepEqual(Object.keys(graph.tickets).sort(), [member, 'T-38-02']);
     write(f.root, '.planning/graph/tickets.json', JSON.stringify(graph));
     write(f.root, '.planning/phases/38-codex-arch-review/SUMMARY.md', 'Original native obligations remain HOLD.');
-    git(f.root, ['switch', '-c', graph.tickets[TICKET].epic]);
+    git(f.root, ['switch', '-c', graph.tickets[member].epic]);
     if (productBytes) {
       write(f.root, 'complete-product.txt', 'COMPLETE PRODUCT HUNK\n'.repeat(Math.ceil(productBytes / 21)));
       git(f.root, ['add', 'complete-product.txt']);
     }
     git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'fixture: aggregate evidence']);
     f.head = git(f.root, ['rev-parse', 'HEAD']);
-    f.pr.headRefName = graph.tickets[TICKET].epic; f.pr.headRefOid = f.head;
+    f.pr.headRefName = graph.tickets[member].epic; f.pr.headRefOid = f.head;
     const request = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').build(
       ['arch-review', '38-codex-arch-review', '--phase', '38', '--pr', String(f.pr.number), '--runtime', 'codex'],
       { cwd: f.root, graphDir });
@@ -287,8 +417,10 @@ for (const scenario of [
     fs.writeFileSync(requestPath, JSON.stringify(request));
     const hostModule = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
     const parsed = hostModule.readRequestFile(requestPath);
-    const options = { graphDir, refreshGit: false, getPullRequest: () => f.pr };
+    const options = { graphDir, refreshGit: false, getPullRequest: () => f.pr,
+      ...(instructionBytes ? { inflightDispatchId: 'aggregate-instruction-fallback' } : {}) };
     const roster = registerAggregateRoster(f, originalTicketReview, graphDir, storage);
+    assert.equal(roster.records[0].ticket, member);
     if (mutation === 'roster') {
       fs.unlinkSync(roster.record_path);
       assert.throws(() => contextBuilder.prepare(parsed.scope, parsed.launch, options),
@@ -329,11 +461,20 @@ for (const scenario of [
     }
     let value;
     assert.doesNotThrow(() => { value = contextBuilder.prepare(parsed.scope, parsed.launch, options); });
+    const originalPacket = JSON.stringify(value.prepared.packet);
     const preparedInput = productBytes ? contextBuilder.admittedFileInput(value) : null;
-    if (preparedInput) assertFiniteFileSchedule(preparedInput, JSON.stringify(value.prepared.packet));
+    if (preparedInput) {
+      assertFiniteFileSchedule(preparedInput, JSON.stringify(require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').encodeUniqueContent(value.prepared.packet)));
+      assertArchitectureIdentity(preparedInput, value);
+      assert.deepEqual(value.prepared.binding.ticketSet.map(record => record.id), [member, 'T-38-02']);
+    }
+    if (instructionBytes) {
+      assert.ok(Buffer.byteLength(value.launch.context.prompt) < 1048576);
+      assert.equal(contextBuilder.admittedFileInput(value), null);
+    }
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: value.launch.signals });
-    const agentDir = path.join(storage, 'agents'); fs.mkdirSync(agentDir);
+    const agentDir = path.join(storage, 'native-home', 'agents'); fs.mkdirSync(agentDir, { recursive: true });
     const text = ['# shipyard-policy-id = "' + policy.POLICY.id + '"',
       '# shipyard-policy-version = "' + selected.policy_version + '"',
       '# shipyard-policy-hash = "' + selected.policy_hash + '"',
@@ -341,7 +482,7 @@ for (const scenario of [
       '# shipyard-policy-rung = "' + selected.rung + '"',
       'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"',
       'model = "' + selected.model + '"', 'model_reasoning_effort = "' + selected.effort + '"',
-      'sandbox_mode = "read-only"', "developer_instructions = '''", 'Judge the complete authenticated phase.', "'''", ''].join('\n');
+      'sandbox_mode = "read-only"', "developer_instructions = '''", 'Judge the complete authenticated phase.' + 'a'.repeat(instructionBytes), "'''", ''].join('\n');
     const digest = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
     fs.writeFileSync(path.join(agentDir, selected.agent_file), text);
     const agentManifest = path.join(agentDir, '.shipyard-manifest.json');
@@ -349,12 +490,29 @@ for (const scenario of [
       policy_version: selected.policy_version, policy_hash: selected.policy_hash,
       agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: digest(text) } }));
     const capabilities = { supportedModels: [selected.model], supportedEfforts: [selected.effort] };
-    if (productBytes) {
+    if (fileReview) {
       const installation = contextBuilder.admitInstalledLaunch(value, { agentDir, agentFile: selected.agent_file, agentManifest, capabilities });
       const installedInput = contextBuilder.admittedFileInput(value);
-      assertFiniteFileSchedule(installedInput, JSON.stringify(value.prepared.packet));
+      assertFiniteFileSchedule(installedInput, JSON.stringify(require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').encodeUniqueContent(value.prepared.packet)));
+      const installedIdentity = assertArchitectureIdentity(installedInput, value);
+      assert.equal(JSON.stringify(value.prepared.packet), originalPacket);
+      assert.ok(installedInput.manifest.binding.installed_files.some(pin => pin.path === selected.agent_file));
+      assert.equal(installedInput.manifest.binding.agent_sha256, digest(text));
+      assert.equal(installedInput.manifest.binding.capabilities_sha256, digest(JSON.stringify(capabilities)));
+      assert.deepEqual(value.prepared.binding.ticketSet.map(record => record.id), [member, 'T-38-02']);
+      assert.deepEqual(value.prepared.packet.ticket_set, value.prepared.binding.ticketSet);
+      assert.notEqual(installedIdentity.ticket_set_digest, digest(JSON.stringify(installedIdentity.ticket_set)));
+      if (preparedInput) {
+        const initialIdentity = assertArchitectureIdentity(preparedInput, value);
+        for (const field of ['repository', 'worktree', 'role', 'policy_hash', 'contract', 'head', 'head_tree',
+          'base', 'base_ref', 'merge_base', 'ticket_set', 'ticket_set_digest', 'dispatch_id', 'run_id', 'ticket', 'phase'])
+          assert.deepEqual(installedIdentity[field], initialIdentity[field]);
+        assert.deepEqual(contextBuilder.verifyFileInput(installedInput).material, contextBuilder.verifyFileInput(preparedInput).material);
+      } else {
+        assert.ok(installedInput.manifest.accounting.generated_instruction_bytes >= instructionBytes);
+        assert.ok(installedInput.input_bytes > 1048576);
+      }
       assert.notStrictEqual(installedInput, preparedInput);
-      assert.deepEqual(contextBuilder.verifyFileInput(installedInput).material, contextBuilder.verifyFileInput(preparedInput).material);
       assert.deepEqual(installation.capacity.accounting, installedInput.manifest.accounting);
     }
     const recorder = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs').createDurableRecorder(path.join(storage, 'receipts'));
@@ -372,8 +530,8 @@ for (const scenario of [
         write(f.root, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
         const records = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
           .trim().split('\n').map(line => JSON.parse(line));
-        const streamRecords = ['thread.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
-        streamRecords[0].thread_id = session; streamRecords[1].item.text = JSON.stringify(judgment);
+        const streamRecords = ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
+        streamRecords[0].thread_id = session; streamRecords[2].item.text = JSON.stringify(judgment);
         const stream = streamRecords.map(record => JSON.stringify(record)).join('\n') + '\n';
         const transcript = path.join(storage, 'transcript.jsonl'); fs.writeFileSync(transcript, stream);
         return { launch_id: 'codex-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
@@ -382,13 +540,28 @@ for (const scenario of [
             session_id: session, worktree: f.root, ticket: request.scope.ticket, phase: 38,
             transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: digest(stream) } } };
       } };
-    if (productBytes) host = aggregateRuntimeFixture({ host, parsed, storage, capabilities, recorder, selected, text,
-      inspect(packet) {
-        assert.ok(Buffer.byteLength(packet.diff.content) > 2553952);
+    let launchedInput;
+    host = aggregateRuntimeFixture({ host, parsed, storage, capabilities, recorder, selected, text, agentDir, agentManifest,
+      inspect(envelope, input) {
+        launchedInput = input;
+        assert.equal(input.manifest.role, 'arch-review');
+        assert.equal(input.manifest.snapshot.head, value.prepared.canonical.head);
+        assert.equal(input.manifest.binding.base, value.prepared.baseCommit);
+        assert.equal(input.manifest.binding.base_ref, value.prepared.base);
+        assert.equal(input.manifest.binding.merge_base, value.prepared.packet.diff.merge_base);
+        assert.equal(envelope.schema, 'shipyard.semantic-content.v1');
+        const content = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+        assert.deepEqual(envelope, JSON.parse(JSON.stringify(content.encodeUniqueContent(value.prepared.packet))));
+        const packet = content.decodeUniqueContent(envelope);
+        const expectedPacket = content.decodeUniqueContent(content.encodeUniqueContent(value.prepared.packet));
+        if (productBytes) assert.ok(Buffer.byteLength(packet.diff.content) > 2553952);
+        assert.deepEqual(packet.ticket_set.map(record => record.id), [member, 'T-38-02']);
         assert.deepEqual(packet.ticket_set, value.prepared.packet.ticket_set);
         assert.equal(packet.ticket_set.length, 2);
-        assert.ok(packet.refs.some(ref => ref.path.endsWith('38-02-PLAN.md')));
-        assert.deepEqual(packet.refs, value.prepared.packet.refs);
+        assert.deepEqual(packet.acceptance.map(item => item.path),
+          value.prepared.rows.map(item => item.row.plan));
+        assert.ok(packet.refs.some(ref => ref.path.endsWith('ADR-014-host-bound-review.md')));
+        assert.deepEqual(packet.refs, expectedPacket.refs);
         assert.deepEqual(packet.retained_evidence, value.prepared.packet.retained_evidence);
       } });
     let output = '';
@@ -398,6 +571,43 @@ for (const scenario of [
     assert.equal(result.subject, request.scope.ticket);
     assert(value.prepared.packet.retained_evidence.some(item => item.dispatch_id === originalTicketReview.result.receipt.dispatch_id));
     assert.notEqual(result.receipt.dispatch_id, originalTicketReview.result.receipt.dispatch_id);
+    if (contextBuilder.isFocusedContext(value)) {
+      assert.equal(result.receipt.runtime_evidence.focused_review.review_contract, contextBuilder.FOCUSED_CONTRACT);
+      assert.equal(result.result.review_completeness, 'complete');
+      assert.equal(result.receipt.runtime_evidence.input_consumption, undefined);
+      assert.equal(result.receipt.runtime_evidence.completed_source, undefined);
+      if (fileReview) {
+        assert.equal(launchedInput.manifest.binding.packet_digest, value.prepared.packet.digest);
+        assert.equal(result.receipt.runtime_evidence.input_bundle.manifest_sha256, digest(launchedInput.manifest_bytes));
+      }
+    } else if (fileReview) {
+      const launchedBundle = result.receipt.runtime_evidence.input_bundle;
+      const source = result.receipt.runtime_evidence.completed_source;
+      assert.ok(source, 'automatic aggregate final requires original completed-source custody');
+      assert.equal(source.new_physical_calls, 0);
+      assert.equal(source.semantic_credit, false);
+      assert.notEqual(source.original_dispatch_id, result.receipt.dispatch_id);
+      const probe = recorder.getVerifiedRecord(source.original_dispatch_id);
+      assert.equal(probe.subject_kind, 'phase');
+      assert.equal(probe.receipt.runtime_evidence.session_id, result.receipt.runtime_evidence.session_id);
+      assert.equal(probe.receipt.runtime_evidence.reader_capacity_probe.review_dispatch_id, result.receipt.dispatch_id);
+      assert.equal(probe.receipt.agent_file, selected.agent_file);
+      assert.equal(result.receipt.agent_file, selected.agent_file);
+      assert.equal(probe.receipt.agent_file_digest, digest(text));
+      assert.equal(result.receipt.agent_file_digest, digest(text));
+      const probeText = fs.readFileSync(probe.receipt.runtime_evidence.transcript.path, 'utf8').trim().split('\n')
+        .map(JSON.parse).find(record => record.item?.type === 'agent_message').item.text;
+      assert.equal(JSON.parse(probeText).probe_only, true);
+      assert.equal(Object.hasOwn(JSON.parse(probeText), 'verdict'), false);
+      assert.equal(launchedInput.manifest.snapshot.head, f.head);
+      assert.equal(launchedInput.manifest.binding.packet_digest, value.prepared.packet.digest);
+      assert.deepEqual(launchedInput.manifest.binding.ticket_set, [member, 'T-38-02']);
+      assert.equal(launchedInput.manifest.binding.ticket_set_digest, value.prepared.binding.membership);
+      assert.equal(result.receipt.runtime_evidence.input_consumption.manifest_sha256, launchedBundle.manifest_sha256);
+      assert.notEqual(result.receipt.runtime_evidence.session_id, originalTicketReview.result.receipt.runtime_evidence.session_id);
+      assert.equal(result.receipt.runtime_evidence.input_consumption.chunk_reads,
+        launchedInput.chunk_reads);
+    }
     const artifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
     const current = { worktreePath: f.root, pr: f.pr.number, head: f.head, headBranch: f.pr.headRefName,
       baseName: 'main', baseCommit: f.base, graphDir };
@@ -405,8 +615,13 @@ for (const scenario of [
     if (scoped) {
       assert.equal(value.prepared.packet.retained_evidence.length, 1);
       assert.equal(value.prepared.packet.retained_evidence[0].files.length, 3);
-      assert.deepEqual(value.prepared.packet.retained_evidence[0].receipt, originalTicketReview.result.receipt);
-      assert.notEqual(JSON.parse(value.prepared.packet.retained_evidence[0].files.find(pin => pin.path.endsWith(artifacts.MANIFEST_NAME)).content).head, f.head);
+      const retained = value.prepared.packet.retained_evidence[0];
+      assert.deepEqual(retained.files, roster.records[0].pins);
+      assert.equal(Object.hasOwn(retained, 'receipt'), false);
+      assert.ok(retained.files.every(pin => !Object.hasOwn(pin, 'content')));
+      assert.deepEqual(originalTicketReview.recorder.getVerifiedRecord(retained.dispatch_id).receipt, originalTicketReview.result.receipt);
+      const manifestPin = retained.files.find(pin => pin.path.endsWith(artifacts.MANIFEST_NAME));
+      assert.notEqual(JSON.parse(fs.readFileSync(path.join(retained.worktree, manifestPin.path))).head, f.head);
       const input = { worktreePath: f.root, role: 'arch-review', ticket: request.scope.ticket, pr: f.pr.number,
         base: 'refs/remotes/origin/main', ticketSet: value.prepared.binding.ticketSet,
         ticketSetDigest: value.prepared.binding.membership, boundaryStore: path.join(storage, 'receipts'),
@@ -417,13 +632,19 @@ for (const scenario of [
         x.input.io={execFileSync(exe,args,opts){if(exe==='gh')return JSON.stringify(x.pr);
           if(exe==='git'&&args.includes('fetch'))return '';return cp.execFileSync(exe,args,opts);}};
         const role=require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))});
-        if(x.verdict) require('node:assert/strict').equal(role.currentArchitectureVerdict(x.current).subject,x.input.ticket);
+        if(x.verdict) {
+          const refusals=[]; x.current.onCandidateRefusal=e=>refusals.push(e);
+          const result=role.currentArchitectureVerdict(x.current);
+          if(x.refused) { require('node:assert/strict').equal(result,null);
+            require('node:assert/strict').ok(refusals.some(e=>/selected|archive|family|pin|membership/i.test(e.message))); }
+          else require('node:assert/strict').equal(result.subject,x.input.ticket);
+        }
         else role.validateJudgmentManifest(x.input);
         require('node:assert/strict').equal(restore(),0);`;
-      const fresh = verdict => execFileSync(process.execPath, [...testAuthorityArgs, '-e', consumer], {
-        input: JSON.stringify({ input, current, pr: f.pr, verdict, foreignPaths }), stdio: ['pipe', 'pipe', 'pipe'] });
+      const fresh = (verdict, refused = false) => execFileSync(process.execPath, [...testAuthorityArgs, '-e', consumer], {
+        input: JSON.stringify({ input, current, pr: f.pr, verdict, refused, foreignPaths }), stdio: ['pipe', 'pipe', 'pipe'] });
       fresh(false); fresh(true);
-      const selectedDigest = artifacts.phaseArchitectureEvidenceDigest(value.prepared.packet.retained_evidence);
+      const selectedDigest = value.prepared.packet.retained_history_digest;
       if (mutation === 'foreign') {
         for (const root of [f.root, foreignPaths[1]]) {
           for (const name of fs.readdirSync(path.join(root, '.shipyard-role-artifacts')).filter(name => name.startsWith('foreign-'))) {
@@ -440,13 +661,15 @@ for (const scenario of [
         if (mutation === 'bytes') fs.appendFileSync(path.join(f.root, pin.path), 'changed selected bytes');
         else fs.writeFileSync(path.join(path.dirname(path.join(f.root, pin.path)), 'unexpected-member'), 'changed selected membership');
         assert.throws(() => fresh(false), /selected|archive|family|pin|membership/i);
-        assert.throws(() => fresh(true), /selected|archive|family|pin|membership/i);
-        assert.throws(() => artifacts.currentArchitectureVerdict(current), /selected|archive|family|pin|membership/i);
+        fresh(true, true);
+        const refusals = [];
+        assert.equal(artifacts.currentArchitectureVerdict({ ...current, onCandidateRefusal: error => refusals.push(error) }), null);
+        assert.ok(refusals.some(error => /selected|archive|family|pin|membership/i.test(error.message)));
         return;
       }
     }
 
-    if (productBytes) {
+    if (fileReview) {
       const program = `const assert=require('node:assert/strict'); const c=require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))});
         assert.equal(c.currentArchitectureVerdict(JSON.parse(process.argv[1])).subject,${JSON.stringify(request.scope.ticket)});`;
       execFileSync(process.execPath, [...testAuthorityArgs, '-e', program, JSON.stringify(current)]);
@@ -456,7 +679,7 @@ for (const scenario of [
     }
 
     assert.equal(artifacts.currentArchitectureVerdict({ ...current, head: 'f'.repeat(40) }), null);
-    fs.appendFileSync(path.join(f.root, '.planning/phases/38-codex-arch-review/SUMMARY.md'), '\nChanged evidence.');
+    fs.appendFileSync(path.join(f.root, '.planning/architecture/ADR-014-host-bound-review.md'), '\nChanged governing decision.');
     assert.equal(artifacts.currentArchitectureVerdict(current), null);
   } finally {
     if (restoreForeignGuard) assert.equal(restoreForeignGuard(), 0);
@@ -464,7 +687,75 @@ for (const scenario of [
   }
 });
 
-module.exports = { fixture, unitJudgment, cleanupJudgment, registerTests, registerCases, testAuthorityArgs };
+
+test('finite batch candidates reject serialized profiles and keep capacity separate from estimates', () => {
+  const reader = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  assert.equal(typeof reader.createReaderBatchProfile, 'function');
+  assert.throws(() => reader.createReaderBatchProfile({ chunk_bytes: 0, ranges_per_batch: 2 }),
+    error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+  assert.throws(() => reader.readBatchCli(['--read-batch', '/tmp/absent', '01', 'a'.repeat(64)]));
+  assert.throws(() => reader.readBatchCli(['--read-batch', '/tmp/absent', '0', 'a'.repeat(64), '--eval']));
+});
+
+
+test('finite batch CLI returns only its exact scheduled frames and enforces private immutable files', () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "finite batch ' custody-")));
+  const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+  try {
+    const parameters = { chunk_bytes: 8192, ranges_per_batch: 3,
+      candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+        instructions_sha256: sha('fixture instructions'), model: 'gpt-6.1-sol', effort: 'high', provider: 'openai' } };
+    const profile = contextBuilder.createReaderBatchProfile(parameters);
+    const scope = { worktree: f.root, ticket: TICKET, phase: 38 };
+    const options = { role: 'arch-review', dispatchId: 'finite-batch', storageRoot: storage, readerProfile: profile };
+    assert.throws(() => contextBuilder.prepareFileInput(scope, 'exact bytes', { ...options, readerProfile: {} }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    const foreignSource = contextBuilder.createReaderBatchProfile({ ...parameters,
+      candidate: { ...parameters.candidate, source_sha256: '0'.repeat(64) } });
+    assert.throws(() => contextBuilder.prepareFileInput(scope, 'complete', { ...options, readerProfile: foreignSource }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    assert.throws(() => contextBuilder.prepareFileInput(scope, Buffer.alloc(contextBuilder.FILE_LIMITS.material + 1), options),
+      error => error.code === 'CONTEXT_OVER_BOUND');
+    const tooManyRanges = contextBuilder.createReaderBatchProfile({ ...parameters, chunk_bytes: 1 });
+    assert.throws(() => contextBuilder.prepareFileInput(scope, 'x'.repeat(contextBuilder.FILE_LIMITS.reads + 1),
+      { ...options, readerProfile: tooManyRanges }), error => error.code === 'CONTEXT_OVER_BOUND');
+    const input = contextBuilder.prepareFileInput(scope, ['x'.repeat(8191) + '€' + 'é'.repeat(6000), 'short terminal €'], options);
+    const checked = contextBuilder.verifyFileInput(input);
+    assert.equal(input.manifest.schema, 'shipyard.host-file-input.v3');
+    assert.equal(input.input_bundle.transport.output_tokens, 10000);
+    assert.equal(checked.schedule.range_count, checked.chunk_reads);
+    assert.equal(checked.schedule.batch_count, input.manifest.batches.length);
+    assert.ok(checked.chunk_reads > checked.schedule.batch_count);
+    assert.throws(() => contextBuilder.requireReaderBatchCapacity(input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    const frames = [];
+    for (const batch of input.manifest.batches) {
+      const output = execFileSync('node', [input.manifest.transport.module_path, '--read-batch', input.input_bundle.manifest_path,
+        String(batch.index), input.manifest.transport.profile_sha256], { encoding: 'utf8' });
+      assert.equal(output, contextBuilder.batchOutput(input.manifest, checked.manifest_bytes, checked.material, batch.index));
+      const records = output.trim().split('\n').map(JSON.parse);
+      assert.equal(records[0].type, 'batch');
+      assert.equal(records.at(-1).type, 'terminal');
+      assert.equal(records[0].frame_count, batch.count);
+      assert.equal(records.length, batch.count + 2);
+      frames.push(...records.slice(1, -1));
+      assert.ok(contextBuilder.batchCommand(input.input_bundle, batch.index).includes("'\\''"));
+    }
+    assert.deepEqual(Buffer.concat(frames.map(frame => Buffer.from(frame.base64, 'base64'))),
+      Buffer.concat([checked.manifest_bytes, ...checked.material]));
+    for (const index of ['01', '-1', '1.0', String(Number.MAX_SAFE_INTEGER + 1), String(input.manifest.batches.length)])
+      assert.throws(() => contextBuilder.readBatchCli(['--read-batch', input.input_bundle.manifest_path, index, input.manifest.transport.profile_sha256]));
+    assert.throws(() => contextBuilder.readBatchCli(['--read-batch', input.input_bundle.manifest_path, '0', '0'.repeat(64)]));
+    const asset = input.manifest.assets[0];
+    fs.chmodSync(asset.path, 0o600);
+    assert.throws(() => contextBuilder.readBatchCli(['--read-batch', input.input_bundle.manifest_path,
+      String(input.manifest.batches.find(batch => input.manifest.ranges.slice(batch.start, batch.start + batch.count).some(range => range.ordinal === 0)).index),
+      input.manifest.transport.profile_sha256]));
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
+module.exports = { fixture, unitJudgment, cleanupJudgment, registerTests, registerCases, testAuthorityArgs,
+  canonicalReviewMember, registerAggregateRoster, aggregateRuntimeFixture };
 
 test('large complete architecture context is included once within final prompt capacity', () => {
   const f = fixture();
@@ -545,7 +836,7 @@ test('named review checkpoint remains an escalation signal', () => {
 
 test('a result after the terminal native completion cannot authorize judgment', async () => {
   const f = fixture(); f.resultAfterCompletion = true;
-  try { await assert.rejects(() => unitJudgment(f), /outside a completed native turn/); }
+  try { await assert.rejects(() => unitJudgment(f), /CLI final is outside its unique completed turn/); }
   finally { cleanupJudgment(f); }
 });
 
@@ -702,6 +993,9 @@ for (const dependency of ['plan-delivery.cjs', 'conveyor-scratch.cjs']) {
         fs.mkdirSync(path.join(installed, 'tests/fixtures/captured'), { recursive: true });
         fs.copyFileSync(path.resolve(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'),
           path.join(installed, 'tests/fixtures/captured/codex-agent-stream-exec.jsonl'));
+        for (const name of ['codex-agent-stream-parent.jsonl', 'codex-agent-stream-child.jsonl'])
+          fs.copyFileSync(path.resolve(__dirname, '../fixtures/captured', name),
+            path.join(installed, 'tests/fixtures/captured', name));
         const script = `const fs = require('node:fs'); const path = require('node:path');
           const assert = require('node:assert/strict');
           const { execFileSync } = require('node:child_process');
@@ -713,7 +1007,7 @@ for (const dependency of ['plan-delivery.cjs', 'conveyor-scratch.cjs']) {
           (async () => { try {
             if (stage === 'launch') {
               await assert.rejects(() => suite.unitJudgment(f, () => fs.appendFileSync(helper, '\\n// changed installed authority\\n')),
-                /installed launch source changed/);
+                /installed launch source changed|installed source or instructions changed/);
             } else {
               const completed = await suite.unitJudgment(f);
               const manifest = JSON.parse(fs.readFileSync(completed.result.artifact.ref));
@@ -1022,7 +1316,7 @@ function stableReceiptDigest(receipt) {
 }
 
 async function legacyAdmissionFixture(f) {
-  const first = await unitJudgment(f);
+  const first = await require('./helpers/codex-arch-review-fixtures.cjs').legacyUnitJudgment(f);
   const artifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
   const admission = { worktreePath: f.root, recorder: first.recorder, dispatchId: first.result.receipt.dispatch_id,
     expectedManifestDigest: first.result.artifact.digest,
@@ -1267,7 +1561,7 @@ for (const targetKind of ['original native transcript', 'complete reviewer evide
         fs.openSync = function(file, ...args) {
           const fd = open.call(fs, file, ...args);
           const target = targetKind === 'original native transcript'
-            ? String(file) === path.join(f.storage, 'transcript.jsonl') : String(file) === path.join(f.root, '.shipyard-arch-review-evidence.md');
+            ? String(file) === f.transcript : String(file) === path.join(f.root, '.shipyard-arch-review-evidence.md');
           if (target && !changed) { changed = true; fs.appendFileSync(file, 'unapproved growth'); }
           return fd;
         };
@@ -1295,7 +1589,7 @@ for (const targetKind of ['original native transcript', 'complete reviewer evide
         fs.lstatSync = function(file, ...args) {
           const stat = lstat.call(fs, file, ...args);
           const target = targetKind === 'original native transcript'
-            ? String(file) === path.join(f.storage, 'transcript.jsonl') : String(file) === path.join(f.root, '.shipyard-arch-review-evidence.md');
+            ? String(file) === f.transcript : String(file) === path.join(f.root, '.shipyard-arch-review-evidence.md');
           if (target && !replaced) {
             replaced = true; const replacement = String(file) + '.replacement';
             fs.writeFileSync(replacement, fs.readFileSync(file)); fs.renameSync(replacement, file);
@@ -1391,7 +1685,7 @@ test('two independently approved linked decision closures coexist across sealed 
     const secondRegistration = b.role.registerArchitectureAuthority(b.input);
     const second = await unitJudgment(other);
     assert.notEqual(a.role.architectureAuthorityPath(f.root, a.approval.source, a.approval.pins), secondRegistration.recordPath);
-    assert.deepEqual(a.role.authenticateArchitectureSources(reviews[0], f.root, first.value.prepared.packet.required_refs.filter(ref => ref.path !== planPath())), first.value.prepared.packet.source_authority);
+    assert.deepEqual(a.role.authenticateArchitectureSources(reviews[0], f.root, first.value.prepared.packet.source_authority.pins), first.value.prepared.packet.source_authority);
     assert.equal(first.value.prepared.packet.digest, originalDigest);
     for (const [fixture, sealed] of [[f, first], [other, second]]) {
       const input = { ...sealed.validationInput, recorder: undefined, io: undefined, boundaryStore: path.join(fixture.storage, 'receipts') };
@@ -1488,27 +1782,177 @@ test('fresh consumption refuses ignored archive members while preserving the ret
   } finally { cleanupJudgment(f); }
 });
 
-function aggregateRuntimeFixture({ host: fixtureHost, parsed, storage, capabilities, recorder, selected, text, inspect }) {
+function aggregateRuntimeFixture({ host: fixtureHost, parsed, storage, capabilities, recorder, selected, text, agentDir, agentManifest, inspect }) {
   const { EventEmitter } = require('node:events');
   const home = path.join(storage, 'native-home');
+  process.env.CODEX_HOME = home;
+  assert.equal(fs.realpathSync(agentDir), fs.realpathSync(path.join(home, 'agents')));
+  assert.equal(fs.realpathSync(agentManifest), path.join(fs.realpathSync(agentDir), '.shipyard-manifest.json'));
+  const installedManifestBytes = fs.readFileSync(agentManifest);
+  const installedAgentPath = path.join(agentDir, selected.agent_file);
+  assert.equal(fs.readFileSync(installedAgentPath, 'utf8'), text);
+  const installedAdapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs')
+    .createCodexDispatchAdapter({ agentsDir: agentDir, agentManifest, capabilities });
+  assert.equal(installedAdapter.validate(selected), true);
+  const batchSession = require('node:crypto').randomUUID();
+  let batchLaunches = 0, batchManifest;
   return require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').createCodexRuntimeHost({
-    scope: parsed.scope, capabilities, recorder, env: { CODEX_HOME: home },
+    scope: parsed.scope, capabilities, recorder, env: { CODEX_HOME: home }, agentDir, agentManifest,
     probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
     transcriptDir: path.join(storage, 'native-streams'),
     spawn(executable, args) {
+      assert.deepEqual(fs.readFileSync(agentManifest), installedManifestBytes,
+        'original probe and fresh final retain the same installed manifest');
+      assert.equal(fs.readFileSync(installedAgentPath, 'utf8'), text,
+        'original probe and fresh final retain the same installed instruction bytes');
+      assert.equal(args[args.indexOf('--model') + 1], selected.model);
+      assert.equal(args.find(arg => arg.startsWith('model_reasoning_effort=')),
+        'model_reasoning_effort=' + JSON.stringify(selected.effort));
       const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = 23001;
       let stdin = '';
       child.stdin = { write(value) { stdin += value; }, end() {
         try {
-          assert.ok(stdin.startsWith('Judge the complete authenticated phase.\n\n'));
+          const focusedFields = /^Repeat these focused subject fields: (.+)$/m.exec(stdin);
+          if (focusedFields) {
+            assert.equal(++batchLaunches, 1, 'focused architecture has one original launch and no capacity probe');
+            const binding = JSON.parse(focusedFields[1]);
+            const manifestMatch = /^INPUT_MANIFEST=(.*)$/m.exec(stdin);
+            let packet;
+            if (manifestMatch) {
+              const manifestPath = manifestMatch[1], raw = fs.readFileSync(manifestPath), manifest = JSON.parse(raw);
+              const stat = fs.statSync(manifestPath);
+              const descriptor = { review_contract: contextBuilder.FOCUSED_CONTRACT, manifest_path: manifestPath, manifest_sha256: require('node:crypto').createHash('sha256').update(raw).digest('hex'),
+                total_bytes: manifest.accounting.material_bytes, asset_count: manifest.assets.length,
+                chunk_bytes: manifest.chunk_bytes, max_chunk_reads: manifest.max_chunk_reads,
+                manifest_identity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode'].map(key => [key, stat[key]])) };
+              const checked = contextBuilder.verifyFileInput(descriptor, { sealed: true });
+              const envelope = JSON.parse(checked.material[0]); inspect(envelope, checked);
+              packet = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(envelope);
+            } else {
+              const encoded = stdin.split('<AUTHENTICATED_CONTEXT_PACKET>')[1].split('</AUTHENTICATED_CONTEXT_PACKET>')[0].trim();
+              packet = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(JSON.parse(encoded));
+            }
+            const result = { ...binding, id: parsed.scope.ticket, pr: packet.pr.number, head: packet.pr.head,
+              base_tree: packet.diff.merge_base_tree, review_completeness: 'complete', limitations: [], unresolved_sources: [],
+              verdict: 'conform', summary: 'Independent fixture focused aggregate judgment.', findings: [], blocking_count: 0,
+              ticket_set: packet.ticket_set, ticket_set_digest: packet.ticket_set_digest,
+              context_digest: packet.digest, launch_digest: stdin.match(/launch_digest=([a-f0-9]{64})/)[1],
+              evidence_markdown: 'Complete unit aggregate review.' };
+            write(parsed.scope.worktree, '.shipyard-arch-review-evidence.md', result.evidence_markdown);
+            const resultText = JSON.stringify(result);
+            const native = require('./helpers/codex-arch-review-fixtures.cjs').focusedNativeSession({ session: batchSession,
+              worktree: parsed.scope.worktree, model: selected.model, effort: selected.effort, text: resultText, prompt: stdin });
+            const now = new Date(), directory = path.join(home, 'sessions', String(now.getFullYear()),
+              String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+            fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, batchSession + '.jsonl'), native);
+            const templates = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
+              .trim().split('\n').map(JSON.parse);
+            const cli = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
+              .map(type => structuredClone(templates.find(row => row.type === type)));
+            cli[0].thread_id = batchSession; cli[2].item.text = resultText;
+            process.nextTick(() => { child.stdout.emit('data', Buffer.from(cli.map(JSON.stringify).join('\n') + '\n')); child.emit('close', 0, null); });
+            return;
+          }
           const manifestPath = /^INPUT_MANIFEST=(.*)$/m.exec(stdin)[1];
           const manifest = JSON.parse(fs.readFileSync(manifestPath)); const stat = fs.statSync(manifestPath);
+          if (manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
+            const index = ++batchLaunches;
+            assert.ok(index <= 2, 'one original aggregate probe and one fresh final');
+            const instructions = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').generatedInstructions(text);
+            const prompt = index === 1 ? stdin.slice(instructions.length + 2).trim() : stdin.trim();
+            if (index === 1) {
+              assert.ok(stdin.startsWith(instructions + '\n\n'));
+              assert.equal(args.includes('resume'), false);
+              batchManifest = fs.readFileSync(manifestPath);
+            } else {
+              assert.ok(args.includes('resume'));
+              assert.ok(args.includes(batchSession));
+              assert.deepEqual(fs.readFileSync(manifestPath), batchManifest);
+            }
+            const hash = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+            const descriptor = { manifest_path: manifestPath, manifest_sha256: hash(fs.readFileSync(manifestPath)),
+              total_bytes: manifest.accounting.material_bytes, asset_count: manifest.assets.length,
+              chunk_bytes: manifest.chunk_bytes, max_chunk_reads: manifest.max_chunk_reads, transport: manifest.transport,
+              logical_range_count: manifest.ranges.length, physical_batch_count: manifest.batches.length,
+              manifest_identity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode'].map(key => [key, stat[key]])) };
+            const checked = contextBuilder.verifyFileInput(descriptor, { sealed: true });
+            const envelope = JSON.parse(Buffer.concat(checked.material)); inspect(envelope, checked);
+            const packet = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(envelope);
+            const echo = { input_manifest_sha256: descriptor.manifest_sha256, input_material_bytes: descriptor.total_bytes,
+              input_asset_count: descriptor.asset_count, input_chunk_reads: checked.chunk_reads,
+              input_batch_reads: manifest.batches.length, input_profile_sha256: manifest.transport.profile_sha256 };
+            const result = index === 1 ? { ...echo, probe_only: true, summary: 'Original capacity observation only.' }
+              : { ...echo, id: parsed.scope.ticket, pr: packet.pr.number, head: manifest.snapshot.head,
+                base_tree: packet.diff.merge_base_tree, verdict: 'conform', summary: 'Fresh unit aggregate judgment.',
+                findings: [], blocking_count: 0, ticket_set: packet.ticket_set,
+                ticket_set_digest: manifest.binding.ticket_set_digest, context_digest: manifest.binding.packet_digest,
+                launch_digest: prompt.match(/launch_digest=([a-f0-9]{64})/)[1], evidence_markdown: 'Complete unit aggregate review.' };
+            const resultText = JSON.stringify(result), turn = 'aggregate-batch-' + index;
+            const captured = name => fs.readFileSync(path.join(__dirname, '../fixtures/captured', name), 'utf8')
+              .split('\n').filter(line => line && !line.startsWith('{"shipyard_fixture"')).map(JSON.parse);
+            const parent = captured('codex-agent-stream-parent.jsonl'), childTemplates = captured('codex-agent-stream-child.jsonl');
+            const clone = (records, predicate) => { const record = records.find(predicate); assert.ok(record); return structuredClone(record); };
+            const response = (type, fields) => {
+              const record = clone(childTemplates, row => row.type === 'response_item' && row.payload?.type === type
+                && (!fields.role || row.payload.role === fields.role)
+                && (!fields.phase || row.payload.phase === fields.phase));
+              Object.assign(record.payload, fields); record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+              return record;
+            };
+            const message = (role, body) => {
+              const record = response('message', { role, ...(role === 'assistant' ? { phase: 'final_answer' } : {}) });
+              record.payload.content = [{ ...record.payload.content[0], text: body }];
+              return record;
+            };
+            const event = (type, fields = {}) => {
+              const record = clone(parent, row => row.type === 'event_msg' && row.payload?.type === type);
+              Object.assign(record.payload, { turn_id: turn, ...fields }); return record;
+            };
+            const metadata = clone(parent, row => row.type === 'session_meta');
+            Object.assign(metadata.payload, { id: batchSession, session_id: batchSession, cwd: parsed.scope.worktree,
+              runtime_workspace_roots: [parsed.scope.worktree] });
+            const context = clone(childTemplates, row => row.type === 'turn_context');
+            Object.assign(context.payload, { turn_id: turn, root_turn_id: turn, model: selected.model, effort: selected.effort,
+              cwd: parsed.scope.worktree, workspace_roots: [parsed.scope.worktree] });
+            context.payload.sandbox_policy.type = 'read-only';
+            Object.assign(context.payload.collaboration_mode.settings, { model: selected.model, reasoning_effort: selected.effort });
+            const reads = index === 1 ? manifest.batches.flatMap(batch => {
+              const call_id = turn + '-read-' + batch.index;
+              const args = ['--read-batch', manifestPath, String(batch.index), manifest.transport.profile_sha256];
+              const output = contextBuilder.readBatchCli(args);
+              assert.ok(Buffer.byteLength(output) <= 252 * 1024);
+              assert.equal(output, contextBuilder.batchOutput(manifest, checked.manifest_bytes, checked.material, batch.index));
+              if (batch.index === 0 || batch.index === manifest.batches.length - 1)
+                assert.equal(output, execFileSync(process.execPath, [manifest.transport.module_path, ...args],
+                  { encoding: 'utf8', maxBuffer: 252 * 1024 }));
+              return [response('custom_tool_call', { name: 'exec', call_id,
+                input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: contextBuilder.batchCommand(descriptor, batch.index), max_output_tokens: 10000 }) + '));' }),
+              response('custom_tool_call_output', { call_id, output: [
+                { type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:\n' },
+                { type: 'input_text', text: JSON.stringify({ exit_code: 0, output }) }] })];
+            }) : [];
+            const records = [...(index === 1 ? [metadata] : []), context,
+              ...(index === 1 ? [message('developer', instructions)] : []), message('user', prompt), event('task_started'),
+              ...reads, message('assistant', resultText), event('task_complete', { last_agent_message: resultText })];
+            const now = new Date();
+            const directory = path.join(home, 'sessions', String(now.getFullYear()), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+            fs.mkdirSync(directory, { recursive: true });
+            const nativePath = path.join(directory, batchSession + '.jsonl'), raw = records.map(JSON.stringify).join('\n') + '\n';
+            if (index === 1) fs.writeFileSync(nativePath, raw, { mode: 0o600 }); else fs.appendFileSync(nativePath, raw);
+            const templates = captured('codex-agent-stream-exec.jsonl');
+            const cli = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
+              .map(type => clone(templates, row => row.type === type));
+            cli[0].thread_id = batchSession; cli[2].item.text = resultText;
+            process.nextTick(() => { child.stdout.emit('data', Buffer.from(cli.map(JSON.stringify).join('\n') + '\n')); child.emit('close', 0, null); });
+            return;
+          }
+          assert.ok(stdin.startsWith(require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').generatedInstructions(text) + '\n\n'));
           const descriptor = { manifest_path: manifestPath, manifest_sha256: /^INPUT_MANIFEST_SHA256=(.*)$/m.exec(stdin)[1],
             total_bytes: manifest.accounting.material_bytes, asset_count: manifest.assets.length,
             chunk_bytes: manifest.chunk_bytes, max_chunk_reads: manifest.max_chunk_reads,
             manifest_identity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode'].map(key => [key, stat[key]])) };
           const checked = contextBuilder.verifyFileInput(descriptor, { sealed: true });
-          inspect(JSON.parse(Buffer.concat(checked.material)));
+          inspect(JSON.parse(Buffer.concat(checked.material)), checked);
           const digest = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
           const produced = fixtureHost.launchStatic({ model: selected.model, reasoning_effort: selected.effort,
             agent_file_digest: digest(text) }, { prompt: stdin, input_bundle: descriptor });
@@ -1516,21 +1960,41 @@ function aggregateRuntimeFixture({ host: fixtureHost, parsed, storage, capabilit
           const parent = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-parent.jsonl'), 'utf8')
             .split('\n').filter(line => line && !line.startsWith('{"shipyard_fixture"')).map(line => {
               const record = JSON.parse(line.replaceAll('<SESSION-2>', session));
-              if (record.type === 'turn_context') Object.assign(record.payload, { model: selected.model, effort: selected.effort });
+              if (record.type === 'session_meta') Object.assign(record.payload, {
+                session_id: session, cwd: parsed.scope.worktree, runtime_workspace_roots: [parsed.scope.worktree],
+              });
+              if (record.type === 'turn_context') {
+                Object.assign(record.payload, { model: selected.model, effort: selected.effort,
+                  cwd: parsed.scope.worktree, workspace_roots: [parsed.scope.worktree] });
+                record.payload.sandbox_policy.type = 'read-only';
+                Object.assign(record.payload.collaboration_mode.settings, {
+                  model: selected.model, reasoning_effort: selected.effort,
+                });
+              }
               return record;
             });
           const assets = [{ path: manifestPath, bytes: checked.manifest_bytes },
             ...manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
-          const response = parent.find(record => record.type === 'response_item');
-          const wrap = payload => ({ ...structuredClone(response), payload });
+          const childTemplates = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-child.jsonl'), 'utf8')
+            .split('\n').filter(Boolean).map(JSON.parse);
+          const turn = parent.find(record => record.payload?.type === 'task_started').payload.turn_id;
+          const wrap = (type, fields) => {
+            const record = structuredClone(childTemplates.find(record => record.type === 'response_item' && record.payload?.type === type));
+            Object.assign(record.payload, fields);
+            record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+            return record;
+          };
           const reads = [];
           let ordinal = 0;
           for (const asset of assets) for (let index = 0; index < Math.ceil(asset.bytes.length / manifest.chunk_bytes); index++) {
             const callId = 'fixture-read-' + ordinal++;
-            reads.push(wrap({ type: 'function_call', name: 'exec_command', call_id: callId,
-              arguments: JSON.stringify({ cmd: "dd if='" + asset.path + "' bs=" + manifest.chunk_bytes + ' skip=' + index + ' count=1 2>/dev/null | base64' }) }),
-            wrap({ type: 'function_call_output', call_id: callId,
-              output: JSON.stringify({ exit_code: 0, output: asset.bytes.subarray(index * manifest.chunk_bytes, (index + 1) * manifest.chunk_bytes).toString('base64') }) }));
+            const cmd = "dd if='" + asset.path + "' bs=" + manifest.chunk_bytes + ' skip=' + index + ' count=1 2>/dev/null | base64';
+            const output = wrap('custom_tool_call_output', { call_id: callId });
+            output.payload.output[0].text = 'Script completed\nWall time 0.1 seconds\nOutput:\n';
+            output.payload.output[1].text = JSON.stringify({ exit_code: 0,
+              output: asset.bytes.subarray(index * manifest.chunk_bytes, (index + 1) * manifest.chunk_bytes).toString('base64') });
+            reads.push(wrap('custom_tool_call', { name: 'exec', call_id: callId,
+              input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));' }), output);
           }
           const resultText = fs.readFileSync(produced.runtime_evidence.transcript.path, 'utf8').split('\n').filter(Boolean).map(JSON.parse).find(record => record.item?.type === 'agent_message').item.text;
           for (const record of parent) if (record.payload?.type === 'task_complete') record.payload.last_agent_message = resultText;
@@ -1549,20 +2013,28 @@ function aggregateRuntimeFixture({ host: fixtureHost, parsed, storage, capabilit
   });
 }
 
-function assertFiniteFileSchedule(input, material) {
+function assertFiniteFileSchedule(input, material, { requireMultipleManifestChunks = true } = {}) {
   assert.equal(contextBuilder.isPreparedFileInput(input), true);
   assert.throws(() => contextBuilder.verifyFileInput({ ...input }), /private producer authority/);
   const checked = contextBuilder.verifyFileInput(input);
   const bytes = fs.readFileSync(input.input_bundle.manifest_path);
   const count = Math.ceil(bytes.length / input.input_bundle.chunk_bytes);
-  assert.ok(count > 1, 'real producer manifest must span multiple chunks');
+  assert.ok(count >= 1, 'real producer manifest must contain complete bytes');
+  if (requireMultipleManifestChunks)
+    assert.ok(count > 1, 'large producer manifest must span multiple chunks');
   assert.ok(bytes.subarray(0, input.input_bundle.chunk_bytes).includes(Buffer.from('"manifest_bytes":' + bytes.length)));
   assert.equal(checked.manifest.accounting.manifest_bytes, bytes.length);
   assert.equal(checked.manifest.accounting.relay_bytes, Buffer.byteLength(input.prompt));
   assert.equal(checked.chunk_reads, count + checked.manifest.assets.reduce((sum, asset) => sum + asset.chunk_count, 0));
   assert.equal(input.input_bytes, Object.values(checked.manifest.accounting).reduce((sum, value) => sum + value, 0));
   assert.equal(input.inputTokens, Math.ceil(input.input_bytes / 4));
-  assert.equal(Buffer.concat(checked.material).toString(), material);
+  assert.equal((input.manifest.binding.review_contract === contextBuilder.FOCUSED_CONTRACT
+    ? checked.material[0] : Buffer.concat(checked.material)).toString(), material);
+  if (input.manifest.binding.review_contract === contextBuilder.FOCUSED_CONTRACT) {
+    assert.ok(input.manifest.sources.length > 0);
+    assert.ok(input.prompt.includes('Focused pinned input'));
+    return;
+  }
   assert.ok(input.prompt.includes('Math.ceil(accounting.manifest_bytes / chunk_bytes)'));
   assert.ok(input.prompt.includes('indices 0 through manifest_chunk_count - 1 before requesting any asset'));
   assert.ok(input.prompt.includes('indices 0 through asset.chunk_count - 1'));
@@ -1590,6 +2062,17 @@ for (const [role, changedPath] of [
     const input = f.create();
     write(f.f.root, changedPath, 'unauthorized mutation');
     assert.throws(() => contextBuilder.verifyFileInput(input), /current source or policy changed/);
+  } finally { f.clean(); }
+});
+
+for (const options of [
+  { chunkBytes: 128 * 1024 }, { chunkBytes: 256 * 1024 },
+  { readerCapacity: { contract: { chunk_bytes: 128 * 1024, output_budget_bytes: 256 * 1024 } } },
+]) test('larger reader refuses unmeasured size and serialized capacity authority', () => {
+  const f = fileInputFixture('x'.repeat(128 * 1024), options);
+  try {
+    assert.throws(f.create, error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    assert.deepEqual(fs.readdirSync(f.storage), []);
   } finally { f.clean(); }
 });
 
@@ -1712,14 +2195,318 @@ test('file snapshot accepts canonical graph bytes above the input manifest limit
   } finally { f.clean(); }
 });
 
+
+async function recordedBatchApplication(verified, input, root, cliRaw) {
+  const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const sha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  const receiptStore = path.join(root, 'measurement-receipts');
+  const recorder = boundaryModule.createDurableRecorder(receiptStore);
+  const cliFile = path.join(root, 'measurement-cli.jsonl');
+  fs.writeFileSync(cliFile, cliRaw, { mode: 0o600 });
+  const candidate = input.manifest.transport.candidate;
+  const args = ['exec', '--json', '--model', candidate.model,
+    '--config', 'model_reasoning_effort="' + candidate.effort + '"'];
+  const content = "developer_instructions = '''\nReview all required material.\n'''";
+  const evidence = {
+    schema: 'shipyard.codex-runtime-evidence.v1', version: 1, runtime: 'codex', provider: 'openai',
+    run_id: input.manifest.run_id, ticket: input.manifest.ticket, phase: input.manifest.phase,
+    worktree: input.manifest.snapshot.worktree, dispatch_id: input.manifest.dispatch_id,
+    session_id: verified.native_session_evidence.session_id, process_id: process.pid,
+    selection_source: 'codex-native-session-transcript', command: { executable: 'codex', args },
+    command_digest: sha(JSON.stringify(args)), native_session_evidence: verified.native_session_evidence,
+    input_transport: 'host-files', input_bundle: input.input_bundle,
+    input_consumption: { manifest_sha256: input.input_bundle.manifest_sha256 },
+    transcript: { path: cliFile, bytes: Buffer.byteLength(cliRaw), sha256: sha(cliRaw) },
+  };
+  const adapter = {
+    validateGeneratedAgent(resolution) {
+      return { valid: true, exists: true, content_verified: true, policy_hash: resolution.policy_hash,
+        agent_file: resolution.agent_file, agent_file_digest: sha(content), agent_file_content: content };
+    },
+    launchStatic(resolution) {
+      return { receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
+        dispatch_id: resolution.dispatch_id, launch_id: 'codex-' + evidence.session_id,
+        requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+        applied_model: candidate.model, applied_effort: candidate.effort,
+        observed_model: candidate.model, observed_effort: candidate.effort, policy_hash: policy.POLICY_HASH,
+        agent_file: resolution.agent_file, agent_file_digest: resolution.agent_file_digest,
+        runtime_evidence: evidence };
+    },
+  };
+  const result = await boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder })
+    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: input.manifest.dispatch_id },
+      { ticket: input.manifest.ticket });
+  assert.deepEqual(recorder.getVerifiedRecord(input.manifest.dispatch_id).receipt, result.receipt);
+  return { recorder, receipt: result.receipt };
+}
+
+test('installed v3 admission measures the finalized input and retains its private cached identity', async () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'installed-batch-')));
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+  try {
+    canonicalReviewMember(f);
+    write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', ADR + 'x'.repeat(1100000));
+    git(f.root, ['add', '-A']); git(f.root, ['commit', '-m', 'fixture: complete batch review material']);
+    f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
+    const agents = path.join(storage, 'agents'); fs.mkdirSync(agents);
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: {}, dispatch_id: 'installed-batch' });
+    const selection = { model: selected.model, effort: selected.effort, sandbox_mode: 'read-only' };
+    const agentText = [
+      '# shipyard-policy-id = "' + policy.POLICY.id + '"', '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
+      '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"', '# shipyard-policy-runtime = "codex"',
+      '# shipyard-policy-role = "arch-review"', '# shipyard-policy-rung = "' + selected.rung + '"',
+      'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"', 'model = "' + selected.model + '"',
+      'model_reasoning_effort = "' + selected.effort + '"', 'sandbox_mode = "read-only"',
+      "developer_instructions = '''", 'Review all required material.', "'''", '',
+    ].join('\n');
+    write(agents, selected.agent_file, agentText);
+    write(agents, 'manifest.json', JSON.stringify({ policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
+      policy_hash: policy.POLICY_HASH, agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: sha(agentText) } }));
+    const instructions = runtime.generatedInstructions(agentText);
+    const profile = contextBuilder.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
+      candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+        instructions_sha256: sha(instructions), model: selection.model, effort: selection.effort, provider: 'openai' } });
+    const value = contextBuilder.prepare({ ticket: f.ticket, phase: 38, worktree: f.root, run_id: 'installed-batch-run' },
+      { role: 'arch-review', context: {}, signals: {} }, { refreshGit: false,
+        graphDir: path.join(f.root, '.planning/graph'), getPullRequest: () => f.pr,
+        storageRoot: storage, inflightDispatchId: 'installed-batch', readerProfile: profile,
+        generatedInstructionBytes: Buffer.byteLength(instructions) + 2 });
+    const original = contextBuilder.admittedFileInput(value);
+    assert.equal(original.manifest.schema, 'shipyard.host-file-input.v3');
+    const admission = { agentDir: agents, agentFile: selected.agent_file, agentManifest: path.join(agents, 'manifest.json'),
+      capabilities: { supportedModels: [selection.model], supportedEfforts: [selection.effort] }, selection };
+    contextBuilder.admitInstalledLaunch(value, admission);
+    const candidate = contextBuilder.admittedFileInput(value);
+    assert.notStrictEqual(candidate, original);
+    assertArchitectureIdentity(candidate, value);
+    assert.equal(candidate.manifest.binding.agent_sha256, sha(agentText));
+    assert.equal(candidate.manifest.binding.capabilities_sha256, sha(JSON.stringify(admission.capabilities)));
+    assert.equal(candidate.manifest.accounting.generated_instruction_bytes, Buffer.byteLength(instructions) + 2);
+    assert.ok(candidate.manifest.binding.installed_files.some(pin => pin.path === 'codex-runtime-host.cjs'));
+    assert.throws(() => contextBuilder.requireReaderBatchCapacity(candidate), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    const directories = fs.readdirSync(storage).filter(name => name.startsWith('input-'));
+    const manifestBytes = fs.readFileSync(candidate.input_bundle.manifest_path);
+    contextBuilder.admitInstalledLaunch(value, admission);
+    assert.strictEqual(contextBuilder.admittedFileInput(value), candidate);
+    assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
+
+    const session = '77777777-7777-4777-8777-777777777777', turn = 'installed-capacity';
+    const fixtureRecords = name => fs.readFileSync(path.join(__dirname, '../fixtures/captured', name), 'utf8')
+      .split('\n').filter(line => line && !line.startsWith('{"shipyard_fixture"'))
+      .map(line => JSON.parse(line.replace(/<SESSION-\d+>|<TMP>/g, token => JSON.stringify(
+        token === '<TMP>' ? f.root : ['<SESSION-4>', '<SESSION-7>'].includes(token) ? turn : session).slice(1, -1))));
+    const parent = fixtureRecords('codex-agent-stream-parent.jsonl');
+    const child = fixtureRecords('codex-agent-stream-child.jsonl');
+    const template = (records, match) => {
+      const record = records.find(match); assert.ok(record, 'registered native record template is required');
+      return structuredClone(record);
+    };
+    const message = (role, text) => {
+      const record = template(child, record => record.type === 'response_item' && record.payload.type === 'message'
+        && record.payload.role === role && (role !== 'assistant' || record.payload.phase === 'final_answer'));
+      record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+      record.payload.content = [{ ...record.payload.content[0], text }];
+      return record;
+    };
+    const event = (type, extra = {}) => {
+      const record = template(child, record => record.type === 'event_msg' && record.payload.type === type);
+      Object.assign(record.payload, { turn_id: turn, ...extra });
+      if (record.payload.root_turn_id) record.payload.root_turn_id = turn;
+      return record;
+    };
+    const response = (type, fields) => {
+      const record = template(child, record => record.type === 'response_item' && record.payload.type === type);
+      Object.assign(record.payload, fields); record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+      return record;
+    };
+    const metadata = template(parent, record => record.type === 'session_meta');
+    Object.assign(metadata.payload, { id: session, session_id: session, cwd: f.root, runtime_workspace_roots: [f.root] });
+    const nativeContext = template(child, record => record.type === 'turn_context');
+    Object.assign(nativeContext.payload, { turn_id: turn, root_turn_id: turn, ...selection, cwd: f.root, workspace_roots: [f.root] });
+    nativeContext.payload.sandbox_policy.type = 'read-only';
+    Object.assign(nativeContext.payload.collaboration_mode.settings, { model: selection.model, reasoning_effort: selection.effort });
+    const checked = contextBuilder.verifyFileInput(candidate);
+    const reads = candidate.manifest.batches.flatMap(batch => {
+      const call_id = 'installed-batch-' + batch.index;
+      const args = ['--read-batch', candidate.input_bundle.manifest_path,
+        String(batch.index), candidate.manifest.transport.profile_sha256];
+      const output = contextBuilder.readBatchCli(args);
+      assert.ok(Buffer.byteLength(output) <= 252 * 1024);
+      assert.equal(output, contextBuilder.batchOutput(candidate.manifest, checked.manifest_bytes, checked.material, batch.index));
+      if (batch.index === 0 || batch.index === candidate.manifest.batches.length - 1)
+        assert.equal(output, execFileSync('node', [candidate.manifest.transport.module_path, ...args],
+          { encoding: 'utf8', maxBuffer: 252 * 1024 }));
+      return [response('custom_tool_call', { name: 'exec', call_id,
+        input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: contextBuilder.batchCommand(candidate.input_bundle, batch.index),
+          max_output_tokens: 10000 }) + '));' }),
+      response('custom_tool_call_output', { call_id, output: [
+        { type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:\n' },
+        { type: 'input_text', text: JSON.stringify({ exit_code: 0, output }) }] })];
+    });
+    const resultText = JSON.stringify({ input_manifest_sha256: candidate.input_bundle.manifest_sha256,
+      input_material_bytes: candidate.input_bundle.total_bytes, input_asset_count: candidate.input_bundle.asset_count,
+      input_chunk_reads: contextBuilder.verifyFileInput(candidate).chunk_reads,
+      input_batch_reads: candidate.manifest.batches.length, input_profile_sha256: candidate.manifest.transport.profile_sha256 });
+    const nativeRaw = [metadata, nativeContext, message('developer', instructions), message('user', candidate.prompt),
+      event('task_started'), ...reads, message('assistant', resultText), event('task_complete', { last_agent_message: resultText })]
+      .map(record => JSON.stringify(record) + '\n').join('');
+    const home = path.join(storage, 'native'), date = new Date();
+    const nativeDir = path.join(home, 'sessions', String(date.getFullYear()), String(date.getMonth() + 1).padStart(2, '0'),
+      String(date.getDate()).padStart(2, '0'));
+    fs.mkdirSync(nativeDir, { recursive: true });
+    const nativeFile = path.join(nativeDir, session + '.jsonl'); fs.writeFileSync(nativeFile, nativeRaw, { mode: 0o600 });
+    const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection, env: { CODEX_HOME: home }, resultText });
+    assert.throws(() => runtime.measureReaderCapacity(verified, candidate), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    const cli = fixtureRecords('codex-agent-stream-exec.jsonl').filter(record =>
+      ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].includes(record.type));
+    for (const record of cli) if (record.item?.type === 'agent_message') record.item.text = resultText;
+    const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+    const recorder = boundaryModule.createDurableRecorder(path.join(storage, 'production-receipts'));
+    let launches = 0, completions = 0, finalResult, finalPrompt, finalRaw;
+    const host = runtime.createCodexRuntimeHost({ scope: { worktree: f.root, phase: 38, ticket: f.ticket,
+      run_id: candidate.manifest.run_id }, recorder, agentDir: agents, agentManifest: path.join(agents, 'manifest.json'),
+      env: { CODEX_HOME: home }, probe: { status: 'available', runtime_version: 'fixture', executable: 'codex', capabilities: admission.capabilities },
+      spawn() {
+        launches++;
+        const activeSession = launches === 1 ? session : '88888888-8888-4888-8888-888888888888';
+        const activeTurn = launches === 1 ? turn : 'installed-final';
+        const activeResult = finalResult || resultText;
+        const activePrompt = finalPrompt || candidate.prompt;
+        const records = JSON.parse(JSON.stringify([metadata, nativeContext, message('developer', instructions),
+          message('user', activePrompt), event('task_started'), ...reads, message('assistant', activeResult),
+          event('task_complete', { last_agent_message: activeResult })]));
+        for (const record of records) {
+          if (record.type === 'session_meta') Object.assign(record.payload, { id: activeSession, session_id: activeSession });
+          if (record.payload?.turn_id) record.payload.turn_id = activeTurn;
+          if (record.payload?.root_turn_id) record.payload.root_turn_id = activeTurn;
+          if (record.payload?.internal_chat_message_metadata_passthrough)
+            record.payload.internal_chat_message_metadata_passthrough.turn_id = activeTurn;
+          if (record.payload?.call_id) record.payload.call_id = activeTurn + '-' + record.payload.call_id;
+        }
+        const raw = records.map(record => JSON.stringify(record) + '\n').join('');
+        if (launches === 2) finalRaw = raw;
+        fs.writeFileSync(path.join(nativeDir, activeSession + '.jsonl'), raw, { mode: 0o600 });
+        const activeCli = structuredClone(cli);
+        activeCli.find(record => record.type === 'thread.started').thread_id = activeSession;
+        activeCli.find(record => record.item?.type === 'agent_message').item.text = activeResult;
+        const { EventEmitter } = require('node:events');
+        const processFixture = new EventEmitter(); processFixture.pid = process.pid;
+        processFixture.stdout = new EventEmitter(); processFixture.stderr = new EventEmitter(); processFixture.kill = () => {};
+        processFixture.stdin = { write() {}, end() { process.nextTick(() => {
+          if (launches === 2) write(f.root, '.shipyard-arch-review-evidence.md', JSON.parse(activeResult).evidence_markdown);
+          processFixture.stdout.emit('data', Buffer.from(activeCli.map(record => JSON.stringify(record) + '\n').join('')));
+          processFixture.emit('close', 0);
+        }); } };
+        return processFixture;
+      },
+    });
+    const capacity = await host.measureBatchReaderCapacity(selection, candidate, { onCompleted(completion) {
+      completions++;
+      assert.equal(recorder.getVerifiedRecord(completion.runtime_evidence.dispatch_id), null);
+      assert.equal(recorder.getVerifiedRecord(candidate.manifest.dispatch_id), null);
+    } });
+    const probeRecord = recorder.getVerifiedRecord(capacity.contract.application_dispatch_id);
+    assert.notEqual(probeRecord.dispatch_id, candidate.manifest.dispatch_id);
+    assert.equal(probeRecord.receipt.runtime_evidence.reader_capacity_probe.review_dispatch_id, candidate.manifest.dispatch_id);
+    assert.equal(fs.existsSync(path.join(f.root, '.shipyard-arch-review-evidence.md')), false);
+    const currentProbeVerified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
+      env: { CODEX_HOME: home }, resultText });
+    assert.throws(() => runtime.measureReaderCapacity(currentProbeVerified, candidate,
+      { recorder: {}, receipt: JSON.parse(JSON.stringify(probeRecord.receipt)) }),
+    { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.equal(capacity.contract.semantic_credit, false);
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: JSON.parse(JSON.stringify(capacity)) }),
+      { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity,
+      selection: { ...selection, effort: 'low' } }), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity });
+    const admitted = contextBuilder.admittedFileInput(value);
+    assert.notStrictEqual(admitted, candidate);
+    assert.strictEqual(admitted.manifest, candidate.manifest);
+    assert.equal(admitted.prompt, candidate.prompt);
+    assert.deepEqual(admitted.input_bundle, { ...candidate.input_bundle, reader_capacity: capacity.contract });
+    contextBuilder.requireReaderBatchCapacity(admitted); contextBuilder.recheckInstalledLaunch(value);
+    const digest = /launch_digest=([a-f0-9]{64})/.exec(contextBuilder.admittedPrompt(value))[1];
+    assert.notEqual(digest, '0'.repeat(64));
+    finalPrompt = contextBuilder.admittedPrompt(value);
+    assert.ok(finalPrompt.includes('launch_digest=' + digest));
+    finalResult = JSON.stringify({ ...JSON.parse(resultText), id: f.ticket, pr: f.pr.number, head: f.head,
+      base_tree: value.prepared.mergeBaseTree, verdict: 'conform', summary: 'Fresh complete fixture judgment.',
+      findings: [], blocking_count: 0, context_digest: value.prepared.packet.digest,
+      launch_digest: digest, evidence_markdown: 'Complete installed batch fixture review.' });
+    const adapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
+      agentsDir: agents, agentManifest: path.join(agents, 'manifest.json'), capabilities: admission.capabilities, host });
+    const finalBoundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder });
+    const final = await finalBoundary.dispatch({ runtime: 'codex', role: 'arch-review', signals: {}, dispatch_id: candidate.manifest.dispatch_id },
+      { ticket: f.ticket, phase: 38, worktree: f.root, run_id: candidate.manifest.run_id, prompt: finalPrompt,
+        input_transport: 'host-files', input_bundle: admitted.input_bundle, input_prepared: admitted,
+        onCompleted(completion) {
+          completions++;
+          assert.equal(recorder.getVerifiedRecord(candidate.manifest.dispatch_id), null);
+          assert.equal(completion.runtime_evidence.reader_capacity_probe, undefined);
+          assert.equal(fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), 'utf8'),
+            JSON.parse(completion.last_agent_message).evidence_markdown);
+        } });
+    assert.equal(launches, 2); assert.equal(completions, 2);
+    assert.notEqual(final.receipt.runtime_evidence.session_id, capacity.contract.native_session_id);
+    assert.deepEqual(final.receipt.runtime_evidence.input_bundle, admitted.input_bundle);
+    const consumption = runtime.verifyFileConsumption(admitted, finalRaw, 'installed-batch', finalResult);
+    assert.equal(consumption.physical_calls, candidate.manifest.batches.length);
+    assert.equal(consumption.chunk_reads, candidate.manifest.ranges.length);
+    assert.throws(() => contextBuilder.finish(value, { ...final, receipt: probeRecord.receipt }, recorder), { code: 'MISSING_RECEIPT' });
+    assert.deepEqual(recorder.getVerifiedRecord(probeRecord.dispatch_id), probeRecord);
+    for (const repeat of [admission, { ...admission, readerCapacity: capacity }]) {
+      contextBuilder.admitInstalledLaunch(value, repeat);
+      assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+    }
+    assert.deepEqual(fs.readFileSync(candidate.input_bundle.manifest_path), manifestBytes);
+    assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
+    assert.throws(() => runtime.readerCapacityContract(capacity, original.manifest), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, capabilities: { changed: true } }),
+      { code: 'READER_CAPACITY_UNSUPPORTED' });
+    write(agents, 'other.toml', agentText);
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, agentFile: 'other.toml' }),
+      { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+    assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
+    fs.appendFileSync(path.join(agents, selected.agent_file), '\n# changed installed instructions');
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }),
+      { code: 'STALE_CONTEXT' });
+    fs.writeFileSync(path.join(agents, selected.agent_file), agentText);
+    contextBuilder.recheckInstalledLaunch(value);
+    const originalProbeBytes = fs.readFileSync(nativeFile);
+    try {
+      fs.appendFileSync(nativeFile, '\n');
+      assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }));
+    } finally { fs.writeFileSync(nativeFile, originalProbeBytes); }
+    assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+    contextBuilder.recheckInstalledLaunch(value);
+    const finished = contextBuilder.finish(value, final, recorder);
+    assert.equal(finished.result.launch_digest, digest);
+    assert.equal(finished.subject, f.ticket);
+    assert.equal(finished.result.verdict, 'conform');
+    assert.deepEqual(recorder.getVerifiedRecord(probeRecord.dispatch_id), probeRecord);
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }),
+      { code: 'ARCHIVE_AUTHORITY_INVALID' });
+  } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
 test('selected instruction bytes upgrade a below-limit architecture prompt to authenticated file input', () => {
   const f = fixture();
   const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'instruction-fallback-')));
   try {
+    canonicalReviewMember(f);
     write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', ADR + 'a'.repeat(250000));
     git(f.root, ['add', '-A']); git(f.root, ['commit', '-m', 'large review context']);
     f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
-    const value = prepared(f, { storageRoot: storage, inflightDispatchId: 'instruction-fallback' });
+    const value = contextBuilder.prepare({ ticket: f.ticket, phase: 38, worktree: f.root },
+      { role: 'arch-review', context: {}, signals: {} }, { refreshGit: false,
+        graphDir: path.join(f.root, '.planning/graph'), getPullRequest: () => f.pr,
+        storageRoot: storage, inflightDispatchId: 'instruction-fallback' });
     assert.ok(Buffer.byteLength(value.launch.context.prompt) < 1048576);
     assert.ok(!contextBuilder.admittedFileInput(value));
     const agents = path.join(storage, 'agents'); fs.mkdirSync(agents);
@@ -1729,10 +2516,46 @@ test('selected instruction bytes upgrade a below-limit architecture prompt to au
       agentManifest: path.join(agents, 'manifest.json'), capabilities: {} });
     const input = contextBuilder.admittedFileInput(value);
     assert.ok(input); assert.equal(input.manifest.dispatch_id, 'instruction-fallback');
+    assertArchitectureIdentity(input, value);
     assert.ok(input.input_bytes > 1048576);
     assert.equal(installation.capacity.complete_upper_bound_bytes, input.input_bytes);
     assert.ok(input.manifest.accounting.generated_instruction_bytes >= 900000);
-    assert.deepEqual(JSON.parse(Buffer.concat(contextBuilder.verifyFileInput(input).material)), value.prepared.packet);
+    const content = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+    const encoded = content.encodeUniqueContent(value.prepared.packet);
+    const pinned = contextBuilder.verifyFileInput(input);
+    assertFiniteFileSchedule(input, pinned.material[0].toString('utf8'), { requireMultipleManifestChunks: false });
+    assert.equal(pinned.material[0].length, input.manifest.assets[0].bytes);
+    assert.equal(require('node:crypto').createHash('sha256').update(pinned.material[0]).digest('hex'), input.manifest.assets[0].sha256);
+    assert.deepEqual(content.decodeUniqueContent(JSON.parse(contextBuilder.verifyFileInput(input).material[0])),
+      content.decodeUniqueContent(encoded));
+    for (const [name, mutate, code] of [
+      ['missing role', options => { delete options.role; }, 'INVALID_ARCH_REVIEW_CONTEXT'],
+      ['changed role', options => { options.role = 'integrator'; }, 'STALE_CONTEXT'],
+      ['missing base', options => { delete options.binding.base; }, 'REVIEW_RESTART_REQUIRED'],
+      ['missing merge-base', options => { delete options.binding.merge_base; }, 'REVIEW_RESTART_REQUIRED'],
+      ['missing membership', options => { delete options.binding.ticket_set; }, 'REVIEW_RESTART_REQUIRED'],
+      ['missing membership digest', options => { delete options.binding.ticket_set_digest; }, 'REVIEW_RESTART_REQUIRED'],
+      ['suffixed member', options => { options.binding.ticket_set = [TICKET]; }, 'REVIEW_RESTART_REQUIRED'],
+      ['duplicate member', options => { options.binding.ticket_set = [f.ticket, f.ticket]; }, 'REVIEW_RESTART_REQUIRED'],
+      ['missing packet digest', options => { delete options.binding.packet_digest; }, 'STALE_CONTEXT'],
+      ['changed packet digest', options => { options.binding.packet_digest = 'f'.repeat(64); }, 'STALE_CONTEXT'],
+    ]) {
+      const options = { role: input.manifest.role, dispatchId: 'invalid-' + name.replaceAll(' ', '-'),
+        storageRoot: storage, architecturePacket: value.prepared.packet,
+        binding: structuredClone(input.manifest.binding) };
+      mutate(options);
+      assert.throws(() => contextBuilder.reviewProgressIdentity(contextBuilder.prepareFileInput(
+        { ticket: f.ticket, phase: 38, worktree: f.root }, JSON.stringify(encoded), options)), { code }, name);
+    }
+    const changedBase = git(f.root, ['commit-tree', f.base + '^{tree}', '-p', f.base, '-m', 'fixture: changed base']);
+    git(f.root, ['update-ref', 'refs/remotes/origin/main', changedBase]);
+    try { assert.throws(() => contextBuilder.reviewProgressIdentity(input), { code: 'REVIEW_RESTART_REQUIRED' }); }
+    finally { git(f.root, ['update-ref', 'refs/remotes/origin/main', f.base]); }
+    const changedHead = git(f.root, ['commit-tree', f.head + '^{tree}', '-p', f.head, '-m', 'fixture: changed source']);
+    git(f.root, ['update-ref', 'refs/heads/' + f.pr.headRefName, changedHead]);
+    try { assert.throws(() => contextBuilder.reviewProgressIdentity(input), { code: 'STALE_CONTEXT' }); }
+    finally { git(f.root, ['update-ref', 'refs/heads/' + f.pr.headRefName, f.head]); }
+    assertArchitectureIdentity(input, value);
     const directories = fs.readdirSync(storage).filter(name => name.startsWith('input-'));
     const rawManifest = fs.readFileSync(input.input_bundle.manifest_path);
     const admission = { agentDir: agents, agentFile: 'review.toml', agentManifest: path.join(agents, 'manifest.json'), capabilities: {} };
@@ -1742,6 +2565,7 @@ test('selected instruction bytes upgrade a below-limit architecture prompt to au
     assert.deepEqual(fs.readFileSync(input.input_bundle.manifest_path), rawManifest);
     contextBuilder.admitInstalledLaunch(value, { ...admission, capabilities: { changed: true } });
     const variant = contextBuilder.admittedFileInput(value);
+    assertArchitectureIdentity(variant, value);
     assert.notStrictEqual(variant, input);
     assert.notEqual(variant.input_bundle.manifest_path, input.input_bundle.manifest_path);
     const variantDirectories = fs.readdirSync(storage).filter(name => name.startsWith('input-'));
@@ -1766,12 +2590,22 @@ test('complete development inventory preserves Unicode, quotes, tabs and newline
   try {
     const paths = ['docs/audits/é.md', 'docs/audits/quote".md', 'docs/audits/tab\t.md', 'docs/audits/line\n.md'];
     paths.forEach((name, index) => write(f.root, name, 'development evidence ' + index));
-    git(f.root, ['add', '-A']); git(f.root, ['commit', '-m', 'unusual development paths']);
+    const objectDirectory = path.resolve(f.root, git(f.root, ['rev-parse', '--git-path', 'objects']));
+    assert.ok(fs.statSync(objectDirectory).isDirectory(), 'fixture object directory exists before unusual-path indexing');
+    try { git(f.root, ['add', '-A']); } catch (error) {
+      error.fixture_git_environment = { root: f.root, objectDirectory,
+        objects_present: fs.existsSync(objectDirectory), tmpdir: os.tmpdir(),
+        tmpdir_present: fs.existsSync(os.tmpdir()),
+        inherited: Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+          /^(?:TMPDIR|TMP|TEMP|GIT_DIR|GIT_WORK_TREE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_INDEX_FILE|GIT_CONFIG_GLOBAL|GIT_CONFIG_NOSYSTEM)$/.test(key))) };
+      throw error;
+    }
+    git(f.root, ['commit', '-m', 'unusual development paths']);
     f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
     const value = prepared(f);
     for (const [index, name] of paths.entries()) {
       assert.ok(value.prepared.packet.development.paths.includes(name));
-      assert.ok(value.prepared.packet.development.content.includes('development evidence ' + index));
+      assert.ok(value.prepared.packet.diff.content.includes('development evidence ' + index));
     }
   } finally { cleanupJudgment(f); }
 });
@@ -1995,5 +2829,104 @@ test('fixture: ' + transport + ' ' + (tamper || 'complete') + ' ' + materialByte
 }
 
 }
+
+test('automatic installed candidate retains its exact finite profile and cached manifest before capacity', () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'automatic-installed-candidate-')));
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  try {
+    const ticket = canonicalReviewMember(f);
+    write(f.root, '.planning/architecture/ADR-014-host-bound-review.md',
+      '# ADR-014\n' + 'Complete bounded authority context.\n'.repeat(40000));
+    git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'fixture: large canonical context']);
+    f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
+    const value = contextBuilder.prepare({ ticket, phase: 38, worktree: f.root, run_id: 'automatic-cache' },
+      { role: 'arch-review', context: {}, signals: {}, dispatch_id: 'automatic-cache-final' },
+      { refreshGit: false, graphDir: path.join(f.root, '.planning/graph'), storageRoot: storage,
+        getPullRequest: () => f.pr, execFileSync,
+        readerProfile: contextBuilder.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 3,
+          candidate: { source_sha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))).digest('hex'),
+            instructions_sha256: '0'.repeat(64), model: 'gpt-6.1-sol', effort: 'low', provider: 'openai' } }) });
+    const selection = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: value.prepared.signals });
+    const capabilities = { supportedModels: [selection.model], supportedEfforts: [selection.effort] };
+    const agents = path.join(storage, 'agents'); fs.mkdirSync(agents);
+    const content = [
+      '# shipyard-policy-id = "' + policy.POLICY.id + '"', '# shipyard-policy-version = "' + selection.policy_version + '"',
+      '# shipyard-policy-hash = "' + selection.policy_hash + '"', '# shipyard-policy-runtime = "codex"',
+      '# shipyard-policy-role = "arch-review"', '# shipyard-policy-rung = "' + selection.rung + '"',
+      'name = "' + selection.agent_file.replace(/\.toml$/, '') + '"', 'model = "' + selection.model + '"',
+      'model_reasoning_effort = "' + selection.effort + '"', 'sandbox_mode = "read-only"',
+      "developer_instructions = '''", 'Complete installed instructions.', "'''", '',
+    ].join('\n');
+    fs.writeFileSync(path.join(agents, selection.agent_file), content);
+    const agentManifest = path.join(agents, '.shipyard-manifest.json');
+    fs.writeFileSync(agentManifest, JSON.stringify({ policy_id: policy.POLICY.id,
+      policy_version: selection.policy_version, policy_hash: selection.policy_hash,
+      agent_files: [selection.agent_file], agent_digests: {
+        [selection.agent_file]: require('node:crypto').createHash('sha256').update(content).digest('hex') } }));
+    const adapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs')
+      .createCodexDispatchAdapter({ agentsDir: agents, agentManifest, capabilities });
+    assert.equal(adapter.validate(selection), true);
+    const admission = { agentDir: agents, agentFile: selection.agent_file, agentManifest,
+      capabilities, automaticReader: true, selection: { model: selection.model, effort: selection.effort } };
+    contextBuilder.admitInstalledLaunch(value, admission);
+    const first = contextBuilder.admittedFileInput(value), bytes = fs.readFileSync(first.input_bundle.manifest_path);
+    assert.equal(first.manifest.transport.schema, 'shipyard.native-reader-transport.v3');
+    assert.equal(first.manifest.transport.chunk_bytes, 8192);
+    assert.equal(first.manifest.transport.ranges_per_batch, 3);
+    const checked = contextBuilder.verifyFileInput(first), frames = [];
+    for (const batch of first.manifest.batches) {
+      const output = execFileSync('node', [first.manifest.transport.module_path, '--read-batch',
+        first.input_bundle.manifest_path, String(batch.index), first.manifest.transport.profile_sha256], { encoding: 'utf8' });
+      assert.equal(output, contextBuilder.batchOutput(first.manifest, checked.manifest_bytes, checked.material, batch.index));
+      const records = output.trim().split('\n').map(JSON.parse);
+      assert.equal(records[0].type, 'batch');
+      assert.equal(records.at(-1).type, 'terminal');
+      assert.equal(records.length, batch.count + 2);
+      frames.push(...records.slice(1, -1));
+    }
+    assert.deepEqual(Buffer.concat(frames.map(frame => Buffer.from(frame.base64, 'base64'))),
+      Buffer.concat([checked.manifest_bytes, ...checked.material]));
+    assert.equal(first.manifest.transport.candidate.effort, selection.effort);
+    assert.equal(first.manifest.dispatch_id, 'automatic-cache-final');
+    assert.throws(() => contextBuilder.requireReaderBatchCapacity(first), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    contextBuilder.admitInstalledLaunch(value, admission);
+    const second = contextBuilder.admittedFileInput(value);
+    assert.equal(second.manifest, first.manifest);
+    assert.deepEqual(fs.readFileSync(second.input_bundle.manifest_path), bytes);
+    contextBuilder.admitInstalledLaunch(value, { ...admission,
+      capabilities: { ...capabilities, candidate_identity: 'changed' } });
+    const foreign = contextBuilder.admittedFileInput(value);
+    assert.notEqual(foreign.manifest, first.manifest);
+    assert.throws(() => contextBuilder.requireReaderBatchCapacity(foreign), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    contextBuilder.admitInstalledLaunch(value, admission);
+    assert.equal(contextBuilder.admittedFileInput(value).manifest, first.manifest);
+    contextBuilder.recheckInstalledLaunch(value);
+    assert.throws(() => contextBuilder.restoreCompletedSourceInput(JSON.parse(JSON.stringify({ input: first }))),
+      { code: 'REVIEW_SOURCE_REQUIRED' });
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
+for (const cold of [false, true]) for (const mutation of ['source', 'instructions'])
+  test('automatic integration measurement restoration refuses changed ' + mutation + (cold ? ' cold' : ' live'), async () => {
+    const { automaticCompletedReviewFixture } = require('./phase49-review-continuation.test.cjs');
+    let observed;
+    await assert.rejects(() => automaticCompletedReviewFixture('integrator', cold, false, false, 'seal-envelope', state => {
+      observed = state;
+      assert.deepEqual(state.statistics(), { launches: 1, probeCallbacks: 1, finalCallbacks: 0 });
+      if (mutation === 'source') fs.appendFileSync(path.join(state.root, 'src/reviewed.txt'), '\nChanged current source.\n');
+      else for (const name of fs.readdirSync(state.agents).filter(name => name.endsWith('.toml')))
+        fs.appendFileSync(path.join(state.agents, name), '\nChanged installed instructions.\n');
+    }), error => mutation === 'source'
+      ? error.code === 'INVALID_HOST' && error.message === 'claude-role-host: worktree has local changes before role dispatch'
+      : ['STALE_CONTEXT', 'REVIEW_RESTART_REQUIRED', 'UNBOUND_AGENT'].includes(error.code));
+    assert.ok(observed);
+    assert.deepEqual(observed.statistics(), { launches: 1, probeCallbacks: 1, finalCallbacks: 0 });
+  });
+
+test('integration measurement restoration refuses caller-created measurement custody', () => {
+  assert.throws(() => contextBuilder.restoreMeasuredIntegrationInput({ input: {}, identity: {} }, {}),
+    { code: 'REVIEW_SOURCE_REQUIRED' });
+});
 
 if (require.main === module) registerTests(require('node:test'));

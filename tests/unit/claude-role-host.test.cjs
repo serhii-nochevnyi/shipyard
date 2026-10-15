@@ -57,7 +57,7 @@ function writeCorpus(root, { adrs = [], backlogFiles = [], investigations = [] }
 
 function setupRepository(kind, options = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-')));
-  const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-state-'));
+  const storageRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-state-')));
   git(root, ['init', '-b', 'main']);
   git(root, ['config', 'user.name', 'Shipyard Test']);
   git(root, ['config', 'user.email', 'shipyard-test@example.invalid']);
@@ -88,7 +88,7 @@ function setupRepository(kind, options = {}) {
   const baseTree = git(root, ['rev-parse', 'HEAD^{tree}']);
   git(root, ['update-ref', 'refs/remotes/origin/main', base]);
   git(root, ['checkout', '-b', branch]);
-  write(root, 'src/role.txt', 'reviewed change\n');
+  write(root, 'src/role.txt', options.sourceContent || 'reviewed change\n');
   git(root, ['add', 'src/role.txt']);
   if (options.planningBytes) {
     write(root, `.planning/phases/${PHASE}/PROJECTION.md`, 'p'.repeat(options.planningBytes));
@@ -126,14 +126,77 @@ function livePr(fixture) {
   };
 }
 
+function stable(value) {
+  if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}';
+}
+
 function packetFromPrompt(prompt) {
+  const focused = /<AUTHENTICATED_FOCUSED_INPUT>\s*([\s\S]*?)\s*<\/AUTHENTICATED_FOCUSED_INPUT>/.exec(prompt);
+  if (focused) {
+    const checked = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs')
+      .verifyFileInput(JSON.parse(focused[1]), { sealed: true });
+    return require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]));
+  }
   const startTag = '<AUTHENTICATED_CONTEXT_PACKET>\n\n';
   const endTag = '\n\n</AUTHENTICATED_CONTEXT_PACKET>';
   const start = prompt.indexOf(startTag);
   const end = prompt.indexOf(endTag, start + startTag.length);
   assert.ok(start >= 0 && end > start);
-  return JSON.parse(prompt.slice(start + startTag.length, end));
+  const packet = JSON.parse(prompt.slice(start + startTag.length, end));
+  return packet.schema === 'shipyard.semantic-content.v1'
+    ? require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(packet) : packet;
 }
+
+test('native inline preparation preserves shared logical coverage and refuses incompatible schemas', () => {
+  const fixture = setupRepository('integrator');
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const { prepareInlineReview } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const packet = packets.buildContextPacket({ root: fixture.root, role: 'integrator', subject: 'inline-fixture',
+      sourceRevision: fixture.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+      scope: { files_modified: [] }, requiredRefs: [],
+      roleContext: { phase_contracts: [], combined_diff: { content: 'complete diff' } } });
+    const encoded = packets.encodeUniqueContent(packet);
+    const prompt = prepareInlineReview('integrator', packet.subject, encoded, 'native inline reference');
+    assert.deepEqual(packetFromPrompt(prompt), packets.decodeUniqueContent(encoded));
+    assert.ok(prompt.includes('no semantic reading credit'));
+    assert.ok(!prompt.includes('INPUT_MANIFEST='));
+    assert.throws(() => prepareInlineReview('integrator', packet.subject, encoded, 'x'.repeat(1500000)),
+      error => error.code === 'CONTEXT_PACKET_OVER_BOUND'
+        && error.refusal.limiting_field === 'complete_inline_prompt_bytes'
+        && error.refusal.required > error.refusal.observed);
+    for (const mutation of ['version', 'obligation', 'dictionary']) {
+      const changed = structuredClone(encoded);
+      if (mutation === 'version') changed.schema = 'shipyard.semantic-content.v99';
+      if (mutation === 'obligation') changed.obligations.pop();
+      if (mutation === 'dictionary') changed.dictionary[0].content += 'tamper';
+      assert.throws(() => prepareInlineReview('integrator', packet.subject, changed, 'reference'),
+        error => error.code === 'INVALID_CONTEXT_PACKET');
+    }
+  } finally { cleanupFixture(fixture); }
+});
+
+test('native inline launch refuses governing source mutation after preparation', async () => {
+  const fixture = setupRepository('integrator');
+  let launched = false;
+  try {
+    const options = hostOptions(fixture, { onLaunch() { launched = true; } });
+    const factory = options.createRuntimeHost;
+    options.createRuntimeHost = input => {
+      const runtime = factory(input);
+      const plans = fs.readdirSync(path.join(fixture.root, '.planning/phases', PHASE));
+      const plan = plans.find(name => name.endsWith('-PLAN.md'));
+      fs.appendFileSync(path.join(fixture.root, '.planning/phases', PHASE, plan), '\nchanged governing source\n');
+      return runtime;
+    };
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), error =>
+      ['STALE_CONTEXT_PACKET', 'STALE_CONTEXT'].includes(error.code));
+    assert.equal(launched, false);
+  } finally { cleanupFixture(fixture); }
+});
 
 function fakeEvidence(model, effort, usage) {
   const sessionId = `session-${crypto.randomUUID()}`;
@@ -191,7 +254,7 @@ function fakeEvidenceLines(model, effort, lines) {
 
 function fakeRuntimeFactory(fixture, options = {}) {
   const live = fixture.kind === 'pr-sentinel' ? null : livePr(fixture);
-  return ({ scope, controller, recorderDir }) => {
+  return ({ scope, controller, recorderDir, transcriptDir }) => {
     const recorder = createDurableRecorder(recorderDir);
     const runtime = {
       scope: { worktree: scope.worktree.path },
@@ -210,10 +273,15 @@ function fakeRuntimeFactory(fixture, options = {}) {
         let result;
         let evidencePath;
         if (packet.role === 'arch-review') {
-          result = { id: packet.subject, ...(context.ticket_set ? { ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest } : {}), pr: live.number, verdict: 'conform', head: fixture.head,
+          result = { ...context.focused, review_completeness: 'complete', limitations: [], unresolved_sources: [],
+            context_digest: crypto.createHash('sha256').update(stable(packet)).digest('hex'),
+            launch_digest: crypto.createHash('sha256').update(stable({ packet_digest: crypto.createHash('sha256').update(stable(packet)).digest('hex'),
+              reference_digest: context.reference_digest })).digest('hex'),
+            id: packet.subject, ...(context.ticket_set ? { ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest } : {}), pr: live.number, verdict: 'conform', head: fixture.head,
             base_tree: fixture.mergeBaseTree, blocking_count: 0, summary: 'No architecture conflict.', findings: [] };
           evidencePath = path.join(fixture.root, '.shipyard-arch-review-evidence.md');
-          fs.writeFileSync(evidencePath, `Reviewed ${fixture.head}; base tree ${fixture.mergeBaseTree}.\n`);
+          result.evidence_markdown = `Reviewed ${fixture.head}; base tree ${fixture.mergeBaseTree}.\n`;
+          fs.writeFileSync(evidencePath, result.evidence_markdown);
         } else if (packet.role === 'pr-sentinel') {
           const ticketSet = context.ticket_set;
           const readOnlySmoke = selection.readOnly === true;
@@ -244,6 +312,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
           fs.writeFileSync(evidencePath, `Integration check at ${context.combined_diff.head}.\n`);
         }
         options.mutateResult?.(result, packet);
+        if (options.originalStream) return { output: result };
         const applicationEvidence = options.badEvidence ? fakeEvidence(selection.model, 'low')
           : options.firstResponseLines ? fakeEvidenceLines(selection.model, selection.effort, options.firstResponseLines)
           : fakeEvidence(selection.model, selection.effort, options.firstResponseUsage);
@@ -252,9 +321,101 @@ function fakeRuntimeFactory(fixture, options = {}) {
       },
       applicationEvidence({ result }) { return result.applicationEvidence; },
     };
+    if (options.originalStream) {
+      const claudeRuntime = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+      const captureStart = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs').capture;
+      const registry = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/captured/boundaries/claude-stream.json')));
+      const streamPath = registry.fixtures.find(file => file.endsWith('/claude-stream-research.jsonl'));
+      assert.ok(streamPath, 'registered original Claude stream is required');
+      const records = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
+        .map(JSON.parse).filter(record => !record.shipyard_fixture);
+      const template = predicate => structuredClone(records.find(predicate));
+      const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
+      const session = crypto.randomUUID();
+      return claudeRuntime.createClaudeRuntimeHost({ scope, controller, recorderDir, transcriptDir,
+        startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
+        uuid: () => session, sessionTranscriptRoot: path.join(fixture.storageRoot, 'native'),
+        probe: { status: 'available', executable: 'claude-fixture', runtime_version: registry.cli_version,
+          capabilities: { assistantTranscriptEvidence: true, restrictedTools: true, sandboxedBash: true } },
+        spawn(_file, args) {
+          const { EventEmitter } = require('node:events');
+          const child = new EventEmitter(); child.pid = process.pid;
+          child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+          let framedInput = '';
+          child.stdin = { write(value) { framedInput += value; }, end() {
+            process.nextTick(async () => {
+              try {
+                assert.ok(framedInput.endsWith('\n'));
+                const userInput = JSON.parse(framedInput.slice(0, -1));
+                const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
+                const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
+                const { output } = await runtime.agent(userInput.message.content, { model, effort, schema: JSON.parse(args[args.indexOf('--json-schema') + 1]) });
+                const init = template(row => row.type === 'system' && row.subtype === 'init');
+                Object.assign(init, { session_id: session, model, cwd: fixture.root });
+                const assistant = template(row => row.type === 'assistant');
+                assistant.session_id = session; assistant.sessionId = session; assistant.message.model = observedModel;
+                delete assistant.message.usage;
+                assistant.message.content[0].input = output;
+                const final = template(row => row.type === 'result');
+                Object.assign(final, { session_id: session, is_error: false, structured_output: output, result: JSON.stringify(output) });
+                const nativeFile = path.join(fixture.storageRoot, 'native/project', session + '.jsonl');
+                fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
+                const nativeAssistant = { ...structuredClone(assistant), sessionId: session, effort };
+                fs.writeFileSync(nativeFile, serialize([{ ...userInput, sessionId: session }, nativeAssistant]));
+                const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+                const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
+                const hookValue = name => hookArgs[hookArgs.indexOf(name) + 1];
+                captureStart({ hook_event_name: 'SessionStart', source: 'startup', session_id: session,
+                  transcript_path: nativeFile, cwd: fixture.root }, {
+                  evidenceFile: hookValue('--evidence-file'), expectedSession: hookValue('--expected-session') });
+                if (options.firstResponseUsage) {
+                  assistant.message.usage = options.firstResponseUsage; assistant.message.stop_reason = 'end_turn';
+                }
+                const usageRecords = options.firstResponseLines
+                  ? options.firstResponseLines.map(row => ({ ...structuredClone(row), session_id: session, sessionId: session })) : [assistant];
+                child.stdout.emit('data', Buffer.from(serialize([init, ...usageRecords, final]))); child.emit('close', 0, null);
+              } catch (error) { child.emit('error', error); }
+            });
+          } };
+          return child;
+        } });
+    }
     return runtime;
   };
 }
+
+test('changed role instruction bytes refuse before native launch without modifying shared references', async (t) => {
+  const fixture = setupRepository('arch-review');
+  let launched = false;
+  let altered = false;
+  try {
+    const referencePath = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs').REFERENCE_PATHS['arch-review'];
+    const referenceStat = fs.statSync(referencePath);
+    const originalRead = fs.readSync;
+    const options = hostOptions(fixture, { onLaunch() { launched = true; } });
+    const originalFactory = options.createRuntimeHost;
+    options.createRuntimeHost = (...args) => {
+      const runtime = originalFactory(...args);
+      t.mock.method(fs, 'readSync', (fd, buffer, offset, length, position) => {
+        const count = originalRead(fd, buffer, offset, length, position);
+        const stat = fs.fstatSync(fd);
+        if (count > 0 && stat.dev === referenceStat.dev && stat.ino === referenceStat.ino) {
+          buffer[offset] = buffer[offset] === 35 ? 32 : 35;
+          altered = true;
+        }
+        return count;
+      });
+      return runtime;
+    };
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)),
+      error => error.code === 'STALE_CONTEXT' && /role instructions changed before native launch/.test(error.message));
+    assert.equal(altered, true);
+    assert.equal(launched, false);
+  } finally {
+    t.mock.restoreAll();
+    cleanupFixture(fixture);
+  }
+});
 
 function hostOptions(fixture, extra = {}) {
   const pr = livePr(fixture);
@@ -279,13 +440,14 @@ function hostOptions(fixture, extra = {}) {
         .map((repo) => ({ repo, root: projectWorktree, base: null, base_oid: null }));
       return { repos, synced: true, committed: null };
     },
-    createRuntimeHost: fakeRuntimeFactory(fixture, extra),
+    createRuntimeHost: fakeRuntimeFactory(fixture, {
+      ...(fixture.kind === 'arch-review' && !extra.badEvidence && !extra.corruptDigest ? { originalStream: true } : {}), ...extra }),
   };
 }
 
 function setupSentinelRepository(options = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-sentinel-')));
-  const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-sentinel-state-'));
+  const storageRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-sentinel-state-')));
   const phase = '38-sentinel-role-test';
   const ids = ['T-38-11-sentinel-a', 'T-38-12-sentinel-b'];
   const branches = ids.map((id) => `ticket/${id.toLowerCase()}`);
@@ -431,6 +593,7 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
 for (const scenario of ['seals a phase verdict and re-owes changed context', 'rejects roster removal during launch']) {
 test(`aggregate architecture ${scenario}`, async () => {
   const fixture = setupRepository('arch-review');
+  fixture.storageRoot = fs.realpathSync(fixture.storageRoot);
   try {
     const epic = `epic/${PHASE}`;
     git(fixture.root, ['branch', '-m', epic]);
@@ -460,6 +623,7 @@ test(`aggregate architecture ${scenario}`, async () => {
     write(fixture.root, '.shipyard-role-artifacts/foreign/evidence.md', 'Unadmitted foreign evidence.');
     let packet;
     const launched = createClaudeRoleHost(hostOptions(fixture, {
+      originalStream: true,
       onLaunch(prompt) {
         if (scenario === 'rejects roster removal during launch') fs.unlinkSync(roster.record_path);
         packet = packetFromPrompt(prompt);
@@ -482,7 +646,7 @@ test(`aggregate architecture ${scenario}`, async () => {
       pr: 101, worktreePath: fixture.root, getPullRequest: () => live }).ready, true);
     assert.equal(artifact.currentArchitectureVerdict({ ...input, head: 'f'.repeat(40) }), null);
     assert.equal(artifact.currentArchitectureVerdict({ ...input, baseName: epic }), null);
-    fs.appendFileSync(path.join(fixture.root, `.planning/phases/${PHASE}/SUMMARY.md`), '\nChanged obligations.');
+    fs.appendFileSync(path.join(fixture.root, '.planning/architecture/ADR-014-test.md'), '\nChanged governing obligations.');
     assert.equal(artifact.currentArchitectureVerdict(input), null);
   } finally { cleanupFixture(fixture); }
 });
@@ -1105,6 +1269,14 @@ test('a superseded ADR is excluded from arch-review and integrator packets', asy
     const fixture = setupRepository(kind, { corpus, planExtra });
     let launched;
     try {
+      if (kind === 'arch-review') {
+        await assert.rejects(createClaudeRoleHost(hostOptions(fixture)).run(request(fixture)), /required architecture record is missing: ADR-999/);
+        write(fixture.root, '.planning/architecture/ADR-999-current.md', '# ADR-999 — current\nStatus: accepted\nCurrent governing decision.\n');
+        git(fixture.root, ['add', '.planning/architecture']);
+        git(fixture.root, ['commit', '-m', 'fixture: supply referenced current decision']);
+        fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
+        fixture.headTree = git(fixture.root, ['rev-parse', 'HEAD^{tree}']);
+      }
       await createClaudeRoleHost(hostOptions(fixture, {
         onLaunch(prompt, selection) { launched = { prompt, selection }; },
       })).run(request(fixture));
@@ -1114,7 +1286,8 @@ test('a superseded ADR is excluded from arch-review and integrator packets', asy
         { id: 'ADR-105', path: '.planning/architecture/ADR-105-old.md', reason: 'superseded' },
         { id: 'ADR-112', path: '.planning/architecture/ADR-112-older.md', reason: 'superseded' },
       ]);
-      assert.deepEqual(packet.role_context.adr_unresolved, ['ADR-999']);
+      assert.deepEqual(packet.role_context.adr_unresolved, kind === 'arch-review' ? [] : ['ADR-999']);
+      if (kind === 'arch-review') assert.ok(packet.required_refs.some(ref => ref.path.endsWith('ADR-999-current.md')));
     } finally {
       cleanupFixture(fixture);
     }
@@ -1144,7 +1317,35 @@ test('a plan-referenced backlog file is the only backlog in the packet', async (
   }
 });
 
-test('an over-bound role packet is refused before launch with its remedy', async () => {
+test('focused Claude overflow preserves complete pinned input through original current admission', async () => {
+  const sourceContent = 'Complete current producer and consumer source.\n'.repeat(17000);
+  const adrs = [201, 202].map(number => ({ name: 'ADR-' + number + '-overflow.md',
+    content: '# ADR-' + number + ' — governing overflow\n\n- **Status:** accepted\n\n' + 'Governing decision.\n'.repeat(8000) }));
+  const fixture = setupRepository('arch-review', { sourceContent, corpus: { adrs },
+    planExtra: ['References ADR-201 and ADR-202.'] });
+  try {
+    let checked;
+    const result = await createClaudeRoleHost(hostOptions(fixture, { onLaunch(prompt) {
+      const descriptor = /<AUTHENTICATED_FOCUSED_INPUT>\s*([\s\S]*?)\s*<\/AUTHENTICATED_FOCUSED_INPUT>/.exec(prompt);
+      assert.ok(descriptor, 'overflow uses pinned focused files');
+      checked = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs')
+        .verifyFileInput(JSON.parse(descriptor[1]), { sealed: true });
+      assert.ok(checked.material.length > 1, 'oversized input is explicitly partitioned');
+      const packet = packetFromPrompt(prompt);
+      assert.ok(packet.role_context.exact_diff.content.includes(sourceContent.split('\n')[0]));
+      for (const adr of adrs) assert.ok(packet.required_refs.some(ref => ref.content === adr.content));
+    } })).run(request(fixture));
+    assert.ok(checked);
+    assert.equal(result.artifact.outcome, 'conform');
+    assert.equal(result.result.review_completeness, 'complete');
+    const input = { worktreePath: fixture.root, pr: 101, head: fixture.head, baseName: 'main', baseCommit: fixture.base };
+    assert.equal(require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').currentArchitectureVerdict(input).subject, result.subject);
+    assert.equal(require('../../plugins/delivery-pipeline/scripts/gate-trailer.cjs').verifyArchitectureTarget({
+      pr: 101, worktreePath: fixture.root, getPullRequest: () => livePr(fixture) }).ready, true);
+  } finally { cleanupFixture(fixture); }
+});
+
+test('architecture above its typical target stays complete while other role bounds retain their remedies', async () => {
   const bigBody = (label) => `# ${label}\n\n- **Status:** accepted\n\n${'x'.repeat(150 * 1024)}\n`;
   const corpus = { adrs: [
     { name: 'ADR-201-big.md', content: bigBody('ADR-201 — big') },
@@ -1155,15 +1356,15 @@ test('an over-bound role packet is refused before launch with its remedy', async
   const archFixture = setupRepository('arch-review', { corpus, planExtra });
   try {
     let launched = false;
-    await assert.rejects(
-      createClaudeRoleHost(hostOptions(archFixture, { onLaunch() { launched = true; } })).run(request(archFixture)),
-      (error) => error.code === 'CONTEXT_PACKET_OVER_BOUND'
-        && error.message.includes('arch-review context packet is')
-        && error.message.includes('over its bound of 60000')
-        && error.message.includes('remedy: split the ticket'),
-    );
-    assert.equal(launched, false);
-    assert.equal(fs.existsSync(path.join(archFixture.root, '.shipyard-role-artifacts')), false);
+    const reviewed = await createClaudeRoleHost(hostOptions(archFixture, { onLaunch(prompt) {
+      launched = true;
+      const packet = packetFromPrompt(prompt);
+      assert.equal(packet.accounting.overflow, true);
+      assert.ok(packet.required_refs.some(ref => ref.content === corpus.adrs[0].content));
+      assert.ok(packet.required_refs.some(ref => ref.content === corpus.adrs[1].content));
+    } })).run(request(archFixture));
+    assert.equal(launched, true);
+    assert.equal(reviewed.artifact.outcome, 'conform');
   } finally {
     cleanupFixture(archFixture);
   }
@@ -1315,8 +1516,13 @@ test('the launch record separates the packet estimate from the complete prompt a
       });
       assert.match(result.context.run_id, /^claude-role-/);
       assert.deepEqual(result.context.selected_backlog_ids, packet.backlog.selected_ids);
-      assert.ok(result.context.selected_refs.some((ref) => ref.path.endsWith('PLAN.md')));
-      assert.deepEqual(result.context.first_response_usage, { status: 'unknown', reason: 'transcript is unreadable' });
+      if (fixture.kind === 'arch-review') {
+        assert.ok(packet.acceptance.length > 0);
+        assert.ok(packet.verification.length > 0);
+        assert.ok(result.context.selected_refs.some(ref => ref.path.includes('/ADR-')));
+        assert.equal(result.context.selected_refs.some(ref => ref.path.endsWith('PLAN.md')), false);
+      } else assert.ok(result.context.selected_refs.some((ref) => ref.path.endsWith('PLAN.md')));
+      assert.deepEqual(result.context.first_response_usage, { status: 'unknown', reason: fixture.kind === 'arch-review' ? 'no matching first-response usage record' : 'transcript is unreadable' });
     } finally {
       cleanupFixture(fixture);
     }
@@ -1483,16 +1689,42 @@ test('a transcript whose content no longer matches its recorded digest is refuse
   const usage = { input_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 };
   let transcriptPath;
   try {
-    const result = await createClaudeRoleHost(hostOptions(fixture, {
-      firstResponseUsage: usage,
-      corruptDigest: true,
-      onLaunch() {},
-    })).run(request(fixture));
-    transcriptPath = result.dispatch.application_evidence.transcript.path;
-    assert.deepEqual(result.context.first_response_usage,
+    const evidence = fakeEvidence('claude-opus-5-5', 'high', usage);
+    transcriptPath = evidence.transcript.path;
+    evidence.transcript.sha256 = 'b'.repeat(64);
+    assert.deepEqual(require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs').firstResponseUsage(evidence),
       { status: 'unknown', reason: 'transcript content does not match its recorded digest' });
   } finally {
     cleanupFixture(fixture);
     if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
   }
+});
+
+
+test('Claude architecture selection includes an uncited governing ADR without importing unrelated bodies', async () => {
+  const fixture = setupRepository('arch-review', { corpus: { adrs: [
+    { name: 'ADR-101-governing.md', content: '# ADR-101\nGoverns src/role.txt and its consumer contract.\n' },
+    { name: 'ADR-102-unrelated.md', content: '# ADR-102\nUNRELATED_BODY_MUST_REMAIN_TARGETED\n' },
+  ] } });
+  let inspected = false;
+  try {
+    await assert.rejects(createClaudeRoleHost(hostOptions(fixture, { onLaunch(prompt) {
+      const packet = packetFromPrompt(prompt);
+      assert.ok(packet.required_refs.some(ref => ref.path.endsWith('ADR-101-governing.md')));
+      assert.ok(!packet.required_refs.some(ref => ref.path.endsWith('ADR-102-unrelated.md')));
+      assert.ok(!prompt.includes('UNRELATED_BODY_MUST_REMAIN_TARGETED'));
+      assert.equal(packet.role_context.review_contract, 'shipyard.focused-architecture-review.v1');
+      const echoed = JSON.parse(/Echo these focused subject fields: ([^\n]+)/.exec(prompt)[1]);
+      const stable = value => Array.isArray(value) ? '[' + value.map(stable).join(',') + ']'
+        : value && typeof value === 'object' ? '{' + Object.keys(value).sort()
+          .map(key => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}' : JSON.stringify(value);
+      const packetDigest = crypto.createHash('sha256').update(stable(packet)).digest('hex');
+      assert.equal(echoed.context_digest, packetDigest);
+      assert.equal(echoed.launch_digest, crypto.createHash('sha256').update(stable({
+        packet_digest: packetDigest, reference_digest: packet.role_context.reference_digest })).digest('hex'));
+      inspected = true;
+      throw new Error('focused selection inspected');
+    } })).run(request(fixture)), /focused selection inspected/);
+    assert.equal(inspected, true);
+  } finally { cleanupFixture(fixture); }
 });

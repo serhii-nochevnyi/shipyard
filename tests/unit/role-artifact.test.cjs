@@ -32,7 +32,15 @@ else if (args[0] === 'pr' && args[1] === 'view') {
 const targetOldPath = process.env.PATH;
 process.env.PATH = targetBin + path.delimiter + targetOldPath;
 process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
-const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
+let pendingCase = Promise.resolve();
+function test(name, callback) {
+  runTest(name, () => {
+    const current = pendingCase.then(callback);
+    pendingCase = current.catch(() => {});
+    return current;
+  });
+}
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
@@ -777,6 +785,51 @@ suite('role-artifact — Codex sealed architecture context');
 
 const codexJudgmentFixtures = require('./helpers/codex-arch-review-fixtures.cjs');
 
+for (const mutation of ['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal', 'failed-turn', 'incomplete-turn', 'foreign-session'])
+test('original focused CLI retains progress and rejects invalid terminal results: ' + mutation, async () => {
+  const f = codexJudgmentFixtures.fixture();
+  const prototype = require('node:events').EventEmitter.prototype;
+  const emit = prototype.emit;
+  let observed = false;
+  prototype.emit = function(event, bytes, ...args) {
+    if (event === 'data' && Buffer.isBuffer(bytes) && bytes.toString().includes('shipyard.focused-architecture-review.v1')) {
+      const rows = bytes.toString().trim().split('\n').map(JSON.parse);
+      const index = rows.findIndex(row => row.item?.type === 'agent_message');
+      if (index >= 0 && rows[index].item.text.includes('shipyard.focused-architecture-review.v1')) {
+        observed = true;
+        const progress = structuredClone(rows[index]);
+        progress.item.id += '-progress'; progress.item.text = 'Inspecting the current diff and governing ADRs.';
+        rows.splice(index, 0, progress);
+        if (mutation === 'duplicate-contract') {
+          const duplicate = structuredClone(rows[index + 1]); duplicate.item.id += '-duplicate';
+          rows.splice(index + 1, 0, duplicate);
+        }
+        if (mutation === 'duplicate-item') progress.item.id = rows[index + 1].item.id;
+        if (mutation === 'corrupt-terminal') {
+          const corrupt = structuredClone(progress); corrupt.item.id += '-corrupt'; corrupt.item.text = '{"review_contract":';
+          rows.splice(index + 2, 0, corrupt);
+        }
+        if (mutation === 'failed-turn') rows.splice(rows.length - 1, 0, { type: 'turn.failed', error: { message: 'original failed turn' } });
+        if (mutation === 'incomplete-turn') rows.splice(rows.findIndex(row => row.type === 'turn.completed'), 1);
+        if (mutation === 'foreign-session') rows.unshift({ ...rows[0], thread_id: 'foreign-session' });
+        bytes = Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+      }
+    }
+    return emit.call(this, event, bytes, ...args);
+  };
+  try {
+    if (mutation === 'progress') {
+      const { validationInput } = await codexJudgmentFixtures.unitJudgment(f);
+      assert.equal(roleArtifact.validateJudgmentManifest(validationInput).envelope.verdict, 'conform');
+      assert.equal(roleArtifact.read(validationInput).envelope.verdict, 'conform');
+      assert.equal(roleArtifact.currentArchitectureVerdict({ worktreePath: f.root, pr: f.pr.number,
+        head: f.head, baseName: 'main', baseCommit: f.base, headBranch: f.pr.headRefName,
+        graphDir: path.join(f.root, '.planning/graph') })?.dispatch_id, validationInput.dispatchId);
+    } else await assert.rejects(() => codexJudgmentFixtures.unitJudgment(f));
+    assert.ok(observed, 'original registered native CLI boundary was exercised');
+  } finally { prototype.emit = emit; codexJudgmentFixtures.cleanupJudgment(f); }
+});
+
 test('fresh Codex architecture artifact remains valid after CLI inflight cleanup', async () => {
   const f = codexJudgmentFixtures.fixture();
   try {
@@ -1352,20 +1405,143 @@ function fixtureAggregateHint(value, row, boundary) {
   return { familyName, id, record: { dispatch_id: id, ticket: subject, receipt: dispatch.receipt, pins } };
 }
 
+async function aggregateNativeDispatch(value, selected) {
+  const crypto = require('node:crypto');
+  const { EventEmitter } = require('node:events');
+  const { createClaudeRuntimeHost } = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+  const { createClaudeDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
+  const { capture } = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs');
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const registry = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/captured/boundaries/claude-stream.json')));
+  const streamPath = registry.fixtures.find(file => file.endsWith('/claude-stream-research.jsonl'));
+  assert.ok(streamPath, 'registered original Claude stream is required');
+  const templates = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
+    .map(JSON.parse).filter(record => !record.shipyard_fixture);
+  const template = predicate => structuredClone(templates.find(predicate));
+  const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
+  const session = crypto.randomUUID();
+  const subject = value.input.binding.subject;
+  const aggregate = { ...value, ticket: subject, ticketSet: value.input.binding.ticketSet };
+  const result = archReviewResult(aggregate, { verdict: 'conform', blocking_count: 0,
+    ticket_set: aggregate.ticketSet,
+    host_context: { phase_archive_selection: selected.selection, graph_dir: value.input.graphDir,
+      phase_repo: null, phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(selected.evidence) } });
+  const original = { ...result, evidence_markdown: 'complete architecture review evidence\n' };
+  const requiredRefs = ['.planning/graph/tickets.json', '.planning/graph/delivery-state.json',
+    path.relative(value.root, value.input.inventoryPath), ...selected.pins.map(pin => pin.path)];
+  const base = git(value.root, ['rev-parse', 'main']);
+  const packet = packets.buildContextPacket({ root: value.root, role: 'arch-review', subject,
+    sourceRevision: result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+    scope: { files_modified: requiredRefs }, requiredRefs, uniqueContent: true,
+    roleContext: { adr_refs: [], exact_diff: { base, head: result.head,
+      content: git(value.root, ['diff', base, 'HEAD', '--']) },
+      integration_base: { ref: 'main', commit: base, tree: result.base_tree },
+      ticket_set: aggregate.ticketSet, ticket_set_digest: value.input.binding.membership,
+      phase_archive_roster: { identity: selected.selection.identity, roster_digest: selected.selection.roster_digest,
+        inventory_digest: selected.selection.inventory_digest } } });
+  packets.validateContextPacket(packet, { root: value.root, role: 'arch-review', subject,
+    sourceRevision: result.head, policyHash: policy.POLICY_HASH });
+  const prompt = '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packet) + '\n</AUTHENTICATED_CONTEXT_PACKET>';
+  const transcriptDir = path.join(value.root, 'aggregate-transcripts');
+  let suppliedUserInput;
+  const runtime = createClaudeRuntimeHost({
+    scope: { run_id: 'archive-aggregate-' + session, ticket: subject, phase: 47, worktree: value.root },
+    recorder: value.recorder, transcriptDir, uuid: () => session,
+    startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
+    sessionTranscriptRoot: path.join(value.root, 'aggregate-native'),
+    probe: { status: 'available', executable: 'claude-fixture', runtime_version: registry.cli_version,
+      capabilities: { assistantTranscriptEvidence: true, restrictedTools: true, sandboxedBash: true } },
+    spawn(_file, args) {
+      const child = new EventEmitter(); child.pid = process.pid;
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+      let framedInput = '';
+      child.stdin = { write(bytes) { framedInput += bytes; }, end() {
+        process.nextTick(() => {
+          try {
+            assert.ok(framedInput.endsWith('\n'));
+            suppliedUserInput = JSON.parse(framedInput.slice(0, -1));
+            assert.equal(suppliedUserInput.type, 'user');
+            assert.equal(suppliedUserInput.message.role, 'user');
+            assert.equal(suppliedUserInput.message.content, prompt);
+            const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
+            const init = template(row => row.type === 'system' && row.subtype === 'init');
+            Object.assign(init, { session_id: session, model, cwd: value.root });
+            const assistant = template(row => row.type === 'assistant');
+            assistant.session_id = session;
+            assistant.message.model = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
+            assistant.message.content[0].input = original;
+            const final = template(row => row.type === 'result');
+            Object.assign(final, { session_id: session, is_error: false, structured_output: original, result: JSON.stringify(original) });
+            const nativeFile = path.join(value.root, 'aggregate-native/project', session + '.jsonl');
+            fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
+            fs.writeFileSync(nativeFile, serialize([{ ...suppliedUserInput, sessionId: session },
+              { ...structuredClone(assistant), sessionId: session, effort }]));
+            const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+            const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
+            const hookValue = name => hookArgs[hookArgs.indexOf(name) + 1];
+            capture({ hook_event_name: 'SessionStart', source: 'startup', session_id: session,
+              transcript_path: nativeFile, cwd: value.root }, {
+              evidenceFile: hookValue('--evidence-file'), expectedSession: hookValue('--expected-session') });
+            child.stdout.emit('data', Buffer.from(serialize([init, assistant, final])));
+            child.emit('close', 0, null);
+          } catch (error) { child.emit('error', error); }
+        });
+      } };
+      return child;
+    },
+  });
+  const adapter = createClaudeDispatchAdapter({ capabilities: runtime.capabilities, host: {
+    async launch(selection) {
+      const completed = await runtime.agent(prompt, selection);
+      assert.deepEqual(completed.output, original);
+      return runtime.applicationEvidence({ result: completed });
+    },
+  } });
+  const dispatch = await createDispatchBoundary({ adapters: { claude: adapter }, recorder: value.recorder })
+    .dispatch({ runtime: 'claude', role: 'arch-review', signals: {} }, { ticket: subject, subject_kind: 'phase', phase: 47 });
+  const receipt = dispatch.receipt;
+  assert.equal(receipt.compliance, 'verified');
+  assert.equal(receipt.session_id, session);
+  assert.deepEqual(value.recorder.getVerifiedRecord(dispatch.dispatch_id).receipt, receipt);
+  const stream = fs.readFileSync(receipt.transcript.path);
+  const nativePath = path.join(path.dirname(receipt.transcript.path), 'projects', receipt.selection_evidence.transcript.path);
+  const native = fs.readFileSync(nativePath);
+  for (const [bytes, pin] of [[stream, receipt.transcript], [native, receipt.selection_evidence.transcript]]) {
+    assert.equal(bytes.length, pin.bytes);
+    assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), pin.sha256);
+    assert.ok(bytes.toString('utf8').endsWith('\n'));
+  }
+  assert.notEqual(receipt.transcript.sha256, receipt.selection_evidence.transcript.sha256);
+  const users = native.toString('utf8').trim().split('\n').map(JSON.parse)
+    .filter(row => row.type === 'user' && row.sessionId === session);
+  assert.equal(users.length, 1);
+  assert.deepEqual(users[0].message, suppliedUserInput.message);
+  return { aggregate: { ...aggregate, dispatch }, result, nativePath };
+}
+
 for (const conflict of [null, 'ticket', 'receipt.ticket', 'runtime_evidence.ticket'])
-test('phase-local archive scope: batch catalogue aggregate identities ' + (conflict || 'discover current verdict'), () => {
+test('phase-local archive scope: batch catalogue aggregate identities ' + (conflict || 'discover current verdict'), async () => {
   const value = phaseScopeFixture();
   try {
+    const graphPath = path.join(value.input.graphDir, 'tickets.json');
+    const graph = JSON.parse(fs.readFileSync(graphPath));
+    graph.tickets['T-47-02'] = { ...graph.tickets[value.ticket], repo: 'acme/foreign' };
+    fs.writeFileSync(graphPath, JSON.stringify(graph));
+    const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+    const originalSubject = target.PHASE_SUBJECT.exec(value.input.binding.subject);
+    const bindingInput = { graph, state: {}, phase: 47, repository: originalSubject[2],
+      branch: 'epic/47-scope', pr: 404, head: originalSubject[5], base: originalSubject[6] };
+    assert.deepEqual(target.phaseBinding(bindingInput), value.input.binding);
+    const foreignBinding = target.phaseBinding({ ...bindingInput, repo: 'acme/foreign' });
+    assert.deepEqual(foreignBinding.ticketSet.map(member => member.id), ['T-47-02']);
+    assert.notEqual(foreignBinding.subject, value.input.binding.subject);
     const selected = value.select();
+    assert.deepEqual(selected.selection.records, value.roster.records);
     const subject = value.input.binding.subject;
-    const dispatch = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } },
-      recorder: value.recorder }).dispatch({ runtime: 'claude', role: 'arch-review', signals: {} },
-      { ticket: subject, subject_kind: 'phase', phase: 47 });
-    const aggregate = { ...value, ticket: subject, dispatch, ticketSet: value.input.binding.ticketSet };
-    sealArchReview(aggregate, archReviewResult(aggregate, { verdict: 'conform', blocking_count: 0,
-      ticket_set: aggregate.ticketSet,
-      host_context: { phase_archive_selection: selected.selection, graph_dir: value.input.graphDir,
-        phase_repo: null, phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(selected.evidence) } }));
+    const { aggregate, result, nativePath } = await aggregateNativeDispatch(value, selected);
+    const { dispatch } = aggregate;
+    sealArchReview(aggregate, result);
     mutateFixtureCatalogue(value, payload => {
       const record = payload.records[dispatch.receipt.dispatch_id];
       delete record.ticket;
@@ -1390,6 +1566,20 @@ test('phase-local archive scope: batch catalogue aggregate identities ' + (confl
       assert.equal(lookup({ baseName: 'develop' }), null);
       assert.equal(lookup({ baseCommit: parsed[5] }), null);
       assert.equal(lookup({ repo: 'acme/foreign' }), null);
+      const originalReceipt = JSON.stringify(value.recorder.getVerifiedRecord(dispatch.dispatch_id).receipt);
+      for (const file of [dispatch.receipt.transcript.path, nativePath]) {
+        const bytes = fs.readFileSync(file);
+        const mode = fs.statSync(file).mode & 0o777;
+        for (const malformed of [null, bytes.subarray(0, bytes.length - 1), Buffer.concat([bytes, Buffer.from('altered\n')])]) {
+          try {
+            if (malformed === null) fs.unlinkSync(file);
+            else fs.writeFileSync(file, malformed);
+            assert.equal(lookup(), null, 'missing, truncated or altered original evidence must refuse current admission');
+          } finally { fs.writeFileSync(file, bytes, { mode }); fs.chmodSync(file, mode); }
+          assert.equal(lookup().dispatch_id, dispatch.receipt.dispatch_id);
+          assert.equal(JSON.stringify(value.recorder.getVerifiedRecord(dispatch.dispatch_id).receipt), originalReceipt);
+        }
+      }
     }
   } finally { cleanPhaseScope(value); }
 });
@@ -1977,6 +2167,144 @@ for (const repo of [null, 'acme/selected']) test('mixed repository archive scope
     fs.unlinkSync(path.join(value.root,pin.path));
     assert.throws(()=>value.select({phaseArchiveSelection:selected.selection}));
   } finally {cleanPhaseScope(value);}
+});
+
+test('completed reference authentication rejects caller authority with no filesystem mutation', () => {
+  const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  for (const selectors of [null, {}, { worktree: '/missing', progress: {}, receipt_store: '/missing', dispatch_id: 'missing',
+    evidence: {} }, { worktree: '/missing', progress: {}, receipt_store: '/missing', dispatch_id: 'missing',
+    completed: true }, ...['gsd_role', 'gsd_launch_mechanism', 'native_child_evidence', 'task_relay'].map(key => ({
+      worktree: '/missing', progress: {}, receipt_store: '/missing', dispatch_id: 'missing', [key]: {} }))]) {
+    assert.throws(() => authority.authenticateCompletedReviewReferences(selectors),
+      error => error.code === 'REVIEW_PROGRESS_REQUIRED');
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'completed-reference-refusal-'));
+  try {
+    git(root, ['init', '--quiet']);
+    const store = path.join(root, 'absent-original-store');
+    const source = `
+      const fs = require('node:fs');
+      const authority = require(process.env.REFERENCE_MODULE);
+      const selectors = JSON.parse(process.env.REFERENCE_SELECTORS);
+      for (const name of ['mkdirSync', 'writeFileSync', 'renameSync', 'unlinkSync', 'appendFileSync', 'fsyncSync'])
+        fs[name] = () => { throw new Error('unexpected authority mutation: ' + name); };
+      const original = fs.openSync;
+      fs.openSync = (file, flags, ...args) => {
+        if (typeof flags === 'string' ? flags !== 'r' : flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT))
+          throw new Error('unexpected authority write-open');
+        return original(file, flags, ...args);
+      };
+      try { authority.authenticateCompletedReviewReferences(selectors); process.exit(2); }
+      catch (error) {
+        if (error.message.includes('unexpected authority')) throw error;
+        process.stdout.write('REFUSED_WITHOUT_WRITES');
+      }
+    `;
+    const output = execFileSync(process.execPath, [...testAuthorityArgs, '-e', source], { encoding: 'utf8',
+      env: { ...process.env, REFERENCE_MODULE: require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs'),
+        REFERENCE_SELECTORS: JSON.stringify({ worktree: root, receipt_store: store, dispatch_id: 'missing-original',
+          progress: { reference: 'review-progress-' + '0'.repeat(64) + '.json', sha256: '0'.repeat(64) } }) } });
+    assert.equal(output, 'REFUSED_WITHOUT_WRITES');
+    assert.equal(fs.existsSync(store), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+
+test('focused completeness and subject declarations fail closed without consumption inference', () => {
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const binding = { review_contract: context.FOCUSED_CONTRACT, repository: '/repo/.git', id: 'T-49-20',
+    pr: 473, head: 'a'.repeat(40), base_commit: 'b'.repeat(40), merge_base: 'c'.repeat(40),
+    base_tree: 'd'.repeat(40), ticket_set_digest: 'e'.repeat(64), context_digest: 'f'.repeat(64) };
+  const result = { ...binding, launch_digest: '1'.repeat(64), review_completeness: 'complete', limitations: [], unresolved_sources: [] };
+  assert.equal(context.validateFocusedResult(result, binding), true);
+  for (const edit of [{ review_contract: 'forged' }, { review_completeness: 'maybe' },
+    { unresolved_sources: ['src/missing.cjs'] }, { limitations: ['unresolved boundary'] },
+    { limitations: ['x'.repeat(1025)] }, { base_commit: '9'.repeat(40) }])
+    assert.throws(() => context.validateFocusedResult({ ...result, ...edit }, binding));
+  assert.equal(context.validateFocusedResult({ ...result, review_completeness: 'incomplete',
+    unresolved_sources: ['src/missing.cjs'] }, binding), true);
+});
+
+
+for (const corrupt of [false, true]) test('current integration excludes foreign catalogue before authority reads: ' + corrupt, () => {
+  const value = phaseScopeFixture({ second: true });
+  const read = fs.readFileSync;
+  try {
+    const foreign = path.join(roleArtifact.archiveAuthorityDirectory(fs.realpathSync(value.second)), 'catalogue.json');
+    if (corrupt) fs.writeFileSync(foreign, 'corrupt foreign catalogue'.repeat(800000));
+    let opened = 0;
+    fs.readFileSync = function(file, ...args) {
+      if (String(file) === foreign) { opened++; throw new Error('foreign catalogue must not be opened'); }
+      return read.call(this, file, ...args);
+    };
+    const head = git(value.root, ['rev-parse', 'HEAD']);
+    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: value.root, head,
+      baseName: 'main', baseCommit: git(value.root, ['rev-parse', 'main']),
+      graphDir: value.input.graphDir, headBranch: 'epic/47-scope' }), null);
+    assert.equal(opened, 0);
+  } finally { fs.readFileSync = read; cleanPhaseScope(value); }
+});
+
+for (const runtime of ['codex', 'claude']) test('aggregate original subject reconciles retained and legacy ' + runtime, () => {
+  const value = judgmentFixture();
+  try {
+    const subject = 'phase=47-scope;repository=/fixture;tickets=' + 'a'.repeat(64);
+    const launch = resolution => ({ ...judgmentReceipt(resolution),
+      ...(resolution.agent_file ? { agent_file: resolution.agent_file,
+        agent_file_digest: resolution.agent_file_digest } : {}) });
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const selected = policy.resolveDispatch({ runtime, role: 'integrator', signals: {} });
+    const agentsDir = path.join(value.root, 'agents');
+    if (runtime === 'codex') {
+      fs.mkdirSync(agentsDir);
+      const content = [
+        '# shipyard-policy-id = "' + policy.POLICY.id + '"',
+        '# shipyard-policy-version = "' + selected.policy_version + '"',
+        '# shipyard-policy-hash = "' + selected.policy_hash + '"',
+        '# shipyard-policy-runtime = "codex"',
+        '# shipyard-policy-role = "' + selected.role + '"',
+        '# shipyard-policy-rung = "' + selected.rung + '"',
+        'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"',
+        'model = "' + selected.model + '"',
+        'model_reasoning_effort = "' + selected.effort + '"',
+        "developer_instructions = '''\nAuthenticate the original integration subject.\n'''", '',
+      ].join('\n');
+      fs.writeFileSync(path.join(agentsDir, selected.agent_file), content);
+      fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
+        policy_id: policy.POLICY.id, policy_version: selected.policy_version, policy_hash: selected.policy_hash,
+        agent_files: [selected.agent_file], agent_digests: {
+          [selected.agent_file]: require('node:crypto').createHash('sha256').update(content).digest('hex'),
+        },
+      }));
+    }
+    const boundary = createDispatchBoundary({ adapters: { [runtime]: {
+      ...(runtime === 'codex' ? { agentsDir } : {}), launch, launchStatic: launch,
+    } }, recorder: value.recorder });
+    const dispatch = boundary.dispatch({ runtime, role: 'integrator', signals: {} }, { ticket: subject });
+    if (runtime === 'codex') {
+      assert.equal(dispatch.receipt.agent_file, selected.agent_file);
+      assert.equal(dispatch.receipt.agent_file_digest,
+      require('node:crypto').createHash('sha256')
+        .update(fs.readFileSync(path.join(agentsDir, selected.agent_file))).digest('hex'));
+    }
+    const Module = require('node:module');
+    const isolated = new Module(ROLE_ARTIFACT, module);
+    isolated.filename = ROLE_ARTIFACT;
+    isolated.paths = Module._nodeModulePaths(path.dirname(ROLE_ARTIFACT));
+    isolated._compile(fs.readFileSync(ROLE_ARTIFACT, 'utf8')
+      + '\nmodule.exports = { authenticatedRecordSubject };', ROLE_ARTIFACT);
+    const record = { dispatch_id: dispatch.receipt.dispatch_id, receipt: dispatch.receipt,
+      review_current: { receipt_store: value.recorder.storeDir } };
+    const read = isolated.exports.authenticatedRecordSubject;
+    assert.equal(read(record), subject);
+    assert.equal(read({ ...record, review_current: undefined, receipt_store: value.recorder.storeDir }), subject);
+    assert.equal(read({ ...record, ticket: subject }), subject);
+    assert.throws(() => read({ ...record, ticket: subject + '-foreign' }));
+    assert.throws(() => read({ ...record, receipt: { ...record.receipt, ticket: 'foreign' } }));
+    assert.throws(() => read({ ...record, review_current: {} }));
+    assert.throws(() => read({ ...record, dispatch_id: 'missing-original' }));
+  } finally { clean(value); }
 });
 
 done();

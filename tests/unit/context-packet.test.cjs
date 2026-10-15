@@ -420,5 +420,44 @@ test('an unknown backlogInventory value is refused', () => {
   }
 });
 
+test('unique semantic content preserves distinct governing obligations and refuses tampering', () => {
+  const api = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.root, 'COPY.md'), f.plan);
+    const original = buildContextPacket(options(f, { requiredRefs: ['COPY.md', 'PLAN.md'] }));
+    const encoded = api.encodeUniqueContent(original);
+    assert.equal(encoded.dictionary.filter(entry => entry.sha256 === sha256(f.plan)).length, 1);
+    assert.equal(encoded.obligations.filter(ref => ref.content_sha256 === sha256(f.plan)).length, 2);
+    validateContextPacket(encoded);
+    assert.equal(original.logical_source_obligations.filter(ref => ref.path === 'PLAN.md').length, 2);
+    validateContextPacket(buildContextPacket(options(f, { uniqueContent: true })));
+    const reversed = buildContextPacket(options(f, { requiredRefs: ['PLAN.md', 'COPY.md'] }));
+    assert.equal(api.encodeUniqueContent(reversed).dictionary_sha256, encoded.dictionary_sha256);
+    assert.equal(api.encodeUniqueContent(reversed).obligations_sha256, encoded.obligations_sha256);
+    for (const alter of [value => value.obligations.pop(), value => value.dictionary[0].content += 'changed',
+      value => value.obligations[0].content_sha256 = '0'.repeat(64), value => value.obligations[0].provenance = [], value => value.dictionary.push(value.dictionary[0]),
+      value => value.schema = 'shipyard.semantic-content.v99']) {
+      const value = JSON.parse(JSON.stringify(encoded)); alter(value);
+      assert.throws(() => api.decodeUniqueContent(value));
+    }
+    fs.writeFileSync(path.join(f.root, 'COPY.md'), 'mutated');
+    assert.throws(() => validateContextPacket(api.decodeUniqueContent(encoded)));
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('retained role evidence shares exact complete bytes while preserving both locations', () => {
+  const api = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const evidence = [{ role: 'integrator', receipt: 'original', findings: ['unresolved'], content: 'complete evidence' }];
+  const packet = { source_revision: 'a'.repeat(40), binding: { retained_evidence: evidence }, retained_evidence: evidence };
+  const encoded = api.encodeUniqueContent(packet);
+  assert.equal(encoded.dictionary.length, 1);
+  assert.equal(encoded.obligations.length, 2);
+  assert.deepEqual(api.decodeUniqueContent(encoded), packet);
+  assert.equal(encoded.accounting.logical_content_bytes, 2 * encoded.accounting.unique_content_bytes);
+  const broken = { source_revision: 'a'.repeat(40), required_refs: [{ path: 'ADR.md', sha256: 'b'.repeat(64), bytes: 4 }], refs: [] };
+  assert.throws(() => api.encodeUniqueContent(broken));
+});
+
 assert.ok(DEFAULT_TOKEN_CEILING >= 12000);
 done();
