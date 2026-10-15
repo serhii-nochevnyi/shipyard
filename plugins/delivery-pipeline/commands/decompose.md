@@ -310,9 +310,14 @@ The decomposition envelope must carry a bounded `artifact_index` reference.
 That index lists the exact relative paths, byte counts, and SHA-256 digests of
 `CONTEXT.md` and every `PLAN.md`. The trusted consumer checks containment,
 source revision, phase/repository/ADR identity, and every listed digest before
-Gate 2. A success message without those materialized files, a wrong phase or
-ADR digest, a stale or altered plan, a missing receipt, or a forged application
-receipt is a hard refusal. Artifact validity never replaces the real
+Gate 2. The ADR digest in the subject is the SHA-256 of the bytes of the one
+accepted ADR the decomposition was launched for, named by the request's `adr`
+field: a repository-relative path to a regular file directly inside
+`.planning/architecture/`. Both hosts resolve and hash it from the worktree at
+launch and again when the envelope is sealed. A success message without those
+materialized files, a subject without `adr=`, a wrong phase, repository or ADR
+digest, an ADR edited after launch, a stale or altered plan, a missing receipt,
+or a forged application receipt is a hard refusal. Artifact validity never replaces the real
 `validate-graph.cjs` gate; it is evidence that the gate consumed the intended
 planning output.
 
@@ -362,6 +367,9 @@ context first, then one callback set, then materialization verification.
      build decomposition "$planningInput" --phase "$phase" --runtime "$runtime"
    ```
 
+   The builder resolves the accepted ADR (the selected ADR, or the one the
+   investigation links with `adr:` in `PROBLEM.md`; an investigation with no
+   linked ADR is refused) and puts its path in the request's `adr` field.
    The builder attaches a verified context packet with required source content
    and digest-bound references for the selected ADR or investigation,
    requirements, roadmap, applicable research, phase context, and the graph
@@ -398,7 +406,7 @@ context first, then one callback set, then materialization verification.
    `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs` before the first typed
    launch. The decomposition packet uses the resolved project root and source
    revision, role `decomposition`, subject
-   `phase=<N>;repository=<repo>;adr=<ADR digest>`, the ADR-014 policy object and
+   `phase=<N>;input=<INV-id|ADR-id>;repository=<repo>`, the ADR-014 policy object and
    `policy_hash`, complete ADR/requirements/research/context references, and
    `roleContext: { adr_refs, requirements, research_refs, context }`. Select
    backlog items through `backlog-index.cjs`, carry their source hashes and

@@ -236,11 +236,11 @@ host_request() {
       };
       codexHost.validateArgs({ role: request.role, signals: request.signals, context: request.context });
     } else if (runtime === "claude") {
-      request = { role: "gsd-planner", phase: 1, worktree: project, prompt: plannerPrompt, signals: {} };
+      request = { role: "gsd-planner", phase: 1, worktree: project, prompt: plannerPrompt, signals: {}, adr };
       require(path.join(scripts, "claude-decompose-host.cjs")).canonicalRequest(request);
     } else {
-      request = { scope: codexScope, gsd_role: "gsd-planner", prompt: plannerPrompt, signals: {} };
-      require(path.join(scripts, "codex-decompose-host.cjs")).requestValue({ gsd_role: request.gsd_role, prompt: request.prompt, signals: request.signals });
+      request = { scope: codexScope, gsd_role: "gsd-planner", prompt: plannerPrompt, signals: {}, adr };
+      require(path.join(scripts, "codex-decompose-host.cjs")).requestValue({ gsd_role: request.gsd_role, prompt: request.prompt, signals: request.signals, adr: request.adr });
     }
     process.stdout.write(JSON.stringify(request));
   ' "$SCRIPTS" > "$work/$1.request.json"
