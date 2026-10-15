@@ -92,7 +92,9 @@ while IFS= read -r target; do
   grep -qE "^$target:" Makefile || fail "README references missing make target: $target"
 done < <(grep -oE 'make [a-z][a-z0-9-]+' README.md | awk '{print $2}' | sort -u)
 
-grep -q 'make test-fast' .github/workflows/test.yml || fail "CI must run make test-fast"
+grep -q 'make test-fast-rest' .github/workflows/test.yml || fail "CI must run the non-unit part of make test-fast"
+grep -q 'UNIT_SHARD' .github/workflows/test.yml || fail "CI must run the sharded unit suite"
+grep -qE '^  test-fast:' .github/workflows/test.yml || fail "CI must report a single test-fast job"
 grep -q "node-version: '24.15.0'" .github/workflows/test.yml || fail "CI Node version is not pinned"
 if grep -Eiq 'docker|container|k8s|kubernetes|dockerfile|image|entrypoint' .github/workflows/test.yml; then
   fail "CI still names a retired execution path"
