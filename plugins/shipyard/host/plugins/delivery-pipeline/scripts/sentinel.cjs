@@ -918,9 +918,6 @@ function dutyItems() {
       && s.authenticated_architecture.pr === s.pr && s.authenticated_architecture.head === s.head_sha
       && s.authenticated_architecture.base_commit === s.pr_base_sha && s.authenticated_architecture.base === base
       && s.authenticated_architecture.verdict === 'conform');
-    const integrationReady = !item.architecture.required || (s.authenticated_integration?.authenticated === true
-      && s.authenticated_integration.head === s.head_sha && s.authenticated_integration.base_commit === s.pr_base_sha
-      && s.authenticated_integration.base === base && s.authenticated_integration.outcome === 'passed');
     item.depth = stackDepth(id);
 
     if (PARKED.has(id)) {
@@ -1018,9 +1015,6 @@ function dutyItems() {
     } else if (item.architecture.required && !architectureReady && s.review_decision !== 'CHANGES_REQUESTED') {
       item.action = 'arch-review';
       item.why = 'integration target requires a fresh authenticated verdict on the exact live head and base';
-    } else if (item.architecture.required && !integrationReady && s.review_decision !== 'CHANGES_REQUESTED') {
-      item.action = 'integrator';
-      item.why = 'integration target requires a fresh authenticated integration verdict on the exact combined subject';
     } else if (t.checkpoint === 'review' && !reviewCheckpointReady(s)) {
       item.action = 'human';
       item.why = 'awaiting human review';
@@ -1288,7 +1282,6 @@ function mergeOne(id) {
       pr: s.pr, graphDir: GRAPH_DIR }); }
     catch (error) { return block('authenticated current review unavailable: ' + error.message); }
     if (!admitted?.architecture.ready) return block('integration PR requires a fresh authenticated architecture verdict on its live head and base before human merge');
-    if (!admitted?.integration) return block('integration PR requires a fresh authenticated integration verdict on its live combined subject before human merge');
     return block(`PR targets the integration branch ${integration} — landing a phase there is a human's decision, never the sentinel's`);
   }
   if (!allowed.has(pr.baseRefName)) {

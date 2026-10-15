@@ -637,6 +637,32 @@ test('a PR targeting the integration branch is refused though every ticket is pr
   assert.ok(r.blockers.some((b) => /human/.test(b)), r.blockers.join('; '));
 });
 
+test('direct integration duty counts current architecture as a human merge handoff', () => {
+  const current = { authenticated: true, pr: 9, head: 'a'.repeat(40),
+    base_commit: 'c'.repeat(40), base: 'main', verdict: 'conform' };
+  const root = project({ tickets: { A: { branch: 'ticket/A', epic: 'epic/24-x' } },
+    state: { A: { ...openGreen(9, 'ticket/A', 'main'), merge_scope: 'integration',
+      head_sha: current.head, pr_base_sha: current.base_commit, authenticated_architecture: current } },
+    config: epicConfig });
+  const env = onPath(stubGh(), { STUB_BASE: 'main', STUB_HEAD: 'ticket/A', STUB_PR: '9' });
+  const duty = JSON.parse(run(root, ['duty', '--json'], { env }).stdout);
+  assert.strictEqual(duty.items[0].action, 'human-merge');
+  assert.strictEqual(duty.human_count, 1);
+  assert.strictEqual(duty.actionable_count, 0);
+  assert.strictEqual(duty.waiting_count, 0);
+  assert.strictEqual(duty.clear, true);
+  for (const verdict of [null, { ...current, pr: 10 }, { ...current, head: 'b'.repeat(40) },
+    { ...current, base_commit: 'd'.repeat(40) }, { ...current, base: 'another-base' }]) {
+    const file = path.join(root, '.planning/graph/delivery-state.json');
+    const state = JSON.parse(fs.readFileSync(file)); state.A.authenticated_architecture = verdict;
+    fs.writeFileSync(file, JSON.stringify(state));
+    const stale = JSON.parse(run(root, ['duty', '--json'], { env }).stdout);
+    assert.strictEqual(stale.items[0].action, 'arch-review');
+    assert.strictEqual(stale.actionable_count, 1);
+    assert.strictEqual(stale.clear, false);
+  }
+});
+
 test('foreign integration lookup uses planning Git identity and keeps checkout availability guard', () => {
   const repo = 'acme/other';
   const root = project({
@@ -657,9 +683,9 @@ test('foreign integration lookup uses planning Git identity and keeps checkout a
   const artifactModule = path.join(path.dirname(SENTINEL),'role-artifact.cjs');
   fs.writeFileSync(preload, `const fs=require('fs'),target=${JSON.stringify(artifactModule)};
 const original=require(target);
-const observe=(role,input)=>{fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({role,input})+'\\n');return role==='integration'&&process.env.STUB_INTEGRATION_MISSING==='1'?null:{authenticated:true,verdict:'conform'};};
+const observe=(role,input)=>{fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({role,input})+'\\n');return role==='integration'||process.env.STUB_ARCHITECTURE_MISSING==='1'?null:{authenticated:true,verdict:'conform'};};
 require.cache[require.resolve(target)].exports={...original,currentArchitectureVerdict:input=>observe('architecture',input),currentIntegrationVerdict:input=>observe('integration',input)};`);
-  const env = onPath(stubGh(), {STUB_BASE:'main',STUB_BASE_OID:'c'.repeat(40),STUB_HEAD:'ticket/T-FR',STUB_PR:'9',STUB_HEAD_OID:'a'.repeat(40),STUB_INTEGRATION_MISSING:'0',NODE_OPTIONS:'--require=' + preload});
+  const env = onPath(stubGh(), {STUB_BASE:'main',STUB_BASE_OID:'c'.repeat(40),STUB_HEAD:'ticket/T-FR',STUB_PR:'9',STUB_HEAD_OID:'a'.repeat(40),STUB_ARCHITECTURE_MISSING:'0',NODE_OPTIONS:'--require=' + preload});
   const result = run(root,['merge','T-FR','--json','--dry-run'],{env});
   assert.strictEqual(result.status,0,result.stderr);
   assert.ok(fs.existsSync(observed),result.stdout);
@@ -681,13 +707,13 @@ require.cache[require.resolve(target)].exports={...original,currentArchitectureV
   assert.strictEqual(row.would_merge,undefined);
   assert.ok(row.blockers.some(b=>/human/.test(b)),row.blockers.join('; '));
   fs.unlinkSync(observed);
-  const unavailableRole = run(root,['merge','T-FR','--json','--dry-run'],{env:{...env,STUB_INTEGRATION_MISSING:'1'}});
+  const unavailableRole = run(root,['merge','T-FR','--json','--dry-run'],{env:{...env,STUB_ARCHITECTURE_MISSING:'1'}});
   assert.strictEqual(unavailableRole.status,0,unavailableRole.stderr);
   assert.deepStrictEqual(observations().map(({role})=>role),['architecture','integration']);
   const roleRow = JSON.parse(unavailableRole.stdout).results[0];
   assert.strictEqual(roleRow.merged,false);
   assert.strictEqual(roleRow.would_merge,undefined);
-  assert.ok(roleRow.blockers.some(b=>/fresh authenticated integration/.test(b)),roleRow.blockers.join('; '));
+  assert.ok(roleRow.blockers.some(b=>/fresh authenticated architecture/.test(b)),roleRow.blockers.join('; '));
   fs.unlinkSync(observed);
   const incomplete = run(root,['merge','T-FR','--json','--dry-run'],{env:{...env,STUB_BASE_OID:''}});
   assert.strictEqual(incomplete.status,0,incomplete.stderr);

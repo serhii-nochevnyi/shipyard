@@ -62,6 +62,92 @@ test('focused original inline judgment reaches finish, archive lookup and the ex
   });
 });
 
+for (const completeness of ['complete', 'incomplete']) test('direct ticket original ' + completeness + ' architecture reaches actual sentinel duty and live merge', async () => {
+  await fixture(async f => {
+    f.directTicket = 'T-49-01';
+    git(f.worktree, 'switch', '-qc', f.rows[f.directTicket].branch);
+    f.pr.headRefName = f.rows[f.directTicket].branch;
+    f.rows[f.directTicket].human_checkpoint = false;
+    f.rows[f.directTicket].risk = 'medium';
+    f.state[f.directTicket] = { status: 'pr-open', pr: f.pr.number, branch: f.pr.headRefName };
+    write(f.worktree, '.planning/graph/tickets.json', JSON.stringify({ tickets: f.rows }));
+    write(f.worktree, '.planning/graph/delivery-state.json', JSON.stringify(f.state));
+    commit(f, 'direct ticket review subject');
+    const sentinel = require.resolve('../../plugins/delivery-pipeline/scripts/sentinel.cjs');
+    const preload = path.join(f.root, 'fixture-home.cjs');
+    fs.writeFileSync(preload, "require('node:os').homedir = () => " + JSON.stringify(f.root) + ';');
+    const bin = path.join(f.root, 'bin'); fs.mkdirSync(bin);
+    const live = path.join(f.root, 'live-pr.json');
+    fs.writeFileSync(path.join(bin, 'gh'), '#!/usr/bin/env node\n' +
+      "const args = process.argv.slice(2); if (args[0] === 'pr' && args[1] === 'view') " +
+      "process.stdout.write(require('fs').readFileSync(" + JSON.stringify(live) + ")); " +
+      "else if (args[0] === 'repo') console.log('main'); else process.exit(1);\n", { mode: 0o755 });
+    const invoke = args => JSON.parse(execFileSync(process.execPath, [sentinel, ...args, '--json'], {
+      cwd: f.worktree, encoding: 'utf8', env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
+        NODE_OPTIONS: '--require=' + preload } }));
+    const project = (worktree = f.worktree) => {
+      fs.writeFileSync(live, JSON.stringify(f.pr));
+      const admitted = require('../../plugins/delivery-pipeline/scripts/state-sync.cjs').currentReviewAdmission({ ...currentSubject(f),
+        worktreePath: worktree, graphDir: path.join(worktree, '.planning/graph') });
+      const entry = { ...f.state[f.directTicket], draft: false, merge_scope: 'integration',
+        epic: f.rows[f.directTicket].epic, pr_base: f.pr.baseRefName, integration_branch: 'main',
+        head_sha: f.pr.headRefOid, pr_base_sha: f.pr.baseRefOid,
+        checks: { total: 3, failing: 0, pending: 0, none_reported: false },
+        authenticated_architecture: admitted?.architecture.verdict || null,
+        authenticated_integration: admitted?.integration || null };
+      assert.equal(entry.authenticated_integration, null);
+      write(f.worktree, '.planning/graph/delivery-state.json', JSON.stringify({ ...f.state, [f.directTicket]: entry }));
+      return invoke(['duty', '--scope', f.directTicket]);
+    };
+    const assertOwed = duty => {
+      assert.equal(duty.items[0].action, 'arch-review'); assert.equal(duty.actionable_count, 1);
+      assert.equal(duty.human_count, 0); assert.equal(duty.clear, false);
+    };
+    assertOwed(project());
+    for (const dry of [[], ['--dry-run']]) {
+      const row = invoke(['merge', f.directTicket, ...dry]).results[0];
+      assert.equal(row.merged, false); assert.equal(row.would_merge, undefined);
+      assert.match(row.blockers.join('; '), /fresh authenticated architecture/);
+    }
+    write(f.worktree, '.planning/graph/delivery-state.json', JSON.stringify(f.state));
+    await runFocusedArchitecture(f, result => {
+      if (completeness === 'incomplete') {
+        result.review_completeness = 'incomplete'; result.limitations = ['Unresolved consumer'];
+        result.unresolved_sources = ['src/consumer.cjs'];
+      }
+    });
+    const duty = project();
+    if (completeness === 'incomplete') { assertOwed(duty); return; }
+    assert.equal(duty.items[0].action, 'human-merge'); assert.equal(duty.human_count, 1);
+    assert.equal(duty.actionable_count, 0); assert.equal(duty.waiting_count, 0); assert.equal(duty.clear, true);
+    for (const dry of [[], ['--dry-run']]) {
+      const row = invoke(['merge', f.directTicket, ...dry]).results[0];
+      assert.equal(row.merged, false); assert.equal(row.would_merge, undefined);
+      assert.match(row.blockers.join('; '), /integration branch.*human/);
+    }
+    git(f.worktree, 'update-ref', 'refs/remotes/origin/main', f.head);
+    f.pr.baseRefOid = f.head;
+    assertOwed(project());
+    const movedBase = invoke(['merge', f.directTicket, '--dry-run']).results[0];
+    assert.equal(movedBase.merged, false); assert.equal(movedBase.would_merge, undefined);
+    assert.match(movedBase.blockers.join('; '), /fresh authenticated architecture/);
+    git(f.worktree, 'update-ref', 'refs/remotes/origin/main', f.base);
+    f.pr.baseRefOid = f.base;
+    const foreign = path.join(f.root, 'foreign-repository');
+    git(f.root, 'clone', '--quiet', '--no-hardlinks', f.worktree, foreign);
+    assert.notEqual(git(foreign, 'rev-parse', '--path-format=absolute', '--git-common-dir'),
+      git(f.worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'));
+    assertOwed(project(foreign));
+    assert.equal(project().items[0].action, 'human-merge');
+    git(f.worktree, 'commit', '--allow-empty', '-qm', 'tree-equal moved direct head');
+    f.head = git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
+    assertOwed(project());
+    const stale = invoke(['merge', f.directTicket, '--dry-run']).results[0];
+    assert.equal(stale.merged, false); assert.equal(stale.would_merge, undefined);
+    assert.match(stale.blockers.join('; '), /fresh authenticated architecture/);
+  });
+});
+
 test('focused incomplete original review retains limitations and findings but cannot grant current conformance', async () => {
   await fixture(async f => {
     const reviewed = await runFocusedArchitecture(f, result => {
@@ -128,7 +214,7 @@ async function runFocusedArchitecture(f, edit = () => {}) {
   const scope = { worktree: f.worktree, ticket: prepared.prepared.ticket, phase: 49, run_id: dispatchId };
   const prompt = collector.admittedPrompt(prepared);
   const binding = collector.authenticateFocusedLaunch(prepared, prompt, { ...scope, dispatch_id: dispatchId });
-  const result = { ...binding, ticket_set: prepared.prepared.binding.ticketSet,
+  const result = { ...binding, ticket_set: prepared.prepared.binding?.ticketSet || [prepared.prepared.ticket],
     verdict: 'conform', blocking_count: 0, findings: [], summary: 'Independent focused judgment',
     review_completeness: 'complete', limitations: [], unresolved_sources: [],
     evidence_markdown: 'Complete independent review of the current diff and selected governing ADR.' };
@@ -159,7 +245,7 @@ async function runFocusedArchitecture(f, edit = () => {}) {
     host: { requireRuntimeEvidence: true, launchStatic: () => launched } });
   const dispatched = boundary.createDispatchBoundary({ adapters: { codex: adapter }, recorder }).dispatch(
     { runtime: 'codex', role: 'arch-review', dispatch_id: dispatchId, signals: prepared.launch.signals },
-    { ticket: scope.ticket, subject_kind: 'phase' });
+    { ticket: scope.ticket, ...(prepared.prepared.binding ? { subject_kind: 'phase' } : {}) });
   write(f.worktree, '.shipyard-arch-review-evidence.md', result.evidence_markdown);
   return collector.finish(prepared, dispatched, recorder);
 }
@@ -965,10 +1051,10 @@ function agent(f, role, signals) {
 }
 
 function currentInput(f, role, dispatchId = 'current-' + role + '-' + ++f.count, options = {}) {
-  const binding = phaseBinding(f);
+  const binding = f.directTicket ? null : phaseBinding(f);
   const storage = path.join(f.root, 'inputs');
   if (role === 'arch-review') {
-    const scope = { worktree: f.worktree, phase: 49, ticket: binding.subject, run_id: dispatchId };
+    const scope = { worktree: f.worktree, phase: 49, ticket: f.directTicket || binding.subject, run_id: dispatchId };
     const value = collector.prepare(scope, { role, context: {}, signals: {} }, { graphDir: f.graphDir,
       refreshGit: false, getPullRequest: () => f.pr, inflightDispatchId: dispatchId, storageRoot: storage,
       ...(options.legacy ? { readerProfile: collector.createReaderBatchProfile({
@@ -989,7 +1075,8 @@ function currentInput(f, role, dispatchId = 'current-' + role + '-' + ++f.count,
       relayPrefix: collector.admittedPrompt(value).split('<AUTHENTICATED_CONTEXT_PACKET>')[0],
       binding: { packet_digest: value.prepared.packet.digest, base: f.base, base_ref: 'refs/remotes/origin/main',
         merge_base: value.prepared.packet.diff.merge_base,
-        ticket_set: binding.ticketSet.map(item => item.id), ticket_set_digest: binding.membership,
+        ticket_set: f.directTicket ? [f.directTicket] : binding.ticketSet.map(item => item.id),
+        ticket_set_digest: f.directTicket ? hash(JSON.stringify([f.directTicket])) : binding.membership,
         agent_sha256: instructions.sha256, agent_path: path.join(a.dir, a.selection.agent_file),
         installed_files: instructions.installed_files } });
   }

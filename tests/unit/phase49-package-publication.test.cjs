@@ -35,6 +35,35 @@ const COMPLETE_OWNED = [...OWNED, ...['gate-trailer', 'sentinel', 'state-sync']
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
 
+test('ordinary-complete-candidate-package-parity', () => {
+  const temporary = temporaryDirectory('ordinary-package-parity-');
+  try {
+    const expectedRoot = build(path.join(temporary, 'expected'));
+    const expected = inventory(expectedRoot);
+    assert.deepEqual(inventory(path.join(ROOT, 'plugins/shipyard')), expected,
+      'complete candidate differs from unchanged builder output');
+    const copy = path.join(temporary, 'mutation');
+    for (const mutate of [
+      root => fs.appendFileSync(path.join(root, 'host/plugins/delivery-pipeline/scripts/sentinel.cjs'), '\nstale'),
+      root => fs.appendFileSync(path.join(root, '.codex-plugin/plugin.json'), ' '),
+      root => fs.appendFileSync(path.join(root, 'package-build.json'), ' '),
+      root => fs.unlinkSync(path.join(root, 'package-build.json')),
+      root => fs.writeFileSync(path.join(root, 'extra-member'), 'extra'),
+      root => {
+        const file = path.join(root, 'host/plugins/delivery-pipeline/scripts/sentinel.cjs');
+        fs.chmodSync(file, (fs.statSync(file).mode & 0o7777) ^ 0o100);
+      },
+    ]) {
+      fs.rmSync(copy, { recursive: true, force: true });
+      fs.cpSync(expectedRoot, copy, { recursive: true });
+      assert.deepEqual(inventory(copy), expected);
+      mutate(copy);
+      assert.throws(() => assert.deepEqual(inventory(copy), expected));
+    }
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+
 const CANONICAL_ROOTS = ['scripts', 'plugins/delivery-pipeline', 'capabilities/delivery-pipeline'];
 function canonicalInputs(repository) {
   const rows = CANONICAL_ROOTS.flatMap(directory => inventory(path.join(repository, directory))
@@ -700,6 +729,77 @@ function inspectBatchCI(ci, head) {
   assert(log && typeof log.path === 'string', 'original full CI log missing');
   assert.equal(read(log.path, log.sha256).length, log.bytes, 'full CI log changed');
 }
+
+test('ordinary same-source physical inspection refuses stale sentinel, metadata, inventory and runtime custody', () => {
+  const temporary = temporaryDirectory('ordinary-physical-fixture-');
+  try {
+    const runtimeRoot = path.join(temporary, 'runtime');
+    const packageRoot = build(path.join(runtimeRoot, 'package'));
+    const hostRoot = path.join(runtimeRoot, 'shipyard'); fs.mkdirSync(hostRoot);
+    const outputs = inventory(packageRoot).map(({ mode, ...row }) => ({ ...row, publication_mode: mode }));
+    const prefix = 'host/plugins/delivery-pipeline/';
+    for (const row of outputs.filter(row => row.path.startsWith(prefix) &&
+      ['scripts/', 'references/', 'templates/', 'workflows/', 'skills/delivery-rules/']
+        .some(directory => row.path.startsWith(prefix + directory)))) {
+      const file = path.join(hostRoot, row.path.slice(prefix.length));
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.copyFileSync(path.join(packageRoot, row.path), file); fs.chmodSync(file, row.publication_mode);
+    }
+    const reference = file => ({ path: file, sha256: sha(read(file)), bytes: read(file).length });
+    const capabilities = path.join(hostRoot, 'codex-capabilities.json');
+    fs.writeFileSync(capabilities, '{}\n', { mode: 0o644 });
+    const converterFile = path.join(runtimeRoot, 'fixture-converter.cjs');
+    fs.writeFileSync(converterFile, 'exports.convertClaudeCommandToCodexSkill = value => value;\n');
+    const converted = require('../../scripts/gen-codex-shipyard.cjs').shipyardRewrites(
+      read(path.join(packageRoot, prefix, 'commands/deliver.md')).toString('utf8'), hostRoot)
+      .replace(/\$shipyard-(route|investigate|decompose|deliver|bench|delivery-rules)\b/g, '$shipyard:shipyard-$1');
+    const nativeDeliver = path.join(runtimeRoot, 'native-deliver.md'); fs.writeFileSync(nativeDeliver, converted);
+    const installerLog = path.join(temporary, 'fixture-installer.log');
+    fs.writeFileSync(installerLog, 'Fixture only; no actual installation or Source acceptance.\n');
+    const versionFile = path.join(runtimeRoot, 'VERSION'); fs.writeFileSync(versionFile, '1.0.0\n');
+    const proof = { installer_log: reference(installerLog), gsd_version: { ...reference(versionFile), version: '1.0.0' },
+      converter: reference(converterFile), native_deliver: reference(nativeDeliver) };
+    for (const [key, root] of [['package_manifest', packageRoot], ['bundle_manifest', hostRoot]]) {
+      const file = path.join(temporary, key + '.json');
+      fs.writeFileSync(file, JSON.stringify({ root, files: inventory(root) })); proof[key] = reference(file);
+    }
+    const selected = { outputs };
+    const identity = { source_dirty: false, package_root: packageRoot, host_root: hostRoot,
+      runtime_root: runtimeRoot, native_capabilities: reference(capabilities) };
+    const inspectPhysical = (subject = selected, custody = proof, installed = identity) =>
+      inspectBatchInstalledPhysical(installed, subject, custody);
+    assert.equal(inspectPhysical().package_files, outputs.length);
+    for (const file of ['host/plugins/delivery-pipeline/scripts/sentinel.cjs',
+      '.codex-plugin/plugin.json', 'package-build.json']) {
+      const target = path.join(packageRoot, file), original = read(target);
+      fs.appendFileSync(target, 'stale generation'); assert.throws(() => inspectPhysical());
+      fs.writeFileSync(target, original);
+    }
+    const sentinel = path.join(hostRoot, 'scripts/sentinel.cjs'), original = read(sentinel);
+    fs.appendFileSync(sentinel, 'old23 sentinel'); assert.throws(() => inspectPhysical()); fs.writeFileSync(sentinel, original);
+    const mode = fs.statSync(sentinel).mode & 0o7777;
+    fs.chmodSync(sentinel, mode ^ 0o100); assert.throws(() => inspectPhysical()); fs.chmodSync(sentinel, mode);
+    fs.renameSync(sentinel, sentinel + '.missing'); assert.throws(() => inspectPhysical());
+    fs.renameSync(sentinel + '.missing', sentinel);
+    const extra = path.join(packageRoot, 'extra'); fs.writeFileSync(extra, 'extra');
+    assert.throws(() => inspectPhysical()); fs.unlinkSync(extra);
+    const old = structuredClone(selected);
+    old.outputs.find(row => row.path === prefix + 'scripts/sentinel.cjs').sha256 = '0'.repeat(64);
+    assert.throws(() => inspectPhysical(old), /BUNDLE identity differs/);
+    for (const key of ['package_manifest', 'bundle_manifest', 'installer_log', 'gsd_version', 'converter', 'native_deliver']) {
+      const absent = { ...proof }; delete absent[key]; assert.throws(() => inspectPhysical(selected, absent));
+    }
+    assert.throws(() => inspectPhysical(selected, proof, { ...identity, runtime_root: runtimeRoot + '-foreign' }));
+    assert.throws(() => inspectPhysical(selected, proof, { ...identity, source_dirty: true }));
+    const ci = { headSha: 'a'.repeat(40), status: 'completed', conclusion: 'success', original_full_log: reference(installerLog),
+      jobs: [{ name: 'test-fast', status: 'completed', conclusion: 'success', steps:
+        ['publish gate', 'runtime digest trailer', 'make test-fast'].map(name => ({ name, status: 'completed', conclusion: 'success' })) }] };
+    inspectBatchCI(ci, ci.headSha);
+    assert.throws(() => inspectBatchCI(ci, CURRENT_REVIEW.head), /stale full CI/);
+    assert.throws(() => inspectBatchCI({ ...ci, original_full_log: null }, ci.headSha), /log missing/);
+    fs.appendFileSync(installerLog, 'tampered'); assert.throws(() => inspectBatchCI(ci, ci.headSha));
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
 
 test('batch installed admission retains separate source/publication CI and refuses forged authority', () => {
   const temporary = temporaryDirectory('phase49-batch-ci-refusal-');
@@ -1878,7 +1978,8 @@ function inspectFocusedInstalledGeneration(identity, authenticated, bytes, expec
     original_dispatch: proof.publication_dispatch } }, current ? 'T-49-23' : 'T-49-21', expected.publication_head, expected.publication_tree);
   inspectBatchNative(publicationReceipt, proof.publication_native.path);
   if (current) {
-    assert.equal(proof.publication_worktree, ROOT, 'foreign publication worktree');
+    assert.equal(proof.publication_worktree, inspectCurrentReviewCustody(bytes).publication_worktree,
+      'foreign publication worktree');
     assert.notEqual(expected.publication_head, generation.head, 'source/publication identity collapsed');
     const sourceReceipt = authenticateBatchSource(selected, 'T-49-22', generation.head, generation.tree);
     inspectBatchNative(sourceReceipt, proof.source_native.path);
@@ -1891,7 +1992,7 @@ function inspectFocusedInstalledGeneration(identity, authenticated, bytes, expec
   assert.equal(authenticated.binding.version, selected.package.version);
   assert.equal(authenticated.binding.package_sha256, selected.package.digest);
   equalInputs(selected.inputs, authenticated.binding.source.identities);
-  const published = current ? inspectCurrentReviewPublication(bytes) : inspectFocusedPublication(bytes,
+  const published = current ? inspectCurrentReviewPublication(bytes, proof.publication_worktree) : inspectFocusedPublication(bytes,
     path.join(path.dirname(selected.source.worktree), 'T-49-21'));
   const observed = require('../smoke/phase47-runtime-acceptance.cjs').inspectInstalled(identity, authenticated);
   const physicalIdentity = inspectBatchInstalledPhysical(identity, selected, proof);
@@ -2087,9 +2188,12 @@ function inspectCurrentReviewDelta(selected, historical) {
   return inspectFocusedDelta(selected, historical, CURRENT_REVIEW_INPUTS, CURRENT_REVIEW_OUTPUTS);
 }
 
-function inspectCurrentReviewPublication(bytes, repository = ROOT) {
+function inspectCurrentReviewPublication(bytes, repository) {
   assert.equal(sha(bytes), CURRENT_REVIEW.sha256, 'foreign current-review selection');
+  assert.equal(typeof repository, 'string', 'authenticated original publication checkout required');
   const selected = JSON.parse(bytes);
+  assert.equal(repository, path.join(path.dirname(selected.source.worktree), 'T-49-23'),
+    'foreign original publication checkout');
   assert.equal(selected.stage, path.join(CURRENT_REVIEW.root, 'candidate'));
   const historical = JSON.parse(read(path.join(FOCUSED_ROOT, 'selection.json'), FOCUSED_SHA));
   for (const [root, digest] of [[FOCUSED_ROOT, FOCUSED_SHA], [BATCH_ROOT, BATCH_SHA]]) {
@@ -2121,7 +2225,15 @@ function inspectCurrentReviewCustody(bytes) {
   const launch = JSON.parse(read(state + 'phase49-T23-actual-clean-native-before-stage.json',
     'fa3c92b0d5e94900eaf84c9b38d0645b4ab5a91dc5b2b205a177947dda317729'));
   assert.equal(launch.ticket, 'T-49-23'); assert.equal(launch.role, 'executor');
-  assert.equal(launch.worktree, ROOT); assert.equal(launch.tracked_clean, true);
+  assert.equal(path.basename(selected.source.worktree), 'T-49-22');
+  const publicationWorktree = path.join(path.dirname(selected.source.worktree), launch.ticket);
+  assert.equal(launch.worktree, publicationWorktree);
+  const commonRepository = worktree => fs.realpathSync(execFileSync('git',
+    ['-C', worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+    { encoding: 'utf8', timeout: 10000 }).trim());
+  assert.equal(commonRepository(publicationWorktree), commonRepository(selected.source.worktree));
+  assert.equal(commonRepository(publicationWorktree), commonRepository(ROOT));
+  assert.equal(launch.tracked_clean, true);
   assert.equal(launch.source_head, CURRENT_REVIEW.head);
   assert.equal(launch.baseline_head, CURRENT_REVIEW.squash); assert.equal(launch.baseline_tree, CURRENT_REVIEW.tree);
   assert(Number.isSafeInteger(launch.native_process_id));
@@ -2132,7 +2244,7 @@ function inspectCurrentReviewCustody(bytes) {
   assert.equal(built.source_head, CURRENT_REVIEW.head); assert.equal(built.source_tree, CURRENT_REVIEW.tree);
   assert.equal(built.build_calls, 1); assert.equal(built.published, 0);
   assert.equal(built.outputs, selected.outputs.length);
-  return { installed_acceptance: false, empirical_acceptance: false };
+  return { publication_worktree: publicationWorktree, installed_acceptance: false, empirical_acceptance: false };
 }
 
 function inspectCurrentReviewInstalled(identity, authenticated, bytes, expected, authenticate) {
@@ -2170,8 +2282,10 @@ if (require.main === module) {
       t.skip('HOLD: actual current-review custody unavailable; fixtures grant no installed acceptance'); return;
     }
     const bytes = authenticatePublicSelection(CURRENT_REVIEW.root, CURRENT_REVIEW.sha256, 'public-key.asc');
-    inspectCurrentReviewCustody(bytes);
-    const observed = inspectCurrentReviewPublication(bytes);
+    const custody = inspectCurrentReviewCustody(bytes);
+    assert.notEqual(custody.publication_worktree, ROOT);
+    const observed = inspectCurrentReviewPublication(bytes, custody.publication_worktree);
+    assert.throws(() => inspectCurrentReviewPublication(bytes, ROOT), /publication checkout/);
     assert.deepEqual(observed.changed_inputs, [...CURRENT_REVIEW_INPUTS].sort());
     assert.deepEqual(observed.changed_outputs, [...CURRENT_REVIEW_OUTPUTS].sort());
     assert.equal(observed.installed_acceptance, false);
