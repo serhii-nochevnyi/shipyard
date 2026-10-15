@@ -194,8 +194,11 @@ host_request() {
       + " Write one PLAN.md per ticket (01-01-PLAN.md, 01-02-PLAN.md). Each has YAML frontmatter with phase: 1, plan, title, type: implementation, wave, depends_on, files_modified, requirements"
       + " and a delivery block (ticket: T-01-<MM>, risk: low, human_checkpoint: false), then these Markdown sections as ## headings with bullet lists:"
       + " Goal, Context (Reads), Scope, Out of scope, Acceptance criteria, Test strategy, Verification commands."
-      + " Verification commands are scoped to files_modified and runnable offline, and each one starts with node, bash or make"
-      + " (the hosts run PLAN verification through a fixed allowlist of those executables; no git, npm or shell pipelines)."
+      + " Verification commands are scoped to files_modified and runnable offline. For the code ticket, use node --test tests/greeting.test.cjs"
+      + " and put all acceptance assertions in that owned test file. The fixture approves only node --test and node -e sandbox prefixes;"
+      + " no git, npm, shell pipelines or shell expansion."
+      + " Return changed_paths relative to the phase directory: 01-01-PLAN.md and 01-02-PLAN.md, without a .planning/phases/ prefix."
+      + " List every file actually changed, and do not list unchanged files."
       + " Research findings: " + path.relative(project, artifactRoot) + "/*.md.";
     const sourceRevision = git("rev-parse", "HEAD");
     const repository = fs.realpathSync(git("rev-parse", "--path-format=absolute", "--git-common-dir"));
