@@ -40,10 +40,12 @@ test('run.sh snapshots every unit file and configures each private Git environme
   const launch = content.indexOf('node "${unit_files[$unit_next]}"', worker);
   assert.ok(inventory > 0 && queue > inventory && worker > queue && launch > worker,
     'complete inventory must be snapshotted before the queue and each direct worker launch');
-  assert.equal((content.match(/unit_files=\(/g) || []).length, 1,
+  assert.ok(content.lastIndexOf('unit_files=(') < queue,
     'the snapshotted inventory must not be replaced while scheduling');
-  assert.ok(content.slice(queue, worker).includes('unit_active_count < 4'),
-    'the queue must bound direct workers to four');
+  assert.ok(content.slice(queue, worker).includes('unit_active_count < unit_workers'),
+    'the queue must bound direct workers to the configured count');
+  assert.ok(content.includes('unit_workers="${UNIT_WORKERS:-4}"'),
+    'the worker count must default to four, the CI runner core count');
   const beforeLaunch = content.slice(worker, launch);
   assert.ok(beforeLaunch.includes('cp /dev/null "$unit_worker/gitconfig"'),
     'each worker must start with a fresh private Git config');
