@@ -884,13 +884,22 @@ function finishIntegrationReview(review, dispatch, recorder) {
   if (crypto.createHash('sha256').update(raw).digest('hex') !== pin.sha256)
     fail('RUNTIME_EVIDENCE_MISMATCH', 'original integration transcript changed');
   const parsed = parseCodexStream(raw.toString('utf8'));
-  const messages = parsed.records.filter(item => item.type === 'item.completed' && item.item?.type === 'agent_message');
-  if (parsed.session_id !== evidence.session_id || messages.length !== 1)
-    fail('INVALID_RESULT', 'integration requires one fresh native result');
+  if (parsed.session_id !== evidence.session_id)
+    fail('INVALID_RESULT', 'integration requires its original native session');
+  const text = repairStreamFinal(parsed, 'INVALID_RESULT', !!(evidence.completed_source || evidence.review_continuation));
+  const turnStart = parsed.records.findLastIndex(item => item.type === 'turn.started');
+  const messages = parsed.records.filter((item, index) => index > turnStart
+    && item.type === 'item.completed' && item.item?.type === 'agent_message');
+  let contracts = 0;
+  for (const message of messages) {
+    let candidate;
+    try { candidate = JSON.parse(message.item.text); } catch {}
+    if (object(candidate) && (candidate.review_contract !== undefined || candidate.status !== undefined || candidate.outcome !== undefined)) contracts++;
+  }
   let result;
-  if (Buffer.byteLength(messages[0].item.text || '') > 128 * 1024)
-    fail('INVALID_RESULT', 'complete integration result exceeds its bounded envelope');
-  try { result = JSON.parse(messages[0].item.text); } catch { fail('INVALID_RESULT', 'integration requires complete JSON'); }
+  if (contracts !== 1 || Buffer.byteLength(text || '') > 128 * 1024)
+    fail('INVALID_RESULT', 'integration requires one bounded terminal role contract');
+  try { result = JSON.parse(text); } catch { fail('INVALID_RESULT', 'integration requires complete JSON'); }
   validateIntegrationCoverage(review, result);
   if (result.context_digest !== review.input.manifest.binding.packet_digest
       || result.input_manifest_sha256 !== review.input.input_bundle.manifest_sha256
@@ -1521,18 +1530,20 @@ function completeRepairFeedback(options, prepared, pr) {
 const repairPredecessors = new WeakMap();
 const repairNativeCustody = new WeakMap();
 
-function repairStreamFinal(stream) {
+function repairStreamFinal(stream, code = 'REPAIR_COMPLETION_INVALID', allowContinuation = false) {
   const starts = stream.records.flatMap((row, index) => row.type === 'turn.started' ? [index] : []);
   const ends = stream.records.flatMap((row, index) => row.type === 'turn.completed' ? [index] : []);
   const messages = stream.records.flatMap((row, index) => row.type === 'item.completed'
     && row.item?.type === 'agent_message' ? [index] : []);
   const ids = messages.map(index => stream.records[index].item.id);
-  if (starts.length !== 1 || ends.length !== 1 || !messages.length
-      || messages.some(index => index <= starts[0] || index >= ends[0])
+  const current = messages.filter(index => index > starts.at(-1) && index < ends.at(-1));
+  if (!starts.length || starts.length !== ends.length || (!allowContinuation && starts.length !== 1) || !current.length
+      || starts.some((start, index) => start >= ends[index] || (index && start <= ends[index - 1]))
+      || messages.some(index => !starts.some((start, turn) => index > start && index < ends[turn]))
       || ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length
-      || messages.filter(index => stream.records[index].item.text === stream.records[messages.at(-1)].item.text).length !== 1)
-    fail('REPAIR_COMPLETION_INVALID', 'repair CLI lacks one uniquely completed turn and final item');
-  return stream.records[messages.at(-1)].item.text;
+      || current.filter(index => stream.records[index].item.text === stream.records[current.at(-1)].item.text).length !== 1)
+    fail(code, 'repair CLI lacks one uniquely completed turn and final item');
+  return stream.records[current.at(-1)].item.text;
 }
 
 function authenticateRepairNative(receipt, custody, worktree, finalText) {
@@ -2013,6 +2024,26 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
   return Object.freeze({ inventory, digest: sha256(canonical(normalized)), ...shareRepairTransitions(coverage), historical_dispatch_ids: historicalDispatches });
 }
 
+function repairIssueSnapshot(inventory) {
+  const signatures = require('./review-signature.cjs');
+  const threads = new Map(inventory.filter(item => item.kind === 'thread').map(item => [item.id, item]));
+  const findings = inventory.filter(item => item.kind === 'thread-comment').map(item => {
+    const thread = threads.get(item.thread_id);
+    const finding = { id: item.id, body: item.body, path: thread?.path,
+      line: thread?.line, original_line: thread?.original_line };
+    const identity = signatures.findingIdentity(finding);
+    const marked = [...item.body.matchAll(/(?:^|[\s[(])(?:rule|check|category|class|code)\s*[:=]\s*([A-Za-z0-9_.:/-]+)/gi)]
+      .map(match => match[1].toLowerCase());
+    if (new Set([...marked, ...(identity.known ? [identity.identity.rule_class] : [])]).size > 1) delete finding.body;
+    if (identity.known && thread?.resolved) return null;
+    return finding;
+  }).filter(Boolean);
+  for (const item of inventory) {
+    if ((item.kind === 'comment' || item.kind === 'review') && item.body.trim()) findings.push({ id: item.id, body: item.body });
+  }
+  return signatures.snapshot(findings);
+}
+
 function prepareRepair(options, scope, context) {
   if (context.prompt !== undefined || context.task_prompt !== undefined || context.input !== undefined)
     fail('REPAIR_SUBJECT_REQUIRED', 'repair prompt is built by the host from canonical full feedback');
@@ -2034,13 +2065,25 @@ function prepareRepair(options, scope, context) {
       id: item.id, action: 'reply', reply: 'x', evidence: { command: 'x', result: 'x' } })) };
   if (Buffer.byteLength(canonical(minimumResult)) > 128 * 1024)
     fail('REPAIR_FEEDBACK_OVERFLOW', 'complete disposition inventory cannot fit the unchanged native final result bound');
-  const signature = sha256(canonical({ ticket: scope.ticket, pr, repository: feedback.repo, feedback: normalized.digest }));
-  const previous = history.history[0];
+  const issues = repairIssueSnapshot(normalized.inventory);
+  const known = issues.coverage.complete && issues.signatures.length > 0;
+  const signature = sha256(canonical({ ticket: scope.ticket, pr, repository: feedback.repo,
+    feedback: known ? issues.digest : normalized.digest }));
+  const eligible = item => item.receipt && item.attempt.subject
+    && !normalized.historical_dispatch_ids.includes(item.attempt.dispatch_id)
+    && canonical(repairScopeIdentity(item.attempt.preparation)) === canonical(repairScopeIdentity(prepared))
+    && (item.attempt.preparation.commit.expectedHead === prepared.commit.expectedHead
+      || normalized.coverage.some(row => row.dispatch_id === item.attempt.dispatch_id && !row.historical));
+  const matching = known ? history.history.filter(item => {
+    if (!eligible(item)) return false;
+    const prior = repairIssueSnapshot(item.attempt.subject.actionable_feedback?.inventory || item.attempt.subject.feedback.inventory);
+    return prior.coverage.complete && prior.signatures.some(signature => issues.signatures.includes(signature));
+  }) : history.history.filter((item, index) => index === 0 && eligible(item)
+    && (item.attempt.normalized_feedback_digest || item.attempt.feedback_digest) === normalized.digest);
+  const effortRank = effort => effort === 'low' ? 0 : effort === 'high' ? 1 : 2;
+  const previous = matching.sort((a, b) => effortRank(b.receipt.applied_effort) - effortRank(a.receipt.applied_effort))[0];
   let signatureState = 'first';
-  if ((previous?.attempt.normalized_feedback_digest || previous?.attempt.feedback_digest) === normalized.digest && previous.receipt
-      && !normalized.historical_dispatch_ids.includes(previous.attempt.dispatch_id)
-      && (previous.attempt.preparation.commit.expectedHead === prepared.commit.expectedHead
-        || normalized.coverage.some(item => item.dispatch_id === previous.attempt.dispatch_id && !item.historical))) {
+  if (previous) {
     if (previous.receipt.applied_effort === 'low') signatureState = 'repeat';
     else if (previous.receipt.applied_effort === 'high') signatureState = 'repeat_exhausted';
     else fail('REPAIR_POLICY_EXHAUSTED', 'original completed deepest repair remains unresolved');
@@ -2072,12 +2115,12 @@ function prepareRepair(options, scope, context) {
   if (Buffer.byteLength(prompt) > MAX_STATE_BYTES || Buffer.byteLength(canonical(subject)) > MAX_STATE_BYTES / 2)
     fail('REPAIR_FEEDBACK_OVERFLOW', 'complete repair inventory and predecessor reasoning exceed host custody bounds');
   const result = Object.freeze({ ...prepared, expectedRole: 'review-fix', repair: subject, prompt });
-  repairPredecessors.set(result, history);
+  repairPredecessors.set(result, { ...history, selected: previous });
   return result;
 }
 
 function preparedRepairSignals(prepared) {
-  const prior = repairPredecessors.get(prepared)?.history[0];
+  const prior = repairPredecessors.get(prepared)?.selected;
   if (!repairPredecessors.has(prepared)) fail('REPAIR_SUBJECT_REQUIRED', 'repair signals require original host preparation');
   return { inputTokens: Math.ceil(Buffer.byteLength(prepared.prompt) / 4), signatureState: prepared.repair.signature_state,
     ...(prepared.repair.signature_state !== 'first' ? { priorApplied: prior.receipt } : {}) };
@@ -2085,7 +2128,7 @@ function preparedRepairSignals(prepared) {
 
 
 function resolvePreparedRepair(prepared, dispatchId, options, capabilities) {
-  const previous = repairPredecessors.get(prepared)?.history[0];
+  const previous = repairPredecessors.get(prepared)?.selected;
   if (!previous?.receipt || !previous.recorder || prepared.repair.signature_state === 'first')
     fail('REPAIR_PREDECESSOR_INVALID', 'repeat selection requires its original protected predecessor');
   const loaded = loadConfig(prepared.commit.worktree, { runtime: 'codex', env: options.env || process.env, routed: true });
@@ -3067,9 +3110,9 @@ function createCodexDeliveryHost(options = {}) {
           const adapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({ agentsDir: agentDir, agentManifest,
             capabilities: runtimeHost.capabilities, host: reviewHost });
           return require('./dispatch-boundary.cjs').createDispatchBoundary({ adapters: { codex: adapter },
-            recorder: repairPrepared ? repairPredecessors.get(repairPrepared).history[0].recorder : runtimeHost.recorder, recoverReserved: !!completedSourceReference }).dispatch({ runtime: 'codex', role: request.role,
+            recorder: repairPrepared ? repairPredecessors.get(repairPrepared).selected.recorder : runtimeHost.recorder, recoverReserved: !!completedSourceReference }).dispatch({ runtime: 'codex', role: request.role,
               signals: request.signals, dispatch_id: dispatchId, model: selection.model, effort: selection.effort,
-              ...(repairPrepared ? { previous_dispatch_id: repairPredecessors.get(repairPrepared).history[0].attempt.dispatch_id } : {}) }, taskContext);
+              ...(repairPrepared ? { previous_dispatch_id: repairPredecessors.get(repairPrepared).selected.attempt.dispatch_id } : {}) }, taskContext);
         }
         return launchAgent(request.role, {
         cwd: scope.worktree,
@@ -3180,7 +3223,7 @@ function createCodexDeliveryHost(options = {}) {
       }
       if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
       if (repairPrepared) {
-        const repairRecorder = request.signals.signatureState === 'first' ? runtimeHost.recorder : repairPredecessors.get(repairPrepared).history[0].recorder;
+        const repairRecorder = request.signals.signatureState === 'first' ? runtimeHost.recorder : repairPredecessors.get(repairPrepared).selected.recorder;
         recheckRepair(repairPrepared, options);
         const output = repairCompletion(repairCompleted, result, repairPrepared, repairRecorder);
         const sealInput = { role: 'review-fix', runtime: 'codex', ticket: scope.ticket, pr: repairPrepared.repair.pr,

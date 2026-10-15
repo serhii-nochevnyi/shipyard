@@ -1690,16 +1690,36 @@ test('same-generation packaged fixer authenticates source publication and comple
       .map(mutation => 'original fixer custody refuses ' + mutation),
     'signed fixer publication recovers a lost response without replaying its confirmed push',
     'original feedback action recovers resolve-response-loss without reply replay',
+    ...['issue-repost', 'issue-oscillation', 'issue-unknown', 'issue-ambiguous', 'issue-shift'].map(mutation =>
+      'known issue history uses the original applied predecessor across reposts: ' + mutation),
+    ...[false, true].flatMap(full => ['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal',
+      'incomplete-turn', 'failed-turn', 'foreign-session'].map(mutation =>
+      'original integration boundary completes and retains one terminal contract: ' + mutation + ' full=' + full)),
   ];
   const exercise = `
     const fs = require('node:fs'), path = require('node:path'), Module = require('node:module');
-    const file = path.join(process.argv[1], 'tests/unit/codex-delivery-host.test.cjs');
+    const file = path.join(process.argv[1], 'tests/unit', process.argv[3] || 'codex-delivery-host.test.cjs');
     const entry = new Module(file); entry.filename = file;
     entry.paths = Module._nodeModulePaths(path.dirname(file));
     const registered = new Map(), originalRequire = entry.require.bind(entry);
     entry.require = request => request === './assert-harness.cjs'
       ? { assert: require('node:assert'), suite() {}, done() {}, test(name, callback) { registered.set(name, callback); } }
       : originalRequire(request);
+    const load = Module._load;
+    const canonical = path.join(process.argv[1], 'plugins/delivery-pipeline');
+    const packaged = path.join(process.argv[1], 'plugins/shipyard/host/plugins/delivery-pipeline');
+    Module._load = function(request, parent, main) {
+      const resolved = Module._resolveFilename(request, parent, main);
+      return load.call(this, typeof resolved === 'string' && resolved.startsWith(canonical + path.sep)
+        ? packaged + resolved.slice(canonical.length) : request, parent, main);
+    };
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = function(target, ...args) {
+      const value = originalRead.call(this, target, ...args);
+      if (String(target).endsWith('/phase49-incremental-integration.test.cjs') && typeof value === 'string')
+        return value.split('../../plugins/delivery-pipeline/').join('../../plugins/shipyard/host/plugins/delivery-pipeline/');
+      return value;
+    };
     const source = fs.readFileSync(file, 'utf8');
     const prefix = '../../plugins/delivery-pipeline/';
     if (!source.includes(prefix)) throw new Error('original fixer package import seam changed');
@@ -1716,6 +1736,17 @@ test('same-generation packaged fixer authenticates source publication and comple
   const observed = execFileSync(process.execPath, ['-e', exercise, ROOT, JSON.stringify(names)],
     { timeout: 420000, maxBuffer: 1024 * 1024, encoding: 'utf8', stdio: 'pipe' });
   assert.match(observed, /packaged-original-fixer-contracts-pass/);
+  const roleNames = [
+    ...['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal', 'failed-turn',
+      'incomplete-turn', 'foreign-session'].map(mutation =>
+      'original focused CLI retains progress and rejects invalid terminal results: ' + mutation),
+    ...[false, true].map(corrupt => 'current integration excludes foreign catalogue before authority reads: ' + corrupt),
+    ...['codex', 'claude'].map(runtime => 'aggregate original subject reconciles retained and legacy ' + runtime),
+  ];
+  const roleObserved = execFileSync(process.execPath,
+    ['-e', exercise, ROOT, JSON.stringify(roleNames), 'role-artifact.test.cjs'],
+    { timeout: 120000, maxBuffer: 1024 * 1024, encoding: 'utf8', stdio: 'pipe' });
+  assert.match(roleObserved, /packaged-original-fixer-contracts-pass/);
 });
 
 module.exports = { inspectBatchNative, inspectBatchInstalledPhysical, BATCH_ROOT, BATCH_SHA, BATCH_HEAD, BATCH_TREE, authenticateBatchSource, inspectBatchCI, inspectBatchDelta, inspectBatchSuccessor, inspectBatchInstalled, inspectBatchAPIs, BATCH_INPUTS, BATCH_OUTPUTS, inspect, inspectAccountingSuccessor, inspectAccountingInstalled, inspectModeSuccessor, inspectModeInstalled, inventory, read, canonicalInputs, admitSuccessor, OWNED: COMPLETE_OWNED };
@@ -1731,14 +1762,14 @@ const FOCUSED_INPUTS = ['codex-arch-review-context', 'codex-delivery-host', 'cod
 const FOCUSED_OUTPUTS = FOCUSED_INPUTS.map(relative => 'host/' + relative)
   .concat('.codex-plugin/plugin.json', 'package-build.json');
 
-function inspectFocusedDelta(selected, historical) {
+function inspectFocusedDelta(selected, historical, inputs = FOCUSED_INPUTS, outputs = FOCUSED_OUTPUTS) {
   assert.equal(selected.build_calls, 1); assert.equal(historical.build_calls, 1);
   assert.notEqual(selected.stage, historical.stage, 'historical stage substituted');
   assert.notEqual(selected.source.head, historical.source.head, 'historical source substituted');
   assert.equal(selected.builder_sha256, historical.builder_sha256, 'builder changed');
   const result = {};
-  for (const [field, mode, allowed] of [['inputs', 'mode', FOCUSED_INPUTS],
-    ['outputs', 'publication_mode', FOCUSED_OUTPUTS]]) {
+  for (const [field, mode, allowed] of [['inputs', 'mode', inputs],
+    ['outputs', 'publication_mode', outputs]]) {
     const rows = selected[field], oldRows = historical[field];
     for (const list of [rows, oldRows]) {
       assert(Array.isArray(list) && list.length > 0 && list.length <= 1000);
@@ -1760,11 +1791,12 @@ function inspectFocusedDelta(selected, historical) {
   }
   assert.deepEqual(result.changed_outputs.filter(relative => relative.startsWith('host/')),
     result.changed_inputs.map(relative => 'host/' + relative).sort(), 'mixed focused generation');
-  for (const relative of FOCUSED_INPUTS) {
+  for (const relative of inputs) {
     const input = selected.inputs.find(row => row.path === relative);
     const output = selected.outputs.find(row => row.path === 'host/' + relative);
     assert(input && output, 'missing focused union member');
     assert.equal(output.sha256, input.sha256); assert.equal(output.publication_mode, input.mode);
+    if (input.bytes !== undefined) assert.equal(output.bytes, input.bytes);
   }
   assert.equal(selected.inputs.find(row => row.path === MODE_INPUT).mode, 0o755);
   assert.equal(selected.outputs.find(row => row.path === MODE_OUTPUT).publication_mode, 0o755);
@@ -1808,26 +1840,50 @@ async function inspectFocusedConsumers(hostRoot) {
 }
 
 function inspectFocusedInstalled(identity, authenticated, bytes, expected, authenticate) {
+  return inspectFocusedInstalledGeneration(identity, authenticated, bytes, expected, authenticate, false);
+}
+
+function inspectFocusedInstalledGeneration(identity, authenticated, bytes, expected, authenticate, current) {
+  const generation = current ? CURRENT_REVIEW : { root: FOCUSED_ROOT, sha256: FOCUSED_SHA, head: FOCUSED_HEAD, tree: FOCUSED_TREE };
   assert.equal(typeof authenticate, 'function', 'protected focused installed verifier missing');
   const proof = authenticate(expected);
   assert(proof && proof.authenticated === true, 'focused installed authority missing');
   assert.deepEqual(proof.expected, expected); assert.deepEqual(proof.identity, identity);
   assert.deepEqual(proof.binding, authenticated);
-  assert.equal(expected.selection_sha256, FOCUSED_SHA); assert.equal(expected.selection_root, FOCUSED_ROOT);
-  assert.equal(expected.source_head, FOCUSED_HEAD); assert.equal(expected.source_tree, FOCUSED_TREE);
+  assert.equal(expected.selection_sha256, generation.sha256); assert.equal(expected.selection_root, generation.root);
+  assert.equal(expected.source_head, generation.head); assert.equal(expected.source_tree, generation.tree);
   assert.equal(expected.runtime_root, identity.runtime_root, 'same-version cache substitution');
-  const signed = authenticatePublicSelection(FOCUSED_ROOT, FOCUSED_SHA, 'public-key.asc');
+  if (current) {
+    assert.equal(typeof expected.runtime_root, 'string'); assert(path.isAbsolute(expected.runtime_root));
+    for (const field of ['publication_head', 'publication_tree']) assert.match(expected[field], /^[a-f0-9]{40}$/);
+    assert.notEqual(expected.publication_head, generation.head, 'source/publication identity collapsed');
+    assert.match(proof.publication_dispatch, /^dispatch-[a-zA-Z0-9-]+$/);
+    for (const field of ['source_native', 'publication_native', 'publication_result']) {
+      assert(proof[field] && typeof proof[field].path === 'string', 'missing original ' + field);
+      if (field === 'publication_result') assert.match(proof[field].sha256, /^[a-f0-9]{64}$/);
+    }
+    inspectBatchCI(proof.source_ci, generation.head);
+    inspectBatchCI(proof.ci, expected.publication_head);
+  }
+  const signed = authenticatePublicSelection(generation.root, generation.sha256, 'public-key.asc');
   assert.deepEqual(bytes, signed);
   const selected = JSON.parse(bytes);
-  authenticateBatchSource(selected, 'T-49-20', FOCUSED_HEAD, FOCUSED_TREE);
-  inspectBatchCI(proof.source_ci, FOCUSED_HEAD); inspectBatchCI(proof.ci, expected.publication_head);
+  authenticateBatchSource(selected, current ? 'T-49-22' : 'T-49-20', generation.head, generation.tree);
+  inspectBatchCI(proof.source_ci, generation.head); inspectBatchCI(proof.ci, expected.publication_head);
   assert.match(expected.publication_head, /^[a-f0-9]{40}$/);
   assert.match(expected.publication_tree, /^[a-f0-9]{40}$/);
   const publicationReceipt = authenticateBatchSource({ ...selected, source: { ...selected.source,
     head: expected.publication_head, tree: expected.publication_tree,
     original_result: proof.publication_result.path, original_result_sha256: proof.publication_result.sha256,
-    original_dispatch: proof.publication_dispatch } }, 'T-49-21', expected.publication_head, expected.publication_tree);
+    original_dispatch: proof.publication_dispatch } }, current ? 'T-49-23' : 'T-49-21', expected.publication_head, expected.publication_tree);
   inspectBatchNative(publicationReceipt, proof.publication_native.path);
+  if (current) {
+    assert.equal(proof.publication_worktree, ROOT, 'foreign publication worktree');
+    assert.notEqual(expected.publication_head, generation.head, 'source/publication identity collapsed');
+    const sourceReceipt = authenticateBatchSource(selected, 'T-49-22', generation.head, generation.tree);
+    inspectBatchNative(sourceReceipt, proof.source_native.path);
+    assert.equal(publicationReceipt.policy_hash, sourceReceipt.policy_hash);
+  }
   assert.equal(identity.source_head, expected.publication_head); assert.equal(identity.source_tree, expected.publication_tree);
   assert.equal(authenticated.identity.head, expected.publication_head);
   assert.equal(authenticated.identity.tree, expected.publication_tree);
@@ -1835,7 +1891,8 @@ function inspectFocusedInstalled(identity, authenticated, bytes, expected, authe
   assert.equal(authenticated.binding.version, selected.package.version);
   assert.equal(authenticated.binding.package_sha256, selected.package.digest);
   equalInputs(selected.inputs, authenticated.binding.source.identities);
-  const published = inspectFocusedPublication(bytes);
+  const published = current ? inspectCurrentReviewPublication(bytes) : inspectFocusedPublication(bytes,
+    path.join(path.dirname(selected.source.worktree), 'T-49-21'));
   const observed = require('../smoke/phase47-runtime-acceptance.cjs').inspectInstalled(identity, authenticated);
   const physicalIdentity = inspectBatchInstalledPhysical(identity, selected, proof);
   const generator = require('../../scripts/gen-codex-shipyard.cjs');
@@ -2008,3 +2065,200 @@ if (require.main === module) {
       () => ({ authenticated: true, expected: stale, identity: {}, binding: {} })));
   });
 }
+
+// A separately pinned correctness successor; historical focused identities stay immutable.
+const CURRENT_REVIEW = Object.freeze({
+  root: '/Users/serhii/.local/state/shipyard/phase49-selected-package-current-review-1b106e733931',
+  sha256: '15994b3dd54929d627f0fcf9c10c3757dc04f96be6e60d8639eb0eb485f6702a',
+  head: '1b106e7339319f7dd31a1d3412ab6fd6002b195b',
+  tree: '74a2fe91561810eeb0e74001f8889768eb8c6189',
+  squash: '92e263f69fdb60450a1cfad2e97d33cb87f33f05',
+});
+const CURRENT_REVIEW_INPUTS = ['role-artifact', 'codex-delivery-host']
+  .map(name => 'plugins/delivery-pipeline/scripts/' + name + '.cjs');
+const CURRENT_REVIEW_OUTPUTS = CURRENT_REVIEW_INPUTS.map(relative => 'host/' + relative)
+  .concat(['.codex-plugin/plugin.json', 'package-build.json']);
+
+function inspectCurrentReviewDelta(selected, historical) {
+  assert.equal(selected.source.head, CURRENT_REVIEW.head);
+  assert.equal(selected.source.tree, CURRENT_REVIEW.tree);
+  assert.equal(historical.source.head, FOCUSED_HEAD);
+  assert.equal(historical.source.tree, FOCUSED_TREE);
+  return inspectFocusedDelta(selected, historical, CURRENT_REVIEW_INPUTS, CURRENT_REVIEW_OUTPUTS);
+}
+
+function inspectCurrentReviewPublication(bytes, repository = ROOT) {
+  assert.equal(sha(bytes), CURRENT_REVIEW.sha256, 'foreign current-review selection');
+  const selected = JSON.parse(bytes);
+  assert.equal(selected.stage, path.join(CURRENT_REVIEW.root, 'candidate'));
+  const historical = JSON.parse(read(path.join(FOCUSED_ROOT, 'selection.json'), FOCUSED_SHA));
+  for (const [root, digest] of [[FOCUSED_ROOT, FOCUSED_SHA], [BATCH_ROOT, BATCH_SHA]]) {
+    const original = JSON.parse(read(path.join(root, 'selection.json'), digest));
+    assert.deepEqual(inventory(original.stage, '', true), original.outputs.map(row => ({
+      path: row.path, sha256: row.sha256, bytes: row.bytes,
+      mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })), 'immutable historical stage drift');
+  }
+  const delta = inspectCurrentReviewDelta(selected, historical);
+  const observed = inspect(bytes, { selection_sha256: CURRENT_REVIEW.sha256,
+    head: CURRENT_REVIEW.head, tree: CURRENT_REVIEW.tree }, repository, selected.stage, CURRENT_REVIEW_OUTPUTS);
+  return { ...observed, ...delta, installed_acceptance: false, empirical_acceptance: false };
+}
+
+function inspectCurrentReviewCustody(bytes) {
+  assert.equal(sha(bytes), CURRENT_REVIEW.sha256);
+  const selected = JSON.parse(bytes), state = '/Users/serhii/.local/state/shipyard/';
+  const receipt = authenticateBatchSource(selected, 'T-49-22', CURRENT_REVIEW.head, CURRENT_REVIEW.tree);
+  inspectBatchNative(receipt, '/Users/serhii/.codex/sessions/2026/10/15/'
+    + receipt.runtime_evidence.native_session_evidence.file);
+  inspectBatchCI(JSON.parse(read(state + 'phase49-T22-1b106e7-current-green-ci-admission.json',
+    'b67d0648c18e1c553f8cdec58c4488ec8328c634f70ce06d6be4b0972c7dbdb5')), CURRENT_REVIEW.head);
+  const squash = selected.original_squash;
+  const original = JSON.parse(read(squash.proof_path, squash.proof_sha256));
+  assert.equal(original.state, 'MERGED'); assert.equal(original.headRefOid, CURRENT_REVIEW.head);
+  assert.equal(original.mergeCommit.oid, CURRENT_REVIEW.squash);
+  assert.equal(execFileSync('git', ['-C', ROOT, 'rev-parse', CURRENT_REVIEW.squash + '^{tree}'],
+    { encoding: 'utf8' }).trim(), CURRENT_REVIEW.tree);
+  const launch = JSON.parse(read(state + 'phase49-T23-actual-clean-native-before-stage.json',
+    'fa3c92b0d5e94900eaf84c9b38d0645b4ab5a91dc5b2b205a177947dda317729'));
+  assert.equal(launch.ticket, 'T-49-23'); assert.equal(launch.role, 'executor');
+  assert.equal(launch.worktree, ROOT); assert.equal(launch.tracked_clean, true);
+  assert.equal(launch.source_head, CURRENT_REVIEW.head);
+  assert.equal(launch.baseline_head, CURRENT_REVIEW.squash); assert.equal(launch.baseline_tree, CURRENT_REVIEW.tree);
+  assert(Number.isSafeInteger(launch.native_process_id));
+  assert.equal(sha(Buffer.from(launch.observed_command + '\n')), launch.observed_command_sha256);
+  const built = JSON.parse(read(state + 'phase49-T23-original-once-stage-result.json',
+    'aac187b5f628e36d0a84eb375e09ea2c8900018904973678b4465e1aef25122a'));
+  assert.equal(built.root, CURRENT_REVIEW.root); assert.equal(built.selection_sha256, CURRENT_REVIEW.sha256);
+  assert.equal(built.source_head, CURRENT_REVIEW.head); assert.equal(built.source_tree, CURRENT_REVIEW.tree);
+  assert.equal(built.build_calls, 1); assert.equal(built.published, 0);
+  assert.equal(built.outputs, selected.outputs.length);
+  return { installed_acceptance: false, empirical_acceptance: false };
+}
+
+function inspectCurrentReviewInstalled(identity, authenticated, bytes, expected, authenticate) {
+  // Authenticate the original generation and clean launch independently of Source23.
+  assert.equal(typeof authenticate, 'function', 'protected current-review installed verifier missing');
+  assert.equal(expected.selection_sha256, CURRENT_REVIEW.sha256, 'old installed generation');
+  assert.equal(expected.selection_root, CURRENT_REVIEW.root, 'foreign installed generation');
+  const result = inspectFocusedInstalledGeneration(identity, authenticated, bytes, expected, authenticate, true);
+  inspectCurrentReviewCustody(bytes);
+  return { ...result, installed_acceptance: true, empirical_acceptance: false,
+    native_experiment_counters: null, counters_reason: 'Deferred experiments were not performed.' };
+}
+
+module.exports = { ...module.exports, CURRENT_REVIEW, CURRENT_REVIEW_INPUTS, CURRENT_REVIEW_OUTPUTS,
+  inspectCurrentReviewDelta, inspectCurrentReviewPublication, inspectCurrentReviewCustody, inspectCurrentReviewInstalled };
+
+if (require.main === module) {
+  test('current-review successor rejects old installed proof and unavailable authority before physical admission', () => {
+    const expected = { selection_sha256: CURRENT_REVIEW.sha256, selection_root: CURRENT_REVIEW.root,
+      source_head: CURRENT_REVIEW.head, source_tree: CURRENT_REVIEW.tree };
+    assert.throws(() => inspectCurrentReviewInstalled({}, {}, Buffer.from('{}'), expected), /protected/);
+    for (const proof of [null, { authenticated: false }])
+      assert.throws(() => inspectCurrentReviewInstalled({}, {}, Buffer.from('{}'), expected, () => proof), /authority/);
+    for (const key of ['selection_sha256', 'selection_root', 'source_head', 'source_tree']) {
+      const stale = { ...expected, [key]: key.endsWith('root') ? FOCUSED_ROOT : FOCUSED_SHA };
+      assert.throws(() => inspectCurrentReviewInstalled({}, {}, Buffer.from('{}'), stale,
+        () => ({ authenticated: true, expected: stale, identity: {}, binding: {} })));
+    }
+  });
+
+  test('current-review original stage and complete candidate retain separate source and publication custody', t => {
+    try { fs.accessSync(path.join(CURRENT_REVIEW.root, 'selection.json')); }
+    catch (error) {
+      if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
+      t.skip('HOLD: actual current-review custody unavailable; fixtures grant no installed acceptance'); return;
+    }
+    const bytes = authenticatePublicSelection(CURRENT_REVIEW.root, CURRENT_REVIEW.sha256, 'public-key.asc');
+    inspectCurrentReviewCustody(bytes);
+    const observed = inspectCurrentReviewPublication(bytes);
+    assert.deepEqual(observed.changed_inputs, [...CURRENT_REVIEW_INPUTS].sort());
+    assert.deepEqual(observed.changed_outputs, [...CURRENT_REVIEW_OUTPUTS].sort());
+    assert.equal(observed.installed_acceptance, false);
+    const selected = JSON.parse(bytes);
+    const historical = JSON.parse(read(path.join(FOCUSED_ROOT, 'selection.json'), FOCUSED_SHA));
+    for (const mutate of [
+      value => value.inputs.pop(), value => value.outputs.push(value.outputs[0]),
+      value => value.build_calls++, value => { value.stage = historical.stage; },
+      value => { value.outputs.find(row => !CURRENT_REVIEW_OUTPUTS.includes(row.path)).sha256 = '0'.repeat(64); },
+      value => { value.inputs.find(row => !CURRENT_REVIEW_INPUTS.includes(row.path)).mode ^= 0o111; },
+      value => { value.outputs.find(row => row.path === 'host/' + CURRENT_REVIEW_INPUTS[0]).sha256 = '0'.repeat(64); },
+    ]) {
+      const altered = structuredClone(selected); mutate(altered);
+      assert.throws(() => inspectCurrentReviewDelta(altered, historical));
+    }
+  });
+}
+
+if (require.main === module) test('portable correctness successor bounds complete physical inventories without production custody', () => {
+  const temporary = temporaryDirectory('current-review-delta-fixture-');
+  try {
+    const roots = ['current', 'previous'].map(name => path.join(temporary, name));
+    for (const root of roots) {
+      for (const directory of CANONICAL_ROOTS)
+        fs.cpSync(path.join(ROOT, directory), path.join(root, directory), { recursive: true });
+      fs.cpSync(path.join(ROOT, 'plugins/shipyard'), path.join(root, 'package'), { recursive: true });
+      for (const relative of CURRENT_REVIEW_INPUTS) {
+        const input = path.join(root, relative), output = path.join(root, 'package/host', relative);
+        if (root === roots[1]) fs.appendFileSync(input, '\n// fixture-only predecessor\n');
+        fs.copyFileSync(input, output); fs.chmodSync(output, physical(input).mode & 0o7777);
+      }
+      if (root === roots[1]) for (const relative of ['.codex-plugin/plugin.json', 'package-build.json'])
+        fs.appendFileSync(path.join(root, 'package', relative), '\nfixture-only predecessor');
+    }
+    const selection = (root, head, tree) => ({ source: { head, tree }, stage: root, build_calls: 1,
+      builder_sha256: sha(read(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))),
+      inputs: CANONICAL_ROOTS.flatMap(directory => inventory(path.join(root, directory))
+        .map(row => ({ ...row, path: directory + '/' + row.path }))),
+      outputs: inventory(path.join(root, 'package')).map(row => ({ ...row, publication_mode: row.mode })) });
+    const selected = selection(roots[0], CURRENT_REVIEW.head, CURRENT_REVIEW.tree);
+    const historical = selection(roots[1], FOCUSED_HEAD, FOCUSED_TREE);
+    const result = inspectCurrentReviewDelta(selected, historical);
+    assert.deepEqual(result.changed_inputs, [...CURRENT_REVIEW_INPUTS].sort());
+    assert.deepEqual(result.changed_outputs, [...CURRENT_REVIEW_OUTPUTS].sort());
+    assert.equal(result.unchanged_inputs, selected.inputs.length - 2);
+    assert.equal(result.unchanged_outputs, selected.outputs.length - 4);
+    for (const mutate of [value => value.inputs.pop(), value => value.outputs.pop(),
+      value => value.outputs.push(value.outputs[0]), value => { value.build_calls = 2; },
+      value => { value.outputs[0].publication_mode ^= 0o111; },
+      value => { value.inputs.find(row => !CURRENT_REVIEW_INPUTS.includes(row.path)).sha256 = '0'.repeat(64); },
+      value => { value.outputs.find(row => !CURRENT_REVIEW_OUTPUTS.includes(row.path)).bytes++; },
+      value => { value.outputs.find(row => row.path === 'host/' + CURRENT_REVIEW_INPUTS[0]).bytes++; },
+    ]) {
+      const altered = structuredClone(selected); mutate(altered);
+      assert.throws(() => inspectCurrentReviewDelta(altered, historical));
+    }
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+if (require.main === module) test('successor installed contract refuses changed roots and missing original native or current CI custody', () => {
+  const temporary = temporaryDirectory('current-review-installed-refusals-');
+  try {
+    const file = path.join(temporary, 'fixture-ci.log'), raw = Buffer.from('fixture only; no actual installed acceptance\n');
+    fs.writeFileSync(file, raw);
+    const expected = { selection_sha256: CURRENT_REVIEW.sha256, selection_root: CURRENT_REVIEW.root,
+      source_head: CURRENT_REVIEW.head, source_tree: CURRENT_REVIEW.tree,
+      publication_head: 'a'.repeat(40), publication_tree: 'b'.repeat(40), runtime_root: temporary };
+    const identity = { runtime_root: temporary }, binding = {};
+    const ci = head => ({ headSha: head, status: 'completed', conclusion: 'success',
+      original_full_log: { path: file, sha256: sha(raw), bytes: raw.length }, jobs: [{ name: 'test-fast',
+        status: 'completed', conclusion: 'success', steps: ['publish gate', 'runtime digest trailer', 'make test-fast']
+          .map(name => ({ name, status: 'completed', conclusion: 'success' })) }] });
+    const original = { authenticated: true, expected, identity, binding,
+      publication_dispatch: 'dispatch-fixture-only', source_native: { path: '/fixture-source' },
+      publication_native: { path: '/fixture-publication' }, publication_result: { path: '/fixture-result', sha256: 'c'.repeat(64) },
+      source_ci: ci(expected.source_head), ci: ci(expected.publication_head) };
+    for (const mutate of [proof => { delete proof.source_native; }, proof => { delete proof.publication_native; },
+      proof => { delete proof.publication_result; }, proof => { delete proof.source_ci; }, proof => { delete proof.ci; },
+      proof => { proof.source_ci.headSha = FOCUSED_HEAD; }, proof => { proof.ci.status = 'in_progress'; },
+      proof => { proof.ci.jobs[0].steps[2].conclusion = 'skipped'; },
+      proof => { proof.source_ci.original_full_log.sha256 = '0'.repeat(64); },
+    ]) {
+      const proof = structuredClone(original); mutate(proof);
+      assert.throws(() => inspectCurrentReviewInstalled(identity, binding, Buffer.from('{}'), expected, () => proof));
+    }
+    const changed = { ...expected, runtime_root: path.join(temporary, 'same-version-cache') };
+    assert.throws(() => inspectCurrentReviewInstalled(identity, binding, Buffer.from('{}'), changed,
+      () => ({ ...original, expected: changed })), /cache substitution/);
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
