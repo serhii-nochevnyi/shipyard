@@ -2535,7 +2535,14 @@ function selectedArchiveRecord(scope, row, trusted) {
 }
 
 function authenticatedRecordSubject(record) {
-  const identities = [record.ticket, record.receipt?.ticket, record.receipt?.runtime_evidence?.ticket]
+  const retained = record.review_current || record.review_baseline;
+  const original = record.receipt?.role === 'integrator'
+    ? trustedRecord({ dispatchId: record.dispatch_id,
+      boundaryStore: nonEmpty(retained?.receipt_store || record.receipt_store, 'aggregate original receipt store') }) : null;
+  if (original && stable(original.receipt) !== stable(record.receipt))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate original receipt differs');
+  const identities = [record.ticket, record.receipt?.ticket, record.receipt?.runtime_evidence?.ticket,
+    ...(original ? [reconciledRecordTicket(original)] : [])]
     .filter(value => value !== undefined);
   if (identities.some(value => typeof value !== 'string' || !value || value !== identities[0]))
     fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate original receipt identity differs');
@@ -4085,8 +4092,9 @@ function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest)
   const findings = JSON.parse(readPinnedArchiveFile(worktree, manifest.files.findings, 'validated findings'));
   const bookkeeping = trusted.receipt.role === 'arch-review' ? findings.host_context?.bookkeeping || [] : [];
   const record = { dispatch_id: trusted.dispatchId, receipt: trusted.receipt, pins, bookkeeping,
-    ...(require('./architecture-target.cjs').PHASE_SUBJECT.test(manifest.boundary_subject || '')
-      ? { ticket: reconciledRecordTicket(trusted) } : {}) };
+    ...((require('./architecture-target.cjs').PHASE_SUBJECT.test(manifest.boundary_subject || '')
+      || /^phase=[^;]+;repository=[^;]+;tickets=[a-f0-9]{64}$/.test(manifest.boundary_subject || ''))
+      ? { ticket: reconciledRecordTicket(trusted), receipt_store: trusted.recorder.storeDir } : {}) };
   const previous = state.payload.records[trusted.dispatchId];
   if (manifest.current_review) {
     const retention = previous?.review_current || currentReviewRetention(worktree, trusted);

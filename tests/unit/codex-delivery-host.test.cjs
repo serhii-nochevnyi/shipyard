@@ -3323,6 +3323,11 @@ test('original integration boundary completes and retains one terminal contract:
         assert.equal(dispatched.receipt.role, 'integrator');
         assert.ok(full ? fresh.artifact : fresh.result.artifact.artifact_path);
         const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+        if (full) {
+          const catalogue = JSON.parse(fs.readFileSync(path.join(authority.archiveAuthorityDirectory(f.worktree), 'catalogue.json'), 'utf8'));
+          assert.equal(typeof catalogue.payload.records[dispatched.dispatch_id].receipt_store, 'string');
+          assert.ok(fs.statSync(catalogue.payload.records[dispatched.dispatch_id].receipt_store).isDirectory());
+        }
         const currentVerdict = () => authority.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head,
           baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName });
         assert.equal(currentVerdict()?.dispatch_id, dispatched.dispatch_id);

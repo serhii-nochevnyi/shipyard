@@ -1876,26 +1876,40 @@ module.exports = { ...module.exports, inspectFocusedDelta, inspectFocusedPublica
 
 if (require.main === module) {
   test('focused generation admits only the complete source/reference union and derived metadata', () => {
-    // Portable behavior fixture: complete physical repository inventories, never native custody.
-    const selected = { source: { head: 'fixture-focused' }, stage: '/fixture-focused',
-      build_calls: 1, builder_sha256: sha(read(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))),
-      inputs: canonicalInputs(ROOT), outputs: inventory(path.join(ROOT, 'plugins/shipyard'))
-        .map(row => ({ ...row, publication_mode: row.mode })) };
-    const historical = structuredClone(selected);
-    historical.source.head = 'fixture-historical'; historical.stage = '/fixture-historical';
-    for (const relative of FOCUSED_INPUTS) {
-      const oldHash = sha(Buffer.from('fixture predecessor: ' + relative));
-      historical.inputs.find(row => row.path === relative).sha256 = oldHash;
-      historical.outputs.find(row => row.path === 'host/' + relative).sha256 = oldHash;
+    const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'focused-publication-fixture-')));
+    try {
+    const selectedRoot = path.join(temporary, 'selected');
+    const historicalRoot = path.join(temporary, 'historical');
+    for (const root of [selectedRoot, historicalRoot]) {
+      for (const directory of CANONICAL_ROOTS)
+        fs.cpSync(path.join(ROOT, directory), path.join(root, directory), { recursive: true });
+      fs.cpSync(path.join(ROOT, 'plugins/shipyard'), path.join(root, 'package'), { recursive: true });
+      for (const relative of FOCUSED_INPUTS) {
+        const input = path.join(root, relative), output = path.join(root, 'package/host', relative);
+        if (root === historicalRoot) fs.appendFileSync(input, '\nfixture predecessor: ' + relative);
+        fs.copyFileSync(input, output);
+        fs.chmodSync(output, fs.statSync(input).mode & 0o7777);
+      }
+      if (root === historicalRoot)
+        for (const relative of ['.codex-plugin/plugin.json', 'package-build.json'])
+          fs.appendFileSync(path.join(root, 'package', relative), '\nfixture predecessor');
     }
-    for (const relative of ['.codex-plugin/plugin.json', 'package-build.json'])
-      historical.outputs.find(row => row.path === relative).sha256 = sha(Buffer.from('fixture predecessor: ' + relative));
+    const selection = root => ({ source: { head: path.basename(root) }, stage: root,
+      build_calls: 1, builder_sha256: sha(read(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))),
+      inputs: CANONICAL_ROOTS.flatMap(directory => inventory(path.join(root, directory))
+        .map(row => ({ ...row, path: directory + '/' + row.path })))
+        .sort((a, b) => a.path.localeCompare(b.path)),
+      outputs: inventory(path.join(root, 'package')).map(row => ({ ...row, publication_mode: row.mode })) });
+    const selected = selection(selectedRoot), historical = selection(historicalRoot);
     const observed = inspectFocusedDelta(selected, historical);
     assert.equal(observed.unchanged_inputs, selected.inputs.length - observed.changed_inputs.length);
     assert.equal(observed.unchanged_outputs, selected.outputs.length - observed.changed_outputs.length);
     for (const mutate of [value => { value.inputs.pop(); }, value => { value.outputs.pop(); },
       value => { value.outputs[0].publication_mode ^= 0o100; },
       value => { value.outputs.find(row => !FOCUSED_OUTPUTS.includes(row.path)).sha256 = '0'.repeat(64); },
+      value => { value.outputs.find(row => !FOCUSED_OUTPUTS.includes(row.path)).bytes++; },
+      value => { value.inputs.push({ ...value.inputs[0], path: 'unassigned-input' }); },
+      value => { value.outputs.push({ ...value.outputs[0], path: 'unassigned-output' }); },
       value => { value.inputs.push(value.inputs[0]); },
       value => { value.outputs.push(value.outputs[0]); },
       value => { value.inputs[0].mode ^= 0o100; }, value => { value.stage = historical.stage; },
@@ -1904,16 +1918,14 @@ if (require.main === module) {
       const altered = structuredClone(selected); mutate(altered);
       assert.throws(() => inspectFocusedDelta(altered, historical));
     }
-    const unchanged = structuredClone(selected);
-    for (const field of ['inputs', 'outputs']) {
-      const relative = (field === 'inputs' ? '' : 'host/') + FOCUSED_INPUTS[0];
-      Object.assign(unchanged[field].find(row => row.path === relative), historical[field].find(row => row.path === relative));
-    }
+    for (const relative of [FOCUSED_INPUTS[0], 'package/host/' + FOCUSED_INPUTS[0]])
+      fs.copyFileSync(path.join(historicalRoot, relative), path.join(selectedRoot, relative));
+    const unchanged = selection(selectedRoot);
     assert.doesNotThrow(() => inspectFocusedDelta(unchanged, historical));
+    assert.deepEqual(observed.changed_inputs, [...FOCUSED_INPUTS].sort());
+    assert.deepEqual(observed.changed_outputs, [...FOCUSED_OUTPUTS].sort());
     // macOS may expose /tmp as an alias for /private/tmp. Resolve only our new
     // fixture root; inventory must still reject symlinks in inspected payloads.
-    const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'focused-publication-fixture-')));
-    try {
       const fixturePackage = path.join(temporary, 'package');
       fs.cpSync(path.join(ROOT, 'plugins/shipyard'), fixturePackage, { recursive: true });
       const expected = inventory(fixturePackage);
@@ -1948,7 +1960,15 @@ if (require.main === module) {
     const launch = JSON.parse(read(state + 'phase49-focused-review-T49-21-actual-clean-native-before-stage.json',
       'd0de77d8adf11120e9f2e236fc3f6b9e4fc73658a81c488b31227617a86fbdc7'));
     assert.equal(launch.ticket, 'T-49-21'); assert.equal(launch.role, 'executor');
-    assert.equal(launch.worktree, ROOT); assert.equal(launch.source_head, FOCUSED_HEAD);
+    assert.equal(path.basename(selected.source.worktree), 'T-49-20');
+    const publicationWorktree = path.join(path.dirname(selected.source.worktree), launch.ticket);
+    assert.equal(launch.worktree, publicationWorktree);
+    const commonRepository = worktree => fs.realpathSync(execFileSync('git',
+      ['-C', worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+      { encoding: 'utf8', timeout: 10000 }).trim());
+    assert.equal(commonRepository(publicationWorktree), commonRepository(selected.source.worktree));
+    assert.equal(commonRepository(publicationWorktree), commonRepository(ROOT));
+    assert.equal(launch.source_head, FOCUSED_HEAD);
     assert.equal(launch.baseline_head, FOCUSED_BASE); assert.equal(launch.baseline_tree, FOCUSED_TREE);
     assert.equal(launch.tracked_clean, true); assert(Number.isSafeInteger(launch.native_process_id));
     assert.equal(sha(Buffer.from(launch.observed_command)), launch.observed_command_sha256);
@@ -1968,7 +1988,7 @@ if (require.main === module) {
     assert.equal(merge.state, 'MERGED'); assert.equal(merge.headRefOid, FOCUSED_HEAD);
     assert.equal(merge.mergeCommit.oid, FOCUSED_BASE);
     assert.equal(execFileSync('git', ['-C', ROOT, 'rev-parse', FOCUSED_BASE + '^{tree}'], { encoding: 'utf8' }).trim(), FOCUSED_TREE);
-    assert.equal(inspectFocusedPublication(bytes).empirical_acceptance, false);
+    assert.equal(inspectFocusedPublication(bytes, publicationWorktree).empirical_acceptance, false);
     await inspectFocusedConsumers(path.join(FOCUSED_ROOT, 'candidate/host/plugins/delivery-pipeline'));
   });
 

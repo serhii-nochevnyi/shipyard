@@ -2246,4 +2246,65 @@ for (const corrupt of [false, true]) test('current integration excludes foreign 
   } finally { fs.readFileSync = read; cleanPhaseScope(value); }
 });
 
+for (const runtime of ['codex', 'claude']) test('aggregate original subject reconciles retained and legacy ' + runtime, () => {
+  const value = judgmentFixture();
+  try {
+    const subject = 'phase=47-scope;repository=/fixture;tickets=' + 'a'.repeat(64);
+    const launch = resolution => ({ ...judgmentReceipt(resolution),
+      ...(resolution.agent_file ? { agent_file: resolution.agent_file,
+        agent_file_digest: resolution.agent_file_digest } : {}) });
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const selected = policy.resolveDispatch({ runtime, role: 'integrator', signals: {} });
+    const agentsDir = path.join(value.root, 'agents');
+    if (runtime === 'codex') {
+      fs.mkdirSync(agentsDir);
+      const content = [
+        '# shipyard-policy-id = "' + policy.POLICY.id + '"',
+        '# shipyard-policy-version = "' + selected.policy_version + '"',
+        '# shipyard-policy-hash = "' + selected.policy_hash + '"',
+        '# shipyard-policy-runtime = "codex"',
+        '# shipyard-policy-role = "' + selected.role + '"',
+        '# shipyard-policy-rung = "' + selected.rung + '"',
+        'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"',
+        'model = "' + selected.model + '"',
+        'model_reasoning_effort = "' + selected.effort + '"',
+        "developer_instructions = '''\nAuthenticate the original integration subject.\n'''", '',
+      ].join('\n');
+      fs.writeFileSync(path.join(agentsDir, selected.agent_file), content);
+      fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
+        policy_id: policy.POLICY.id, policy_version: selected.policy_version, policy_hash: selected.policy_hash,
+        agent_files: [selected.agent_file], agent_digests: {
+          [selected.agent_file]: require('node:crypto').createHash('sha256').update(content).digest('hex'),
+        },
+      }));
+    }
+    const boundary = createDispatchBoundary({ adapters: { [runtime]: {
+      ...(runtime === 'codex' ? { agentsDir } : {}), launch, launchStatic: launch,
+    } }, recorder: value.recorder });
+    const dispatch = boundary.dispatch({ runtime, role: 'integrator', signals: {} }, { ticket: subject });
+    if (runtime === 'codex') {
+      assert.equal(dispatch.receipt.agent_file, selected.agent_file);
+      assert.equal(dispatch.receipt.agent_file_digest,
+      require('node:crypto').createHash('sha256')
+        .update(fs.readFileSync(path.join(agentsDir, selected.agent_file))).digest('hex'));
+    }
+    const Module = require('node:module');
+    const isolated = new Module(ROLE_ARTIFACT, module);
+    isolated.filename = ROLE_ARTIFACT;
+    isolated.paths = Module._nodeModulePaths(path.dirname(ROLE_ARTIFACT));
+    isolated._compile(fs.readFileSync(ROLE_ARTIFACT, 'utf8')
+      + '\nmodule.exports = { authenticatedRecordSubject };', ROLE_ARTIFACT);
+    const record = { dispatch_id: dispatch.receipt.dispatch_id, receipt: dispatch.receipt,
+      review_current: { receipt_store: value.recorder.storeDir } };
+    const read = isolated.exports.authenticatedRecordSubject;
+    assert.equal(read(record), subject);
+    assert.equal(read({ ...record, review_current: undefined, receipt_store: value.recorder.storeDir }), subject);
+    assert.equal(read({ ...record, ticket: subject }), subject);
+    assert.throws(() => read({ ...record, ticket: subject + '-foreign' }));
+    assert.throws(() => read({ ...record, receipt: { ...record.receipt, ticket: 'foreign' } }));
+    assert.throws(() => read({ ...record, review_current: {} }));
+    assert.throws(() => read({ ...record, dispatch_id: 'missing-original' }));
+  } finally { clean(value); }
+});
+
 done();
