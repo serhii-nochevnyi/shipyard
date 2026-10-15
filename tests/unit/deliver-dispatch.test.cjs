@@ -334,6 +334,123 @@ test('research and decomposition builders round-trip through both runtimes’ re
   }
 });
 
+// @contract: planning builders work with no graph; a graph that is named or exists but is wrong still refuses.
+function graphlessFixture(invId = 'INV-001-first') {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-graphless-')));
+  initRepo(root);
+  fs.writeFileSync(path.join(root, 'README.md'), '# Target project\n');
+  commitAll(root, 'initial');
+  const invPath = path.join(root, '.planning', 'investigations', invId);
+  fs.mkdirSync(path.join(invPath, 'research'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.planning', 'architecture'), { recursive: true });
+  fs.writeFileSync(path.join(invPath, 'PROBLEM.md'), '---\nadr: .planning/architecture/ADR-TEST.md\n---\n\n# Problem\n');
+  fs.writeFileSync(path.join(invPath, 'RESEARCH-CONTRACT.md'), '# Research contract\n');
+  fs.writeFileSync(path.join(invPath, 'DECISIONS.md'), '# Decisions\n');
+  fs.writeFileSync(path.join(root, '.planning', 'architecture', 'ADR-TEST.md'), '# Planning ADR\n');
+  return { root, invId, invPath };
+}
+
+// @contract: graph resolution reads process.cwd() as well as the cwd option, so these tests chdir to match the CLI.
+function withoutGraphEnv(run) {
+  const saved = process.env.SHIPYARD_GRAPH_DIR;
+  const originalCwd = process.cwd();
+  delete process.env.SHIPYARD_GRAPH_DIR;
+  process.chdir(os.tmpdir());
+  try { return run(); } finally {
+    process.chdir(originalCwd);
+    if (saved !== undefined) process.env.SHIPYARD_GRAPH_DIR = saved;
+  }
+}
+
+test('research and decomposition build with no graph and pass both runtimes’ real validators', () => withoutGraphEnv(() => {
+  const fixture = graphlessFixture();
+  try {
+    process.chdir(fixture.root);
+    assert.equal(fs.existsSync(path.join(fixture.root, '.planning', 'graph')), false);
+    const revision = git(fixture.root, 'rev-parse', 'HEAD');
+    for (const runtime of ['claude', 'codex']) {
+      const research = deliverDispatch.build(['research', fixture.invId, '--runtime', runtime], { cwd: fixture.root });
+      const refPaths = runtime === 'claude'
+        ? research.args.sourceRefs.map((ref) => ref.path)
+        : research.context.contextPacket.required_refs.concat(research.context.contextPacket.optional_refs)
+          .map((ref) => ref.path);
+      assert.ok(refPaths.every((file) => !file.endsWith('tickets.json')), `${runtime} research must not name a graph`);
+      assert.equal(research.scope.phase, 1);
+      assert.equal(research.scope.worktree, fixture.root);
+      if (runtime === 'claude') {
+        assert.equal(validateRequest('investigation-research', research).workflow, 'investigation-research');
+        assert.equal(research.args.sourceRefs.length, 3);
+        for (const line of research.args.lines) {
+          validateContextPacket(line.contextPacket, {
+            role: 'research', subject: `${fixture.invId}:${line.id}`, root: fixture.root,
+            sourceRevision: revision, policyHash: modelPolicy.POLICY_HASH,
+          });
+        }
+      } else {
+        const { scope: _scope, ...launch } = research;
+        assert.equal(codexDeliveryHost.validateArgs(launch).request.role, 'research');
+        validateContextPacket(research.context.contextPacket, {
+          role: 'research', subject: fixture.invId, root: fixture.root,
+          sourceRevision: revision, policyHash: modelPolicy.POLICY_HASH,
+        });
+      }
+
+      const decomposition = deliverDispatch.build(['decomposition', fixture.invId, '--phase', '1', '--runtime', runtime],
+        { cwd: fixture.root });
+      assert.equal(JSON.stringify(decomposition).includes('tickets.json'), false);
+      if (runtime === 'claude') {
+        assert.equal(claudeDecomposeHost.canonicalRequest(decomposition).phase, 1);
+        assert.ok(decomposition.prompt.includes('.planning/architecture/ADR-TEST.md'));
+      } else {
+        const { scope: _scope, ...launch } = decomposition;
+        const accepted = codexPlanningContextHost.requestValue(launch, { worktreePath: fixture.root });
+        assert.ok(accepted.contextPacket.required_refs.some((ref) => ref.path === '.planning/architecture/ADR-TEST.md'));
+      }
+    }
+    const phased = deliverDispatch.build(['research', fixture.invId, '--runtime', 'claude', '--phase', '3'], { cwd: fixture.root });
+    assert.equal(phased.scope.phase, 3);
+    assert.equal(fs.existsSync(path.join(fixture.root, '.planning', 'graph')), false);
+  } finally {
+    cleanup(fixture.root);
+  }
+}));
+
+test('graph-less planning build resolves the owning repository from a linked worktree', () => withoutGraphEnv(() => {
+  const fixture = graphlessFixture('INV-002-linked');
+  const linked = path.join(os.tmpdir(), `deliver-graphless-linked-${process.pid}`);
+  try {
+    git(fixture.root, 'worktree', 'add', '-q', '--detach', linked);
+    process.chdir(linked);
+    const request = deliverDispatch.build(['research', fixture.invId, '--runtime', 'claude'], { cwd: linked });
+    assert.equal(request.scope.worktree, fixture.root);
+    assert.equal(request.scope.phase, 1);
+  } finally {
+    cleanup(linked, fixture.root);
+  }
+}));
+
+test('graph-less fallback does not relax a graph that was named or that exists but is wrong', () => withoutGraphEnv(() => {
+  const fixture = graphlessFixture('INV-003-strict');
+  try {
+    process.chdir(fixture.root);
+    const missing = path.join(fixture.root, 'elsewhere', 'graph');
+    assert.throws(() => deliverDispatch.build(['research', fixture.invId], { cwd: fixture.root, graphDir: missing }),
+      (error) => error.code === 'BUILD_REFUSED' && /canonical ticket graph is unavailable/.test(error.message));
+    process.env.SHIPYARD_GRAPH_DIR = missing;
+    try {
+      assert.throws(() => deliverDispatch.build(['research', fixture.invId], { cwd: fixture.root }),
+        (error) => error.code === 'BUILD_REFUSED' && /canonical ticket graph is unavailable/.test(error.message));
+    } finally { delete process.env.SHIPYARD_GRAPH_DIR; }
+    const graphDir = path.join(fixture.root, '.planning', 'graph');
+    writeJson(path.join(graphDir, 'tickets.json'), { tickets: {} });
+    commitAll(fixture.root, 'graph');
+    assert.throws(() => deliverDispatch.build(['research', fixture.invId, '--runtime', 'claude'], { cwd: fixture.root }),
+      (error) => error.code === 'BUILD_REFUSED' && /no positive phase/.test(error.message));
+  } finally {
+    cleanup(fixture.root);
+  }
+}));
+
 test('planning builders preserve context with distinct fresh run ids and missing PROBLEM.md exits 2', () => {
   const fixture = planningBuilderFixture('INV-43-16');
   const args = ['research', fixture.invId, '--runtime', 'codex'];

@@ -364,7 +364,8 @@ context first, then one callback set, then materialization verification.
 
    The builder attaches a verified context packet with required source content
    and digest-bound references for the selected ADR or investigation,
-   requirements, roadmap, applicable research, phase context, and graph. It
+   requirements, roadmap, applicable research, phase context, and the graph
+   when one exists (a repository's first decomposition has none yet). It
    never selects a model or effort. Optional file bodies are elided to fit the
    token ceiling while their paths and hashes remain verifiable; the planner
    reads only relevant omitted files and checks their hashes. It validates the
