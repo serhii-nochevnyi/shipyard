@@ -982,7 +982,7 @@ owner. Automatic context transfer is unavailable until a runtime-specific
 fresh-context launch, child enumeration and application-evidence continuity
 are proven; do not infer that capability from CLI help or a synthetic fixture.
 
-The host-held owner capability is passed through the Claude runtime host and Codex
+The host-held owner capability is passed through the Anthropic runtime host and Codex
 adapter closures into the same ADR-014 `resolve → validate → reserve → launch →
 application evidence → record` boundary. It is never placed in serializable
 workflow arguments, launch context, prompts or child arguments. The boundary
@@ -1607,7 +1607,7 @@ host-owned. Codex uses `codex-delivery-host.cjs --args-file` with role
 window size, and other global context are retained as evidence but cannot
 promote it. The returned receipt must be `verified` before the drift result is
 accepted. On Codex the boundary validates the generated
-`shipyard-drift-check.toml` and uses `launchStatic`; the Claude host passes the
+`shipyard-drift-check.toml` and uses `launchStatic`; the Anthropic host passes the
 native alias and explicit effort through the workflow adapter. The Codex
 read-only profile grants write access only to the fixed
 `.shipyard-drift-evidence.md` file so the judge can supply sealable evidence.

@@ -206,7 +206,7 @@ ladder into the other.
 On the Codex ladder, research and decomposition start at Sol/high. Research
 may escalate to Sol/xhigh only for `complexity: very-complex`; `type:
 alternatives` is inert. Decomposition may escalate to Sol/xhigh only for
-the declared critical or checkpoint signal. On the Claude alias ladder,
+the declared critical or checkpoint signal. On the Anthropic alias ladder,
 research starts at sonnet/xhigh and escalates to opus/high only for the declared
 `complexity: very-complex` signal; `type: alternatives` is inert. Decomposition
 starts at sonnet/xhigh and escalates to opus/high under the declared critical or
@@ -215,7 +215,7 @@ policy choose the highest applicable rung and retain the signal evidence.
 Pass signals as policy inputs; never compose a model, effort, alias, or literal
 fallback in this command.
 
-For the Claude alias ladder, `sonnet/xhigh` is the ADR-014 policy result for
+For the Anthropic alias ladder, `sonnet/xhigh` is the ADR-014 policy result for
 the base research and decomposition selections, and `opus/high` is the result
 for their declared escalations. Fable is not a valid rung for either
 role. The routed `pipeline-config.cjs` `resolveDispatch` bridge must validate the
