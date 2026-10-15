@@ -42,7 +42,7 @@ function requestValue(input, options = {}) {
   if (!object(input)) fail('INVALID_INPUT', 'request must be an object');
   for (const key of Object.keys(input)) {
     if (!['gsd_role', 'prompt', 'signals', 'dispatch_id', 'subject', 'sourceRevision',
-      'contextPacket', 'contextPacketRequired'].includes(key)) {
+      'contextPacket', 'contextPacketRequired', 'adr'].includes(key)) {
       fail('INVALID_INPUT', `unsupported request field ${key}`);
     }
   }
@@ -93,6 +93,7 @@ function requestValue(input, options = {}) {
     sourceRevision: input.sourceRevision,
     contextPacket: input.contextPacket,
     contextPacketRequired: true,
+    ...(input.adr === undefined ? {} : { adr: input.adr }),
   });
   delegateRequest(request);
   return request;
@@ -116,6 +117,7 @@ function delegateRequest(request) {
     prompt: packetPrompt(request.prompt, request.contextPacket),
     signals: request.signals,
     ...(request.dispatch_id ? { dispatch_id: request.dispatch_id } : {}),
+    ...(request.adr === undefined ? {} : { adr: request.adr }),
   };
   try { return codexDecomposeHost.requestValue(delegated); }
   catch (error) { fail(error.code || 'INVALID_INPUT', error.message); }

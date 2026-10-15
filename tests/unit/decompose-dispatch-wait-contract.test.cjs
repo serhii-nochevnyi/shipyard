@@ -128,6 +128,8 @@ function createFixture({ installPlanner = true, includeDispatchId = true } = {})
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), '{}\n');
+  fs.mkdirSync(path.join(root, '.planning', 'architecture'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.planning', 'architecture', 'ADR-TEST.md'), '# Test ADR\n');
   fs.writeFileSync(path.join(phase, 'CONTEXT.md'), '# Context\n');
   fs.writeFileSync(path.join(root, 'source.cjs'), "'use strict';\n");
   fs.writeFileSync(path.join(root, '.gitignore'), '.planning/graph/\n');
@@ -175,7 +177,7 @@ function createFixture({ installPlanner = true, includeDispatchId = true } = {})
   };
   const dispatchId = installPlanner ? 'decompose-success-' + crypto.randomBytes(4).toString('hex')
     : 'decompose-refusal-' + crypto.randomBytes(4).toString('hex');
-  const requestBody = { scope, gsd_role: gsdRole, prompt: 'Plan this phase.' };
+  const requestBody = { scope, gsd_role: gsdRole, adr: '.planning/architecture/ADR-TEST.md', prompt: 'Plan this phase.' };
   if (includeDispatchId) requestBody.dispatch_id = dispatchId;
   fs.writeFileSync(request, JSON.stringify(requestBody));
   return {

@@ -766,6 +766,9 @@ function decompositionPlanningInputs(projectRoot, inputId, phase, { graphless = 
     const inputs = investigationPlanningInputs(projectRoot, inputId);
     const invRelative = path.join('.planning', 'investigations', inputId);
     const linkedAdr = linkedAdrPlanningSources(projectRoot, inputs.sourceRefs[0], inputId);
+    if (!linkedAdr.length) {
+      buildFail(inputId, 'decomposition requires the investigation to link its accepted ADR (adr: in PROBLEM.md)');
+    }
     const topLevel = ['RESEARCH.md', 'OPTIONS.md', 'RISKS.md', 'OPEN-QUESTIONS.md', 'SCOPING-NOTES.md', 'PREFLIGHT.md']
       .map((name) => path.join(invRelative, name));
     const researchDirectory = path.join(projectRoot, invRelative, 'research');
@@ -777,12 +780,12 @@ function decompositionPlanningInputs(projectRoot, inputId, phase, { graphless = 
     const requiredRefs = [...inputs.sourceRefs, ...linkedAdr, ...phaseInputs.requiredRefs];
     const optionalRefs = [...optionalPlanningSources(projectRoot, [...topLevel, ...researchFiles]),
       ...shared, ...phaseInputs.optionalRefs, ...graphRefs];
-    return { requiredRefs, optionalRefs, sourceRefs: [...requiredRefs, ...optionalRefs] };
+    return { requiredRefs, optionalRefs, sourceRefs: [...requiredRefs, ...optionalRefs], adrRef: linkedAdr[0] };
   }
   const selected = adrPlanningInputs(projectRoot, inputId);
   const requiredRefs = [...selected.sourceRefs, ...phaseInputs.requiredRefs];
   const optionalRefs = [...shared, ...phaseInputs.optionalRefs, ...graphRefs];
-  return { requiredRefs, optionalRefs, sourceRefs: [...requiredRefs, ...optionalRefs] };
+  return { requiredRefs, optionalRefs, sourceRefs: [...requiredRefs, ...optionalRefs], adrRef: selected.sourceRefs[0] };
 }
 
 function linkedAdrPlanningSources(projectRoot, problemSource, inputId) {
@@ -999,12 +1002,13 @@ function buildPlanningRequest(args, options) {
 
   const inputs = decompositionPlanningInputs(context.projectRoot, args.ticket, args.phase, { graphless: context.graphless });
   const sourceRefs = inputs.sourceRefs;
+  const adr = path.relative(context.projectRoot, inputs.adrRef.path).split(path.sep).join('/');
   const prompt = planningPrompt({
     operation: 'decomposition', inputId: args.ticket, phase: args.phase, sourceRefs,
   });
   if (args.runtime === 'claude') {
     const request = {
-      role: 'gsd-planner', phase: args.phase, worktree: context.projectRoot, prompt, signals: {},
+      role: 'gsd-planner', phase: args.phase, worktree: context.projectRoot, prompt, signals: {}, adr,
     };
     validateBuildRequest(args.role, (value) => claudeDecomposeHost.canonicalRequest(value), request);
     return request;
@@ -1045,6 +1049,7 @@ function buildPlanningRequest(args, options) {
     sourceRevision,
     contextPacket: packet,
     contextPacketRequired: true,
+    adr,
   };
   validateBuildRequest(args.role, ({ scope: _scope, ...value }) => require('./codex-planning-context-host.cjs').requestValue(value, {
     worktreePath: context.projectRoot,

@@ -78,7 +78,7 @@ for (const first of ['deliver-dispatch', 'codex-decompose-host']) {
           fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
             gsdAgentToml('gsd-planner', data.instructions.trimEnd()));
           const requestFile = path.join(f.root, 'detached-request.json');
-          const request = { scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan this phase.',
+          const request = { scope: f.scope, gsd_role: 'gsd-planner', adr: '.planning/architecture/ADR-TEST.md', prompt: 'Plan this phase.',
             dispatch_id: 'original-public-dispatch' };
           fs.writeFileSync(requestFile, JSON.stringify({ ...request, model: 'unauthorized' }));
           let spawns = 0;
@@ -176,6 +176,8 @@ function writeArtifacts(root, gsdRole, artifactPaths = null) {
   }
 }
 
+const ADR_PATH = '.planning/architecture/ADR-TEST.md';
+
 function fixture() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-decompose-')));
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-decompose-state-'));
@@ -184,6 +186,8 @@ function fixture() {
   fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
   fs.mkdirSync(agentDir, { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), '{}\n');
+  fs.mkdirSync(path.join(root, '.planning', 'architecture'), { recursive: true });
+  fs.writeFileSync(path.join(root, ADR_PATH), '# Test ADR\n');
   fs.mkdirSync(path.join(root, '.planning', 'phases', '38-codex-decompose'), { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'phases', '38-codex-decompose', 'CONTEXT.md'), '# Context\n');
   fs.writeFileSync(path.join(root, 'source.cjs'), "'use strict';\n");
@@ -283,7 +287,7 @@ for (const [gsdRole, logicalRole, sandbox] of [
   test(gsdRole + ' resolves and records one typed ADR-014 launch', async () => {
     const f = fixture();
     try {
-      const result = await f.create().run({ gsd_role: gsdRole, prompt: 'Plan this phase.' });
+      const result = await f.create().run({ gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Plan this phase.' });
       assert.equal(f.calls.length, 1);
       assert.equal(f.calls[0].selection.model, 'gpt-6.1-sol');
       assert.equal(f.calls[0].selection.reasoning_effort, 'high');
@@ -327,7 +331,7 @@ test('researcher and planner writes outside their contained paths refuse with ev
         fs.appendFileSync(path.join(root, 'source.cjs'), '// extra\n');
         fs.writeFileSync(path.join(root, 'stray.md'), 'stray\n');
       };
-      await assert.rejects(() => f.create().run({ gsd_role: gsdRole, prompt: 'Research.' }), (error) =>
+      await assert.rejects(() => f.create().run({ gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Research.' }), (error) =>
         error.code === 'CONTAINMENT_VIOLATION' && /source\.cjs/.test(error.message) && /stray\.md/.test(error.message));
     } finally { f.clean(); }
   }
@@ -356,7 +360,7 @@ test('a callback cannot replace the original lease containment token with a refr
       fs.appendFileSync(path.join(root, 'source.cjs'), '// unauthorized callback mutation\n');
       lease.containmentBaseline = captureContainmentBaseline({ worktree: root });
     };
-    await assert.rejects(f.create({ lease }).run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }),
+    await assert.rejects(f.create({ lease }).run({ gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }),
       error => error.code === 'CONTAINMENT_VIOLATION' && /source\.cjs/.test(error.message));
     assert.equal(fs.existsSync(path.join(f.stateRoot, 'sealed')), false);
   } finally { f.clean(); }
@@ -381,9 +385,9 @@ test('unsupported role, injected selection and foreign scope refuse before launc
     const host = f.create();
     for (const request of [
       { gsd_role: 'gsd-executor', prompt: 'Run.' },
-      { gsd_role: 'gsd-planner', prompt: 'Run.', model: 'gpt-6-luna' },
-      { gsd_role: 'gsd-planner', prompt: 'Run.', config_file: '/tmp/foreign.toml' },
-      { gsd_role: 'gsd-planner', prompt: 'Run.', context: { provider: 'anthropic' } },
+      { gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Run.', model: 'gpt-6-luna' },
+      { gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Run.', config_file: '/tmp/foreign.toml' },
+      { gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Run.', context: { provider: 'anthropic' } },
     ]) {
       await assert.rejects(() => host.run(request), (error) =>
         ['UNSUPPORTED_ROLE', 'INVALID_INPUT'].includes(error.code));
@@ -399,11 +403,11 @@ test('missing or conflicting installed role refuses before launch and receipt', 
   try {
     const file = path.join(f.agentDir, 'gsd-planner.toml');
     fs.appendFileSync(file, 'model = "gpt-6-luna"\n');
-    await assert.rejects(() => f.create().run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }),
+    await assert.rejects(() => f.create().run({ gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }),
       (error) => error.code === 'CONFLICTING_OVERRIDE');
     assert.equal(f.calls.length, 0);
     fs.unlinkSync(file);
-    await assert.rejects(() => f.create().run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }),
+    await assert.rejects(() => f.create().run({ gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }),
       (error) => error.code === 'STALE_GSD_AGENT');
     assert.equal(f.calls.length, 0);
   } finally { f.clean(); }
@@ -433,7 +437,7 @@ test('contradictory native child evidence never becomes a durable receipt', asyn
         agent_file_digest: '0'.repeat(64), provider: 'openai',
       } },
     });
-    await assert.rejects(() => f.create().run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }),
+    await assert.rejects(() => f.create().run({ gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }),
       (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
     assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
   } finally { f.clean(); }
@@ -443,17 +447,18 @@ test('CLI accepts only a bounded scope and typed request file', () => {
   const f = fixture();
   try {
     const file = path.join(f.root, 'request.json');
-    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
     assert.equal(parseCliArguments(['--args-file', file]), file);
-    assert.deepEqual(readRequestFile(file).launch, requestValue({ gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    assert.deepEqual(readRequestFile(file).launch, requestValue({ gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
     assert.throws(() => parseCliArguments(['--args-file', file, '--module', 'foreign']),
       (error) => error.code === 'INVALID_INPUT');
-    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.', host: './foreign.cjs' }));
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.', host: './foreign.cjs' }));
     assert.throws(() => readRequestFile(file), (error) => error.code === 'INVALID_INPUT');
     fs.writeFileSync(file, JSON.stringify({ scope: { ...f.scope, module: './foreign.cjs' },
-      gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+      gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
     assert.throws(() => readRequestFile(file), (error) => error.code === 'INVALID_INPUT');
     fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner',
+      adr: ADR_PATH,
       prompt: 'Plan.', runStoreDir: path.join(f.root, 'runs') }));
     assert.throws(() => readRequestFile(file), (error) => error.code === 'INVALID_INPUT');
   } finally { f.clean(); }
@@ -491,7 +496,7 @@ for (const mode of ['active', 'corrupt']) {
       if (mode === 'corrupt') fs.writeFileSync(oldLease.file, '{invalid', { mode: 0o600 });
       const original = fs.readFileSync(oldLease.file);
       const file = path.join(f.root, 'legacy-request.json');
-      fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+      fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
       let launches = 0;
       await assert.rejects(runCli(['--args-file', file], { write() {} }, {
         testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
@@ -517,7 +522,7 @@ test('child telemetry collector failure warns without leaking collector details 
       gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
     const file = path.join(f.root, 'telemetry-failure-request.json');
     fs.writeFileSync(file, JSON.stringify({
-      scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.',
+      scope: f.scope, gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Check this phase plan.',
     }));
     const stdout = [];
     const stderr = [];
@@ -691,7 +696,7 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
   try {
     fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'), gsdAgentToml(gsdRole, instructions.replace(/\n$/, '')));
     const file = path.join(f.root, 'cli-request.json');
-    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' }));
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Check this phase plan.' }));
     const output = [];
     const { spawn, calls } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
       clock.advance(50);
@@ -762,6 +767,7 @@ for (const mutation of ['none', 'modify', 'remove', 'add', 'stage', 'commit', 'm
       const request = path.join(f.root, 'cli-request.json');
       const dispatchId = 'fresh-dirty-' + mutation;
       fs.writeFileSync(request, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner',
+        adr: ADR_PATH,
         prompt: 'Use the prepared inputs.', dispatch_id: dispatchId }));
       const onSpawn = () => {
         if (mutation === 'modify') fs.appendFileSync(input, '// unauthorized\n');
@@ -826,6 +832,7 @@ test('fresh planning binds containment before snapshot callbacks can refresh an 
     const file = path.join(f.root, 'cli-request.json');
     const dispatchId = 'snapshot-manifest-mutation';
     fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner',
+      adr: ADR_PATH,
       prompt: 'Plan the prepared input.', dispatch_id: dispatchId }));
     await assert.rejects(runCli(['--args-file', file], { write() {} }, {
       writerLease, env: { CODEX_HOME: f.codexHome }, agentDir: f.agentDir,
@@ -862,6 +869,7 @@ test('direct ADR decomposition retains its subject through controller, in-flight
       gsdAgentToml('gsd-planner', data.instructions.trimEnd()));
     const file = path.join(f.root, 'cli-request.json');
     fs.writeFileSync(file, JSON.stringify({ scope, gsd_role: 'gsd-planner',
+      adr: ADR_PATH,
       prompt: 'Decompose the accepted ADR.', dispatch_id: dispatchId }));
     const result = await runCli(['--args-file', file], { write() {} }, {
       env: { CODEX_HOME: f.codexHome }, agentDir: f.agentDir,
@@ -893,7 +901,7 @@ test(`detached ${includeDispatchId ? 'explicit' : 'omitted'} dispatch ID reaches
     fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
       gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
     const requestedDispatchId = includeDispatchId ? 'explicit-decompose-' + crypto.randomBytes(5).toString('hex') : null;
-    const requestBody = { scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' };
+    const requestBody = { scope: f.scope, gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Check this phase plan.' };
     if (requestedDispatchId !== null) requestBody.dispatch_id = requestedDispatchId;
     const requestFile = path.join(f.root, 'detached-request.json');
     fs.writeFileSync(requestFile, JSON.stringify(requestBody));
@@ -973,7 +981,7 @@ test('a live Codex CLI writer blocks Claude decomposition before its typed launc
   const fixtureData = buildNativeChildFixture(gsdRole);
   const sharedRoot = path.join(f.stateRoot, 'shared-writer');
   const file = path.join(f.root, 'codex-owner-request.json');
-  fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check.' }));
+  fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Check.' }));
   fs.writeFileSync(path.join(f.agentDir, `${gsdRole}.toml`),
     gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
   let entered;
@@ -993,7 +1001,7 @@ test('a live Codex CLI writer blocks Claude decomposition before its typed launc
     const original = fs.readFileSync(lease.file, 'utf8');
     let claudeLaunches = 0;
     await assert.rejects(runClaudeDecomposition({ phase: 38, worktree: f.root,
-      role: 'gsd-plan-checker', prompt: 'Check.' }, {
+      role: 'gsd-plan-checker', prompt: 'Check.', adr: ADR_PATH }, {
       store: path.join(f.stateRoot, 'claude-private'), testWriterStateRoot: sharedRoot,
       runtimeHostFactory: () => { claudeLaunches++; throw new Error('second paid child'); },
     }), { code: 'WRITER_LEASED' });
@@ -1021,7 +1029,7 @@ test('advancing the injected clock past the lease TTL with no heartbeat still re
     fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'),
       gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
     const file = path.join(f.root, 'cli-request.json');
-    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' }));
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Check this phase plan.' }));
     const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
       clock.advance(5000);
     });
@@ -1047,7 +1055,7 @@ test('standalone CLI records a failed owned run after launch preflight refusal',
   const f = fixture();
   try {
     const file = path.join(f.root, 'cli-request.json');
-    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
     fs.appendFileSync(path.join(f.agentDir, 'gsd-planner.toml'), 'model = "gpt-6-luna"\n');
     const output = [];
     await assert.rejects(() => runCli(['--args-file', file], { write(value) { output.push(value); } }, {
@@ -1068,7 +1076,7 @@ test('standalone CLI owns runtime unavailability and fails the run', async () =>
   const f = fixture();
   try {
     const file = path.join(f.root, 'cli-request.json');
-    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
     await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
       env: { CODEX_HOME: f.codexHome },
       testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
@@ -1086,7 +1094,7 @@ test('a second session planning the same worktree and phase is refused with WRIT
   const f = fixture();
   try {
     const file = path.join(f.root, 'cli-request.json');
-    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
     const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
     const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
     const writerLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: leaseStateRoot });
@@ -1107,7 +1115,7 @@ test('different phases in the same worktree do not contend for the planning writ
   const f = fixture();
   try {
     const file = path.join(f.root, 'cli-request.json');
-    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
     const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
     const otherPhaseLease = createPlanningWriterLease({
       worktree: f.root, phaseDir: path.join(f.root, '.planning', 'phases', '39-other-codex-decompose'), stateRoot: leaseStateRoot,
@@ -1144,7 +1152,7 @@ test('a lease takeover before sealing refuses with WRITER_FENCED and seals nothi
     };
     await assert.rejects(() => f.create({
       lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot },
-    }).run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }), (error) => error.code === 'WRITER_FENCED');
+    }).run({ gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }), (error) => error.code === 'WRITER_FENCED');
     assert.equal(fs.existsSync(path.join(f.stateRoot, 'sealed', 'decomposition-index')), false);
     assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
   } finally { f.clean(); }
@@ -1165,7 +1173,7 @@ test('a foreign edit to the phase directory mid-run refuses with FOREIGN_EDIT, n
     };
     await assert.rejects(() => f.create({
       lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot },
-    }).run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }),
+    }).run({ gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }),
       (error) => error.code === 'FOREIGN_EDIT' && /stray\.md/.test(error.message));
     assert.equal(fs.existsSync(path.join(f.stateRoot, 'sealed', 'decomposition-index')), false);
     assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
@@ -1190,7 +1198,7 @@ test('Codex live judgment roles gate takeover and foreign edits before recorder 
           return launch(selection, context);
         };
         await assert.rejects(f.create({ lease: { writerLease, token: handle.token, epoch: handle.epoch,
-          snapshot: original.snapshotTree() } }).run({ gsd_role: role, prompt: 'Plan.' }), { code: refusal });
+          snapshot: original.snapshotTree() } }).run({ gsd_role: role, adr: ADR_PATH, prompt: 'Plan.' }), { code: refusal });
         assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
       } finally { f.clean(); }
     }
@@ -1205,7 +1213,7 @@ test('the planning writer lease releases on success and on failure so a followin
   try {
     fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'), gsdAgentToml('gsd-planner', fixtureData.instructions.replace(/\n$/, '')));
     const file = path.join(f.root, 'cli-request.json');
-    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan this phase.' }));
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan this phase.' }));
     const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
     const successStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-success-'));
     const successLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: successStateRoot });
@@ -1229,7 +1237,7 @@ test('the planning writer lease releases on success and on failure so a followin
     const failureLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: failureStateRoot });
     const failureScope = { ...f.scope, run_id: 'run-codex-decompose-test-failure' };
     const failureFile = path.join(f.root, 'cli-request-failure.json');
-    fs.writeFileSync(failureFile, JSON.stringify({ scope: failureScope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    fs.writeFileSync(failureFile, JSON.stringify({ scope: failureScope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
     fs.appendFileSync(path.join(f.agentDir, 'gsd-planner.toml'), 'model = "gpt-6-luna"\n');
     await assert.rejects(() => runCli(['--args-file', failureFile], { write() {} }, {
       env: { CODEX_HOME: f.codexHome },
@@ -1247,7 +1255,7 @@ test('post-acquire snapshot and heartbeat setup failures release the original wr
     const f = fixture();
     try {
       const file = path.join(f.root, 'cli-request.json');
-      fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+      fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
       const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
       const realLease = createPlanningWriterLease({ worktree: f.root, phaseDir,
         stateRoot: path.join(f.stateRoot, 'post-acquire-writer') });
@@ -1302,7 +1310,7 @@ async function recoverySetup(gsdRole, {
   const file = path.join(f.root, 'cli-request.json');
   const dispatchId = 'dispatch-recover-' + crypto.randomBytes(6).toString('hex');
   fs.writeFileSync(file, JSON.stringify({
-    scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.', dispatch_id: dispatchId,
+    scope: f.scope, gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Check this phase plan.', dispatch_id: dispatchId,
   }));
   const hostState = path.dirname(defaultRunStoreDir(f.scope, f.stateRoot));
   const receipts = path.join(hostState, 'receipts');
@@ -1452,7 +1460,7 @@ async function recoverySetup(gsdRole, {
     lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: leaseSnapshot, containmentBaseline },
   });
   try {
-    await liveHost.run({ gsd_role: gsdRole, prompt: 'Check this phase plan.', dispatch_id: dispatchId });
+    await liveHost.run({ gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Check this phase plan.', dispatch_id: dispatchId });
   } catch (error) { crashError = error; }
   const base = {
     env, agentDir: f.agentDir, agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
@@ -1795,7 +1803,7 @@ test('recover refuses a dispatch with no reservation and one already recorded', 
     assert.equal(recovered.receipt.dispatch_id, setup.dispatchId);
     await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_ALREADY_RECORDED');
     setup.setLeasePid(2147483647);
-    fs.writeFileSync(setup.file, JSON.stringify({ scope: setup.f.scope, gsd_role: 'gsd-planner', prompt: 'x' }));
+    fs.writeFileSync(setup.file, JSON.stringify({ scope: setup.f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'x' }));
     await assert.rejects(setup.recover('dispatch-never-reserved'), (error) => error.code === 'RECOVERY_NO_RESERVATION');
     assert.equal(setup.spawned.length, 0);
   } finally { setup.f.clean(); }
@@ -1820,6 +1828,7 @@ test('recover refuses a changed original request scope before recording', async 
     setup.setLeasePid(2147483647);
     fs.writeFileSync(setup.file, JSON.stringify({
       scope: { ...setup.f.scope, ticket: 'T-OTHER' }, gsd_role: 'gsd-planner',
+      adr: ADR_PATH,
       prompt: 'Check this phase plan.', dispatch_id: setup.dispatchId,
     }));
     await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_INCOMPLETE');
@@ -1832,7 +1841,7 @@ test('recover refuses a changed original prompt and policy signals before record
   try {
     setup.setLeasePid(2147483647);
     fs.writeFileSync(setup.file, JSON.stringify({
-      scope: setup.f.scope, gsd_role: 'gsd-planner', prompt: 'A different request.',
+      scope: setup.f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'A different request.',
       signals: { critical: true }, dispatch_id: setup.dispatchId,
     }));
     await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_INCOMPLETE');
@@ -2183,6 +2192,8 @@ function measuredCreateFixture({ installPlanner = true, includeDispatchId = true
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), '{}\n');
+  fs.mkdirSync(path.join(root, '.planning', 'architecture'), { recursive: true });
+  fs.writeFileSync(path.join(root, ADR_PATH), '# Test ADR\n');
   fs.writeFileSync(path.join(phase, 'CONTEXT.md'), '# Context\n');
   fs.writeFileSync(path.join(root, 'source.cjs'), "'use strict';\n");
   fs.writeFileSync(path.join(root, '.gitignore'), '.planning/graph/\n');
@@ -2232,7 +2243,7 @@ function measuredCreateFixture({ installPlanner = true, includeDispatchId = true
   };
   const dispatchId = installPlanner ? 'decompose-success-' + crypto.randomBytes(4).toString('hex')
     : 'decompose-refusal-' + crypto.randomBytes(4).toString('hex');
-  const requestBody = { scope, gsd_role: gsdRole, prompt: 'Plan this phase.' };
+  const requestBody = { scope, gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Plan this phase.' };
   if (includeDispatchId) requestBody.dispatch_id = dispatchId;
   fs.writeFileSync(request, JSON.stringify(requestBody));
   return {

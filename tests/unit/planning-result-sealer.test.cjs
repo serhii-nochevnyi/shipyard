@@ -66,6 +66,8 @@ function sealFixtureLines(fixture, overrides = {}) {
   });
 }
 
+const { decompositionAdr } = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+
 suite('T-40-10 — shared research and decomposition sealer');
 
 test('sealResearch reproduces the pre-extraction research-result envelope', () => {
@@ -269,13 +271,16 @@ function decompositionFixture(fileCount) {
     files.push(file);
   }
   const archiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sealer-decompose-archive-'));
+  fs.mkdirSync(path.join(worktree, '.planning', 'architecture'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.planning', 'architecture', 'ADR-TEST.md'), '# Test ADR\n');
+  const adr = decompositionAdr.resolveAdr(worktree, '.planning/architecture/ADR-TEST.md');
   const scope = {
-    worktree, subject: 'phase=40;repository=acme/shipyard',
+    worktree, subject: decompositionAdr.decompositionSubject({ phase: 40, repository: 'acme/shipyard', adr }),
     sourceRevision: 'a'.repeat(40), repository: 'acme/shipyard', policyHash: 'b'.repeat(64),
     status: 'completed', summary: 'plans materialized',
   };
   return {
-    root, worktree, archiveRoot, scope, files,
+    root, worktree, archiveRoot, scope, files, adr,
     clean() {
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(archiveRoot, { recursive: true, force: true });
@@ -286,7 +291,7 @@ function decompositionFixture(fileCount) {
 test('sealDecomposition indexes every plan file sorted by path with correct digests', () => {
   const fixture = decompositionFixture(2);
   try {
-    const envelope = sealDecomposition({ root: fixture.archiveRoot, scope: fixture.scope, plans: fixture.files });
+    const envelope = sealDecomposition({ root: fixture.archiveRoot, scope: fixture.scope, plans: fixture.files, adr: fixture.adr });
     assert.equal(envelope.schema, 'shipyard.decomposition-result.v1');
     assert.equal(envelope.version, 1);
     assert.equal(envelope.role, 'decomposition');
@@ -314,7 +319,7 @@ test('sealDecomposition rejects a symlinked plan file', () => {
     fs.unlinkSync(target);
     fs.symlinkSync('/etc/hosts', target);
     assert.throws(
-      () => sealDecomposition({ root: fixture.archiveRoot, scope: fixture.scope, plans: fixture.files }),
+      () => sealDecomposition({ root: fixture.archiveRoot, scope: fixture.scope, plans: fixture.files, adr: fixture.adr }),
       (error) => error.code === 'DECOMPOSITION_PLAN_SYMLINK',
     );
   } finally { fixture.clean(); }
@@ -325,7 +330,7 @@ test('sealDecomposition rejects an oversized plan file', () => {
   try {
     fs.writeFileSync(fixture.files[1], Buffer.alloc(1024 * 1024 + 1, 'a'));
     assert.throws(
-      () => sealDecomposition({ root: fixture.archiveRoot, scope: fixture.scope, plans: fixture.files }),
+      () => sealDecomposition({ root: fixture.archiveRoot, scope: fixture.scope, plans: fixture.files, adr: fixture.adr }),
       (error) => error.code === 'DECOMPOSITION_PLAN_TOO_LARGE',
     );
   } finally { fixture.clean(); }

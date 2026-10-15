@@ -24,6 +24,10 @@ function runDecomposition(request, dependencies = {}) {
     ...dependencies });
 }
 
+const ADR_PATH = '.planning/architecture/ADR-TEST.md';
+const ADR_TEXT = '# Test ADR\n';
+const ADR_REF = { path: ADR_PATH, sha256: crypto.createHash('sha256').update(ADR_TEXT).digest('hex') };
+
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-decompose-host-'));
   const worktree = path.join(root, 'project');
@@ -32,6 +36,8 @@ function fixture() {
   fs.mkdirSync(path.join(config, 'agents'), { recursive: true });
   fs.mkdirSync(path.join(config, 'gsd-core', 'references'), { recursive: true });
   execFileSync('git', ['init', '-q', worktree]);
+  fs.mkdirSync(path.join(worktree, '.planning', 'architecture'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, ADR_PATH), ADR_TEXT);
   for (const role of Object.keys(ROLES)) {
     fs.writeFileSync(path.join(config, 'agents', `${role}.md`),
       `---\nname: ${role}\ndescription: Test agent\ntools: Bash, Read, Edit, Write, Glob, Grep\nmodel: claude-sonnet-5\neffort: xhigh\n---\nUse @gsd-core/references/required.md\n`);
@@ -41,7 +47,7 @@ function fixture() {
 }
 
 function request(worktree, role) {
-  return { phase: 38, worktree, role, prompt: 'Create the phase plan.' };
+  return { phase: 38, worktree, role, prompt: 'Create the phase plan.', adr: ADR_PATH };
 }
 
 function preparedPhaseFixture() {
@@ -432,7 +438,7 @@ test('different phases in the same worktree do not contend for the planning writ
     const leaseA = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: f.phaseDir, stateRoot });
     leaseA.acquire({ owner: 'holder-of-phase-38', base_revision: 'deadbeef' });
     const leaseB = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: otherPhaseDir, stateRoot });
-    const otherRequest = { phase: 39, worktree: f.worktree, role: 'gsd-plan-checker', prompt: 'Check the other phase.' };
+    const otherRequest = { phase: 39, worktree: f.worktree, role: 'gsd-plan-checker', prompt: 'Check the other phase.', adr: ADR_PATH };
     const { deps } = successDependencies(f, { store: path.join(f.root, 'store-phase-39'), writerLease: leaseB });
     const output = await runDecomposition(otherRequest, deps);
     assert.equal(output.receipt.compliance, 'verified');
@@ -576,7 +582,7 @@ function recoveryFixture(role, { cli = false, extraPlannerBaseline = false } = {
     start_evidence_sha256: digest(startFile),
     binding: { repository, worktree, phase: 38, ticket: 'T-38-DECOMPOSE', run_id: runId,
       role, request_sha256: digestValue(JSON.stringify({ role, phase: 38, worktree,
-        prompt: 'Create the phase plan.', signals: {} })), model: resolution.model,
+        prompt: 'Create the phase plan.', signals: {} })), adr: ADR_REF, model: resolution.model,
       effort: resolution.effort, policy_hash: resolution.policy_hash ?? null,
       policy_version: resolution.policy_version ?? null, policy_id: resolution.policy_id ?? null,
       policy_rung: resolution.rung ?? null },

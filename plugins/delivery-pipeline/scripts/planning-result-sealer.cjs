@@ -293,8 +293,93 @@ function writeManifestOnce(file, bytes) {
   }
 }
 
-function sealDecomposition({ root, scope, plans, extra } = {}) {
+const ADR_DIRECTORY = '.planning/architecture';
+const ADR_MAX_BYTES = 1024 * 1024;
+const SUBJECT_PATTERN = /^phase=(\d+);repository=([^;]+);adr=([a-f0-9]{64})$/;
+
+function adrRefuse(code, message) {
+  const error = new Error(`decomposition-adr: ${message}`);
+  error.code = code;
+  throw error;
+}
+
+function adrPathInput(value) {
+  if (typeof value !== 'string' || !value.trim()) adrRefuse('ADR_REQUIRED', 'decomposition requires the repository-relative path of its accepted ADR');
+  const normalized = value.split(path.sep).join('/');
+  if (path.isAbsolute(normalized) || normalized.split('/').includes('..') || normalized.includes('\0')
+      || !normalized.startsWith(`${ADR_DIRECTORY}/`) || !normalized.endsWith('.md')
+      || normalized.slice(ADR_DIRECTORY.length + 1).includes('/')) {
+    adrRefuse('ADR_PATH_INVALID', `ADR path must be a file directly inside ${ADR_DIRECTORY}/: ${value}`);
+  }
+  return normalized;
+}
+
+function resolveAdr(worktree, value) {
+  const relative = adrPathInput(value);
+  let root;
+  try { root = fs.realpathSync(worktree); }
+  catch { adrRefuse('ADR_UNAVAILABLE', `worktree ${worktree} cannot be resolved`); }
+  const file = path.join(root, relative);
+  let stat;
+  try { stat = fs.lstatSync(file); }
+  catch { adrRefuse('ADR_UNAVAILABLE', `ADR is missing: ${relative}`); }
+  if (stat.isSymbolicLink() || !stat.isFile()) adrRefuse('ADR_UNAVAILABLE', `ADR must be a regular non-symlink file: ${relative}`);
+  if (stat.size > ADR_MAX_BYTES) adrRefuse('ADR_UNAVAILABLE', `ADR exceeds ${ADR_MAX_BYTES} bytes: ${relative}`);
+  let real;
+  try { real = fs.realpathSync(file); }
+  catch { adrRefuse('ADR_UNAVAILABLE', `ADR is missing: ${relative}`); }
+  if (real !== file) adrRefuse('ADR_UNAVAILABLE', `ADR resolves through a symlink: ${relative}`);
+  const bytes = fs.readFileSync(file);
+  if (bytes.length !== stat.size) adrRefuse('ADR_UNAVAILABLE', `ADR changed while it was being read: ${relative}`);
+  return Object.freeze({ path: relative, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+}
+
+function assertAdrUnchanged(worktree, adr) {
+  if (!adr || typeof adr !== 'object' || typeof adr.path !== 'string' || !/^[a-f0-9]{64}$/.test(adr.sha256 || '')) {
+    adrRefuse('ADR_REQUIRED', 'decomposition has no resolved ADR');
+  }
+  const current = resolveAdr(worktree, adr.path);
+  if (current.sha256 !== adr.sha256) {
+    adrRefuse('ADR_CHANGED', `ADR ${adr.path} changed after the decomposition launched (${adr.sha256} -> ${current.sha256})`);
+  }
+  return current;
+}
+
+function decompositionSubject({ phase, repository, adr }) {
+  if (!Number.isSafeInteger(Number(phase)) || Number(phase) < 1) adrRefuse('DECOMPOSITION_SUBJECT_INVALID', 'phase must be a positive integer');
+  if (typeof repository !== 'string' || !repository.trim() || repository.includes(';')) {
+    adrRefuse('DECOMPOSITION_SUBJECT_INVALID', 'repository identity must be non-empty text without ";"');
+  }
+  if (!adr || !/^[a-f0-9]{64}$/.test(adr.sha256 || '')) adrRefuse('ADR_REQUIRED', 'decomposition subject needs the ADR digest');
+  return `phase=${Number(phase)};repository=${repository};adr=${adr.sha256}`;
+}
+
+function assertDecompositionSubject(subject, { worktree, repository, adr }) {
+  const match = SUBJECT_PATTERN.exec(typeof subject === 'string' ? subject : '');
+  if (!match) {
+    adrRefuse('DECOMPOSITION_SUBJECT_INVALID', `decomposition subject must be phase=<phase>;repository=<repo>;adr=<ADR digest>, got ${JSON.stringify(subject)}`);
+  }
+  if (match[2] !== repository) adrRefuse('DECOMPOSITION_SUBJECT_INVALID', 'decomposition subject names a different repository');
+  const current = assertAdrUnchanged(worktree, adr);
+  if (match[3] !== current.sha256) {
+    adrRefuse('ADR_DIGEST_MISMATCH', `decomposition subject carries ADR digest ${match[3]}, but ${adr.path} is ${current.sha256}`);
+  }
+  return Object.freeze({ phase: Number(match[1]), repository: match[2], adr: current });
+}
+
+const decompositionAdr = Object.freeze({
+  ADR_DIRECTORY, SUBJECT_PATTERN, resolveAdr, assertAdrUnchanged, decompositionSubject, assertDecompositionSubject,
+});
+
+// @contract: a decomposition is sealed only for the ADR its subject names, unchanged since launch.
+function sealDecomposition({ root, scope, plans, extra, adr, adrBinding = 'required' } = {}) {
   const identity = decompositionIdentity(scope);
+  if (adrBinding === 'required') {
+    try { decompositionAdr.assertDecompositionSubject(identity.subject, { worktree: identity.worktree, repository: identity.repository, adr }); }
+    catch (error) { refuse(error.code || 'DECOMPOSITION_ADR_INVALID', error.message.replace(/^decomposition-adr: /, '')); }
+  } else if (adrBinding !== 'none') {
+    refuse('DECOMPOSITION_ADR_INVALID', 'adrBinding must be required or none');
+  }
   if (typeof root !== 'string' || !root.trim()) refuse('DECOMPOSITION_ROOT_INVALID', 'sealDecomposition requires an archive root');
   if (!Array.isArray(plans) || !plans.length) refuse('DECOMPOSITION_PLANS_INVALID', 'sealDecomposition requires at least one plan file');
   if (plans.length > DECOMPOSITION_MAX_PLANS) {
@@ -566,6 +651,7 @@ function assertContained({ worktree, allowed, baseline } = {}) {
 module.exports = Object.freeze({
   sealResearch,
   sealDecomposition,
+  decompositionAdr,
   researchLineFailure,
   verifySealedLine,
   assertContained,

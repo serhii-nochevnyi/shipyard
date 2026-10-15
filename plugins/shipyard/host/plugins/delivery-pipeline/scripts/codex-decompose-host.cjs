@@ -12,6 +12,7 @@ const {
 const { launchAgent, selectAgent } = require('./codex-agent.cjs');
 const { createCodexDispatchAdapter } = require('./codex-dispatch-adapter.cjs');
 const policy = require('./model-policy.cjs');
+const { decompositionAdr } = require('./planning-result-sealer.cjs');
 const { newDispatchId, createDispatchBoundary, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
@@ -45,7 +46,7 @@ function fail(code, message) {
 function requestValue(input) {
   if (!object(input)) fail('INVALID_INPUT', 'request must be an object');
   for (const key of Object.keys(input)) {
-    if (!['gsd_role', 'prompt', 'signals', 'dispatch_id'].includes(key)) {
+    if (!['gsd_role', 'prompt', 'signals', 'dispatch_id', 'adr'].includes(key)) {
       fail('INVALID_INPUT', 'unsupported request field ' + key);
     }
   }
@@ -56,12 +57,25 @@ function requestValue(input) {
       && (typeof input.dispatch_id !== 'string' || !input.dispatch_id.trim())) {
     fail('INVALID_INPUT', 'dispatch_id must be non-empty text');
   }
+  if (input.adr !== undefined && (typeof input.adr !== 'string' || !input.adr.trim())) {
+    fail('INVALID_INPUT', 'adr must be the repository-relative path of the accepted ADR');
+  }
   return Object.freeze({
     gsd_role: input.gsd_role,
     prompt: input.prompt,
     signals: policy.normalizeSignals(input.signals || {}),
     ...(input.dispatch_id === undefined ? {} : { dispatch_id: input.dispatch_id }),
+    ...(input.adr === undefined ? {} : { adr: input.adr }),
   });
+}
+
+function withResolvedAdr(request, scope) {
+  if (request.adr === undefined) {
+    if (request.gsd_role === 'gsd-planner') fail('ADR_REQUIRED', 'decomposition requires the repository-relative path of its accepted ADR');
+    return request;
+  }
+  try { return Object.freeze({ ...request, adr: decompositionAdr.resolveAdr(scope.worktree, request.adr) }); }
+  catch (error) { fail(error.code || 'INVALID_INPUT', error.message.replace(/^decomposition-adr: /, '')); }
 }
 
 function researchInstructions(content) {
@@ -146,6 +160,11 @@ function sealScope(scope, output, summary) {
   };
 }
 
+function planScope(scope, output, adr) {
+  const sealed = sealScope(scope, output, 'materialized plans for phase ' + scope.phase);
+  return { ...sealed, subject: decompositionAdr.decompositionSubject({ phase: scope.phase, repository: sealed.repository, adr }) };
+}
+
 function assertNoForeignEdit(leaseCtx, scope, directory, declaredAbsolutePaths) {
   if (!leaseCtx) return;
   leaseCtx.writerLease.assertFence({ token: leaseCtx.token, epoch: leaseCtx.epoch, base_revision: sourceRevision(scope.worktree) });
@@ -171,6 +190,7 @@ function sealResearchArtifact(scope, root, output, leaseCtx) {
     root: path.join(root, 'research-index'),
     scope: sealScope(scope, output, 'researched phase ' + scope.phase),
     plans: [artifact],
+    adrBinding: 'none',
   });
   return Object.freeze({
     schema: 'shipyard.research-result.v1', version: 1, role: 'research',
@@ -181,7 +201,7 @@ function sealResearchArtifact(scope, root, output, leaseCtx) {
   });
 }
 
-function sealPlans(scope, root, output, leaseCtx) {
+function sealPlans(scope, root, output, leaseCtx, adr) {
   const directory = phaseDirectory(scope.worktree, scope.phase);
   const names = fs.readdirSync(directory).filter((name) => new RegExp(`^0*${scope.phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!names.length) fail('MISSING_ARTIFACT', 'no materialized PLAN.md files were found in ' + directory);
@@ -194,8 +214,9 @@ function sealPlans(scope, root, output, leaseCtx) {
   assertNoForeignEdit(leaseCtx, scope, directory, plans);
   return sealDecomposition({
     root: path.join(root, 'decomposition-index'),
-    scope: sealScope(scope, output, 'materialized plans for phase ' + scope.phase),
+    scope: planScope(scope, output, adr),
     plans,
+    adr,
     extra: { receipt: output.receipt },
   });
 }
@@ -276,6 +297,7 @@ function launchBinding(scope, request, dispatchId, resolution, agent, generatedA
         gsd_role: request.gsd_role,
         prompt: request.prompt,
         signals: request.signals,
+        ...(request.adr === undefined ? {} : { adr: request.adr }),
       },
     })),
     dispatch_id: dispatchId,
@@ -566,7 +588,7 @@ function createCodexDecomposeHost(options = {}) {
     version: 1,
     scope,
     async run(rawRequest, runOptions = {}) {
-      const request = requestValue(rawRequest);
+      const request = withResolvedAdr(requestValue(rawRequest), scope);
       const recovering = object(runOptions.recovered);
       const suppliedLease = recovering ? runOptions.lease : options.lease;
       const leaseCtx = suppliedLease ? Object.freeze({ ...suppliedLease }) : null;
@@ -858,7 +880,7 @@ function createCodexDecomposeHost(options = {}) {
         return recoveredFields ? Object.freeze({ ...sealed, ...recoveredFields }) : sealed;
       }
       if (request.gsd_role === 'gsd-planner') {
-        const sealed = sealPlans(scope, sealRoot, output, leaseCtx);
+        const sealed = sealPlans(scope, sealRoot, output, leaseCtx, request.adr);
         return recoveredFields ? Object.freeze({ ...sealed, ...recoveredFields }) : sealed;
       }
       return recoveredFields ? Object.freeze({ ...output, ...recoveredFields }) : output;
@@ -1099,7 +1121,7 @@ async function recoverCli(argv, stdout, options) {
       runtime: 'codex', role: ROLES[request.gsd_role].role, signals: request.signals, dispatch_id: dispatchId,
     });
     const agent = installedGsdAgent(request.gsd_role, env);
-    const binding = launchBinding(scope, request, dispatchId, resolution, agent);
+    const binding = launchBinding(scope, withResolvedAdr(request, scope), dispatchId, resolution, agent);
     const originalBinding = object(record.binding) ? { ...record.binding } : null;
     if (originalBinding) delete originalBinding.generated_agent;
     const generatedAgentValid = request.gsd_role === 'gsd-phase-researcher'

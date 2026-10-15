@@ -19,6 +19,8 @@ const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
   assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
 
+const { decompositionAdr } = require('./planning-result-sealer.cjs');
+
 const ROLES = Object.freeze({
   'gsd-phase-researcher': 'research',
   'gsd-planner': 'decomposition',
@@ -99,7 +101,7 @@ function git(worktree, ...args) {
 
 function canonicalRequest(input) {
   if (!object(input)) refuse('INVALID_INPUT', 'request must be an object');
-  const keys = new Set(['role', 'phase', 'worktree', 'prompt', 'signals']);
+  const keys = new Set(['role', 'phase', 'worktree', 'prompt', 'signals', 'adr']);
   if (Object.keys(input).some((key) => !keys.has(key))) refuse('INVALID_INPUT', 'request has unsupported fields');
   const role = safeText(input.role, 'role', 32);
   if (!Object.hasOwn(ROLES, role)) refuse('UNSUPPORTED_ROLE', `unsupported GSD role ${role}`);
@@ -127,8 +129,13 @@ function canonicalRequest(input) {
     if (signals[key] !== undefined && typeof signals[key] !== 'boolean') refuse('INVALID_SIGNAL', `invalid ${key} signal`);
   }
   const common = fs.realpathSync(path.resolve(worktree, git(worktree, 'rev-parse', '--git-common-dir')));
+  let adr = null;
+  if (ROLES[role] === 'decomposition' || input.adr !== undefined) {
+    try { adr = decompositionAdr.resolveAdr(worktree, input.adr); }
+    catch (error) { refuse(error.code || 'INVALID_INPUT', error.message.replace(/^decomposition-adr: /, '')); }
+  }
   return Object.freeze({ role, phase, worktree, prompt, signals: Object.freeze({ ...signals }),
-    ticket: `T-${phase}-DECOMPOSE`, repository: common });
+    ticket: `T-${phase}-DECOMPOSE`, repository: common, adr });
 }
 
 function phaseDirectory(worktree, phase) {
@@ -172,7 +179,7 @@ function decompositionEnvelope(scope, store, output) {
     root: path.join(store, 'decomposition-index'),
     scope: {
       worktree: scope.worktree,
-      subject: `phase=${scope.phase};repository=${scope.repository}`,
+      subject: decompositionAdr.decompositionSubject({ phase: scope.phase, repository: scope.repository, adr: scope.adr }),
       sourceRevision: git(scope.worktree, 'rev-parse', 'HEAD'),
       repository: scope.repository,
       policyHash: output.receipt.policy_hash,
@@ -182,6 +189,7 @@ function decompositionEnvelope(scope, store, output) {
         : `materialized plans for phase ${scope.phase}`,
     },
     plans,
+    adr: scope.adr,
   });
 }
 
@@ -229,6 +237,7 @@ function requestBinding(scope, runId, resolution) {
     ticket: scope.ticket, run_id: runId, role: scope.role,
     request_sha256: digestValue(JSON.stringify({ role: scope.role, phase: scope.phase,
       worktree: scope.worktree, prompt: scope.prompt, signals: scope.signals })),
+    adr: scope.adr,
     model: resolution.model, effort: resolution.effort,
     policy_hash: resolution.policy_hash ?? null,
     policy_version: resolution.policy_version ?? null,
