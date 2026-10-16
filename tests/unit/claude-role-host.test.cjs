@@ -56,7 +56,7 @@ function writeCorpus(root, { adrs = [], backlogFiles = [], investigations = [] }
 }
 
 function setupRepository(kind, options = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), options.spaced ? 'shipyard claude role ' : 'shipyard-claude-role-')));
   const storageRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-state-')));
   git(root, ['init', '-b', 'main']);
   git(root, ['config', 'user.name', 'Shipyard Test']);
@@ -1727,4 +1727,174 @@ test('Claude architecture selection includes an uncited governing ADR without im
     } })).run(request(fixture)), /focused selection inspected/);
     assert.equal(inspected, true);
   } finally { cleanupFixture(fixture); }
+});
+
+test('integrator subject for a space-path worktree is accepted by the authority modules and round-trips inflight', () => {
+  const fixture = setupRepository('integrator', { spaced: true });
+  const targets = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const records = require('../../plugins/delivery-pipeline/scripts/dispatch-record.cjs');
+  const { prepareIntegratorContext } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const prepared = prepareIntegratorContext(hostOptions(fixture), request(fixture));
+    const parsed = targets.parseSubject('integrator', prepared.ticket);
+    assert.ok(parsed, 'integrator subject parses');
+    assert.ok(parsed.repository.includes(' '));
+    assert.equal(parsed.repository, targets.repositoryIdentity(fixture.root));
+    const graphDir = path.join(fixture.root, '.planning/graph');
+    const input = { graphDir, worktree: fixture.root, dispatch_id: records.newDispatchId(), pid: process.pid,
+      role: 'integrator', host: 'claude', ticket: prepared.ticket };
+    records.recordInflight(input);
+    const rows = Object.values(JSON.parse(fs.readFileSync(path.join(graphDir, 'dispatches.json'), 'utf8')).inflight || {});
+    assert.ok(rows.some((row) => row.ticket === prepared.ticket));
+    records.clearInflight(input);
+  } finally { cleanupFixture(fixture); }
+});
+
+test('aggregate architecture review for a space-path worktree builds its phase binding from repositoryIdentity', async () => {
+  const fixture = setupRepository('arch-review', { spaced: true });
+  const targets = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const original = targets.phaseBinding;
+  const seen = [];
+  try {
+    const epic = `epic/${PHASE}`;
+    git(fixture.root, ['branch', '-m', epic]);
+    fixture.branch = epic;
+    const graphFile = path.join(fixture.root, '.planning/graph/tickets.json');
+    const graph = JSON.parse(fs.readFileSync(graphFile));
+    graph.tickets[TICKET].epic = epic;
+    fs.writeFileSync(graphFile, JSON.stringify(graph));
+    git(fixture.root, ['add', '.planning']);
+    git(fixture.root, ['commit', '-m', 'chore: bind canonical phase epic']);
+    fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
+    targets.phaseBinding = (input) => {
+      const binding = original(input);
+      seen.push({ input, binding });
+      return binding;
+    };
+    await createClaudeRoleHost(hostOptions(fixture)).run({ ...request(fixture), ticket: undefined, phase: PHASE, pr: 101 }).catch(() => {});
+    assert.ok(seen.length >= 1, 'the host built a phase binding');
+    const identity = targets.repositoryIdentity(fixture.root);
+    assert.ok(identity.includes(' '));
+    for (const { input, binding } of seen) {
+      assert.equal(input.repository, identity);
+      assert.equal(targets.parseSubject('architecture-review', binding.subject).repository, identity);
+    }
+  } finally {
+    targets.phaseBinding = original;
+    cleanupFixture(fixture);
+  }
+});
+
+const { spawnSync: spawnRole } = require('node:child_process');
+const ROLE_SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+
+function roleTree(dir) {
+  const out = [];
+  const walk = (entry) => {
+    if (path.basename(entry) === '.git') return;
+    out.push(entry);
+    if (fs.lstatSync(entry).isDirectory()) for (const name of fs.readdirSync(entry).sort()) walk(path.join(entry, name));
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return out;
+}
+
+function roleCliFixture() {
+  const fixture = setupRepository('arch-review');
+  const aux = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-role-cli-')));
+  const home = path.join(aux, 'home');
+  const bin = path.join(aux, 'bin');
+  fs.mkdirSync(home);
+  fs.mkdirSync(bin);
+  const help = ['--model', '--effort', '--output-format', 'stream-json', '--session-id', '--permission-mode',
+    '--permission-prompts', '--allowedTools', '--tools', '--restricted', '--strict-mcp-config', '--settings',
+    '--setting-sources', '--agent', '--agents'].join(' ');
+  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo "9.9.9 (Claude Code)";;
+  --help) echo "${help}";;
+  auth) echo '{"loggedIn":true}';;
+esac
+`, { mode: 0o755 });
+  const argsFile = path.join(aux, 'args.json');
+  fs.writeFileSync(argsFile, JSON.stringify(request(fixture)));
+  return { ...fixture, aux, home, bin, argsFile };
+}
+
+function spawnRoleHost(fixture, args, env = {}) {
+  return spawnRole(process.execPath, [ROLE_SCRIPT, ...args], {
+    encoding: 'utf8', cwd: fixture.root, timeout: 30000,
+    env: { ...process.env, HOME: fixture.home, PATH: `${fixture.bin}:${process.env.PATH}`, ...env },
+  });
+}
+
+function cleanupRoleCli(fixture) {
+  fs.rmSync(fixture.aux, { recursive: true, force: true });
+  cleanupFixture(fixture);
+}
+
+test('role host --args-file refuses with hints before any private file, run store or authority exists', () => {
+  const fixture = roleCliFixture();
+  try {
+    const provenance = path.join(fixture.root, '.planning/graph/provenance');
+    fs.mkdirSync(provenance, { recursive: true });
+    fs.writeFileSync(path.join(provenance, 'one.json'), '{}');
+    fs.symlinkSync('one.json', path.join(provenance, 'link.json'));
+    const before = [roleTree(fixture.root), roleTree(fixture.home), roleTree(fixture.storageRoot)];
+    const result = spawnRoleHost(fixture, ['--args-file', fixture.argsFile]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+    assert.deepEqual([roleTree(fixture.root), roleTree(fixture.home), roleTree(fixture.storageRoot)], before);
+  } finally { cleanupRoleCli(fixture); }
+});
+
+test('role host --preflight exits by result and starts nothing', () => {
+  const fixture = roleCliFixture();
+  try {
+    const before = [roleTree(fixture.root), roleTree(fixture.home)];
+    const bare = spawnRoleHost(fixture, ['--preflight']);
+    assert.equal(bare.status, 0, bare.stderr);
+    assert.match(bare.stderr, /^preflight: ok/);
+    const withArgs = spawnRoleHost(fixture, ['--preflight', '--args-file', fixture.argsFile]);
+    assert.equal(withArgs.status, 0, withArgs.stderr);
+    assert.deepEqual([roleTree(fixture.root), roleTree(fixture.home)], before);
+    const missing = spawnRoleHost(fixture, ['--preflight'], { PATH: '/nonexistent' });
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.equal(spawnRoleHost(fixture, ['--preflight', '--capability-only']).status, 1);
+  } finally { cleanupRoleCli(fixture); }
+});
+
+test('role host --capability-only keeps exit 0 and stdout and adds a stderr hint when the probe is unavailable', () => {
+  const fixture = roleCliFixture();
+  try {
+    const ok = spawnRoleHost(fixture, ['--capability-only']);
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.equal(JSON.parse(ok.stdout).status, 'available');
+    assert.doesNotMatch(ok.stderr, /hint\[/);
+    const missing = spawnRoleHost(fixture, ['--capability-only'], { PATH: '/nonexistent' });
+    assert.equal(missing.status, 0);
+    assert.equal(JSON.parse(missing.stdout).status, 'unavailable');
+    assert.match(missing.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+  } finally { cleanupRoleCli(fixture); }
+});
+
+test('role host preflight judges the legacy history of the host graph directory project', () => {
+  const worktreeProject = roleCliFixture();
+  const graphProject = setupRepository('arch-review');
+  try {
+    const provenance = path.join(graphProject.root, '.planning/graph/provenance');
+    fs.mkdirSync(provenance, { recursive: true });
+    fs.writeFileSync(path.join(provenance, 'one.json'), '{}');
+    fs.symlinkSync('one.json', path.join(provenance, 'link.json'));
+    const { runClaudeRoleCli } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+    const out = [];
+    const result = runClaudeRoleCli(['--preflight', '--args-file', worktreeProject.argsFile], { write: (value) => out.push(value) },
+      { graphDir: path.join(graphProject.root, '.planning/graph'), probe: { status: 'available' }, stderr: { write() {} } });
+    assert.equal(result.ok, false);
+    assert.ok(result.findings.some((finding) => finding.code === 'LEGACY_HISTORY_UNSAFE'));
+  } finally {
+    cleanupRoleCli(worktreeProject);
+    cleanupFixture(graphProject);
+  }
 });
