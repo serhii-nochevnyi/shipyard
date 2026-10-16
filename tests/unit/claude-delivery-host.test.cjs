@@ -1599,4 +1599,133 @@ test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main workt
   }
 });
 
+const { classifyLegacyProvenance } = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+const { spawnSync } = require('node:child_process');
+
+const DELIVERY_SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+
+function preflightProject(members = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-preflight-')));
+  const home = path.join(root, 'home');
+  fs.mkdirSync(home);
+  const worktree = path.join(root, 'project');
+  fs.mkdirSync(path.join(worktree, '.planning', 'graph', 'provenance'), { recursive: true });
+  git(worktree, 'init', '-q');
+  fs.writeFileSync(path.join(worktree, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {} }));
+  for (const [name, body] of Object.entries(members)) {
+    fs.writeFileSync(path.join(worktree, '.planning', 'graph', 'provenance', name), body);
+  }
+  const requestFile = path.join(root, 'request.json');
+  fs.writeFileSync(requestFile, JSON.stringify({
+    schema: REQUEST_SCHEMA,
+    scope: { run_id: 'pf-run', ticket: 'T-50-16', phase: 50, worktree },
+    args: { tickets: [{ id: 'T-50-16', worktreePath: worktree }] },
+  }));
+  fakeClaude(root);
+  return { root, home, worktree, requestFile, graphDir: path.join(worktree, '.planning', 'graph') };
+}
+
+function fakeClaude(root) {
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const help = ['--model', '--effort', '--output-format', 'stream-json', '--session-id', '--permission-mode',
+    '--permission-prompts', '--allowedTools', '--tools', '--restricted', '--strict-mcp-config', '--settings',
+    '--setting-sources', '--agent', '--agents'].join(' ');
+  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo "9.9.9 (Claude Code)";;
+  --help) echo "${help}";;
+  auth) echo '{"loggedIn":true}';;
+esac
+`, { mode: 0o755 });
+  return bin;
+}
+
+function spawnHost(fixture, args, extraEnv = {}) {
+  return spawnSync(process.execPath, [DELIVERY_SCRIPT, ...args], {
+    encoding: 'utf8', cwd: fixture.worktree, timeout: 30000,
+    env: { ...process.env, HOME: fixture.home, SHIPYARD_GRAPH_DIR: fixture.graphDir, PATH: `${path.join(fixture.root, 'bin')}:${process.env.PATH}`, ...extraEnv },
+  });
+}
+
+function treeSnapshot(dir) {
+  const out = [];
+  const walk = (entry) => {
+    out.push(entry);
+    if (fs.lstatSync(entry).isDirectory()) for (const name of fs.readdirSync(entry).sort()) walk(path.join(entry, name));
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return out;
+}
+
+test('Claude delivery CLI refuses an unsafe legacy member before any run state exists', () => {
+  const fixture = preflightProject({ 'one.json': '{}' });
+  try {
+    fs.symlinkSync('one.json', path.join(fixture.graphDir, 'provenance', 'link.json'));
+    const before = treeSnapshot(fixture.root);
+    const result = spawnHost(fixture, ['--workflow', 'executors', '--request-file', fixture.requestFile]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+    assert.deepEqual(treeSnapshot(fixture.root), before);
+    assert.equal(fs.existsSync(path.join(fixture.home, '.local')), false);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test('Claude delivery CLI adopts adoptable legacy history on first launch and refuses a changed member', () => {
+  const fixture = preflightProject({ 'one.json': '{}' });
+  const state = () => spawnSync(process.execPath, ['-e',
+    `process.stdout.write(require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))}).classifyLegacyProvenance(${JSON.stringify(fixture.worktree)}).state)`],
+  { encoding: 'utf8', env: { ...process.env, HOME: fixture.home } }).stdout;
+  const launch = () => spawnHost(fixture, ['--workflow', 'executors', '--request-file', fixture.requestFile]);
+  try {
+    assert.equal(state(), 'adoptable');
+    const first = launch();
+    assert.doesNotMatch(first.stderr, /hint\[LEGACY_HISTORY/);
+    assert.equal(state(), 'adopted');
+    fs.writeFileSync(path.join(fixture.graphDir, 'provenance', 'one.json'), '{"changed":1}');
+    const second = launch();
+    assert.notEqual(second.status, 0);
+    assert.match(second.stderr, /hint\[LEGACY_HISTORY_CHANGED\]/);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test('Claude delivery preflight judges the legacy history of the graph directory project', async () => {
+  const worktreeProject = preflightProject();
+  const graphProject = preflightProject({ 'one.json': '{}' });
+  fs.symlinkSync('one.json', path.join(graphProject.graphDir, 'provenance', 'link.json'));
+  try {
+    const out = [];
+    await assert.rejects(() => runClaudeDeliveryCli(
+      ['--preflight', '--workflow', 'executors', '--request-file', worktreeProject.requestFile],
+      { write: (value) => out.push(value) },
+      { graphDir: graphProject.graphDir, probe: { status: 'available' }, stderr: { write() {} } },
+    ).then((result) => { if (!result.ok) throw Object.assign(new Error('refused'), { findings: result.findings }); }),
+    (error) => error.findings.some((finding) => finding.code === 'LEGACY_HISTORY_UNSAFE'));
+  } finally {
+    fs.rmSync(worktreeProject.root, { recursive: true, force: true });
+    fs.rmSync(graphProject.root, { recursive: true, force: true });
+  }
+});
+
+test('Claude delivery --preflight exits by result and starts nothing, with and without a request', () => {
+  const fixture = preflightProject({ 'one.json': '{}' });
+  try {
+    const before = treeSnapshot(fixture.root);
+    const bare = spawnHost(fixture, ['--preflight']);
+    assert.equal(bare.status, 0, bare.stderr);
+    assert.match(bare.stderr, /^preflight: ok/);
+    const withRequest = spawnHost(fixture, ['--preflight', '--workflow', 'executors', '--request-file', fixture.requestFile]);
+    assert.equal(withRequest.status, 0, withRequest.stderr);
+    assert.deepEqual(treeSnapshot(fixture.root), before);
+    const unsafe = path.join(fixture.graphDir, 'provenance', 'link.json');
+    fs.symlinkSync('one.json', unsafe);
+    const refused = spawnHost(fixture, ['--preflight']);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+    const bad = spawnHost(fixture, ['--preflight', '--workflow', 'executors']);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /usage: claude-delivery-host\.cjs/);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
 done();
