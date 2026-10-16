@@ -342,4 +342,38 @@ test('CLI plain and JSON output both preserve explicit dynamic model and effort'
   } finally { clean(f); }
 });
 
+function installedCodexLayout(extraManifest = {}) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-installed-agent-')));
+  const home = path.join(base, 'codex-home');
+  const bundle = path.join(home, 'shipyard');
+  fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'plugins/delivery-pipeline/scripts'), path.join(bundle, 'scripts'), { recursive: true });
+  const evidence = Buffer.from(JSON.stringify(require('../smoke/installed-launch/lib.cjs').codexCapabilities()));
+  fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
+  const manifest = { phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
+    capabilities_digest: crypto.createHash('sha256').update(evidence).digest('hex'), ...extraManifest };
+  fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify(manifest));
+  return { base, home, bundle, scripts: path.join(bundle, 'scripts'), manifest };
+}
+
+test('an installed bundle supplies the agents dir and capability evidence with an empty env', () => {
+  const f = fixture();
+  const layout = installedCodexLayout();
+  try {
+    for (const name of fs.readdirSync(f.agentDir)) fs.copyFileSync(path.join(f.agentDir, name), path.join(layout.home, 'agents', name));
+    const agentManifest = JSON.parse(fs.readFileSync(path.join(f.agentDir, '.shipyard-manifest.json'), 'utf8'));
+    fs.writeFileSync(path.join(layout.home, 'agents', '.shipyard-manifest.json'), JSON.stringify({ ...agentManifest, ...layout.manifest }));
+    const run = (env) => spawnSync(process.execPath, [path.join(layout.scripts, 'codex-agent.cjs'), 'select', 'research',
+      '--project-dir', f.root, '--json'], { encoding: 'utf8', env });
+    const ok = run({ PATH: process.env.PATH, GSD_RUNTIME: 'codex' });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.equal(JSON.parse(ok.stdout).agent_path, path.join(layout.home, 'agents', 'shipyard-inv-research.toml'));
+    const other = path.join(layout.base, 'elsewhere');
+    fs.mkdirSync(other);
+    const conflict = run({ PATH: process.env.PATH, GSD_RUNTIME: 'codex', CODEX_HOME: other });
+    assert.notEqual(conflict.status, 0);
+    assert.match(conflict.stderr, /ENV_CONFLICT|disagrees/);
+  } finally { clean(f); fs.rmSync(layout.base, { recursive: true, force: true }); }
+});
+
 done();
