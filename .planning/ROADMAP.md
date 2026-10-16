@@ -930,9 +930,9 @@ Native-role policy changes are authorized for investigation and implementation a
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `d144ff57edd373349705cd7a327f41f165c376b3399409c3d83b6e7d8a349467`
-- Plans merged: 251/253
-- Phases verified: 10/28
+- Source fingerprint: `26b052353e5cccaa37280b370b51e23ed307f2359d785b3db582e5279bfdffe6`
+- Plans merged: 253/282
+- Phases verified: 10/29
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -963,8 +963,9 @@ Native-role policy changes are authorized for investigation and implementation a
 | 43 — Target-project delivery at scale | 19 | 19 | pending |
 | 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |
 | 45 — Close residual pipeline efficiency gaps | 18 | 18 | gaps_found |
-| 46 — Refresh the native runtime model ladder | 6 | 4 | gaps_found |
+| 46 — Refresh the native runtime model ladder | 6 | 6 | gaps_found |
 | 47 — Complete deferred decomposition wait attribution | 0 | 0 | pending |
+| 50 — Make launch and upgrade reliable | 29 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
 
@@ -981,3 +982,15 @@ Plans:
 - [ ] TBD — integrate the actual decomposition parent with blocking wait and measured parent wait_poll evidence; verify both actor rows in a real detached run.
 
 The original REQ-193 definition is unchanged and remains open until this phase verifies it. Phase-45 first-pass delivery and release preparation do not constitute full REQ-193 acceptance. Phase 46 already belongs to the independent native model-ladder workstream; this queued phase does not activate or alter that work.
+
+### Phase 50: Make launch and upgrade reliable
+
+**Status**: operator-approved scope from accepted ADR-030 (INV-017 Gate 1, 2026-10-15); authenticated decomposition in progress; no executable plans or accepted ticket graph yet
+**Goal**: after install or upgrade an ordinary command works in an existing project on both runtimes with no manual `export`, no history cleanup and no knowledge of internal host commands, through one shared environment resolver, host-side preflight, automatic adoption of legacy provenance as historical/unverified, one subject contract and a hermetic installed-package acceptance core.
+**Requirements**: REQ-197, REQ-198, REQ-199, REQ-200, REQ-201, REQ-202, REQ-203
+**Depends on**: none declared; establish exact ticket dependencies during decomposition against the then-current source (`v0.72.2`)
+**Plans**: 0; plan against the then-current source before execution
+
+Plans:
+
+- [ ] TBD — decomposed from ADR-030 decisions L-1…L-11 under the `fine` granularity and `--tdd`.

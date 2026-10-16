@@ -33,7 +33,6 @@ shipyard_source_fingerprint: a2431db492bdef8d1e97a1f7fb4da54fa9488986ba47f047190
 
 ## Verification Commands
 
-- `node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json`
 - `gsd-tools phase uat-passed 27 --raw`
 
 ## Gaps Summary
