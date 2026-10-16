@@ -4872,16 +4872,15 @@
     "branch": "ticket/T-46-01-migrate-native-ladder-runtime-trailer",
     "pr": 405,
     "status": "merged",
-    "recorded_pr": 405,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/405",
     "merge_sha": "a3821498ecd6f72740650f1cc6b988c9b54c8cd9",
     "merged_into": "epic/46-refresh-native-runtime-model-ladder",
     "epic_pr": {
       "number": 403,
       "branch": "epic/46-refresh-native-runtime-model-ladder",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/46-refresh-native-runtime-model-ladder",
     "base_reason": "no primary parent — a root ticket PRs into epic/46-refresh-native-runtime-model-ladder",
@@ -4893,16 +4892,15 @@
     "branch": "ticket/T-46-04-publish-supported-grid-and-isolated-roll",
     "pr": 406,
     "status": "merged",
-    "recorded_pr": 406,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/406",
     "merge_sha": "316778bf7afdc3bc2d31a515508c474fc1b00b8d",
     "merged_into": "epic/46-refresh-native-runtime-model-ladder",
     "epic_pr": {
       "number": 403,
       "branch": "epic/46-refresh-native-runtime-model-ladder",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/46-refresh-native-runtime-model-ladder",
     "base_reason": "T-46-01 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
@@ -4914,16 +4912,15 @@
     "branch": "ticket/T-46-05-regenerate-the-reviewed-package-and-veri",
     "pr": 408,
     "status": "merged",
-    "recorded_pr": 408,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/408",
     "merge_sha": "6bf4a496d84f7716da0655aaaf976c6502c88adc",
     "merged_into": "epic/46-refresh-native-runtime-model-ladder",
     "epic_pr": {
       "number": 403,
       "branch": "epic/46-refresh-native-runtime-model-ladder",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/46-refresh-native-runtime-model-ladder",
     "base_reason": "T-46-04 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
@@ -4935,16 +4932,15 @@
     "branch": "ticket/T-46-06-independently-review-native-application",
     "pr": 409,
     "status": "merged",
-    "recorded_pr": 409,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/409",
     "merge_sha": "1ead39a290966aacc3cb37a0feb2acb851b58300",
     "merged_into": "epic/46-refresh-native-runtime-model-ladder",
     "epic_pr": {
       "number": 403,
       "branch": "epic/46-refresh-native-runtime-model-ladder",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/46-refresh-native-runtime-model-ladder",
     "base_reason": "T-46-05 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
@@ -4955,47 +4951,659 @@
   "T-46-07": {
     "branch": "ticket/T-46-07-preserve-history-runtime-trailer",
     "pr": 412,
-    "status": "pr-open",
-    "recorded_pr": 412,
-    "draft": true,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/412",
-    "pr_base": "epic/46-refresh-native-runtime-model-ladder",
-    "pr_created_at": "2026-10-02T08:24:27Z",
-    "head_sha": "fe8b1440f985acb5442bf767cb8a947c60dfe249",
-    "author": {
-      "login": "serhii-nochevnyi"
-    },
-    "approved_reviews": [],
-    "reviewer_bots": [],
-    "review_fresh": false,
-    "review_freshness_reason": null,
-    "merge_state": "UNSTABLE",
-    "behind_by": 0,
-    "checks": {
-      "total": 1,
-      "failing": 1,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
+    "merge_sha": "65ffeeea8a87ed97b543a1b82d396a3b82bdfb95",
+    "merged_into": "epic/46-refresh-native-runtime-model-ladder",
+    "epic_pr": {
+      "number": 403,
+      "branch": "epic/46-refresh-native-runtime-model-ladder",
+      "state": "MERGED",
+      "base": "main",
+      "landed": true
     },
     "base": "epic/46-refresh-native-runtime-model-ladder",
     "base_reason": "T-46-06 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/46-refresh-native-runtime-model-ladder",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-10-02T08:34:39.574Z"
+    "reapable": true,
+    "since": "2026-10-15T17:15:47.986Z"
   },
   "T-46-08": {
     "branch": "ticket/T-46-08-confine-candidate-dependency-installatio",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-46-07-preserve-history-runtime-trailer",
-    "base_reason": "T-46-07 is pr-open — cascade off ticket/T-46-07-preserve-history-runtime-trailer; the sentinel retargets this PR onto epic/46-refresh-native-runtime-model-ladder when T-46-07 lands; ticket-worktree.sh create merges epic/46-refresh-native-runtime-model-ladder in for non-primary parent(s) T-46-06",
+    "pr": 413,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/413",
+    "merge_sha": "5cb05772dd0da982a75e54b10cd089c75108cedd",
+    "merged_into": "epic/46-refresh-native-runtime-model-ladder",
+    "epic_pr": {
+      "number": 403,
+      "branch": "epic/46-refresh-native-runtime-model-ladder",
+      "state": "MERGED",
+      "base": "main",
+      "landed": true
+    },
+    "base": "epic/46-refresh-native-runtime-model-ladder",
+    "base_reason": "T-46-07 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/46-refresh-native-runtime-model-ladder in for non-primary parent(s) T-46-06",
     "epic": "epic/46-refresh-native-runtime-model-ladder",
     "base_merge": "epic/46-refresh-native-runtime-model-ladder",
+    "reapable": true,
+    "since": "2026-10-15T17:15:47.986Z"
+  },
+  "T-50-01": {
+    "branch": "ticket/T-50-01-tracer-an-installed-codex-bundle-launche",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
     "ready": true,
     "reapable": false,
-    "since": "2026-10-02T07:31:39.749Z"
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-02": {
+    "branch": "ticket/T-50-02-name-every-launch-and-upgrade-refusal-wi",
+    "pr": 490,
+    "status": "pr-open",
+    "recorded_pr": 490,
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/490",
+    "pr_base": "epic/50-make-launch-and-upgrade-reliable",
+    "pr_created_at": "2026-10-16T08:23:44Z",
+    "head_sha": "2fddfee409c6c840762fee49be19f1d4a8a11bf4",
+    "pr_base_sha": "be7ab4f3407b017a50e9fe2a49bf54e22e7d3202",
+    "integration_branch": "main",
+    "architecture": {
+      "required": false,
+      "status": "skipped-by-target",
+      "target": "epic/50-make-launch-and-upgrade-reliable",
+      "integration_branch": "main"
+    },
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 5,
+      "failing": 2,
+      "pending": 2,
+      "none_reported": false,
+      "unavailable": false
+    },
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "merge_scope": "stacked",
+    "reapable": false,
+    "since": "2026-10-16T08:24:31.707Z"
+  },
+  "T-50-03": {
+    "branch": "ticket/T-50-03-complete-the-resolver-agreement-matrix-s",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-01 has no branch on the remote yet (status pending) — ticket/T-50-01-tracer-an-installed-codex-bundle-launche is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-01"
+    ],
+    "blocked_reasons": {
+      "T-50-01": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-04": {
+    "branch": "ticket/T-50-04-classify-legacy-provenance-read-only-and",
+    "pr": 491,
+    "status": "pr-open",
+    "recorded_pr": 491,
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/491",
+    "pr_base": "epic/50-make-launch-and-upgrade-reliable",
+    "pr_created_at": "2026-10-16T08:24:14Z",
+    "head_sha": "6119f70c55382174715733d6fdb4eb1a14c19a3b",
+    "pr_base_sha": "be7ab4f3407b017a50e9fe2a49bf54e22e7d3202",
+    "integration_branch": "main",
+    "architecture": {
+      "required": false,
+      "status": "skipped-by-target",
+      "target": "epic/50-make-launch-and-upgrade-reliable",
+      "integration_branch": "main"
+    },
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 5,
+      "failing": 2,
+      "pending": 2,
+      "none_reported": false,
+      "unavailable": false
+    },
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "merge_scope": "stacked",
+    "reapable": false,
+    "since": "2026-10-16T08:24:31.707Z"
+  },
+  "T-50-05": {
+    "branch": "ticket/T-50-05-one-repositoryidentity-and-one-subject-g",
+    "pr": 488,
+    "status": "pr-open",
+    "recorded_pr": 488,
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/488",
+    "pr_base": "epic/50-make-launch-and-upgrade-reliable",
+    "pr_created_at": "2026-10-16T08:19:22Z",
+    "head_sha": "0ae1f97fed39cd832a0398e1ec928ba7688eb278",
+    "pr_base_sha": "be7ab4f3407b017a50e9fe2a49bf54e22e7d3202",
+    "integration_branch": "main",
+    "architecture": {
+      "required": false,
+      "status": "skipped-by-target",
+      "target": "epic/50-make-launch-and-upgrade-reliable",
+      "integration_branch": "main"
+    },
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 6,
+      "failing": 3,
+      "pending": 0,
+      "none_reported": false,
+      "unavailable": false
+    },
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "merge_scope": "stacked",
+    "reapable": false,
+    "since": "2026-10-16T08:24:31.707Z"
+  },
+  "T-50-06": {
+    "branch": "ticket/T-50-06-open-the-l-11-verification-record-with-t",
+    "pr": 489,
+    "status": "pr-open",
+    "recorded_pr": 489,
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/489",
+    "pr_base": "epic/50-make-launch-and-upgrade-reliable",
+    "pr_created_at": "2026-10-16T08:23:13Z",
+    "head_sha": "da50bfdda18066222193fdfd603645dfa1d08682",
+    "pr_base_sha": "be7ab4f3407b017a50e9fe2a49bf54e22e7d3202",
+    "integration_branch": "main",
+    "architecture": {
+      "required": false,
+      "status": "skipped-by-target",
+      "target": "epic/50-make-launch-and-upgrade-reliable",
+      "integration_branch": "main"
+    },
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 5,
+      "failing": 0,
+      "pending": 1,
+      "none_reported": false,
+      "unavailable": false
+    },
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "merge_scope": "stacked",
+    "reapable": false,
+    "since": "2026-10-16T08:24:31.707Z"
+  },
+  "T-50-07": {
+    "branch": "ticket/T-50-07-adopt-pre-existing-provenance-once-as-hi",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-50-04-classify-legacy-provenance-read-only-and",
+    "base_reason": "T-50-04 is pr-open — cascade off ticket/T-50-04-classify-legacy-provenance-read-only-and; the sentinel retargets this PR onto epic/50-make-launch-and-upgrade-reliable when T-50-04 lands",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-08": {
+    "branch": "ticket/T-50-08-give-a-contended-catalogue-lock-a-bounde",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-07 has no branch on the remote yet (status pending) — ticket/T-50-07-adopt-pre-existing-provenance-once-as-hi is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-07"
+    ],
+    "blocked_reasons": {
+      "T-50-07": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-09": {
+    "branch": "ticket/T-50-09-route-legacy-bearing-host-admission-thro",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-08 has no branch on the remote yet (status pending) — ticket/T-50-08-give-a-contended-catalogue-lock-a-bounde is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-08"
+    ],
+    "blocked_reasons": {
+      "T-50-08": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-10": {
+    "branch": "ticket/T-50-10-planning-seal-and-review-subject-consume",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-50-05-one-repositoryidentity-and-one-subject-g",
+    "base_reason": "T-50-05 is pr-open — cascade off ticket/T-50-05-one-repositoryidentity-and-one-subject-g; the sentinel retargets this PR onto epic/50-make-launch-and-upgrade-reliable when T-50-05 lands",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-11": {
+    "branch": "ticket/T-50-11-shared-host-preflight-that-reports-every",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-03 has no branch on the remote yet (status pending) — ticket/T-50-03-complete-the-resolver-agreement-matrix-s is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-01",
+      "T-50-03",
+      "T-50-07",
+      "T-50-02"
+    ],
+    "blocked_reasons": {
+      "T-50-01": "parent has no branch yet (nothing to cascade from)",
+      "T-50-03": "parent has no branch yet (nothing to cascade from)",
+      "T-50-07": "parent has no branch yet (nothing to cascade from)",
+      "T-50-02": "non-primary parent T-50-02 is pr-open — T-50-11's worktree is cut from T-50-03 and receives T-50-02 only through epic/50-make-launch-and-upgrade-reliable; T-50-02 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-02 is pr-open)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-12": {
+    "branch": "ticket/T-50-12-record-the-codex-cli-version-beside-the",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-11"
+    ],
+    "blocked_reasons": {
+      "T-50-11": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-13": {
+    "branch": "ticket/T-50-13-codex-runtime-host-resolves-its-home-and",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-03 has no branch on the remote yet (status pending) — ticket/T-50-03-complete-the-resolver-agreement-matrix-s is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-01",
+      "T-50-03"
+    ],
+    "blocked_reasons": {
+      "T-50-01": "parent has no branch yet (nothing to cascade from)",
+      "T-50-03": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-14": {
+    "branch": "ticket/T-50-14-codex-delivery-host-runs-shared-prefligh",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-11"
+    ],
+    "blocked_reasons": {
+      "T-50-11": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-15": {
+    "branch": "ticket/T-50-15-codex-decomposition-hosts-preflight-befo",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-11",
+      "T-50-10"
+    ],
+    "blocked_reasons": {
+      "T-50-11": "parent has no branch yet (nothing to cascade from)",
+      "T-50-10": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-16": {
+    "branch": "ticket/T-50-16-claude-delivery-and-investigation-hosts",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-11"
+    ],
+    "blocked_reasons": {
+      "T-50-11": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-18": {
+    "branch": "ticket/T-50-18-integrator-subject-and-remaining-home-si",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-09 has no branch on the remote yet (status pending) — ticket/T-50-09-route-legacy-bearing-host-admission-thro is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-09",
+      "T-50-03",
+      "T-50-05"
+    ],
+    "blocked_reasons": {
+      "T-50-09": "parent has no branch yet (nothing to cascade from)",
+      "T-50-03": "parent has no branch yet (nothing to cascade from)",
+      "T-50-05": "non-primary parent T-50-05 is pr-open — T-50-18's worktree is cut from T-50-09 and receives T-50-05 only through epic/50-make-launch-and-upgrade-reliable; T-50-05 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-05 is pr-open)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-17": {
+    "branch": "ticket/T-50-17-claude-role-host-preflights-before-begin",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-18 has no branch on the remote yet (status pending) — ticket/T-50-18-integrator-subject-and-remaining-home-si is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-11",
+      "T-50-18"
+    ],
+    "blocked_reasons": {
+      "T-50-11": "parent has no branch yet (nothing to cascade from)",
+      "T-50-18": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-19": {
+    "branch": "ticket/T-50-19-claude-decomposition-and-runtime-hosts-p",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-11",
+      "T-50-10"
+    ],
+    "blocked_reasons": {
+      "T-50-11": "parent has no branch yet (nothing to cascade from)",
+      "T-50-10": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-20": {
+    "branch": "ticket/T-50-20-deliver-dispatch-runs-preflight-before-s",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-15 has no branch on the remote yet (status pending) — ticket/T-50-15-codex-decomposition-hosts-preflight-befo is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-11",
+      "T-50-15"
+    ],
+    "blocked_reasons": {
+      "T-50-11": "parent has no branch yet (nothing to cascade from)",
+      "T-50-15": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-21": {
+    "branch": "ticket/T-50-21-agent-definitions-session-observer-and-t",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-03 has no branch on the remote yet (status pending) — ticket/T-50-03-complete-the-resolver-agreement-matrix-s is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-03"
+    ],
+    "blocked_reasons": {
+      "T-50-03": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-28": {
+    "branch": "ticket/T-50-28-pin-the-resolver-across-every-installed",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-03 has no branch on the remote yet (status pending) — ticket/T-50-03-complete-the-resolver-agreement-matrix-s is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-01",
+      "T-50-03"
+    ],
+    "blocked_reasons": {
+      "T-50-01": "parent has no branch yet (nothing to cascade from)",
+      "T-50-03": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-29": {
+    "branch": "ticket/T-50-29-codex-architecture-review-context-builds",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-10 has no branch on the remote yet (status pending) — ticket/T-50-10-planning-seal-and-review-subject-consume is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-10",
+      "T-50-05"
+    ],
+    "blocked_reasons": {
+      "T-50-10": "parent has no branch yet (nothing to cascade from)",
+      "T-50-05": "non-primary parent T-50-05 is pr-open — T-50-29's worktree is cut from T-50-10 and receives T-50-05 only through epic/50-make-launch-and-upgrade-reliable; T-50-05 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-05 is pr-open)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-22": {
+    "branch": "ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-17 has no branch on the remote yet (status pending) — ticket/T-50-17-claude-role-host-preflights-before-begin is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-13",
+      "T-50-14",
+      "T-50-15",
+      "T-50-16",
+      "T-50-17",
+      "T-50-18",
+      "T-50-19",
+      "T-50-20",
+      "T-50-21",
+      "T-50-29"
+    ],
+    "blocked_reasons": {
+      "T-50-13": "parent has no branch yet (nothing to cascade from)",
+      "T-50-14": "parent has no branch yet (nothing to cascade from)",
+      "T-50-15": "parent has no branch yet (nothing to cascade from)",
+      "T-50-16": "parent has no branch yet (nothing to cascade from)",
+      "T-50-17": "parent has no branch yet (nothing to cascade from)",
+      "T-50-18": "parent has no branch yet (nothing to cascade from)",
+      "T-50-19": "parent has no branch yet (nothing to cascade from)",
+      "T-50-20": "parent has no branch yet (nothing to cascade from)",
+      "T-50-21": "parent has no branch yet (nothing to cascade from)",
+      "T-50-29": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-23": {
+    "branch": "ticket/T-50-23-installed-package-scenario-a-claude-host",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-22 has no branch on the remote yet (status pending) — ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-22",
+      "T-50-28"
+    ],
+    "blocked_reasons": {
+      "T-50-22": "parent has no branch yet (nothing to cascade from)",
+      "T-50-28": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-24": {
+    "branch": "ticket/T-50-24-installed-package-scenario-upgrade-a-pro",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-22 has no branch on the remote yet (status pending) — ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-22",
+      "T-50-09",
+      "T-50-28"
+    ],
+    "blocked_reasons": {
+      "T-50-22": "parent has no branch yet (nothing to cascade from)",
+      "T-50-09": "parent has no branch yet (nothing to cascade from)",
+      "T-50-28": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-25": {
+    "branch": "ticket/T-50-25-installed-package-scenarios-concurrent-c",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-22 has no branch on the remote yet (status pending) — ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-22",
+      "T-50-08",
+      "T-50-09",
+      "T-50-28",
+      "T-50-06"
+    ],
+    "blocked_reasons": {
+      "T-50-22": "parent has no branch yet (nothing to cascade from)",
+      "T-50-08": "parent has no branch yet (nothing to cascade from)",
+      "T-50-09": "parent has no branch yet (nothing to cascade from)",
+      "T-50-28": "parent has no branch yet (nothing to cascade from)",
+      "T-50-06": "non-primary parent T-50-06 is pr-open — T-50-25's worktree is cut from T-50-22 and receives T-50-06 only through epic/50-make-launch-and-upgrade-reliable; T-50-06 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-06 is pr-open)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-26": {
+    "branch": "ticket/T-50-26-document-launch-without-variables-prefli",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-22 has no branch on the remote yet (status pending) — ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-22",
+      "T-50-28"
+    ],
+    "blocked_reasons": {
+      "T-50-22": "parent has no branch yet (nothing to cascade from)",
+      "T-50-28": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
+  },
+  "T-50-27": {
+    "branch": "ticket/T-50-27-close-the-l-11-obligations-and-write-the",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/50-make-launch-and-upgrade-reliable",
+    "base_reason": "T-50-23 has no branch on the remote yet (status pending) — ticket/T-50-23-installed-package-scenario-a-claude-host is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable",
+    "epic": "epic/50-make-launch-and-upgrade-reliable",
+    "ready": false,
+    "blocked_by": [
+      "T-50-12",
+      "T-50-23",
+      "T-50-24",
+      "T-50-25",
+      "T-50-26",
+      "T-50-29",
+      "T-50-06"
+    ],
+    "blocked_reasons": {
+      "T-50-12": "parent has no branch yet (nothing to cascade from)",
+      "T-50-23": "parent has no branch yet (nothing to cascade from)",
+      "T-50-24": "parent has no branch yet (nothing to cascade from)",
+      "T-50-25": "parent has no branch yet (nothing to cascade from)",
+      "T-50-26": "parent has no branch yet (nothing to cascade from)",
+      "T-50-29": "parent has no branch yet (nothing to cascade from)",
+      "T-50-06": "non-primary parent T-50-06 is pr-open — T-50-27's worktree is cut from T-50-23 and receives T-50-06 only through epic/50-make-launch-and-upgrade-reliable; T-50-06 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-06 is pr-open)"
+    },
+    "reapable": false,
+    "since": "2026-10-16T05:50:24.538Z"
   }
 }
