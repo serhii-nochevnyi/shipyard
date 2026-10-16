@@ -30,7 +30,7 @@ const tmp = (label) => {
 };
 after(() => { for (const root of roots) fs.rmSync(root, { recursive: true, force: true }); });
 
-function installedLayout({ stale = false } = {}) {
+function installedLayout({ stale = false, cliVersion } = {}) {
   const root = tmp('install');
   const home = path.join(root, 'codex-home');
   const bundle = path.join(home, 'shipyard');
@@ -45,6 +45,7 @@ function installedLayout({ stale = false } = {}) {
     phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
     capabilities_digest: digest(evidence), policy_hash: stale ? 'old' : POLICY_HASH,
     agent_files: ['a.toml'], agent_digests: { 'a.toml': digest(agent) },
+    ...(cliVersion === undefined ? {} : { codex_cli_version: cliVersion }),
   }));
   return { root, home, bundle, scriptDir };
 }
@@ -232,6 +233,32 @@ describe('host preflight', () => {
     const quiet = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
     assert.equal(emitPreflight(ok, quiet), 0);
     assert.match(quiet.stderr.text, /preflight: warning\[LEGACY_HISTORY_MISSING\]/);
+  });
+
+  it('warns once when the installed Codex CLI differs from the recorded version', () => {
+    const layout = installedLayout({ cliVersion: '0.147.0' });
+    const result = preflight(base(layout, { cliVersion: () => '0.150.0' }));
+    assert.deepEqual(result.findings, []);
+    assert.equal(result.ok, true);
+    const aged = result.warnings.filter((w) => w.code === 'CAPABILITY_SNAPSHOT_AGED');
+    assert.equal(aged.length, 1);
+    assert.match(aged[0].detail, /0\.147\.0.*0\.150\.0/);
+    const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
+    assert.equal(emitPreflight(result, streams), 0);
+  });
+
+  it('stays silent when versions match or either side is unknown', () => {
+    const cases = [
+      [installedLayout({ cliVersion: '0.147.0' }), () => '0.147.0'],
+      [installedLayout({ cliVersion: null }), () => '0.150.0'],
+      [installedLayout(), () => '0.150.0'],
+      [installedLayout({ cliVersion: '0.147.0' }), () => null],
+    ];
+    for (const [layout, cliVersion] of cases) {
+      const result = preflight(base(layout, { cliVersion }));
+      assert.deepEqual(result.warnings, []);
+      assert.equal(result.ok, true);
+    }
   });
 
   it('keeps runtime-context free of host modules', () => {
