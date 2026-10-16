@@ -2308,4 +2308,117 @@ for (const runtime of ['codex', 'claude']) test('aggregate original subject reco
   } finally { clean(value); }
 });
 
+function roleArtifactInternals(names) {
+  const Module = require('node:module');
+  const isolated = new Module(ROLE_ARTIFACT, module);
+  isolated.filename = ROLE_ARTIFACT;
+  isolated.paths = Module._nodeModulePaths(path.dirname(ROLE_ARTIFACT));
+  isolated._compile(fs.readFileSync(ROLE_ARTIFACT, 'utf8') + `\nmodule.exports = { ${names.join(', ')} };`, ROLE_ARTIFACT);
+  return isolated.exports;
+}
+
+test('integrator subject round-trips through the producer and every consumer for every repository form', () => {
+  const { judgmentSubject, phaseSubjectFields } = roleArtifactInternals(['judgmentSubject', 'phaseSubjectFields']);
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const { recordInflight, clearInflight } = require('../../plugins/delivery-pipeline/scripts/dispatch-record.cjs');
+  const scratchRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'integrator-subject-')));
+  const digestValue = 'c'.repeat(64);
+  try {
+    const project = path.join(scratchRoot, 'project');
+    fs.mkdirSync(path.join(project, '.planning', 'graph'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {} }));
+    const graphDir = path.join(project, '.planning', 'graph');
+    let count = 0;
+    for (const name of ['plain', 'with space', 'репо']) {
+      const worktree = path.join(scratchRoot, name);
+      fs.mkdirSync(worktree);
+      execFileSync('git', ['init', '-q', worktree]);
+      const expected = target.repositoryIdentity(worktree);
+      const identity = { worktree, repository: { root: worktree, identity: '/decoy/not-the-git-common-dir' } };
+      const subject = judgmentSubject('integrator', {}, identity, { phase: '47-scope' }, { digest: digestValue });
+      assert.equal(subject, `phase=47-scope;repository=${expected};tickets=${digestValue}`, name);
+      for (const parsed of [phaseSubjectFields(subject), target.parseSubject('integrator', subject)]) {
+        assert.equal(parsed.phase, '47-scope');
+        assert.equal(parsed.repository, expected);
+        assert.equal(parsed.tickets, digestValue);
+      }
+      for (const role of ['integrator', 'pr-sentinel']) {
+        const input = { graphDir, ticket: subject, role, dispatch_id: 'round-trip-' + count++, pid: process.pid, host: 'codex' };
+        recordInflight(input);
+        assert.equal(clearInflight(input), true);
+      }
+    }
+    const semicolon = path.join(scratchRoot, 'semi;colon');
+    fs.mkdirSync(semicolon);
+    execFileSync('git', ['init', '-q', semicolon]);
+    assert.throws(() => judgmentSubject('integrator', {}, { worktree: semicolon, repository: { identity: '/ok/.git' } },
+      { phase: '47-scope' }, { digest: digestValue }), { code: 'REPOSITORY_IDENTITY_INVALID' });
+    const plain = path.join(scratchRoot, 'plain');
+    assert.throws(() => judgmentSubject('integrator', {}, { worktree: plain, repository: { identity: '/ok/.git' } },
+      { phase: 'no-number' }, { digest: digestValue }), { code: 'INVALID_RESULT' });
+    assert.throws(() => judgmentSubject('integrator', {}, { worktree: plain, repository: { identity: '/ok/.git' } },
+      { phase: '47 scope' }, { digest: digestValue }), { code: 'INVALID_RESULT' });
+  } finally { fs.rmSync(scratchRoot, { recursive: true, force: true }); }
+});
+
+test('phase subject consumers accept the shared repository class and refuse a semicolon or control character', () => {
+  const { phaseSubjectFields } = roleArtifactInternals(['phaseSubjectFields']);
+  const digestValue = 'd'.repeat(64), head = 'a'.repeat(40), base = 'b'.repeat(40);
+  for (const repository of ['/work/my repo/.git', '/work/дім/.git', 'owner/repo', '/plain/.git']) {
+    const integrator = `phase=47-scope;repository=${repository};tickets=${digestValue}`;
+    const aggregate = `${integrator};pr=3;head=${head};base=${base}`;
+    for (const subject of [integrator, aggregate]) {
+      const parsed = phaseSubjectFields(subject);
+      assert.ok(parsed, subject);
+      assert.equal(parsed.repository, repository);
+      assert.equal(parsed.phase, '47-scope');
+      assert.equal(parsed.tickets, digestValue);
+    }
+  }
+  for (const repository of ['/a;b/.git', '/a\tb/.git', '/a\nb/.git', '']) {
+    const integrator = `phase=47-scope;repository=${repository};tickets=${digestValue}`;
+    assert.equal(phaseSubjectFields(integrator), null, JSON.stringify(repository));
+    assert.equal(phaseSubjectFields(`${integrator};pr=3;head=${head};base=${base}`), null, JSON.stringify(repository));
+  }
+  assert.equal(phaseSubjectFields(`phase=47-scope;repository=/r/.git;tickets=${digestValue};extra=1`), null);
+  assert.equal(phaseSubjectFields(undefined), null);
+});
+
+test('role-artifact holds no private subject grammar or home expression', () => {
+  const source = fs.readFileSync(ROLE_ARTIFACT, 'utf8');
+  assert.ok(!/\/\^phase=/.test(source), 'no subject regular expression is written out in role-artifact');
+  assert.ok(!/process\.env\.CODEX_HOME/.test(source), 'the Codex home has one resolver');
+  assert.ok(!/process\.env\.CLAUDE_CONFIG_DIR/.test(source), 'the Claude home has one resolver');
+  assert.ok(!/'\.codex'/.test(source) && !/'\.claude'/.test(source), 'no private home fallback');
+  assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 3, 'definition plus the two phase-record sites');
+  assert.equal((source.match(/parseSubject\('integrator'/g) || []).length >= 3, true);
+  assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 2);
+  assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 2,
+    'both Codex session sites follow the executing bundle like every converted site');
+  assert.equal((source.match(/resolveClaudeHome\(/g) || []).length, 1);
+  assert.ok(!/^(?:const|let|var) [^\n]*require\(['"]\.\/runtime-context\.cjs['"]\)/m.test(source),
+    'runtime-context is required lazily at each site');
+});
+
+test('the Claude semantic transcript falls back through the shared Claude home', () => {
+  const { currentClaudeSemanticPin } = roleArtifactInternals(['currentClaudeSemanticPin']);
+  const trusted = { receipt: { runtime: 'claude', session_id: 'session-1',
+    selection_evidence: { transcript: { path: 'project-a/session-1.jsonl' } },
+    transcript: { path: path.join(os.tmpdir(), 'absent-claude-store', 'transcript.jsonl') } } };
+  const saved = { config: process.env.CLAUDE_CONFIG_DIR, home: process.env.HOME };
+  const restore = (key, value) => value === undefined ? delete process.env[key] : (process.env[key] = value);
+  try {
+    process.env.HOME = '/home/isolated';
+    process.env.CLAUDE_CONFIG_DIR = '/configured/claude';
+    assert.equal(currentClaudeSemanticPin(trusted).path, '/configured/claude/projects/project-a/session-1.jsonl');
+    process.env.CLAUDE_CONFIG_DIR = '~/relative-claude';
+    assert.equal(currentClaudeSemanticPin(trusted).path, '/home/isolated/relative-claude/projects/project-a/session-1.jsonl');
+    delete process.env.CLAUDE_CONFIG_DIR;
+    assert.equal(currentClaudeSemanticPin(trusted).path, '/home/isolated/.claude/projects/project-a/session-1.jsonl');
+    process.env.CLAUDE_CONFIG_DIR = '   ';
+    assert.equal(currentClaudeSemanticPin(trusted).path, '/home/isolated/.claude/projects/project-a/session-1.jsonl',
+      'a blank CLAUDE_CONFIG_DIR is unset, as the resolver reads it');
+  } finally { restore('CLAUDE_CONFIG_DIR', saved.config); restore('HOME', saved.home); }
+});
+
 done();
