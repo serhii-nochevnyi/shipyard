@@ -161,7 +161,9 @@ function readCapabilities(file) {
 }
 
 function codexHomeOf(env) {
-  return path.resolve(resolveCodexHome({ scriptDir: __dirname, env: { ...process.env, ...(env || {}) } }));
+  const merged = { ...process.env, ...(env || {}) };
+  if (!(env && Object.prototype.hasOwnProperty.call(env, 'HOME'))) delete merged.HOME;
+  return path.resolve(resolveCodexHome({ scriptDir: __dirname, env: merged }));
 }
 
 function capabilitiesFrom(options = {}) {
