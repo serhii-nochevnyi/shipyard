@@ -531,6 +531,13 @@ function errorCode(error) {
   return error && typeof error.code === 'string' && error.code ? error.code : 'UNKNOWN';
 }
 
+function installedCodexCliVersion() {
+  const result = require('child_process').spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 10_000 });
+  if (!result || result.error || result.status !== 0) return null;
+  const match = /(\d+\.\d+(?:\.\d+)*)/.exec(`${result.stdout || ''} ${result.stderr || ''}`);
+  return match ? match[1] : null;
+}
+
 // @contract: preflight is read-only, collects every incompatibility and never throws.
 function preflight(options = {}) {
   const opts = options && typeof options === 'object' ? options : {};
@@ -578,6 +585,19 @@ function preflight(options = {}) {
       if (actual === null || actual !== digests[name]) stale.push(name);
     }
     if (stale.length) find('STALE_GENERATED_AGENT', `stale or missing: ${stale.join(', ')}`, { bundle: resolved.bundleRoot, files: stale.join(', ') });
+  });
+
+  run('capability snapshot age', () => {
+    if (!resolved || resolved.mode !== 'installed') return;
+    const recorded = resolved.manifest.codex_cli_version;
+    if (typeof recorded !== 'string' || !recorded) return;
+    const current = (typeof opts.cliVersion === 'function' ? opts.cliVersion : installedCodexCliVersion)();
+    if (typeof current !== 'string' || !current || current === recorded) return;
+    warnings.push({
+      code: 'CAPABILITY_SNAPSHOT_AGED',
+      detail: `capability evidence was recorded with Codex CLI ${recorded}; installed is ${current}`,
+      vars: withBundle({ host, recorded, current }),
+    });
   });
 
   run('runtime probe', () => {
