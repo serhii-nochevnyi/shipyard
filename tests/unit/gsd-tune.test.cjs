@@ -1340,5 +1340,34 @@ test('Codex static variants: research is workspace-write, arch-review and drift-
   }
   assert.deepEqual([...new Set(codexStaticVariants(1).map((variant) => variant.sandbox))], ['workspace-write']);
 });
+const crypto = require('crypto');
+const ROOT = path.join(__dirname, '..', '..');
+
+function installedCodexLayout(extraManifest = {}) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-installed-tune-')));
+  const home = path.join(base, 'codex-home');
+  const bundle = path.join(home, 'shipyard');
+  fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'plugins/delivery-pipeline/scripts'), path.join(bundle, 'scripts'), { recursive: true });
+  const evidence = Buffer.from(JSON.stringify(require('../smoke/installed-launch/lib.cjs').codexCapabilities()));
+  fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
+  const manifest = { phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
+    capabilities_digest: crypto.createHash('sha256').update(evidence).digest('hex'), ...extraManifest };
+  fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify(manifest));
+  return { base, home, bundle, scripts: path.join(bundle, 'scripts'), manifest };
+}
+
+test('an installed bundle: a disagreeing CODEX_HOME refuses, and validate-codex-bundle still demands explicit evidence', () => {
+  const layout = installedCodexLayout();
+  try {
+    const tune = path.join(layout.scripts, 'gsd-tune.cjs');
+    const conflict = spawnSync(process.execPath, [tune, '--global'], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, HOME: layout.base, CODEX_HOME: path.join(layout.base, 'elsewhere') } });
+    assert.match(conflict.stderr + conflict.stdout, /disagrees/);
+    const bare = spawnSync(process.execPath, [SCRIPT, '--validate-codex-bundle', layout.base], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, HOME: layout.base } });
+    assert.notEqual(bare.status, 0);
+  } finally { fs.rmSync(layout.base, { recursive: true, force: true }); }
+});
 
 done();

@@ -66,9 +66,16 @@ function signalsFrom(flags) {
 function projectDirFrom(flags) {
   return path.resolve(expandHome(flags.get('project-dir')) || process.cwd());
 }
+function hostFlags(flags) {
+  return { capabilitiesFile: flags && flags.get('capabilities-file') };
+}
 function agentDirFrom(flags, env = process.env) {
-  return path.resolve(expandHome(flags.get('agent-dir'))
-    || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents'));
+  const explicit = expandHome(flags.get('agent-dir'));
+  if (explicit) return path.resolve(explicit);
+  const home = require('./runtime-context.cjs').resolveCodexHome({
+    scriptDir: __dirname, env, flags: hostFlags(flags),
+  });
+  return path.resolve(path.join(home, 'agents'));
 }
 function readCapabilities(file) {
   if (!file) fail(CAPABILITIES_CONTRACT, 'UNSUPPORTED_SELECTION');
@@ -81,7 +88,7 @@ function readCapabilities(file) {
   return capabilities;
 }
 
-function capabilitiesFrom(options, flags) {
+function capabilitiesFrom(options, flags, env = process.env) {
   if (Object.prototype.hasOwnProperty.call(options, 'capabilities') && options.capabilities !== undefined) {
     return options.capabilities;
   }
@@ -91,7 +98,13 @@ function capabilitiesFrom(options, flags) {
         && options.host.capabilities !== undefined) return options.host.capabilities;
   }
   const file = options.capabilitiesFile || flags.get('capabilities-file');
-  if (!file) fail(CAPABILITIES_CONTRACT, 'UNSUPPORTED_SELECTION');
+  if (!file) {
+    const resolved = require('./runtime-context.cjs').resolveHostEnvironment({
+      scriptDir: __dirname, runtime: 'codex', env, flags: hostFlags(flags),
+    });
+    if (resolved.mode === 'installed') return resolved.capabilities;
+    fail(CAPABILITIES_CONTRACT, 'UNSUPPORTED_SELECTION');
+  }
   return readCapabilities(file);
 }
 
@@ -161,7 +174,7 @@ function selectAgentInternal(role, options) {
   const env = options.env || process.env;
   if (options.runtime !== undefined && options.runtime !== 'codex') fail('Codex selector cannot launch another runtime');
   const loaded = pc.loadConfig(cwd, { runtime: 'codex', env, routed: true });
-  const capabilities = capabilitiesFrom(options, flags);
+  const capabilities = capabilitiesFrom(options, flags, env);
   const resolutionConfig = routedConfigForCodexResolution(loaded.config, cwd, env);
   const resolution = pc.resolveDispatch({
     ...options, config: resolutionConfig, runtime: 'codex',
@@ -193,7 +206,7 @@ function selectAgent(role, options = {}) {
 function launchAgent(role, options = {}) {
   const flags = options.flags || new Map();
   const selection = selectAgentInternal(role, { ...options, flags });
-  const capabilities = capabilitiesFrom(options, flags);
+  const capabilities = capabilitiesFrom(options, flags, options.env || process.env);
   const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, options.env || process.env));
   const host = options.host || createCodexRuntimeHost({
     scope: options.scope || options.runScope,
