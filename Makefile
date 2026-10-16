@@ -17,7 +17,7 @@ install-shipyard-marketplace-claude:
         install-shipyard-capability ensure-gsd-core-claude ensure-gsd-core-codex \
         gsd-tune gsd-tune-apply doctor \
         test test-fast test-fast-rest test-unit test-graph test-worktree test-worktree-gates \
-        test-sentinel test-docs test-hooks test-comment-policy test-codex-shipyard test-releases
+        test-sentinel test-docs test-hooks test-comment-policy test-codex-shipyard test-releases test-installed-launch
 
 # Install or refresh the conveyor on a host OpenAI Codex CLI setup.
 # Set SHIPYARD_CODEX_PHASE=1 for investigate/decompose only.
@@ -62,7 +62,7 @@ doctor:
 
 # Fast, deterministic checks for every local edit and every pull request.
 # @contract: test-fast is test-unit plus TEST_FAST_REST; CI runs test-unit as shards and test-fast-rest apart.
-TEST_FAST_REST = test-graph test-worktree test-worktree-gates test-sentinel test-docs test-hooks test-comment-policy test-model-ladder-runtime test-statusline
+TEST_FAST_REST = test-graph test-worktree test-worktree-gates test-sentinel test-docs test-hooks test-comment-policy test-model-ladder-runtime test-statusline test-installed-launch
 
 test-fast: test-unit $(TEST_FAST_REST)
 
@@ -74,6 +74,9 @@ test: test-fast test-codex-shipyard test-releases
 
 test-unit:
 	./tests/unit/run.sh
+
+test-installed-launch:
+	./tests/smoke/installed-launch-smoke.sh
 
 test-graph:
 	./tests/smoke/graph-validator-smoke.sh
