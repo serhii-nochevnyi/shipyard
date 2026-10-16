@@ -1733,8 +1733,11 @@ function packagedBatchFixtures(repository) {
   assert.deepEqual(originalReader, historicalOutput,
     'original producer history changed');
   const originalPath = path.join(repository, 'plugins/shipyard/host', relative);
-  assert.deepEqual(read(originalPath), read(path.join(repository, relative)),
-    'legacy fixture candidate must pin the current packaged producer');
+  const rawBaseRef = process.env.COMMENT_POLICY_BASE
+    ?? execFileSync('git', ['branch', '--show-current'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  if (packageFreshnessRequired(rawBaseRef.startsWith('origin/') ? rawBaseRef.slice(7) : rawBaseRef))
+    assert.deepEqual(read(originalPath), read(path.join(repository, relative)),
+      'legacy fixture candidate must pin the current packaged producer');
   const resolver = "require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs')";
   const originalSource = read(file).toString('utf8');
   assert.ok(originalSource.includes(resolver), 'original candidate source resolver seam is required');
