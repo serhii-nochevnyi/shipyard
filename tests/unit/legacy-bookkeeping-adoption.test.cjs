@@ -44,27 +44,21 @@ function snapshot(root) {
   return out;
 }
 
-function stable(value) {
-  if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';
-  if (value && typeof value === 'object')
-    return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}';
-  return JSON.stringify(value);
+function adopt(root, callback = () => {}, written) {
+  return roleArtifact.trustedBookkeepingMutation(root, callback, written);
 }
 
-function writeLegacyRecord(root, members) {
-  const directory = roleArtifact.archiveAuthorityDirectory(root);
-  const file = path.join(directory, 'catalogue.json');
-  const key = fs.readFileSync(path.join(directory, 'hmac.key'));
-  const envelope = JSON.parse(fs.readFileSync(file, 'utf8'));
-  envelope.payload[roleArtifact.LEGACY_BOOKKEEPING_FIELD] = {
-    schema: roleArtifact.LEGACY_BOOKKEEPING_SCHEMA, version: roleArtifact.LEGACY_BOOKKEEPING_VERSION,
-    status: roleArtifact.LEGACY_STATUS, members };
-  envelope.mac = crypto.createHmac('sha256', key).update(stable(envelope.payload)).digest('hex');
-  fs.writeFileSync(file, JSON.stringify(envelope) + '\n', { mode: 0o600 });
+function catalogueOf(root) {
+  return JSON.parse(fs.readFileSync(path.join(roleArtifact.archiveAuthorityDirectory(root), 'catalogue.json'), 'utf8'));
 }
 
-function inventoryOf(root) {
-  return roleArtifact.classifyLegacyProvenance(root).members;
+function catalogueBytes(root) {
+  return fs.readFileSync(path.join(roleArtifact.archiveAuthorityDirectory(root), 'catalogue.json'));
+}
+
+function refusal(fn) {
+  try { fn(); } catch (error) { return error; }
+  assert.fail('expected a refusal');
 }
 
 const authorityRoot = () => path.join(home, '.local');
@@ -186,9 +180,9 @@ test('a catalogue with an empty bookkeeping state does not make sidecars authent
 
 test('adopted history: unchanged, changed, missing and unknown members', () => {
   const root = project();
-  roleArtifact.trustedBookkeepingMutation(root, () => {});
+  adopt(root);
   sidecars(root, 3);
-  writeLegacyRecord(root, inventoryOf(root));
+  adopt(root);
   assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'adopted');
   assert.equal(roleArtifact.legacyBookkeepingMembers(root).length, 3);
   const dir = path.join(root, '.planning/graph/provenance');
@@ -272,4 +266,210 @@ test('a real unreadable authority directory is reported as unreadable', { skip: 
   try { result = roleArtifact.classifyLegacyProvenance(root); } finally { fs.chmodSync(shipyard, 0o700); }
   assert.equal(result.state, 'unreadable');
   assert.ok(['EACCES', 'EPERM'].includes(result.unreadable.code));
+});
+
+const provenanceDir = root => path.join(root, '.planning/graph/provenance');
+
+test('first admission adopts 64 sidecars once, bytes untouched, never as authenticated pins', () => {
+  const root = project();
+  sidecars(root, 64);
+  const dir = provenanceDir(root);
+  const before = snapshot(dir);
+  let invoked = 0;
+  adopt(root, () => {
+    invoked++;
+    fs.writeFileSync(path.join(root, '.planning/graph/dispatches.json'), '{"a":1}');
+  });
+  assert.equal(invoked, 1);
+  assert.deepEqual(snapshot(dir), before);
+  const { payload } = catalogueOf(root);
+  const record = payload[roleArtifact.LEGACY_BOOKKEEPING_FIELD];
+  assert.equal(record.schema, roleArtifact.LEGACY_BOOKKEEPING_SCHEMA);
+  assert.equal(record.version, roleArtifact.LEGACY_BOOKKEEPING_VERSION);
+  assert.equal(record.status, 'historical-unverified');
+  assert.ok(!Number.isNaN(Date.parse(record.adopted_at)));
+  assert.equal(record.members.length, 64);
+  for (const member of record.members) {
+    assert.deepEqual(Object.keys(member).sort(), ['bytes', 'path', 'sha256']);
+    const content = fs.readFileSync(path.join(root, member.path));
+    assert.equal(member.bytes, content.length);
+    assert.equal(member.sha256, crypto.createHash('sha256').update(content).digest('hex'));
+  }
+  const pins = roleArtifact.historicalBookkeepingPins(root);
+  assert.deepEqual(pins.map(pin => pin.path), ['.planning/graph/dispatches.json']);
+  assert.ok(payload.bookkeeping_state.every(pin => !pin.path.startsWith('.planning/graph/provenance/')));
+  assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'adopted');
+  assert.equal(roleArtifact.legacyBookkeepingMembers(root).length, 64);
+  const recordBefore = JSON.stringify(record);
+  adopt(root);
+  assert.equal(JSON.stringify(catalogueOf(root).payload[roleArtifact.LEGACY_BOOKKEEPING_FIELD]), recordBefore);
+  assert.deepEqual(snapshot(dir), before);
+});
+
+test('a later authenticated sidecar becomes a pin while legacy members stay recorded and unpinned', () => {
+  const root = project();
+  sidecars(root, 5);
+  adopt(root);
+  const recordBefore = JSON.stringify(catalogueOf(root).payload[roleArtifact.LEGACY_BOOKKEEPING_FIELD]);
+  const member = '.planning/graph/provenance/dispatch-new.json';
+  adopt(root, () => fs.writeFileSync(path.join(root, member), '{"new":1}'), [member]);
+  assert.deepEqual(roleArtifact.historicalBookkeepingPins(root).map(pin => pin.path), [member]);
+  assert.equal(JSON.stringify(catalogueOf(root).payload[roleArtifact.LEGACY_BOOKKEEPING_FIELD]), recordBefore);
+  assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'adopted');
+});
+
+test('a changed legacy member blocks the mutation before the callback and keeps the catalogue', () => {
+  const root = project();
+  sidecars(root, 4);
+  adopt(root);
+  const catalogue = catalogueBytes(root);
+  fs.writeFileSync(path.join(provenanceDir(root), 'dispatch-2.json'), '{"n":"tampered"}');
+  const after = snapshot(provenanceDir(root));
+  let invoked = false;
+  const error = refusal(() => adopt(root, () => { invoked = true; }));
+  assert.equal(error.code, 'LEGACY_HISTORY_CHANGED');
+  assert.match(error.message, /dispatch-2\.json/);
+  assert.equal(invoked, false);
+  assert.deepEqual(catalogueBytes(root), catalogue);
+  assert.deepEqual(snapshot(provenanceDir(root)), after);
+});
+
+test('an unknown member added after adoption blocks and keeps the unknown message prefix', () => {
+  const root = project();
+  sidecars(root, 4);
+  adopt(root);
+  const catalogue = catalogueBytes(root);
+  fs.writeFileSync(path.join(provenanceDir(root), 'planted-by-older-host.json'), '{}');
+  let invoked = false;
+  const error = refusal(() => adopt(root, () => { invoked = true; }));
+  assert.equal(error.code, 'LEGACY_HISTORY_UNKNOWN_MEMBER');
+  assert.match(error.message, /^unknown host provenance member/);
+  assert.match(error.message, /planted-by-older-host\.json/);
+  assert.equal(invoked, false);
+  assert.deepEqual(catalogueBytes(root), catalogue);
+  assert.ok(fs.existsSync(path.join(provenanceDir(root), 'planted-by-older-host.json')));
+});
+
+test('an unknown member beside an authenticated record is refused with the same code and prefix', () => {
+  const root = project();
+  const member = '.planning/graph/provenance/dispatch-one.json';
+  adopt(root, () => {
+    fs.mkdirSync(provenanceDir(root), { recursive: true });
+    fs.writeFileSync(path.join(root, member), '{"d":1}');
+  }, [member]);
+  fs.writeFileSync(path.join(provenanceDir(root), 'forged.json'), '{}');
+  const error = refusal(() => adopt(root));
+  assert.equal(error.code, 'LEGACY_HISTORY_UNKNOWN_MEMBER');
+  assert.match(error.message, /unknown host provenance/);
+  assert.equal(catalogueOf(root).payload[roleArtifact.LEGACY_BOOKKEEPING_FIELD], undefined);
+});
+
+test('a legacy member removed after adoption is allowed and never re-adopted', () => {
+  const root = project();
+  sidecars(root, 3);
+  adopt(root);
+  const recordBefore = JSON.stringify(catalogueOf(root).payload[roleArtifact.LEGACY_BOOKKEEPING_FIELD]);
+  fs.unlinkSync(path.join(provenanceDir(root), 'dispatch-0.json'));
+  assert.doesNotThrow(() => adopt(root));
+  assert.equal(JSON.stringify(catalogueOf(root).payload[roleArtifact.LEGACY_BOOKKEEPING_FIELD]), recordBefore);
+});
+
+test('unsafe history refuses before the callback and creates no authority directory or key', () => {
+  const variants = {
+    symlink: dir => fs.symlinkSync('/etc/hosts', path.join(dir, 'link.json')),
+    nested: dir => fs.mkdirSync(path.join(dir, 'nested')),
+    badName: dir => fs.writeFileSync(path.join(dir, 'has space.json'), '{}')
+  };
+  for (const [name, mutate] of Object.entries(variants)) {
+    const root = project();
+    const dir = sidecars(root, 3);
+    mutate(dir);
+    const before = snapshot(root), homeBefore = snapshot(home);
+    let invoked = false;
+    const error = refusal(() => adopt(root, () => { invoked = true; }));
+    assert.equal(error.code, 'LEGACY_HISTORY_UNSAFE', name);
+    assert.equal(invoked, false, name);
+    assert.ok(authorityAbsent(root), name);
+    assert.deepEqual(snapshot(root), before, name);
+    assert.deepEqual(snapshot(home), homeBefore, name);
+  }
+});
+
+test('an oversize inventory refuses before the callback and creates no authority state', () => {
+  const root = project();
+  const dir = provenanceDir(root);
+  fs.mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < 32000; i++) fs.writeFileSync(path.join(dir, 'm' + i + '.json'), '{}');
+  const homeBefore = snapshot(home);
+  let invoked = false;
+  const error = refusal(() => adopt(root, () => { invoked = true; }));
+  assert.equal(error.code, 'LEGACY_HISTORY_UNSAFE');
+  assert.match(error.message, /byte bound/);
+  assert.equal(invoked, false);
+  assert.ok(authorityAbsent(root));
+  assert.deepEqual(snapshot(home), homeBefore);
+});
+
+test('adoption of one worktree does not touch another worktree catalogue', () => {
+  const first = project(), second = project();
+  sidecars(first, 64);
+  sidecars(second, 3);
+  adopt(first);
+  const firstBytes = catalogueBytes(first);
+  assert.ok(authorityAbsent(second));
+  adopt(second);
+  assert.equal(catalogueOf(first).payload.legacy_bookkeeping.members.length, 64);
+  assert.equal(catalogueOf(second).payload.legacy_bookkeeping.members.length, 3);
+  assert.deepEqual(catalogueBytes(first), firstBytes);
+});
+
+test('a failed callback leaves no adoption record and the history adoptable', () => {
+  const root = project();
+  sidecars(root, 3);
+  const before = snapshot(provenanceDir(root));
+  assert.throws(() => adopt(root, () => { throw new Error('writer failed'); }), /writer failed/);
+  assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'adoptable');
+  assert.deepEqual(snapshot(provenanceDir(root)), before);
+  adopt(root);
+  assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'adopted');
+});
+
+test('a writer that declares a recorded legacy path is refused before the callback', () => {
+  const root = project();
+  sidecars(root, 3);
+  adopt(root);
+  const legacy = '.planning/graph/provenance/dispatch-1.json';
+  const before = snapshot(provenanceDir(root));
+  let invoked = false;
+  const error = refusal(() => adopt(root, () => { invoked = true; }, [legacy]));
+  assert.equal(error.code, 'LEGACY_HISTORY_CHANGED');
+  assert.equal(invoked, false);
+  assert.deepEqual(snapshot(provenanceDir(root)), before);
+});
+
+test('a callback that rewrites a legacy member is refused and the catalogue is not advanced', () => {
+  const root = project();
+  sidecars(root, 3);
+  adopt(root);
+  const catalogue = catalogueBytes(root);
+  const error = refusal(() => adopt(root, () => fs.writeFileSync(path.join(provenanceDir(root), 'dispatch-1.json'), '{"n":"rewritten"}')));
+  assert.equal(error.code, 'LEGACY_HISTORY_CHANGED');
+  assert.deepEqual(catalogueBytes(root), catalogue);
+});
+
+test('an unreadable authority namespace adopts nothing and writes nothing', () => {
+  const root = project();
+  sidecars(root, 64);
+  const before = snapshot(root), homeBefore = snapshot(home);
+  const stub = injectUnreadable();
+  let invoked = false, error;
+  try { error = refusal(() => adopt(root, () => { invoked = true; })); }
+  finally { stub.mock.restore(); }
+  assert.equal(error.code, 'EPERM');
+  assert.equal(error.syscall, 'lstat');
+  assert.equal(invoked, false);
+  assert.ok(authorityAbsent(root));
+  assert.deepEqual(snapshot(root), before);
+  assert.deepEqual(snapshot(home), homeBefore);
+  assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'adoptable');
 });
