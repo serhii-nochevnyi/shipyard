@@ -4028,15 +4028,56 @@ function writeArchiveCatalogue(state) {
     fs.renameSync(temporary, state.file);
   } finally { try { assertArchiveLock(state.payload.worktree); fs.unlinkSync(temporary); } catch {} }
 }
+function refuseLegacyFinding(finding) {
+  const unknown = finding.code === 'LEGACY_HISTORY_UNKNOWN_MEMBER';
+  const subject = finding.path ? ' ' + finding.path : '';
+  const detail = finding.detail ? ': ' + finding.detail : '';
+  fail(finding.code, (unknown ? 'unknown host provenance member before trusted mutation'
+    : 'legacy provenance history is not safe before trusted mutation') + subject + detail);
+}
+
+function refuseBlockedLegacyHistoryBeforeState(worktree) {
+  try { fs.lstatSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json')); return; }
+  catch (error) { if (error.code !== 'ENOENT') return; }
+  const result = classifyLegacyProvenance(worktree);
+  if (result.state === 'blocked') refuseLegacyFinding(result.findings[0]);
+}
+
+function assertLegacyMembersUnchanged(worktree, members) {
+  for (const entry of members) {
+    const file = fixedPath(worktree, entry.path, 'legacy provenance member');
+    let stat;
+    try { stat = fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    let content = null;
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= HISTORICAL_ARCHIVE_MAX_BYTES) {
+      try { content = readImmutableFile(fs, file, 'legacy provenance member', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size); }
+      catch { content = null; }
+    }
+    if (!content || content.length !== entry.bytes || digest(content) !== entry.sha256)
+      refuseLegacyFinding({ code: 'LEGACY_HISTORY_CHANGED', path: entry.path, detail: 'recorded legacy member bytes differ' });
+  }
+}
+
 function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning/graph/dispatches.json']) {
   const worktree = fs.realpathSync(worktreePath);
   const allowed = relative => relative === '.planning/graph/dispatches.json'
     || PROVENANCE_MEMBER_PATH.test(relative);
   if (!Array.isArray(writtenPaths) || writtenPaths.some(relative => !allowed(relative)))
     fail('ARCHIVE_AUTHORITY_INVALID', 'trusted writer paths are malformed');
+  refuseBlockedLegacyHistoryBeforeState(worktree);
   return withArchiveAuthorityLock(worktree, () => {
     const state = authorityState(worktree, true);
     const previous = historicalBookkeepingPins(worktree);
+    const classification = classifyLegacyProvenance(worktree);
+    if (classification.state === 'blocked') refuseLegacyFinding(classification.findings[0]);
+    const adopting = classification.state === 'adoptable';
+    const legacyMembers = adopting ? classification.members.map(member => ({ ...member }))
+      : classification.state === 'adopted' ? legacyBookkeepingMembers(worktree) : [];
+    const legacyPaths = new Set(legacyMembers.map(member => member.path));
+    const overwritten = writtenPaths.find(relative => legacyPaths.has(relative));
+    if (overwritten) refuseLegacyFinding({ code: 'LEGACY_HISTORY_CHANGED', path: overwritten,
+      detail: 'a trusted writer may not overwrite recorded legacy history' });
     const validatedPrevious = [];
     const provenance = fixedPath(worktree, '.planning/graph/provenance', 'host bookkeeping directory');
     const inventory = () => {
@@ -4046,8 +4087,8 @@ function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning
       return fs.readdirSync(provenance).map(name => '.planning/graph/provenance/' + name).sort();
     };
     const authenticatedPaths = previous.map(pin => pin.path);
-    if (inventory().some(relative => !authenticatedPaths.includes(relative)))
-      fail('ARCHIVE_AUTHORITY_INVALID', 'unknown host provenance member before trusted mutation');
+    const unknownMember = inventory().find(relative => !authenticatedPaths.includes(relative) && !legacyPaths.has(relative));
+    if (unknownMember) refuseLegacyFinding({ code: 'LEGACY_HISTORY_UNKNOWN_MEMBER', path: unknownMember });
     for (const pin of previous) {
       const legacy = !state.payload.bookkeeping_state && (state.payload.latest_bookkeeping || []).find(item => item.path === pin.path);
       let actual = pin;
@@ -4075,8 +4116,9 @@ function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning
         readPinnedArchiveFile(worktree, pin, 'undeclared authenticated bookkeeping');
     }
     const paths = [...new Set([...authenticatedPaths, ...writtenPaths])].sort();
-    if (inventory().some(relative => !paths.includes(relative)))
+    if (inventory().some(relative => !paths.includes(relative) && !legacyPaths.has(relative)))
       fail('ARCHIVE_AUTHORITY_INVALID', 'trusted mutation published an undeclared provenance member');
+    assertLegacyMembersUnchanged(worktree, legacyMembers);
     state.payload.bookkeeping_state = paths.filter(relative =>
       validatedPrevious.some(pin => pin.path === relative && !writtenPaths.includes(relative))
       || fs.existsSync(fixedPath(worktree, relative, 'host bookkeeping')))
@@ -4088,6 +4130,8 @@ function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning
         const content = readImmutableFile(fs, file, 'host bookkeeping', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size);
         return { path: relative, bytes: content.length, sha256: digest(content) };
       });
+    if (adopting) state.payload[LEGACY_BOOKKEEPING_FIELD] = { schema: LEGACY_BOOKKEEPING_SCHEMA,
+      version: LEGACY_BOOKKEEPING_VERSION, status: LEGACY_STATUS, adopted_at: new Date().toISOString(), members: legacyMembers };
     writeArchiveCatalogue(state);
     return result;
   });

@@ -1064,7 +1064,8 @@ test('trusted bookkeeping updates remain mutable while changed bytes and unknown
     assert.equal(invoked, false);
     fs.writeFileSync(store, '{"two":2}');
     fs.writeFileSync(path.join(path.dirname(provenance), 'forged.json'), '{}');
-    assert.throws(() => roleArtifact.trustedBookkeepingMutation(root, () => {}), /unknown host provenance/);
+    assert.throws(() => roleArtifact.trustedBookkeepingMutation(root, () => {}),
+      error => error.code === 'LEGACY_HISTORY_UNKNOWN_MEMBER' && /unknown host provenance/.test(error.message));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
