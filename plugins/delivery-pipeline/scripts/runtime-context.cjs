@@ -284,7 +284,7 @@ function readBundleManifest(home, bundleRoot) {
   return { file, manifest };
 }
 
-// @security: bundle evidence is trusted only after its installer digest and the ADR-014 grid both agree.
+// @security: bundle evidence is trusted only after its installer digest and the capability grid both agree.
 function readBundleCapabilities(bundleRoot, manifest) {
   const file = path.join(bundleRoot, CODEX_CAPABILITIES_BUNDLE_FILE);
   if (manifest.capabilities_file !== CODEX_CAPABILITIES_BUNDLE_FILE) {
