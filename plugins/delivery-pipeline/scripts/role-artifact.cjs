@@ -2558,6 +2558,11 @@ function selectedArchiveRecord(scope, row, trusted) {
   return { worktree: row.worktree, dispatch_id: row.dispatch_id, receipt: row.receipt, files };
 }
 
+function phaseSubjectFields(subject) {
+  const target = require('./architecture-target.cjs');
+  return target.parseSubject('integrator', subject) || target.parseSubject('architecture-review', subject);
+}
+
 function authenticatedRecordSubject(record) {
   const retained = record.review_current || record.review_baseline;
   const original = record.receipt?.role === 'integrator'
@@ -2633,7 +2638,7 @@ function originalReviewRetention(worktree, trusted) {
       || runtime.review_continuation || runtime.native_child_evidence) return null;
   const native = runtime.native_session_evidence;
   if (!object(native) || !/^[a-f0-9]{64}$/.test(native.sha256 || '') || native.session_id !== runtime.session_id) return null;
-  const codexHome = process.env.CODEX_HOME || path.join(require('node:os').homedir(), '.codex');
+  const codexHome = require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env: process.env });
   try {
     const candidates = require('./codex-runtime-host.cjs').nativeSessionCandidates(path.join(codexHome, 'sessions'), native.session_id);
     if (candidates.length !== 1) return null;
@@ -2689,8 +2694,8 @@ function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
       for (const record of Object.values(state.payload.records)) {
         if (record.receipt?.role !== current.role || record.dispatch_id === excludeDispatchId) continue;
         if (++count > 1000) return fallback('baseline-discovery-over-bound', rejected);
-        const hint = /^phase=([^;]+);repository=([^;]+);/.exec(authenticatedRecordSubject(record) || '');
-        if (!hint || hint[2] !== current.repository || Number(hint[1].split('-')[0]) !== Number(current.phase)) continue;
+        const hint = phaseSubjectFields(authenticatedRecordSubject(record));
+        if (!hint || hint.repository !== current.repository || Number(hint.phase.split('-')[0]) !== Number(current.phase)) continue;
         try {
           const retained = record.review_baseline;
           if (retained?.schema !== 'shipyard.review-baseline-authority.v1'
@@ -2708,9 +2713,9 @@ function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
           const evidence = Buffer.from(archive.files.find(pin => pin.path === manifest.files.evidence.path).content);
           if (manifest.current_review !== undefined) fail('REVIEW_BASELINE_UNSUPPORTED', 'extended current lineage is not a supported original full baseline');
           if (manifest.artifact_kind !== 'judgment') fail('REVIEW_BASELINE_INVALID', 'baseline is not a judgment');
-          const phaseSubject = /^phase=([^;]+);repository=([^;]+);tickets=([a-f0-9]{64})(?:;|$)/.exec(subject);
-          if (!phaseSubject || phaseSubject[2] !== current.repository
-              || Number(phaseSubject[1].split('-')[0]) !== Number(current.phase))
+          const phaseSubject = phaseSubjectFields(subject);
+          if (!phaseSubject || phaseSubject.repository !== current.repository
+              || Number(phaseSubject.phase.split('-')[0]) !== Number(current.phase))
             fail('REVIEW_BASELINE_INVALID', 'baseline is not the same complete phase/repository');
           const identity = { worktree, repository: { root: manifest.repository_realpath, identity: current.repository },
             head: manifest.head, head_tree: manifest.head_tree, base: manifest.base, base_commit: manifest.base_commit,
@@ -2719,11 +2724,11 @@ function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
               || git({}, worktree, ['merge-base', manifest.base_commit, manifest.head], 'original ancestry') !== manifest.merge_base)
             fail('REVIEW_BASELINE_INVALID', 'original base ancestry differs');
           const data = judgmentResultData(findings, { ...trustedMetadata({ role: current.role }, trusted, identity), trusted }, {
-            phase: manifest.phase || phaseSubject[1], ticketSet: findings.ticket_set, ticketSetDigest: manifest.ticket_set_digest,
+            phase: manifest.phase || phaseSubject.phase, ticketSet: findings.ticket_set, ticketSetDigest: manifest.ticket_set_digest,
             pr: manifest.pr, base: manifest.base,
           }, identity);
           if (manifest.subject !== data.subject || stable(manifest.reviewed) !== stable(data.reviewed)
-              || manifest.ticket_set_digest !== data.ticket_set_digest || phaseSubject[3] !== data.ticket_set_digest
+              || manifest.ticket_set_digest !== data.ticket_set_digest || phaseSubject.tickets !== data.ticket_set_digest
               || stable(manifest.envelope) !== stable(judgmentEnvelope(data, {
                 evidence: { relative: manifest.files.evidence.path, content: evidence },
                 findings: { relative: manifest.files.findings.path, content: Buffer.from(archive.files.find(pin => pin.path === manifest.files.findings.path).content) },
@@ -3087,7 +3092,7 @@ function currentClaudeSemanticPin(trusted) {
   try { fs.lstatSync(saved); return { ...pin, path: saved }; }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const home = process.env.HOME || require('node:os').homedir();
-  const config = process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+  const config = require('./runtime-context.cjs').resolveClaudeHome({ env: process.env });
   const root = path.resolve(config.startsWith('~/') ? path.join(home, config.slice(2)) : config, 'projects');
   return { ...pin, path: path.join(root, ...parts) };
 }
@@ -3489,7 +3494,7 @@ function currentReviewRetention(worktree, trusted) {
       native: { path: progress.native_file, bytes: native.bytes, sha256: native.sha256 } };
   }
   if (trusted.receipt.runtime === 'codex' && runtime?.input_transport === 'host-files' && runtime.native_child_evidence) {
-    const home = process.env.CODEX_HOME || path.join(require('node:os').homedir(), '.codex');
+    const home = require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env: process.env });
     const files = require('./codex-runtime-host.cjs').nativeSessionCandidates(path.join(home, 'sessions'), runtime.native_session_evidence.session_id);
     if (files.length !== 1) return null;
     const content = readImmutableFile(fs, files[0], 'original typed current reviewer', 128 * 1024 * 1024);
@@ -3725,22 +3730,23 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
     const state = authorityState(worktree);
     for (const record of Object.values(state.payload.records)) {
       if (record.receipt?.role !== 'integrator') continue;
-      const subject = /^phase=([^;]+);repository=([^;]+);tickets=([a-f0-9]{64})$/.exec(authenticatedRecordSubject(record));
-      if (!subject || subject[1] !== [...phaseNames][0] || subject[2] !== common) continue;
+      const recordSubject = authenticatedRecordSubject(record);
+      const subject = require('./architecture-target.cjs').parseSubject('integrator', recordSubject);
+      if (!subject || subject.phase !== [...phaseNames][0] || subject.repository !== common) continue;
       const runtime = record.receipt.runtime_evidence;
       const checkedInput = runtime?.input_bundle
         ? require('./codex-arch-review-context.cjs').verifyFileInput(runtime.input_bundle, { sealed: true, historical: true }) : null;
       if (checkedInput && (checkedInput.manifest.snapshot.repository !== common
           || checkedInput.manifest.snapshot.head !== head || checkedInput.manifest.binding?.base !== baseCommit
-          || checkedInput.manifest.ticket !== subject[0]
-          || checkedInput.manifest.binding.ticket_set_digest !== subject[3]
+          || checkedInput.manifest.ticket !== recordSubject
+          || checkedInput.manifest.binding.ticket_set_digest !== subject.tickets
           || stable(checkedInput.manifest.binding.ticket_set) !== stable(ids))) continue;
 
       if (++count > 1000) fail('REVIEW_COVERAGE_INVALID', 'current integration discovery exceeds its bound');
       const pin = record.pins.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
       const manifest = JSON.parse(readPinnedArchiveFile(worktree, pin, 'current integration manifest'));
-      if (manifest.boundary_subject !== authenticatedRecordSubject(record) || manifest.subject !== subject[0]
-          || manifest.ticket_set_digest !== subject[3] || manifest.role !== 'integrator' || manifest.head !== head || manifest.base_commit !== baseCommit
+      if (manifest.boundary_subject !== recordSubject || manifest.subject !== recordSubject
+          || manifest.ticket_set_digest !== subject.tickets || manifest.role !== 'integrator' || manifest.head !== head || manifest.base_commit !== baseCommit
           || manifest.repository_identity !== common || manifest.envelope?.outcome !== 'passed'
           || manifest.base.replace(/^(?:refs\/remotes\/origin\/|origin\/)/, '') !== baseName) continue;
       try {
@@ -4277,7 +4283,7 @@ function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest)
   const bookkeeping = trusted.receipt.role === 'arch-review' ? findings.host_context?.bookkeeping || [] : [];
   const record = { dispatch_id: trusted.dispatchId, receipt: trusted.receipt, pins, bookkeeping,
     ...((require('./architecture-target.cjs').PHASE_SUBJECT.test(manifest.boundary_subject || '')
-      || /^phase=[^;]+;repository=[^;]+;tickets=[a-f0-9]{64}$/.test(manifest.boundary_subject || ''))
+      || require('./architecture-target.cjs').parseSubject('integrator', manifest.boundary_subject || ''))
       ? { ticket: reconciledRecordTicket(trusted), receipt_store: trusted.recorder.storeDir } : {}) };
   const previous = state.payload.records[trusted.dispatchId];
   if (manifest.current_review) {
@@ -5120,7 +5126,10 @@ function judgmentSubject(role, metadata, identity, input, ticketSet, pr) {
   if (role === 'pr-sentinel') return `round:${ticketSet.digest}`;
   if (role === 'integrator') {
     const phase = compactIdentity(input.phase, 'integration phase');
-    return `phase=${phase};repository=${identity.repository.identity};tickets=${ticketSet.digest}`;
+    const target = require('./architecture-target.cjs');
+    const repository = target.repositoryIdentity(identity.worktree);
+    try { return target.buildSubject('integrator', { phase, repository, tickets: ticketSet.digest }); }
+    catch { return fail('INVALID_RESULT', 'integration subject needs a numbered phase directory and a 64-hex ticket digest'); }
   }
   if (role === 'arch-review' && metadata.ticket.startsWith('phase=')) {
     const aggregate = require('./architecture-target.cjs').PHASE_SUBJECT.exec(metadata.ticket);

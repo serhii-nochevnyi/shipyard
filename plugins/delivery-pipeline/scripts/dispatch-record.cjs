@@ -61,7 +61,6 @@
 // this safe to write from a loop that may not survive to clean up after itself.
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
@@ -450,8 +449,7 @@ function agentFilesFor(role, known) {
 function codexAgentDir(env = process.env) {
   return path.resolve(
     env.SHIPYARD_CODEX_AGENT_DIR
-      || env.CODEX_HOME && path.join(env.CODEX_HOME, 'agents')
-      || path.join(os.homedir(), '.codex', 'agents')
+      || path.join(require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env }), 'agents')
   );
 }
 
@@ -1513,7 +1511,7 @@ function inflightSubject(ticket, role) {
     } catch { return false; }
   }
   return ['integrator', 'pr-sentinel'].includes(role)
-    && /^phase=[A-Za-z0-9._-]+;repository=\/[^;\x00-\x1f]+;tickets=[a-f0-9]{64}$/.test(ticket);
+    && require('./architecture-target.cjs').parseSubject('integrator', ticket) !== null;
 }
 
 

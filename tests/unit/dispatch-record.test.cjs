@@ -519,6 +519,108 @@ test('aggregate architecture in-flight records retain exact PR identity and role
   assert.throws(() => recordInflight({ ...input, ticket: ticket.replace(';pr=91', ';pr=0') }), /ticket/);
 });
 
+test('integrator and pr-sentinel in-flight subjects use the shared repository class', () => {
+  const { graph } = scratch({ 'T-01-01': { ...READY } });
+  const digests = { integrator: 'a'.repeat(64), 'pr-sentinel': 'b'.repeat(64) };
+  const admit = (role, repository, dispatchId) => recordInflight({
+    graphDir: graph, ticket: `phase=46-runtime;repository=${repository};tickets=${digests[role]}`,
+    role, dispatch_id: dispatchId, pid: process.pid, host: 'codex',
+  });
+  let count = 0;
+  for (const repository of ['/tmp/phase.git', '/work/my repo/.git', '/work/дім/.git', 'owner/repo']) {
+    for (const role of Object.keys(digests)) {
+      const dispatchId = 'shared-class-' + count++;
+      admit(role, repository, dispatchId);
+      assert.equal(inflightStore(graph)[dispatchId].ticket,
+        `phase=46-runtime;repository=${repository};tickets=${digests[role]}`, `${role} ${repository}`);
+    }
+  }
+  for (const repository of ['/a;b/.git', '/a\tb/.git', '/a\nb/.git', '/a\u0001b/.git', '']) {
+    for (const role of Object.keys(digests)) {
+      assert.throws(() => admit(role, repository, 'refused-' + count++), /ticket/, `${role} ${JSON.stringify(repository)}`);
+    }
+  }
+  assert.throws(() => recordInflight({ graphDir: graph, role: 'executor', dispatch_id: 'wrong-role',
+    ticket: `phase=46-runtime;repository=/tmp/r.git;tickets=${digests.integrator}`, pid: process.pid, host: 'codex' }), /ticket/);
+  assert.throws(() => recordInflight({ graphDir: graph, role: 'integrator', dispatch_id: 'short-digest',
+    ticket: 'phase=46-runtime;repository=/tmp/r.git;tickets=' + 'a'.repeat(63), pid: process.pid, host: 'codex' }), /ticket/);
+});
+
+test('dispatch-record holds no private subject grammar or Codex home expression', () => {
+  const source = fs.readFileSync(DISPATCH, 'utf8');
+  assert.ok(!/repository=/.test(source), 'the integrator subject grammar lives in architecture-target');
+  assert.ok(!/homedir\(\), '\.codex'/.test(source), 'the Codex home has one resolver');
+  assert.ok(/parseSubject\('integrator'/.test(source));
+  assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env \}\)/g) || []).length, 1,
+    'the agents directory follows the executing bundle like every converted site');
+  assert.ok(!/^const [^\n]*require\(['"]\.\/runtime-context\.cjs['"]\)/m.test(source),
+    'runtime-context is required lazily at the site');
+});
+
+test('an installed bundle answers its own agents directory with no environment variable', () => {
+  const { codexCapabilities } = require(path.join(__dirname, '..', 'smoke', 'installed-launch', 'lib.cjs'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bundle-agents-')));
+  try {
+    const home = path.join(root, 'custom-codex-home');
+    const bundle = path.join(home, 'shipyard');
+    fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
+    fs.cpSync(SCRIPTS, path.join(bundle, 'scripts'), { recursive: true });
+    const evidence = Buffer.from(JSON.stringify(codexCapabilities()));
+    fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
+    fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify({
+      phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
+      capabilities_digest: crypto.createHash('sha256').update(evidence).digest('hex') }));
+    fs.writeFileSync(path.join(home, 'agents', 'shipyard-bundled.toml'), '');
+    const probe = (env) => spawnSync(process.execPath, ['-e',
+      'console.log(JSON.stringify([...require(process.argv[1]).codexAgentFiles()]))',
+      path.join(bundle, 'scripts', 'dispatch-record.cjs')], {
+      env: { PATH: process.env.PATH, HOME: path.join(root, 'empty-home'), ...env }, encoding: 'utf8' });
+    const bare = probe({});
+    assert.equal(bare.status, 0, bare.stderr);
+    assert.deepEqual(JSON.parse(bare.stdout), ['shipyard-bundled']);
+    const explicit = path.join(root, 'explicit');
+    fs.mkdirSync(explicit);
+    fs.writeFileSync(path.join(explicit, 'shipyard-explicit.toml'), '');
+    const owned = probe({ SHIPYARD_CODEX_AGENT_DIR: explicit });
+    assert.equal(owned.status, 0, owned.stderr);
+    assert.deepEqual(JSON.parse(owned.stdout), ['shipyard-explicit']);
+    const conflict = probe({ CODEX_HOME: path.join(root, 'elsewhere') });
+    assert.notEqual(conflict.status, 0);
+    assert.ok(/ENV_CONFLICT|disagrees/.test(conflict.stderr), conflict.stderr);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the agents directory is SHIPYARD_CODEX_AGENT_DIR, then the resolved Codex home, then HOME', () => {
+  const { codexAgentFiles } = require(DISPATCH);
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-dir-')));
+  const put = (label, dir) => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `shipyard-${label}.toml`), '');
+    return `shipyard-${label}`;
+  };
+  const names = { explicit: put('explicit', path.join(root, 'explicit', 'agents')),
+    codex: put('codex', path.join(root, 'codex', 'agents')),
+    home: put('home', path.join(root, 'home', '.codex', 'agents')) };
+  const saved = { a: process.env.SHIPYARD_CODEX_AGENT_DIR, c: process.env.CODEX_HOME, h: process.env.HOME };
+  const restore = (key, value) => value === undefined ? delete process.env[key] : (process.env[key] = value);
+  try {
+    process.env.HOME = path.join(root, 'home');
+    delete process.env.CODEX_HOME;
+    delete process.env.SHIPYARD_CODEX_AGENT_DIR;
+    assert.deepEqual([...codexAgentFiles()], [names.home]);
+    process.env.CODEX_HOME = path.join(root, 'codex');
+    assert.deepEqual([...codexAgentFiles()], [names.codex]);
+    process.env.SHIPYARD_CODEX_AGENT_DIR = path.join(root, 'explicit', 'agents');
+    assert.deepEqual([...codexAgentFiles()], [names.explicit]);
+    delete process.env.SHIPYARD_CODEX_AGENT_DIR;
+    process.env.CODEX_HOME = '   ';
+    assert.deepEqual([...codexAgentFiles()], [names.home], 'a blank CODEX_HOME is unset, as the resolver reads it');
+  } finally {
+    restore('SHIPYARD_CODEX_AGENT_DIR', saved.a); restore('CODEX_HOME', saved.c); restore('HOME', saved.h);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('planning in-flight admission agrees with the role-scoped run contract', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const { normalizeTicketIdentity } = require(path.join(SCRIPTS, 'run-contract.cjs'));
