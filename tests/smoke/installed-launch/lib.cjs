@@ -257,7 +257,252 @@ function runWriteGuardControl(fixture) {
   return readJsonLines(control.log);
 }
 
+const CLAUDE_HELP_MARKERS = [
+  '--model', '--effort', '--output-format', 'stream-json', '--session-id',
+  '--permission-mode', '--permission-prompts', '--allowedTools', '--tools',
+  '--restricted', '--strict-mcp-config', '--settings', '--setting-sources', '--agent',
+  '--agents',
+];
+const PROJECT_PHASE = {
+  phase: '99', phaseDir: '99-claude-fixture', ticket: 'T-99-01-claude-fixture',
+  branch: 'ticket/t-99-01-claude-fixture', otherTicket: 'T-98-01-codex-fixture',
+  otherPhase: '98', otherPhaseDir: '98-codex-fixture', otherBranch: 'ticket/t-98-01-codex-fixture',
+};
+
+function inside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function requireFixtureRoots(fixture) {
+  for (const key of ['workRoot', 'home', 'bin']) {
+    if (!fixture || typeof fixture[key] !== 'string' || !path.isAbsolute(fixture[key])) {
+      throw new Error(`fixture.${key} must be an absolute path`);
+    }
+  }
+  const workRoot = path.resolve(fixture.workRoot);
+  for (const key of ['home', 'bin']) {
+    if (!inside(workRoot, path.resolve(fixture[key])) || path.resolve(fixture[key]) === workRoot) {
+      throw new Error(`fixture.${key} must be inside the fixture work root`);
+    }
+  }
+  return workRoot;
+}
+
+function inWorkRoot(workRoot, target) {
+  const resolved = path.resolve(target);
+  if (!inside(workRoot, resolved)) throw new Error(`refusing to write outside the fixture work root: ${resolved}`);
+  return resolved;
+}
+
+function hermeticGit(fixture, cwd, args) {
+  const result = spawnSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid',
+    '-c', 'commit.gpgsign=false', '-c', 'protocol.file.allow=always', ...args], {
+    cwd, encoding: 'utf8',
+    env: { PATH: process.env.PATH, HOME: fixture.home, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' },
+  });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.error}`);
+  return result.stdout.trim();
+}
+
+function stageClaudeLayout(fixture) {
+  const workRoot = requireFixtureRoots(fixture);
+  const claudeHome = inWorkRoot(workRoot, path.join(fixture.home, '.claude'));
+  const pluginRoot = inWorkRoot(workRoot, path.join(claudeHome, 'plugins/shipyard'));
+  const tmpDir = inWorkRoot(workRoot, path.join(workRoot, 'tmp'));
+  fs.mkdirSync(path.dirname(pluginRoot), { recursive: true });
+  fs.cpSync(SOURCE, pluginRoot, { recursive: true });
+  fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(tmpDir, 0o700);
+  return { claudeHome, pluginRoot, scriptsDir: path.join(pluginRoot, 'scripts'), tmpDir, env: { TMPDIR: tmpDir } };
+}
+
+const fakeClaudeSource = (logFile) => `#!${process.execPath}
+'use strict';
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('2.1.300 (Claude Code)'); process.exit(0); }
+if (args[0] === '--help') { console.log(${JSON.stringify(CLAUDE_HELP_MARKERS.join(' '))}); process.exit(0); }
+if (args[0] === 'auth' && args[1] === 'status') { console.log(JSON.stringify({ loggedIn: true })); process.exit(0); }
+fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ argv: args, envNames: Object.keys(process.env).sort() }) + '\\n');
+process.stdin.resume();
+process.stdin.on('end', () => process.exit(0));
+process.stdin.on('error', () => process.exit(0));
+`;
+
+function installFakeClaude(fixture) {
+  const workRoot = requireFixtureRoots(fixture);
+  const executable = inWorkRoot(workRoot, path.join(fixture.bin, 'claude'));
+  const logPath = inWorkRoot(workRoot, path.join(workRoot, 'claude-calls.log'));
+  if (!fs.existsSync(logPath)) write(logPath, '');
+  write(executable, fakeClaudeSource(logPath), 0o755);
+  return { executable, logPath, readLog: () => readJsonLines(logPath) };
+}
+
+const fakeGhSource = (registryFile, callLog) => `#!${process.execPath}
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const registryFile = ${JSON.stringify(registryFile)};
+const callLog = ${JSON.stringify(callLog)};
+const raw = process.argv.slice(2);
+const args = [];
+for (let i = 0; i < raw.length; i += 1) {
+  if (raw[i] === '--repo') { i += 1; continue; }
+  args.push(raw[i]);
+}
+function flag(name) { const i = args.indexOf(name); return i === -1 ? undefined : args[i + 1]; }
+function record(status) { fs.appendFileSync(callLog, JSON.stringify({ cwd: process.cwd(), args: raw, status }) + '\\n'); }
+function unmodelled() {
+  record(2);
+  process.stderr.write('fake gh: unmodelled call: ' + raw.join(' ') + '\\n');
+  process.exit(2);
+}
+function project() {
+  let registry;
+  try { registry = JSON.parse(fs.readFileSync(registryFile, 'utf8')); } catch { return null; }
+  let dir;
+  try { dir = fs.realpathSync(process.cwd()); } catch { return null; }
+  for (;;) {
+    if (registry[dir]) return registry[dir];
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+function pick(object, fields) {
+  const out = {};
+  for (const field of fields.split(',')) out[field] = object[field] === undefined ? null : object[field];
+  return out;
+}
+function done(text) { record(0); process.stdout.write(text); process.exit(0); }
+const entry = project();
+if (!entry) unmodelled();
+if (args.some((a) => ['-f', '-F', '-X', '--method', '--input', '--field', '--raw-field'].includes(a))) unmodelled();
+const [group, action] = args;
+if (group === 'repo' && action === 'view') {
+  if (flag('--json') === 'defaultBranchRef' && flag('--jq') === '.defaultBranchRef.name') done(entry.defaultBranch + '\\n');
+  if (flag('--json') === 'owner,name') done(JSON.stringify({ owner: { login: entry.owner }, name: entry.name }) + '\\n');
+  unmodelled();
+}
+if (group === 'pr' && action === 'list' && flag('--json')) {
+  const state = flag('--state');
+  const head = flag('--head');
+  if (!['open', 'closed', 'all'].includes(state)) unmodelled();
+  const rows = entry.prs.filter((pr) => (state === 'all' || (state === 'open' ? pr.state === 'OPEN' : pr.state !== 'OPEN'))
+    && (head === undefined || pr.headRefName === head));
+  done(JSON.stringify(rows.map((pr) => pick(pr, flag('--json')))) + '\\n');
+}
+if (group === 'pr' && action === 'view' && /^\\d+$/.test(args[2] || '') && flag('--json')) {
+  const pr = entry.prs.find((candidate) => candidate.number === Number(args[2]));
+  if (!pr) unmodelled();
+  done(JSON.stringify(pick(pr, flag('--json'))) + '\\n');
+}
+if (group === 'pr' && action === 'checks' && /^\\d+$/.test(args[2] || '')) done('[]\\n');
+if (group === 'api') {
+  const target = args[1] || '';
+  if (/^repos\\/[^/]+\\/[^/]+\\/branches$/.test(target)) done(entry.branches.join('\\n') + '\\n');
+  if (/^repos\\/[^/]+\\/[^/]+\\/compare\\/[^/]+(\\/[^/]+)*\\.\\.\\.[^/]+(\\/[^/]+)*$/.test(target)) done('0\\n');
+  if (/^repos\\/[^/]+\\/[^/]+\\/commits\\/[0-9a-f]+\\/statuses$/.test(target)) done('[]\\n');
+}
+unmodelled();
+`;
+
+function installFakeGh(fixture) {
+  const workRoot = requireFixtureRoots(fixture);
+  const executable = inWorkRoot(workRoot, path.join(fixture.bin, 'gh'));
+  const stateDir = inWorkRoot(workRoot, path.join(workRoot, 'gh-state'));
+  const registryFile = path.join(stateDir, 'projects.json');
+  const callLog = path.join(stateDir, 'calls.log');
+  fs.mkdirSync(stateDir, { recursive: true });
+  if (!fs.existsSync(registryFile)) write(registryFile, '{}\n');
+  if (!fs.existsSync(callLog)) write(callLog, '');
+  write(executable, fakeGhSource(registryFile, callLog), 0o755);
+  return { executable, stateDir, registryFile, readCalls: () => readJsonLines(callLog) };
+}
+
+function planText(title) {
+  return `---\nphase: fixture\n---\n\n# ${title}\n\n## Acceptance criteria\n\n- The fixture ticket is described.\n\n`
+    + '## Verification commands\n\n- `node --version`\n';
+}
+
+function stageClaudeProject(fixture, name) {
+  const workRoot = requireFixtureRoots(fixture);
+  if (typeof name !== 'string' || !/^[a-z0-9-]+$/.test(name)) throw new Error('project name must match ^[a-z0-9-]+$');
+  const root = inWorkRoot(workRoot, path.join(workRoot, 'projects', name));
+  const origin = inWorkRoot(workRoot, path.join(workRoot, 'origins', name + '.git'));
+  if (fs.existsSync(root) || fs.existsSync(origin)) throw new Error(`project ${name} is already staged in this fixture`);
+  const gh = installFakeGh(fixture);
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(path.dirname(origin), { recursive: true });
+  const git = (cwd, ...args) => hermeticGit(fixture, cwd, args);
+  const { phase, phaseDir, ticket, branch, otherTicket, otherPhase, otherPhaseDir, otherBranch } = PROJECT_PHASE;
+  git(root, 'init', '-q', '-b', 'main');
+  write(path.join(root, 'src/fixture.txt'), 'base\n');
+  write(path.join(root, '.planning/architecture/ADR-014-fixture.md'), '# ADR-014 fixture\n\nStatus: accepted\n');
+  write(path.join(root, '.planning/config.json'), JSON.stringify({
+    git: { base_branch: 'main' }, delivery_pipeline: { gsd_sync: false, integration_mode: 'direct-to-main' },
+  }, null, 2) + '\n');
+  const planFor = (dir, number) => `.planning/phases/${dir}/${number}-01-PLAN.md`;
+  write(path.join(root, planFor(phaseDir, phase)), planText('Claude fixture'));
+  write(path.join(root, planFor(otherPhaseDir, otherPhase)), planText('Codex fixture'));
+  git(root, 'add', '.');
+  git(root, 'commit', '-q', '-m', 'fixture base');
+  const base = git(root, 'rev-parse', 'HEAD');
+  git(root, 'checkout', '-q', '-b', branch);
+  write(path.join(root, 'src/fixture.txt'), 'changed\n');
+  git(root, 'commit', '-q', '-am', 'fixture change');
+  const head = git(root, 'rev-parse', 'HEAD');
+  git(root, 'checkout', '-q', 'main');
+  git(workRoot, 'init', '-q', '--bare', '-b', 'main', origin);
+  git(root, 'remote', 'add', 'origin', origin);
+  git(root, 'push', '-q', 'origin', 'main', branch);
+  git(root, 'fetch', '-q', 'origin');
+  git(root, 'remote', 'set-head', 'origin', 'main');
+  const row = (plan, rowPhase, rowBranch) => ({
+    title: 'Fixture ticket', plan, phase: rowPhase, repo: null, wave: 1, depends_on: [], cross_phase_deps: [],
+    cross_repo_deps: [], files: ['src/fixture.txt'], risk: 'low', type: 'implementation',
+    human_checkpoint: false, branch: rowBranch,
+  });
+  const graphDir = path.join(root, '.planning/graph');
+  write(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets: {
+    [ticket]: row(planFor(phaseDir, phase), phase, branch),
+    [otherTicket]: row(planFor(otherPhaseDir, otherPhase), otherPhase, otherBranch),
+  } }, null, 2) + '\n');
+  write(path.join(graphDir, 'delivery-state.json'), JSON.stringify({
+    [ticket]: { status: 'pr-open', pr: 7, branch, pr_base: 'main', head_sha: head },
+    [otherTicket]: { status: 'pending', pr: null, branch: otherBranch },
+  }, null, 2) + '\n');
+  fs.appendFileSync(path.join(root, '.git/info/exclude'), '.planning/graph/\n');
+  const registry = JSON.parse(fs.readFileSync(gh.registryFile, 'utf8'));
+  registry[fs.realpathSync(root)] = {
+    defaultBranch: 'main', owner: 'fixture-owner', name: name, branches: ['main', branch],
+    prs: [{
+      number: 7, state: 'OPEN', isDraft: false, headRefName: branch, headRefOid: head, baseRefName: 'main',
+      baseRefOid: base, mergedAt: null, mergeCommit: null, reviewDecision: null,
+      createdAt: '2026-01-01T00:00:00Z', url: 'https://example.invalid/fixture/pull/7', title: 'Fixture change',
+      body: '', mergeStateStatus: 'CLEAN', author: { login: 'fixture-author' },
+    }],
+  };
+  fs.writeFileSync(gh.registryFile, JSON.stringify(registry, null, 2) + '\n');
+  return { root: fs.realpathSync(root), origin, phase, phaseDir, ticket, branch, head, base, otherTicket, otherPhase, otherPhaseDir };
+}
+
+function writeClaudeRoleRequest(fixture, project) {
+  const workRoot = requireFixtureRoots(fixture);
+  const directory = inWorkRoot(workRoot, path.join(workRoot, 'requests'));
+  fs.mkdirSync(directory, { recursive: true });
+  let index = fs.readdirSync(directory).length + 1;
+  let file = path.join(directory, index + '.json');
+  while (fs.existsSync(file)) { index += 1; file = path.join(directory, index + '.json'); }
+  write(file, JSON.stringify({
+    schema: 'shipyard.claude-role-request.v1', role: 'pr-sentinel', worktree: project.root, phase: project.phaseDir,
+  }), 0o600);
+  return file;
+}
+
 module.exports = {
   ROOT, SOURCE, codexCapabilities, createFixture, runHost, runClassified, classifyLaunch,
   assertHarnessIsolation, assertNothingCreated, runWriteGuardControl,
+  stageClaudeLayout, installFakeClaude, installFakeGh, stageClaudeProject, writeClaudeRoleRequest,
 };
