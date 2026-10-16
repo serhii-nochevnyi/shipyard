@@ -97,17 +97,17 @@ test('missing escalation file refuses instead of selecting the existing ordinary
   try {
     fs.unlinkSync(path.join(f.agentDir, 'shipyard-arch-review-critical.toml'));
     assert.throws(() => selectAgent('arch-review', { ...f.options, signals: { critical: true } }),
-      /exact generated file.*install-shipyard-codex/);
+      /exact generated file.*codex plugin marketplace upgrade shipyard/);
   } finally { clean(f); }
 });
 
-test('a stale or missing generated agent refusal keeps the exact historical reinstall remedy', () => {
+test('a stale or missing generated agent refusal names the marketplace upgrade remedy', () => {
   const f = fixture();
   try {
     fs.unlinkSync(path.join(f.agentDir, 'shipyard-arch-review-critical.toml'));
     assert.throws(() => selectAgent('arch-review', { ...f.options, signals: { critical: true } }), (error) =>
       error.code === 'STALE_GENERATED_AGENT'
-      && error.message.includes('Install an ADR-014-capable Codex host and regenerate agents with install-shipyard-codex.sh --phase 2; provide current host capabilities and retry the exact selection.')
+      && error.message.includes('Install an ADR-014-capable Codex host by running codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard; provide current host capabilities and retry the exact selection.')
       && !error.message.includes('gsd-tune.cjs'));
   } finally { clean(f); }
 });
