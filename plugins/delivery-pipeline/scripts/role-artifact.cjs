@@ -9,7 +9,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { acquire } = require('./lock.cjs');
+const { acquire, sleepSync, DEFAULT_TTL_MS } = require('./lock.cjs');
 const { execFileSync } = require('node:child_process');
 const {
   boundaryError,
@@ -1046,6 +1046,31 @@ function authorityFile(file, maximum = 4 * 1024 * 1024) {
   } finally { fs.closeSync(fd); }
 }
 
+const AUTHORITY_READ_ATTEMPTS = 5;
+const AUTHORITY_READ_RETRY_MS = 10;
+const AUTHORITY_TRANSIENT_CHANGE = /^archive authority changed (before bounded reading|while reading)$/;
+
+function stableAuthorityFile(file, maximum) {
+  for (let attempt = 1; ; attempt++) {
+    try { return authorityFile(file, maximum); }
+    catch (error) {
+      if (error.code !== 'ARCHIVE_AUTHORITY_INVALID' || !AUTHORITY_TRANSIENT_CHANGE.test(error.message)
+          || attempt >= AUTHORITY_READ_ATTEMPTS) throw error;
+      sleepSync(AUTHORITY_READ_RETRY_MS);
+    }
+  }
+}
+
+function publishAuthorityKey(directory, keyFile) {
+  const temporary = path.join(directory, 'hmac.key.' + process.pid + '.' + crypto.randomUUID() + '.tmp');
+  try {
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try { fs.writeFileSync(fd, crypto.randomBytes(32)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    try { fs.linkSync(temporary, keyFile); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  } finally { try { fs.unlinkSync(temporary); } catch {} }
+}
+
 function authorityState(worktree, create = false, requireCatalogue = true, readCatalogue = true) {
   const directory = archiveAuthorityDirectory(worktree, create);
   if (create) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -1053,18 +1078,17 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
       || (fs.lstatSync(directory).mode & 0o077))
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority directory is not private or contains symlinks');
   const keyFile = path.join(directory, 'hmac.key');
-  if (create) {
-    if (!fs.existsSync(keyFile) && fs.readdirSync(directory).some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-')))
+  if (create && !fs.existsSync(keyFile)) {
+    if (fs.readdirSync(directory).some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-')))
       fail('ARCHIVE_AUTHORITY_INVALID', 'existing protected records require their original authority key');
-    try { fs.writeFileSync(keyFile, crypto.randomBytes(32), { flag: 'wx', mode: 0o600 }); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    publishAuthorityKey(directory, keyFile);
   }
-  const key = authorityFile(keyFile, 32);
+  const key = stableAuthorityFile(keyFile, 32);
   if (key.length !== 32) fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority key is malformed');
   const file = path.join(directory, 'catalogue.json');
   let payload = { schema: 'shipyard.role-archive-catalogue.v1', worktree, records: {} };
   if (readCatalogue && fs.existsSync(file)) {
-    const envelope = JSON.parse(authorityFile(file));
+    const envelope = JSON.parse(stableAuthorityFile(file));
     const mac = crypto.createHmac('sha256', key).update(stable(envelope.payload)).digest('hex');
     if (!object(envelope.payload) || !/^[a-f0-9]{64}$/.test(envelope.mac || '')
         || !crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex')))
@@ -4138,6 +4162,21 @@ function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning
 }
 
 const archivePublicationFrames = [];
+const ARCHIVE_LOCK_WAIT_MS = 5000;
+const LOCK_OWNERSHIP_LOST = 'archive catalogue lock ownership was lost: it was taken over after outliving its TTL '
+  + 'or removed while this session held it; retry the operation';
+
+function archiveLockOwner(lockPath) {
+  try { return JSON.parse(readImmutableFile(fs, path.join(lockPath, 'owner.json'), 'archive catalogue lock owner', 4096)); }
+  catch { return undefined; }
+}
+function describeArchiveLockOwner(owner) {
+  return (owner.label || 'an unlabelled session') + ' (pid ' + owner.pid + ', since ' + (owner.at || 'an unknown time') + ')';
+}
+function ownerPidIsLive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+}
+
 function withArchiveAuthorityLock(worktree, fn) {
   const active = archivePublicationFrames.at(-1);
   if (active?.worktree === worktree) { assertArchiveLock(worktree); return fn(); }
@@ -4146,19 +4185,25 @@ function withArchiveAuthorityLock(worktree, fn) {
   if (fs.existsSync(lockPath)) {
     const stat = fs.lstatSync(lockPath);
     if (stat.isSymbolicLink() || !stat.isDirectory())
-      fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock is not a physical directory');
-    let owner;
-    try { owner = JSON.parse(readImmutableFile(fs, path.join(lockPath, 'owner.json'), 'archive catalogue lock owner', 4096)); } catch {}
-    if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
-      let live = true;
-      try { process.kill(owner.pid, 0); } catch (error) { if (error.code === 'ESRCH') live = false; }
-      if (live) fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock has a live owner');
-    }
+      fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock is not a physical directory: a file or symlink sits where '
+        + 'the lock directory belongs; remove ' + lockPath + ' and retry');
+    const owner = archiveLockOwner(lockPath);
+    if (Number.isSafeInteger(owner?.pid) && owner.pid > 0 && ownerPidIsLive(owner.pid)
+        && !(Date.now() - Date.parse(owner.at) < DEFAULT_TTL_MS))
+      fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock owner record ' + describeArchiveLockOwner(owner)
+        + ' is older than the lock TTL (' + DEFAULT_TTL_MS / 1000 + ' s) or has no readable time, and its pid may '
+        + 'have been reused by an unrelated process; end pid ' + owner.pid + ' if it is not a Shipyard session, then retry',
+      { pid: owner.pid });
   }
   let lock;
-  try { lock = acquire(state.directory, 'catalogue', { waitMs: 1000, label: 'role-archive-authority' }); }
+  try { lock = acquire(state.directory, 'catalogue', { waitMs: ARCHIVE_LOCK_WAIT_MS, label: 'role-archive-authority' }); }
   catch (error) { fail('ARCHIVE_AUTHORITY_BUSY', error.message); }
-  if (!lock) fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock acquisition timed out');
+  if (!lock) {
+    const holder = archiveLockOwner(lockPath);
+    fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock is held by '
+      + (holder ? describeArchiveLockOwner(holder) : 'another session') + ' and stayed held for '
+      + ARCHIVE_LOCK_WAIT_MS + ' ms; retry when it finishes', holder ? { pid: holder.pid } : {});
+  }
   const frame = { worktree, lockOnly: true, lock };
   archivePublicationFrames.push(frame);
   try { assertArchiveLock(worktree); return fn(); } finally { archivePublicationFrames.pop(); lock.release(); }
@@ -4170,9 +4215,9 @@ function assertArchiveLock(worktree) {
     const stat = fs.lstatSync(frame.lock.path);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('lock is not physical');
     owner = JSON.parse(readImmutableFile(fs, path.join(frame.lock.path, 'owner.json'), 'archive catalogue lock owner', 4096));
-  } catch { fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock ownership was lost'); }
+  } catch { fail('ARCHIVE_AUTHORITY_BUSY', LOCK_OWNERSHIP_LOST); }
   if (!frame?.lock.owner.token || owner?.token !== frame.lock.owner.token)
-    fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock ownership was lost');
+    fail('ARCHIVE_AUTHORITY_BUSY', LOCK_OWNERSHIP_LOST);
 }
 
 function withArchivePublication(worktree, fn) {
