@@ -24,6 +24,7 @@ const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
+const { resolveHostEnvironment, launchEnvironment } = require('./runtime-context.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
@@ -720,6 +721,16 @@ function installedAgentOptions(options, selection, capabilities) {
     agentManifest: options.agentManifest === undefined ? path.join(agentDir, '.shipyard-manifest.json') : options.agentManifest,
     capabilities, capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE,
     readerCapacity: options.readerCapacity, automaticReader: options.automaticReader === true, selection: { model: selection.model, effort: selection.effort } };
+}
+
+function installedHostOptions(options, resolved) {
+  if (resolved.mode !== 'installed') return options;
+  const env = options.env || process.env;
+  return { ...options,
+    env: launchEnvironment(resolved, env),
+    agentDir: options.agentDir === undefined ? resolved.agentsDir : options.agentDir,
+    agentManifest: options.agentManifest === undefined ? resolved.manifestFile : options.agentManifest,
+    capabilitiesFile: options.capabilitiesFile || (env.SHIPYARD_CODEX_CAPABILITIES_FILE ? undefined : resolved.capabilitiesFile) };
 }
 
 function admitArchitectureInput(prepared, request, options, capabilities) {
@@ -3430,6 +3441,8 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   }
   const parsed = readRequestFile(parseCliArguments(argv));
   const scope = canonicalCliScope(parsed.scope);
+  options = installedHostOptions(options, resolveHostEnvironment({
+    scriptDir: __dirname, runtime: 'codex', env: options.env || process.env }));
   if (parsed.graphDir) {
     if (options.graphDir && path.resolve(options.graphDir) !== path.resolve(parsed.graphDir))
       fail('INVALID_INPUT', 'conflicting canonical graph selectors');
