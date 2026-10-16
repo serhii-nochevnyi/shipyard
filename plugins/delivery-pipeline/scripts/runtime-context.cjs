@@ -20,6 +20,7 @@ const TRANSFER_PROOF_CATEGORIES = Object.freeze([
   'crash_recovery',
 ]);
 const TRANSFER_REFUSAL = 'automatic transfer is unsupported and unproven until a reviewed runtime-specific proving ground supplies every required evidence category';
+const CODEX_CAPABILITIES_BUNDLE_FILE = 'codex-capabilities.json';
 
 function normalizeRuntime(value) {
   if (typeof value !== 'string') return null;
@@ -252,6 +253,87 @@ function resolveDispatchContext(root, options = {}) {
   return Object.freeze(context);
 }
 
+function hostEnvironmentError(code, message) {
+  const error = new Error('runtime-context: ' + message);
+  error.name = 'HostEnvironmentError';
+  error.code = code;
+  return error;
+}
+
+function physicalPath(value) {
+  try { return fs.realpathSync(value); } catch { return null; }
+}
+
+function readBundleManifest(home, bundleRoot) {
+  const file = path.join(home, 'agents', '.shipyard-manifest.json');
+  let manifest;
+  try { manifest = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) {
+    throw hostEnvironmentError('BUNDLE_MANIFEST_INVALID', `cannot read the installer manifest ${file}: ${error.message}`);
+  }
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw hostEnvironmentError('BUNDLE_MANIFEST_INVALID', `the installer manifest ${file} must be a JSON object`);
+  }
+  for (const [field, expected] of [['scriptsRoot', bundleRoot], ['codexHome', home]]) {
+    const declared = typeof manifest[field] === 'string' ? physicalPath(manifest[field]) : null;
+    if (declared !== expected) {
+      throw hostEnvironmentError('BUNDLE_MANIFEST_INVALID',
+        `manifest ${field} ${JSON.stringify(manifest[field])} does not name this bundle (${expected})`);
+    }
+  }
+  return { file, manifest };
+}
+
+// @security: bundle evidence is trusted only after its installer digest and the capability grid both agree.
+function readBundleCapabilities(bundleRoot, manifest) {
+  const file = path.join(bundleRoot, CODEX_CAPABILITIES_BUNDLE_FILE);
+  if (manifest.capabilities_file !== CODEX_CAPABILITIES_BUNDLE_FILE) {
+    throw hostEnvironmentError('BUNDLE_MANIFEST_INVALID',
+      `manifest capabilities_file ${JSON.stringify(manifest.capabilities_file)} is not ${CODEX_CAPABILITIES_BUNDLE_FILE}`);
+  }
+  let raw;
+  try { raw = fs.readFileSync(file); }
+  catch (error) { throw hostEnvironmentError('CAPABILITY_EVIDENCE_STALE', `cannot read ${file}: ${error.message}`); }
+  const actual = require('crypto').createHash('sha256').update(raw).digest('hex');
+  if (actual !== manifest.capabilities_digest) {
+    throw hostEnvironmentError('CAPABILITY_EVIDENCE_STALE',
+      `${file} digest ${actual} differs from the installer manifest digest ${manifest.capabilities_digest}`);
+  }
+  let capabilities;
+  try {
+    capabilities = JSON.parse(raw.toString('utf8'));
+    require('./gsd-tune.cjs').validateCodexCapabilities(capabilities, manifest.phase);
+  } catch (error) {
+    throw hostEnvironmentError('CAPABILITY_EVIDENCE_STALE', `${file} does not satisfy the ADR-014 grid: ${error.message}`);
+  }
+  return { file, capabilities };
+}
+
+function resolveHostEnvironment({ scriptDir, runtime, env = process.env } = {}) {
+  const source = Object.freeze({ mode: 'source', runtime: runtime || null });
+  if (runtime !== 'codex' || typeof scriptDir !== 'string' || !scriptDir) return source;
+  const bundleRoot = physicalPath(path.join(scriptDir, '..'));
+  if (!bundleRoot || !fs.existsSync(path.join(bundleRoot, CODEX_CAPABILITIES_BUNDLE_FILE))) return source;
+  const home = path.dirname(bundleRoot);
+  const { file: manifestFile, manifest } = readBundleManifest(home, bundleRoot);
+  const { file: capabilitiesFile, capabilities } = readBundleCapabilities(bundleRoot, manifest);
+  const exported = env && nonEmpty(env.CODEX_HOME);
+  if (exported && (physicalPath(exported) || path.resolve(exported)) !== home) {
+    throw hostEnvironmentError('ENV_CONFLICT',
+      `CODEX_HOME=${exported} disagrees with the Codex home ${home} of the installed bundle that is running`);
+  }
+  return Object.freeze({
+    mode: 'installed', runtime, home, bundleRoot, manifestFile, manifest, capabilitiesFile, capabilities,
+    agentsDir: path.join(home, 'agents'),
+  });
+}
+
+function launchEnvironment(resolved, baseEnv = process.env) {
+  const env = { ...baseEnv };
+  if (resolved && resolved.mode === 'installed') env.CODEX_HOME = resolved.home;
+  return env;
+}
+
 function cleanEvidenceText(value) {
   return typeof value === 'string' && value.trim() && !/[\u0000-\u001f\u007f]/.test(value)
     ? value.trim().slice(0, 256) : null;
@@ -359,6 +441,8 @@ module.exports = {
   readJsonRuntime,
   resolveRuntime,
   resolveDispatchContext,
+  resolveHostEnvironment,
+  launchEnvironment,
   reportTransferCapability,
   readInheritedConfig,
 };

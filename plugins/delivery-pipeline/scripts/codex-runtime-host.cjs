@@ -7,6 +7,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
 const { createDurableRecorder } = require('./dispatch-boundary.cjs');
+const { resolveHostEnvironment, launchEnvironment } = require('./runtime-context.cjs');
 
 const SCHEMA = 'shipyard.codex-runtime-host.v1';
 const VERSION = 1;
@@ -165,8 +166,12 @@ function capabilitiesFrom(options = {}) {
     if (!object(options.capabilities)) fail('RUNTIME_CAPABILITY_MISSING', 'Codex capabilities must be an object');
     return clone(options.capabilities);
   }
-  const file = options.capabilitiesFile
-    || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE
+  const explicit = options.capabilitiesFile || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE;
+  if (!explicit) {
+    const installed = resolveHostEnvironment({ scriptDir: __dirname, runtime: 'codex', env: process.env });
+    if (installed.mode === 'installed') return clone(installed.capabilities);
+  }
+  const file = explicit
     || (process.env.CODEX_HOME && path.join(process.env.CODEX_HOME, 'shipyard', 'codex-capabilities.json'));
   if (!file) fail('RUNTIME_CAPABILITY_MISSING', 'explicit Codex capability evidence is required');
   return readCapabilities(file);
@@ -2566,6 +2571,7 @@ function createCodexCliLauncher(options = {}) {
   if (options.additionalProtectedPaths !== undefined && !Array.isArray(options.additionalProtectedPaths)) {
     fail('INVALID_INPUT', 'additionalProtectedPaths must be an array of host-owned paths');
   }
+  const installedHost = resolveHostEnvironment({ scriptDir: __dirname, runtime: 'codex', env: { ...process.env, ...environment } });
   const archiveAuthority = require('./role-artifact.cjs').archiveAuthorityNamespace(true);
   const hostProtectedPaths = normalizeProtectedPaths([archiveAuthority, ...(options.additionalProtectedPaths || [])]);
   const taskDir = taskStateDir(options, scope);
@@ -2647,7 +2653,7 @@ function createCodexCliLauncher(options = {}) {
     if (!['read-only', 'workspace-write'].includes(sandbox)) {
       fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write sandbox');
     }
-    const env = { ...process.env, ...environment };
+    const env = launchEnvironment(installedHost, { ...process.env, ...environment });
     const task = agent ? writeTaskFile(taskDir, scope, launchOptions.dispatch_id, launchPrompt(prompt)) : null;
     try {
     const protectedPaths = normalizeProtectedPaths([...signerProtectionPaths(env, scope.worktree), ...hostProtectedPaths,
