@@ -292,7 +292,7 @@ function observeCodexDatabase(dbPath, graphDir, options = {}) {
 }
 
 function observeCodexNotify(payload, graphDir, options = {}) {
-  const home = process.env.CODEX_HOME || path.join(require('node:os').homedir(), '.codex');
+  const home = require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env: process.env });
   const db = options.dbPath || process.env.SHIPYARD_CODEX_LOG_DB || path.join(home, 'logs_2.sqlite');
   return observeCodexDatabase(db, graphDir, {
     ...options,

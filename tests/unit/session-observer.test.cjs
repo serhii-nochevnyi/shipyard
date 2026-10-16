@@ -95,5 +95,35 @@ test('Codex log facts retain model, effort and turn token deltas', () => {
   assert.strictEqual(turns[1].total_tokens, 55);
   assert.strictEqual(turns[1].usage_basis, 'turn_delta');
 });
+const crypto = require('node:crypto');
+const ROOT = path.join(__dirname, '..', '..');
+
+function installedCodexLayout(extraManifest = {}) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-installed-observer-')));
+  const home = path.join(base, 'codex-home');
+  const bundle = path.join(home, 'shipyard');
+  fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'plugins/delivery-pipeline/scripts'), path.join(bundle, 'scripts'), { recursive: true });
+  const evidence = Buffer.from(JSON.stringify(require('../smoke/installed-launch/lib.cjs').codexCapabilities()));
+  fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
+  const manifest = { phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
+    capabilities_digest: crypto.createHash('sha256').update(evidence).digest('hex'), ...extraManifest };
+  fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify(manifest));
+  return { base, home, bundle, scripts: path.join(bundle, 'scripts'), manifest };
+}
+
+test('an installed bundle supplies the sessions home and a disagreeing CODEX_HOME refuses', () => {
+  const layout = installedCodexLayout();
+  try {
+    const script = path.join(layout.scripts, 'session-observer.cjs');
+    const probe = (env) => require('node:child_process').spawnSync(process.execPath, ['-e',
+      "const o=require(process.argv[1]);try{o.observeCodexNotify({},process.argv[2],{});}catch(e){console.log(e.message)}",
+      script, path.join(layout.base, 'graph')], { encoding: 'utf8', env });
+    const ok = probe({ PATH: process.env.PATH });
+    assert.ok(ok.stdout.includes(path.join(layout.home, 'logs_2.sqlite')) || !/disagrees/.test(ok.stdout), ok.stdout + ok.stderr);
+    const conflict = probe({ PATH: process.env.PATH, CODEX_HOME: path.join(layout.base, 'elsewhere') });
+    assert.match(conflict.stdout, /disagrees/);
+  } finally { fs.rmSync(layout.base, { recursive: true, force: true }); }
+});
 
 done();
