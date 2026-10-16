@@ -3919,6 +3919,101 @@ function historicalBookkeepingPins(worktreePath) {
   return pins;
 }
 
+const PROVENANCE_MEMBER_PATH = /^\.planning\/graph\/provenance\/[A-Za-z0-9_.-]+\.json$/;
+const LEGACY_BOOKKEEPING_FIELD = 'legacy_bookkeeping';
+const LEGACY_BOOKKEEPING_SCHEMA = 'shipyard.legacy-bookkeeping.v1';
+const LEGACY_BOOKKEEPING_VERSION = 1;
+const LEGACY_STATUS = 'historical-unverified';
+
+function legacyAuthoritySide(worktree) {
+  const side = { pins: [], legacy: null, finding: null, unreadable: null };
+  try {
+    const directory = archiveAuthorityDirectory(worktree);
+    const catalogue = path.join(directory, 'catalogue.json');
+    try { fs.lstatSync(catalogue); }
+    catch (error) { if (error.code === 'ENOENT') return side; throw error; }
+    const { payload } = authorityState(worktree);
+    side.pins = historicalBookkeepingPins(worktree);
+    const record = payload[LEGACY_BOOKKEEPING_FIELD];
+    if (record !== undefined) {
+      if (!object(record) || record.schema !== LEGACY_BOOKKEEPING_SCHEMA || record.version !== LEGACY_BOOKKEEPING_VERSION
+          || record.status !== LEGACY_STATUS || !Array.isArray(record.members)
+          || record.members.some(member => !object(member) || !PROVENANCE_MEMBER_PATH.test(member.path || '')
+            || !Number.isSafeInteger(member.bytes) || !/^[a-f0-9]{64}$/.test(member.sha256 || '')))
+        fail('ARCHIVE_AUTHORITY_INVALID', 'legacy bookkeeping record is malformed');
+      side.legacy = record;
+    }
+  } catch (error) {
+    const code = error && error.code;
+    if (typeof code === 'string' && code.startsWith('ARCHIVE_AUTHORITY_'))
+      side.finding = { code: 'ARCHIVE_AUTHORITY_INVALID', path: '', detail: String(error.message).slice(0, 200) };
+    else if (error && (error.syscall || /^E[A-Z0-9]+$/.test(code || '')))
+      side.unreadable = { code: code || 'UNKNOWN', syscall: error.syscall || 'unknown' };
+    else throw error;
+  }
+  return side;
+}
+
+function legacyBookkeepingMembers(worktreePath) {
+  const side = legacyAuthoritySide(fs.realpathSync(worktreePath));
+  return side.legacy ? side.legacy.members.map(member => ({ ...member })) : [];
+}
+
+function classifyLegacyProvenance(worktreePath) {
+  const worktree = fs.realpathSync(worktreePath);
+  const members = [], findings = [], warnings = [];
+  const unsafe = (relative, detail) => findings.push({ code: 'LEGACY_HISTORY_UNSAFE', path: relative, detail });
+  const directory = fixedPath(worktree, '.planning/graph/provenance', 'host provenance directory');
+  let directoryStat = null;
+  try { directoryStat = fs.lstatSync(directory); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (directoryStat && (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()))
+    unsafe('.planning/graph/provenance', 'provenance directory is not a physical directory');
+  else if (directoryStat) {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const relative = '.planning/graph/provenance/' + name;
+      if (!PROVENANCE_MEMBER_PATH.test(relative)) { unsafe(relative, 'member name is not allowed'); continue; }
+      const file = path.join(directory, name), stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink()) { unsafe(relative, 'member is a symlink'); continue; }
+      if (!stat.isFile()) { unsafe(relative, 'member is not a regular file'); continue; }
+      if (stat.size > HISTORICAL_ARCHIVE_MAX_BYTES) { unsafe(relative, 'member exceeds the archive byte bound'); continue; }
+      try {
+        const content = readImmutableFile(fs, file, 'legacy provenance member', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size);
+        members.push({ path: relative, bytes: content.length, sha256: digest(content) });
+      } catch (error) { unsafe(relative, 'member could not be read stably'); }
+    }
+  }
+  const projected = JSON.stringify({ payload: { schema: 'shipyard.role-archive-catalogue.v1', worktree, records: {},
+    [LEGACY_BOOKKEEPING_FIELD]: { schema: LEGACY_BOOKKEEPING_SCHEMA, version: LEGACY_BOOKKEEPING_VERSION,
+      status: LEGACY_STATUS, members } }, mac: '0'.repeat(64) }) + '\n';
+  if (Buffer.byteLength(projected) > HISTORICAL_ARCHIVE_MAX_BYTES)
+    unsafe('.planning/graph/provenance', 'inventory would exceed the catalogue byte bound');
+  const side = legacyAuthoritySide(worktree);
+  const result = (state, extra = {}) => ({ state, members, findings, warnings, unreadable: null, ...extra });
+  if (side.finding) findings.push(side.finding);
+  if (findings.length) return result('blocked');
+  if (side.unreadable) return { state: 'unreadable', members: [], findings: [], warnings: [], unreadable: side.unreadable };
+  const pinned = new Set(side.pins.map(pin => pin.path));
+  const recorded = new Map((side.legacy ? side.legacy.members : []).map(member => [member.path, member]));
+  const catalogued = side.pins.length > 0 || side.legacy !== null;
+  for (const entry of recorded.values()) {
+    const present = members.find(member => member.path === entry.path);
+    if (!present) warnings.push({ code: 'LEGACY_HISTORY_MISSING', path: entry.path });
+    else if (present.sha256 !== entry.sha256 || present.bytes !== entry.bytes)
+      findings.push({ code: 'LEGACY_HISTORY_CHANGED', path: entry.path, detail: 'recorded legacy member bytes differ' });
+  }
+  if (catalogued) {
+    for (const member of members)
+      if (!pinned.has(member.path) && !recorded.has(member.path))
+        findings.push({ code: 'LEGACY_HISTORY_UNKNOWN_MEMBER', path: member.path,
+          detail: 'member is neither an authenticated pin nor a recorded legacy member' });
+  }
+  if (findings.length) return result('blocked');
+  if (side.legacy) return result('adopted');
+  if (side.pins.length) return result('authenticated');
+  return result(members.length ? 'adoptable' : 'absent');
+}
+
 function writeArchiveCatalogue(state) {
   const envelope = { payload: state.payload,
     mac: crypto.createHmac('sha256', state.key).update(stable(state.payload)).digest('hex') };
@@ -3936,7 +4031,7 @@ function writeArchiveCatalogue(state) {
 function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning/graph/dispatches.json']) {
   const worktree = fs.realpathSync(worktreePath);
   const allowed = relative => relative === '.planning/graph/dispatches.json'
-    || /^\.planning\/graph\/provenance\/[A-Za-z0-9_.-]+\.json$/.test(relative);
+    || PROVENANCE_MEMBER_PATH.test(relative);
   if (!Array.isArray(writtenPaths) || writtenPaths.some(relative => !allowed(relative)))
     fail('ARCHIVE_AUTHORITY_INVALID', 'trusted writer paths are malformed');
   return withArchiveAuthorityLock(worktree, () => {
@@ -6201,6 +6296,12 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   phaseArchitectureEvidenceDigest,
   assertArchiveInventory,
   historicalBookkeepingPins,
+  classifyLegacyProvenance,
+  legacyBookkeepingMembers,
+  LEGACY_BOOKKEEPING_FIELD,
+  LEGACY_BOOKKEEPING_SCHEMA,
+  LEGACY_BOOKKEEPING_VERSION,
+  LEGACY_STATUS,
   trustedBookkeepingMutation,
   admitHistoricalArchive,
   prepareRoleArtifact,
