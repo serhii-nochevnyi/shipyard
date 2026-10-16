@@ -24,6 +24,9 @@ const {
   SCRATCH_FILES, statusIgnoringScratch,
 } = require('./conveyor-scratch.cjs');
 const { preflightRound } = require('./sentinel-preflight.cjs');
+const { repositoryIdentity, buildSubject } = require('./architecture-target.cjs');
+const { preflight, emitPreflight } = require('./runtime-context.cjs');
+const { formatHint } = require('./refusal-hints.cjs');
 
 const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
 const REQUEST_MAX_BYTES = 32768;
@@ -176,8 +179,7 @@ function canonicalWorktree(options, value, aggregate = false) {
     if (!stat.isFile() || stat.isSymbolicLink()) reject(`scratch file must be a regular file: ${name}`);
     scratchDigests.set(name, sha(fs.readFileSync(file)));
   }
-  const common = git(options, worktree, ['rev-parse', '--git-common-dir']);
-  const commonPath = fs.realpathSync(path.isAbsolute(common) ? common : path.resolve(worktree, common));
+  const commonPath = repositoryIdentity(worktree);
   const projectRoot = worktree;
   const head = git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']);
   const headTree = git(options, worktree, ['rev-parse', '--verify', 'HEAD^{tree}']);
@@ -607,8 +609,7 @@ function prepareIntegrator(options, request, canonical, graph) {
   }
   ticketSet.sort((a, b) => a.id.localeCompare(b.id));
   const ticketSetDigest = sha(JSON.stringify(ticketSet));
-  const repositoryIdentity = canonical.commonPath;
-  const subject = `phase=${phase};repository=${repositoryIdentity};tickets=${ticketSetDigest}`;
+  const subject = buildSubject('integrator', { phase, repository: canonical.commonPath, tickets: ticketSetDigest });
   const mergeBase = git(options, canonical.worktree, ['merge-base', defaultBase, canonical.head]);
   const mergeBaseTree = git(options, canonical.worktree, ['rev-parse', '--verify', `${mergeBase}^{tree}`]);
   const combinedDiff = diffText(options, canonical.worktree, mergeBase, canonical.head, productPathspec());
@@ -1555,6 +1556,11 @@ function parseCli(argv) {
   const values = {};
   for (let index = 0; index < argv.length; index++) {
     const flag = argv[index];
+    if (flag === '--preflight') {
+      if (values.preflight) reject('--preflight may be provided once');
+      values.preflight = true;
+      continue;
+    }
     if (flag === '--capability-only') {
       if (values.capabilityOnly) reject('--capability-only may be provided once');
       values.capabilityOnly = true;
@@ -1565,8 +1571,26 @@ function parseCli(argv) {
     if (typeof file !== 'string' || !file.trim() || file.startsWith('--')) reject('--args-file requires a path');
     values.argsFile = file;
   }
-  if (values.capabilityOnly === (values.argsFile !== undefined)) reject('provide either --capability-only or --args-file <json>');
+  if (values.preflight && values.capabilityOnly) reject('--preflight cannot be combined with --capability-only');
+  if (!values.preflight && values.capabilityOnly === (values.argsFile !== undefined)) reject('provide either --capability-only or --args-file <json>');
   return Object.freeze(values);
+}
+
+function launchPreflight(worktree, hostOptions, output) {
+  const stderr = hostOptions.stderr || process.stderr;
+  const graphDir = hostOptions.graphDir ? path.resolve(hostOptions.graphDir) : path.join(worktree, '.planning', 'graph');
+  const result = preflight({
+    runtime: 'claude',
+    scriptDir: __dirname,
+    worktree,
+    graphDir,
+    scope: 'launch',
+    host: 'claude-role-host.cjs',
+    env: hostOptions.preflightEnv || process.env,
+    probe: () => hostOptions.probe || probeClaudeRuntime(hostOptions),
+  });
+  emitPreflight(result, { stdout: output, stderr });
+  return result;
 }
 
 function runClaudeRoleCli(argv = process.argv.slice(2), output = process.stdout, hostOptions = {}) {
@@ -1574,11 +1598,26 @@ function runClaudeRoleCli(argv = process.argv.slice(2), output = process.stdout,
   if (args.capabilityOnly) {
     const probe = probeClaudeRuntime(hostOptions);
     output.write(`${JSON.stringify(probe)}\n`);
+    if (probe && probe.status === 'unavailable') {
+      const code = /capability/.test(String(probe.reason || '')) ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
+      (hostOptions.stderr || process.stderr).write(`${formatHint(code, { host: 'claude-role-host.cjs' })}\n`);
+    }
     return probe;
   }
-  const stat = fs.lstatSync(args.argsFile);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > REQUEST_MAX_BYTES) reject('args file must be a bounded regular file');
-  const request = parseRequest(readJsonFile(args.argsFile, 'args file', REQUEST_MAX_BYTES));
+  let request = null;
+  if (args.argsFile !== undefined) {
+    const stat = fs.lstatSync(args.argsFile);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > REQUEST_MAX_BYTES) reject('args file must be a bounded regular file');
+    request = parseRequest(readJsonFile(args.argsFile, 'args file', REQUEST_MAX_BYTES));
+  }
+  const checked = launchPreflight(request ? fs.realpathSync(request.worktree) : fs.realpathSync(process.cwd()), hostOptions,
+    args.preflight ? output : { write() {} });
+  if (args.preflight) return checked;
+  if (!checked.ok) {
+    const error = new Error(`claude-role-host: preflight found ${checked.findings.length} incompatibilities: ${checked.findings.map((item) => item.code).join(', ')}`);
+    error.code = checked.findings[0].code;
+    throw error;
+  }
   return createClaudeRoleHost(hostOptions).run(request).then((result) => {
     output.write(`${JSON.stringify(result)}\n`);
     return result;
@@ -1602,8 +1641,11 @@ module.exports = Object.freeze({
 if (require.main === module) {
   const hostOptions = process.env.SHIPYARD_CLAUDE_ROLE_SMOKE === 'read-only'
     ? { readOnlySmoke: true } : {};
-  Promise.resolve(runClaudeRoleCli(process.argv.slice(2), process.stdout, hostOptions)).catch((error) => {
+  Promise.resolve().then(() => runClaudeRoleCli(process.argv.slice(2), process.stdout, hostOptions)).then((result) => {
+    if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
+  }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
+    process.stderr.write(`${formatHint(error && error.code)}\n`);
     process.exitCode = 1;
   });
 }
