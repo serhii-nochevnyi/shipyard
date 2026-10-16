@@ -1299,12 +1299,16 @@ function authenticateBookkeeping(cwd, fn, writtenPaths, required = false) {
   return authority.trustedBookkeepingMutation(worktree, fn, writtenPaths);
 }
 
+const LEGACY_ADMISSION_STATES = new Set(['adoptable', 'adopted', 'blocked', 'unreadable']);
+
+// @security: host admission over unauthenticated provenance always takes the trusted writer.
 function inflightBookkeepingRequired(input, cwd) {
   if (typeof input.worktree !== 'string') return false;
   const project = fs.realpathSync(path.resolve(graphDir(cwd), '../..'));
   if (fs.realpathSync(input.worktree) === project) return true;
   const provenance = path.join(project, '.planning', 'graph', 'provenance');
-  return !fs.existsSync(provenance) || fs.readdirSync(provenance).length === 0;
+  if (!fs.existsSync(provenance) || fs.readdirSync(provenance).length === 0) return true;
+  return LEGACY_ADMISSION_STATES.has(require('./role-artifact.cjs').classifyLegacyProvenance(project).state);
 }
 
 function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false, authenticate = false) {
@@ -1563,9 +1567,20 @@ function provenanceFile(dir, dispatchId) {
   return path.join(dir, 'provenance', `${dispatchId}.json`);
 }
 
+function refuseLegacyCollision(project, dispatchId) {
+  const relative = `.planning/graph/provenance/${dispatchId}.json`;
+  const authority = require('./role-artifact.cjs');
+  if (!authority.legacyBookkeepingMembers(project).some((member) => member.path === relative)) return;
+  if (authority.historicalBookkeepingPins(project).some((pin) => pin.path === relative)) return;
+  throw Object.assign(new Error(`dispatch id ${dispatchId} collides with recorded legacy provenance ${relative}`),
+    { code: 'LEGACY_HISTORY_COLLISION' });
+}
+
 // @invariant: a provenance sidecar is written once per dispatch_id and never overwritten.
 function writeProvenanceOnce(dir, fields, authenticate) {
-  return authenticateBookkeeping(path.resolve(dir, '../..'), () => {
+  const project = path.resolve(dir, '../..');
+  refuseLegacyCollision(project, fields.dispatch_id);
+  return authenticateBookkeeping(project, () => {
   const file = provenanceFile(dir, fields.dispatch_id);
   if (fs.existsSync(file)) return false;
   const stamp = hostProvenance.current({ pluginRoot: path.join(__dirname, '..') });
