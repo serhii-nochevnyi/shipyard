@@ -97,3 +97,38 @@ test('accepted values list the identity first and the legacy owner/repo second',
   const without = repo('no-remote');
   assert.deepEqual(target.acceptedRepositoryValues(without), [path.join(without, '.git')]);
 });
+
+test('consumers accept the shared class for planning-input, decomposition-seal and arch-review subjects', () => {
+  const { normalizeTicketIdentity } = require('../../plugins/delivery-pipeline/scripts/run-contract.cjs');
+  const sealer = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+  const sha = 'a'.repeat(64);
+  const head = 'b'.repeat(40);
+  for (const repository of ['/work/my repo/.git', '/work/дім/.git', 'owner/repo', '/plain/.git']) {
+    const input = target.buildSubject('planning-input', { phase: 3, input: 'INV-001', repository });
+    assert.equal(normalizeTicketIdentity(input, { role: 'decomposition', phase: 3 }).ticket, input);
+    const review = target.buildSubject('architecture-review', { phase: '3-x', repository, tickets: sha, pr: 4, head, base: head });
+    assert.equal(normalizeTicketIdentity(review, { role: 'arch-review', phase: 3 }).ticket, review);
+    const seal = target.buildSubject('decomposition-seal', { phase: 3, repository, adr: sha });
+    assert.ok(sealer.decompositionAdr.SUBJECT_PATTERN.test(seal));
+  }
+  assert.throws(() => normalizeTicketIdentity('phase=3;input=INV-001;repository=a;b', { role: 'decomposition', phase: 3 }));
+  assert.throws(() => normalizeTicketIdentity('phase=3;input=INV-001;repository=a\tb', { role: 'decomposition', phase: 3 }));
+  assert.throws(() => normalizeTicketIdentity('T-1 2', { role: 'executor' }));
+  assert.throws(() => sealer.decompositionAdr.decompositionSubject({ phase: 3, repository: 'a;b', adr: { sha256: sha } }), /DECOMPOSITION_SUBJECT_INVALID|repository/);
+});
+
+test('a decomposition seal with the old owner/repo form verifies only through acceptedRepositories', () => {
+  const { decompositionAdr } = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+  const dir = path.join(scratch, 'adr');
+  fs.mkdirSync(path.join(dir, '.planning/architecture'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning/architecture/ADR-1.md'), 'adr');
+  const adr = decompositionAdr.resolveAdr(dir, '.planning/architecture/ADR-1.md');
+  const subject = target.buildSubject('decomposition-seal', { phase: 3, repository: 'owner/repo', adr: adr.sha256 });
+  const base = { worktree: dir, repository: '/w/my repo/.git', adr };
+  assert.throws(() => decompositionAdr.assertDecompositionSubject(subject, base), /different repository/);
+  assert.equal(decompositionAdr.assertDecompositionSubject(subject, { ...base, acceptedRepositories: ['owner/repo'] }).repository, 'owner/repo');
+  const other = target.buildSubject('decomposition-seal', { phase: 3, repository: 'x/y', adr: adr.sha256 });
+  assert.throws(() => decompositionAdr.assertDecompositionSubject(other, { ...base, acceptedRepositories: ['owner/repo'] }), /different repository/);
+  const bad = target.buildSubject('decomposition-seal', { phase: 3, repository: 'owner/repo', adr: 'c'.repeat(64) });
+  assert.throws(() => decompositionAdr.assertDecompositionSubject(bad, { ...base, acceptedRepositories: ['owner/repo'] }), /digest/);
+});
