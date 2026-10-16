@@ -500,6 +500,150 @@ function reportTransferCapability(options = {}) {
   });
 }
 
+const PREFLIGHT_CODES = Object.freeze([
+  'ENV_CONFLICT', 'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE', 'RUNTIME_CAPABILITY_MISSING',
+  'UNKNOWN_RUNTIME', 'AMBIGUOUS_RUNTIME', 'STALE_GENERATED_AGENT', 'RUNTIME_UNAVAILABLE',
+  'LEGACY_HISTORY_UNSAFE', 'LEGACY_HISTORY_CHANGED', 'LEGACY_HISTORY_UNKNOWN_MEMBER', 'LEGACY_HISTORY_MISSING',
+  'ARCHIVE_AUTHORITY_INVALID', 'LEGACY_WRITER_STATE', 'INVALID_STORE',
+]);
+
+function preflightGraphDir(graphDir, worktree, env) {
+  if (graphDir === null) return null;
+  let candidate = graphDir;
+  if (candidate === undefined) {
+    candidate = nonEmpty(env.SHIPYARD_GRAPH_DIR);
+    if (!candidate && typeof worktree === 'string' && worktree) {
+      let top = worktree;
+      try {
+        top = require('child_process').execFileSync('git', ['-C', worktree, 'rev-parse', '--show-toplevel'],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || worktree;
+      } catch { top = worktree; }
+      candidate = path.join(top, '.planning', 'graph');
+    }
+  }
+  if (typeof candidate !== 'string' || !candidate) return null;
+  const directory = path.resolve(candidate);
+  if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning') return null;
+  return fs.existsSync(directory) ? directory : null;
+}
+
+function errorCode(error) {
+  return error && typeof error.code === 'string' && error.code ? error.code : 'UNKNOWN';
+}
+
+// @contract: preflight is read-only, collects every incompatibility and never throws.
+function preflight(options = {}) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const env = opts.env || process.env;
+  const scope = opts.scope === 'environment' ? 'environment' : 'launch';
+  const host = typeof opts.host === 'string' && opts.host ? opts.host : 'deliver-dispatch.cjs';
+  const findings = [], warnings = [], notes = [];
+  const note = (kind, detail) => notes.push({ kind, detail });
+  const find = (code, detail, vars = {}) => findings.push({ code, detail: String(detail), vars: { host, ...vars } });
+  const run = (name, fn) => {
+    try { fn(); } catch (error) {
+      const code = errorCode(error);
+      if (PREFLIGHT_CODES.includes(code)) find(code, error.message);
+      else note('not-evaluated', `${name}: check not evaluated (${code})`);
+    }
+  };
+  let resolved = null;
+  run('environment and bundle', () => {
+    resolved = resolveHostEnvironment({ scriptDir: opts.scriptDir, runtime: opts.runtime, env, flags: opts.flags || {} });
+  });
+  if (!resolved) note('not-evaluated', 'policy and generated agents: not evaluated, no resolved environment');
+  const bundle = resolved && resolved.bundleRoot;
+  const withBundle = (vars) => (bundle ? { ...vars, bundle } : vars);
+  for (const finding of findings) finding.vars = withBundle(finding.vars);
+
+  run('runtime identity', () => {
+    resolveDispatchContext(opts.worktree, {
+      routed: true, runtime: opts.runtime, env, scriptPath: opts.scriptDir,
+    });
+  });
+
+  run('policy and generated agents', () => {
+    if (!resolved || resolved.mode !== 'installed') return;
+    const manifest = resolved.manifest;
+    const stale = [];
+    const { POLICY_HASH } = require('./model-policy.cjs');
+    if (manifest.policy_hash !== POLICY_HASH) stale.push('policy_hash');
+    const files = Array.isArray(manifest.agent_files) ? manifest.agent_files : [];
+    const digests = manifest.agent_digests && typeof manifest.agent_digests === 'object' ? manifest.agent_digests : {};
+    for (const name of files) {
+      let actual = null;
+      try {
+        actual = require('crypto').createHash('sha256').update(fs.readFileSync(path.join(resolved.agentsDir, name))).digest('hex');
+      } catch { actual = null; }
+      if (actual === null || actual !== digests[name]) stale.push(name);
+    }
+    if (stale.length) find('STALE_GENERATED_AGENT', `stale or missing: ${stale.join(', ')}`, { bundle: resolved.bundleRoot, files: stale.join(', ') });
+  });
+
+  run('runtime probe', () => {
+    if (typeof opts.probe !== 'function') return;
+    const result = opts.probe();
+    if (result && result.status === 'unavailable') {
+      const reason = String(result.reason || 'unknown');
+      const code = /capability/.test(reason) ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
+      find(code, `${reason}${result.detail ? ': ' + result.detail : ''}`, withBundle({}));
+    }
+  });
+
+  if (scope === 'launch') {
+    run('legacy history', () => {
+      const directory = preflightGraphDir(opts.graphDir, opts.worktree, env);
+      if (!directory) { note('not-evaluated', 'legacy history: not evaluated, no graph directory'); return; }
+      const root = fs.realpathSync(path.resolve(directory, '..', '..'));
+      const result = require('./role-artifact.cjs').classifyLegacyProvenance(root);
+      if (result.state === 'unreadable') {
+        note('not-evaluated', `legacy history: not evaluated, authority namespace unreadable (${result.unreadable && result.unreadable.code})`);
+        return;
+      }
+      for (const item of result.findings) find(item.code, item.detail || item.code, withBundle({ path: item.path || '' }));
+      for (const item of result.warnings) {
+        warnings.push({ code: item.code, detail: item.path || item.code, vars: withBundle({ host, path: item.path || '' }) });
+      }
+      if (result.state === 'adoptable') note('adoptable', `legacy history: adoption will record ${result.members.length} member(s)`);
+    });
+    if (typeof opts.gsdRole === 'string' && opts.gsdRole && opts.worktree && opts.phaseDir) {
+      run('planning writer state', () => {
+        require('./planning-writer-lease.cjs').assertNoLegacyPlanningWriter({
+          worktree: opts.worktree, phaseDir: opts.phaseDir, roots: opts.writerRoots || [],
+        });
+      });
+    }
+    if (typeof opts.runStoreFile === 'string' && opts.runStoreFile) {
+      run('run store', () => {
+        let raw;
+        try { raw = fs.readFileSync(opts.runStoreFile, 'utf8'); } catch (error) {
+          if (error.code === 'ENOENT') return;
+          throw error;
+        }
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch (error) { find('INVALID_STORE', `run store is not JSON: ${error.message}`, withBundle({})); return; }
+        require('./run-store.cjs').normalizeStore(parsed);
+      });
+    }
+  }
+  for (const finding of findings) finding.vars = withBundle(finding.vars);
+  return { schema: 'shipyard.host-preflight.v1', ok: findings.length === 0, scope, findings, warnings, notes };
+}
+
+function emitPreflight(result, streams = {}) {
+  const stdout = streams.stdout || process.stdout;
+  const stderr = streams.stderr || process.stderr;
+  const { formatHint } = require('./refusal-hints.cjs');
+  const count = result.findings.length;
+  const lines = [count === 0 ? 'preflight: ok' : `preflight: ${count} incompatibilities`];
+  for (const finding of result.findings) lines.push(formatHint(finding.code, finding.vars));
+  for (const warning of result.warnings) lines.push(`preflight: warning[${warning.code}] ${warning.detail}`);
+  for (const item of result.notes) lines.push(`preflight: note ${item.detail}`);
+  stderr.write(lines.join('\n') + '\n');
+  stdout.write(JSON.stringify(result) + '\n');
+  return result.ok ? 0 : 1;
+}
+
 module.exports = {
   KNOWN_RUNTIMES,
   TRANSFER_CAPABILITY_SCHEMA,
@@ -514,6 +658,9 @@ module.exports = {
   resolveCodexHome,
   resolveClaudeHome,
   RESOLVER_CODES,
+  PREFLIGHT_CODES,
+  preflight,
+  emitPreflight,
   reportTransferCapability,
   readInheritedConfig,
 };
