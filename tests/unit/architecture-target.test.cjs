@@ -432,3 +432,13 @@ test('mixed repository binding selects only explicit target members', () => {
   assert.throws(()=>phaseBinding({...input,repo:'acme/other',branch:'epic/foreign'}), /canonical phase epic/);
   assert.equal(phaseBinding({...input,repo:null}).subject,phaseBinding({...input,graph:{tickets:{local:graph.tickets.local}}}).subject);
 });
+
+test('every PHASE_SUBJECT importer shares the one definition', () => {
+  const dir = '../../plugins/delivery-pipeline/scripts/';
+  for (const name of ['run-contract', 'dispatch-record', 'role-artifact', 'dispatch-boundary', 'codex-arch-review-context']) {
+    const source = fs.readFileSync(path.join(__dirname, dir, name + '.cjs'), 'utf8');
+    assert.match(source, /architecture-target\.cjs/, name);
+    assert.doesNotThrow(() => require(dir + name + '.cjs'), name);
+  }
+  assert.ok(PHASE_SUBJECT.test(`phase=1-x;repository=/a b/.git;tickets=${'a'.repeat(64)};pr=1;head=${'b'.repeat(40)};base=${'c'.repeat(40)}`));
+});
