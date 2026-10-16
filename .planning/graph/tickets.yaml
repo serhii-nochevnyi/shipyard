@@ -4466,7 +4466,7 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/refusal-hints.cjs, tests/unit/refusal-hints.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/refusal-hints.cjs, tests/unit/refusal-hints.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/codex-agent.test.cjs]
     risk: low
     human_checkpoint: false
     checkpoint: null
@@ -4788,7 +4788,7 @@ tickets:
     phase: '50'
     repo: null
     wave: 3
-    depends_on: [T-50-03]
+    depends_on: [T-50-03, T-50-02]
     files: [plugins/delivery-pipeline/scripts/codex-agent.cjs, plugins/delivery-pipeline/scripts/session-observer.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/codex-agent.test.cjs, tests/unit/session-observer.test.cjs, tests/unit/gsd-tune.test.cjs]
     risk: low
     human_checkpoint: false
