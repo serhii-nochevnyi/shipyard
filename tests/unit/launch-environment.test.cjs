@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { after, describe, it } = require('node:test');
-const { resolveHostEnvironment, launchEnvironment } = require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs');
+const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, resolveClaudeHome, RESOLVER_CODES } = require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs');
 const { classifyLaunch, codexCapabilities } = require('../smoke/installed-launch/lib.cjs');
 
 const roots = [];
@@ -125,7 +125,7 @@ describe('resolveHostEnvironment outside an installed Codex layout', () => {
 
   it('returns source mode for another runtime or a missing script directory', () => {
     const layout = installedLayout();
-    assert.equal(resolve(layout, {}, 'claude').mode, 'source');
+    assert.equal(resolve(layout, {}, 'claude').mode, 'claude');
     assert.equal(resolveHostEnvironment({ runtime: 'codex', env: {} }).mode, 'source');
   });
 });
@@ -135,9 +135,86 @@ describe('launchEnvironment', () => {
     const layout = installedLayout();
     const base = { PATH: '/bin', HOME: '/home/fixture', CODEX_HOME: '/stale' };
     const env = launchEnvironment(resolve(layout, {}), base);
-    assert.deepEqual(env, { PATH: '/bin', HOME: '/home/fixture', CODEX_HOME: layout.home });
+    assert.deepEqual(env, {
+      PATH: '/bin', HOME: '/home/fixture', CODEX_HOME: layout.home,
+      SHIPYARD_CODEX_CAPABILITIES_FILE: layout.evidenceFile, SHIPYARD_RUNTIME: 'codex',
+    });
     assert.equal(base.CODEX_HOME, '/stale');
     assert.deepEqual(launchEnvironment({ mode: 'source' }, { PATH: '/bin' }), { PATH: '/bin' });
+  });
+});
+
+describe('explicit home and capability file against an installed bundle', () => {
+  const conflict = (fn, ...needles) => assert.throws(fn, (error) => {
+    assert.equal(error.code, 'ENV_CONFLICT');
+    for (const needle of needles) assert.ok(error.message.includes(needle), error.message);
+    return true;
+  });
+
+  it('accepts flags and env that agree, through a symlink or identical bytes elsewhere', () => {
+    const layout = installedLayout();
+    const alias = path.join(layout.root, 'alias');
+    fs.symlinkSync(layout.home, alias);
+    const copy = path.join(layout.root, 'copy.json');
+    fs.copyFileSync(layout.evidenceFile, copy);
+    const flags = { codexHome: alias, capabilitiesFile: copy };
+    const env = { CODEX_HOME: layout.home, SHIPYARD_CODEX_CAPABILITIES_FILE: layout.evidenceFile };
+    const resolved = resolveHostEnvironment({ scriptDir: layout.scripts, runtime: 'codex', env, flags });
+    assert.equal(resolved.home, layout.home);
+    assert.equal(resolveHostEnvironment({ scriptDir: layout.scripts, runtime: 'codex', env: { SHIPYARD_CODEX_CAPABILITIES_FILE: copy } }).mode, 'installed');
+  });
+
+  it('refuses a disagreeing home flag, capability file and a flag that disagrees with env', () => {
+    const layout = installedLayout();
+    const other = path.join(layout.root, 'other-home');
+    fs.mkdirSync(other);
+    const foreign = path.join(layout.root, 'foreign.json');
+    fs.writeFileSync(foreign, JSON.stringify(codexCapabilities()) + '\n');
+    const run = (env, flags) => () => resolveHostEnvironment({ scriptDir: layout.scripts, runtime: 'codex', env, flags });
+    conflict(run({}, { codexHome: other }), other, layout.home);
+    conflict(run({ SHIPYARD_CODEX_CAPABILITIES_FILE: foreign }, {}), foreign, layout.evidenceFile);
+    conflict(run({}, { capabilitiesFile: foreign }), foreign, layout.evidenceFile);
+    conflict(run({ CODEX_HOME: layout.home }, { codexHome: other }), other, layout.home);
+  });
+
+  it('exposes the codes the module can throw', () => {
+    for (const code of ['ENV_CONFLICT', 'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE']) assert.ok(RESOLVER_CODES.includes(code), code);
+    assert.ok(Object.isFrozen(RESOLVER_CODES));
+  });
+});
+
+describe('home accessors and the Claude branch', () => {
+  it('answers the Codex home from the bundle, an explicit value, or ~/.codex in a source checkout', () => {
+    const layout = installedLayout();
+    assert.equal(resolveCodexHome({ scriptDir: layout.scripts, env: {} }), layout.home);
+    const source = path.join(layout.root, 'plugin/scripts');
+    fs.mkdirSync(source, { recursive: true });
+    assert.equal(resolveCodexHome({ scriptDir: source, env: { CODEX_HOME: '/explicit' } }), '/explicit');
+    assert.equal(resolveCodexHome({ scriptDir: source, env: { CODEX_HOME: '/env' }, flags: { codexHome: '/flag' } }), '/flag');
+    assert.equal(resolveCodexHome({ scriptDir: source, env: { HOME: '/home/u' } }), path.join('/home/u', '.codex'));
+  });
+
+  it('answers the Claude home from CLAUDE_CONFIG_DIR or HOME', () => {
+    assert.equal(resolveClaudeHome({ env: { CLAUDE_CONFIG_DIR: '/cfg', HOME: '/h' } }), '/cfg');
+    assert.equal(resolveClaudeHome({ env: { HOME: '/h' } }), path.join('/h', '.claude'));
+  });
+
+  it('does not refuse a Claude run on conflicting Codex variables and carries no Codex keys', () => {
+    const layout = installedLayout();
+    const resolved = resolveHostEnvironment({
+      scriptDir: layout.scripts, runtime: 'claude',
+      env: { CODEX_HOME: '/conflict', SHIPYARD_CODEX_CAPABILITIES_FILE: '/conflict.json', HOME: '/h' },
+    });
+    assert.equal(resolved.runtime, 'claude');
+    assert.equal(resolved.claudeHome, path.join('/h', '.claude'));
+    assert.deepEqual(launchEnvironment(resolved, { PATH: '/bin' }), { PATH: '/bin', SHIPYARD_RUNTIME: 'claude' });
+  });
+
+  it('leaves every other variable untouched in the child environment', () => {
+    const layout = installedLayout();
+    const base = { SHIPYARD_GRAPH_DIR: '/g', SHIPYARD_CODEX_AGENT_DIR: '/a', SHIPYARD_CODEX_LOG_DB: '/l', GSD_X: '1', ZED: 'z' };
+    const env = launchEnvironment(resolve(layout, {}), base);
+    for (const key of Object.keys(base)) assert.equal(env[key], base[key]);
   });
 });
 

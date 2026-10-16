@@ -309,7 +309,65 @@ function readBundleCapabilities(bundleRoot, manifest) {
   return { file, capabilities };
 }
 
-function resolveHostEnvironment({ scriptDir, runtime, env = process.env } = {}) {
+const RESOLVER_CODES = Object.freeze([
+  'ENV_CONFLICT', 'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE',
+]);
+
+function claudeHomeOf(env) {
+  const configured = env && nonEmpty(env.CLAUDE_CONFIG_DIR);
+  if (configured) return configured;
+  return path.join((env && nonEmpty(env.HOME)) || require('os').homedir(), '.claude');
+}
+
+function resolveClaudeHome({ env = process.env } = {}) {
+  return claudeHomeOf(env);
+}
+
+function explicitCodexHome(env, flags) {
+  return nonEmpty(flags && flags.codexHome) || (env && nonEmpty(env.CODEX_HOME)) || null;
+}
+
+function explicitCapabilitiesFile(env, flags) {
+  return nonEmpty(flags && flags.capabilitiesFile)
+    || (env && nonEmpty(env.SHIPYARD_CODEX_CAPABILITIES_FILE)) || null;
+}
+
+function sameFile(candidate, expectedFile, expectedDigest) {
+  const physical = physicalPath(candidate);
+  if (physical && physical === physicalPath(expectedFile)) return true;
+  try {
+    return require('crypto').createHash('sha256').update(fs.readFileSync(candidate)).digest('hex') === expectedDigest;
+  } catch { return false; }
+}
+
+// @contract: a disagreeing explicit home or evidence file refuses; an agreeing one is accepted.
+function checkExplicitSources(env, flags, home, capabilitiesFile, manifest) {
+  const homes = [
+    [flags && nonEmpty(flags.codexHome), '--codex-home'],
+    [env && nonEmpty(env.CODEX_HOME), 'CODEX_HOME'],
+  ];
+  for (const [value, name] of homes) {
+    if (value && (physicalPath(value) || path.resolve(value)) !== home) {
+      throw hostEnvironmentError('ENV_CONFLICT',
+        `${name}=${value} disagrees with the Codex home ${home} of the installed bundle that is running`);
+    }
+  }
+  const files = [
+    [flags && nonEmpty(flags.capabilitiesFile), '--capabilities-file'],
+    [env && nonEmpty(env.SHIPYARD_CODEX_CAPABILITIES_FILE), 'SHIPYARD_CODEX_CAPABILITIES_FILE'],
+  ];
+  for (const [value, name] of files) {
+    if (value && !sameFile(value, capabilitiesFile, manifest.capabilities_digest)) {
+      throw hostEnvironmentError('ENV_CONFLICT',
+        `${name}=${value} disagrees with the capability evidence ${capabilitiesFile} of the installed bundle that is running`);
+    }
+  }
+}
+
+function resolveHostEnvironment({ scriptDir, runtime, env = process.env, flags = {} } = {}) {
+  if (runtime === 'claude') {
+    return Object.freeze({ mode: 'claude', runtime, claudeHome: claudeHomeOf(env) });
+  }
   const source = Object.freeze({ mode: 'source', runtime: runtime || null });
   if (runtime !== 'codex' || typeof scriptDir !== 'string' || !scriptDir) return source;
   const bundleRoot = physicalPath(path.join(scriptDir, '..'));
@@ -317,20 +375,30 @@ function resolveHostEnvironment({ scriptDir, runtime, env = process.env } = {}) 
   const home = path.dirname(bundleRoot);
   const { file: manifestFile, manifest } = readBundleManifest(home, bundleRoot);
   const { file: capabilitiesFile, capabilities } = readBundleCapabilities(bundleRoot, manifest);
-  const exported = env && nonEmpty(env.CODEX_HOME);
-  if (exported && (physicalPath(exported) || path.resolve(exported)) !== home) {
-    throw hostEnvironmentError('ENV_CONFLICT',
-      `CODEX_HOME=${exported} disagrees with the Codex home ${home} of the installed bundle that is running`);
-  }
+  checkExplicitSources(env, flags, home, capabilitiesFile, manifest);
   return Object.freeze({
     mode: 'installed', runtime, home, bundleRoot, manifestFile, manifest, capabilitiesFile, capabilities,
     agentsDir: path.join(home, 'agents'),
   });
 }
 
+function resolveCodexHome({ scriptDir, env = process.env, flags = {} } = {}) {
+  const resolved = resolveHostEnvironment({ scriptDir, runtime: 'codex', env, flags });
+  if (resolved.mode === 'installed') return resolved.home;
+  return explicitCodexHome(env, flags)
+    || path.join((env && nonEmpty(env.HOME)) || require('os').homedir(), '.codex');
+}
+
+// SHIPYARD_GRAPH_DIR, SHIPYARD_CODEX_AGENT_DIR, SHIPYARD_CODEX_LOG_DB and GSD_* keep their owners.
 function launchEnvironment(resolved, baseEnv = process.env) {
   const env = { ...baseEnv };
-  if (resolved && resolved.mode === 'installed') env.CODEX_HOME = resolved.home;
+  if (resolved && resolved.mode === 'installed') {
+    env.CODEX_HOME = resolved.home;
+    env.SHIPYARD_CODEX_CAPABILITIES_FILE = resolved.capabilitiesFile;
+    env.SHIPYARD_RUNTIME = resolved.runtime;
+  } else if (resolved && resolved.mode === 'claude') {
+    env.SHIPYARD_RUNTIME = resolved.runtime;
+  }
   return env;
 }
 
@@ -443,6 +511,9 @@ module.exports = {
   resolveDispatchContext,
   resolveHostEnvironment,
   launchEnvironment,
+  resolveCodexHome,
+  resolveClaudeHome,
+  RESOLVER_CODES,
   reportTransferCapability,
   readInheritedConfig,
 };
