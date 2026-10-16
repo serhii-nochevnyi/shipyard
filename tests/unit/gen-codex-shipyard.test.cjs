@@ -298,6 +298,20 @@ test('the generator writes nothing outside --out and preserves a valid stage on 
   });
 });
 
+test('the manifest records the Codex CLI version, or null when unreadable', () => {
+  withFixture({}, (f) => {
+    assert.strictEqual(generated(f).codex_cli_version, null);
+  });
+  withFixture({}, (f) => {
+    write(f.codexFile, '#!/bin/sh\necho "codex-cli 0.147.0"\n');
+    fs.chmodSync(f.codexFile, 0o755);
+    const r = f.run();
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(json(path.join(f.out, 'manifest.json')).codex_cli_version, '0.147.0');
+    assert.strictEqual(gen.validateCodexBundle(f.out, f.options).codex_cli_version, '0.147.0');
+  });
+});
+
 test('the bundle carries canonical payloads and rewrites installed Shipyard references', () => {
   withFixture({}, (f) => {
     const manifest = generated(f);
