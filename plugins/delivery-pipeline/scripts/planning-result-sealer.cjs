@@ -295,7 +295,8 @@ function writeManifestOnce(file, bytes) {
 
 const ADR_DIRECTORY = '.planning/architecture';
 const ADR_MAX_BYTES = 1024 * 1024;
-const SUBJECT_PATTERN = /^phase=(\d+);repository=([^;]+);adr=([a-f0-9]{64})$/;
+const { REPOSITORY_CLASS, buildSubject } = require('./architecture-target.cjs');
+const SUBJECT_PATTERN = new RegExp(`^phase=(\\d+);repository=(${REPOSITORY_CLASS});adr=([a-f0-9]{64})$`);
 
 function adrRefuse(code, message) {
   const error = new Error(`decomposition-adr: ${message}`);
@@ -347,19 +348,19 @@ function assertAdrUnchanged(worktree, adr) {
 
 function decompositionSubject({ phase, repository, adr }) {
   if (!Number.isSafeInteger(Number(phase)) || Number(phase) < 1) adrRefuse('DECOMPOSITION_SUBJECT_INVALID', 'phase must be a positive integer');
-  if (typeof repository !== 'string' || !repository.trim() || repository.includes(';')) {
-    adrRefuse('DECOMPOSITION_SUBJECT_INVALID', 'repository identity must be non-empty text without ";"');
+  if (typeof repository !== 'string' || !repository.trim() || !new RegExp(`^${REPOSITORY_CLASS}$`).test(repository)) {
+    adrRefuse('DECOMPOSITION_SUBJECT_INVALID', 'repository identity must be non-empty text without ";" or control characters');
   }
   if (!adr || !/^[a-f0-9]{64}$/.test(adr.sha256 || '')) adrRefuse('ADR_REQUIRED', 'decomposition subject needs the ADR digest');
-  return `phase=${Number(phase)};repository=${repository};adr=${adr.sha256}`;
+  return buildSubject('decomposition-seal', { phase: Number(phase), repository, adr: adr.sha256 });
 }
 
-function assertDecompositionSubject(subject, { worktree, repository, adr }) {
+function assertDecompositionSubject(subject, { worktree, repository, adr, acceptedRepositories = [repository] }) {
   const match = SUBJECT_PATTERN.exec(typeof subject === 'string' ? subject : '');
   if (!match) {
     adrRefuse('DECOMPOSITION_SUBJECT_INVALID', `decomposition subject must be phase=<phase>;repository=<repo>;adr=<ADR digest>, got ${JSON.stringify(subject)}`);
   }
-  if (match[2] !== repository) adrRefuse('DECOMPOSITION_SUBJECT_INVALID', 'decomposition subject names a different repository');
+  if (match[2] !== repository && !acceptedRepositories.includes(match[2])) adrRefuse('DECOMPOSITION_SUBJECT_INVALID', 'decomposition subject names a different repository');
   const current = assertAdrUnchanged(worktree, adr);
   if (match[3] !== current.sha256) {
     adrRefuse('ADR_DIGEST_MISMATCH', `decomposition subject carries ADR digest ${match[3]}, but ${adr.path} is ${current.sha256}`);

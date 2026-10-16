@@ -523,7 +523,8 @@ test('planning in-flight admission agrees with the role-scoped run contract', ()
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const { normalizeTicketIdentity } = require(path.join(SCRIPTS, 'run-contract.cjs'));
   const subjects = ['INV-014', `phase=47;input=INV-014;repository=${project}`,
-    `phase=47;input=ADR-025;repository=${project}`, `phase=047;input=ADR-025;repository=${project}`];
+    `phase=47;input=ADR-025;repository=${project}`, `phase=047;input=ADR-025;repository=${project}`,
+    'phase=47;input=ADR-025;repository=/work/my repo/.git'];
   for (const ticket of subjects) {
     for (const role of ['research', 'decomposition', 'executor', 'arch-review', 'integrator', 'pr-sentinel']) {
       const admitted = ticket === 'INV-014' ? ['research', 'decomposition'].includes(role)
@@ -548,7 +549,7 @@ test('planning in-flight admission agrees with the role-scoped run contract', ()
     }
   }
   for (const ticket of ['ADR-025', 'INV-014:risks', 'INV--014', 'phase=47;input=ADR-025;repository=a;b',
-    'phase=47;input=ADR-025;repository=with space', 'phase=0;input=ADR-025;repository=repo',
+    'phase=0;input=ADR-025;repository=repo',
     'phase=47;input=ADR-025;repository=repo\u0000', 'phase=47;input=ADR-025;repository=' + 'a'.repeat(512)]) {
     assert.throws(() => recordInflight({ graphDir: graph, ticket, role: 'decomposition',
       dispatch_id: 'malformed-planning', pid: process.pid, host: 'codex', refreshBoard: false }), /ticket/);
