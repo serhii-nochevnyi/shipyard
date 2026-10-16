@@ -7,7 +7,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
 const { createDurableRecorder } = require('./dispatch-boundary.cjs');
-const { resolveHostEnvironment, launchEnvironment } = require('./runtime-context.cjs');
+const { resolveHostEnvironment, launchEnvironment, resolveCodexHome } = require('./runtime-context.cjs');
 
 const SCHEMA = 'shipyard.codex-runtime-host.v1';
 const VERSION = 1;
@@ -160,6 +160,10 @@ function readCapabilities(file) {
   return parsed;
 }
 
+function codexHomeOf(env) {
+  return path.resolve(resolveCodexHome({ scriptDir: __dirname, env: { ...process.env, ...(env || {}) } }));
+}
+
 function capabilitiesFrom(options = {}) {
   if (Object.prototype.hasOwnProperty.call(options, 'capabilities')
       && options.capabilities !== undefined) {
@@ -167,10 +171,11 @@ function capabilitiesFrom(options = {}) {
     return clone(options.capabilities);
   }
   const explicit = options.capabilitiesFile || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE;
-  if (!explicit) {
-    const installed = resolveHostEnvironment({ scriptDir: __dirname, runtime: 'codex', env: process.env });
-    if (installed.mode === 'installed') return clone(installed.capabilities);
-  }
+  const installed = resolveHostEnvironment({
+    scriptDir: __dirname, runtime: 'codex', env: process.env,
+    flags: { capabilitiesFile: options.capabilitiesFile },
+  });
+  if (installed.mode === 'installed') return clone(installed.capabilities);
   const file = explicit
     || (process.env.CODEX_HOME && path.join(process.env.CODEX_HOME, 'shipyard', 'codex-capabilities.json'));
   if (!file) fail('RUNTIME_CAPABILITY_MISSING', 'explicit Codex capability evidence is required');
@@ -399,7 +404,7 @@ function nativeSessionCandidates(root, sessionId, now = new Date()) {
 
 async function readNativeCodexSession(sessionId, options = {}) {
   const env = options.env && object(options.env) ? options.env : {};
-  const codexHome = env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  const codexHome = codexHomeOf(env);
   const sessionsRoot = path.join(path.resolve(codexHome), 'sessions');
   const deadline = Date.now() + (options.waitMs === undefined ? NATIVE_SESSION_WAIT_MS : options.waitMs);
   let file = null;
@@ -445,7 +450,7 @@ async function readNativeCodexSession(sessionId, options = {}) {
 
 async function readNativeCodexChild(parentId, role, model, effort, agent, spawnEvidence, options = {}) {
   const env = options.env && object(options.env) ? options.env : {};
-  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const home = codexHomeOf(env);
   const root = path.join(home, 'sessions');
   const deadline = Date.now() + (options.waitMs === undefined ? NATIVE_SESSION_WAIT_MS : options.waitMs);
   do {
@@ -734,7 +739,7 @@ function generatedInstructions(content) {
 
 function installedGsdAgent(role, env = {}) {
   if (!GSD_ROLES.has(role)) fail('INVALID_INPUT', 'unsupported typed GSD role');
-  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const home = codexHomeOf(env);
   const file = path.join(home, 'agents', role + '.toml');
   let stat;
   let content;
@@ -888,7 +893,7 @@ function completionMessage(raw) {
 }
 
 function readNativeParentRaw(sessionId, evidence, env, now) {
-  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const home = codexHomeOf(env);
   const files = nativeSessionCandidates(path.join(home, 'sessions'), sessionId, now);
   if (files.length !== 1 || path.basename(files[0]) !== evidence.file) {
     fail('RUNTIME_EVIDENCE_MISSING', 'native parent transcript cannot be rebound to session evidence');
@@ -1503,7 +1508,7 @@ function readReviewNativeFile(file, worktree, live = false) {
 }
 
 function originalReviewFile(sessionId, env, worktree, live = false) {
-  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const home = codexHomeOf(env);
   const matches = nativeSessionCandidates(path.join(home, 'sessions'), sessionId);
   if (!matches.length) return null;
   if (matches.length !== 1) fail('REVIEW_RESTART_REQUIRED', 'original review session is ambiguous');
@@ -2382,7 +2387,7 @@ function liveReviewChild(parentRaw, parentId, launch, env, worktree) {
   if (at < 0) return null;
   const parentPrefix = complete.split('\n').filter(Boolean).slice(0, at + 1).join('\n') + '\n';
   const spawn = parseNativeParentSpawn(parentPrefix, parentId, launch.agent.role, launch.model, launch.effort, true);
-  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const home = codexHomeOf(env);
   const matches = [];
   for (const offset of [-1, 0, 1]) {
     const date = new Date(); date.setDate(date.getDate() + offset);
@@ -2893,7 +2898,7 @@ function createCodexCliLauncher(options = {}) {
         const physical = { exit_code: exit.code ?? null, signal: exit.signal ?? null, transcript: historical,
           elapsed_ms: Date.now() - startedAt, native: null, unavailable_reasons: {} };
         try {
-          const home = env.CODEX_HOME || path.join(os.homedir(), '.codex');
+          const home = codexHomeOf(env);
           const candidates = nativeSessionCandidates(path.join(home, 'sessions'), announcedSessionId, new Date());
           if (candidates.length !== 1) throw new Error('native session is missing or ambiguous');
           const raw = readReviewNativeFile(fs.realpathSync(candidates[0]), scope.worktree);
@@ -3212,8 +3217,7 @@ function createCodexRuntimeHost(options = {}) {
     spawn: options.spawn,
     env: options.env,
     capabilities,
-    transcriptDir: options.transcriptDir || path.join(options.env?.CODEX_HOME || process.env.CODEX_HOME
-      || path.join(os.homedir(), '.codex'), 'shipyard', 'transcripts', reviewHash(scope.worktree)),
+    transcriptDir: options.transcriptDir || path.join(codexHomeOf(options.env), 'shipyard', 'transcripts', reviewHash(scope.worktree)),
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
     additionalProtectedPaths: options.additionalProtectedPaths,
@@ -3580,7 +3584,7 @@ function createCodexRuntimeHost(options = {}) {
     try {
       const boundaryModule = require('./dispatch-boundary.cjs');
       const adapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
-        agentsDir: options.agentDir || path.join(options.env?.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents'),
+        agentsDir: options.agentDir || path.join(codexHomeOf(options.env), 'agents'),
         agentManifest: options.agentManifest, capabilities,
         host: { requireRuntimeEvidence: true, async launchStatic(applied, context) {
           assertOwner();
@@ -3741,10 +3745,20 @@ function parseCliArguments(argv) {
   return Object.freeze(values);
 }
 
+function emitProbeHint(probe) {
+  if (!probe || probe.status !== 'unavailable') return;
+  const code = probe.reason === 'capability_evidence_missing' || probe.reason === 'RUNTIME_CAPABILITY_MISSING'
+    ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
+  const { formatHint } = require('./refusal-hints.cjs');
+  process.stderr.write(formatHint(code, { host: 'codex-runtime-host.cjs', reason: probe.reason }) + '\n');
+}
+
 if (require.main === module) {
   try {
     const args = parseCliArguments(process.argv.slice(2));
-    process.stdout.write(JSON.stringify(probeCodexRuntime(args)) + '\n');
+    const probe = probeCodexRuntime(args);
+    process.stdout.write(JSON.stringify(probe) + '\n');
+    emitProbeHint(probe);
   } catch (error) {
     process.stdout.write(JSON.stringify({
       schema: 'shipyard.codex-runtime-probe.v1',
@@ -3753,6 +3767,7 @@ if (require.main === module) {
       reason: error.code || 'probe_failed',
       detail: error.message,
     }) + '\n');
+    emitProbeHint({ status: 'unavailable', reason: error.code || 'probe_failed' });
     process.exitCode = 0;
   }
 }
