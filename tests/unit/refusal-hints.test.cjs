@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { HINTS, hintFor, formatHint } = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs');
+const { HINTS, LAUNCH_CODES, hintFor, formatHint } = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs');
 
 const REQUIRED_CODES = [
   'REFERENCE_UNAVAILABLE', 'INVALID_INPUT', 'UNSUPPORTED_ROLE', 'SCOPE_MISMATCH',
@@ -103,6 +103,40 @@ test('the Codex config-fix and generated-agent-fix causes are registered and for
   assert.match(HINTS.CODEX_CONFIG_FIX.remedy, /\.planning\/config\.json/);
   assert.match(HINTS.CODEX_CONFIG_FIX.remedy, /gsd-tune\.cjs --runtime codex/);
   assert.doesNotMatch(HINTS.CODEX_CONFIG_FIX.remedy, /install-shipyard-codex/);
-  assert.match(HINTS.CODEX_GENERATED_AGENT_FIX.remedy, /install-shipyard-codex/);
+  assert.match(HINTS.CODEX_GENERATED_AGENT_FIX.remedy, /codex plugin marketplace upgrade shipyard/);
   assert.doesNotMatch(HINTS.CODEX_GENERATED_AGENT_FIX.remedy, /gsd-tune\.cjs/);
+});
+
+test('every launch code has a frozen entry, including the warning-only codes', () => {
+  for (const code of [...LAUNCH_CODES, 'CAPABILITY_SNAPSHOT_AGED', 'LEGACY_HISTORY_MISSING']) {
+    assert.ok(LAUNCH_CODES.includes(code), `LAUNCH_CODES missing ${code}`);
+    assert.ok(Object.hasOwn(HINTS, code), `HINTS missing ${code}`);
+    assert.ok(Object.isFrozen(HINTS[code]));
+    assert.ok(HINTS[code].hint.trim() && HINTS[code].remedy.trim());
+  }
+});
+
+test('formatHint substitutes supplied tokens, defaults {bundle}, and leaves others visible', () => {
+  assert.match(formatHint('ENV_CONFLICT', { explicit: 'A', bundle_value: 'B' }), /names A but the installed bundle is B/);
+  const bundle = path.resolve(SCRIPTS_DIR, '..');
+  assert.ok(formatHint('CODEX_CONFIG_FIX').includes(`node ${bundle}/scripts/gsd-tune.cjs`));
+  assert.ok(formatHint('CODEX_CONFIG_FIX').includes('{key}'));
+  assert.ok(formatHint('CODEX_CONFIG_FIX', { bundle: '/x', key: 'k' }).includes('Fix k in .planning/config.json, then run: node /x/scripts/gsd-tune.cjs'));
+});
+
+test('no remedy in the whole map is checkout-relative or a bypass', () => {
+  for (const entry of [...Object.values(HINTS), hintFor(undefined)]) {
+    const r = entry.remedy;
+    assert.doesNotMatch(r, /make |plugins\/delivery-pipeline\/|install-shipyard-|ensure-gsd-core/);
+    assert.doesNotMatch(r, /(?<!\{bundle\}\/)scripts[/]/);
+    assert.doesNotMatch(r, BYPASS_TOKENS);
+  }
+});
+
+test('remedies touching history or authority never suggest deleting or moving it', () => {
+  for (const entry of Object.values(HINTS)) {
+    if (/provenance|history|sidecar|catalogue|authority/i.test(entry.remedy)) {
+      assert.doesNotMatch(entry.remedy, /\b(delete|remove|archive|move|rename|purge|clean)/i);
+    }
+  }
 });
