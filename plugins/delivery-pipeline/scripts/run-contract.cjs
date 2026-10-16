@@ -223,16 +223,19 @@ function normalizePhaseIdentity(input) {
 
 function normalizeTicketIdentity(input, { role, phase } = {}) {
   const ticket = object(input) ? input.ticket : input;
-  const value = safeId(ticket, 'ticket');
+  const isSubject = typeof ticket === 'string' && ticket.startsWith('phase=');
+  const value = isSubject ? safeString(ticket, 'ticket', { whitespace: true }) : safeId(ticket, 'ticket');
+  const target = isSubject ? require('./architecture-target.cjs') : null;
   const ticketId = /^T-[A-Z0-9][A-Z0-9._-]*$/i.test(value);
-  const subject = value.match(/^phase=(\d+)-[A-Z0-9][A-Z0-9._-]*;repository=[^;\s]+;tickets=[a-f0-9]{64}$/i);
-  const aggregate = role === 'arch-review' && require('./architecture-target.cjs').PHASE_SUBJECT.exec(value);
+  const integratorSubject = target && target.parseSubject('integrator', value);
+  const subject = integratorSubject && [value, integratorSubject.phase.split('-')[0]];
+  const aggregate = role === 'arch-review' && target && target.PHASE_SUBJECT.exec(value);
   const phaseSubject = (role === 'integrator' && subject && Number(subject[1]) === Number(phase))
     || (aggregate && Number(aggregate[1].split('-')[0]) === Number(phase));
   const investigation = /^INV-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(value);
-  const planningInput = value.match(/^phase=(\d+);input=((?:INV|ADR)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*);repository=[^;\s]+$/);
+  const planningInput = target && target.parseSubject('planning-input', value);
   const planningSubject = role === 'decomposition' && planningInput
-    && Number(planningInput[1]) === Number(phase);
+    && Number(planningInput.phase) === Number(phase);
   const investigationSubject = investigation && ['research', 'decomposition'].includes(role);
   if (!ticketId && !phaseSubject && !investigationSubject && !planningSubject) {
     refuse('INVALID_INPUT', `ticket ${value} must use the T-... identifier form`, { ticket: value });
