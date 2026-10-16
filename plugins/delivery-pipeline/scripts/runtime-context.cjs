@@ -389,7 +389,7 @@ function resolveCodexHome({ scriptDir, env = process.env, flags = {} } = {}) {
     || path.join((env && nonEmpty(env.HOME)) || require('os').homedir(), '.codex');
 }
 
-// SHIPYARD_GRAPH_DIR, SHIPYARD_CODEX_AGENT_DIR, SHIPYARD_CODEX_LOG_DB and GSD_* keep their owners.
+// @contract: only the Codex home, capability path and runtime are set; every other key is copied untouched.
 function launchEnvironment(resolved, baseEnv = process.env) {
   const env = { ...baseEnv };
   if (resolved && resolved.mode === 'installed') {
