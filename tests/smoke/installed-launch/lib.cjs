@@ -192,8 +192,8 @@ function runHost(fixture, script, args, extraEnv = {}) {
 }
 
 function launchLabels(stderr) {
-  const labels = [...stderr.matchAll(/hint\[([A-Za-z0-9_]+)\]/g)].map((match) => match[1]);
-  if (/key is malformed|changed while reading/.test(stderr)) labels.push('ARCHIVE_AUTHORITY_INVALID');
+  // @invariant: only a printed hint[CODE] names a refusal; raw error text and hint[UNKNOWN] never do.
+  const labels = [...stderr.matchAll(/hint\[([A-Za-z0-9_]+)\]/g)].map((match) => match[1]).filter((label) => label !== 'UNKNOWN');
   return [...new Set(labels)];
 }
 
