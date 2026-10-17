@@ -16,7 +16,7 @@ const archReviewContext = require('./codex-arch-review-context.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
-const { acceptedRepositoryValues } = require('./architecture-target.cjs');
+const { acceptedRepositoryValues, GIT_SCOPE_KEYS } = require('./architecture-target.cjs');
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
 const { newDispatchId, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createVerificationRunner } = require('./command-runner.cjs');
@@ -146,7 +146,7 @@ function inflightGraphDir(options, worktree) {
 
 function git(worktree, args) {
   const env = { ...process.env };
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) delete env[key];
+  for (const key of GIT_SCOPE_KEYS) delete env[key];
   try {
     return execFileSync('git', ['-C', worktree, ...args], {
       encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,

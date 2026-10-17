@@ -11,7 +11,8 @@ process.on('exit', () => {
   os.homedir = originalHomedir;
   fs.rmSync(authorityHome,{recursive:true,force:true});
 });
-const { resolveIntegrationBranch, architectureTarget, phaseBinding, PHASE_SUBJECT, buildSubject, parseSubject } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+const { resolveIntegrationBranch, architectureTarget, phaseBinding, PHASE_SUBJECT, buildSubject, parseSubject,
+  repositoryIdentity, acceptedRepositoryValues } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 
 test('configuration wins for the project; foreign repositories keep their own default', () => {
   const config = { git: { base_branch: 'develop' } };
@@ -53,6 +54,34 @@ test('subject repositories allow spaces but refuse the delete control character'
   assert.equal(parseSubject('planning-input', subject).repository, '/work/my repo/.git');
   assert.throws(() => buildSubject('planning-input', { ...fields, repository: '/work/my\x7frepo/.git' }), /repository/);
   assert.equal(parseSubject('planning-input', subject.replace('my repo', 'my\x7frepo')), null);
+});
+
+test('repository identity ignores an inherited git scope pointing at another repository', () => {
+  const { execFileSync } = require('node:child_process');
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-git-env-')));
+  const make = (name, remote) => {
+    const dir = path.join(base, name);
+    fs.mkdirSync(dir);
+    execFileSync('git', ['-C', dir, 'init', '-q']);
+    execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', remote]);
+    return dir;
+  };
+  const saved = Object.fromEntries(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE'].map(key => [key, process.env[key]]));
+  try {
+    const mine = make('mine', 'https://github.com/Acme/Mine.git');
+    const other = make('other', 'https://github.com/Acme/Other.git');
+    const expected = path.join(mine, '.git');
+    assert.equal(repositoryIdentity(mine), expected);
+    process.env.GIT_DIR = path.join(other, '.git');
+    process.env.GIT_COMMON_DIR = path.join(other, '.git');
+    process.env.GIT_WORK_TREE = other;
+    process.env.GIT_INDEX_FILE = path.join(other, '.git', 'index');
+    assert.equal(repositoryIdentity(mine), expected);
+    assert.deepEqual(acceptedRepositoryValues(mine), [expected, 'acme/mine']);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test('public phase builder reports empty selections as structured build refusals', () => {
