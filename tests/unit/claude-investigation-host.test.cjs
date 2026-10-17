@@ -65,3 +65,40 @@ test('spawning with a caller-supplied host module still refuses with the pinned 
   const lines = result.stderr.split('\n');
   assert.match(lines[1], /^hint\[INVALID_HOST\]: /);
 });
+
+test('investigation --preflight returns the same result as the delivery host and starts nothing', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-preflight-')));
+  const home = path.join(root, 'home');
+  const bin = path.join(root, 'bin');
+  const project = path.join(root, 'project');
+  fs.mkdirSync(home);
+  fs.mkdirSync(bin);
+  fs.mkdirSync(path.join(project, '.planning', 'graph', 'provenance'), { recursive: true });
+  spawnSync('git', ['init', '-q', project]);
+  fs.writeFileSync(path.join(project, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {} }));
+  fs.writeFileSync(path.join(project, '.planning', 'graph', 'provenance', 'one.json'), '{}');
+  fs.symlinkSync('one.json', path.join(project, '.planning', 'graph', 'provenance', 'link.json'));
+  const help = ['--model', '--effort', '--output-format', 'stream-json', '--session-id', '--permission-mode',
+    '--permission-prompts', '--allowedTools', '--tools', '--restricted', '--strict-mcp-config', '--settings',
+    '--setting-sources', '--agent', '--agents'].join(' ');
+  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo "9.9.9";;
+  --help) echo "${help}";;
+  auth) echo '{"loggedIn":true}';;
+esac
+`, { mode: 0o755 });
+  const env = { ...process.env, HOME: home, SHIPYARD_GRAPH_DIR: path.join(project, '.planning', 'graph'), PATH: `${bin}:${process.env.PATH}` };
+  const delivery = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+  try {
+    const viaInvestigation = spawnSync(process.execPath, [SCRIPT_PATH, '--preflight'], { encoding: 'utf8', cwd: project, env, timeout: 30000 });
+    const viaDelivery = spawnSync(process.execPath, [delivery, '--preflight'], { encoding: 'utf8', cwd: project, env, timeout: 30000 });
+    assert.equal(viaInvestigation.status, 1, viaInvestigation.stderr);
+    assert.equal(viaInvestigation.status, viaDelivery.status);
+    assert.equal(viaInvestigation.stdout, viaDelivery.stdout);
+    assert.match(viaInvestigation.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+    assert.equal(fs.existsSync(path.join(home, '.local')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

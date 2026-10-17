@@ -1,5 +1,11 @@
 'use strict';
 
+const path = require('node:path');
+
+const BUNDLE_ROOT = path.resolve(__dirname, '..');
+
+const UPGRADE = 'Claude: claude plugin install shipyard@shipyard; Codex: codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard';
+
 const DEFAULT_ENTRY = Object.freeze({
   hint: 'The host refused the request for a reason this map does not name.',
   remedy: 'Re-run the command and check the surrounding stderr for the underlying cause.',
@@ -8,7 +14,7 @@ const DEFAULT_ENTRY = Object.freeze({
 const HINTS = Object.freeze({
   REFERENCE_UNAVAILABLE: Object.freeze({
     hint: 'A trusted GSD reference file is missing, unreadable, or not a bounded regular file.',
-    remedy: 'Reinstall the GSD core: run bash scripts/ensure-gsd-core.sh claude, or make install-shipyard-claude-hook, then re-run.',
+    remedy: `Reinstall the plugin from the marketplace (${UPGRADE}), then re-run.`,
   }),
   INVALID_INPUT: Object.freeze({
     hint: 'The request does not match the shape this host requires.',
@@ -52,11 +58,11 @@ const HINTS = Object.freeze({
   }),
   RUNTIME_UNAVAILABLE: Object.freeze({
     hint: 'The runtime this host needs is not reachable right now.',
-    remedy: 'Install and authenticate the runtime, then re-run.',
+    remedy: `Run node {bundle}/scripts/{host} --preflight to see the specific cause: a missing CLI needs installing and authenticating, an outdated CLI whose help lacks a required option needs the CLI itself upgraded (Codex CLI for the Codex host, Claude Code for the Claude host; reinstalling Shipyard does not change that), missing or stale capability evidence needs the marketplace upgrade (${UPGRADE}), then re-run.`,
   }),
   STALE_GENERATED_AGENT: Object.freeze({
     hint: 'The installed GSD agent definition no longer matches the current policy.',
-    remedy: 'Reinstall the generated agents: run make install-shipyard-codex, then re-run.',
+    remedy: 'Upgrade the installed bundle: run codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard, then re-run.',
   }),
   UNSUPPORTED_SELECTION: Object.freeze({
     hint: 'The resolved model and effort selection is not one the runtime host supports.',
@@ -64,23 +70,213 @@ const HINTS = Object.freeze({
   }),
   CODEX_CONFIG_FIX: Object.freeze({
     hint: 'The Codex launch was refused by a project or host configuration value, not a missing or stale install.',
-    remedy: 'Fix {key} in .planning/config.json, then run: node plugins/delivery-pipeline/scripts/gsd-tune.cjs --runtime codex --apply.',
+    remedy: 'Fix {key} in .planning/config.json, then run: node {bundle}/scripts/gsd-tune.cjs --runtime codex --apply.',
   }),
   CODEX_GENERATED_AGENT_FIX: Object.freeze({
     hint: 'The Codex launch was refused because the generated agent definition is missing or stale.',
-    remedy: 'Install an ADR-014-capable Codex host and regenerate agents with install-shipyard-codex.sh --phase 2; provide current host capabilities and retry the exact selection.',
+    remedy: 'Install an ADR-014-capable Codex host by running codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard; provide current host capabilities and retry the exact selection.',
+  }),
+  ARCHIVE_AUTHORITY_INVALID: Object.freeze({
+    hint: 'The archive authority record is malformed or does not match this run.',
+    remedy: 'Re-run from the same installed bundle that created it; if it persists, run node {bundle}/scripts/{host} --preflight and report its output.',
+  }),
+  ARCHIVE_AUTHORITY_REQUIRED: Object.freeze({
+    hint: 'The operation needs an archive authority that was not supplied.',
+    remedy: 'Re-run through the documented host entry so it supplies the authority, then retry.',
+  }),
+  ARCHIVE_AUTHORITY_BUSY: Object.freeze({
+    hint: 'Another session holds the archive authority (owner pid {pid}).',
+    remedy: "Wait for the other session to finish and re-run; a process that reused a crashed owner's pid must end first.",
+  }),
+  RUNTIME_CAPABILITY_MISSING: Object.freeze({
+    hint: 'The runtime host has no capability evidence for the requested selection.',
+    remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). If the runtime CLI itself reports an unsupported option, upgrade that CLI instead. Then retry.`,
+  }),
+  LEGACY_WRITER_STATE: Object.freeze({
+    hint: 'A planning writer state file was written by an older layout.',
+    remedy: `Upgrade the installed bundle (${UPGRADE}) and re-run.`,
+  }),
+  UNKNOWN_RUNTIME: Object.freeze({
+    hint: 'The runtime could not be recognised from the environment.',
+    remedy: 'Run from inside the Claude or Codex host session, or pass the runtime explicitly, then re-run.',
+  }),
+  AMBIGUOUS_RUNTIME: Object.freeze({
+    hint: 'More than one runtime was detected and the host cannot choose.',
+    remedy: "Run the host from the matching runtime's session, or unset the conflicting runtime marker named in the finding detail; an explicit runtime argument does not override a conflicting marker. Then re-run.",
+  }),
+  INVALID_STORE: Object.freeze({
+    hint: 'The run store content does not match the expected schema.',
+    remedy: 'Run node {bundle}/scripts/{host} --preflight and report its output; the store is left untouched.',
+  }),
+  ADR_REQUIRED: Object.freeze({
+    hint: 'Decomposition needs an accepted ADR that was not named.',
+    remedy: 'Name the accepted ADR in the request and re-run.',
+  }),
+  ADR_PATH_INVALID: Object.freeze({
+    hint: 'The named ADR path is not a valid in-repository path.',
+    remedy: 'Fix the ADR path in the request to a repository-relative file and re-run.',
+  }),
+  ADR_UNAVAILABLE: Object.freeze({
+    hint: 'The named ADR cannot be read.',
+    remedy: 'Check the ADR path exists and is readable, then re-run.',
+  }),
+  ADR_CHANGED: Object.freeze({
+    hint: 'The ADR changed after it was bound to this decomposition.',
+    remedy: 'Re-run the decomposition so it binds the current ADR.',
+  }),
+  ADR_DIGEST_MISMATCH: Object.freeze({
+    hint: 'The ADR digest does not match the bound digest.',
+    remedy: 'Re-run the decomposition so it binds the current ADR digest.',
+  }),
+  DECOMPOSITION_SUBJECT_INVALID: Object.freeze({
+    hint: 'The decomposition subject does not match the required shape.',
+    remedy: 'Fix the subject fields to match the documented schema and re-run.',
+  }),
+  ENV_CONFLICT: Object.freeze({
+    hint: 'The environment names {explicit} but the installed bundle is {bundle_value}.',
+    remedy: `Either unset the variable, or reinstall into the named home (${UPGRADE}) so both agree.`,
+  }),
+  BUNDLE_MANIFEST_INVALID: Object.freeze({
+    hint: 'The installed bundle manifest is missing or invalid.',
+    remedy: `Upgrade the installed bundle (${UPGRADE}), then run node {bundle}/scripts/{host} --preflight.`,
+  }),
+  CAPABILITY_EVIDENCE_STALE: Object.freeze({
+    hint: 'The capability evidence is older than the installed policy.',
+    remedy: `Upgrade the installed bundle (${UPGRADE}), then run node {bundle}/scripts/{host} --preflight.`,
+  }),
+  CAPABILITY_SNAPSHOT_AGED: Object.freeze({
+    hint: 'Warning: the capability snapshot is aged but still usable.',
+    remedy: 'Run node {bundle}/scripts/{host} --preflight to refresh it when convenient.',
+  }),
+  LEGACY_HISTORY_UNSAFE: Object.freeze({
+    hint: 'The legacy history at {path} cannot be adopted safely.',
+    remedy: 'Leave the history in place and report it; adoption stays blocked until the host that wrote it is updated.',
+  }),
+  LEGACY_HISTORY_CHANGED: Object.freeze({
+    hint: 'The legacy history at {path} changed during adoption.',
+    remedy: 'Wait for the other writer to finish, then re-run; the history is left as it is.',
+  }),
+  LEGACY_HISTORY_UNKNOWN_MEMBER: Object.freeze({
+    hint: 'The legacy history at {path} contains a member this host does not know.',
+    remedy: `Update the host that wrote the file (${UPGRADE}), then re-run.`,
+  }),
+  LEGACY_HISTORY_COLLISION: Object.freeze({
+    hint: 'Adopting the legacy history at {path} would collide with existing content.',
+    remedy: 'Leave both in place and report the collision; adoption stays blocked.',
+  }),
+  LEGACY_HISTORY_MISSING: Object.freeze({
+    hint: 'Warning: the expected legacy history at {path} was not found.',
+    remedy: 'Continue if this project has no earlier history; otherwise re-run from the original checkout location.',
+  }),
+  REPOSITORY_IDENTITY_INVALID: Object.freeze({
+    hint: 'The repository identity could not be established.',
+    remedy: 'Check that git can resolve the common directory of this worktree and that its real path contains no ";" or control character, then re-run.',
   }),
 });
+
+const LAUNCH_CODES = Object.freeze(["ARCHIVE_AUTHORITY_INVALID", "ARCHIVE_AUTHORITY_REQUIRED", "ARCHIVE_AUTHORITY_BUSY", "RUNTIME_CAPABILITY_MISSING", "LEGACY_WRITER_STATE", "UNKNOWN_RUNTIME", "AMBIGUOUS_RUNTIME", "INVALID_STORE", "ADR_REQUIRED", "ADR_PATH_INVALID", "ADR_UNAVAILABLE", "ADR_CHANGED", "ADR_DIGEST_MISMATCH", "DECOMPOSITION_SUBJECT_INVALID", "ENV_CONFLICT", "BUNDLE_MANIFEST_INVALID", "CAPABILITY_EVIDENCE_STALE", "CAPABILITY_SNAPSHOT_AGED", "LEGACY_HISTORY_UNSAFE", "LEGACY_HISTORY_CHANGED", "LEGACY_HISTORY_UNKNOWN_MEMBER", "LEGACY_HISTORY_COLLISION", "LEGACY_HISTORY_MISSING", "REPOSITORY_IDENTITY_INVALID", "REFERENCE_UNAVAILABLE", "RUNTIME_UNAVAILABLE", "STALE_GENERATED_AGENT", "CODEX_CONFIG_FIX", "CODEX_GENERATED_AGENT_FIX"]);
 
 function hintFor(code) {
   if (typeof code === 'string' && Object.hasOwn(HINTS, code)) return HINTS[code];
   return DEFAULT_ENTRY;
 }
 
-function formatHint(code) {
-  const label = typeof code === 'string' && code.trim() ? code : 'UNKNOWN';
-  const entry = hintFor(code);
-  return `hint[${label}]: ${entry.hint} — remedy: ${entry.remedy}`;
+const CONTROL = /[\u0000-\u001f\u007f]/g;
+
+const TOKEN_FALLBACKS = Object.freeze({
+  host: 'the host script',
+  pid: 'unknown',
+  explicit: 'an explicitly named home',
+  bundle_value: 'a different home',
+  path: 'an unreported path',
+  label: 'unknown',
+  key: 'the refused key',
+  bundle: BUNDLE_ROOT,
+});
+
+// @invariant: a rendered hint never carries a raw placeholder or a control character.
+function stripControl(value) {
+  return String(value).replace(CONTROL, '');
 }
 
-module.exports = Object.freeze({ HINTS, hintFor, formatHint });
+const SAFE_SHELL_WORD = /^[A-Za-z0-9_@%+=:,./-]+$/;
+const COMMAND_PATH_TOKENS = new Set(['bundle', 'host']);
+
+// @security: a path substituted into a copy-paste command is single-quoted unless it is plainly safe.
+function shellQuote(value) {
+  return SAFE_SHELL_WORD.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function fillText(text, vars, quoted = false) {
+  const supplied = vars && typeof vars === 'object' ? vars : {};
+  return text.replace(/\{(\w+)\}/g, (token, name) => {
+    const value = Object.hasOwn(supplied, name) ? supplied[name] : undefined;
+    if (value !== undefined && value !== null && value !== '') {
+      const clean = stripControl(value);
+      return quoted && COMMAND_PATH_TOKENS.has(name) ? shellQuote(clean) : clean;
+    }
+    if (!Object.hasOwn(TOKEN_FALLBACKS, name)) return 'unspecified';
+    return quoted && name === 'bundle' ? shellQuote(TOKEN_FALLBACKS[name]) : TOKEN_FALLBACKS[name];
+  });
+}
+
+function renderRemedy(code, vars) {
+  return fillText(hintFor(code).remedy, vars, true);
+}
+
+function formatHint(code, vars) {
+  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
+  const entry = hintFor(code);
+  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(entry.remedy, vars, true)}`;
+}
+
+const PREFLIGHT_HOSTS = Object.freeze(['codex-delivery-host.cjs', 'codex-decompose-host.cjs', 'codex-planning-context-host.cjs',
+  'claude-delivery-host.cjs', 'claude-role-host.cjs', 'claude-decompose-host.cjs', 'claude-investigation-host.cjs']);
+const DETAIL_TOKENS = Object.freeze(['pid', 'path', 'label', 'key', 'explicit', 'bundle_value']);
+const PREFLIGHT_COMMAND = 'node {bundle}/scripts/{host} --preflight';
+const DELIVERY_PREFLIGHT_PROSE = "the runtime's delivery host with --preflight (claude-delivery-host.cjs or codex-delivery-host.cjs in {bundle}/scripts)";
+const PLANNING_PATH_IN_MESSAGE = /(?:^|\s)(\.planning\/.*?)(?:: |$)/;
+
+function scalar(value) {
+  return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)) ? String(value) : undefined;
+}
+
+function errorVars(error) {
+  const source = error && typeof error === 'object' ? error : {};
+  const vars = {};
+  for (const bag of [source.details, source.vars]) {
+    if (!bag || typeof bag !== 'object') continue;
+    for (const token of DETAIL_TOKENS) {
+      const value = scalar(bag[token]);
+      if (value !== undefined && value !== '') vars[token] = value;
+    }
+    const bundle = scalar(bag.bundle);
+    if (bundle) vars.bundle = bundle;
+  }
+  if (vars.path === undefined && typeof source.code === 'string' && source.code.startsWith('LEGACY_HISTORY_')) {
+    const found = PLANNING_PATH_IN_MESSAGE.exec(String(source.message || ''));
+    if (found) vars.path = found[1];
+  }
+  return vars;
+}
+
+function preflightHostName(host) {
+  const candidate = host === undefined ? process.argv[1] : host;
+  if (typeof candidate !== 'string' || !candidate) return null;
+  const name = path.basename(candidate);
+  return PREFLIGHT_HOSTS.includes(name) ? name : null;
+}
+
+// @contract: renders a preflight-style hint with the error's own pid or path and a host that has --preflight.
+function hintForError(error, host) {
+  const code = error && error.code;
+  const vars = errorVars(error);
+  const name = preflightHostName(host);
+  if (name) return formatHint(code, { ...vars, host: name });
+  const entry = hintFor(code);
+  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
+  const remedy = entry.remedy.split(PREFLIGHT_COMMAND).join(DELIVERY_PREFLIGHT_PROSE);
+  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(remedy, vars, true)}`;
+}
+
+module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, hintForError, renderRemedy, stripControl });

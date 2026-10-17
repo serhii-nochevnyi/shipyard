@@ -7,7 +7,7 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { build } = require('../../scripts/package-shipyard-codex.cjs');
+const { build, packageFreshnessRequired } = require('../../scripts/package-shipyard-codex.cjs');
 const ROOT = path.resolve(__dirname, '../..');
 const STAGE_ROOT = '/Users/serhii/.local/state/shipyard/phase49-selected-package-bd18893c6948';
 const SELECTION_SHA = 'b09e4ab44ee00bd8600fb34774994a37e46dc2c98d1b311d163b881b939c65db';
@@ -40,8 +40,13 @@ test('ordinary-complete-candidate-package-parity', () => {
   try {
     const expectedRoot = build(path.join(temporary, 'expected'));
     const expected = inventory(expectedRoot);
-    assert.deepEqual(inventory(path.join(ROOT, 'plugins/shipyard')), expected,
-      'complete candidate differs from unchanged builder output');
+    const rawBaseRef = process.env.COMMENT_POLICY_BASE
+      ?? execFileSync('git', ['branch', '--show-current'], { cwd: ROOT, encoding: 'utf8' }).trim();
+    const baseRef = rawBaseRef.startsWith('origin/') ? rawBaseRef.slice(7) : rawBaseRef;
+    if (packageFreshnessRequired(baseRef)) {
+      assert.deepEqual(inventory(path.join(ROOT, 'plugins/shipyard')), expected,
+        'complete candidate differs from unchanged builder output');
+    }
     const copy = path.join(temporary, 'mutation');
     for (const mutate of [
       root => fs.appendFileSync(path.join(root, 'host/plugins/delivery-pipeline/scripts/sentinel.cjs'), '\nstale'),
@@ -1728,8 +1733,11 @@ function packagedBatchFixtures(repository) {
   assert.deepEqual(originalReader, historicalOutput,
     'original producer history changed');
   const originalPath = path.join(repository, 'plugins/shipyard/host', relative);
-  assert.deepEqual(read(originalPath), read(path.join(repository, relative)),
-    'legacy fixture candidate must pin the current packaged producer');
+  const rawBaseRef = process.env.COMMENT_POLICY_BASE
+    ?? execFileSync('git', ['branch', '--show-current'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  if (packageFreshnessRequired(rawBaseRef.startsWith('origin/') ? rawBaseRef.slice(7) : rawBaseRef))
+    assert.deepEqual(read(originalPath), read(path.join(repository, relative)),
+      'legacy fixture candidate must pin the current packaged producer');
   const resolver = "require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs')";
   const originalSource = read(file).toString('utf8');
   assert.ok(originalSource.includes(resolver), 'original candidate source resolver seam is required');

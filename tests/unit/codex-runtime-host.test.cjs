@@ -523,6 +523,94 @@ test('probe requires the real CLI surface and explicit host capability evidence'
   assert.equal(missing.reason, 'capability_evidence_missing');
 });
 
+const HOST_SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+
+function runCapabilityOnly(script, env, extra = []) {
+  const { spawnSync: spawn } = require('node:child_process');
+  const result = spawn(process.execPath, [script, '--capability-only', ...extra], { encoding: 'utf8', env });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function fakeCodex(root) {
+  const file = path.join(root, 'codex');
+  fs.writeFileSync(file, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "codex-cli 0.155.1"; else echo "--json --model --config --cd --ignore-user-config"; fi\n', { mode: 0o755 });
+  return file;
+}
+
+function installedBundle(root) {
+  const { codexCapabilities } = require('../smoke/installed-launch/lib.cjs');
+  const home = path.join(root, 'codex-home');
+  const bundle = path.join(home, 'shipyard');
+  fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
+  fs.cpSync(path.dirname(HOST_SCRIPT), path.join(bundle, 'scripts'), { recursive: true });
+  const evidence = Buffer.from(JSON.stringify(codexCapabilities()));
+  fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
+  fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify({
+    phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
+    capabilities_digest: crypto.createHash('sha256').update(evidence).digest('hex'),
+  }));
+  return { home, script: path.join(bundle, 'scripts', 'codex-runtime-host.cjs') };
+}
+
+test('--capability-only explains missing evidence on stderr, exits 0 and keeps stdout JSON', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-capability-only-')));
+  try {
+    const executable = fakeCodex(root);
+    const missing = runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root }, ['--executable', executable]);
+    assert.equal(missing.status, 0);
+    assert.equal(JSON.parse(missing.stdout).status, 'unavailable');
+    assert.equal(JSON.parse(missing.stdout).reason, 'capability_evidence_missing');
+    assert.match(missing.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
+    const file = path.join(root, 'capabilities.json');
+    fs.writeFileSync(file, JSON.stringify(capabilities));
+    const healthy = runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root }, ['--executable', executable, '--capabilities-file', file]);
+    assert.equal(healthy.status, 0);
+    assert.equal(JSON.parse(healthy.stdout).status, 'available');
+    assert.doesNotMatch(healthy.stderr, /hint\[/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('--capability-only names the delivery host, which implements --preflight, in the unavailable remedy', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-capability-host-')));
+  try {
+    const file = path.join(root, 'capabilities.json');
+    fs.writeFileSync(file, JSON.stringify(capabilities));
+    const gone = runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root },
+      ['--executable', path.join(root, 'no-such-codex'), '--capabilities-file', file]);
+    assert.equal(gone.status, 0);
+    assert.equal(JSON.parse(gone.stdout).reason, 'runtime_missing');
+    assert.match(gone.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.match(gone.stderr, /codex-delivery-host\.cjs --preflight/);
+    assert.doesNotMatch(gone.stderr, /codex-runtime-host\.cjs --preflight/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('installed bundle resolves its own evidence with an empty env and refuses a disagreeing CODEX_HOME', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-installed-host-')));
+  try {
+    const executable = fakeCodex(root);
+    const { script } = installedBundle(root);
+    const env = { PATH: process.env.PATH, HOME: root };
+    const ok = runCapabilityOnly(script, env, ['--executable', executable]);
+    assert.equal(ok.status, 0);
+    assert.equal(JSON.parse(ok.stdout).status, 'available');
+    assert.doesNotMatch(ok.stderr, /hint\[/);
+    const conflict = runCapabilityOnly(script, { ...env, CODEX_HOME: path.join(root, 'elsewhere') }, ['--executable', executable]);
+    assert.equal(conflict.status, 0);
+    assert.equal(JSON.parse(conflict.stdout).status, 'unavailable');
+    assert.equal(JSON.parse(conflict.stdout).reason, 'ENV_CONFLICT');
+    assert.match(JSON.parse(conflict.stdout).detail, /disagrees/);
+    assert.match(conflict.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.doesNotMatch(conflict.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('launchAgent sends dynamic selection through the adapter boundary', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-agent-launch-'));
   try {

@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createCodexRuntimeHost, normalizeScope, parseCodexStream } = require('./codex-runtime-host.cjs');
+const { createCodexRuntimeHost, normalizeScope, parseCodexStream, probeCodexRuntime } = require('./codex-runtime-host.cjs');
 const { encodeUniqueContent } = require('./context-packet.cjs');
 const { stableStringify } = require('./model-policy-internal.cjs');
 const integrationPreflight = require('./phase-integrator-preflight.cjs');
@@ -16,6 +16,7 @@ const archReviewContext = require('./codex-arch-review-context.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
+const { acceptedRepositoryValues, GIT_SCOPE_KEYS } = require('./architecture-target.cjs');
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
 const { newDispatchId, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createVerificationRunner } = require('./command-runner.cjs');
@@ -23,7 +24,9 @@ const hostVerification = require('./host-verification.cjs');
 const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
+const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, emitPreflight,
+  roleNeedsRepositoryIdentity } = require('./runtime-context.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
@@ -144,7 +147,7 @@ function inflightGraphDir(options, worktree) {
 
 function git(worktree, args) {
   const env = { ...process.env };
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) delete env[key];
+  for (const key of GIT_SCOPE_KEYS) delete env[key];
   try {
     return execFileSync('git', ['-C', worktree, ...args], {
       encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
@@ -715,11 +718,21 @@ function finalizer(options) {
 
 function installedAgentOptions(options, selection, capabilities) {
   const env = options.env || process.env;
-  const agentDir = options.agentDir === undefined ? path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents') : options.agentDir;
+  const agentDir = options.agentDir === undefined ? path.join(resolveCodexHome({ scriptDir: __dirname, env }), 'agents') : options.agentDir;
   return { agentDir, agentFile: selection.agent_file,
     agentManifest: options.agentManifest === undefined ? path.join(agentDir, '.shipyard-manifest.json') : options.agentManifest,
     capabilities, capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE,
     readerCapacity: options.readerCapacity, automaticReader: options.automaticReader === true, selection: { model: selection.model, effort: selection.effort } };
+}
+
+function installedHostOptions(options, resolved) {
+  if (resolved.mode !== 'installed') return options;
+  const env = options.env || process.env;
+  return { ...options,
+    env: launchEnvironment(resolved, env),
+    agentDir: options.agentDir === undefined ? resolved.agentsDir : options.agentDir,
+    agentManifest: options.agentManifest === undefined ? resolved.manifestFile : options.agentManifest,
+    capabilitiesFile: options.capabilitiesFile || (env.SHIPYARD_CODEX_CAPABILITIES_FILE ? undefined : resolved.capabilitiesFile) };
 }
 
 function admitArchitectureInput(prepared, request, options, capabilities) {
@@ -925,7 +938,7 @@ function finishIntegrationReview(review, dispatch, recorder) {
         || crypto.createHash('sha256').update(fs.readFileSync(progress.native_file)).digest('hex') !== evidence.native_session_evidence.sha256)
       fail('RUNTIME_EVIDENCE_MISMATCH', 'complete protected continuation transcript changed');
   } else {
-    const codexHome = review.options.env?.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+    const codexHome = resolveCodexHome({ scriptDir: __dirname, env: review.options.env || process.env });
     const originals = require('./codex-runtime-host.cjs').nativeSessionCandidates(path.join(codexHome, 'sessions'), evidence.session_id);
     if (originals.length !== 1) fail('MISSING_RECEIPT', 'one complete original native integration transcript is required');
     archReviewContext.validateOriginalReviewContext({ receipt: dispatch.receipt, dispatchId: dispatch.dispatch_id,
@@ -1153,7 +1166,8 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
   const root = path.join(storageDirectory(options, scope), 'planning-artifacts');
   const verifyScope = Object.freeze({ invId: inv.invId, sourceRevision: inv.sourceRevision,
     repository: inv.repository, policyHash: inv.policyHash });
-  const verifiedSiblings = inv.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
+  const acceptedRepositories = acceptedRepositoryValues(worktree);
+  const verifiedSiblings = inv.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line, acceptedRepositories }));
   if (verifiedSiblings.some((line) => line.status !== 'completed')) {
     fail('RESEARCH_VERIFY_STATUS_INVALID', 'blocked research evidence cannot be reused as a completed sibling');
   }
@@ -3062,7 +3076,7 @@ function createCodexDeliveryHost(options = {}) {
                 canonical_prompt_sha256: sha256(boundContext.prompt.trim()),
                 combined_prompt_sha256: sha256(instructions + '\n\n' + boundContext.prompt.trim()),
                 instructions_sha256: sha256(instructions), agent_file_digest: selection.agent_file_digest,
-                native_home: path.resolve(options.env?.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex')) }));
+                native_home: path.resolve(resolveCodexHome({ scriptDir: __dirname, env: options.env || process.env })) }));
               recheckRepair(repairPrepared, options, { clean: true });
               return runtimeHost.launchStatic(selection, boundContext);
             }
@@ -3340,9 +3354,47 @@ function readResumeScope(file) {
   return scope;
 }
 
+function parsePreflightArguments(argv) {
+  if (argv.length === 1) return { requestFile: null };
+  if (argv.length === 3 && argv[1] === '--args-file' && typeof argv[2] === 'string' && argv[2].trim()) {
+    return { requestFile: path.resolve(argv[2]) };
+  }
+  fail('INVALID_INPUT', 'usage: codex-delivery-host.cjs --preflight [--args-file <json>]');
+}
+
+function hostProbe(options) {
+  if (!options.probe && options.host) return undefined;
+  return () => (typeof options.probe === 'function' ? options.probe() : options.probe || probeCodexRuntime({
+    executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile }));
+}
+
+function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
+  const result = preflight({ host: 'codex-delivery-host.cjs', runtime: 'codex', scriptDir: __dirname,
+    worktree: scope.worktree, env: options.env || process.env, ...extra });
+  const stderr = options.preflightStderr || process.stderr;
+  if (report) {
+    const code = emitPreflight(result, { stdout: options.preflightStdout || process.stdout, stderr });
+    return { result, code };
+  }
+  if (result.ok) {
+    if (result.warnings.length) {
+      stderr.write(result.warnings.map((warning) => `preflight: warning[${warning.code}] ${warning.detail}\n`).join(''));
+    }
+    return { result, code: 0 };
+  }
+  emitPreflight(result, { stdout: { write() {} }, stderr });
+  const refusal = new Error(`preflight found ${result.findings.length} incompatibilities: `
+    + result.findings.map((finding) => finding.code).join(', '));
+  refusal.code = result.findings[0].code;
+  refusal.hintPrinted = true;
+  throw refusal;
+}
+
 async function runResumeCli(argv, stdout, options) {
   const parsed = parseResumeArguments(argv);
   const scope = canonicalCliScope(readResumeScope(parsed.scopeFile));
+  const gate = runHostPreflight(options, scope, { scope: 'environment' });
+  if (gate.code !== 0) return gate.result;
   const stateDir = storageDirectory(options, scope);
   const controller = createRunController({
     storeDir: path.join(stateDir, 'runs'),
@@ -3424,17 +3476,42 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   if (Array.isArray(argv) && argv[0] === '--resume-finalization') return runResumeCli(argv, stdout, options);
   if (Array.isArray(argv) && argv[0] === '--resume-repair-actions') {
     const parsed = parseRepairActionResumeArguments(argv);
-    const result = resumeRepairActions(options, parsed.dispatchId, readResumeScope(parsed.scopeFile));
+    const resumeScope = readResumeScope(parsed.scopeFile);
+    const gate = runHostPreflight(options, canonicalCliScope(resumeScope), { scope: 'environment' });
+    if (gate.code !== 0) return gate.result;
+    const result = resumeRepairActions(options, parsed.dispatchId, resumeScope);
     stdout.write(JSON.stringify(result) + '\n');
     return result;
   }
-  const parsed = readRequestFile(parseCliArguments(argv));
-  const scope = canonicalCliScope(parsed.scope);
-  if (parsed.graphDir) {
+  const checkOnly = Array.isArray(argv) && argv[0] === '--preflight';
+  const requestFile = checkOnly ? parsePreflightArguments(argv).requestFile : parseCliArguments(argv);
+  const parsed = requestFile ? readRequestFile(requestFile) : null;
+  const scope = parsed ? canonicalCliScope(parsed.scope) : { worktree: fs.realpathSync(process.cwd()) };
+  let resolvedEnvironment = null;
+  let environmentRefused = false;
+  try {
+    resolvedEnvironment = resolveHostEnvironment({ scriptDir: __dirname, runtime: 'codex', env: options.env || process.env });
+  } catch { resolvedEnvironment = null; environmentRefused = true; }
+  if (resolvedEnvironment) options = installedHostOptions(options, resolvedEnvironment);
+  if (parsed && parsed.graphDir) {
     if (options.graphDir && path.resolve(options.graphDir) !== path.resolve(parsed.graphDir))
       fail('INVALID_INPUT', 'conflicting canonical graph selectors');
     options = { ...options, graphDir: parsed.graphDir };
   }
+  const gsdRole = parsed ? parsed.launch.gsd_role : undefined;
+  let phaseDir;
+  if (gsdRole !== undefined) {
+    try { phaseDir = typedPhaseDirectory(scope.worktree, scope.phase); } catch { phaseDir = undefined; }
+  }
+  const gate = runHostPreflight(options, scope, { report: checkOnly, scope: 'launch', probe: environmentRefused ? undefined : hostProbe(options),
+    needsRepositoryIdentity: parsed ? roleNeedsRepositoryIdentity(parsed.launch.role) : false,
+    graphDir: inflightGraphDir(options, scope.worktree),
+    ...(parsed ? { runStoreFile: path.join(storageRootOf(options, scope),
+      crypto.createHash('sha256').update(`${scope.run_id}\0${scope.worktree}`).digest('hex'), 'runs', 'runs.json') } : {}),
+    ...(gsdRole !== undefined && phaseDir ? { gsdRole, phaseDir,
+      writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+        repository: scope.repository }) } : {}) });
+  if (checkOnly || gate.code !== 0) return gate.result;
   const archDispatchId = parsed.launch.role === 'arch-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
   const preparedArchReview = parsed.launch.role === 'arch-review'
     ? archReviewContext.prepare(scope, parsed.launch, {
@@ -3634,9 +3711,10 @@ module.exports = Object.freeze({
 if (require.main === module) {
   runCli().then((result) => {
     if (result?.status === 'blocked' || result?.status === 'verification_failed') process.exitCode = 1;
+    if (result?.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write('codex-delivery-host: ' + (error && error.message ? error.message : error) + '\n');
-    process.stderr.write(formatHint(error && error.code) + '\n');
+    if (!error?.hintPrinted) process.stderr.write(hintForError(error) + '\n');
     if (error?.diagnostics) process.stderr.write(JSON.stringify({ diagnostics: error.diagnostics }) + '\n');
     process.exitCode = 1;
   });

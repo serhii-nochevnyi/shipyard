@@ -9,7 +9,7 @@ const {
 } = require('./claude-workflow-host.cjs');
 const { createClaudeDeliveryHost, runClaudeDeliveryCli } = require('./claude-delivery-host.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
 
 const INVESTIGATION_RESEARCH_SCRIPT = WORKFLOW_SCRIPTS['investigation-research'];
 const REQUEST_MAX_BYTES = 1024 * 1024;
@@ -107,6 +107,15 @@ function runInvestigationResearch(options = {}) {
 }
 
 function runInvestigationResearchCli(argv = process.argv.slice(2), stdout = process.stdout) {
+  if (Array.isArray(argv) && argv[0] === '--preflight') {
+    if (argv.length === 1) return runClaudeDeliveryCli(['--preflight'], stdout);
+    if (argv.length === 3 && argv[1] === '--request-file') {
+      const prepared = prepareResolvedRequestFile(argv[2]);
+      return Promise.resolve(runClaudeDeliveryCli([
+        '--preflight', '--workflow', 'investigation-research', '--request-file', prepared.file,
+      ], stdout)).finally(prepared.cleanup);
+    }
+  }
   if (!Array.isArray(argv) || argv[0] !== '--request-file' || argv.length !== 2) {
     const error = new Error('claude-investigation-host: --request-file <json> is required');
     error.code = 'INVALID_HOST';
@@ -138,9 +147,11 @@ module.exports = Object.freeze({
 });
 
 if (require.main === module) {
-  Promise.resolve().then(runInvestigationResearchCli).catch((error) => {
+  Promise.resolve().then(() => runInvestigationResearchCli()).then((result) => {
+    if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
+  }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
-    process.stderr.write(`${formatHint(error && error.code)}\n`);
+    if (!error?.hintPrinted) process.stderr.write(`${hintForError(error)}\n`);
     process.exitCode = 1;
   });
 }

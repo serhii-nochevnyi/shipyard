@@ -88,5 +88,14 @@
   },
   "rounds": {},
   "reservations": {},
-  "inflight": {}
+  "inflight": {
+    "dispatch-2a8f6d83-0008-4d1d-984b-c7fe0b092755": {
+      "ticket": "T-50-01",
+      "role": "executor",
+      "dispatch_id": "dispatch-2a8f6d83-0008-4d1d-984b-c7fe0b092755",
+      "pid": 57989,
+      "host": "claude",
+      "started_at": "2026-10-16T08:08:40.229Z"
+    }
+  }
 }

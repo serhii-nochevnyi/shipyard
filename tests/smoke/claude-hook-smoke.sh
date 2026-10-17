@@ -14,7 +14,7 @@ printf '{"version":"%s"}\n' "$PLUGIN_VERSION" > "$PLUGIN/.claude-plugin/plugin.j
 
 cat > "$PLUGIN/scripts/stop-gate.cjs" <<'EOF'
 const wake = require('./run-waker.cjs');
-process.stdout.write(wake);
+process.stdout.write(typeof wake === 'string' ? wake : '{}');
 EOF
 cat > "$PLUGIN/scripts/run-waker.cjs" <<'EOF'
 module.exports = require('./run-store.cjs');

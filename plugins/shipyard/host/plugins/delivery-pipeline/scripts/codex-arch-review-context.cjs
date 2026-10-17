@@ -9,7 +9,7 @@ const { execFileSync } = require('node:child_process');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const { statusIgnoringScratch } = require('./conveyor-scratch.cjs');
 const roleArtifact = require('./role-artifact.cjs');
-const { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, phaseEvidencePaths, PHASE_SUBJECT } = require('./architecture-target.cjs');
+const { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, phaseEvidencePaths, PHASE_SUBJECT, repositoryIdentity } = require('./architecture-target.cjs');
 const { parseCodexStream } = require('./codex-runtime-host.cjs');
 
 const FOCUSED_CONTRACT = 'shipyard.focused-architecture-review.v1';
@@ -1018,8 +1018,7 @@ function collect(scope, options, legacyArchitecture = false) {
       }
     } catch {}
   }
-  const common = root => fs.realpathSync(git(options, root,
-    ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+  const common = root => repositoryIdentity(root, { execFileSync: options.execFileSync || execFileSync });
   if (common(project) !== common(worktree)) fail('graph belongs to another repository');
   const graphFile = file(project, '.planning/graph/tickets.json');
   const stateFile = file(project, '.planning/graph/delivery-state.json');
@@ -1407,7 +1406,7 @@ function validateFocusedResult(result, binding) {
 
 function focusedBinding(prepared) {
   return { review_contract: FOCUSED_CONTRACT,
-    repository: fs.realpathSync(git({}, prepared.canonical.worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir'])),
+    repository: repositoryIdentity(prepared.canonical.worktree),
     id: prepared.ticket, pr: prepared.pr, head: prepared.canonical.head, base_commit: prepared.baseCommit,
     merge_base: prepared.packet.diff.merge_base, base_tree: prepared.mergeBaseTree,
     ticket_set_digest: prepared.binding?.membership || digest(JSON.stringify([prepared.ticket])),

@@ -10,6 +10,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const codexDecomposeHost = require('./codex-decompose-host.cjs');
 const { normalizeScope } = require('./codex-runtime-host.cjs');
+const { repositoryIdentity } = require('./architecture-target.cjs');
 const { validateContextPacket } = require('./context-packet.cjs');
 const modelPolicy = require('./model-policy.cjs');
 const { createDurableRecorder } = require('./dispatch-boundary.cjs');
@@ -246,18 +247,16 @@ function externalWaitDirectory(destination, worktree) {
 
 function waitRecorder(association, options = {}) {
   const { scope, graphDir, dispatchId } = association;
-  const common = execFileSync('git', ['-C', scope.worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
-  }).trim();
+  const common = repositoryIdentity(scope.worktree);
   const canonicalGraph = path.resolve(graphDir);
-  const identity = crypto.createHash('sha256').update(JSON.stringify({ repository: fs.realpathSync(common),
+  const identity = crypto.createHash('sha256').update(JSON.stringify({ repository: common,
     graph: canonicalGraph, run: scope.run_id, dispatch: dispatchId })).digest('hex');
   const injected = options.waitOptions?.overheadRecorder || options.overheadRecorder;
   const runStore = options.testRunStoreDir || codexDecomposeHost.defaultRunStoreDir(scope, options.testStateRoot);
   const sink = externalWaitDirectory(injected?.graphDir || path.join(path.dirname(runStore), 'planning-overhead', identity), scope.worktree);
   if (injected && (!object(injected) || !['record', 'read', 'latest', 'report'].every(key => typeof injected[key] === 'function')))
     fail('INVALID_WAIT_RECORDER', 'trusted recorder must expose graphDir and record/read/latest/report');
-  return { sink, recorder: injected || overhead.createRecorder(sink), graphDir: canonicalGraph, repository: fs.realpathSync(common) };
+  return { sink, recorder: injected || overhead.createRecorder(sink), graphDir: canonicalGraph, repository: common };
 }
 
 function validateWaitWritePaths(sink, worktree) {
@@ -316,9 +315,35 @@ function readWaitAccounting(association, options = {}) {
     missing_evidence: missing, savings: 'inconclusive' });
 }
 
+function writerPreflight(options, parsed) {
+  try {
+    return codexDecomposeHost.writerPreflight(options, normalizeScope(parsed.scope), parsed.launch);
+  } catch { return {}; }
+}
+
 async function runCli(argv = process.argv.slice(2), stdout = process.stdout, options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
+  const hostName = 'codex-planning-context-host.cjs';
+  const preflightOptions = options.hostOptions || options;
+  if (Array.isArray(argv) && argv[0] === '--preflight') {
+    if (argv.length === 1) {
+      return codexDecomposeHost.runHostPreflight(preflightOptions, { host: hostName,
+        worktree: fs.realpathSync(process.cwd()), stdout });
+    }
+    if (argv.length !== 3 || argv[1] !== '--args-file') {
+      fail('INVALID_INPUT', 'usage: codex-planning-context-host.cjs --preflight [--args-file <json>]');
+    }
+    const checked = readArgsFile(argv.slice(1));
+    return codexDecomposeHost.runHostPreflight(preflightOptions, { host: hostName, worktree: checked.scope.worktree,
+      graphDir: path.resolve((preflightOptions.env && preflightOptions.env.SHIPYARD_GRAPH_DIR)
+        || process.env.SHIPYARD_GRAPH_DIR || path.join(checked.scope.worktree, '.planning', 'graph')), stdout,
+      ...writerPreflight(preflightOptions, checked) });
+  }
   const parsed = readArgsFile(argv);
+  codexDecomposeHost.runHostPreflight(preflightOptions, { host: hostName, worktree: parsed.scope.worktree,
+    graphDir: path.resolve((preflightOptions.env && preflightOptions.env.SHIPYARD_GRAPH_DIR)
+      || process.env.SHIPYARD_GRAPH_DIR || path.join(parsed.scope.worktree, '.planning', 'graph')),
+    ...writerPreflight(preflightOptions, parsed) });
   const request = requestValue(parsed.launch, { worktreePath: parsed.scope.worktree });
   const hostRequest = delegateRequest(request);
   const delegated = {
@@ -411,8 +436,11 @@ module.exports = Object.freeze({
 });
 
 if (require.main === module) {
-  runCli().catch((error) => {
+  runCli().then((result) => {
+    if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
+  }).catch((error) => {
     process.stderr.write('codex-planning-context-host: ' + (error && error.message ? error.message : error) + '\n');
+    if (!error?.hintPrinted) process.stderr.write(require('./refusal-hints.cjs').hintForError(error) + '\n');
     process.exitCode = 1;
   });
 }

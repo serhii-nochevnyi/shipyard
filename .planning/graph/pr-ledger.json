@@ -144,6 +144,30 @@
       "head": "ticket/T-45-15-prepare-the-0-70-0-release-from-the-full",
       "repo": null,
       "created_at": "2026-09-30T20:45:27.795Z"
+    },
+    "T-50-05": {
+      "number": 488,
+      "head": "ticket/T-50-05-one-repositoryidentity-and-one-subject-g",
+      "repo": null,
+      "created_at": "2026-10-16T08:19:23.057Z"
+    },
+    "T-50-06": {
+      "number": 489,
+      "head": "ticket/T-50-06-open-the-l-11-verification-record-with-t",
+      "repo": null,
+      "created_at": "2026-10-16T08:23:14.147Z"
+    },
+    "T-50-02": {
+      "number": 490,
+      "head": "ticket/T-50-02-name-every-launch-and-upgrade-refusal-wi",
+      "repo": null,
+      "created_at": "2026-10-16T08:23:45.235Z"
+    },
+    "T-50-04": {
+      "number": 491,
+      "head": "ticket/T-50-04-classify-legacy-provenance-read-only-and",
+      "repo": null,
+      "created_at": "2026-10-16T08:24:15.642Z"
     }
   }
 }

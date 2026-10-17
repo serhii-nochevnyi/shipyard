@@ -364,7 +364,7 @@ test('both reentry guard names stop before observation, sidecar read or delegati
   for (const guard of ['SHIPYARD_CODEX_NOTIFY_ACTIVE', 'SHIPYARD_NOTIFY_ACTIVE']) {
     const result = hookProbe(f, `
 let observations = 0, reads = 0, launches = 0;
-observer.observeCodexDatabase = () => observations++;
+observer.observeCodexNotify = () => observations++;
 cp.spawn = () => { launches++; throw new Error('unexpected launch'); };
 const hook = require(${JSON.stringify(WRAPPER)});
 const read = fs.readFileSync;
@@ -381,7 +381,7 @@ test('observation failure and synchronous delegation failure do not crash the ho
   sidecar(f, ['/fixture-handler', 'turn-ended']);
   const result = hookProbe(f, `
 let observations = 0, launches = 0;
-observer.observeCodexDatabase = () => { observations++; throw new Error('fixture observer failure'); };
+observer.observeCodexNotify = () => { observations++; throw new Error('fixture observer failure'); };
 cp.spawn = () => { launches++; throw new Error('fixture launch failure'); };
 const status = require(${JSON.stringify(WRAPPER)}).main(['{}']);
 console.log(JSON.stringify({ status, observations, launches }));
@@ -396,7 +396,7 @@ test('missing, malformed and empty sidecars still observe once and do not delega
     else fs.writeFileSync(f.delegate, contents);
     const result = hookProbe(f, `
 let observations = 0, launches = 0;
-observer.observeCodexDatabase = () => observations++;
+observer.observeCodexNotify = () => observations++;
 cp.spawn = () => { launches++; throw new Error('unexpected launch'); };
 const status = require(${JSON.stringify(WRAPPER)}).main(['{}']);
 console.log(JSON.stringify({ status, observations, launches }));
@@ -412,7 +412,7 @@ test('detached spawn uses inherited env, exact argv and payload, unref and an as
   const result = hookProbe(f, `
 const { EventEmitter } = require('node:events');
 let observed = 0, launched = 0, unrefed = 0, correct = false;
-observer.observeCodexDatabase = () => observed++;
+observer.observeCodexNotify = () => observed++;
 cp.spawn = (command, argv, options) => {
   launched++;
   correct = command === '/fixture-handler' && JSON.stringify(argv) === JSON.stringify(['turn-ended', 'argument with spaces', '{}'])

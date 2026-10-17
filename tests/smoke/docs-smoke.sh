@@ -92,6 +92,30 @@ while IFS= read -r target; do
   grep -qE "^$target:" Makefile || fail "README references missing make target: $target"
 done < <(grep -oE 'make [a-z][a-z0-9-]+' README.md | awk '{print $2}' | sort -u)
 
+grep -q '^### Launch and upgrade$' README.md || fail "README misses the Launch and upgrade section"
+grep -q -- '--preflight' README.md || fail "README misses --preflight"
+for host in claude-delivery-host claude-investigation-host claude-decompose-host claude-role-host \
+  codex-delivery-host codex-decompose-host codex-planning-context-host; do
+  grep -q "$host\.cjs" README.md || fail "README does not name host entry $host.cjs"
+done
+while IFS= read -r script; do
+  [[ -z "$script" ]] && continue
+  [[ -f "plugins/delivery-pipeline/scripts/$script" ]] || fail "README names a missing host script: $script"
+done < <(grep -oE '(claude|codex)-[a-z-]+-host\.cjs' README.md | sort -u)
+grep -q 'make test-installed-launch' CLAUDE.md || fail "CLAUDE.md misses make test-installed-launch"
+grep -qE '^test-installed-launch:' Makefile || fail "Makefile misses test-installed-launch"
+if grep -nE 'still needs `?SHIPYARD_CODEX_CAPABILITIES_FILE' README.md; then
+  fail "README says a dogfood launch needs SHIPYARD_CODEX_CAPABILITIES_FILE"
+fi
+launch_section="$(awk '/^### Launch and upgrade$/{on=1; next} on && /^#+ /{exit} on' README.md)"
+[[ -n "$launch_section" ]] || fail "README Launch and upgrade section is empty"
+grep -qE 'needs neither `CODEX_HOME` nor `SHIPYARD_CODEX_CAPABILITIES_FILE`' <<<"$launch_section" \
+  || fail "Launch and upgrade must say a launch needs no exported CODEX_HOME or capability path"
+grep -qE 'SHIPYARD_CODEX_CAPABILITIES_FILE`?\. This is the only case that does' <<<"$launch_section" \
+  || fail "Launch and upgrade must name the single remaining case that needs SHIPYARD_CODEX_CAPABILITIES_FILE"
+[[ "$(grep -c 'This is the only case that does' <<<"$launch_section")" -eq 1 ]] \
+  || fail "Launch and upgrade must name exactly one remaining case"
+
 grep -q 'make test-fast-rest' .github/workflows/test.yml || fail "CI must run the non-unit part of make test-fast"
 grep -q 'UNIT_SHARD' .github/workflows/test.yml || fail "CI must run the sharded unit suite"
 grep -qE '^  test-fast:' .github/workflows/test.yml || fail "CI must report a single test-fast job"
@@ -103,7 +127,7 @@ fi
 grep -q 'STOP_DIR=' scripts/install-shipyard-claude-hook.sh || fail "Claude installer has no stable hook bundle"
 grep -q 'copy_stop_bundle' scripts/install-shipyard-claude-hook.sh || fail "Claude installer does not copy dependencies"
 grep -q 'OLD_STOP_CMD' scripts/install-shipyard-claude-hook.sh || fail "Claude installer does not migrate the old hook"
-grep -q 'usage-attribution.cjs' README.md || fail "README misses usage attribution"
-grep -q 'usage-report.cjs' README.md || fail "README misses usage report"
+grep -q 'usage-attribution\.cjs' README.md || fail "README misses usage attribution"
+grep -q 'usage-report\.cjs' README.md || fail "README misses usage report"
 
 echo "docs smoke passed"

@@ -20,6 +20,7 @@ const TRANSFER_PROOF_CATEGORIES = Object.freeze([
   'crash_recovery',
 ]);
 const TRANSFER_REFUSAL = 'automatic transfer is unsupported and unproven until a reviewed runtime-specific proving ground supplies every required evidence category';
+const CODEX_CAPABILITIES_BUNDLE_FILE = 'codex-capabilities.json';
 
 function normalizeRuntime(value) {
   if (typeof value !== 'string') return null;
@@ -252,6 +253,161 @@ function resolveDispatchContext(root, options = {}) {
   return Object.freeze(context);
 }
 
+function hostEnvironmentError(code, message, vars) {
+  const error = new Error('runtime-context: ' + message);
+  error.name = 'HostEnvironmentError';
+  error.code = code;
+  if (vars) error.vars = Object.freeze({ ...vars });
+  return error;
+}
+
+function physicalPath(value) {
+  try { return fs.realpathSync(value); } catch { return null; }
+}
+
+function readBundleManifest(home, bundleRoot) {
+  const file = path.join(home, 'agents', '.shipyard-manifest.json');
+  let manifest;
+  try { manifest = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) {
+    throw hostEnvironmentError('BUNDLE_MANIFEST_INVALID', `cannot read the installer manifest ${file}: ${error.message}`);
+  }
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw hostEnvironmentError('BUNDLE_MANIFEST_INVALID', `the installer manifest ${file} must be a JSON object`);
+  }
+  for (const [field, expected] of [['scriptsRoot', bundleRoot], ['codexHome', home]]) {
+    const declared = typeof manifest[field] === 'string' ? physicalPath(manifest[field]) : null;
+    if (declared !== expected) {
+      throw hostEnvironmentError('BUNDLE_MANIFEST_INVALID',
+        `manifest ${field} ${JSON.stringify(manifest[field])} does not name this bundle (${expected})`);
+    }
+  }
+  return { file, manifest };
+}
+
+// @security: bundle evidence is trusted only after its installer digest and the capability grid both agree.
+function readBundleCapabilities(bundleRoot, manifest) {
+  const file = path.join(bundleRoot, CODEX_CAPABILITIES_BUNDLE_FILE);
+  if (manifest.capabilities_file !== CODEX_CAPABILITIES_BUNDLE_FILE) {
+    throw hostEnvironmentError('BUNDLE_MANIFEST_INVALID',
+      `manifest capabilities_file ${JSON.stringify(manifest.capabilities_file)} is not ${CODEX_CAPABILITIES_BUNDLE_FILE}`);
+  }
+  let raw;
+  try { raw = fs.readFileSync(file); }
+  catch (error) { throw hostEnvironmentError('CAPABILITY_EVIDENCE_STALE', `cannot read ${file}: ${error.message}`); }
+  const actual = require('crypto').createHash('sha256').update(raw).digest('hex');
+  if (actual !== manifest.capabilities_digest) {
+    throw hostEnvironmentError('CAPABILITY_EVIDENCE_STALE',
+      `${file} digest ${actual} differs from the installer manifest digest ${manifest.capabilities_digest}`);
+  }
+  let capabilities;
+  try {
+    capabilities = JSON.parse(raw.toString('utf8'));
+    require('./gsd-tune.cjs').validateCodexCapabilities(capabilities, manifest.phase);
+  } catch (error) {
+    throw hostEnvironmentError('CAPABILITY_EVIDENCE_STALE', `${file} does not satisfy the ADR-014 grid: ${error.message}`);
+  }
+  return { file, capabilities };
+}
+
+const RESOLVER_CODES = Object.freeze([
+  'ENV_CONFLICT', 'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE',
+]);
+
+function claudeHomeOf(env) {
+  const configured = env && nonEmpty(env.CLAUDE_CONFIG_DIR);
+  if (configured) return configured;
+  return path.join((env && nonEmpty(env.HOME)) || require('os').homedir(), '.claude');
+}
+
+function resolveClaudeHome({ env = process.env } = {}) {
+  return claudeHomeOf(env);
+}
+
+function explicitCodexHome(env, flags) {
+  return nonEmpty(flags && flags.codexHome) || (env && nonEmpty(env.CODEX_HOME)) || null;
+}
+
+function explicitCapabilitiesFile(env, flags) {
+  return nonEmpty(flags && flags.capabilitiesFile)
+    || (env && nonEmpty(env.SHIPYARD_CODEX_CAPABILITIES_FILE)) || null;
+}
+
+function sameFile(candidate, expectedFile, expectedDigest) {
+  const physical = physicalPath(candidate);
+  if (physical && physical === physicalPath(expectedFile)) return true;
+  try {
+    return require('crypto').createHash('sha256').update(fs.readFileSync(candidate)).digest('hex') === expectedDigest;
+  } catch { return false; }
+}
+
+// @contract: a disagreeing explicit home or evidence file refuses; an agreeing one is accepted.
+function checkExplicitSources(env, flags, home, capabilitiesFile, manifest) {
+  const homes = [
+    [flags && nonEmpty(flags.codexHome), '--codex-home'],
+    [env && nonEmpty(env.CODEX_HOME), 'CODEX_HOME'],
+  ];
+  for (const [value, name] of homes) {
+    if (value && (physicalPath(value) || path.resolve(value)) !== home) {
+      throw hostEnvironmentError('ENV_CONFLICT',
+        `${name}=${value} disagrees with the Codex home ${home} of the installed bundle that is running`,
+        { explicit: `${name}=${value}`, bundle_value: home });
+    }
+  }
+  const files = [
+    [flags && nonEmpty(flags.capabilitiesFile), '--capabilities-file'],
+    [env && nonEmpty(env.SHIPYARD_CODEX_CAPABILITIES_FILE), 'SHIPYARD_CODEX_CAPABILITIES_FILE'],
+  ];
+  for (const [value, name] of files) {
+    if (value && !sameFile(value, capabilitiesFile, manifest.capabilities_digest)) {
+      throw hostEnvironmentError('ENV_CONFLICT',
+        `${name}=${value} disagrees with the capability evidence ${capabilitiesFile} of the installed bundle that is running`,
+        { explicit: `${name}=${value}`, bundle_value: capabilitiesFile });
+    }
+  }
+}
+
+function resolveHostEnvironment({ scriptDir, runtime, env = process.env, flags = {} } = {}) {
+  if (runtime === 'claude') {
+    return Object.freeze({ mode: 'claude', runtime, claudeHome: claudeHomeOf(env) });
+  }
+  const source = Object.freeze({ mode: 'source', runtime: runtime || null });
+  if (runtime !== 'codex' || typeof scriptDir !== 'string' || !scriptDir) return source;
+  const bundleRoot = physicalPath(path.join(scriptDir, '..'));
+  if (!bundleRoot) return source;
+  const home = path.dirname(bundleRoot);
+  // @invariant: an installer manifest beside the bundle makes it installed even when its evidence file is gone.
+  if (!fs.existsSync(path.join(bundleRoot, CODEX_CAPABILITIES_BUNDLE_FILE))
+      && !fs.existsSync(path.join(home, 'agents', '.shipyard-manifest.json'))) return source;
+  const { file: manifestFile, manifest } = readBundleManifest(home, bundleRoot);
+  const { file: capabilitiesFile, capabilities } = readBundleCapabilities(bundleRoot, manifest);
+  checkExplicitSources(env, flags, home, capabilitiesFile, manifest);
+  return Object.freeze({
+    mode: 'installed', runtime, home, bundleRoot, manifestFile, manifest, capabilitiesFile, capabilities,
+    agentsDir: path.join(home, 'agents'),
+  });
+}
+
+function resolveCodexHome({ scriptDir, env = process.env, flags = {} } = {}) {
+  const resolved = resolveHostEnvironment({ scriptDir, runtime: 'codex', env, flags });
+  if (resolved.mode === 'installed') return resolved.home;
+  return explicitCodexHome(env, flags)
+    || path.join((env && nonEmpty(env.HOME)) || require('os').homedir(), '.codex');
+}
+
+// @contract: only the Codex home, capability path and runtime are set; every other key is copied untouched.
+function launchEnvironment(resolved, baseEnv = process.env) {
+  const env = { ...baseEnv };
+  if (resolved && resolved.mode === 'installed') {
+    env.CODEX_HOME = resolved.home;
+    env.SHIPYARD_CODEX_CAPABILITIES_FILE = resolved.capabilitiesFile;
+    env.SHIPYARD_RUNTIME = resolved.runtime;
+  } else if (resolved && resolved.mode === 'claude') {
+    env.SHIPYARD_RUNTIME = resolved.runtime;
+  }
+  return env;
+}
+
 function cleanEvidenceText(value) {
   return typeof value === 'string' && value.trim() && !/[\u0000-\u001f\u007f]/.test(value)
     ? value.trim().slice(0, 256) : null;
@@ -350,6 +506,203 @@ function reportTransferCapability(options = {}) {
   });
 }
 
+const PREFLIGHT_CODES = Object.freeze([
+  'ENV_CONFLICT', 'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE', 'RUNTIME_CAPABILITY_MISSING',
+  'UNKNOWN_RUNTIME', 'AMBIGUOUS_RUNTIME', 'STALE_GENERATED_AGENT', 'RUNTIME_UNAVAILABLE',
+  'LEGACY_HISTORY_UNSAFE', 'LEGACY_HISTORY_CHANGED', 'LEGACY_HISTORY_UNKNOWN_MEMBER', 'LEGACY_HISTORY_MISSING',
+  'ARCHIVE_AUTHORITY_INVALID', 'LEGACY_WRITER_STATE', 'INVALID_STORE', 'REPOSITORY_IDENTITY_INVALID',
+]);
+
+function preflightGraphDir(graphDir, worktree, env) {
+  if (graphDir === null) return null;
+  let candidate = graphDir;
+  if (candidate === undefined) {
+    candidate = nonEmpty(env.SHIPYARD_GRAPH_DIR);
+    if (!candidate && typeof worktree === 'string' && worktree) {
+      let top = worktree;
+      try {
+        top = require('child_process').execFileSync('git', ['-C', worktree, 'rev-parse', '--show-toplevel'],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || worktree;
+      } catch { top = worktree; }
+      candidate = path.join(top, '.planning', 'graph');
+    }
+  }
+  if (typeof candidate !== 'string' || !candidate) return null;
+  const directory = path.resolve(candidate);
+  if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning') return null;
+  return fs.existsSync(directory) ? directory : null;
+}
+
+const CAPABILITY_PROBE_REASONS = new Set(['capability_evidence_missing', 'RUNTIME_CAPABILITY_MISSING']);
+
+// @contract: only absent capability evidence is a capability error; any other unavailable probe is RUNTIME_UNAVAILABLE.
+function probeReasonToCode(reason) {
+  return CAPABILITY_PROBE_REASONS.has(String(reason === undefined || reason === null ? '' : reason))
+    ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
+}
+
+function errorCode(error) {
+  return error && typeof error.code === 'string' && error.code ? error.code : 'UNKNOWN';
+}
+
+function installedCodexCliVersion() {
+  const result = require('child_process').spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 10_000 });
+  if (!result || result.error || result.status !== 0) return null;
+  const match = /(\d+\.\d+(?:\.\d+)*)/.exec(`${result.stdout || ''} ${result.stderr || ''}`);
+  return match ? match[1] : null;
+}
+
+const IDENTITY_ROLES = new Set(['research', 'decomposition', 'integrator', 'arch-review']);
+
+// @contract: only the roles that build a subject from the repository identity need it to be representable.
+function roleNeedsRepositoryIdentity(role) {
+  return IDENTITY_ROLES.has(role);
+}
+
+// @contract: preflight is read-only, collects every incompatibility and never throws.
+function preflight(options = {}) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const env = opts.env || process.env;
+  const scope = opts.scope === 'environment' ? 'environment' : 'launch';
+  // @contract: the default host is the delivery host that implements --preflight for the runtime.
+  const DELIVERY_HOSTS = { codex: 'codex-delivery-host.cjs', claude: 'claude-delivery-host.cjs' };
+  const host = typeof opts.host === 'string' && opts.host ? opts.host : (DELIVERY_HOSTS[opts.runtime] || undefined);
+  const findings = [], warnings = [], notes = [];
+  const note = (kind, detail) => notes.push({ kind, detail });
+  const find = (code, detail, vars = {}) => findings.push({ code, detail: String(detail), vars: { host, ...vars } });
+  const run = (name, fn) => {
+    try { fn(); } catch (error) {
+      const code = errorCode(error);
+      if (PREFLIGHT_CODES.includes(code)) find(code, error.message, error.vars);
+      else note('not-evaluated', `${name}: check not evaluated (${code})`);
+    }
+  };
+  let resolved = null;
+  run('environment and bundle', () => {
+    resolved = resolveHostEnvironment({ scriptDir: opts.scriptDir, runtime: opts.runtime, env, flags: opts.flags || {} });
+  });
+  if (!resolved) note('not-evaluated', 'policy and generated agents: not evaluated, no resolved environment');
+  const bundle = resolved && resolved.bundleRoot;
+  const withBundle = (vars) => (bundle ? { ...vars, bundle } : vars);
+  for (const finding of findings) finding.vars = withBundle(finding.vars);
+
+  run('runtime identity', () => {
+    resolveDispatchContext(opts.worktree, {
+      routed: true, runtime: opts.runtime, env, scriptPath: opts.scriptDir,
+    });
+  });
+
+  run('policy and generated agents', () => {
+    if (!resolved || resolved.mode !== 'installed') return;
+    const manifest = resolved.manifest;
+    const stale = [];
+    const { POLICY_HASH } = require('./model-policy.cjs');
+    if (manifest.policy_hash !== POLICY_HASH) stale.push('policy_hash');
+    const files = Array.isArray(manifest.agent_files) ? manifest.agent_files : [];
+    const digests = manifest.agent_digests && typeof manifest.agent_digests === 'object' ? manifest.agent_digests : {};
+    for (const name of files) {
+      let actual = null;
+      try {
+        actual = require('crypto').createHash('sha256').update(fs.readFileSync(path.join(resolved.agentsDir, name))).digest('hex');
+      } catch { actual = null; }
+      if (actual === null || actual !== digests[name]) stale.push(name);
+    }
+    if (stale.length) find('STALE_GENERATED_AGENT', `stale or missing: ${stale.join(', ')}`, { bundle: resolved.bundleRoot, files: stale.join(', ') });
+  });
+
+  run('capability snapshot age', () => {
+    if (!resolved || resolved.mode !== 'installed') return;
+    const recorded = resolved.manifest.codex_cli_version;
+    if (typeof recorded !== 'string' || !recorded) return;
+    const current = (typeof opts.cliVersion === 'function' ? opts.cliVersion : installedCodexCliVersion)();
+    if (typeof current !== 'string' || !current || current === recorded) return;
+    warnings.push({
+      code: 'CAPABILITY_SNAPSHOT_AGED',
+      detail: `capability evidence was recorded with Codex CLI ${recorded}; installed is ${current}`,
+      vars: withBundle({ host, recorded, current }),
+    });
+  });
+
+  run('runtime probe', () => {
+    if (typeof opts.probe !== 'function') return;
+    if (!resolved) { note('not-evaluated', 'runtime probe: not evaluated, no resolved environment'); return; }
+    const result = opts.probe();
+    if (result && result.status === 'unavailable') {
+      const reason = String(result.reason || 'unknown');
+      find(probeReasonToCode(reason), `${reason}${result.detail ? ': ' + result.detail : ''}`, withBundle({}));
+    }
+  });
+
+  if (scope === 'launch') {
+    run('repository identity', () => {
+      if (opts.needsRepositoryIdentity !== true) return;
+      if (typeof opts.worktree !== 'string' || !opts.worktree) return;
+      try { require('./architecture-target.cjs').repositoryIdentity(opts.worktree); }
+      catch (error) {
+        if (error && error.code === 'REPOSITORY_IDENTITY_INVALID' && error.reason === 'git') {
+          note('not-evaluated', 'repository identity: not evaluated, git cannot resolve the common directory');
+          return;
+        }
+        throw error;
+      }
+    });
+    run('legacy history', () => {
+      const directory = preflightGraphDir(opts.graphDir, opts.worktree, env);
+      if (!directory) { note('not-evaluated', 'legacy history: not evaluated, no graph directory'); return; }
+      const root = fs.realpathSync(path.resolve(directory, '..', '..'));
+      const result = require('./role-artifact.cjs').classifyLegacyProvenance(root);
+      if (result.state === 'unreadable') {
+        note('not-evaluated', `legacy history: not evaluated, authority namespace unreadable (${result.unreadable && result.unreadable.code})`);
+        return;
+      }
+      for (const item of result.findings) find(item.code, item.detail || item.code, withBundle({ path: item.path || '' }));
+      for (const item of result.warnings) {
+        warnings.push({ code: item.code, detail: item.path || item.code, vars: withBundle({ host, path: item.path || '' }) });
+      }
+      if (result.state === 'adoptable') note('adoptable', `legacy history: adoption will record ${result.members.length} member(s)`);
+    });
+    if (typeof opts.gsdRole === 'string' && opts.gsdRole && opts.worktree && opts.phaseDir) {
+      run('planning writer state', () => {
+        require('./planning-writer-lease.cjs').assertNoLegacyPlanningWriter({
+          worktree: opts.worktree, phaseDir: opts.phaseDir, roots: opts.writerRoots || [],
+        });
+      });
+    }
+    if (typeof opts.runStoreFile === 'string' && opts.runStoreFile) {
+      run('run store', () => {
+        let raw;
+        try { raw = fs.readFileSync(opts.runStoreFile, 'utf8'); } catch (error) {
+          if (error.code === 'ENOENT') return;
+          throw error;
+        }
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch (error) { find('INVALID_STORE', `run store is not JSON: ${error.message}`, withBundle({})); return; }
+        require('./run-store.cjs').normalizeStore(parsed);
+      });
+    }
+  }
+  for (const finding of findings) finding.vars = withBundle(finding.vars);
+  return { schema: 'shipyard.host-preflight.v1', ok: findings.length === 0, scope, findings, warnings, notes };
+}
+
+function emitPreflight(result, streams = {}) {
+  const stdout = streams.stdout || process.stdout;
+  const stderr = streams.stderr || process.stderr;
+  const { formatHint, stripControl } = require('./refusal-hints.cjs');
+  const count = result.findings.length;
+  const lines = [count === 0 ? 'preflight: ok' : `preflight: ${count} incompatibilities`];
+  const clean = (value) => stripControl(value === undefined || value === null ? '' : value);
+  for (const finding of result.findings) {
+    const detail = clean(finding.detail);
+    lines.push(formatHint(finding.code, finding.vars) + (detail ? ` (detail: ${detail})` : ''));
+  }
+  for (const warning of result.warnings) lines.push(`preflight: warning[${clean(warning.code)}] ${clean(warning.detail)}`);
+  for (const item of result.notes) lines.push(`preflight: note ${clean(item.detail)}`);
+  stderr.write(lines.join('\n') + '\n');
+  stdout.write(JSON.stringify(result) + '\n');
+  return result.ok ? 0 : 1;
+}
+
 module.exports = {
   KNOWN_RUNTIMES,
   TRANSFER_CAPABILITY_SCHEMA,
@@ -359,6 +712,16 @@ module.exports = {
   readJsonRuntime,
   resolveRuntime,
   resolveDispatchContext,
+  resolveHostEnvironment,
+  launchEnvironment,
+  resolveCodexHome,
+  resolveClaudeHome,
+  RESOLVER_CODES,
+  PREFLIGHT_CODES,
+  preflight,
+  probeReasonToCode,
+  roleNeedsRepositoryIdentity,
+  emitPreflight,
   reportTransferCapability,
   readInheritedConfig,
 };
