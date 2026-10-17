@@ -129,7 +129,7 @@ function sealResearch({ root, scope, lines, limits } = {}) {
     envelope, evidence_index: index, artifact_index: index });
 }
 
-function verifySealedLine({ root, scope, line } = {}) {
+function verifySealedLine({ root, scope, line, acceptedRepositories } = {}) {
   if (typeof root !== 'string' || !root.trim()) refuse('RESEARCH_VERIFY_ROOT_INVALID', 'verifySealedLine requires an archive root');
   if (!object(scope) || typeof scope.invId !== 'string' || !/^INV-[A-Za-z0-9-]+$/.test(scope.invId)
       || typeof scope.sourceRevision !== 'string' || !/^[a-f0-9]{40}$/i.test(scope.sourceRevision)
@@ -144,6 +144,11 @@ function verifySealedLine({ root, scope, line } = {}) {
       || typeof line.artifact_digest !== 'string' || !/^[a-f0-9]{64}$/.test(line.artifact_digest)) {
     refuse('RESEARCH_VERIFY_REFERENCE_INVALID', `sealed line ${line.id} requires a bounded manifest reference and digest`);
   }
+  if (acceptedRepositories !== undefined && (!Array.isArray(acceptedRepositories)
+      || acceptedRepositories.some((value) => typeof value !== 'string' || !value.trim()))) {
+    refuse('RESEARCH_VERIFY_SCOPE_INVALID', 'verifySealedLine acceptedRepositories must be a list of non-empty strings');
+  }
+  const repositories = new Set([scope.repository, ...(acceptedRepositories || [])]);
   const archiveRoot = fs.realpathSync(root);
   let stat;
   try {
@@ -180,7 +185,7 @@ function verifySealedLine({ root, scope, line } = {}) {
   if (envelope.role !== 'research' || envelope.schema !== 'shipyard.research-result.v1' || envelope.version !== 1) {
     refuse('RESEARCH_VERIFY_ENVELOPE_INVALID', `sealed line ${line.id} manifest envelope is not a research result`);
   }
-  if (envelope.source_revision !== scope.sourceRevision || envelope.repository !== scope.repository
+  if (envelope.source_revision !== scope.sourceRevision || !repositories.has(envelope.repository)
       || envelope.policy_hash !== scope.policyHash) {
     refuse('RESEARCH_VERIFY_IDENTITY_MISMATCH', `sealed line ${line.id} manifest differs from the authenticated run`);
   }

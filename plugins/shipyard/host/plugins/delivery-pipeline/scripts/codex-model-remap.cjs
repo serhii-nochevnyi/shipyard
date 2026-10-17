@@ -8,14 +8,14 @@ const path = require('path');
 const policy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
-const { hintFor } = require('./refusal-hints.cjs');
+const { hintFor, renderRemedy } = require('./refusal-hints.cjs');
 
 const REPAIR = hintFor('CODEX_GENERATED_AGENT_FIX').remedy;
 
 function repairFor(code, details = {}) {
   const key = details && typeof details.key === 'string' ? details.key.trim() : '';
   if (code === 'CONFLICTING_OVERRIDE' && key) {
-    return hintFor('CODEX_CONFIG_FIX').remedy.replace('{key}', key);
+    return renderRemedy('CODEX_CONFIG_FIX', { key });
   }
   return REPAIR;
 }

@@ -5,9 +5,15 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const REPOSITORY_CLASS = '[^;\\x00-\\x1f]+';
+const REPOSITORY_CLASS = '[^;\\x00-\\x1f\\x7f]+';
 const REPOSITORY_VALUE = new RegExp(`^${REPOSITORY_CLASS}$`);
 const PHASE_SUBJECT = new RegExp('^phase=(\\d+-[A-Za-z0-9._-]+);repository=(' + REPOSITORY_CLASS + ');tickets=([a-f0-9]{64});pr=([1-9]\\d*);head=([a-f0-9]{40});base=([a-f0-9]{40})$');
+const GIT_SCOPE_KEYS = Object.freeze(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']);
+const gitEnvironment = () => {
+  const env = { ...process.env };
+  for (const key of GIT_SCOPE_KEYS) delete env[key];
+  return env;
+};
 const normalizeBranch = value => typeof value === 'string' ? value.trim().replace(/^(?:refs\/heads\/|refs\/remotes\/origin\/|origin\/)/, '') : null;
 
 function resolveIntegrationBranch({ projectRoot = process.cwd(), repo = null, config, defaultBranch, exec = execFileSync } = {}) {
@@ -86,7 +92,7 @@ function repositoryInvalid(message) {
 
 function repositoryIdentity(cwd, { execFileSync: run = execFileSync } = {}) {
   let common;
-  try { common = String(run('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).replace(/\r?\n$/, ''); }
+  try { common = String(run('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', env: gitEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] })).replace(/\r?\n$/, ''); }
   catch { throw repositoryInvalid('git common directory cannot be resolved'); }
   if (!common) throw repositoryInvalid('git common directory is empty');
   let real;
@@ -99,7 +105,7 @@ function repositoryIdentity(cwd, { execFileSync: run = execFileSync } = {}) {
 function legacyRepositoryForms(cwd) {
   try {
     const remote = String(execFileSync('git', ['-C', cwd, 'config', '--get', 'remote.origin.url'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim();
+      { encoding: 'utf8', env: gitEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] })).trim();
     const github = remote.match(/(?:github\.com[:/])([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
     if (github) return [github[1].toLowerCase()];
   } catch { return []; }
@@ -141,5 +147,5 @@ function parseSubject(name, text) {
   return match ? Object.freeze(Object.fromEntries(keys.map((key, index) => [key, match[index + 1]]))) : null;
 }
 
-module.exports = { repositoryIdentity, legacyRepositoryForms, acceptedRepositoryValues, buildSubject, parseSubject,
+module.exports = { GIT_SCOPE_KEYS, repositoryIdentity, legacyRepositoryForms, acceptedRepositoryValues, buildSubject, parseSubject,
   REPOSITORY_CLASS, resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, phaseEvidencePaths, PHASE_SUBJECT };

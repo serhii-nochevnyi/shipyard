@@ -922,15 +922,20 @@ function runHostPreflight(options, { host, worktree, graphDir, kind = 'launch', 
   const env = options.env ? { ...options.env } : process.env;
   const result = preflight({
     runtime: 'codex', scriptDir: __dirname, worktree, graphDir, scope: kind, host, env,
-    probe: () => options.probe || probeCodexRuntime({
+    probe: () => (typeof options.probe === 'function' ? options.probe() : options.probe || probeCodexRuntime({
       executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile,
-    }),
+    })),
     ...extra,
   });
   emitPreflight(result, { stdout: stdout || { write() {} }, stderr: options.stderr || process.stderr });
   if (!stdout && !result.ok) {
-    fail(result.findings[0].code,
-      `preflight found ${result.findings.length} incompatibilities: ${result.findings.map((item) => item.code).join(', ')}`);
+    try {
+      fail(result.findings[0].code,
+        `preflight found ${result.findings.length} incompatibilities: ${result.findings.map((item) => item.code).join(', ')}`);
+    } catch (refusal) {
+      refusal.hintPrinted = true;
+      throw refusal;
+    }
   }
   return result;
 }
@@ -1485,7 +1490,7 @@ if (require.main === module) {
     if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write('codex-decompose-host: ' + (error && error.message ? error.message : error) + '\n');
-    process.stderr.write(formatHint(error && error.code) + '\n');
+    if (!error?.hintPrinted) process.stderr.write(formatHint(error && error.code) + '\n');
     process.exitCode = 1;
   });
 }

@@ -21,9 +21,11 @@ const modelPolicy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const runWaker = require('./run-waker.cjs');
 const overhead = require('./orchestration-overhead.cjs');
-const { repositoryIdentity } = require('./architecture-target.cjs');
+const { repositoryIdentity, buildSubject } = require('./architecture-target.cjs');
+
 const { preflight, emitPreflight, launchEnvironment, resolveHostEnvironment } = require('./runtime-context.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
+const DELIVERY_HOSTS = Object.freeze({ codex: 'codex-delivery-host.cjs', claude: 'claude-delivery-host.cjs' });
 
 const ROLE_BUCKETS = Object.freeze({
   executor: Object.freeze(['execute']),
@@ -333,7 +335,7 @@ async function launch(argv, options = {}) {
   const launchEnv = { ...process.env, ...(options.env || {}), SHIPYARD_GRAPH_DIR: graphDir };
   const scriptDir = options.hostScriptDir || __dirname;
   const gate = preflight({
-    host: 'deliver-dispatch.cjs', runtime: args.runtime, scriptDir, worktree: worktreePath,
+    host: DELIVERY_HOSTS[args.runtime], runtime: args.runtime, scriptDir, worktree: worktreePath,
     scope: 'launch', graphDir, env: launchEnv,
   });
   if (!gate.ok) {
@@ -1024,7 +1026,9 @@ function buildPlanningRequest(args, options) {
   const repository = repositoryIdentity(context.projectRoot);
   const sourceRevision = planningSourceRevision(context.projectRoot);
   const refs = packetSourceRefs(context, sourceRefs);
-  const subject = `phase=${args.phase};input=${args.ticket};repository=${repository}`;
+  let subject;
+  try { subject = buildSubject('planning-input', { phase: args.phase, input: args.ticket, repository }); }
+  catch (error) { buildFail(args.ticket, error.message); }
   const packet = buildPlanningPacket({
     context,
     role: 'decomposition',

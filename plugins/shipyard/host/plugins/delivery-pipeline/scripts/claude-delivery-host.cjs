@@ -21,6 +21,7 @@ const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
 const { preflight, emitPreflight } = require('./runtime-context.cjs');
 const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
+const { acceptedRepositoryValues } = require('./architecture-target.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 
 const WORKFLOWS = Object.freeze(['executors', 'fix-round', 'drift-gate', 'investigation-research']);
@@ -460,7 +461,8 @@ function investigationPreflight(options, args, scope) {
     invId: args.invId, sourceRevision: args.sourceRevision,
     repository: args.repository, policyHash: args.policyHash,
   };
-  return args.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
+  const acceptedRepositories = acceptedRepositoryValues(worktree);
+  return args.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line, acceptedRepositories }));
 }
 
 function fetchReviewFeedback(options, repair) {
@@ -1159,6 +1161,7 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   if (!checked.ok) {
     const error = new Error(`claude-delivery-host: preflight found ${checked.findings.length} incompatibilities: ${checked.findings.map((item) => item.code).join(', ')}`);
     error.code = checked.findings[0].code;
+    error.hintPrinted = true;
     throw error;
   }
   const ownerId = `claude-cli-${crypto.randomUUID()}`;
@@ -1221,7 +1224,7 @@ if (require.main === module) {
     if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
-    process.stderr.write(`${formatHint(error && error.code)}\n`);
+    if (!error?.hintPrinted) process.stderr.write(`${formatHint(error && error.code)}\n`);
     process.exitCode = 1;
   });
 }

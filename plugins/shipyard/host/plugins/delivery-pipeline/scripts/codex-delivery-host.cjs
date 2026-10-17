@@ -16,6 +16,7 @@ const archReviewContext = require('./codex-arch-review-context.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
+const { acceptedRepositoryValues, GIT_SCOPE_KEYS } = require('./architecture-target.cjs');
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
 const { newDispatchId, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createVerificationRunner } = require('./command-runner.cjs');
@@ -145,7 +146,7 @@ function inflightGraphDir(options, worktree) {
 
 function git(worktree, args) {
   const env = { ...process.env };
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) delete env[key];
+  for (const key of GIT_SCOPE_KEYS) delete env[key];
   try {
     return execFileSync('git', ['-C', worktree, ...args], {
       encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
@@ -1164,7 +1165,8 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
   const root = path.join(storageDirectory(options, scope), 'planning-artifacts');
   const verifyScope = Object.freeze({ invId: inv.invId, sourceRevision: inv.sourceRevision,
     repository: inv.repository, policyHash: inv.policyHash });
-  const verifiedSiblings = inv.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
+  const acceptedRepositories = acceptedRepositoryValues(worktree);
+  const verifiedSiblings = inv.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line, acceptedRepositories }));
   if (verifiedSiblings.some((line) => line.status !== 'completed')) {
     fail('RESEARCH_VERIFY_STATUS_INVALID', 'blocked research evidence cannot be reused as a completed sibling');
   }
@@ -3369,10 +3371,8 @@ function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
   const result = preflight({ host: 'codex-delivery-host.cjs', runtime: 'codex', scriptDir: __dirname,
     worktree: scope.worktree, env: options.env || process.env, ...extra });
   const stderr = options.preflightStderr || process.stderr;
-  const details = () => stderr.write(result.findings.map((finding) => `preflight: detail[${finding.code}] ${finding.detail}\n`).join(''));
   if (report) {
     const code = emitPreflight(result, { stdout: options.preflightStdout || process.stdout, stderr });
-    if (code !== 0) details();
     return { result, code };
   }
   if (result.ok) {
@@ -3382,7 +3382,6 @@ function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
     return { result, code: 0 };
   }
   emitPreflight(result, { stdout: { write() {} }, stderr });
-  details();
   const refusal = new Error(`preflight found ${result.findings.length} incompatibilities: `
     + result.findings.map((finding) => finding.code).join(', '));
   refusal.code = result.findings[0].code;

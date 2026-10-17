@@ -90,7 +90,7 @@ const HINTS = Object.freeze({
   }),
   RUNTIME_CAPABILITY_MISSING: Object.freeze({
     hint: 'The runtime host has no capability evidence for the requested selection.',
-    remedy: `Run node {bundle}/scripts/{host} --preflight; if evidence is missing, upgrade the bundle (${UPGRADE}), then retry.`,
+    remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). Then retry.`,
   }),
   LEGACY_WRITER_STATE: Object.freeze({
     hint: 'A planning writer state file was written by an older layout.',
@@ -102,7 +102,7 @@ const HINTS = Object.freeze({
   }),
   AMBIGUOUS_RUNTIME: Object.freeze({
     hint: 'More than one runtime was detected and the host cannot choose.',
-    remedy: 'Pass the runtime explicitly for this command and re-run.',
+    remedy: "Run the host from the matching runtime's session, or unset the conflicting runtime marker named in the finding detail; an explicit runtime argument does not override a conflicting marker. Then re-run.",
   }),
   INVALID_STORE: Object.freeze({
     hint: 'The run store content does not match the expected schema.',
@@ -169,8 +169,8 @@ const HINTS = Object.freeze({
     remedy: 'Continue if this project has no earlier history; otherwise re-run from the original checkout location.',
   }),
   REPOSITORY_IDENTITY_INVALID: Object.freeze({
-    hint: 'The repository identity ({label}) could not be established.',
-    remedy: 'Run from inside a git repository with an origin remote and re-run.',
+    hint: 'The repository identity could not be established.',
+    remedy: 'Check that git can resolve the common directory of this worktree and that its real path contains no ";" or control character, then re-run.',
   }),
 });
 
@@ -199,16 +199,35 @@ function stripControl(value) {
   return String(value).replace(CONTROL, '');
 }
 
+const SAFE_SHELL_WORD = /^[A-Za-z0-9_@%+=:,./-]+$/;
+const COMMAND_PATH_TOKENS = new Set(['bundle', 'host']);
+
+// @security: a path substituted into a copy-paste command is single-quoted unless it is plainly safe.
+function shellQuote(value) {
+  return SAFE_SHELL_WORD.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function fillText(text, vars, quoted = false) {
+  const supplied = vars && typeof vars === 'object' ? vars : {};
+  return text.replace(/\{(\w+)\}/g, (token, name) => {
+    const value = Object.hasOwn(supplied, name) ? supplied[name] : undefined;
+    if (value !== undefined && value !== null && value !== '') {
+      const clean = stripControl(value);
+      return quoted && COMMAND_PATH_TOKENS.has(name) ? shellQuote(clean) : clean;
+    }
+    if (!Object.hasOwn(TOKEN_FALLBACKS, name)) return 'unspecified';
+    return quoted && name === 'bundle' ? shellQuote(TOKEN_FALLBACKS[name]) : TOKEN_FALLBACKS[name];
+  });
+}
+
+function renderRemedy(code, vars) {
+  return fillText(hintFor(code).remedy, vars, true);
+}
+
 function formatHint(code, vars) {
   const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
   const entry = hintFor(code);
-  const supplied = vars && typeof vars === 'object' ? vars : {};
-  const fill = (text) => text.replace(/\{(\w+)\}/g, (token, name) => {
-    const value = Object.hasOwn(supplied, name) ? supplied[name] : undefined;
-    if (value !== undefined && value !== null && value !== '') return stripControl(value);
-    return Object.hasOwn(TOKEN_FALLBACKS, name) ? TOKEN_FALLBACKS[name] : 'unspecified';
-  });
-  return `hint[${label}]: ${fill(entry.hint)} \u2014 remedy: ${fill(entry.remedy)}`;
+  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(entry.remedy, vars, true)}`;
 }
 
-module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, stripControl });
+module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, renderRemedy, stripControl });
