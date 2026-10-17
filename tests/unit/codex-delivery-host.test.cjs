@@ -1664,6 +1664,33 @@ test('a single-line re-dispatch launches only the failed line and leaves its sea
   } finally { clean(f); }
 });
 
+test('a re-dispatch verifies siblings sealed under the older owner/repo form with the physical repository identity', async () => {
+  const f = fixture();
+  try {
+    git(f.root, 'remote', 'add', 'origin', 'https://github.com/Acme/Shipyard.git');
+    f.host.launchStatic = researchLaunchStub(f, { skip: new Set(['alternatives']) });
+    const investigation = baseInvestigation(f, {
+      lines: ['system-state', 'constraints', 'risks', 'alternatives'].map((id) => ({ id, signals: {} })),
+    });
+    const failure = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    assert.equal(failure.sealed_lines.length, 3);
+    f.host.launchStatic = researchLaunchStub(f);
+    const redispatch = await delivery(f).run({
+      role: 'research',
+      context: {
+        prompt: 'Investigate.',
+        investigation: {
+          invId: investigation.invId, sourceRevision: investigation.sourceRevision,
+          repository: fs.realpathSync(path.join(f.root, '.git')), policyHash: investigation.policyHash,
+          lines: [{ id: 'alternatives', signals: {} }],
+          sealedLines: failure.sealed_lines,
+        },
+      },
+    });
+    assert.deepEqual(redispatch.map((entry) => entry.id), ['system-state', 'alternatives', 'constraints', 'risks']);
+  } finally { clean(f); }
+});
+
 test('a single-line request whose sibling artifact is missing refuses naming the sibling', async () => {
   const f = fixture();
   try {

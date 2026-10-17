@@ -1054,6 +1054,7 @@ test('the host accepts a single-line re-dispatch only once its three siblings ve
     git(root, 'init', '-q', '-b', 'main');
     git(root, 'config', 'user.name', 'Investigation Redispatch Test');
     git(root, 'config', 'user.email', 'investigation-redispatch@example.test');
+    git(root, 'remote', 'add', 'origin', 'git@github.com:Shipyard/Test.git');
     fs.writeFileSync(path.join(root, 'base.txt'), 'base\n');
     git(root, 'add', 'base.txt');
     git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
@@ -1142,6 +1143,15 @@ test('the host accepts a single-line re-dispatch only once its three siblings ve
     }
     const redispatched = second.find((line) => line.id === 'alternatives');
     assert.notEqual(redispatched.artifact_ref, first.find((line) => line.id === 'alternatives').artifact_ref);
+
+    note = 'upgraded';
+    const upgraded = await host.run('investigation-research', {
+      ...baseArgs,
+      repository: fs.realpathSync(path.join(root, '.git')),
+      lines: [{ id: 'alternatives', label: labels.alternatives, model: CLAUDE_RESEARCH.model, effort: CLAUDE_RESEARCH.effort, signals: { type: 'facts' } }],
+      sealedLines: siblings,
+    });
+    assert.equal(upgraded.length, 4, 'siblings sealed under the older owner/repo form still verify');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -16,6 +16,7 @@ const archReviewContext = require('./codex-arch-review-context.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
+const { acceptedRepositoryValues } = require('./architecture-target.cjs');
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
 const { newDispatchId, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createVerificationRunner } = require('./command-runner.cjs');
@@ -1164,7 +1165,8 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
   const root = path.join(storageDirectory(options, scope), 'planning-artifacts');
   const verifyScope = Object.freeze({ invId: inv.invId, sourceRevision: inv.sourceRevision,
     repository: inv.repository, policyHash: inv.policyHash });
-  const verifiedSiblings = inv.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
+  const acceptedRepositories = acceptedRepositoryValues(worktree);
+  const verifiedSiblings = inv.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line, acceptedRepositories }));
   if (verifiedSiblings.some((line) => line.status !== 'completed')) {
     fail('RESEARCH_VERIFY_STATUS_INVALID', 'blocked research evidence cannot be reused as a completed sibling');
   }

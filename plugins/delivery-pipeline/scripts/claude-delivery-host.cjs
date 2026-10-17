@@ -21,6 +21,7 @@ const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
 const { preflight, emitPreflight } = require('./runtime-context.cjs');
 const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
+const { acceptedRepositoryValues } = require('./architecture-target.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 
 const WORKFLOWS = Object.freeze(['executors', 'fix-round', 'drift-gate', 'investigation-research']);
@@ -460,7 +461,8 @@ function investigationPreflight(options, args, scope) {
     invId: args.invId, sourceRevision: args.sourceRevision,
     repository: args.repository, policyHash: args.policyHash,
   };
-  return args.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
+  const acceptedRepositories = acceptedRepositoryValues(worktree);
+  return args.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line, acceptedRepositories }));
 }
 
 function fetchReviewFeedback(options, repair) {
