@@ -58,7 +58,7 @@ const HINTS = Object.freeze({
   }),
   RUNTIME_UNAVAILABLE: Object.freeze({
     hint: 'The runtime this host needs is not reachable right now.',
-    remedy: `Run node {bundle}/scripts/{host} --preflight to see the specific cause: a missing CLI needs installing and authenticating, missing or stale capability evidence needs the marketplace upgrade (${UPGRADE}), then re-run.`,
+    remedy: `Run node {bundle}/scripts/{host} --preflight to see the specific cause: a missing CLI needs installing and authenticating, an outdated CLI whose help lacks a required option needs the CLI itself upgraded (Codex CLI for the Codex host, Claude Code for the Claude host; reinstalling Shipyard does not change that), missing or stale capability evidence needs the marketplace upgrade (${UPGRADE}), then re-run.`,
   }),
   STALE_GENERATED_AGENT: Object.freeze({
     hint: 'The installed GSD agent definition no longer matches the current policy.',
@@ -90,7 +90,7 @@ const HINTS = Object.freeze({
   }),
   RUNTIME_CAPABILITY_MISSING: Object.freeze({
     hint: 'The runtime host has no capability evidence for the requested selection.',
-    remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). Then retry.`,
+    remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). If the runtime CLI itself reports an unsupported option, upgrade that CLI instead. Then retry.`,
   }),
   LEGACY_WRITER_STATE: Object.freeze({
     hint: 'A planning writer state file was written by an older layout.',

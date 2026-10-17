@@ -475,9 +475,10 @@ test('an unreadable authority namespace adopts nothing and writes nothing', () =
 });
 
 const STAGING = 'dispatch-9.json.4242.0a1b2c3d-1111-4222-8333-444455556666.tmp';
+const WRITER_TMP = `.${STAGING}.tmp-4243`;
 
 test('editor and checkout noise is not a record: it never blocks, is never adopted and never trusted', () => {
-  for (const noise of ['.DS_Store', '.gitkeep', STAGING]) {
+  for (const noise of ['.DS_Store', '.gitkeep', STAGING, WRITER_TMP]) {
     const root = project();
     const dir = sidecars(root, 3);
     fs.writeFileSync(path.join(dir, noise), 'not a record');
@@ -496,6 +497,22 @@ test('editor and checkout noise is not a record: it never blocks, is never adopt
   }
 });
 
+test('the inert writer name is the exact name lock.writeAtomic stages for a provenance record', () => {
+  const lock = require('../../plugins/delivery-pipeline/scripts/lock.cjs');
+  const root = project();
+  const dir = path.join(root, '.planning/graph/provenance');
+  fs.mkdirSync(dir, { recursive: true });
+  const seen = [];
+  const rename = fs.renameSync;
+  fs.renameSync = (from, to) => { seen.push(path.basename(from)); return rename(from, to); };
+  try { lock.writeAtomic(path.join(dir, `dispatch-9.json.${process.pid}.${crypto.randomUUID()}.tmp`), '{}'); }
+  finally { fs.renameSync = rename; }
+  assert.equal(seen.length, 1);
+  fs.writeFileSync(path.join(dir, seen[0]), 'x');
+  assert.ok(roleArtifact.provenanceInert(dir, seen[0]), seen[0]);
+  assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'absent');
+});
+
 test('noise beside an empty history still classifies as absent', () => {
   const root = project();
   const dir = path.join(root, '.planning/graph/provenance');
@@ -509,6 +526,13 @@ test('noise that is a symlink, a directory or a near-miss name is still unsafe',
     symlinkedNoise: dir => fs.symlinkSync('/etc/hosts', path.join(dir, '.DS_Store')),
     directoryNoise: dir => fs.mkdirSync(path.join(dir, '.gitkeep')),
     symlinkedStaging: dir => fs.symlinkSync('/etc/hosts', path.join(dir, STAGING)),
+    symlinkedWriterTmp: dir => fs.symlinkSync('/etc/hosts', path.join(dir, WRITER_TMP)),
+    directoryWriterTmp: dir => fs.mkdirSync(path.join(dir, WRITER_TMP)),
+    writerTmpWithoutDot: dir => fs.writeFileSync(path.join(dir, `${STAGING}.tmp-4243`), 'x'),
+    writerTmpWithoutPid: dir => fs.writeFileSync(path.join(dir, `.${STAGING}.tmp-`), 'x'),
+    writerTmpWithWordPid: dir => fs.writeFileSync(path.join(dir, `.${STAGING}.tmp-abc`), 'x'),
+    writerTmpOfAShortToken: dir => fs.writeFileSync(path.join(dir, '.dispatch-9.json.4242.abc.tmp.tmp-4243'), 'x'),
+    writerTmpOfARecord: dir => fs.writeFileSync(path.join(dir, '.dispatch-9.json.tmp-4243'), 'x'),
     shortToken: dir => fs.writeFileSync(path.join(dir, 'dispatch-9.json.4242.abc.tmp'), 'x'),
     otherDotfile: dir => fs.writeFileSync(path.join(dir, '.hidden'), 'x'),
     noPid: dir => fs.writeFileSync(path.join(dir, 'dispatch-9.json.0a1b2c3d-1111-4222-8333-444455556666.tmp'), 'x'),
@@ -529,6 +553,7 @@ test('noise appearing after adoption does not block the next mutation', () => {
   adopt(root);
   fs.writeFileSync(path.join(dir, '.DS_Store'), 'x');
   fs.writeFileSync(path.join(dir, STAGING), 'x');
+  fs.writeFileSync(path.join(dir, WRITER_TMP), 'x');
   let invoked = 0;
   adopt(root, () => { invoked++; });
   assert.equal(invoked, 1);

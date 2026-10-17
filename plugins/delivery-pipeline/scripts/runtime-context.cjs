@@ -510,7 +510,7 @@ const PREFLIGHT_CODES = Object.freeze([
   'ENV_CONFLICT', 'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE', 'RUNTIME_CAPABILITY_MISSING',
   'UNKNOWN_RUNTIME', 'AMBIGUOUS_RUNTIME', 'STALE_GENERATED_AGENT', 'RUNTIME_UNAVAILABLE',
   'LEGACY_HISTORY_UNSAFE', 'LEGACY_HISTORY_CHANGED', 'LEGACY_HISTORY_UNKNOWN_MEMBER', 'LEGACY_HISTORY_MISSING',
-  'ARCHIVE_AUTHORITY_INVALID', 'LEGACY_WRITER_STATE', 'INVALID_STORE',
+  'ARCHIVE_AUTHORITY_INVALID', 'LEGACY_WRITER_STATE', 'INVALID_STORE', 'REPOSITORY_IDENTITY_INVALID',
 ]);
 
 function preflightGraphDir(graphDir, worktree, env) {
@@ -531,6 +531,14 @@ function preflightGraphDir(graphDir, worktree, env) {
   const directory = path.resolve(candidate);
   if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning') return null;
   return fs.existsSync(directory) ? directory : null;
+}
+
+const CAPABILITY_PROBE_REASONS = new Set(['capability_evidence_missing', 'RUNTIME_CAPABILITY_MISSING']);
+
+// @contract: only absent capability evidence is a capability error; any other unavailable probe is RUNTIME_UNAVAILABLE.
+function probeReasonToCode(reason) {
+  return CAPABILITY_PROBE_REASONS.has(String(reason === undefined || reason === null ? '' : reason))
+    ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
 }
 
 function errorCode(error) {
@@ -614,12 +622,22 @@ function preflight(options = {}) {
     const result = opts.probe();
     if (result && result.status === 'unavailable') {
       const reason = String(result.reason || 'unknown');
-      const code = /capability/.test(reason) ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
-      find(code, `${reason}${result.detail ? ': ' + result.detail : ''}`, withBundle({}));
+      find(probeReasonToCode(reason), `${reason}${result.detail ? ': ' + result.detail : ''}`, withBundle({}));
     }
   });
 
   if (scope === 'launch') {
+    run('repository identity', () => {
+      if (typeof opts.worktree !== 'string' || !opts.worktree) return;
+      try { require('./architecture-target.cjs').repositoryIdentity(opts.worktree); }
+      catch (error) {
+        if (error && error.code === 'REPOSITORY_IDENTITY_INVALID' && error.reason === 'git') {
+          note('not-evaluated', 'repository identity: not evaluated, git cannot resolve the common directory');
+          return;
+        }
+        throw error;
+      }
+    });
     run('legacy history', () => {
       const directory = preflightGraphDir(opts.graphDir, opts.worktree, env);
       if (!directory) { note('not-evaluated', 'legacy history: not evaluated, no graph directory'); return; }
@@ -693,6 +711,7 @@ module.exports = {
   RESOLVER_CODES,
   PREFLIGHT_CODES,
   preflight,
+  probeReasonToCode,
   emitPreflight,
   reportTransferCapability,
   readInheritedConfig,
