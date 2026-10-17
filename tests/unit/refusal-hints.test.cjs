@@ -141,3 +141,15 @@ test('remedies touching history or authority never suggest deleting or moving it
     }
   }
 });
+
+test('a CONFLICTING_OVERRIDE refusal from the Codex remap renders every placeholder', () => {
+  const remap = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
+  const rendered = remap.repairFor('CONFLICTING_OVERRIDE', { key: 'model_policy.runtime_tiers.codex.sol' });
+  assert.doesNotMatch(rendered, /[{}]/);
+  assert.ok(rendered.includes('Fix model_policy.runtime_tiers.codex.sol in .planning/config.json'));
+  assert.ok(rendered.includes(`node ${path.resolve(SCRIPTS_DIR, '..')}/scripts/gsd-tune.cjs --runtime codex --apply`));
+  assert.throws(
+    () => remap.loadCodexRemap({ config: { model_profile_overrides: { codex: { sol: 'not-a-model' } } } }),
+    (error) => error.code === 'CONFLICTING_OVERRIDE' && !/[{}]/.test(error.message) && /Fix model_profile_overrides\.codex\.sol in/.test(error.message),
+  );
+});

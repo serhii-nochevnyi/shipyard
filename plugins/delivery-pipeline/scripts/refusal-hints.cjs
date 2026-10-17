@@ -199,16 +199,23 @@ function stripControl(value) {
   return String(value).replace(CONTROL, '');
 }
 
-function formatHint(code, vars) {
-  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
-  const entry = hintFor(code);
+function fillText(text, vars) {
   const supplied = vars && typeof vars === 'object' ? vars : {};
-  const fill = (text) => text.replace(/\{(\w+)\}/g, (token, name) => {
+  return text.replace(/\{(\w+)\}/g, (token, name) => {
     const value = Object.hasOwn(supplied, name) ? supplied[name] : undefined;
     if (value !== undefined && value !== null && value !== '') return stripControl(value);
     return Object.hasOwn(TOKEN_FALLBACKS, name) ? TOKEN_FALLBACKS[name] : 'unspecified';
   });
-  return `hint[${label}]: ${fill(entry.hint)} \u2014 remedy: ${fill(entry.remedy)}`;
 }
 
-module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, stripControl });
+function renderRemedy(code, vars) {
+  return fillText(hintFor(code).remedy, vars);
+}
+
+function formatHint(code, vars) {
+  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
+  const entry = hintFor(code);
+  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(entry.remedy, vars)}`;
+}
+
+module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, renderRemedy, stripControl });
