@@ -2664,6 +2664,39 @@ test('a broken environment refuses before the run store, the lease and any detac
   } finally { f.clean(); }
 });
 
+function corruptLegacyWriter(f) {
+  const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+  const hostState = path.dirname(defaultRunStoreDir(f.scope, f.stateRoot));
+  const oldLease = createPlanningWriterLease({ stateRoot: path.join(hostState, 'writer'), worktree: f.root, phaseDir });
+  oldLease.acquire({ owner: 'private-legacy', base_revision: headRevision(f.root) });
+  fs.writeFileSync(oldLease.file, '{invalid', { mode: 0o600 });
+  return hostState;
+}
+
+test('legacy writer state is a preflight finding: launch and detach refuse before any state and --preflight names it', async () => {
+  const f = fixture();
+  try {
+    const hostState = corruptLegacyWriter(f);
+    const file = requestFileFor(f);
+    for (const argv of [['--args-file', file], ['--detach', '--args-file', file]]) {
+      const stderr = preflightSink();
+      let spawned = false;
+      await assert.rejects(() => runCli(argv, preflightSink(), {
+        env: {}, probe: PROBE_OK, stderr, testStateRoot: f.stateRoot,
+        spawn() { spawned = true; return {}; },
+      }), { code: 'LEGACY_WRITER_STATE' });
+      assert.match(stderr.text(), /hint\[LEGACY_WRITER_STATE\]/);
+      assert.equal(spawned, false);
+      assert.equal(fs.existsSync(path.join(hostState, 'runs')), false);
+    }
+    const out = preflightSink();
+    const check = await runCli(['--preflight', '--args-file', file], out, {
+      env: {}, probe: PROBE_OK, stderr: preflightSink(), testStateRoot: f.stateRoot });
+    assert.ok(check.findings.some((finding) => finding.code === 'LEGACY_WRITER_STATE'));
+    assert.ok(JSON.parse(out.text().trim()).findings.some((finding) => finding.code === 'LEGACY_WRITER_STATE'));
+  } finally { f.clean(); }
+});
+
 test('recover refuses a broken environment before it touches any recovery state', async () => {
   const f = fixture();
   try {

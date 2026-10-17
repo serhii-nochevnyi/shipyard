@@ -1109,6 +1109,50 @@ test('--preflight parses alone and with --request-file', () => {
   assert.equal(both.requestFile, 'r.json');
 });
 
+function legacyWriterFixture() {
+  const f = preparedPhaseFixture();
+  const worktree = fs.realpathSync(f.worktree);
+  const sha = (text) => crypto.createHash('sha256').update(text).digest('hex');
+  const leaseDir = path.join(f.root, '.local', 'state', 'shipyard', 'codex-decompose', sha(worktree), 'writer',
+    sha(`${worktree}\n${fs.realpathSync(f.phaseDir)}`));
+  fs.mkdirSync(leaseDir, { recursive: true });
+  fs.writeFileSync(path.join(leaseDir, 'lease.json'), '{}');
+  return { ...f, claudeState: path.join(f.root, '.local', 'state', 'shipyard', 'claude-decompose') };
+}
+
+test('a refused decomposition because of legacy writer state creates no private store', async () => {
+  const f = legacyWriterFixture();
+  const home = process.env.HOME;
+  process.env.HOME = f.root;
+  try {
+    await assert.rejects(nativeRunDecomposition(request(f.worktree, 'gsd-planner'), {}), { code: 'LEGACY_WRITER_STATE' });
+    assert.equal(fs.existsSync(f.claudeState), false);
+  } finally { process.env.HOME = home; f.clean(); }
+});
+
+test('--preflight with a request reports LEGACY_WRITER_STATE and a launch refuses with its code and no state', () => {
+  const f = legacyWriterFixture();
+  try {
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const env = hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config });
+    const run = (args) => require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, ...args],
+      { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    const check = run(['--preflight', '--request-file', requestFile]);
+    const payload = JSON.parse(check.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.ok(payload.findings.some((finding) => finding.code === 'LEGACY_WRITER_STATE'), check.stderr);
+    const launch = run(['--request-file', requestFile]);
+    assert.equal(launch.status, 1, launch.stderr);
+    assert.equal(launch.stdout, '');
+    const first = /^([A-Z_]+): preflight found/m.exec(launch.stderr);
+    assert.ok(first, launch.stderr);
+    assert.equal(first[1], payload.findings[0].code);
+    assert.match(launch.stderr, /hint\[LEGACY_WRITER_STATE\]/);
+    assert.equal(launch.stderr.split('\n').filter((line) => line.startsWith(`hint[${first[1]}]`)).length, 1);
+    assert.equal(fs.existsSync(f.claudeState), false);
+  } finally { f.clean(); }
+});
+
 test('a launch whose preflight passes keeps preflight JSON off stdout', () => {
   const f = preparedPhaseFixture();
   try {

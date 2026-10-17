@@ -349,6 +349,34 @@ test('a broken environment refuses in the caller process with hints before any d
   } finally { f.clean(); }
 });
 
+test('legacy writer state refuses in the caller process before any detached child, and --preflight names it', async () => {
+  const f = fixture();
+  try {
+    const { defaultRunStoreDir } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
+    const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
+    const phaseDir = path.join(f.root, '.planning', 'phases', '43-planning');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const request = requestFor(f.root);
+    const testStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'planning-context-state-'));
+    const hostState = path.dirname(defaultRunStoreDir(request.scope, testStateRoot));
+    const lease = createPlanningWriterLease({ stateRoot: path.join(hostState, 'writer'), worktree: f.root, phaseDir });
+    lease.acquire({ owner: 'private-legacy', base_revision: git(f.root, 'rev-parse', 'HEAD') });
+    fs.writeFileSync(lease.file, '{invalid', { mode: 0o600 });
+    const file = argsFile(f.root, request);
+    let launched = false;
+    const stderr = captured();
+    await assert.rejects(() => runCli(['--args-file', file], captured(), {
+      stateDir: path.join(f.root, 'dispatch'), stderr, testStateRoot, runHost: async () => { launched = true; },
+    }), (error) => error.code === 'LEGACY_WRITER_STATE');
+    assert.equal(launched, false);
+    assert.match(stderr.text(), /hint\[LEGACY_WRITER_STATE\]/);
+    const check = await runCli(['--preflight', '--args-file', file], captured(), {
+      stateDir: path.join(f.root, 'dispatch'), stderr: captured(), testStateRoot, runHost: async () => { launched = true; } });
+    assert.ok(check.findings.some((finding) => finding.code === 'LEGACY_WRITER_STATE'));
+    fs.rmSync(testStateRoot, { recursive: true, force: true });
+  } finally { f.clean(); }
+});
+
 test('--preflight alone checks the current directory, prints the JSON line and starts nothing', async () => {
   const f = fixture();
   const previous = process.cwd();
