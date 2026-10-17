@@ -1022,6 +1022,24 @@ test('an unreadable authority namespace does not stop a healthy launch but other
   }
 });
 
+test('a refused launch names the runtime delivery host in its remedy, never deliver-dispatch', async () => {
+  const fixture = shipyardFixture('T-50-64');
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-host-name-'));
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-host-bundle-'));
+  const stderr = [];
+  try {
+    await assert.rejects(deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: fixture.root, stateDir, hostScriptDir: brokenBundle(runtimeRoot), spawn: noSpawn(),
+      preflightStderr: { write(text) { stderr.push(text); } },
+    }), (error) => error.code === 'PREFLIGHT_REFUSED');
+    const text = stderr.join('');
+    assert.match(text, /codex-delivery-host\.cjs --preflight/);
+    assert.equal(text.includes('deliver-dispatch.cjs'), false);
+  } finally {
+    cleanup(fixture.root, stateDir, runtimeRoot);
+  }
+});
+
 test('decomposition build carries repositoryIdentity for a path with a space and an origin remote', () => {
   const fixture = planningBuilderFixture('INV-50-20', 'shipyard deliver dispatch id-');
   try {
