@@ -315,6 +315,12 @@ function readWaitAccounting(association, options = {}) {
     missing_evidence: missing, savings: 'inconclusive' });
 }
 
+function writerPreflight(options, parsed) {
+  try {
+    return codexDecomposeHost.writerPreflight(options, normalizeScope(parsed.scope), parsed.launch);
+  } catch { return {}; }
+}
+
 async function runCli(argv = process.argv.slice(2), stdout = process.stdout, options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
   const hostName = 'codex-planning-context-host.cjs';
@@ -330,12 +336,14 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     const checked = readArgsFile(argv.slice(1));
     return codexDecomposeHost.runHostPreflight(preflightOptions, { host: hostName, worktree: checked.scope.worktree,
       graphDir: path.resolve((preflightOptions.env && preflightOptions.env.SHIPYARD_GRAPH_DIR)
-        || process.env.SHIPYARD_GRAPH_DIR || path.join(checked.scope.worktree, '.planning', 'graph')), stdout });
+        || process.env.SHIPYARD_GRAPH_DIR || path.join(checked.scope.worktree, '.planning', 'graph')), stdout,
+      ...writerPreflight(preflightOptions, checked) });
   }
   const parsed = readArgsFile(argv);
   codexDecomposeHost.runHostPreflight(preflightOptions, { host: hostName, worktree: parsed.scope.worktree,
     graphDir: path.resolve((preflightOptions.env && preflightOptions.env.SHIPYARD_GRAPH_DIR)
-      || process.env.SHIPYARD_GRAPH_DIR || path.join(parsed.scope.worktree, '.planning', 'graph')) });
+      || process.env.SHIPYARD_GRAPH_DIR || path.join(parsed.scope.worktree, '.planning', 'graph')),
+    ...writerPreflight(preflightOptions, parsed) });
   const request = requestValue(parsed.launch, { worktreePath: parsed.scope.worktree });
   const hostRequest = delegateRequest(request);
   const delegated = {

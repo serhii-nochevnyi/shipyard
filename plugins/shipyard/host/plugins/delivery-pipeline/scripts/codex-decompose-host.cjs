@@ -908,13 +908,24 @@ function requestGraphDir(env, worktree) {
   return path.resolve(env.SHIPYARD_GRAPH_DIR || path.join(worktree, '.planning', 'graph'));
 }
 
-function runHostPreflight(options, { host, worktree, graphDir, kind = 'launch', stdout }) {
+function writerPreflight(options, scope, launch) {
+  try {
+    const phaseDir = phaseDirectory(scope.worktree, scope.phase);
+    const hostStateDir = path.dirname(options.testRunStoreDir || defaultRunStoreDir(scope, options.testStateRoot));
+    return { gsdRole: launch.gsd_role, phaseDir,
+      writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+        repository: scope.repository, privateRoots: [path.join(hostStateDir, 'writer')] }) };
+  } catch { return {}; }
+}
+
+function runHostPreflight(options, { host, worktree, graphDir, kind = 'launch', stdout, ...extra }) {
   const env = options.env ? { ...options.env } : process.env;
   const result = preflight({
     runtime: 'codex', scriptDir: __dirname, worktree, graphDir, scope: kind, host, env,
     probe: () => options.probe || probeCodexRuntime({
       executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile,
     }),
+    ...extra,
   });
   emitPreflight(result, { stdout: stdout || { write() {} }, stderr: options.stderr || process.stderr });
   if (!stdout && !result.ok) {
@@ -932,6 +943,7 @@ function preflightCli(parsed, stdout, options, host = 'codex-decompose-host.cjs'
   const scope = normalizeScope(request.scope);
   return runHostPreflight(options, {
     host, worktree: scope.worktree, graphDir: requestGraphDir(hostEnvironment(options), scope.worktree), stdout,
+    ...writerPreflight(options, scope, request.launch),
   });
 }
 
@@ -1006,7 +1018,8 @@ function detachCli(argv, stdout, options) {
   if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
 
   runHostPreflight(options, { host: 'codex-decompose-host.cjs', worktree: scope.worktree,
-    graphDir: requestGraphDir(hostEnvironment(options), scope.worktree) });
+    graphDir: requestGraphDir(hostEnvironment(options), scope.worktree),
+    ...writerPreflight(options, scope, parsed.launch) });
 
   const dispatchId = detachedDispatchId(parsed.launch);
   if (dispatchId === '.' || dispatchId === '..' || /[\\/]/.test(dispatchId) || path.isAbsolute(dispatchId)) {
@@ -1338,7 +1351,8 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   catch (error) { fail('INVALID_INPUT', 'worktree path cannot be inspected: ' + error.message); }
   if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
   runHostPreflight(options, { host: 'codex-decompose-host.cjs', worktree: scope.worktree,
-    graphDir: requestGraphDir(hostEnvironment(options), scope.worktree) });
+    graphDir: requestGraphDir(hostEnvironment(options), scope.worktree),
+    ...writerPreflight(options, scope, parsed.launch) });
   const runStoreDir = options.testRunStoreDir || defaultRunStoreDir(scope, options.testStateRoot);
   const hostStateDir = path.dirname(runStoreDir);
   const controller = createRunController({
@@ -1460,6 +1474,7 @@ module.exports = Object.freeze({
   readRequestFile,
   sealScope,
   runHostPreflight,
+  writerPreflight,
   preflightCli,
   parsePreflightArguments,
   runCli,
