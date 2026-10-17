@@ -1052,10 +1052,18 @@ function ticketFromContext(context) {
     ? context
     : isObject(context) ? context.ticket : undefined;
   if (ticket === undefined) return undefined;
-  if (typeof ticket !== 'string' || ticket.trim() === '' || /[\s\u0000-\u001f\u007f]/.test(ticket)) {
+  if (typeof ticket !== 'string' || ticket.trim() === '' || /[\u0000-\u001f\u007f]/.test(ticket)
+      || (/\s/.test(ticket) && !isSubjectTicket(ticket))) {
     refuse('INVALID_INPUT', 'launch context ticket must be a non-empty, whitespace-free string');
   }
   return ticket;
+}
+
+// @contract: only a parsed planning or review subject may carry whitespace, inside its repository field.
+function isSubjectTicket(ticket) {
+  const target = require('./architecture-target.cjs');
+  return ['planning-input', 'decomposition-seal', 'integrator', 'architecture-review']
+    .some((name) => target.parseSubject(name, ticket) !== null);
 }
 
 function subjectKindFromContext(context, role, ticket) {

@@ -437,6 +437,30 @@ test('reconciliation refuses without an explicitly configured recorder', () => {
   );
 });
 
+test('the boundary lets a planning subject carry a space in its repository and nothing else', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-subject-space-'));
+  try {
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { claude: fakeAdapter() },
+      recorder: boundaryModule.createDurableRecorder(storeDir),
+    });
+    const refused = (ticket) => assert.throws(
+      () => boundary.dispatch({ runtime: 'claude', role: 'decomposition' }, { ticket }),
+      (error) => error.code === 'INVALID_INPUT');
+    const subject = `phase=50;input=ADR-030;repository=${path.join(os.tmpdir(), 'my checkout', '.git')}`;
+    const result = boundary.dispatch({ runtime: 'claude', role: 'decomposition', dispatch_id: 'subject-space' },
+      { ticket: subject });
+    assert.equal(result.receipt.dispatch_id, 'subject-space');
+    refused('T-50-01 extra');
+    refused(subject.replace('/my checkout', '/my\tcheckout'));
+    refused(subject.replace('/my checkout', '/my\x7fcheckout'));
+    refused(`${subject} trailing;x=1`);
+    refused(subject.replace('phase=50', 'phase=50 '));
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
 test('a sentinel round subject is authenticated through launch, receipt and reconciliation', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-round-subject-'));
   try {

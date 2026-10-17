@@ -11,7 +11,7 @@ process.on('exit', () => {
   os.homedir = originalHomedir;
   fs.rmSync(authorityHome,{recursive:true,force:true});
 });
-const { resolveIntegrationBranch, architectureTarget, phaseBinding, PHASE_SUBJECT } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+const { resolveIntegrationBranch, architectureTarget, phaseBinding, PHASE_SUBJECT, buildSubject, parseSubject } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 
 test('configuration wins for the project; foreign repositories keep their own default', () => {
   const config = { git: { base_branch: 'develop' } };
@@ -45,6 +45,14 @@ test('aggregate subject binds actual membership, repository, PR, live head and b
     {state:{'T-47-01':{pr:2,status:'merged'}}}, {graph:{tickets:{'T-47-01':row,'T-47-02':{...row,plan:'.planning/phases/47-policy/47-02-PLAN.md'}}}}])
     assert.notEqual(phaseBinding({...input,...edit}).subject,subject);
   assert.throws(() => phaseBinding({...input,branch:'ticket/T-47-01'}), /canonical phase epic/);
+});
+
+test('subject repositories allow spaces but refuse the delete control character', () => {
+  const fields = { phase: 50, input: 'ADR-030', repository: '/work/my repo/.git' };
+  const subject = buildSubject('planning-input', fields);
+  assert.equal(parseSubject('planning-input', subject).repository, '/work/my repo/.git');
+  assert.throws(() => buildSubject('planning-input', { ...fields, repository: '/work/my\x7frepo/.git' }), /repository/);
+  assert.equal(parseSubject('planning-input', subject.replace('my repo', 'my\x7frepo')), null);
 });
 
 test('public phase builder reports empty selections as structured build refusals', () => {

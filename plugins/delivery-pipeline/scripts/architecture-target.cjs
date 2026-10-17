@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const REPOSITORY_CLASS = '[^;\\x00-\\x1f]+';
+const REPOSITORY_CLASS = '[^;\\x00-\\x1f\\x7f]+';
 const REPOSITORY_VALUE = new RegExp(`^${REPOSITORY_CLASS}$`);
 const PHASE_SUBJECT = new RegExp('^phase=(\\d+-[A-Za-z0-9._-]+);repository=(' + REPOSITORY_CLASS + ');tickets=([a-f0-9]{64});pr=([1-9]\\d*);head=([a-f0-9]{40});base=([a-f0-9]{40})$');
 const normalizeBranch = value => typeof value === 'string' ? value.trim().replace(/^(?:refs\/heads\/|refs\/remotes\/origin\/|origin\/)/, '') : null;
