@@ -59,7 +59,10 @@ if (process.env.SHIPYARD_RESEARCH_HANDBACK_FIXTURE) {
     };
   }
   const runtime = require(runtimeFile);
-  require.cache[runtimeFile].exports = { ...runtime, createCodexRuntimeHost(options) {
+  require.cache[runtimeFile].exports = { ...runtime,
+    probeCodexRuntime: () => ({ schema: 'shipyard.codex-runtime-probe.v1', version: 1, status: 'available',
+      executable: 'codex', runtime_version: 'fixture', capabilities }),
+    createCodexRuntimeHost(options) {
     const recorder = createDurableRecorder(options.recorderDir);
     return { scope: options.scope, capabilities, recorder, launchStatic(selection, context) {
       fs.appendFileSync(config.calls, context.research_line + '\n');
