@@ -173,3 +173,19 @@ test('prose placeholders are not shell-quoted', () => {
   assert.ok(formatHint('LEGACY_HISTORY_UNSAFE', { path: '.planning/graph/a b;c.json' }).includes('history at .planning/graph/a b;c.json cannot'));
   assert.ok(formatHint('ENV_CONFLICT', { explicit: 'CODEX_HOME=/a b', bundle_value: '/c d' }).includes('names CODEX_HOME=/a b but the installed bundle is /c d'));
 });
+
+test('capability, runtime-ambiguity and repository-identity remedies name the real cause and fix', () => {
+  const missing = formatHint('RUNTIME_CAPABILITY_MISSING', { bundle: '/b', host: 'codex-delivery-host.cjs' });
+  assert.doesNotMatch(missing, /--preflight/);
+  assert.match(missing, /SHIPYARD_CODEX_CAPABILITIES_FILE/);
+  assert.match(missing, /Launch and upgrade/);
+  assert.match(missing, /codex plugin marketplace upgrade shipyard/);
+  const ambiguous = formatHint('AMBIGUOUS_RUNTIME');
+  assert.doesNotMatch(ambiguous, /Pass the runtime explicitly/);
+  assert.match(ambiguous, /matching runtime's session/);
+  assert.match(ambiguous, /unset the conflicting runtime marker named in the finding detail/);
+  const identity = formatHint('REPOSITORY_IDENTITY_INVALID');
+  assert.doesNotMatch(identity, /origin remote|unknown/);
+  assert.match(identity, /common directory/);
+  assert.match(identity, /";" or control character/);
+});
