@@ -84,20 +84,21 @@ function phaseEvidencePaths(project, binding) {
   return paths;
 }
 
-function repositoryInvalid(message) {
+function repositoryInvalid(message, reason = 'value') {
   const error = new Error(`repository identity: ${message}`);
   error.code = 'REPOSITORY_IDENTITY_INVALID';
+  error.reason = reason;
   return error;
 }
 
 function repositoryIdentity(cwd, { execFileSync: run = execFileSync } = {}) {
   let common;
   try { common = String(run('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', env: gitEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] })).replace(/\r?\n$/, ''); }
-  catch { throw repositoryInvalid('git common directory cannot be resolved'); }
-  if (!common) throw repositoryInvalid('git common directory is empty');
+  catch { throw repositoryInvalid('git common directory cannot be resolved', 'git'); }
+  if (!common) throw repositoryInvalid('git common directory is empty', 'git');
   let real;
   try { real = fs.realpathSync(path.resolve(cwd, common)); }
-  catch { throw repositoryInvalid('git common directory cannot be resolved'); }
+  catch { throw repositoryInvalid('git common directory cannot be resolved', 'git'); }
   if (!REPOSITORY_VALUE.test(real)) throw repositoryInvalid('path contains ";" or a control character');
   return real;
 }

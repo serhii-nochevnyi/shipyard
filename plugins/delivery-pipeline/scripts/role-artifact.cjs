@@ -1071,6 +1071,16 @@ function publishAuthorityKey(directory, keyFile) {
   } finally { try { fs.unlinkSync(temporary); } catch {} }
 }
 
+const PROTECTED_RECORDS_NEED_KEY = 'existing protected records require their original authority key';
+// @invariant: protected records without their authority key are never re-keyed, by a launch or by a preflight.
+function protectedRecordsWithoutKey(directory) {
+  if (fs.existsSync(path.join(directory, 'hmac.key'))) return false;
+  let names;
+  try { names = fs.readdirSync(directory); }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  return names.some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-'));
+}
+
 function authorityState(worktree, create = false, requireCatalogue = true, readCatalogue = true) {
   const directory = archiveAuthorityDirectory(worktree, create);
   if (create) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -1079,8 +1089,7 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority directory is not private or contains symlinks');
   const keyFile = path.join(directory, 'hmac.key');
   if (create && !fs.existsSync(keyFile)) {
-    if (fs.readdirSync(directory).some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-')))
-      fail('ARCHIVE_AUTHORITY_INVALID', 'existing protected records require their original authority key');
+    if (protectedRecordsWithoutKey(directory)) fail('ARCHIVE_AUTHORITY_INVALID', PROTECTED_RECORDS_NEED_KEY);
     publishAuthorityKey(directory, keyFile);
   }
   const key = stableAuthorityFile(keyFile, 32);
@@ -3975,6 +3984,10 @@ function legacyAuthoritySide(worktree) {
   const side = { pins: [], legacy: null, finding: null, unreadable: null };
   try {
     const directory = archiveAuthorityDirectory(worktree);
+    if (protectedRecordsWithoutKey(directory)) {
+      side.finding = { code: 'ARCHIVE_AUTHORITY_INVALID', path: '', detail: PROTECTED_RECORDS_NEED_KEY };
+      return side;
+    }
     const catalogue = path.join(directory, 'catalogue.json');
     try { fs.lstatSync(catalogue); }
     catch (error) { if (error.code === 'ENOENT') return side; throw error; }

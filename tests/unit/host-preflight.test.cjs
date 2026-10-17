@@ -50,8 +50,8 @@ function installedLayout({ stale = false, cliVersion } = {}) {
   return { root, home, bundle, scriptDir };
 }
 
-function project(members = {}) {
-  const root = tmp('project');
+function project(members = {}, label = 'project') {
+  const root = tmp(label);
   execFileSync('git', ['init', '-q', root]);
   fs.mkdirSync(path.join(root, '.planning', 'graph', 'provenance'), { recursive: true });
   for (const [name, body] of Object.entries(members)) {
@@ -233,6 +233,57 @@ describe('host preflight', () => {
       assert.throws(() => roleArtifact.trustedBookkeepingMutation(broken.root, () => {}, []),
         (error) => error.code === 'ARCHIVE_AUTHORITY_INVALID' && !(error instanceof SyntaxError) && !(error instanceof TypeError), body);
     }
+  });
+
+  it('reports a repository path that no launch can use, with its hint', () => {
+    const layout = installedLayout();
+    for (const label of ['semi;colon', 'tab\there']) {
+      const bad = project({}, label);
+      const result = preflight(base(layout, { worktree: bad.root, graphDir: bad.graphDir }));
+      assert.deepEqual(codes(result), ['REPOSITORY_IDENTITY_INVALID'], label);
+      assert.equal(result.ok, false, label);
+      assert.throws(() => require(scripts + 'architecture-target.cjs').repositoryIdentity(bad.root), { code: 'REPOSITORY_IDENTITY_INVALID' });
+      const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
+      assert.equal(emitPreflight(result, streams), 1);
+      assert.match(streams.stderr.text, /hint\[REPOSITORY_IDENTITY_INVALID\]/, label);
+      assert.deepEqual(codes(preflight(base(layout, { worktree: bad.root, graphDir: bad.graphDir, scope: 'environment' }))), [], label);
+    }
+    const good = project();
+    assert.equal(preflight(base(layout, { worktree: good.root, graphDir: good.graphDir })).ok, true);
+    const nonGit = preflight(base(layout, { graphDir: null }));
+    assert.equal(nonGit.ok, true);
+    assert.ok(nonGit.notes.some((n) => /repository identity: not evaluated/.test(n.detail)));
+  });
+
+  it('reports a catalogue without its authority key as the finding a trusted mutation refuses with', () => {
+    const layout = installedLayout();
+    const keyless = project({ 'one.json': '{}' });
+    roleArtifact.trustedBookkeepingMutation(keyless.root, () => {}, []);
+    const directory = roleArtifact.archiveAuthorityDirectory(keyless.root);
+    assert.equal(preflight(base(layout, { graphDir: keyless.graphDir })).ok, true);
+    fs.rmSync(path.join(directory, 'hmac.key'));
+    const result = preflight(base(layout, { graphDir: keyless.graphDir }));
+    assert.deepEqual(codes(result), ['ARCHIVE_AUTHORITY_INVALID']);
+    assert.match(result.findings[0].detail, /original authority key/);
+    assert.ok(!result.notes.some((n) => /legacy history: not evaluated/.test(n.detail)));
+    const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
+    assert.equal(emitPreflight(result, streams), 1);
+    assert.match(streams.stderr.text, /hint\[ARCHIVE_AUTHORITY_INVALID\]/);
+    assert.throws(() => roleArtifact.trustedBookkeepingMutation(keyless.root, () => {}, []),
+      (error) => error.code === 'ARCHIVE_AUTHORITY_INVALID' && /original authority key/.test(error.message));
+    assert.equal(fs.existsSync(path.join(directory, 'hmac.key')), false);
+  });
+
+  it('reports other protected records without their key, and stays quiet for a fresh namespace', () => {
+    const layout = installedLayout();
+    const fresh = project({ 'one.json': '{}' });
+    assert.equal(preflight(base(layout, { graphDir: fresh.graphDir })).ok, true);
+    const orphan = project();
+    const directory = roleArtifact.archiveAuthorityDirectory(orphan.root);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(directory, 'review-x.json'), '{}', { mode: 0o600 });
+    assert.deepEqual(codes(preflight(base(layout, { graphDir: orphan.graphDir }))), ['ARCHIVE_AUTHORITY_INVALID']);
+    assert.throws(() => roleArtifact.trustedBookkeepingMutation(orphan.root, () => {}, []), { code: 'ARCHIVE_AUTHORITY_INVALID' });
   });
 
   it('flags an invalid run store and a legacy planning writer', () => {

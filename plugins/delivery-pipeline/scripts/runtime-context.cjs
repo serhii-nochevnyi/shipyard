@@ -510,7 +510,7 @@ const PREFLIGHT_CODES = Object.freeze([
   'ENV_CONFLICT', 'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE', 'RUNTIME_CAPABILITY_MISSING',
   'UNKNOWN_RUNTIME', 'AMBIGUOUS_RUNTIME', 'STALE_GENERATED_AGENT', 'RUNTIME_UNAVAILABLE',
   'LEGACY_HISTORY_UNSAFE', 'LEGACY_HISTORY_CHANGED', 'LEGACY_HISTORY_UNKNOWN_MEMBER', 'LEGACY_HISTORY_MISSING',
-  'ARCHIVE_AUTHORITY_INVALID', 'LEGACY_WRITER_STATE', 'INVALID_STORE',
+  'ARCHIVE_AUTHORITY_INVALID', 'LEGACY_WRITER_STATE', 'INVALID_STORE', 'REPOSITORY_IDENTITY_INVALID',
 ]);
 
 function preflightGraphDir(graphDir, worktree, env) {
@@ -620,6 +620,17 @@ function preflight(options = {}) {
   });
 
   if (scope === 'launch') {
+    run('repository identity', () => {
+      if (typeof opts.worktree !== 'string' || !opts.worktree) return;
+      try { require('./architecture-target.cjs').repositoryIdentity(opts.worktree); }
+      catch (error) {
+        if (error && error.code === 'REPOSITORY_IDENTITY_INVALID' && error.reason === 'git') {
+          note('not-evaluated', 'repository identity: not evaluated, git cannot resolve the common directory');
+          return;
+        }
+        throw error;
+      }
+    });
     run('legacy history', () => {
       const directory = preflightGraphDir(opts.graphDir, opts.worktree, env);
       if (!directory) { note('not-evaluated', 'legacy history: not evaluated, no graph directory'); return; }
