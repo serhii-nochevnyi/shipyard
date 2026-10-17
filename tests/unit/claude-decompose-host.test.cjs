@@ -394,6 +394,9 @@ test('a live Claude decomposition blocks both genuine Codex typed CLIs before a 
     role: 'decomposition', gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }));
   const owner = runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps);
   let childCalls = 0;
+  const codexCapabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
+    supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+  const probe = { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities: codexCapabilities };
   try {
     await launched;
     const lease = createPlanningWriterLease({ stateRoot: sharedRoot, worktree: f.worktree,
@@ -401,10 +404,12 @@ test('a live Claude decomposition blocks both genuine Codex typed CLIs before a 
     const original = fs.readFileSync(lease.file, 'utf8');
     await assert.rejects(runCodexDecomposeCli(['--args-file', decomposeRequest], { write() {} }, {
       testStateRoot: path.join(f.root, 'codex-private'), testWriterStateRoot: sharedRoot,
+      capabilities: codexCapabilities, probe,
       spawn: () => { childCalls++; throw new Error('second paid child'); },
     }), { code: 'WRITER_LEASED' });
     await assert.rejects(runCodexDeliveryCli(['--args-file', deliveryRequest], { write() {} }, {
       testWriterStateRoot: sharedRoot, storageRoot: path.join(f.root, 'delivery-private'),
+      capabilities: codexCapabilities, probe,
       spawn: () => { childCalls++; throw new Error('second paid child'); },
     }), { code: 'WRITER_LEASED' });
     assert.equal(childCalls, 0);

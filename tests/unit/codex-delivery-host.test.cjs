@@ -32,6 +32,7 @@ const {
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
 const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
+const { codexCapabilities } = require('../smoke/installed-launch/lib.cjs');
 
 const capabilities = {
   supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
@@ -3363,5 +3364,142 @@ test('original integration boundary completes and retains one terminal contract:
     assert.equal(observed, 1);
   } finally { require('node:events').EventEmitter.prototype.emit = emit; }
 }));
+
+suite('codex-delivery-host — T-50-14 shared preflight');
+
+const scriptsSource = path.join(__dirname, '../../plugins/delivery-pipeline/scripts');
+const HELP_MARKERS = '--json --model --config --cd --ignore-user-config';
+
+function preflightFixture({ stalePolicy = false } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(temporary, 'pf-')));
+  const isolated = path.join(root, 'home');
+  const home = path.join(root, 'codex-home');
+  const bundle = path.join(home, 'shipyard');
+  const bin = path.join(root, 'bin');
+  const project = path.join(root, 'project');
+  for (const dir of [isolated, path.join(home, 'agents'), bin, project]) fs.mkdirSync(dir, { recursive: true });
+  fs.cpSync(scriptsSource, path.join(bundle, 'scripts'), { recursive: true });
+  const evidence = Buffer.from(JSON.stringify(codexCapabilities()));
+  fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
+  const agent = Buffer.from('name = "x"\n');
+  fs.writeFileSync(path.join(home, 'agents', 'a.toml'), agent);
+  const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+  fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify({
+    phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
+    capabilities_digest: digest(evidence), policy_hash: stalePolicy ? 'old' : policy.POLICY_HASH,
+    agent_files: ['a.toml'], agent_digests: { 'a.toml': digest(agent) },
+  }));
+  fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo codex-test; exit 0; fi\necho "${HELP_MARKERS}"\n`,
+    { mode: 0o755 });
+  execFileSync('git', ['init', '-q', project]);
+  fs.mkdirSync(path.join(project, '.planning', 'graph', 'provenance'), { recursive: true });
+  const env = { PATH: bin + ':/usr/bin:/bin', HOME: isolated, XDG_STATE_HOME: path.join(isolated, 'state'), CODEX_HOME: home };
+  return { root, home, bundle, project, isolated, env, host: path.join(bundle, 'scripts', 'codex-delivery-host.cjs') };
+}
+
+function runScript(f, args, env = f.env, cwd = f.project) {
+  const result = spawnSync(process.execPath, [f.host, ...args], { cwd, env, encoding: 'utf8' });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function treeOf(dir) {
+  const out = [];
+  const walk = (entry) => {
+    for (const name of fs.readdirSync(entry).sort()) {
+      const file = path.join(entry, name);
+      out.push(path.relative(dir, file));
+      if (fs.lstatSync(file).isDirectory()) walk(file);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+function requestFor(f) {
+  const file = path.join(f.root, 'request.json');
+  fs.writeFileSync(file, JSON.stringify({
+    scope: { run_id: 'pf-run', ticket: 'T-50-14', phase: 50, worktree: f.project, runtime: 'codex', provider: 'openai' },
+    role: 'executor', context: { prompt: 'x' },
+  }));
+  return file;
+}
+
+test('--preflight on a healthy installed fixture exits 0 and starts nothing', () => {
+  const f = preflightFixture();
+  const before = treeOf(f.isolated);
+  const result = runScript(f, ['--preflight']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout.trim()).ok, true);
+  assert.deepEqual(treeOf(f.isolated), before);
+});
+
+test('--preflight exits 1 and names the stale generated agent', () => {
+  const f = preflightFixture({ stalePolicy: true });
+  const result = runScript(f, ['--preflight']);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /hint\[STALE_GENERATED_AGENT\]/);
+  assert.equal(JSON.parse(result.stdout.trim()).ok, false);
+});
+
+test('a launch with a disagreeing CODEX_HOME refuses before creating any state', () => {
+  const f = preflightFixture();
+  const other = path.join(f.root, 'other-home');
+  fs.mkdirSync(other);
+  const before = treeOf(f.isolated);
+  const result = runScript(f, ['--args-file', requestFor(f)], { ...f.env, CODEX_HOME: other });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /hint\[ENV_CONFLICT\]/);
+  assert.deepEqual(treeOf(f.isolated), before);
+  assert.ok(!fs.existsSync(path.join(f.isolated, '.local')));
+});
+
+test('a launch against a stale bundle refuses before creating any state, and --preflight accepts the request', () => {
+  const f = preflightFixture({ stalePolicy: true });
+  const request = requestFor(f);
+  const before = treeOf(f.isolated);
+  const launch = runScript(f, ['--args-file', request]);
+  assert.equal(launch.status, 1, launch.stderr);
+  assert.match(launch.stderr, /hint\[STALE_GENERATED_AGENT\]/);
+  const check = runScript(f, ['--preflight', '--args-file', request]);
+  assert.equal(check.status, 1);
+  assert.match(check.stderr, /hint\[STALE_GENERATED_AGENT\]/);
+  assert.deepEqual(treeOf(f.isolated), before);
+});
+
+test('a symlinked provenance member in the host graph directory refuses the launch with no state', () => {
+  const f = preflightFixture();
+  const foreign = path.join(f.root, 'foreign');
+  fs.mkdirSync(path.join(foreign, '.planning', 'graph', 'provenance'), { recursive: true });
+  fs.writeFileSync(path.join(foreign, '.planning', 'graph', 'provenance', 'one.json'), '{}');
+  fs.symlinkSync('one.json', path.join(foreign, '.planning', 'graph', 'provenance', 'link.json'));
+  const before = treeOf(f.isolated);
+  const env = { ...f.env, SHIPYARD_GRAPH_DIR: path.join(foreign, '.planning', 'graph') };
+  const result = runScript(f, ['--args-file', requestFor(f)], env);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+  assert.deepEqual(treeOf(f.isolated), before);
+  fs.symlinkSync('one.json', path.join(f.project, '.planning', 'graph', 'provenance', 'link.json'));
+  fs.writeFileSync(path.join(f.project, '.planning', 'graph', 'provenance', 'one.json'), '{}');
+  const own = runScript(f, ['--preflight', '--args-file', requestFor(f)]);
+  assert.match(own.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+});
+
+test('resume modes refuse a broken environment before their controller begins', () => {
+  const f = preflightFixture({ stalePolicy: true });
+  const scopeFile = path.join(f.root, 'scope.json');
+  fs.writeFileSync(scopeFile, JSON.stringify({ run_id: 'pf-run', worktree: f.project, phase: 50, ticket: 'T-50-14' }));
+  const before = treeOf(f.isolated);
+  for (const args of [['--resume-finalization', 'a'.repeat(64), '--scope-file', scopeFile],
+    ['--resume-repair-actions', 'dispatch-1', '--scope-file', scopeFile]]) {
+    const result = runScript(f, args);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /hint\[STALE_GENERATED_AGENT\]/);
+  }
+  assert.deepEqual(treeOf(f.isolated), before);
+});
+
+test('a malformed --preflight argv is a usage error', async () => {
+  await assert.rejects(runCli(['--preflight', '--bogus'], { write() {} }, {}), (error) => error.code === 'INVALID_INPUT');
+});
 
 done();

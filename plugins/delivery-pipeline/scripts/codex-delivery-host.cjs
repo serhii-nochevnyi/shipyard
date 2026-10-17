@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createCodexRuntimeHost, normalizeScope, parseCodexStream } = require('./codex-runtime-host.cjs');
+const { createCodexRuntimeHost, normalizeScope, parseCodexStream, probeCodexRuntime } = require('./codex-runtime-host.cjs');
 const { encodeUniqueContent } = require('./context-packet.cjs');
 const { stableStringify } = require('./model-policy-internal.cjs');
 const integrationPreflight = require('./phase-integrator-preflight.cjs');
@@ -24,7 +24,7 @@ const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
-const { resolveHostEnvironment, launchEnvironment } = require('./runtime-context.cjs');
+const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, emitPreflight } = require('./runtime-context.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
@@ -716,7 +716,7 @@ function finalizer(options) {
 
 function installedAgentOptions(options, selection, capabilities) {
   const env = options.env || process.env;
-  const agentDir = options.agentDir === undefined ? path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents') : options.agentDir;
+  const agentDir = options.agentDir === undefined ? path.join(resolveCodexHome({ scriptDir: __dirname, env }), 'agents') : options.agentDir;
   return { agentDir, agentFile: selection.agent_file,
     agentManifest: options.agentManifest === undefined ? path.join(agentDir, '.shipyard-manifest.json') : options.agentManifest,
     capabilities, capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE,
@@ -936,7 +936,7 @@ function finishIntegrationReview(review, dispatch, recorder) {
         || crypto.createHash('sha256').update(fs.readFileSync(progress.native_file)).digest('hex') !== evidence.native_session_evidence.sha256)
       fail('RUNTIME_EVIDENCE_MISMATCH', 'complete protected continuation transcript changed');
   } else {
-    const codexHome = review.options.env?.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+    const codexHome = resolveCodexHome({ scriptDir: __dirname, env: review.options.env || process.env });
     const originals = require('./codex-runtime-host.cjs').nativeSessionCandidates(path.join(codexHome, 'sessions'), evidence.session_id);
     if (originals.length !== 1) fail('MISSING_RECEIPT', 'one complete original native integration transcript is required');
     archReviewContext.validateOriginalReviewContext({ receipt: dispatch.receipt, dispatchId: dispatch.dispatch_id,
@@ -3073,7 +3073,7 @@ function createCodexDeliveryHost(options = {}) {
                 canonical_prompt_sha256: sha256(boundContext.prompt.trim()),
                 combined_prompt_sha256: sha256(instructions + '\n\n' + boundContext.prompt.trim()),
                 instructions_sha256: sha256(instructions), agent_file_digest: selection.agent_file_digest,
-                native_home: path.resolve(options.env?.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex')) }));
+                native_home: path.resolve(resolveCodexHome({ scriptDir: __dirname, env: options.env || process.env })) }));
               recheckRepair(repairPrepared, options, { clean: true });
               return runtimeHost.launchStatic(selection, boundContext);
             }
@@ -3351,9 +3351,35 @@ function readResumeScope(file) {
   return scope;
 }
 
+function parsePreflightArguments(argv) {
+  if (argv.length === 1) return { requestFile: null };
+  if (argv.length === 3 && argv[1] === '--args-file' && typeof argv[2] === 'string' && argv[2].trim()) {
+    return { requestFile: path.resolve(argv[2]) };
+  }
+  fail('INVALID_INPUT', 'usage: codex-delivery-host.cjs --preflight [--args-file <json>]');
+}
+
+function hostProbe(options) {
+  if (!options.probe && options.host) return undefined;
+  return () => (typeof options.probe === 'function' ? options.probe() : options.probe || probeCodexRuntime({
+    executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile }));
+}
+
+function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
+  const result = preflight({ host: 'codex-delivery-host.cjs', runtime: 'codex', scriptDir: __dirname,
+    worktree: scope.worktree, env: options.env || process.env, ...extra });
+  if (result.ok && !report) return { result, code: 0 };
+  const stderr = options.preflightStderr || process.stderr;
+  const code = emitPreflight(result, { stdout: options.preflightStdout || process.stdout, stderr });
+  if (code !== 0) stderr.write(result.findings.map((finding) => `preflight: detail[${finding.code}] ${finding.detail}\n`).join(''));
+  return { result, code };
+}
+
 async function runResumeCli(argv, stdout, options) {
   const parsed = parseResumeArguments(argv);
   const scope = canonicalCliScope(readResumeScope(parsed.scopeFile));
+  const gate = runHostPreflight(options, scope, { scope: 'environment' });
+  if (gate.code !== 0) return gate.result;
   const stateDir = storageDirectory(options, scope);
   const controller = createRunController({
     storeDir: path.join(stateDir, 'runs'),
@@ -3435,19 +3461,41 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   if (Array.isArray(argv) && argv[0] === '--resume-finalization') return runResumeCli(argv, stdout, options);
   if (Array.isArray(argv) && argv[0] === '--resume-repair-actions') {
     const parsed = parseRepairActionResumeArguments(argv);
-    const result = resumeRepairActions(options, parsed.dispatchId, readResumeScope(parsed.scopeFile));
+    const resumeScope = readResumeScope(parsed.scopeFile);
+    const gate = runHostPreflight(options, canonicalCliScope(resumeScope), { scope: 'environment' });
+    if (gate.code !== 0) return gate.result;
+    const result = resumeRepairActions(options, parsed.dispatchId, resumeScope);
     stdout.write(JSON.stringify(result) + '\n');
     return result;
   }
-  const parsed = readRequestFile(parseCliArguments(argv));
-  const scope = canonicalCliScope(parsed.scope);
-  options = installedHostOptions(options, resolveHostEnvironment({
-    scriptDir: __dirname, runtime: 'codex', env: options.env || process.env }));
-  if (parsed.graphDir) {
+  const checkOnly = Array.isArray(argv) && argv[0] === '--preflight';
+  const requestFile = checkOnly ? parsePreflightArguments(argv).requestFile : parseCliArguments(argv);
+  const parsed = requestFile ? readRequestFile(requestFile) : null;
+  const scope = parsed ? canonicalCliScope(parsed.scope) : { worktree: fs.realpathSync(process.cwd()) };
+  let resolvedEnvironment = null;
+  let environmentRefused = false;
+  try {
+    resolvedEnvironment = resolveHostEnvironment({ scriptDir: __dirname, runtime: 'codex', env: options.env || process.env });
+  } catch { resolvedEnvironment = null; environmentRefused = true; }
+  if (resolvedEnvironment) options = installedHostOptions(options, resolvedEnvironment);
+  if (parsed && parsed.graphDir) {
     if (options.graphDir && path.resolve(options.graphDir) !== path.resolve(parsed.graphDir))
       fail('INVALID_INPUT', 'conflicting canonical graph selectors');
     options = { ...options, graphDir: parsed.graphDir };
   }
+  const gsdRole = parsed ? parsed.launch.gsd_role : undefined;
+  let phaseDir;
+  if (gsdRole !== undefined) {
+    try { phaseDir = typedPhaseDirectory(scope.worktree, scope.phase); } catch { phaseDir = undefined; }
+  }
+  const gate = runHostPreflight(options, scope, { report: checkOnly, scope: 'launch', probe: environmentRefused ? undefined : hostProbe(options),
+    graphDir: inflightGraphDir(options, scope.worktree),
+    ...(parsed ? { runStoreFile: path.join(storageRootOf(options, scope),
+      crypto.createHash('sha256').update(`${scope.run_id}\0${scope.worktree}`).digest('hex'), 'runs', 'runs.json') } : {}),
+    ...(gsdRole !== undefined && phaseDir ? { gsdRole, phaseDir,
+      writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+        repository: scope.repository }) } : {}) });
+  if (checkOnly || gate.code !== 0) return gate.result;
   const archDispatchId = parsed.launch.role === 'arch-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
   const preparedArchReview = parsed.launch.role === 'arch-review'
     ? archReviewContext.prepare(scope, parsed.launch, {
@@ -3647,6 +3695,7 @@ module.exports = Object.freeze({
 if (require.main === module) {
   runCli().then((result) => {
     if (result?.status === 'blocked' || result?.status === 'verification_failed') process.exitCode = 1;
+    if (result?.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write('codex-delivery-host: ' + (error && error.message ? error.message : error) + '\n');
     process.stderr.write(formatHint(error && error.code) + '\n');
