@@ -92,6 +92,23 @@ while IFS= read -r target; do
   grep -qE "^$target:" Makefile || fail "README references missing make target: $target"
 done < <(grep -oE 'make [a-z][a-z0-9-]+' README.md | awk '{print $2}' | sort -u)
 
+grep -q '^### Launch and upgrade$' README.md || fail "README misses the Launch and upgrade section"
+grep -q -- '--preflight' README.md || fail "README misses --preflight"
+for host in claude-delivery-host claude-investigation-host claude-decompose-host claude-role-host \
+  codex-delivery-host codex-decompose-host codex-planning-context-host; do
+  grep -q "$host.cjs" README.md || fail "README does not name host entry $host.cjs"
+done
+while IFS= read -r script; do
+  [[ -z "$script" ]] && continue
+  [[ -f "plugins/delivery-pipeline/scripts/$script" ]] || fail "README names a missing host script: $script"
+done < <(grep -oE '(claude|codex)-[a-z-]+-host\.cjs' README.md | sort -u)
+grep -q 'make test-installed-launch' CLAUDE.md || fail "CLAUDE.md misses make test-installed-launch"
+grep -qE '^test-installed-launch:' Makefile || fail "Makefile misses test-installed-launch"
+if grep -nE 'still needs `?SHIPYARD_CODEX_CAPABILITIES_FILE' README.md; then
+  fail "README says a dogfood launch needs SHIPYARD_CODEX_CAPABILITIES_FILE"
+fi
+[[ "$(grep -c 'SHIPYARD_CODEX_CAPABILITIES_FILE' README.md)" -le 2 ]] || fail "README must give one account of Codex capability evidence"
+
 grep -q 'make test-fast-rest' .github/workflows/test.yml || fail "CI must run the non-unit part of make test-fast"
 grep -q 'UNIT_SHARD' .github/workflows/test.yml || fail "CI must run the sharded unit suite"
 grep -qE '^  test-fast:' .github/workflows/test.yml || fail "CI must report a single test-fast job"
