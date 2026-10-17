@@ -1,8 +1,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const {
-  candidateRoots, classifyDriverCheck, validateUiSmokeRecord,
+  candidateRoots, classifyDriverCheck, validateUiSmokeRecord, resolveFixtureRoots, toolInsideFixture,
 } = require('../smoke/installed-launch/scenario-ui-smoke.cjs');
 
 const COMMANDS = ['gsd-ui-phase', 'gsd-ui-review'];
@@ -89,4 +93,57 @@ test('validateUiSmokeRecord rejects weakened or malformed records', () => {
   rejects([]);
   rejects([gap({ ...absent, contents: 'secret' })]);
   rejects([gap({ ...absent, content: 'secret' })]);
+});
+
+test('fixture roots ignore the process environment', () => {
+  const saved = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, CODEX_HOME: process.env.CODEX_HOME };
+  process.env.CLAUDE_CONFIG_DIR = '/real/claude';
+  process.env.CODEX_HOME = '/real/codex';
+  try {
+    assert.deepEqual(resolveFixtureRoots({ home: '/f/home', codexHome: '/f/codex' }),
+      ['/f/home/.claude/gsd-core', '/f/codex/gsd-core']);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test('a driver outside the fixture is refused before it can run', () => {
+  const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ui-smoke-unit-')));
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ui-smoke-outside-')));
+  try {
+    const inner = path.join(work, 'tools.cjs');
+    const stray = path.join(outside, 'tools.cjs');
+    fs.writeFileSync(inner, '');
+    fs.writeFileSync(stray, '');
+    assert.equal(toolInsideFixture({ workRoot: work }, `node ${inner} {ui-phase}`), inner);
+    assert.throws(() => toolInsideFixture({ workRoot: work }, `node ${stray} {ui-phase}`), /outside the fixture/);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('the scenario never reads or runs a driver installed under the real home', () => {
+  const decoy = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ui-smoke-decoy-')));
+  try {
+    const marker = path.join(decoy, 'executed');
+    for (const base of [path.join(decoy, '.claude/gsd-core'), path.join(decoy, '.codex/gsd-core')]) {
+      fs.mkdirSync(path.join(base, 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(base, 'bin/gsd-tools.cjs'),
+        `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x');\n// 'ui-phase' 'ui-review'\n`);
+    }
+    const result = spawnSync(process.execPath, [path.join(__dirname, '../smoke/installed-launch/scenario-ui-smoke.cjs')], {
+      encoding: 'utf8', timeout: 120000,
+      env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR || os.tmpdir(), HOME: decoy,
+        CLAUDE_CONFIG_DIR: path.join(decoy, '.claude'), CLAUDE_HOME: path.join(decoy, '.claude'), CODEX_HOME: path.join(decoy, '.codex') },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(marker), false, 'a decoy driver outside the fixture was executed');
+    assert.ok(!result.stdout.includes(decoy), 'the record named a path outside the fixture');
+    assert.match(result.stdout, /^GAP: /m);
+  } finally {
+    fs.rmSync(decoy, { recursive: true, force: true });
+  }
 });

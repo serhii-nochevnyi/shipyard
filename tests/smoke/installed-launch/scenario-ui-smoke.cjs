@@ -2,8 +2,8 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
+const lib = require('./lib.cjs');
 
 const COMMANDS = ['gsd-ui-phase', 'gsd-ui-review'];
 const STATUSES = ['found', 'absent', 'unreadable', 'not-installed'];
@@ -146,24 +146,57 @@ function realProbe() {
   };
 }
 
+function resolveFixtureRoots(fixture) {
+  // @security: GSD roots come only from the fixture HOME and fixture Codex home, never the process environment.
+  return candidateRoots({ CODEX_HOME: fixture.codexHome }, fixture.home);
+}
+
+function toolInsideFixture(fixture, invocation) {
+  const tools = String(invocation).split(' ')[1];
+  const real = fs.realpathSync(tools);
+  const root = fs.realpathSync(fixture.workRoot);
+  const relative = path.relative(root, real);
+  assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), 'a driver outside the fixture is never executed');
+  return real;
+}
+
+function runDriverSteps(fixture, check) {
+  const tools = toolInsideFixture(fixture, check.invocation);
+  return COMMANDS.map((command) => {
+    const run = lib.runHost(fixture, tools, [command.replace(/^gsd-/, ''), '--non-interactive']);
+    assert.equal(run.status, 0, `${command} failed: ${run.stderr}`);
+    assert.ok(!REFUSAL_CODE.test(run.stdout + run.stderr), `${command} printed a refusal code`);
+    return { command, exit: run.status };
+  });
+}
+
+function writeDriverStub(fixture) {
+  const root = path.join(fixture.workRoot, 'driver-stub/gsd-core');
+  fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'bin/gsd-tools.cjs'), [
+    "const verbs = ['ui-phase', 'ui-review'];",
+    'if (!verbs.includes(process.argv[2]) || process.argv[3] !== "--non-interactive") process.exit(64);',
+    '',
+  ].join('\n'));
+  return root;
+}
+
+function exerciseStubDriver(fixture) {
+  const check = classifyDriverCheck(markCandidates([writeDriverStub(fixture)]), realProbe());
+  assert.equal(check.status, 'found', 'the stub driver written by the scenario must be found');
+  const steps = runDriverSteps(fixture, check);
+  validateUiSmokeRecord(['RAN: ' + JSON.stringify({ scenario: 'ui-smoke', steps, status: 'ran', driver_check: check })]);
+  return steps.length;
+}
+
 function runScenario() {
-  const processEnv = { ...process.env };
-  const processHome = os.homedir();
   const lib = require('./lib.cjs');
   const fixture = lib.createFixture();
   try {
-    const candidates = markCandidates(candidateRoots(processEnv, processHome), fixture.workRoot);
-    const check = classifyDriverCheck(candidates, realProbe());
+    const check = classifyDriverCheck(markCandidates(resolveFixtureRoots(fixture)), realProbe());
     let line;
     if (check.status === 'found') {
-      const steps = COMMANDS.map((command) => {
-        const verb = command.replace(/^gsd-/, '');
-        const tools = check.invocation.split(' ')[1];
-        const run = lib.runHost(fixture, tools, [verb, '--non-interactive']);
-        assert.equal(run.status, 0, `${command} failed: ${run.stderr}`);
-        assert.ok(!REFUSAL_CODE.test(run.stdout + run.stderr), `${command} printed a refusal code`);
-        return { command, exit: run.status };
-      });
+      const steps = runDriverSteps(fixture, check);
       line = 'RAN: ' + JSON.stringify({ scenario: 'ui-smoke', steps, status: 'ran', driver_check: check });
     } else {
       line = 'GAP: ' + JSON.stringify({
@@ -171,13 +204,15 @@ function runScenario() {
       });
     }
     validateUiSmokeRecord([line]);
+    const stubbed = exerciseStubDriver(fixture);
     lib.assertHarnessIsolation(fixture);
     console.log(line);
+    console.log(`ui-smoke control: fixture stub driver ran ${stubbed} commands`);
   } finally {
     fixture.cleanup();
   }
 }
 
-module.exports = { candidateRoots, classifyDriverCheck, validateUiSmokeRecord, markCandidates };
+module.exports = { candidateRoots, classifyDriverCheck, validateUiSmokeRecord, markCandidates, resolveFixtureRoots, toolInsideFixture };
 
 if (require.main === module) runScenario();
