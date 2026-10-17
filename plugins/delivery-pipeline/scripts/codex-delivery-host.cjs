@@ -3365,11 +3365,13 @@ function hostProbe(options) {
     executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile }));
 }
 
-function runHostPreflight(options, scope, extra = {}) {
+function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
   const result = preflight({ host: 'codex-delivery-host.cjs', runtime: 'codex', scriptDir: __dirname,
     worktree: scope.worktree, env: options.env || process.env, ...extra });
-  const code = emitPreflight(result, { stdout: options.preflightStdout || process.stdout,
-    stderr: options.preflightStderr || process.stderr });
+  if (result.ok && !report) return { result, code: 0 };
+  const stderr = options.preflightStderr || process.stderr;
+  const code = emitPreflight(result, { stdout: options.preflightStdout || process.stdout, stderr });
+  if (code !== 0) stderr.write(result.findings.map((finding) => `preflight: detail[${finding.code}] ${finding.detail}\n`).join(''));
   return { result, code };
 }
 
@@ -3471,9 +3473,10 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   const parsed = requestFile ? readRequestFile(requestFile) : null;
   const scope = parsed ? canonicalCliScope(parsed.scope) : { worktree: fs.realpathSync(process.cwd()) };
   let resolvedEnvironment = null;
+  let environmentRefused = false;
   try {
     resolvedEnvironment = resolveHostEnvironment({ scriptDir: __dirname, runtime: 'codex', env: options.env || process.env });
-  } catch { resolvedEnvironment = null; }
+  } catch { resolvedEnvironment = null; environmentRefused = true; }
   if (resolvedEnvironment) options = installedHostOptions(options, resolvedEnvironment);
   if (parsed && parsed.graphDir) {
     if (options.graphDir && path.resolve(options.graphDir) !== path.resolve(parsed.graphDir))
@@ -3485,7 +3488,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   if (gsdRole !== undefined) {
     try { phaseDir = typedPhaseDirectory(scope.worktree, scope.phase); } catch { phaseDir = undefined; }
   }
-  const gate = runHostPreflight(options, scope, { scope: 'launch', probe: hostProbe(options),
+  const gate = runHostPreflight(options, scope, { report: checkOnly, scope: 'launch', probe: environmentRefused ? undefined : hostProbe(options),
     graphDir: inflightGraphDir(options, scope.worktree),
     ...(parsed ? { runStoreFile: path.join(storageRootOf(options, scope),
       crypto.createHash('sha256').update(`${scope.run_id}\0${scope.worktree}`).digest('hex'), 'runs', 'runs.json') } : {}),
