@@ -117,12 +117,28 @@ test('an installed bundle supplies the sessions home and a disagreeing CODEX_HOM
   try {
     const script = path.join(layout.scripts, 'session-observer.cjs');
     const probe = (env) => require('node:child_process').spawnSync(process.execPath, ['-e',
-      "const o=require(process.argv[1]);try{o.observeCodexNotify({},process.argv[2],{});}catch(e){console.log(e.message)}",
+      "const o=require(process.argv[1]);try{const r=o.observeCodexNotify({},process.argv[2],{});console.log(JSON.stringify(r))}catch(e){console.log('THROWN '+e.message)}",
       script, path.join(layout.base, 'graph')], { encoding: 'utf8', env });
     const ok = probe({ PATH: process.env.PATH });
     assert.ok(ok.stdout.includes(path.join(layout.home, 'logs_2.sqlite')) || !/disagrees/.test(ok.stdout), ok.stdout + ok.stderr);
     const conflict = probe({ PATH: process.env.PATH, CODEX_HOME: path.join(layout.base, 'elsewhere') });
     assert.match(conflict.stdout, /disagrees/);
+    assert.doesNotMatch(conflict.stdout, /THROWN/);
+    const refusal = JSON.parse(conflict.stdout);
+    assert.equal(refusal.refused, true);
+    assert.equal(refusal.code, 'ENV_CONFLICT');
+    assert.match(refusal.hint, /^hint\[ENV_CONFLICT\]/);
+    assert.doesNotMatch(refusal.hint, /\{[^}]*\}/);
+    const stale = installedCodexLayout();
+    try {
+      fs.rmSync(path.join(stale.bundle, 'codex-capabilities.json'));
+      const missing = require('node:child_process').spawnSync(process.execPath, ['-e',
+        "const o=require(process.argv[1]);console.log(JSON.stringify(o.observeCodexNotify({},process.argv[2],{})))",
+        path.join(stale.scripts, 'session-observer.cjs'), path.join(stale.base, 'graph')],
+      { encoding: 'utf8', env: { PATH: process.env.PATH } });
+      assert.equal(JSON.parse(missing.stdout).code, 'CAPABILITY_EVIDENCE_STALE', missing.stdout + missing.stderr);
+    } finally { fs.rmSync(stale.base, { recursive: true, force: true }); }
+    assert.doesNotMatch(conflict.stderr, /\n\s+at /);
   } finally { fs.rmSync(layout.base, { recursive: true, force: true }); }
 });
 
