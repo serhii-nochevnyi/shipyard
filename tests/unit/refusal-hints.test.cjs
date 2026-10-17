@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { HINTS, LAUNCH_CODES, hintFor, formatHint } = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs');
+const { HINTS, LAUNCH_CODES, hintFor, formatHint, hintForError } = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs');
 
 const REQUIRED_CODES = [
   'REFERENCE_UNAVAILABLE', 'INVALID_INPUT', 'UNSUPPORTED_ROLE', 'SCOPE_MISMATCH',
@@ -188,4 +188,46 @@ test('capability, runtime-ambiguity and repository-identity remedies name the re
   assert.doesNotMatch(identity, /origin remote|unknown/);
   assert.match(identity, /common directory/);
   assert.match(identity, /";" or control character/);
+});
+
+test('hintForError carries the pid, the path and the supplied host and never prose placeholders', () => {
+  const busy = hintForError(Object.assign(new Error('held'), { code: 'ARCHIVE_AUTHORITY_BUSY', details: { pid: 4242 } }));
+  assert.match(busy, /\(owner pid 4242\)/);
+  const viaVars = hintForError(Object.assign(new Error('x'), { code: 'LEGACY_HISTORY_CHANGED', vars: { path: '.planning/a b.json' } }));
+  assert.match(viaVars, /history at \.planning\/a b\.json changed/);
+  const fromMessage = hintForError(Object.assign(new Error('legacy provenance history is not safe before trusted mutation '
+    + '.planning/graph/provenance/m n.json: member is a symlink'), { code: 'LEGACY_HISTORY_UNSAFE' }));
+  assert.match(fromMessage, /history at \.planning\/graph\/provenance\/m n\.json cannot/);
+  assert.equal(hintForError(Object.assign(new Error('x'), { code: 'LEGACY_HISTORY_UNSAFE', details: { path: 'p' } }))
+    .includes('history at p cannot'), true);
+  const hosted = hintForError({ code: 'RUNTIME_UNAVAILABLE' }, 'codex-delivery-host.cjs');
+  assert.ok(hosted.includes('/scripts/codex-delivery-host.cjs --preflight'), hosted);
+  assert.equal(hintForError({ code: 'RUNTIME_UNAVAILABLE' }, '/x/y/claude-role-host.cjs').includes('/scripts/claude-role-host.cjs --preflight'), true);
+  assert.equal(hintForError(null), formatHint(undefined));
+});
+
+test('hintForError names a script only when it implements --preflight', () => {
+  const hosts = ['codex-delivery-host', 'codex-decompose-host', 'codex-planning-context-host', 'claude-delivery-host',
+    'claude-role-host', 'claude-decompose-host', 'claude-investigation-host'];
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'hint-for-error-scripts-'));
+  const probe = (name) => require('node:child_process').spawnSync(process.execPath, [name], { encoding: 'utf8', cwd: dir });
+  try {
+    const render = (file, host) => {
+      const script = path.join(dir, file);
+      fs.writeFileSync(script, `const { hintForError } = require(${JSON.stringify(path.join(SCRIPTS_DIR, 'refusal-hints.cjs'))});\n`
+        + `process.stdout.write(hintForError({ code: 'INVALID_STORE' }${host === undefined ? '' : `, ${JSON.stringify(host)}`}));\n`);
+      return probe(script).stdout;
+    };
+    for (const host of hosts) {
+      const text = render(`${host}.cjs`);
+      assert.ok(text.includes(`/scripts/${host}.cjs --preflight`), text);
+    }
+    for (const file of ['deliver-dispatch.cjs', 'gsd-tune.cjs', 'unrelated.cjs']) {
+      const text = render(file);
+      assert.equal(text.includes(`${file} --preflight`), false, text);
+      assert.equal(text.includes('the host script'), false, text);
+      assert.match(text, /claude-delivery-host\.cjs or codex-delivery-host\.cjs/);
+    }
+    assert.ok(render('deliver-dispatch.cjs', 'codex-delivery-host.cjs').includes('/scripts/codex-delivery-host.cjs --preflight'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

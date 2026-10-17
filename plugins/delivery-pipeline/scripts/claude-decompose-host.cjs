@@ -14,7 +14,7 @@ const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
 const { resolveClaudeHome, preflight, emitPreflight } = require('./runtime-context.cjs');
 const { repositoryIdentity } = require('./architecture-target.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
@@ -746,7 +746,7 @@ async function main(argv = process.argv.slice(2)) {
         roles: Object.keys(ROLES), live_execution: 'not_run' })}\n`);
     } catch (error) {
       process.stdout.write(`${JSON.stringify({ status: 'unavailable', reason: error.code || 'role_unavailable',
-        detail: error.message, live_execution: 'not_run', hint: formatHint(error.code) })}\n`);
+        detail: error.message, live_execution: 'not_run', hint: hintForError(error) })}\n`);
     }
     return;
   }
@@ -768,7 +768,7 @@ async function main(argv = process.argv.slice(2)) {
 if (require.main === module) {
   main().catch((error) => {
     process.stderr.write(`${error.code || 'FAILED'}: ${error.message}\n`);
-    if (!error.hintPrinted) process.stderr.write(`${formatHint(error.code)}\n`);
+    if (!error.hintPrinted) process.stderr.write(`${hintForError(error)}\n`);
     process.exitCode = 1;
   });
 }

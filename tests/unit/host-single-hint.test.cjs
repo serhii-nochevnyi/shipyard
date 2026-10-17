@@ -114,3 +114,59 @@ test('codex-delivery-host --preflight reports each finding detail once', () => {
   }
   assert.equal(outcome.stderr.includes('preflight: detail['), false);
 });
+
+const TRIPWIRE = path.join(scratch, 'tripwire-preload.cjs');
+fs.writeFileSync(TRIPWIRE, `const fs = require('node:fs');
+const real = fs.lstatSync;
+const realPath = fs.realpathSync;
+fs.realpathSync = Object.assign(function (target, ...rest) {
+  if (typeof target === 'string' && target === process.env.TRIPWIRE_CWD) {
+    throw Object.assign(new Error('refused at the tripwire'), JSON.parse(process.env.TRIPWIRE_ERROR));
+  }
+  return realPath.call(this, target, ...rest);
+}, realPath);
+fs.lstatSync = function (target, ...rest) {
+  if (typeof target === 'string' && target.endsWith('tripwire.json')) {
+    throw Object.assign(new Error('refused at the tripwire'), JSON.parse(process.env.TRIPWIRE_ERROR));
+  }
+  return real.call(this, target, ...rest);
+};
+`);
+
+const CATCH_HOSTS = [
+  { file: 'claude-role-host.cjs', runtime: 'claude', args: (file) => ['--args-file', file] },
+  { file: 'claude-delivery-host.cjs', runtime: 'claude', args: (file) => ['--workflow', 'executors', '--request-file', file] },
+  { file: 'claude-decompose-host.cjs', runtime: 'claude', args: (file) => ['--request-file', file] },
+  { file: 'codex-decompose-host.cjs', runtime: 'codex', args: () => ['--preflight'], tripCwd: true },
+  { file: 'codex-planning-context-host.cjs', runtime: 'codex', args: () => ['--preflight'], tripCwd: true },
+  { file: 'codex-delivery-host.cjs', runtime: 'codex', args: () => ['--preflight'], tripCwd: true },
+];
+
+function trip(host, thrown) {
+  const w = world(`catch-${host.file}-${thrown.code}`);
+  return spawnSync(process.execPath, ['--require', TRIPWIRE, path.join(SCRIPTS, host.file),
+    ...host.args(path.join(w.root, 'tripwire.json'))], {
+    cwd: w.project, encoding: 'utf8', timeout: 60000,
+    env: { PATH: '/usr/bin:/bin', HOME: path.join(w.root, 'home'), XDG_STATE_HOME: path.join(w.root, 'xdg'),
+      XDG_CONFIG_HOME: path.join(w.root, 'xdg'), SHIPYARD_RUNTIME: host.runtime, TRIPWIRE_ERROR: JSON.stringify(thrown),
+      ...(host.tripCwd ? { TRIPWIRE_CWD: fs.realpathSync(w.project) } : {}) },
+  });
+}
+
+for (const host of CATCH_HOSTS) {
+  test(`${host.file} top-level handler renders the pid, the path and its own host in the hint`, () => {
+    const busy = trip(host, { code: 'ARCHIVE_AUTHORITY_BUSY', details: { pid: 424242 } });
+    assert.notEqual(busy.status, 0, busy.stderr);
+    assert.match(busy.stderr, /hint\[ARCHIVE_AUTHORITY_BUSY\]: Another session holds the archive authority \(owner pid 424242\)/, busy.stderr);
+    const legacy = trip(host, { code: 'LEGACY_HISTORY_UNSAFE',
+      message: 'legacy provenance history is not safe before trusted mutation .planning/graph/provenance/member.json: member is a symlink' });
+    assert.match(legacy.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]: The legacy history at \.planning\/graph\/provenance\/member\.json /, legacy.stderr);
+    const unavailable = trip(host, { code: 'RUNTIME_UNAVAILABLE' });
+    assert.ok(unavailable.stderr.includes(`/scripts/${host.file} --preflight`), unavailable.stderr);
+    for (const outcome of [busy, legacy, unavailable]) {
+      assert.equal(outcome.stderr.includes('the host script'), false, outcome.stderr);
+      assert.equal(outcome.stderr.includes('owner pid unknown'), false, outcome.stderr);
+      assert.equal(outcome.stderr.includes('an unreported path'), false, outcome.stderr);
+    }
+  });
+}

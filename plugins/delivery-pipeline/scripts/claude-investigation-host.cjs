@@ -9,7 +9,7 @@ const {
 } = require('./claude-workflow-host.cjs');
 const { createClaudeDeliveryHost, runClaudeDeliveryCli } = require('./claude-delivery-host.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
 
 const INVESTIGATION_RESEARCH_SCRIPT = WORKFLOW_SCRIPTS['investigation-research'];
 const REQUEST_MAX_BYTES = 1024 * 1024;
@@ -151,7 +151,7 @@ if (require.main === module) {
     if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
-    if (!error?.hintPrinted) process.stderr.write(`${formatHint(error && error.code)}\n`);
+    if (!error?.hintPrinted) process.stderr.write(`${hintForError(error)}\n`);
     process.exitCode = 1;
   });
 }

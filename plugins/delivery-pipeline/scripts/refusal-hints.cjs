@@ -230,4 +230,53 @@ function formatHint(code, vars) {
   return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(entry.remedy, vars, true)}`;
 }
 
-module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, renderRemedy, stripControl });
+const PREFLIGHT_HOSTS = Object.freeze(['codex-delivery-host.cjs', 'codex-decompose-host.cjs', 'codex-planning-context-host.cjs',
+  'claude-delivery-host.cjs', 'claude-role-host.cjs', 'claude-decompose-host.cjs', 'claude-investigation-host.cjs']);
+const DETAIL_TOKENS = Object.freeze(['pid', 'path', 'label', 'key', 'explicit', 'bundle_value']);
+const PREFLIGHT_COMMAND = 'node {bundle}/scripts/{host} --preflight';
+const DELIVERY_PREFLIGHT_PROSE = "the runtime's delivery host with --preflight (claude-delivery-host.cjs or codex-delivery-host.cjs in {bundle}/scripts)";
+const PLANNING_PATH_IN_MESSAGE = /(?:^|\s)(\.planning\/.*?)(?:: |$)/;
+
+function scalar(value) {
+  return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)) ? String(value) : undefined;
+}
+
+function errorVars(error) {
+  const source = error && typeof error === 'object' ? error : {};
+  const vars = {};
+  for (const bag of [source.details, source.vars]) {
+    if (!bag || typeof bag !== 'object') continue;
+    for (const token of DETAIL_TOKENS) {
+      const value = scalar(bag[token]);
+      if (value !== undefined && value !== '') vars[token] = value;
+    }
+    const bundle = scalar(bag.bundle);
+    if (bundle) vars.bundle = bundle;
+  }
+  if (vars.path === undefined && typeof source.code === 'string' && source.code.startsWith('LEGACY_HISTORY_')) {
+    const found = PLANNING_PATH_IN_MESSAGE.exec(String(source.message || ''));
+    if (found) vars.path = found[1];
+  }
+  return vars;
+}
+
+function preflightHostName(host) {
+  const candidate = host === undefined ? process.argv[1] : host;
+  if (typeof candidate !== 'string' || !candidate) return null;
+  const name = path.basename(candidate);
+  return PREFLIGHT_HOSTS.includes(name) ? name : null;
+}
+
+// @contract: renders a preflight-style hint with the error's own pid or path and a host that has --preflight.
+function hintForError(error, host) {
+  const code = error && error.code;
+  const vars = errorVars(error);
+  const name = preflightHostName(host);
+  if (name) return formatHint(code, { ...vars, host: name });
+  const entry = hintFor(code);
+  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
+  const remedy = entry.remedy.split(PREFLIGHT_COMMAND).join(DELIVERY_PREFLIGHT_PROSE);
+  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(remedy, vars, true)}`;
+}
+
+module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, hintForError, renderRemedy, stripControl });

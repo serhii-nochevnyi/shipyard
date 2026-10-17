@@ -24,7 +24,7 @@ const overhead = require('./orchestration-overhead.cjs');
 const { repositoryIdentity, buildSubject } = require('./architecture-target.cjs');
 
 const { preflight, emitPreflight, launchEnvironment, resolveHostEnvironment } = require('./runtime-context.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
 const DELIVERY_HOSTS = Object.freeze({ codex: 'codex-delivery-host.cjs', claude: 'claude-delivery-host.cjs' });
 
 const ROLE_BUCKETS = Object.freeze({
@@ -1306,10 +1306,16 @@ module.exports = Object.freeze({
   main,
 });
 
+// @contract: deliver-dispatch has no --preflight, so a hint names the delivery host of the requested runtime.
+function dispatchHintHost() {
+  const runtime = flagValue(process.argv.slice(2), '--runtime');
+  return Object.hasOwn(DELIVERY_HOSTS, runtime) ? DELIVERY_HOSTS[runtime] : '';
+}
+
 if (require.main === module) {
   main().then((code) => { process.exitCode = code; }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
-    if (error && typeof error.code === 'string' && error.code !== 'PREFLIGHT_REFUSED') process.stderr.write(`${formatHint(error.code)}\n`);
+    if (error && typeof error.code === 'string' && error.code !== 'PREFLIGHT_REFUSED') process.stderr.write(`${hintForError(error, dispatchHintHost())}\n`);
     process.exitCode = error && error.exitCode === 2 ? 2 : 1;
   });
 }

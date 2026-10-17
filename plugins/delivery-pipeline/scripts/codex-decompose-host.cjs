@@ -19,7 +19,7 @@ const { decompositionAdr } = require('./planning-result-sealer.cjs');
 const { newDispatchId, createDispatchBoundary, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
 const { sealDecomposition, assertContained, captureContainmentBaseline,
   persistContainmentBaseline, restoreContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
@@ -1490,7 +1490,7 @@ if (require.main === module) {
     if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write('codex-decompose-host: ' + (error && error.message ? error.message : error) + '\n');
-    if (!error?.hintPrinted) process.stderr.write(formatHint(error && error.code) + '\n');
+    if (!error?.hintPrinted) process.stderr.write(hintForError(error) + '\n');
     process.exitCode = 1;
   });
 }

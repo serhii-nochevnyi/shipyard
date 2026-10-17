@@ -18,7 +18,7 @@ const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { resolveBaseRef, resolveGraphDir } = require('./graph-dir.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
 const { preflight, emitPreflight } = require('./runtime-context.cjs');
 const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
 const { acceptedRepositoryValues } = require('./architecture-target.cjs');
@@ -1225,7 +1225,7 @@ if (require.main === module) {
     if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
-    if (!error?.hintPrinted) process.stderr.write(`${formatHint(error && error.code)}\n`);
+    if (!error?.hintPrinted) process.stderr.write(`${hintForError(error)}\n`);
     process.exitCode = 1;
   });
 }
