@@ -921,7 +921,7 @@ function writerPreflight(options, scope, launch) {
 function runHostPreflight(options, { host, worktree, graphDir, kind = 'launch', stdout, ...extra }) {
   const env = options.env ? { ...options.env } : process.env;
   const result = preflight({
-    runtime: 'codex', scriptDir: __dirname, worktree, graphDir, scope: kind, host, env,
+    runtime: 'codex', scriptDir: __dirname, worktree, graphDir, scope: kind, host, env, needsRepositoryIdentity: true,
     probe: () => (typeof options.probe === 'function' ? options.probe() : options.probe || probeCodexRuntime({
       executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile,
     })),

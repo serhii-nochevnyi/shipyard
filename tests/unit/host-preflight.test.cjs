@@ -239,7 +239,7 @@ describe('host preflight', () => {
     const layout = installedLayout();
     for (const label of ['semi;colon', 'tab\there']) {
       const bad = project({}, label);
-      const result = preflight(base(layout, { worktree: bad.root, graphDir: bad.graphDir }));
+      const result = preflight(base(layout, { worktree: bad.root, graphDir: bad.graphDir, needsRepositoryIdentity: true }));
       assert.deepEqual(codes(result), ['REPOSITORY_IDENTITY_INVALID'], label);
       assert.equal(result.ok, false, label);
       assert.throws(() => require(scripts + 'architecture-target.cjs').repositoryIdentity(bad.root), { code: 'REPOSITORY_IDENTITY_INVALID' });
@@ -249,10 +249,26 @@ describe('host preflight', () => {
       assert.deepEqual(codes(preflight(base(layout, { worktree: bad.root, graphDir: bad.graphDir, scope: 'environment' }))), [], label);
     }
     const good = project();
-    assert.equal(preflight(base(layout, { worktree: good.root, graphDir: good.graphDir })).ok, true);
-    const nonGit = preflight(base(layout, { graphDir: null }));
+    assert.equal(preflight(base(layout, { worktree: good.root, graphDir: good.graphDir, needsRepositoryIdentity: true })).ok, true);
+    const nonGit = preflight(base(layout, { graphDir: null, needsRepositoryIdentity: true }));
     assert.equal(nonGit.ok, true);
     assert.ok(nonGit.notes.some((n) => /repository identity: not evaluated/.test(n.detail)));
+  });
+
+  it('refuses a path no identity subject can carry only for a launch that builds one', () => {
+    const layout = installedLayout();
+    const bad = project({}, 'semi;colon');
+    const { roleNeedsRepositoryIdentity } = require(scripts + 'runtime-context.cjs');
+    const launch = (role) => preflight(base(layout, {
+      worktree: bad.root, graphDir: bad.graphDir, needsRepositoryIdentity: roleNeedsRepositoryIdentity(role),
+    }));
+    for (const role of ['executor', 'ci-fix', 'review-fix', 'drift-check', 'pr-sentinel']) {
+      assert.equal(launch(role).ok, true, role);
+    }
+    assert.equal(preflight(base(layout, { worktree: bad.root, graphDir: bad.graphDir })).ok, true);
+    for (const role of ['research', 'decomposition', 'integrator', 'arch-review']) {
+      assert.deepEqual(codes(launch(role)), ['REPOSITORY_IDENTITY_INVALID'], role);
+    }
   });
 
   it('reports a catalogue without its authority key as the finding a trusted mutation refuses with', () => {

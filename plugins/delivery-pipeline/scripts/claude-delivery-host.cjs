@@ -1064,7 +1064,7 @@ function parseCli(argv) {
   return { workflow: rest[1], requestFile: rest[3], preflightOnly };
 }
 
-function launchPreflight(worktree, hostOptions, output) {
+function launchPreflight(worktree, hostOptions, output, needsRepositoryIdentity = false) {
   const stderr = hostOptions.stderr || process.stderr;
   const result = preflight({
     runtime: 'claude',
@@ -1072,6 +1072,7 @@ function launchPreflight(worktree, hostOptions, output) {
     worktree,
     graphDir: inflightGraphDir(hostOptions, worktree),
     scope: 'launch',
+    needsRepositoryIdentity,
     host: 'claude-delivery-host.cjs',
     env: hostOptions.preflightEnv || process.env,
     probe: () => (typeof hostOptions.probe === 'function' ? hostOptions.probe()
@@ -1157,7 +1158,8 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   if (worktree !== hostScope.worktree || git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
     reject('CLI run scope must name the canonical repository root');
   }
-  const checked = launchPreflight(worktree, hostOptions, preflightOnly ? output : { write() {} });
+  const checked = launchPreflight(worktree, hostOptions, preflightOnly ? output : { write() {} },
+    workflow === 'investigation-research');
   if (preflightOnly) return checked;
   if (!checked.ok) {
     const error = new Error(`claude-delivery-host: preflight found ${checked.findings.length} incompatibilities: ${checked.findings.map((item) => item.code).join(', ')}`);

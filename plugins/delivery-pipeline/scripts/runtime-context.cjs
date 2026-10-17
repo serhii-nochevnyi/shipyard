@@ -552,6 +552,13 @@ function installedCodexCliVersion() {
   return match ? match[1] : null;
 }
 
+const IDENTITY_ROLES = new Set(['research', 'decomposition', 'integrator', 'arch-review']);
+
+// @contract: only the roles that build a subject from the repository identity need it to be representable.
+function roleNeedsRepositoryIdentity(role) {
+  return IDENTITY_ROLES.has(role);
+}
+
 // @contract: preflight is read-only, collects every incompatibility and never throws.
 function preflight(options = {}) {
   const opts = options && typeof options === 'object' ? options : {};
@@ -628,6 +635,7 @@ function preflight(options = {}) {
 
   if (scope === 'launch') {
     run('repository identity', () => {
+      if (opts.needsRepositoryIdentity !== true) return;
       if (typeof opts.worktree !== 'string' || !opts.worktree) return;
       try { require('./architecture-target.cjs').repositoryIdentity(opts.worktree); }
       catch (error) {
@@ -712,6 +720,7 @@ module.exports = {
   PREFLIGHT_CODES,
   preflight,
   probeReasonToCode,
+  roleNeedsRepositoryIdentity,
   emitPreflight,
   reportTransferCapability,
   readInheritedConfig,

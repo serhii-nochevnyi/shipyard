@@ -10,9 +10,9 @@ const SCRIPTS = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts
 const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'host-single-hint-')));
 test.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
-function world(name) {
+function world(name, projectName = 'project') {
   const root = path.join(scratch, name);
-  const project = path.join(root, 'project');
+  const project = path.join(root, projectName);
   const provenance = path.join(project, '.planning/graph/provenance');
   fs.mkdirSync(provenance, { recursive: true });
   fs.mkdirSync(path.join(root, 'home'));
@@ -72,6 +72,29 @@ for (const host of HOSTS) {
     const hints = outcome.stderr.split('\n').filter((line) => line.startsWith('hint['));
     assert.equal(hints.length, count, `${host.file}: expected one hint per finding\n${outcome.stderr}`);
     assert.equal(outcome.stderr.includes('the host script'), false, `${host.file}: a degraded hint was printed`);
+  });
+}
+
+const identityReport = (outcome) => outcome.stdout.split('\n').filter(Boolean)
+  .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+  .find((value) => value && value.schema === 'shipyard.host-preflight.v1');
+
+for (const host of HOSTS.filter((item) => item.file !== 'claude-investigation-host.cjs')) {
+  test(`${host.file} refuses a semicolon repository path when it launches a role that builds an identity subject`, () => {
+    const w = world(`identity-${host.file}`, 'semi;colon');
+    const file = path.join(w.root, 'request.json');
+    fs.writeFileSync(file, JSON.stringify(host.request(w)));
+    const outcome = run(host.file, host.args(file), w, host.runtime);
+    assert.match(outcome.stderr, /hint\[REPOSITORY_IDENTITY_INVALID\]/, outcome.stderr);
+  });
+}
+
+for (const [file, runtime] of [['codex-delivery-host.cjs', 'codex'], ['claude-delivery-host.cjs', 'claude'], ['claude-role-host.cjs', 'claude']]) {
+  test(`${file} --preflight under a semicolon path does not evaluate the repository identity`, () => {
+    const w = world(`no-identity-${file}`, 'semi;colon');
+    const report = identityReport(run(file, ['--preflight'], w, runtime));
+    assert.ok(report, 'a preflight report is printed');
+    assert.equal(report.findings.some((finding) => finding.code === 'REPOSITORY_IDENTITY_INVALID'), false);
   });
 }
 
