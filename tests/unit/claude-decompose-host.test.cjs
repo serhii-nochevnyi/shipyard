@@ -1109,6 +1109,15 @@ test('--preflight parses alone and with --request-file', () => {
   assert.equal(both.requestFile, 'r.json');
 });
 
+test('a repository identity failure keeps its own code instead of SCOPE_MISMATCH', () => {
+  const f = fixture();
+  try {
+    const odd = path.join(f.root, 'semi;colon');
+    fs.renameSync(f.worktree, odd);
+    assert.throws(() => canonicalRequest(request(odd, 'gsd-planner')), { code: 'REPOSITORY_IDENTITY_INVALID' });
+  } finally { f.clean(); }
+});
+
 test('config root follows CLAUDE_CONFIG_DIR, then HOME/.claude, and ignores CLAUDE_HOME', () => {
   const f = fixture();
   try {

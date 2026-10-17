@@ -130,9 +130,7 @@ function canonicalRequest(input) {
   for (const key of ['critical', 'checkpoint']) {
     if (signals[key] !== undefined && typeof signals[key] !== 'boolean') refuse('INVALID_SIGNAL', `invalid ${key} signal`);
   }
-  let common;
-  try { common = repositoryIdentity(worktree); }
-  catch (error) { refuse('SCOPE_MISMATCH', error.message); }
+  const common = repositoryIdentity(worktree);
   let adr = null;
   if (ROLES[role] === 'decomposition' || input.adr !== undefined) {
     try { adr = decompositionAdr.resolveAdr(worktree, input.adr); }
