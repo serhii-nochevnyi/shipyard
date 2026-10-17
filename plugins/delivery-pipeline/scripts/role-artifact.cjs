@@ -1088,7 +1088,14 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
   const file = path.join(directory, 'catalogue.json');
   let payload = { schema: 'shipyard.role-archive-catalogue.v1', worktree, records: {} };
   if (readCatalogue && fs.existsSync(file)) {
-    const envelope = JSON.parse(stableAuthorityFile(file));
+    let envelope;
+    try { envelope = JSON.parse(stableAuthorityFile(file)); }
+    catch (error) {
+      if (error instanceof SyntaxError) fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue is not valid JSON');
+      throw error;
+    }
+    if (!object(envelope) || !object(envelope.payload))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue is not an authenticated envelope');
     const mac = crypto.createHmac('sha256', key).update(stable(envelope.payload)).digest('hex');
     if (!object(envelope.payload) || !/^[a-f0-9]{64}$/.test(envelope.mac || '')
         || !crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex')))
