@@ -922,9 +922,9 @@ function runHostPreflight(options, { host, worktree, graphDir, kind = 'launch', 
   const env = options.env ? { ...options.env } : process.env;
   const result = preflight({
     runtime: 'codex', scriptDir: __dirname, worktree, graphDir, scope: kind, host, env,
-    probe: () => options.probe || probeCodexRuntime({
+    probe: () => (typeof options.probe === 'function' ? options.probe() : options.probe || probeCodexRuntime({
       executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile,
-    }),
+    })),
     ...extra,
   });
   emitPreflight(result, { stdout: stdout || { write() {} }, stderr: options.stderr || process.stderr });

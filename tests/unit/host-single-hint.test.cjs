@@ -67,6 +67,34 @@ for (const host of HOSTS) {
   });
 }
 
+function capabilityEvidence(file) {
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const selections = Object.values(policy.CODEX_ROLE_RUNG_DEFINITIONS).flat()
+    .map((rung) => ({ model: policy.CODEX_MODEL_IDS[rung.model_key], effort: rung.effort }));
+  fs.writeFileSync(file, JSON.stringify({
+    supportedModels: [...new Set(selections.map((item) => item.model))],
+    supportedEfforts: [...new Set(selections.map((item) => item.effort))],
+    supportedSelections: selections,
+  }));
+}
+
+test('codex-decompose-host calls an injected probe function and keeps a probe value', () => {
+  const { runHostPreflight } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
+  const w = world('probe-injection');
+  capabilityEvidence(path.join(w.root, 'capabilities.json'));
+  const env = { PATH: '/usr/bin:/bin', HOME: path.join(w.root, 'home'), XDG_STATE_HOME: path.join(w.root, 'xdg'),
+    SHIPYARD_RUNTIME: 'codex', SHIPYARD_CODEX_CAPABILITIES_FILE: path.join(w.root, 'capabilities.json') };
+  const unavailable = { status: 'unavailable', reason: 'codex binary missing' };
+  const codes = (probe) => runHostPreflight({ env, probe, stderr: { write() {} } },
+    { host: 'codex-decompose-host.cjs', worktree: w.project, graphDir: null, stdout: { write() {} } })
+    .findings.map((finding) => finding.code);
+  assert.deepEqual(codes(unavailable), ['RUNTIME_UNAVAILABLE']);
+  let calls = 0;
+  assert.deepEqual(codes(() => { calls += 1; return unavailable; }), ['RUNTIME_UNAVAILABLE']);
+  assert.equal(calls, 1);
+  assert.deepEqual(codes(() => ({ status: 'available' })), []);
+});
+
 test('codex-delivery-host --preflight reports each finding detail once', () => {
   const w = world('detail-once');
   const outcome = run('codex-delivery-host.cjs', ['--preflight'], w, 'codex');
