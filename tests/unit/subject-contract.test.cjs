@@ -102,7 +102,31 @@ test('accepted values list the identity first and the legacy owner/repo second',
   const withRemote = repo('remote', 'git@github.com:Serhii-Nochevnyi/Shipyard.git');
   assert.deepEqual(target.acceptedRepositoryValues(withRemote), [path.join(withRemote, '.git'), 'serhii-nochevnyi/shipyard']);
   const without = repo('no-remote');
-  assert.deepEqual(target.acceptedRepositoryValues(without), [path.join(without, '.git')]);
+  assert.deepEqual(target.acceptedRepositoryValues(without), [path.join(without, '.git'), without]);
+});
+
+test('a repository without a github.com origin also accepts its old project-root path form', () => {
+  for (const [name, remote] of [['gitlab-origin', 'git@gitlab.com:acme/mine.git'], ['bitbucket-origin', 'https://bitbucket.org/acme/mine.git'],
+    ['ghe-origin', 'https://github.example.com/acme/mine.git'], ['no-origin', null]]) {
+    const root = repo(name, remote);
+    assert.deepEqual(target.legacyRepositoryForms(root), [root], name);
+    const accepted = target.acceptedRepositoryValues(root);
+    assert.ok(accepted.includes(root), name);
+    assert.ok(!accepted.includes(path.join(scratch, 'unrelated')), name);
+    assert.ok(!accepted.includes(path.dirname(root)), name);
+  }
+  const linkedRoot = repo('path-main');
+  const linked = path.join(scratch, 'path-linked');
+  git(linkedRoot, 'worktree', 'add', '-q', linked, '-b', 'path-linked');
+  assert.deepEqual(target.legacyRepositoryForms(linked).sort(), [linked, linkedRoot].sort());
+  const github = repo('path-github', 'git@github.com:Acme/Mine.git');
+  assert.deepEqual(target.legacyRepositoryForms(github), ['acme/mine']);
+  assert.deepEqual(target.legacyRepositoryForms(path.join(scratch, 'absent')), []);
+});
+
+test('a path form that the shared repository class refuses is not accepted', () => {
+  const root = repo('legacy;semi');
+  assert.deepEqual(target.legacyRepositoryForms(root), []);
 });
 
 test('consumers accept the shared class for planning-input, decomposition-seal and arch-review subjects', () => {
