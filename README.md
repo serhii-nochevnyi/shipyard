@@ -200,11 +200,18 @@ needs neither `CODEX_HOME` nor `SHIPYARD_CODEX_CAPABILITIES_FILE` exported.
   `--preflight` flag of its own. The Codex capability probe with
   `--capability-only` keeps exiting 0.
 - Old provenance history is adopted once, automatically, as historical and
-  unverified. Files stay in place; nothing is deleted, archived or moved. Adoption
-  is blocked only when a recorded file changed during adoption
-  (`LEGACY_HISTORY_CHANGED`) or a later file is not known to this host
-  (`LEGACY_HISTORY_UNKNOWN_MEMBER`). Leave the history as it is; the remedy is to
-  update the host that wrote it (`codex plugin marketplace upgrade shipyard`, then
+  unverified. Files stay in place; nothing is deleted, archived or moved. A
+  `.DS_Store`, a `.gitkeep` and an orphaned `<id>.json.<pid>.<uuid>.tmp` staging
+  file are not records and never block. Adoption and every later mutation are
+  refused when the history is not safe to adopt (`LEGACY_HISTORY_UNSAFE`: a
+  symlink, a directory, an unexpected file name, a file over the byte bound, or a
+  history that would overflow the catalogue bound), when the authority catalogue
+  is malformed or forged (`ARCHIVE_AUTHORITY_INVALID`), when a recorded file
+  differs from what was recorded (`LEGACY_HISTORY_CHANGED`, during adoption and on
+  any later edit) or when a file is neither recorded nor authenticated
+  (`LEGACY_HISTORY_UNKNOWN_MEMBER`). A recorded file that has been removed is
+  allowed. Leave the history as it is; the remedy is to update the host that wrote
+  it (`codex plugin marketplace upgrade shipyard`, then
   `codex plugin add shipyard@shipyard`) and re-run.
 - `make test-installed-launch` runs the installed-launch acceptance core. It
   first checks whether a non-interactive driver of the GSD UI path exists and
