@@ -374,8 +374,11 @@ function resolveHostEnvironment({ scriptDir, runtime, env = process.env, flags =
   const source = Object.freeze({ mode: 'source', runtime: runtime || null });
   if (runtime !== 'codex' || typeof scriptDir !== 'string' || !scriptDir) return source;
   const bundleRoot = physicalPath(path.join(scriptDir, '..'));
-  if (!bundleRoot || !fs.existsSync(path.join(bundleRoot, CODEX_CAPABILITIES_BUNDLE_FILE))) return source;
+  if (!bundleRoot) return source;
   const home = path.dirname(bundleRoot);
+  // @invariant: an installer manifest beside the bundle makes it installed even when its evidence file is gone.
+  if (!fs.existsSync(path.join(bundleRoot, CODEX_CAPABILITIES_BUNDLE_FILE))
+      && !fs.existsSync(path.join(home, 'agents', '.shipyard-manifest.json'))) return source;
   const { file: manifestFile, manifest } = readBundleManifest(home, bundleRoot);
   const { file: capabilitiesFile, capabilities } = readBundleCapabilities(bundleRoot, manifest);
   checkExplicitSources(env, flags, home, capabilitiesFile, manifest);

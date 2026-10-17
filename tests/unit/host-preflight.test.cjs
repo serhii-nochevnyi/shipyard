@@ -122,6 +122,16 @@ describe('host preflight', () => {
     assert.ok(aged.notes.some((n) => /runtime probe: not evaluated/.test(n.detail)));
   });
 
+  it('refuses an installed bundle whose evidence file is missing', () => {
+    const layout = installedLayout();
+    fs.rmSync(path.join(layout.bundle, 'codex-capabilities.json'));
+    const result = preflight(base(layout, { env: { SHIPYARD_RUNTIME: 'codex' } }));
+    assert.deepEqual(codes(result), ['CAPABILITY_EVIDENCE_STALE']);
+    assert.equal(result.ok, false);
+    const source = preflight({ runtime: 'codex', scriptDir: path.join(tmp('src'), 'scripts'), env: {}, graphDir: null });
+    assert.equal(source.ok, true);
+  });
+
   it('treats a throwing probe as a not-evaluated note while other checks still report', () => {
     const stale = installedLayout({ stale: true });
     const result = preflight(base(stale, { probe: () => { throw new Error('boom'); } }));
