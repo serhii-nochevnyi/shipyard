@@ -3371,10 +3371,8 @@ function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
   const result = preflight({ host: 'codex-delivery-host.cjs', runtime: 'codex', scriptDir: __dirname,
     worktree: scope.worktree, env: options.env || process.env, ...extra });
   const stderr = options.preflightStderr || process.stderr;
-  const details = () => stderr.write(result.findings.map((finding) => `preflight: detail[${finding.code}] ${finding.detail}\n`).join(''));
   if (report) {
     const code = emitPreflight(result, { stdout: options.preflightStdout || process.stdout, stderr });
-    if (code !== 0) details();
     return { result, code };
   }
   if (result.ok) {
@@ -3384,7 +3382,6 @@ function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
     return { result, code: 0 };
   }
   emitPreflight(result, { stdout: { write() {} }, stderr });
-  details();
   const refusal = new Error(`preflight found ${result.findings.length} incompatibilities: `
     + result.findings.map((finding) => finding.code).join(', '));
   refusal.code = result.findings[0].code;

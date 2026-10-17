@@ -66,3 +66,15 @@ for (const host of HOSTS) {
     assert.equal(outcome.stderr.includes('the host script'), false, `${host.file}: a degraded hint was printed`);
   });
 }
+
+test('codex-delivery-host --preflight reports each finding detail once', () => {
+  const w = world('detail-once');
+  const outcome = run('codex-delivery-host.cjs', ['--preflight'], w, 'codex');
+  const report = outcome.stdout.split('\n').filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } })
+    .find((value) => value && value.schema === 'shipyard.host-preflight.v1');
+  assert.ok(report && report.findings.length >= 1, outcome.stderr);
+  for (const finding of report.findings) {
+    assert.equal(outcome.stderr.split(finding.detail).length - 1, 1, `${finding.code} detail repeated:\n${outcome.stderr}`);
+  }
+  assert.equal(outcome.stderr.includes('preflight: detail['), false);
+});
