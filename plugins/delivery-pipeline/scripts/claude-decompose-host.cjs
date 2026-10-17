@@ -15,6 +15,8 @@ const { createRunScope } = require('./run-scope.cjs');
 const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
+const { resolveClaudeHome, preflight, emitPreflight } = require('./runtime-context.cjs');
+const { repositoryIdentity } = require('./architecture-target.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
   assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
@@ -128,7 +130,9 @@ function canonicalRequest(input) {
   for (const key of ['critical', 'checkpoint']) {
     if (signals[key] !== undefined && typeof signals[key] !== 'boolean') refuse('INVALID_SIGNAL', `invalid ${key} signal`);
   }
-  const common = fs.realpathSync(path.resolve(worktree, git(worktree, 'rev-parse', '--git-common-dir')));
+  let common;
+  try { common = repositoryIdentity(worktree); }
+  catch (error) { refuse('SCOPE_MISMATCH', error.message); }
   let adr = null;
   if (ROLES[role] === 'decomposition' || input.adr !== undefined) {
     try { adr = decompositionAdr.resolveAdr(worktree, input.adr); }
@@ -359,7 +363,7 @@ async function runDecomposition(request, dependencies = {}) {
         || typeof resolution.effort !== 'string') {
       refuse('CONFLICTING_OVERRIDE', 'routed resolution does not match the requested GSD launch');
     }
-    const configRoot = dependencies.configRoot || process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude');
+    const configRoot = dependencies.configRoot || resolveClaudeHome();
     const definition = trustedAgent(scope.role, configRoot);
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-definition-'));
     fs.chmodSync(temporary, 0o700);
@@ -612,8 +616,7 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
       verified = await verifyCompletedClaudeLaunch({ session_id: launch.session_id,
         start_evidence_file: expectedStart, transcript_path: expectedTranscript,
         saved_native_transcript: launch.saved_native_transcript,
-        original_projects_root: path.join(dependencies.configRoot || process.env.CLAUDE_CONFIG_DIR
-          || path.join(process.env.HOME || os.homedir(), '.claude'), 'projects'),
+        original_projects_root: path.join(dependencies.configRoot || resolveClaudeHome(), 'projects'),
         model: resolution.model, effort: resolution.effort, gsd_role: scope.role,
         worktree: scope.worktree });
     } catch (error) {
@@ -678,6 +681,8 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
 
 function parseArguments(argv) {
   if (argv.length === 1 && argv[0] === '--capability-only') return { capabilityOnly: true };
+  if (argv.length === 1 && argv[0] === '--preflight') return { preflightOnly: true };
+  if (argv[0] === '--preflight') return { ...parseArguments(argv.slice(1)), preflightOnly: true };
   if (argv.length === 3 && argv[0] === 'recover' && argv[1] === '--dispatch') {
     return { recoverDispatch: safeText(argv[2], 'dispatch id', 128) };
   }
@@ -685,8 +690,21 @@ function parseArguments(argv) {
   return { requestFile: argv[1] };
 }
 
+function launchPreflight(worktree, output = process.stdout) {
+  const result = preflight({
+    runtime: 'claude', scriptDir: __dirname, worktree, graphDir: undefined, scope: 'launch',
+    host: 'claude-decompose-host.cjs', env: process.env, probe: () => probeClaudeRuntime(),
+  });
+  emitPreflight(result, { stdout: output, stderr: process.stderr });
+  return result;
+}
+
 async function main(argv = process.argv.slice(2)) {
   const args = parseArguments(argv);
+  if (args.preflightOnly && !args.requestFile) {
+    if (!launchPreflight(process.cwd()).ok) process.exitCode = 1;
+    return;
+  }
   if (args.recoverDispatch) {
     process.stdout.write(`${JSON.stringify(await recoverDecomposition(args.recoverDispatch))}\n`);
     return;
@@ -698,7 +716,7 @@ async function main(argv = process.argv.slice(2)) {
       return;
     }
     try {
-      const configRoot = process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude');
+      const configRoot = resolveClaudeHome();
       for (const [role, boundaryRole] of Object.entries(ROLES)) {
         pipelineConfig.resolveDispatch({ root: process.cwd(), runtime: 'claude',
           role: boundaryRole, signals: {}, dispatch_id: `capability-${role}` });
@@ -717,6 +735,8 @@ async function main(argv = process.argv.slice(2)) {
   const request = JSON.parse(fs.readFileSync(args.requestFile, 'utf8'));
   const scope = canonicalRequest(request);
   process.chdir(scope.worktree);
+  if (!launchPreflight(scope.worktree).ok) { process.exitCode = 1; return; }
+  if (args.preflightOnly) return;
   const output = await runDecomposition(request);
   process.stdout.write(`${JSON.stringify(output)}\n`);
 }
