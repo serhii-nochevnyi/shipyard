@@ -22,6 +22,7 @@ const { captureContainmentBaseline } = require('../../plugins/delivery-pipeline/
 const { createCodexRuntimeHost } = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
 const { runDecomposition: runClaudeDecomposition } = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
 const orchestrationOverhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
+const { repositoryIdentity } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 const {
   createCodexDecomposeHost, defaultRunStoreDir, parseCliArguments, parseRecoverArguments, readRequestFile, requestValue, runCli,
 } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
@@ -547,7 +548,10 @@ test('child telemetry collector failure warns without leaking collector details 
     });
     assert.equal(result.receipt.compliance, 'verified');
     assert.deepEqual(JSON.parse(stdout.join('')), result);
-    assert.deepEqual(stderr, ['codex-decompose-host: child model telemetry collection failed\n']);
+    assert.deepEqual(stderr, [
+      'preflight: ok\npreflight: note legacy history: not evaluated, no graph directory\n',
+      'codex-decompose-host: child model telemetry collection failed\n',
+    ]);
     assert.equal(JSON.stringify({ result, stdout, stderr }).includes(secret), false);
     const storeDir = defaultRunStoreDir(f.scope, f.stateRoot);
     const receipts = createDurableRecorder(path.join(path.dirname(storeDir), 'receipts'));
@@ -799,7 +803,7 @@ for (const mutation of ['none', 'modify', 'remove', 'add', 'stage', 'commit', 'm
         assert.deepEqual(entries.map((entry) => path.basename(entry.path)), ['38-01-PLAN.md', 'CONTEXT.md']);
         assert.equal(result.source_revision, headRevision(f.root));
         assert.equal(result.policy_hash, result.receipt.policy_hash);
-        assert.equal(result.repository, f.root);
+        assert.equal(result.repository, repositoryIdentity(f.root));
         assert.equal(fs.readFileSync(manifest, 'utf8'), '{"generation":2}\n');
         assert.equal(fs.readFileSync(input, 'utf8'), "'use strict';\n// prepared input\n");
       } else {
@@ -2752,7 +2756,6 @@ test('the detached child environment is the launchEnvironment output of the host
 
 test('a seal names the repository identity when the request supplies none and keeps a supplied value', () => {
   const { sealScope } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
-  const { repositoryIdentity } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
   const { decompositionAdr } = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'seal identity ')));
   try {
