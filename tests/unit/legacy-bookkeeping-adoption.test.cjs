@@ -473,3 +473,64 @@ test('an unreadable authority namespace adopts nothing and writes nothing', () =
   assert.deepEqual(snapshot(home), homeBefore);
   assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'adoptable');
 });
+
+const STAGING = 'dispatch-9.json.4242.0a1b2c3d-1111-4222-8333-444455556666.tmp';
+
+test('editor and checkout noise is not a record: it never blocks, is never adopted and never trusted', () => {
+  for (const noise of ['.DS_Store', '.gitkeep', STAGING]) {
+    const root = project();
+    const dir = sidecars(root, 3);
+    fs.writeFileSync(path.join(dir, noise), 'not a record');
+    const result = roleArtifact.classifyLegacyProvenance(root);
+    assert.equal(result.state, 'adoptable', noise);
+    assert.deepEqual(result.findings, [], noise);
+    assert.ok(!result.members.some(member => member.path.endsWith(noise)), noise);
+    adopt(root, () => fs.writeFileSync(path.join(root, '.planning/graph/dispatches.json'), '{"a":1}'));
+    const record = catalogueOf(root).payload[roleArtifact.LEGACY_BOOKKEEPING_FIELD];
+    assert.equal(record.members.length, 3, noise);
+    assert.ok(record.members.every(member => !member.path.endsWith(noise)), noise);
+    assert.ok(roleArtifact.historicalBookkeepingPins(root).every(pin => !pin.path.endsWith(noise)), noise);
+    assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'adopted', noise);
+    assert.equal(fs.readFileSync(path.join(dir, noise), 'utf8'), 'not a record', noise);
+    adopt(root);
+  }
+});
+
+test('noise beside an empty history still classifies as absent', () => {
+  const root = project();
+  const dir = path.join(root, '.planning/graph/provenance');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.DS_Store'), 'x');
+  assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'absent');
+});
+
+test('noise that is a symlink, a directory or a near-miss name is still unsafe', () => {
+  const variants = {
+    symlinkedNoise: dir => fs.symlinkSync('/etc/hosts', path.join(dir, '.DS_Store')),
+    directoryNoise: dir => fs.mkdirSync(path.join(dir, '.gitkeep')),
+    symlinkedStaging: dir => fs.symlinkSync('/etc/hosts', path.join(dir, STAGING)),
+    shortToken: dir => fs.writeFileSync(path.join(dir, 'dispatch-9.json.4242.abc.tmp'), 'x'),
+    otherDotfile: dir => fs.writeFileSync(path.join(dir, '.hidden'), 'x'),
+    noPid: dir => fs.writeFileSync(path.join(dir, 'dispatch-9.json.0a1b2c3d-1111-4222-8333-444455556666.tmp'), 'x'),
+  };
+  for (const [name, mutate] of Object.entries(variants)) {
+    const root = project();
+    const dir = sidecars(root, 2);
+    mutate(dir);
+    const result = roleArtifact.classifyLegacyProvenance(root);
+    assert.equal(result.state, 'blocked', name);
+    assert.ok(result.findings.some(finding => finding.code === 'LEGACY_HISTORY_UNSAFE'), name);
+  }
+});
+
+test('noise appearing after adoption does not block the next mutation', () => {
+  const root = project();
+  const dir = sidecars(root, 2);
+  adopt(root);
+  fs.writeFileSync(path.join(dir, '.DS_Store'), 'x');
+  fs.writeFileSync(path.join(dir, STAGING), 'x');
+  let invoked = 0;
+  adopt(root, () => { invoked++; });
+  assert.equal(invoked, 1);
+  assert.equal(roleArtifact.classifyLegacyProvenance(root).state, 'adopted');
+});

@@ -96,7 +96,7 @@ grep -q '^### Launch and upgrade$' README.md || fail "README misses the Launch a
 grep -q -- '--preflight' README.md || fail "README misses --preflight"
 for host in claude-delivery-host claude-investigation-host claude-decompose-host claude-role-host \
   codex-delivery-host codex-decompose-host codex-planning-context-host; do
-  grep -q "$host.cjs" README.md || fail "README does not name host entry $host.cjs"
+  grep -q "$host\.cjs" README.md || fail "README does not name host entry $host.cjs"
 done
 while IFS= read -r script; do
   [[ -z "$script" ]] && continue
@@ -120,7 +120,7 @@ fi
 grep -q 'STOP_DIR=' scripts/install-shipyard-claude-hook.sh || fail "Claude installer has no stable hook bundle"
 grep -q 'copy_stop_bundle' scripts/install-shipyard-claude-hook.sh || fail "Claude installer does not copy dependencies"
 grep -q 'OLD_STOP_CMD' scripts/install-shipyard-claude-hook.sh || fail "Claude installer does not migrate the old hook"
-grep -q 'usage-attribution.cjs' README.md || fail "README misses usage attribution"
-grep -q 'usage-report.cjs' README.md || fail "README misses usage report"
+grep -q 'usage-attribution\.cjs' README.md || fail "README misses usage attribution"
+grep -q 'usage-report\.cjs' README.md || fail "README misses usage report"
 
 echo "docs smoke passed"

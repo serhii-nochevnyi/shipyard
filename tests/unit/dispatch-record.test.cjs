@@ -2466,6 +2466,19 @@ test('with no history, the root creates the authority and a linked worker with a
   });
 });
 
+test('a provenance directory holding only noise admits a linked worker as an empty one does', () => withAuthorityHome(() => {
+  const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
+  try {
+    const linked = linkedWorktree(project);
+    const authority = authorityModule();
+    fs.mkdirSync(PROVENANCE_DIR(graph), { recursive: true });
+    fs.writeFileSync(path.join(PROVENANCE_DIR(graph), '.DS_Store'), 'x');
+    recordInflight(admission(graph, linked, 'noisy-linked'));
+    assert.ok(authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/noisy-linked.json')));
+    assert.equal(authority.classifyLegacyProvenance(project).state, 'authenticated');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}));
+
 test('an unreadable authority namespace sends a linked worktree down the trusted path, which fails without writing', () => withAuthorityHome((home) => {
   const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
   try {
@@ -2624,6 +2637,29 @@ test('a legacy member named like a new dispatch id is refused and never stands i
       assert.deepStrictEqual(treeDigest(legacyDir), before, 'the legacy file is not replaced or rewritten');
       assert.ok(!authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/colliding-id.json')),
         'the legacy file never becomes a pin');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+}));
+
+test('a refused legacy collision leaves no in-flight row, adoption or catalogue behind', () => withAuthorityHome(() => {
+  for (const adopted of [false, true]) {
+    const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
+    try {
+      const authority = authorityModule();
+      legacySidecars(graph, ['legacy-a']);
+      if (adopted) authority.trustedBookkeepingMutation(project, () => {});
+      const storeFile = path.join(graph, 'dispatches.json');
+      const storeBefore = fs.existsSync(storeFile) ? fs.readFileSync(storeFile, 'utf8') : null;
+      const catalogue = path.join(authority.archiveAuthorityDirectory(project), 'catalogue.json');
+      const catalogueBefore = fs.existsSync(catalogue) ? fs.readFileSync(catalogue, 'utf8') : null;
+      let failure;
+      try { recordInflight(admission(graph, project, 'legacy-a')); } catch (error) { failure = error; }
+      assert.equal(failure && failure.code, 'LEGACY_HISTORY_COLLISION', `adopted=${adopted}`);
+      const storeAfter = fs.existsSync(storeFile) ? fs.readFileSync(storeFile, 'utf8') : null;
+      assert.equal(storeAfter, storeBefore, `adopted=${adopted}: dispatches.json is untouched`);
+      assert.ok(!storeAfter || !JSON.parse(storeAfter).inflight?.['legacy-a'], 'no in-flight row survives the refusal');
+      assert.equal(fs.existsSync(catalogue) ? fs.readFileSync(catalogue, 'utf8') : null, catalogueBefore,
+        `adopted=${adopted}: the refusal adopts nothing`);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
 }));

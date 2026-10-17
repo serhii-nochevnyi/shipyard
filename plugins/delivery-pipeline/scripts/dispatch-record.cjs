@@ -1289,12 +1289,16 @@ function telemetryFor(recorded, ticket, role) {
 // reliably produced five). The lock sits beside the STORE, never at cwd: a mark
 // run from a ticket worktree would otherwise take a lock nobody else contends
 // for and serialize nothing.
+function bookkeepingAuthenticated(cwd, required) {
+  const worktree = path.resolve(graphDir(cwd), '../..');
+  return required || fs.existsSync(path.join(worktree, '.shipyard-role-artifacts'))
+    || require('./role-artifact.cjs').historicalBookkeepingPins(worktree).length > 0;
+}
+
 function authenticateBookkeeping(cwd, fn, writtenPaths, required = false) {
   const worktree = path.resolve(graphDir(cwd), '../..');
-  const authority = require('./role-artifact.cjs');
-  if (!required && !fs.existsSync(path.join(worktree, '.shipyard-role-artifacts'))
-      && authority.historicalBookkeepingPins(worktree).length === 0) return fn();
-  return authority.trustedBookkeepingMutation(worktree, fn, writtenPaths);
+  if (!bookkeepingAuthenticated(cwd, required)) return fn();
+  return require('./role-artifact.cjs').trustedBookkeepingMutation(worktree, fn, writtenPaths);
 }
 
 const LEGACY_ADMISSION_STATES = new Set(['adoptable', 'adopted', 'blocked', 'unreadable']);
@@ -1305,8 +1309,10 @@ function inflightBookkeepingRequired(input, cwd) {
   const project = fs.realpathSync(path.resolve(graphDir(cwd), '../..'));
   if (fs.realpathSync(input.worktree) === project) return true;
   const provenance = path.join(project, '.planning', 'graph', 'provenance');
-  if (!fs.existsSync(provenance) || fs.readdirSync(provenance).length === 0) return true;
-  return LEGACY_ADMISSION_STATES.has(require('./role-artifact.cjs').classifyLegacyProvenance(project).state);
+  const authority = require('./role-artifact.cjs');
+  if (!fs.existsSync(provenance)
+      || fs.readdirSync(provenance).every((name) => authority.provenanceInert(provenance, name))) return true;
+  return LEGACY_ADMISSION_STATES.has(authority.classifyLegacyProvenance(project).state);
 }
 
 function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false, authenticate = false) {
@@ -1545,7 +1551,10 @@ function recordInflight(input) {
   if (issue) throw new Error(`in-flight dispatch id is invalid: ${issue}`);
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('in-flight pid must be a positive integer');
   const row = { ticket, role, dispatch_id: dispatchId, pid, host, started_at: new Date().toISOString() };
+  const required = inflightBookkeepingRequired(input, cwd);
+  const authenticated = bookkeepingAuthenticated(cwd, required);
   mutate(cwd, (store) => {
+    if (authenticated) refuseLegacyCollision(path.resolve(graphDir(cwd), '../..'), dispatchId, true);
     store.inflight = roundObject(store.inflight) ? store.inflight : {};
     const existing = store.inflight[dispatchId];
     if (existing && existing.pid !== pid && inflightRowLive(existing, dispatchId)) {
@@ -1553,7 +1562,7 @@ function recordInflight(input) {
     }
     store.inflight[dispatchId] = row;
     return null;
-  }, undefined, true, inflightBookkeepingRequired(input, cwd));
+  }, undefined, true, required);
   writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at }, inflightBookkeepingRequired(input, cwd));
   if (input.refreshBoard !== false) refreshFront(cwd);
   return Object.freeze({ ...row });
@@ -1565,10 +1574,15 @@ function provenanceFile(dir, dispatchId) {
   return path.join(dir, 'provenance', `${dispatchId}.json`);
 }
 
-function refuseLegacyCollision(project, dispatchId) {
+function refuseLegacyCollision(project, dispatchId, includeAdoptable = false) {
   const relative = `.planning/graph/provenance/${dispatchId}.json`;
   const authority = require('./role-artifact.cjs');
-  if (!authority.legacyBookkeepingMembers(project).some((member) => member.path === relative)) return;
+  let members = authority.legacyBookkeepingMembers(project);
+  if (includeAdoptable) {
+    const classified = authority.classifyLegacyProvenance(project);
+    if (classified.state === 'adoptable') members = classified.members;
+  }
+  if (!members.some((member) => member.path === relative)) return;
   if (authority.historicalBookkeepingPins(project).some((pin) => pin.path === relative)) return;
   throw Object.assign(new Error(`dispatch id ${dispatchId} collides with recorded legacy provenance ${relative}`),
     { code: 'LEGACY_HISTORY_COLLISION' });

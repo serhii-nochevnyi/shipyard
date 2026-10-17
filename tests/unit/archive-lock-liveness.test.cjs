@@ -205,4 +205,21 @@ test('a lock path that is not a physical directory is refused with its cause and
   } finally { value.clean(); }
 });
 
+test('a holder that releases between the existence check and the lock inspection is not a failure', async () => {
+  const value = fixture('released');
+  const original = fs.lstatSync;
+  let raced = 0;
+  try {
+    fs.mkdirSync(value.lockPath);
+    fs.lstatSync = function (target, ...rest) {
+      if (target === value.lockPath && raced === 0) { raced += 1; fs.rmdirSync(value.lockPath); }
+      return original.call(this, target, ...rest);
+    };
+    const seam = loadSeam(ROLE_ARTIFACT).__seam;
+    assert.equal(seam.withArchiveAuthorityLock(value.worktree, () => 'ran'), 'ran');
+    assert.equal(raced, 1, 'the release raced the inspection');
+    assert.equal(fs.existsSync(value.lockPath), false);
+  } finally { fs.lstatSync = original; value.clean(); }
+});
+
 done();

@@ -54,15 +54,19 @@ try {
   const homeProbe = lib.runHost(fixture, host, ['--preflight'], { ...layout.env, CLAUDE_HOME: path.join(fixture.workRoot, 'foreign-claude-home') });
   assert.equal(homeProbe.status, 0, 'CLAUDE_HOME must have no effect: ' + homeProbe.stdout + homeProbe.stderr);
 
+  const homeReaders = fs.readdirSync(layout.scriptsDir).filter((name) => name.endsWith('.cjs')).filter((name) => fs.readFileSync(
+    path.join(layout.scriptsDir, name), 'utf8').split('\n').some((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)
+    && line.includes('CLAUDE_HOME')));
   const names = lines[0].envNames;
   const measure = {
     claudeVariablesSeen: names.filter((name) => name.startsWith('CLAUDE_')),
     shipyardVariablesSeen: names.filter((name) => name.startsWith('SHIPYARD_')),
     configRoot: path.join(fixture.home, '.claude'),
-    claudeHomeReader: false,
+    claudeHomeReaders: homeReaders,
     terminal: outcome.terminal,
   };
   assert.deepEqual(measure.shipyardVariablesSeen, []);
+  assert.deepEqual(measure.claudeHomeReaders, [], 'no script may read CLAUDE_HOME');
   console.log('MEASURE: ' + JSON.stringify(measure));
 
   lib.assertHarnessIsolation(fixture, { admitted: true });
