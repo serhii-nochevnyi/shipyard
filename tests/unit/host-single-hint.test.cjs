@@ -46,6 +46,14 @@ const HOSTS = [
         args: { invId: 'INV-TEST', invPath: path.join(worktree, '.planning/investigations/INV-TEST'), worktreePath: worktree,
           lines: ['system-state', 'alternatives', 'constraints', 'risks'].map((id) => ({ id })) } };
     } },
+  { file: 'claude-investigation-host.cjs', runtime: 'claude', args: (file) => ['--request-file', file],
+    request: (w) => {
+      const worktree = fs.realpathSync(w.project);
+      return { schema: 'shipyard.claude-delivery-request.v1',
+        scope: { run_id: 'cli-inv-50', ticket: 'INV-TEST', phase: 50, worktree },
+        args: { invId: 'INV-TEST', invPath: path.join(worktree, '.planning/investigations/INV-TEST'), worktreePath: worktree,
+          lines: ['system-state', 'alternatives', 'constraints', 'risks'].map((id) => ({ id })) } };
+    } },
   { file: 'codex-decompose-host.cjs', runtime: 'codex', args: (file) => ['--args-file', file],
     request: (w) => ({ scope: scope(w), gsd_role: 'gsd-plan-checker', prompt: 'Check.' }) },
   { file: 'codex-planning-context-host.cjs', runtime: 'codex', args: (file) => ['--args-file', file],
