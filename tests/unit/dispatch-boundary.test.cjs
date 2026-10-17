@@ -452,6 +452,10 @@ test('the boundary lets a planning subject carry a space in its repository and n
       { ticket: subject });
     assert.equal(result.receipt.dispatch_id, 'subject-space');
     refused('T-50-01 extra');
+    assert.throws(() => boundary.dispatch({ runtime: 'claude', role: 'decomposition' }, { ticket: 'T-50-01 extra' }),
+      (error) => /control characters/.test(error.message) && !/whitespace-free/.test(error.message)
+        && ['planning-input', 'decomposition-seal', 'integrator', 'architecture-review']
+          .every((family) => error.message.includes(family)));
     refused(subject.replace('/my checkout', '/my\tcheckout'));
     refused(subject.replace('/my checkout', '/my\x7fcheckout'));
     refused(`${subject} trailing;x=1`);
