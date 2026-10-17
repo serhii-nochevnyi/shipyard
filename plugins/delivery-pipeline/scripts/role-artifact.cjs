@@ -4188,8 +4188,10 @@ function withArchiveAuthorityLock(worktree, fn) {
   if (active?.worktree === worktree) { assertArchiveLock(worktree); return fn(); }
   const state = authorityState(worktree, true);
   const lockPath = path.join(state.directory, 'catalogue.lock');
-  if (fs.existsSync(lockPath)) {
-    const stat = fs.lstatSync(lockPath);
+  let stat = null;
+  try { stat = fs.lstatSync(lockPath); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (stat) {
     if (stat.isSymbolicLink() || !stat.isDirectory())
       fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock is not a physical directory: a file or symlink sits where '
         + 'the lock directory belongs; remove ' + lockPath + ' and retry');
