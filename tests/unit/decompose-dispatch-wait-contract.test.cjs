@@ -233,7 +233,7 @@ test(`detached decomposition preserves ${includeDispatchId ? 'explicit' : 'omitt
     const requestedDispatchId = includeDispatchId ? f.dispatchId : null;
     const launched = launch(f);
     assert.equal(launched.status, 0, launched.stderr);
-    assert.equal(launched.stderr, '');
+    assert.equal(launched.stderr, 'preflight: ok\n');
     const handoff = JSON.parse(launched.stdout.trim());
     f.dispatchId = handoff.dispatch_id;
     if (requestedDispatchId !== null) assert.equal(handoff.dispatch_id, requestedDispatchId);
@@ -414,6 +414,8 @@ test('actual caller timeout resumes the original child with frozen context and a
     let launches = 0;
     let parentArgs;
     const options = { stateDir: f.stateDir, env: f.env,
+      capabilitiesFile: path.join(f.codexHome, 'shipyard', 'codex-capabilities.json'),
+      executable: path.join(f.base, 'bin', 'codex'),
       testStateRoot: path.join(f.home, '.local', 'state', 'shipyard', 'codex-decompose'),
       runHost: async (argv, stdout, opts) => {
         launches++;
