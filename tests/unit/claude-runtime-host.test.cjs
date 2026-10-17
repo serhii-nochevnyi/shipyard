@@ -771,4 +771,18 @@ test('unavailable probe is reported to the controller and refuses launch', () =>
   assert.equal(unavailable[0][0], SCOPE.run_id);
 });
 
+suite('claude-runtime-host — shared Claude home rule');
+
+test('config roots come from resolveClaudeHome, never a private expression, and CLAUDE_HOME is inert', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'plugins/delivery-pipeline/scripts/claude-runtime-host.cjs'), 'utf8');
+  assert.equal((source.match(/resolveClaudeHome\(/g) || []).length, 2);
+  assert.ok(!/CLAUDE_CONFIG_DIR \|\| process\.env\.CLAUDE_CONFIG_DIR\s*\|\|\s*path\.join/.test(source));
+  assert.ok(!/CLAUDE_HOME/.test(source));
+  const { resolveClaudeHome } = require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs');
+  assert.equal(resolveClaudeHome({ env: { HOME: '/fixture/home' } }), path.join('/fixture/home', '.claude'));
+  assert.equal(resolveClaudeHome({ env: { HOME: '/fixture/home', CLAUDE_CONFIG_DIR: '/fixture/cfg' } }), '/fixture/cfg');
+  assert.equal(resolveClaudeHome({ env: { HOME: '/fixture/home', CLAUDE_HOME: '/fixture/other' } }),
+    path.join('/fixture/home', '.claude'));
+});
+
 done();

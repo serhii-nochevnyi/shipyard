@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { claudeGsdAgentDirectory } = require('./gsd-agent-root.cjs');
+const { resolveClaudeHome } = require('./runtime-context.cjs');
 const { spawn, spawnSync } = require('node:child_process');
 const { CLAUDE_MODEL_ALIASES } = require('./runtime-adapters.cjs');
 const { createDurableRecorder } = require('./dispatch-boundary.cjs');
@@ -360,15 +361,16 @@ function projectsDirectory(options, environment) {
     return path.resolve(options.sessionTranscriptRoot);
   }
   const home = environment.HOME || os.homedir();
-  const config = environment.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR
-    || path.join(home, '.claude');
+  const config = resolveClaudeHome({ env: { HOME: environment.HOME,
+    CLAUDE_CONFIG_DIR: environment.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR } });
   const resolved = config.startsWith('~/') ? path.join(home, config.slice(2)) : config;
   return path.join(path.resolve(resolved), 'projects');
 }
 
 function gsdAgentDefinition(role, environment, configuredRoot, schema) {
   const home = environment.HOME || os.homedir();
-  const config = environment.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+  const config = resolveClaudeHome({ env: { HOME: environment.HOME,
+    CLAUDE_CONFIG_DIR: environment.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR } });
   const expanded = config.startsWith('~/') ? path.join(home, config.slice(2)) : config;
   const directory = path.resolve(configuredRoot || claudeGsdAgentDirectory(path.resolve(expanded), role));
   const file = path.join(directory, `${role}.md`);
