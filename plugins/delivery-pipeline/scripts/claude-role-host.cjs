@@ -1587,7 +1587,8 @@ function launchPreflight(worktree, hostOptions, output) {
     scope: 'launch',
     host: 'claude-role-host.cjs',
     env: hostOptions.preflightEnv || process.env,
-    probe: () => hostOptions.probe || probeClaudeRuntime(hostOptions),
+    probe: () => (typeof hostOptions.probe === 'function' ? hostOptions.probe()
+      : hostOptions.probe || probeClaudeRuntime(hostOptions)),
   });
   emitPreflight(result, { stdout: output, stderr });
   return result;

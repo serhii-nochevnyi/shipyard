@@ -1768,6 +1768,21 @@ test('Claude delivery preflight judges the legacy history of the graph directory
   }
 });
 
+test('Claude delivery preflight calls an injected probe function and keeps a probe value', async () => {
+  const project = preflightProject();
+  const argv = ['--preflight', '--workflow', 'executors', '--request-file', project.requestFile];
+  const codes = async (probe) => (await runClaudeDeliveryCli(argv, { write() {} },
+    { graphDir: project.graphDir, probe, stderr: { write() {} } })).findings.map((finding) => finding.code);
+  try {
+    const unavailable = { status: 'unavailable', reason: 'claude binary missing' };
+    assert.deepEqual(await codes(unavailable), ['RUNTIME_UNAVAILABLE']);
+    let calls = 0;
+    assert.deepEqual(await codes(() => { calls += 1; return unavailable; }), ['RUNTIME_UNAVAILABLE']);
+    assert.equal(calls, 1);
+    assert.deepEqual(await codes(() => ({ status: 'available' })), []);
+  } finally { fs.rmSync(project.root, { recursive: true, force: true }); }
+});
+
 test('Claude delivery --preflight exits by result and starts nothing, with and without a request', () => {
   const fixture = preflightProject({ 'one.json': '{}' });
   try {

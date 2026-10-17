@@ -1879,6 +1879,21 @@ test('role host --capability-only keeps exit 0 and stdout and adds a stderr hint
   } finally { cleanupRoleCli(fixture); }
 });
 
+test('role host preflight calls an injected probe function and keeps a probe value', () => {
+  const project = roleCliFixture();
+  try {
+    const { runClaudeRoleCli } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+    const codes = (probe) => runClaudeRoleCli(['--preflight', '--args-file', project.argsFile], { write() {} },
+      { probe, stderr: { write() {} } }).findings.map((finding) => finding.code);
+    const unavailable = { status: 'unavailable', reason: 'claude binary missing' };
+    assert.deepEqual(codes(unavailable), ['RUNTIME_UNAVAILABLE']);
+    let calls = 0;
+    assert.deepEqual(codes(() => { calls += 1; return unavailable; }), ['RUNTIME_UNAVAILABLE']);
+    assert.equal(calls, 1);
+    assert.deepEqual(codes(() => ({ status: 'available' })), []);
+  } finally { cleanupRoleCli(project); }
+});
+
 test('role host preflight judges the legacy history of the host graph directory project', () => {
   const worktreeProject = roleCliFixture();
   const graphProject = setupRepository('arch-review');

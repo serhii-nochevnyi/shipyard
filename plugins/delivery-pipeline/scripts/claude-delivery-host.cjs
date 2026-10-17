@@ -1074,7 +1074,8 @@ function launchPreflight(worktree, hostOptions, output) {
     scope: 'launch',
     host: 'claude-delivery-host.cjs',
     env: hostOptions.preflightEnv || process.env,
-    probe: () => hostOptions.probe || probeClaudeRuntime({ env: process.env }),
+    probe: () => (typeof hostOptions.probe === 'function' ? hostOptions.probe()
+      : hostOptions.probe || probeClaudeRuntime({ env: process.env })),
   });
   emitPreflight(result, { stdout: output, stderr });
   return result;
