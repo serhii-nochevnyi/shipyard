@@ -153,3 +153,23 @@ test('a CONFLICTING_OVERRIDE refusal from the Codex remap renders every placehol
     (error) => error.code === 'CONFLICTING_OVERRIDE' && !/[{}]/.test(error.message) && /Fix model_profile_overrides\.codex\.sol in/.test(error.message),
   );
 });
+
+test('a path substituted into a command remedy is shell-quoted only when it is not plainly safe', () => {
+  const { execFileSync } = require('node:child_process');
+  const safe = formatHint('RUNTIME_UNAVAILABLE', { bundle: '/opt/shipyard/bundle', host: 'codex-delivery-host.cjs' });
+  assert.ok(safe.includes('node /opt/shipyard/bundle/scripts/codex-delivery-host.cjs --preflight'), safe);
+  assert.doesNotMatch(safe, /'/);
+  const spaced = formatHint('RUNTIME_UNAVAILABLE', { bundle: '/tmp/my bundle', host: 'h.cjs' });
+  assert.ok(spaced.includes("node '/tmp/my bundle'/scripts/h.cjs --preflight"), spaced);
+  const hostile = '/tmp/a;touch /tmp/pwned-$(id)`x`\'y';
+  const remedy = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs').renderRemedy('CODEX_CONFIG_FIX', { bundle: hostile, key: 'k' });
+  const command = remedy.slice(remedy.indexOf('node '), remedy.indexOf(' --runtime'));
+  const argv = JSON.parse(execFileSync('sh', ['-c', `set -- ${command.slice('node '.length)}; node -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"`], { encoding: 'utf8' }));
+  assert.deepEqual(argv, [`${hostile}/scripts/gsd-tune.cjs`]);
+  assert.ok(formatHint('CODEX_CONFIG_FIX', { bundle: '/x y;z', key: 'a b' }).includes("Fix a b in .planning/config.json, then run: node '/x y;z'/scripts/gsd-tune.cjs"));
+});
+
+test('prose placeholders are not shell-quoted', () => {
+  assert.ok(formatHint('LEGACY_HISTORY_UNSAFE', { path: '.planning/graph/a b;c.json' }).includes('history at .planning/graph/a b;c.json cannot'));
+  assert.ok(formatHint('ENV_CONFLICT', { explicit: 'CODEX_HOME=/a b', bundle_value: '/c d' }).includes('names CODEX_HOME=/a b but the installed bundle is /c d'));
+});

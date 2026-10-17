@@ -199,23 +199,35 @@ function stripControl(value) {
   return String(value).replace(CONTROL, '');
 }
 
-function fillText(text, vars) {
+const SAFE_SHELL_WORD = /^[A-Za-z0-9_@%+=:,./-]+$/;
+const COMMAND_PATH_TOKENS = new Set(['bundle', 'host']);
+
+// @security: a path substituted into a copy-paste command is single-quoted unless it is plainly safe.
+function shellQuote(value) {
+  return SAFE_SHELL_WORD.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function fillText(text, vars, quoted = false) {
   const supplied = vars && typeof vars === 'object' ? vars : {};
   return text.replace(/\{(\w+)\}/g, (token, name) => {
     const value = Object.hasOwn(supplied, name) ? supplied[name] : undefined;
-    if (value !== undefined && value !== null && value !== '') return stripControl(value);
-    return Object.hasOwn(TOKEN_FALLBACKS, name) ? TOKEN_FALLBACKS[name] : 'unspecified';
+    if (value !== undefined && value !== null && value !== '') {
+      const clean = stripControl(value);
+      return quoted && COMMAND_PATH_TOKENS.has(name) ? shellQuote(clean) : clean;
+    }
+    if (!Object.hasOwn(TOKEN_FALLBACKS, name)) return 'unspecified';
+    return quoted && name === 'bundle' ? shellQuote(TOKEN_FALLBACKS[name]) : TOKEN_FALLBACKS[name];
   });
 }
 
 function renderRemedy(code, vars) {
-  return fillText(hintFor(code).remedy, vars);
+  return fillText(hintFor(code).remedy, vars, true);
 }
 
 function formatHint(code, vars) {
   const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
   const entry = hintFor(code);
-  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(entry.remedy, vars)}`;
+  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(entry.remedy, vars, true)}`;
 }
 
 module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, renderRemedy, stripControl });
