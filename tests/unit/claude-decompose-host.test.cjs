@@ -1109,6 +1109,103 @@ test('--preflight parses alone and with --request-file', () => {
   assert.equal(both.requestFile, 'r.json');
 });
 
+function legacyWriterFixture() {
+  const f = preparedPhaseFixture();
+  const worktree = fs.realpathSync(f.worktree);
+  const sha = (text) => crypto.createHash('sha256').update(text).digest('hex');
+  const leaseDir = path.join(f.root, '.local', 'state', 'shipyard', 'codex-decompose', sha(worktree), 'writer',
+    sha(`${worktree}\n${fs.realpathSync(f.phaseDir)}`));
+  fs.mkdirSync(leaseDir, { recursive: true });
+  fs.writeFileSync(path.join(leaseDir, 'lease.json'), '{}');
+  return { ...f, claudeState: path.join(f.root, '.local', 'state', 'shipyard', 'claude-decompose') };
+}
+
+test('a refused decomposition because of legacy writer state creates no private store', async () => {
+  const f = legacyWriterFixture();
+  const home = process.env.HOME;
+  process.env.HOME = f.root;
+  try {
+    await assert.rejects(nativeRunDecomposition(request(f.worktree, 'gsd-planner'), {}), { code: 'LEGACY_WRITER_STATE' });
+    assert.equal(fs.existsSync(f.claudeState), false);
+  } finally { process.env.HOME = home; f.clean(); }
+});
+
+test('--preflight with a request reports LEGACY_WRITER_STATE and a launch refuses with its code and no state', () => {
+  const f = legacyWriterFixture();
+  try {
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const env = hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config });
+    const run = (args) => require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, ...args],
+      { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    const check = run(['--preflight', '--request-file', requestFile]);
+    const payload = JSON.parse(check.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.ok(payload.findings.some((finding) => finding.code === 'LEGACY_WRITER_STATE'), check.stderr);
+    const launch = run(['--request-file', requestFile]);
+    assert.equal(launch.status, 1, launch.stderr);
+    assert.equal(launch.stdout, '');
+    const first = /^([A-Z_]+): preflight found/m.exec(launch.stderr);
+    assert.ok(first, launch.stderr);
+    assert.equal(first[1], payload.findings[0].code);
+    assert.match(launch.stderr, /hint\[LEGACY_WRITER_STATE\]/);
+    assert.equal(launch.stderr.split('\n').filter((line) => line.startsWith(`hint[${first[1]}]`)).length, 1);
+    assert.equal(fs.existsSync(f.claudeState), false);
+  } finally { f.clean(); }
+});
+
+test('a launch whose preflight passes keeps preflight JSON off stdout', () => {
+  const f = preparedPhaseFixture();
+  try {
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(home);
+    const bin = fakeAvailableClaudeBin(f.root);
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const env = hostEnv({ HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, '--request-file', requestFile],
+      { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.match(result.stderr, /preflight: ok/);
+    assert.doesNotMatch(result.stdout, /shipyard\.host-preflight\.v1/);
+  } finally { f.clean(); }
+});
+
+test('recover --dispatch runs an environment preflight before it creates run-controller state', () => {
+  const f = recoveryFixture('gsd-planner', { cli: true });
+  try {
+    const env = hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, 'recover', '--dispatch', f.dispatchId], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^[A-Z_]+: preflight found/m);
+    assert.match(result.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.equal(fs.existsSync(path.join(f.store, 'recovery-runs')), false);
+  } finally { f.finish(); }
+});
+
+test('recovery runs its environment gate with the original scope before any controller exists', async () => {
+  const f = recoveryFixture('gsd-planner');
+  try {
+    let gated;
+    let controllers = 0;
+    await assert.rejects(recoverDecomposition(f.dispatchId, { ...f.deps,
+      environmentGate: (scope) => { gated = scope.worktree; throw Object.assign(new Error('gate'), { code: 'RUNTIME_UNAVAILABLE' }); },
+      controllerFactory: () => { controllers += 1; throw new Error('controller must not be built'); } }),
+    { code: 'RUNTIME_UNAVAILABLE' });
+    assert.equal(gated, fs.realpathSync(f.worktree));
+    assert.equal(controllers, 0);
+  } finally { f.finish(); }
+});
+
+test('a repository identity failure keeps its own code instead of SCOPE_MISMATCH', () => {
+  const f = fixture();
+  try {
+    const odd = path.join(f.root, 'semi;colon');
+    fs.renameSync(f.worktree, odd);
+    assert.throws(() => canonicalRequest(request(odd, 'gsd-planner')), { code: 'REPOSITORY_IDENTITY_INVALID' });
+  } finally { f.clean(); }
+});
+
 test('config root follows CLAUDE_CONFIG_DIR, then HOME/.claude, and ignores CLAUDE_HOME', () => {
   const f = fixture();
   try {
