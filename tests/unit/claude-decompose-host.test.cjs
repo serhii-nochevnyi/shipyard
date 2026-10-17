@@ -1055,3 +1055,107 @@ test('decomposition seals plans whose phase prefix has leading zeros', async () 
     assert.ok(output.envelope);
   } finally { f.clean(); }
 });
+
+const HOST_SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
+
+function hostEnv(extra) {
+  const env = { ...process.env, ...extra };
+  for (const key of ['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'SHIPYARD_RUNTIME',
+    'GSD_RUNTIME', 'SHIPYARD_GSD_TOOLS', 'GSD_TOOLS', 'GSD_CORE_HOME']) delete env[key];
+  return env;
+}
+
+test('request-file launch with a broken environment refuses with hints and creates no state', () => {
+  const f = fixture();
+  try {
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(home);
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const env = hostEnv({ HOME: home, PATH: '/nonexistent-shipyard-bin', CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, '--request-file', requestFile], { cwd: f.root, encoding: 'utf8', timeout: 20000, env });
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}${result.stderr}`, /hint\[[A-Z_]+\]:/);
+    assert.equal(fs.existsSync(path.join(home, '.local', 'state', 'shipyard', 'claude-decompose')), false);
+    assert.equal(fs.existsSync(path.join(f.worktree, '.planning', 'phases')), false);
+  } finally { f.clean(); }
+});
+
+test('--preflight starts nothing and exits by its result', () => {
+  const f = fixture();
+  try {
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(home);
+    const env = hostEnv({ HOME: home, PATH: '/nonexistent-shipyard-bin', CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, '--preflight'],
+      { cwd: f.worktree, encoding: 'utf8', timeout: 20000, env });
+    const payload = JSON.parse(result.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.equal(payload.schema, 'shipyard.host-preflight.v1');
+    assert.equal(result.status, payload.ok ? 0 : 1);
+    assert.equal(fs.existsSync(path.join(home, '.local')), false);
+  } finally { f.clean(); }
+});
+
+test('--preflight parses alone and with --request-file', () => {
+  assert.equal(parseArguments(['--preflight']).preflightOnly, true);
+  const both = parseArguments(['--preflight', '--request-file', 'r.json']);
+  assert.equal(both.preflightOnly, true);
+  assert.equal(both.requestFile, 'r.json');
+});
+
+test('config root follows CLAUDE_CONFIG_DIR, then HOME/.claude, and ignores CLAUDE_HOME', () => {
+  const f = fixture();
+  try {
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    const bin = fakeAvailableClaudeBin(f.root);
+    const run = (extra) => {
+      const env = hostEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: home, ...extra });
+      delete env.CLAUDE_CONFIG_DIR;
+      Object.assign(env, extra);
+      const result = require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, '--capability-only'],
+        { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', timeout: 20000, env });
+      return JSON.parse(result.stdout);
+    };
+    const unset = run({ CLAUDE_HOME: f.config });
+    assert.notEqual(unset.status, 'available');
+    assert.ok(JSON.stringify(unset).includes(path.join(home, '.claude')));
+    assert.ok(!JSON.stringify(unset).includes(f.config));
+    const set = run({ CLAUDE_CONFIG_DIR: f.config });
+    assert.equal(set.status, 'available');
+  } finally { f.clean(); }
+});
+
+test('the seal repository is the shared identity for a worktree under a path with a space', () => {
+  const f = fixture();
+  try {
+    const spaced = path.join(f.root, 'with space');
+    fs.renameSync(f.worktree, spaced);
+    const scope = canonicalRequest(request(spaced, 'gsd-planner'));
+    assert.equal(scope.repository, require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs')
+      .repositoryIdentity(spaced));
+    assert.equal(scope.repository, fs.realpathSync(path.join(spaced, '.git')));
+  } finally { f.clean(); }
+});
+
+test('a seal subject with the old owner/repo form verifies through acceptedRepositoryValues', () => {
+  const f = fixture();
+  try {
+    const arch = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+    const { decompositionAdr } = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+    fs.mkdirSync(path.join(f.worktree, '.planning/architecture'), { recursive: true });
+    fs.writeFileSync(path.join(f.worktree, ADR_PATH), ADR_TEXT);
+    const adr = decompositionAdr.resolveAdr(f.worktree, ADR_PATH);
+    const accepted = arch.acceptedRepositoryValues(f.worktree);
+    const repository = arch.repositoryIdentity(f.worktree);
+    const legacy = accepted.find((value) => value !== repository && /^[^/\s]+\/[^/\s]+$/.test(value));
+    const forms = [repository, ...(legacy ? [legacy] : [])];
+    for (const form of forms) {
+      const subject = arch.buildSubject('decomposition-seal', { phase: 3, repository: form, adr: adr.sha256 });
+      assert.equal(decompositionAdr.assertDecompositionSubject(subject, { worktree: f.worktree, repository, adr, acceptedRepositories: accepted }).repository, form);
+    }
+    const old = arch.buildSubject('decomposition-seal', { phase: 3, repository: 'owner/repo', adr: adr.sha256 });
+    assert.equal(decompositionAdr.assertDecompositionSubject(old, { worktree: f.worktree, repository, adr, acceptedRepositories: [...accepted, 'owner/repo'] }).repository, 'owner/repo');
+  } finally { f.clean(); }
+});
