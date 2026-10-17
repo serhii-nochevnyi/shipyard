@@ -278,6 +278,7 @@ test('direct ADR refuses research, malformed or unaccepted sources and changed p
   const request = f.build('decomposition', 'ADR-TEST');
   f.write('.planning/architecture/ADR-TEST.md', ADR.replace('accepted', 'proposed'));
   await assert.rejects(() => planning.runCli(['--args-file', f.requestFile(request)], { write() {} }, {
+    probe: { status: 'available', executable: 'controlled-codex', capabilities },
     runHost() { assert.fail('changed ADR must refuse before delegation'); },
   }), /changed after packet construction/);
 });

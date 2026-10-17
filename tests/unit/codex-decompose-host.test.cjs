@@ -917,6 +917,7 @@ test(`detached ${includeDispatchId ? 'explicit' : 'omitted'} dispatch ID reaches
       write(value) { handoffOutput.push(value); },
     }, {
       env: { CODEX_HOME: f.codexHome },
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
       stateDir: dispatchDir,
       spawn(executable, args, options) {
         assert.equal(executable, process.execPath);
@@ -1073,7 +1074,7 @@ test('standalone CLI records a failed owned run after launch preflight refusal',
   } finally { f.clean(); }
 });
 
-test('standalone CLI owns runtime unavailability and fails the run', async () => {
+test('standalone CLI refuses runtime unavailability in preflight before any run is begun', async () => {
   const f = fixture();
   try {
     const file = path.join(f.root, 'cli-request.json');
@@ -1085,9 +1086,7 @@ test('standalone CLI owns runtime unavailability and fails the run', async () =>
     }), (error) => error.code === 'RUNTIME_UNAVAILABLE');
     const status = createRunController({ storeDir: defaultRunStoreDir(f.scope, f.stateRoot) })
       .status(f.scope.run_id);
-    assert.equal(status.state, 'failed');
-    assert.equal(status.owner.status, 'failed');
-    assert.equal(status.scope.runtime.provider, 'openai');
+    assert.equal(status, null);
   } finally { f.clean(); }
 });
 
@@ -1267,6 +1266,7 @@ test('post-acquire snapshot and heartbeat setup failures release the original wr
       };
       await assert.rejects(runCli(['--args-file', file], { write() {} }, {
         testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'), env: { CODEX_HOME: f.codexHome }, writerLease,
+        probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
         heartbeat: failure === 'heartbeat'
           ? { start() { throw Object.assign(new Error('heartbeat failed'), { code: 'HEARTBEAT_FAILED' }); } }
           : undefined,
@@ -2292,6 +2292,7 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
   try {
     measuredPlanningRequest(f);
     const options = { stateDir: f.stateDir, env: f.env,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
       testStateRoot: path.join(f.home, '.local', 'state', 'shipyard', 'codex-decompose'),
       runHost: async (argv, stdout, opts) => {
         launches++;
@@ -2371,6 +2372,7 @@ for (const mutation of ['SOURCE', 'GRAPH']) test('supported caller keeps origina
   try {
     measuredPlanningRequest(f);
     const options = { stateDir: f.stateDir, env: { ...f.env, ['MOCK_MUTATE_' + mutation]: '1' },
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
       testStateRoot: path.join(f.home, '.local/state/shipyard/codex-decompose'),
       waitOptions: measuredWaitOptions(f), onWaitAccounting() {} };
     await assert.rejects(planning.runCli(['--args-file', f.request], { write() {} }, options),
