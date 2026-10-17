@@ -25,7 +25,7 @@ const {
 } = require('./conveyor-scratch.cjs');
 const { preflightRound } = require('./sentinel-preflight.cjs');
 const { repositoryIdentity, buildSubject } = require('./architecture-target.cjs');
-const { preflight, emitPreflight } = require('./runtime-context.cjs');
+const { preflight, emitPreflight, probeReasonToCode } = require('./runtime-context.cjs');
 const { formatHint, hintForError } = require('./refusal-hints.cjs');
 
 const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
@@ -1600,8 +1600,7 @@ function runClaudeRoleCli(argv = process.argv.slice(2), output = process.stdout,
     const probe = probeClaudeRuntime(hostOptions);
     output.write(`${JSON.stringify(probe)}\n`);
     if (probe && probe.status === 'unavailable') {
-      const code = /capability/.test(String(probe.reason || '')) ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
-      (hostOptions.stderr || process.stderr).write(`${formatHint(code, { host: 'claude-role-host.cjs' })}\n`);
+      (hostOptions.stderr || process.stderr).write(`${formatHint(probeReasonToCode(probe.reason), { host: 'claude-role-host.cjs' })}\n`);
     }
     return probe;
   }

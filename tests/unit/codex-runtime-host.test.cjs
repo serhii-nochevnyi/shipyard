@@ -572,6 +572,23 @@ test('--capability-only explains missing evidence on stderr, exits 0 and keeps s
   }
 });
 
+test('--capability-only names the delivery host, which implements --preflight, in the unavailable remedy', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-capability-host-')));
+  try {
+    const file = path.join(root, 'capabilities.json');
+    fs.writeFileSync(file, JSON.stringify(capabilities));
+    const gone = runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root },
+      ['--executable', path.join(root, 'no-such-codex'), '--capabilities-file', file]);
+    assert.equal(gone.status, 0);
+    assert.equal(JSON.parse(gone.stdout).reason, 'runtime_missing');
+    assert.match(gone.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.match(gone.stderr, /codex-delivery-host\.cjs --preflight/);
+    assert.doesNotMatch(gone.stderr, /codex-runtime-host\.cjs --preflight/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('installed bundle resolves its own evidence with an empty env and refuses a disagreeing CODEX_HOME', () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-installed-host-')));
   try {
@@ -585,8 +602,10 @@ test('installed bundle resolves its own evidence with an empty env and refuses a
     const conflict = runCapabilityOnly(script, { ...env, CODEX_HOME: path.join(root, 'elsewhere') }, ['--executable', executable]);
     assert.equal(conflict.status, 0);
     assert.equal(JSON.parse(conflict.stdout).status, 'unavailable');
+    assert.equal(JSON.parse(conflict.stdout).reason, 'ENV_CONFLICT');
     assert.match(JSON.parse(conflict.stdout).detail, /disagrees/);
-    assert.match(conflict.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
+    assert.match(conflict.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.doesNotMatch(conflict.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

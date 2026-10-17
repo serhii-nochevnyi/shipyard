@@ -1879,6 +1879,23 @@ test('role host --capability-only keeps exit 0 and stdout and adds a stderr hint
   } finally { cleanupRoleCli(fixture); }
 });
 
+test('role host --capability-only maps an outdated CLI help to RUNTIME_UNAVAILABLE, not a capability error', () => {
+  const fixture = roleCliFixture();
+  try {
+    fs.writeFileSync(path.join(fixture.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo "9.9.9 (Claude Code)";;
+  --help) echo "--model";;
+esac
+`, { mode: 0o755 });
+    const outdated = spawnRoleHost(fixture, ['--capability-only']);
+    assert.equal(outdated.status, 0);
+    assert.equal(JSON.parse(outdated.stdout).reason, 'runtime_capability_missing');
+    assert.match(outdated.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.doesNotMatch(outdated.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
+  } finally { cleanupRoleCli(fixture); }
+});
+
 test('role host preflight calls an injected probe function and keeps a probe value', () => {
   const project = roleCliFixture();
   try {
