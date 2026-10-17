@@ -546,6 +546,57 @@ test('drift preflight rejects a base that differs from the canonical ticket grap
   }
 });
 
+function stackTicketOnParent(fixture, parentState) {
+  const parentBranch = 'ticket/T-38-02-merged-parent';
+  const graphFile = path.join(fixture.graphDir, 'tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+  Object.assign(graph.tickets['T-38-03'], { pr_base: parentBranch, primary_parent: 'T-38-02', epic: 'main' });
+  graph.tickets['T-38-02'] = { branch: parentBranch, pr_base: 'main', epic: 'main', files: ['src/owned.txt'] };
+  fs.writeFileSync(graphFile, JSON.stringify(graph));
+  const boardFile = path.join(fixture.graphDir, 'delivery-state.json');
+  const board = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+  board['T-38-02'] = { branch: parentBranch, base: 'main', epic: 'main', ...parentState };
+  fs.writeFileSync(boardFile, JSON.stringify(board));
+  return parentBranch;
+}
+
+const driftArgs = (fixture, baseRef) => ({
+  tickets: [{
+    id: 'T-38-03', worktreePath: fixture.worktree, planPath: fixture.planPath, baseRef,
+    model: CLAUDE_DRIFT.model, effort: CLAUDE_DRIFT.effort,
+  }],
+  driftRefPath: REFERENCE_PATHS['drift-check'],
+});
+
+test('drift preflight takes the merge destination as the base once the primary parent is merged', async () => {
+  const fixture = repairFixture();
+  const parentBranch = stackTicketOnParent(fixture, { status: 'merged', merged_into: 'main' });
+  const { host } = driftCapableHost(fixture);
+  try {
+    await host.run('drift-gate', driftArgs(fixture, 'main'));
+    fs.rmSync(path.join(fixture.worktree, '.shipyard-drift-evidence.md'), { force: true });
+    assert.throws(() => host.run('drift-gate', driftArgs(fixture, parentBranch)),
+      /base differs from the canonical graph/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('drift preflight keeps the parent branch as the base while the primary parent is open', async () => {
+  const fixture = repairFixture();
+  const parentBranch = stackTicketOnParent(fixture, { status: 'open' });
+  git(fixture.worktree, 'branch', parentBranch, 'main');
+  const { host } = driftCapableHost(fixture);
+  try {
+    await host.run('drift-gate', driftArgs(fixture, parentBranch));
+    fs.rmSync(path.join(fixture.worktree, '.shipyard-drift-evidence.md'), { force: true });
+    assert.throws(() => host.run('drift-gate', driftArgs(fixture, 'main')),
+      /base differs from the canonical graph/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('moved repair base fails closed when the trusted host cannot fetch origin', () => {
   const fixture = repairFixture();
   try {

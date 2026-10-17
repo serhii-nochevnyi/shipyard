@@ -305,6 +305,18 @@ function canonicalBase(worktree, value, expected) {
   return resolved;
 }
 
+// @contract: once a primary parent is merged its merge destination is the canonical base; otherwise pr_base.
+function canonicalTicketBase(options, row, worktree) {
+  if (!row.primary_parent) return row.pr_base;
+  const state = readGraphFile(options, 'delivery-state.json', worktree);
+  const parent = state && state[row.primary_parent];
+  if (!object(parent) || parent.branch !== row.pr_base || parent.status !== 'merged') return row.pr_base;
+  if (typeof parent.merged_into !== 'string' || !parent.merged_into.trim()) {
+    reject(`primary parent ${row.primary_parent} is merged without a destination`);
+  }
+  return parent.merged_into;
+}
+
 function boardTicket(options, entry, row, worktree) {
   const state = readGraphFile(options, 'delivery-state.json', worktree);
   const board = state && state[entry.id];
@@ -413,7 +425,7 @@ function driftPreflight(options, entry, args) {
   const row = graphTicket(options, entry.id, worktree);
   canonicalPlan(options, row, entry);
   const base = entry.baseRef || args.baseRef;
-  canonicalBase(worktree, base, row.pr_base);
+  canonicalBase(worktree, base, canonicalTicketBase(options, row, worktree));
   return deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree });
 }
 
