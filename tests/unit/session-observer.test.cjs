@@ -142,4 +142,21 @@ test('an installed bundle supplies the sessions home and a disagreeing CODEX_HOM
   } finally { fs.rmSync(layout.base, { recursive: true, force: true }); }
 });
 
+test('the Codex notify hook prints a bundle refusal to stderr and still exits 0', () => {
+  const layout = installedCodexLayout();
+  try {
+    const script = path.join(layout.scripts, 'codex-notify.cjs');
+    const run = (env) => require('node:child_process').spawnSync(process.execPath,
+      [script, JSON.stringify({ thread_id: 't', turn_id: 'u', cwd: layout.base })],
+      { encoding: 'utf8', env: { SHIPYARD_CODEX_NOTIFY_DELEGATE: path.join(layout.base, 'none.json'), ...env } });
+    const refused = run({ PATH: process.env.PATH, CODEX_HOME: path.join(layout.base, 'elsewhere') });
+    assert.equal(refused.status, 0, refused.stderr);
+    assert.match(refused.stderr, /^hint\[ENV_CONFLICT\]/m);
+    assert.doesNotMatch(refused.stderr, /\{[^}]*\}|\n\s+at /);
+    const quiet = run({ PATH: process.env.PATH });
+    assert.equal(quiet.status, 0, quiet.stderr);
+    assert.doesNotMatch(quiet.stderr, /hint\[/);
+  } finally { fs.rmSync(layout.base, { recursive: true, force: true }); }
+});
+
 done();

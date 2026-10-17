@@ -23,11 +23,13 @@ function main(argv = process.argv.slice(2)) {
   const payloadText = argv.at(-1) || '';
   let payload = {};
   try { payload = JSON.parse(payloadText); } catch {}
-  const codexHome = process.env.CODEX_HOME || path.resolve(__dirname, '..', '..');
   const graph = process.env.SHIPYARD_GRAPH_DIR
     || path.resolve(payload.cwd || process.cwd(), '.planning', 'graph');
-  const db = process.env.SHIPYARD_CODEX_LOG_DB || path.join(codexHome, 'logs_2.sqlite');
-  try { observer.observeCodexDatabase(db, graph, { threadId: payload.thread_id, turnId: payload.turn_id }); } catch {}
+  // @contract: a refused bundle prints its hint to stderr and the hook still exits 0.
+  try {
+    const result = observer.observeCodexNotify(payload, graph, {});
+    if (result && result.refused) process.stderr.write(`${result.hint}\n`);
+  } catch {}
 
   const delegateFile = process.env.SHIPYARD_CODEX_NOTIFY_DELEGATE
     || path.resolve(__dirname, '..', '..', 'shipyard-notify-delegate.json');
