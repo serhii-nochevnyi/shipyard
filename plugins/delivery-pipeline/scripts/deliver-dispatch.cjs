@@ -21,7 +21,7 @@ const modelPolicy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const runWaker = require('./run-waker.cjs');
 const overhead = require('./orchestration-overhead.cjs');
-const { repositoryIdentity } = require('./architecture-target.cjs');
+const { repositoryIdentity, buildSubject } = require('./architecture-target.cjs');
 
 const { preflight, emitPreflight, launchEnvironment, resolveHostEnvironment } = require('./runtime-context.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
@@ -1026,7 +1026,9 @@ function buildPlanningRequest(args, options) {
   const repository = repositoryIdentity(context.projectRoot);
   const sourceRevision = planningSourceRevision(context.projectRoot);
   const refs = packetSourceRefs(context, sourceRefs);
-  const subject = `phase=${args.phase};input=${args.ticket};repository=${repository}`;
+  let subject;
+  try { subject = buildSubject('planning-input', { phase: args.phase, input: args.ticket, repository }); }
+  catch (error) { buildFail(args.ticket, error.message); }
   const packet = buildPlanningPacket({
     context,
     role: 'decomposition',
