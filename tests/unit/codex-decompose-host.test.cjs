@@ -499,6 +499,7 @@ for (const mode of ['active', 'corrupt']) {
       fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan.' }));
       let launches = 0;
       await assert.rejects(runCli(['--args-file', file], { write() {} }, {
+        env: { CODEX_HOME: f.codexHome }, probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
         testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
         spawn: () => { launches++; throw new Error('paid launch was forbidden'); },
       }), { code: 'LEGACY_WRITER_STATE' });
@@ -2617,4 +2618,156 @@ test('phase47 original containment recovery refuses an earlier genuine dispatch 
     assert.equal(original.recorder.getReservation(original.dispatchId).recorded, false);
     assert.equal(other.recorder.getReservation(other.dispatchId).recorded, false);
   } finally { original.f.clean(); other.f.clean(); }
+});
+
+function preflightSink() {
+  const chunks = [];
+  return { write(chunk) { chunks.push(String(chunk)); }, text: () => chunks.join('') };
+}
+
+const PROBE_OK = { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities };
+const PROBE_BROKEN = { status: 'unavailable', reason: 'runtime_missing' };
+
+function requestFileFor(f, extra = {}) {
+  const file = path.join(f.root, 'preflight-request.json');
+  fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH,
+    prompt: 'Decompose the accepted ADR.', ...extra }));
+  return file;
+}
+
+function stateListing(f) {
+  return fs.readdirSync(f.stateRoot).sort();
+}
+
+test('a broken environment refuses before the run store, the lease and any detached child exist', async () => {
+  const f = fixture();
+  try {
+    const file = requestFileFor(f);
+    const before = stateListing(f);
+    for (const argv of [['--args-file', file], ['--detach', '--args-file', file]]) {
+      const stderr = preflightSink();
+      let spawned = false;
+      await assert.rejects(() => runCli(argv, preflightSink(), {
+        env: {}, probe: PROBE_BROKEN, stderr, testStateRoot: f.stateRoot,
+        spawn() { spawned = true; return {}; },
+      }), (error) => error.code === 'RUNTIME_UNAVAILABLE');
+      assert.match(stderr.text(), /hint\[RUNTIME_UNAVAILABLE\]/);
+      assert.equal(spawned, false);
+      assert.deepEqual(stateListing(f), before);
+    }
+  } finally { f.clean(); }
+});
+
+test('recover refuses a broken environment before it touches any recovery state', async () => {
+  const f = fixture();
+  try {
+    const file = requestFileFor(f, { dispatch_id: 'recover-preflight' });
+    const stderr = preflightSink();
+    await assert.rejects(() => runCli(['recover', '--dispatch', 'recover-preflight', '--args-file', file], preflightSink(), {
+      env: {}, probe: PROBE_BROKEN, stderr, testStateRoot: f.stateRoot,
+    }), (error) => error.code === 'RUNTIME_UNAVAILABLE');
+    assert.match(stderr.text(), /hint\[RUNTIME_UNAVAILABLE\]/);
+  } finally { f.clean(); }
+});
+
+test('--preflight alone and with --args-file exit by result and start nothing', async () => {
+  const f = fixture();
+  const previous = process.cwd();
+  try {
+    const file = requestFileFor(f);
+    const before = stateListing(f);
+    process.chdir(f.root);
+    for (const argv of [['--preflight'], ['--preflight', '--args-file', file]]) {
+      const okOut = preflightSink();
+      const ok = await runCli(argv, okOut, { env: {}, probe: PROBE_OK, stderr: preflightSink(), testStateRoot: f.stateRoot,
+        spawn() { throw new Error('must not spawn'); } });
+      assert.equal(ok.ok, true);
+      assert.equal(JSON.parse(okOut.text().trim()).schema, 'shipyard.host-preflight.v1');
+      const badErr = preflightSink();
+      const bad = await runCli(argv, preflightSink(), { env: {}, probe: PROBE_BROKEN, stderr: badErr, testStateRoot: f.stateRoot });
+      assert.equal(bad.ok, false);
+      assert.match(badErr.text(), /hint\[RUNTIME_UNAVAILABLE\]/);
+    }
+    assert.deepEqual(stateListing(f), before);
+  } finally { process.chdir(previous); f.clean(); }
+});
+
+test('--preflight beside --detach or recover is an unknown form rejected before any preflight', async () => {
+  const f = fixture();
+  try {
+    const file = requestFileFor(f);
+    for (const argv of [['--preflight', '--detach', '--args-file', file],
+      ['recover', '--dispatch', 'x', '--args-file', file, '--preflight']]) {
+      const stderr = preflightSink();
+      await assert.rejects(() => runCli(argv, preflightSink(), { env: {}, probe: PROBE_OK, stderr }),
+        (error) => error.code === 'INVALID_INPUT');
+      assert.equal(stderr.text(), '');
+    }
+  } finally { f.clean(); }
+});
+
+test('the legacy check reads the graph directory the child will use, not the request worktree', async () => {
+  const f = fixture();
+  const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-other-project-')));
+  try {
+    fs.mkdirSync(path.join(f.root, '.planning', 'graph'), { recursive: true });
+    const file = requestFileFor(f);
+    const own = await runCli(['--preflight', '--args-file', file], preflightSink(),
+      { env: {}, probe: PROBE_OK, stderr: preflightSink() });
+    assert.ok(!own.notes.some((item) => /no graph directory/.test(item.detail)));
+    const redirected = await runCli(['--preflight', '--args-file', file], preflightSink(), {
+      env: { SHIPYARD_GRAPH_DIR: path.join(other, '.planning', 'graph') }, probe: PROBE_OK, stderr: preflightSink(),
+    });
+    assert.ok(redirected.notes.some((item) => /no graph directory/.test(item.detail)));
+  } finally { f.clean(); fs.rmSync(other, { recursive: true, force: true }); }
+});
+
+test('the detached child environment is the launchEnvironment output of the host environment', async () => {
+  const f = fixture();
+  try {
+    const file = requestFileFor(f);
+    let childEnv;
+    const env = { SHIPYARD_GRAPH_DIR: path.join(f.root, '.planning', 'graph'), CODEX_HOME: f.codexHome };
+    await runCli(['--detach', '--args-file', file], preflightSink(), {
+      env, probe: PROBE_OK, stderr: preflightSink(), testStateRoot: f.stateRoot,
+      stateDir: path.join(f.stateRoot, 'dispatch'),
+      spawn(_exe, _args, spawnOptions) {
+        childEnv = spawnOptions.env;
+        const child = new EventEmitter();
+        child.pid = 1_000_000_000;
+        child.unref = () => {};
+        return child;
+      },
+    });
+    const { launchEnvironment, resolveHostEnvironment } = require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs');
+    const base = { ...process.env, ...env };
+    const expected = launchEnvironment(resolveHostEnvironment({
+      scriptDir: path.join(__dirname, '../../plugins/delivery-pipeline/scripts'), runtime: 'codex', env: base }), base);
+    expected.SHIPYARD_GRAPH_DIR = env.SHIPYARD_GRAPH_DIR;
+    assert.deepEqual(childEnv, expected);
+  } finally { f.clean(); }
+});
+
+test('a seal names the repository identity when the request supplies none and keeps a supplied value', () => {
+  const { sealScope } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
+  const { repositoryIdentity } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const { decompositionAdr } = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'seal identity ')));
+  try {
+    const root = path.join(base, 'work tree');
+    fs.mkdirSync(root);
+    git(root, 'init', '-q');
+    git(root, 'commit', '--allow-empty', '-q', '-m', 'seed');
+    const output = { receipt: { policy_hash: 'a'.repeat(64) }, result: {} };
+    const sealed = sealScope({ worktree: root, phase: 38 }, output, 'summary');
+    assert.equal(sealed.repository, repositoryIdentity(root));
+    assert.ok(sealed.repository.includes('work tree'));
+    assert.equal(sealed.subject, 'phase=38;repository=' + repositoryIdentity(root));
+    const adr = { path: ADR_PATH, sha256: 'b'.repeat(64) };
+    const subject = decompositionAdr.decompositionSubject({ phase: 38, repository: sealed.repository, adr });
+    assert.equal(subject, 'phase=38;repository=' + repositoryIdentity(root) + ';adr=' + adr.sha256);
+    const legacy = sealScope({ worktree: root, phase: 38, repository: 'owner/repo' }, output, 'summary');
+    assert.equal(legacy.repository, 'owner/repo');
+    assert.equal(sealScope({ worktree: root, phase: 38, repository: { repository_id: 'owner/repo' } }, output, 's').repository, 'owner/repo');
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });

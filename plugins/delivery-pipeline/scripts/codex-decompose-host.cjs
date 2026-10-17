@@ -8,7 +8,10 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   createCodexRuntimeHost, installedGsdAgent, normalizeScope, parseCodexStream, verifyCompletedNativeLaunch,
+  probeCodexRuntime,
 } = require('./codex-runtime-host.cjs');
+const { preflight, emitPreflight, launchEnvironment, resolveHostEnvironment, resolveCodexHome } = require('./runtime-context.cjs');
+const { repositoryIdentity } = require('./architecture-target.cjs');
 const { launchAgent, selectAgent } = require('./codex-agent.cjs');
 const { createCodexDispatchAdapter } = require('./codex-dispatch-adapter.cjs');
 const policy = require('./model-policy.cjs');
@@ -147,7 +150,7 @@ function sourceRevision(worktree) {
 
 function sealScope(scope, output, summary) {
   const repository = typeof scope.repository === 'string' ? scope.repository
-    : object(scope.repository) ? scope.repository.repository_id || scope.repository.id : fs.realpathSync(scope.worktree);
+    : object(scope.repository) ? scope.repository.repository_id || scope.repository.id : repositoryIdentity(scope.worktree);
   const result = object(output.result) ? output.result : {};
   return {
     worktree: scope.worktree,
@@ -537,7 +540,7 @@ function recoverAgent(role, options) {
     env: options.env,
   });
   const adapter = createCodexDispatchAdapter({
-    agentsDir: path.resolve(options.agentDir || path.join(options.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents')),
+    agentsDir: path.resolve(options.agentDir || path.join(resolveCodexHome({ scriptDir: __dirname, env: options.env }), 'agents')),
     agentManifest: options.agentManifest,
     capabilities: options.capabilities,
     host: options.host,
@@ -888,6 +891,50 @@ function createCodexDecomposeHost(options = {}) {
   });
 }
 
+function parsePreflightArguments(argv) {
+  if (!Array.isArray(argv) || argv[0] !== '--preflight') return null;
+  if (argv.length === 1) return { file: null };
+  if (argv.length === 3 && argv[1] === '--args-file' && typeof argv[2] === 'string' && argv[2].trim()) {
+    return { file: path.resolve(argv[2]) };
+  }
+  fail('INVALID_INPUT', 'usage: codex-decompose-host.cjs --preflight [--args-file <json>]');
+}
+
+function hostEnvironment(options) {
+  return options.env ? { ...process.env, ...options.env } : { ...process.env };
+}
+
+function requestGraphDir(env, worktree) {
+  return path.resolve(env.SHIPYARD_GRAPH_DIR || path.join(worktree, '.planning', 'graph'));
+}
+
+function runHostPreflight(options, { host, worktree, graphDir, kind = 'launch', stdout }) {
+  const env = options.env ? { ...options.env } : process.env;
+  const result = preflight({
+    runtime: 'codex', scriptDir: __dirname, worktree, graphDir, scope: kind, host, env,
+    probe: () => options.probe || probeCodexRuntime({
+      executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile,
+    }),
+  });
+  emitPreflight(result, { stdout: stdout || { write() {} }, stderr: options.stderr || process.stderr });
+  if (!stdout && !result.ok) {
+    fail(result.findings[0].code,
+      `preflight found ${result.findings.length} incompatibilities: ${result.findings.map((item) => item.code).join(', ')}`);
+  }
+  return result;
+}
+
+function preflightCli(parsed, stdout, options, host = 'codex-decompose-host.cjs') {
+  if (parsed.file === null) {
+    return runHostPreflight(options, { host, worktree: fs.realpathSync(process.cwd()), stdout });
+  }
+  const request = readRequestFile(parsed.file);
+  const scope = normalizeScope(request.scope);
+  return runHostPreflight(options, {
+    host, worktree: scope.worktree, graphDir: requestGraphDir(hostEnvironment(options), scope.worktree), stdout,
+  });
+}
+
 function parseCliArguments(argv) {
   if (!Array.isArray(argv) || argv.length !== 2 || argv[0] !== '--args-file'
       || typeof argv[1] !== 'string' || !argv[1].trim()) {
@@ -958,6 +1005,9 @@ function detachCli(argv, stdout, options) {
   catch (error) { fail('INVALID_INPUT', 'worktree path cannot be inspected: ' + error.message); }
   if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
 
+  runHostPreflight(options, { host: 'codex-decompose-host.cjs', worktree: scope.worktree,
+    graphDir: requestGraphDir(hostEnvironment(options), scope.worktree) });
+
   const dispatchId = detachedDispatchId(parsed.launch);
   if (dispatchId === '.' || dispatchId === '..' || /[\\/]/.test(dispatchId) || path.isAbsolute(dispatchId)) {
     fail('INVALID_INPUT', 'dispatch_id must be a path-safe identifier for detached mode');
@@ -983,8 +1033,9 @@ function detachCli(argv, stdout, options) {
   fs.writeFileSync(argsFile, JSON.stringify(childRequest) + '\n', {
     mode: 0o600,
   });
-  const environment = options.env ? { ...process.env, ...options.env } : { ...process.env };
-  const graphDir = path.resolve(environment.SHIPYARD_GRAPH_DIR || path.join(scope.worktree, '.planning', 'graph'));
+  const baseEnvironment = hostEnvironment(options);
+  const graphDir = requestGraphDir(baseEnvironment, scope.worktree);
+  const environment = launchEnvironment(resolveHostEnvironment({ scriptDir: __dirname, runtime: 'codex', env: baseEnvironment }), baseEnvironment);
   environment.SHIPYARD_GRAPH_DIR = graphDir;
   const resultFd = fs.openSync(resultFile, 'a', 0o600);
   const logFd = fs.openSync(logFile, 'a', 0o600);
@@ -1072,6 +1123,7 @@ async function recoverCli(argv, stdout, options) {
   }
   const request = { ...parsed.launch, dispatch_id: dispatchId };
   const scope = normalizeScope(parsed.scope);
+  runHostPreflight(options, { host: 'codex-decompose-host.cjs', worktree: scope.worktree, kind: 'environment' });
   const runStoreDir = options.testRunStoreDir || defaultRunStoreDir(scope, options.testStateRoot);
   const hostStateDir = path.dirname(runStoreDir);
   const env = options.env || process.env;
@@ -1277,12 +1329,16 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
   if (Array.isArray(argv) && argv[0] === '--detach') return detachCli(argv, stdout, options);
   if (Array.isArray(argv) && argv[0] === 'recover') return recoverCli(argv, stdout, options);
+  const preflightArgs = parsePreflightArguments(argv);
+  if (preflightArgs) return preflightCli(preflightArgs, stdout, options);
   const parsed = readRequestFile(parseCliArguments(argv));
   const scope = normalizeScope(parsed.scope);
   let worktree;
   try { worktree = fs.statSync(scope.worktree); }
   catch (error) { fail('INVALID_INPUT', 'worktree path cannot be inspected: ' + error.message); }
   if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
+  runHostPreflight(options, { host: 'codex-decompose-host.cjs', worktree: scope.worktree,
+    graphDir: requestGraphDir(hostEnvironment(options), scope.worktree) });
   const runStoreDir = options.testRunStoreDir || defaultRunStoreDir(scope, options.testStateRoot);
   const hostStateDir = path.dirname(runStoreDir);
   const controller = createRunController({
@@ -1402,11 +1458,17 @@ module.exports = Object.freeze({
   parseCliArguments,
   parseRecoverArguments,
   readRequestFile,
+  sealScope,
+  runHostPreflight,
+  preflightCli,
+  parsePreflightArguments,
   runCli,
 });
 
 if (require.main === module) {
-  Promise.resolve().then(() => runCli()).catch((error) => {
+  Promise.resolve().then(() => runCli()).then((result) => {
+    if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
+  }).catch((error) => {
     process.stderr.write('codex-decompose-host: ' + (error && error.message ? error.message : error) + '\n');
     process.stderr.write(formatHint(error && error.code) + '\n');
     process.exitCode = 1;
