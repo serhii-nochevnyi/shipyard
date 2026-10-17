@@ -533,6 +533,14 @@ function preflightGraphDir(graphDir, worktree, env) {
   return fs.existsSync(directory) ? directory : null;
 }
 
+const CAPABILITY_PROBE_REASONS = new Set(['capability_evidence_missing', 'RUNTIME_CAPABILITY_MISSING']);
+
+// @contract: only absent capability evidence is a capability error; any other unavailable probe is RUNTIME_UNAVAILABLE.
+function probeReasonToCode(reason) {
+  return CAPABILITY_PROBE_REASONS.has(String(reason === undefined || reason === null ? '' : reason))
+    ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
+}
+
 function errorCode(error) {
   return error && typeof error.code === 'string' && error.code ? error.code : 'UNKNOWN';
 }
@@ -614,8 +622,7 @@ function preflight(options = {}) {
     const result = opts.probe();
     if (result && result.status === 'unavailable') {
       const reason = String(result.reason || 'unknown');
-      const code = /capability/.test(reason) ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
-      find(code, `${reason}${result.detail ? ': ' + result.detail : ''}`, withBundle({}));
+      find(probeReasonToCode(reason), `${reason}${result.detail ? ': ' + result.detail : ''}`, withBundle({}));
     }
   });
 
@@ -704,6 +711,7 @@ module.exports = {
   RESOLVER_CODES,
   PREFLIGHT_CODES,
   preflight,
+  probeReasonToCode,
   emitPreflight,
   reportTransferCapability,
   readInheritedConfig,

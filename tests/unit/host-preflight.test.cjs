@@ -15,7 +15,7 @@ const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { after, describe, it, mock } = require('node:test');
 const scripts = '../../plugins/delivery-pipeline/scripts/';
-const { preflight, emitPreflight, PREFLIGHT_CODES } = require(scripts + 'runtime-context.cjs');
+const { preflight, emitPreflight, probeReasonToCode, PREFLIGHT_CODES } = require(scripts + 'runtime-context.cjs');
 const { LAUNCH_CODES, HINTS, formatHint } = require(scripts + 'refusal-hints.cjs');
 const { POLICY_HASH } = require(scripts + 'model-policy.cjs');
 const roleArtifact = require(scripts + 'role-artifact.cjs');
@@ -284,6 +284,34 @@ describe('host preflight', () => {
     fs.writeFileSync(path.join(directory, 'review-x.json'), '{}', { mode: 0o600 });
     assert.deepEqual(codes(preflight(base(layout, { graphDir: orphan.graphDir }))), ['ARCHIVE_AUTHORITY_INVALID']);
     assert.throws(() => roleArtifact.trustedBookkeepingMutation(orphan.root, () => {}, []), { code: 'ARCHIVE_AUTHORITY_INVALID' });
+  });
+
+  it('classifies every probe reason through one function in preflight', () => {
+    const layout = installedLayout();
+    const table = {
+      capability_evidence_missing: 'RUNTIME_CAPABILITY_MISSING',
+      RUNTIME_CAPABILITY_MISSING: 'RUNTIME_CAPABILITY_MISSING',
+      runtime_capability_missing: 'RUNTIME_UNAVAILABLE',
+      capability_help_unavailable: 'RUNTIME_UNAVAILABLE',
+      runtime_missing: 'RUNTIME_UNAVAILABLE',
+      probe_failed: 'RUNTIME_UNAVAILABLE',
+    };
+    for (const [reason, code] of Object.entries(table)) {
+      assert.equal(probeReasonToCode(reason), code, reason);
+      assert.deepEqual(codes(preflight(base(layout, { probe: () => ({ status: 'unavailable', reason }) }))), [code], reason);
+    }
+    assert.equal(probeReasonToCode(undefined), 'RUNTIME_UNAVAILABLE');
+    assert.equal(probeReasonToCode(null), 'RUNTIME_UNAVAILABLE');
+  });
+
+  it('tells an outdated CLI to upgrade the CLI rather than reinstall Shipyard', () => {
+    const layout = installedLayout();
+    const result = preflight(base(layout, { probe: () => ({ status: 'unavailable', reason: 'runtime_capability_missing', detail: 'missing --json' }) }));
+    const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
+    emitPreflight(result, streams);
+    assert.match(streams.stderr.text, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.match(streams.stderr.text, /outdated CLI[^.]*upgraded/);
+    assert.match(formatHint('RUNTIME_CAPABILITY_MISSING'), /upgrade that CLI instead/);
   });
 
   it('flags an invalid run store and a legacy planning writer', () => {
