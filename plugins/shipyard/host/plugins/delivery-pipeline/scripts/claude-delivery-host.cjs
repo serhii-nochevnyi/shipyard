@@ -18,7 +18,7 @@ const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { resolveBaseRef, resolveGraphDir } = require('./graph-dir.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
 const { preflight, emitPreflight } = require('./runtime-context.cjs');
 const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
 const { acceptedRepositoryValues } = require('./architecture-target.cjs');
@@ -1064,7 +1064,7 @@ function parseCli(argv) {
   return { workflow: rest[1], requestFile: rest[3], preflightOnly };
 }
 
-function launchPreflight(worktree, hostOptions, output) {
+function launchPreflight(worktree, hostOptions, output, needsRepositoryIdentity = false) {
   const stderr = hostOptions.stderr || process.stderr;
   const result = preflight({
     runtime: 'claude',
@@ -1072,9 +1072,11 @@ function launchPreflight(worktree, hostOptions, output) {
     worktree,
     graphDir: inflightGraphDir(hostOptions, worktree),
     scope: 'launch',
+    needsRepositoryIdentity,
     host: 'claude-delivery-host.cjs',
     env: hostOptions.preflightEnv || process.env,
-    probe: () => hostOptions.probe || probeClaudeRuntime({ env: process.env }),
+    probe: () => (typeof hostOptions.probe === 'function' ? hostOptions.probe()
+      : hostOptions.probe || probeClaudeRuntime({ env: process.env })),
   });
   emitPreflight(result, { stdout: output, stderr });
   return result;
@@ -1156,7 +1158,8 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   if (worktree !== hostScope.worktree || git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
     reject('CLI run scope must name the canonical repository root');
   }
-  const checked = launchPreflight(worktree, hostOptions, preflightOnly ? output : { write() {} });
+  const checked = launchPreflight(worktree, hostOptions, preflightOnly ? output : { write() {} },
+    workflow === 'investigation-research');
   if (preflightOnly) return checked;
   if (!checked.ok) {
     const error = new Error(`claude-delivery-host: preflight found ${checked.findings.length} incompatibilities: ${checked.findings.map((item) => item.code).join(', ')}`);
@@ -1224,7 +1227,7 @@ if (require.main === module) {
     if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
-    if (!error?.hintPrinted) process.stderr.write(`${formatHint(error && error.code)}\n`);
+    if (!error?.hintPrinted) process.stderr.write(`${hintForError(error)}\n`);
     process.exitCode = 1;
   });
 }

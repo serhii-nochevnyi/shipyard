@@ -1071,6 +1071,16 @@ function publishAuthorityKey(directory, keyFile) {
   } finally { try { fs.unlinkSync(temporary); } catch {} }
 }
 
+const PROTECTED_RECORDS_NEED_KEY = 'existing protected records require their original authority key';
+// @invariant: protected records without their authority key are never re-keyed, by a launch or by a preflight.
+function protectedRecordsWithoutKey(directory) {
+  if (fs.existsSync(path.join(directory, 'hmac.key'))) return false;
+  let names;
+  try { names = fs.readdirSync(directory); }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  return names.some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-'));
+}
+
 function authorityState(worktree, create = false, requireCatalogue = true, readCatalogue = true) {
   const directory = archiveAuthorityDirectory(worktree, create);
   if (create) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -1079,8 +1089,7 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority directory is not private or contains symlinks');
   const keyFile = path.join(directory, 'hmac.key');
   if (create && !fs.existsSync(keyFile)) {
-    if (fs.readdirSync(directory).some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-')))
-      fail('ARCHIVE_AUTHORITY_INVALID', 'existing protected records require their original authority key');
+    if (protectedRecordsWithoutKey(directory)) fail('ARCHIVE_AUTHORITY_INVALID', PROTECTED_RECORDS_NEED_KEY);
     publishAuthorityKey(directory, keyFile);
   }
   const key = stableAuthorityFile(keyFile, 32);
@@ -3958,10 +3967,12 @@ function historicalBookkeepingPins(worktreePath) {
 
 const PROVENANCE_MEMBER_PATH = /^\.planning\/graph\/provenance\/[A-Za-z0-9_.-]+\.json$/;
 const PROVENANCE_NOISE_NAMES = new Set(['.DS_Store', '.gitkeep']);
-const PROVENANCE_STAGING_NAME = /^[A-Za-z0-9_.-]+\.json\.[0-9]+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/;
+const PROVENANCE_STAGING_BODY = '[A-Za-z0-9_.-]+\\.json\\.[0-9]+\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp';
+const PROVENANCE_STAGING_NAME = new RegExp(`^${PROVENANCE_STAGING_BODY}$`);
+const PROVENANCE_WRITER_NAME = new RegExp(`^\\.${PROVENANCE_STAGING_BODY}\\.tmp-[0-9]+$`);
 // @invariant: only a regular file with a known noise or staging name is inert; it is never read, adopted or pinned.
 function provenanceInert(directory, name) {
-  if (!PROVENANCE_NOISE_NAMES.has(name) && !PROVENANCE_STAGING_NAME.test(name)) return false;
+  if (!PROVENANCE_NOISE_NAMES.has(name) && !PROVENANCE_STAGING_NAME.test(name) && !PROVENANCE_WRITER_NAME.test(name)) return false;
   try { return fs.lstatSync(path.join(directory, name)).isFile(); } catch { return false; }
 }
 const LEGACY_BOOKKEEPING_FIELD = 'legacy_bookkeeping';
@@ -3973,6 +3984,10 @@ function legacyAuthoritySide(worktree) {
   const side = { pins: [], legacy: null, finding: null, unreadable: null };
   try {
     const directory = archiveAuthorityDirectory(worktree);
+    if (protectedRecordsWithoutKey(directory)) {
+      side.finding = { code: 'ARCHIVE_AUTHORITY_INVALID', path: '', detail: PROTECTED_RECORDS_NEED_KEY };
+      return side;
+    }
     const catalogue = path.join(directory, 'catalogue.json');
     try { fs.lstatSync(catalogue); }
     catch (error) { if (error.code === 'ENOENT') return side; throw error; }
@@ -4078,7 +4093,8 @@ function refuseLegacyFinding(finding) {
   const subject = finding.path ? ' ' + finding.path : '';
   const detail = finding.detail ? ': ' + finding.detail : '';
   fail(finding.code, (unknown ? 'unknown host provenance member before trusted mutation'
-    : 'legacy provenance history is not safe before trusted mutation') + subject + detail);
+    : 'legacy provenance history is not safe before trusted mutation') + subject + detail,
+  finding.path ? { path: finding.path } : {});
 }
 
 function refuseBlockedLegacyHistoryBeforeState(worktree) {

@@ -7,7 +7,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
 const { createDurableRecorder } = require('./dispatch-boundary.cjs');
-const { resolveHostEnvironment, launchEnvironment, resolveCodexHome } = require('./runtime-context.cjs');
+const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, probeReasonToCode } = require('./runtime-context.cjs');
 
 const SCHEMA = 'shipyard.codex-runtime-host.v1';
 const VERSION = 1;
@@ -193,6 +193,7 @@ function probeCodexRuntime(options = {}) {
   try {
     capabilities = capabilitiesFrom(options);
   } catch (error) {
+    if (error && error.code === 'ENV_CONFLICT') throw error;
     return unavailableProbe(executable, 'capability_evidence_missing', { detail: bounded(error.message) });
   }
   let version;
@@ -3749,10 +3750,9 @@ function parseCliArguments(argv) {
 
 function emitProbeHint(probe) {
   if (!probe || probe.status !== 'unavailable') return;
-  const code = probe.reason === 'capability_evidence_missing' || probe.reason === 'RUNTIME_CAPABILITY_MISSING'
-    ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
   const { formatHint } = require('./refusal-hints.cjs');
-  process.stderr.write(formatHint(code, { host: 'codex-runtime-host.cjs', reason: probe.reason }) + '\n');
+  process.stderr.write(formatHint(probeReasonToCode(probe.reason),
+    { host: 'codex-delivery-host.cjs', reason: probe.reason }) + '\n');
 }
 
 if (require.main === module) {

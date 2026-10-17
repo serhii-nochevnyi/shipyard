@@ -58,7 +58,7 @@ const HINTS = Object.freeze({
   }),
   RUNTIME_UNAVAILABLE: Object.freeze({
     hint: 'The runtime this host needs is not reachable right now.',
-    remedy: `Run node {bundle}/scripts/{host} --preflight to see the specific cause: a missing CLI needs installing and authenticating, missing or stale capability evidence needs the marketplace upgrade (${UPGRADE}), then re-run.`,
+    remedy: `Run node {bundle}/scripts/{host} --preflight to see the specific cause: a missing CLI needs installing and authenticating, an outdated CLI whose help lacks a required option needs the CLI itself upgraded (Codex CLI for the Codex host, Claude Code for the Claude host; reinstalling Shipyard does not change that), missing or stale capability evidence needs the marketplace upgrade (${UPGRADE}), then re-run.`,
   }),
   STALE_GENERATED_AGENT: Object.freeze({
     hint: 'The installed GSD agent definition no longer matches the current policy.',
@@ -90,7 +90,7 @@ const HINTS = Object.freeze({
   }),
   RUNTIME_CAPABILITY_MISSING: Object.freeze({
     hint: 'The runtime host has no capability evidence for the requested selection.',
-    remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). Then retry.`,
+    remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). If the runtime CLI itself reports an unsupported option, upgrade that CLI instead. Then retry.`,
   }),
   LEGACY_WRITER_STATE: Object.freeze({
     hint: 'A planning writer state file was written by an older layout.',
@@ -230,4 +230,53 @@ function formatHint(code, vars) {
   return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(entry.remedy, vars, true)}`;
 }
 
-module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, renderRemedy, stripControl });
+const PREFLIGHT_HOSTS = Object.freeze(['codex-delivery-host.cjs', 'codex-decompose-host.cjs', 'codex-planning-context-host.cjs',
+  'claude-delivery-host.cjs', 'claude-role-host.cjs', 'claude-decompose-host.cjs', 'claude-investigation-host.cjs']);
+const DETAIL_TOKENS = Object.freeze(['pid', 'path', 'label', 'key', 'explicit', 'bundle_value']);
+const PREFLIGHT_COMMAND = 'node {bundle}/scripts/{host} --preflight';
+const DELIVERY_PREFLIGHT_PROSE = "the runtime's delivery host with --preflight (claude-delivery-host.cjs or codex-delivery-host.cjs in {bundle}/scripts)";
+const PLANNING_PATH_IN_MESSAGE = /(?:^|\s)(\.planning\/.*?)(?:: |$)/;
+
+function scalar(value) {
+  return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)) ? String(value) : undefined;
+}
+
+function errorVars(error) {
+  const source = error && typeof error === 'object' ? error : {};
+  const vars = {};
+  for (const bag of [source.details, source.vars]) {
+    if (!bag || typeof bag !== 'object') continue;
+    for (const token of DETAIL_TOKENS) {
+      const value = scalar(bag[token]);
+      if (value !== undefined && value !== '') vars[token] = value;
+    }
+    const bundle = scalar(bag.bundle);
+    if (bundle) vars.bundle = bundle;
+  }
+  if (vars.path === undefined && typeof source.code === 'string' && source.code.startsWith('LEGACY_HISTORY_')) {
+    const found = PLANNING_PATH_IN_MESSAGE.exec(String(source.message || ''));
+    if (found) vars.path = found[1];
+  }
+  return vars;
+}
+
+function preflightHostName(host) {
+  const candidate = host === undefined ? process.argv[1] : host;
+  if (typeof candidate !== 'string' || !candidate) return null;
+  const name = path.basename(candidate);
+  return PREFLIGHT_HOSTS.includes(name) ? name : null;
+}
+
+// @contract: renders a preflight-style hint with the error's own pid or path and a host that has --preflight.
+function hintForError(error, host) {
+  const code = error && error.code;
+  const vars = errorVars(error);
+  const name = preflightHostName(host);
+  if (name) return formatHint(code, { ...vars, host: name });
+  const entry = hintFor(code);
+  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
+  const remedy = entry.remedy.split(PREFLIGHT_COMMAND).join(DELIVERY_PREFLIGHT_PROSE);
+  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(remedy, vars, true)}`;
+}
+
+module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, hintForError, renderRemedy, stripControl });

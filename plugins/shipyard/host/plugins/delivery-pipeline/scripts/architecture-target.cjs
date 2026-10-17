@@ -84,32 +84,45 @@ function phaseEvidencePaths(project, binding) {
   return paths;
 }
 
-function repositoryInvalid(message) {
+function repositoryInvalid(message, reason = 'value') {
   const error = new Error(`repository identity: ${message}`);
   error.code = 'REPOSITORY_IDENTITY_INVALID';
+  error.reason = reason;
   return error;
 }
 
 function repositoryIdentity(cwd, { execFileSync: run = execFileSync } = {}) {
   let common;
   try { common = String(run('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', env: gitEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] })).replace(/\r?\n$/, ''); }
-  catch { throw repositoryInvalid('git common directory cannot be resolved'); }
-  if (!common) throw repositoryInvalid('git common directory is empty');
+  catch { throw repositoryInvalid('git common directory cannot be resolved', 'git'); }
+  if (!common) throw repositoryInvalid('git common directory is empty', 'git');
   let real;
   try { real = fs.realpathSync(path.resolve(cwd, common)); }
-  catch { throw repositoryInvalid('git common directory cannot be resolved'); }
+  catch { throw repositoryInvalid('git common directory cannot be resolved', 'git'); }
   if (!REPOSITORY_VALUE.test(real)) throw repositoryInvalid('path contains ";" or a control character');
   return real;
 }
 
+function gitLine(cwd, args) {
+  return String(execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: gitEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] })).trim();
+}
+
+// @contract: pre-upgrade seals carry owner/repo for a github.com origin, otherwise the project root path
 function legacyRepositoryForms(cwd) {
   try {
-    const remote = String(execFileSync('git', ['-C', cwd, 'config', '--get', 'remote.origin.url'],
-      { encoding: 'utf8', env: gitEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] })).trim();
-    const github = remote.match(/(?:github\.com[:/])([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
+    const github = gitLine(cwd, ['config', '--get', 'remote.origin.url']).match(/(?:github\.com[:/])([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
     if (github) return [github[1].toLowerCase()];
-  } catch { return []; }
-  return [];
+  } catch {}
+  const forms = [];
+  const add = (resolve) => {
+    try {
+      const value = fs.realpathSync(resolve());
+      if (REPOSITORY_VALUE.test(value) && !forms.includes(value)) forms.push(value);
+    } catch { return; }
+  };
+  add(() => gitLine(cwd, ['rev-parse', '--show-toplevel']));
+  add(() => path.dirname(gitLine(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])));
+  return forms;
 }
 
 function acceptedRepositoryValues(cwd) {

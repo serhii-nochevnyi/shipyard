@@ -24,8 +24,9 @@ const hostVerification = require('./host-verification.cjs');
 const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
-const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, emitPreflight } = require('./runtime-context.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
+const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, emitPreflight,
+  roleNeedsRepositoryIdentity } = require('./runtime-context.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
@@ -3503,6 +3504,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     try { phaseDir = typedPhaseDirectory(scope.worktree, scope.phase); } catch { phaseDir = undefined; }
   }
   const gate = runHostPreflight(options, scope, { report: checkOnly, scope: 'launch', probe: environmentRefused ? undefined : hostProbe(options),
+    needsRepositoryIdentity: parsed ? roleNeedsRepositoryIdentity(parsed.launch.role) : false,
     graphDir: inflightGraphDir(options, scope.worktree),
     ...(parsed ? { runStoreFile: path.join(storageRootOf(options, scope),
       crypto.createHash('sha256').update(`${scope.run_id}\0${scope.worktree}`).digest('hex'), 'runs', 'runs.json') } : {}),
@@ -3712,7 +3714,7 @@ if (require.main === module) {
     if (result?.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write('codex-delivery-host: ' + (error && error.message ? error.message : error) + '\n');
-    if (!error?.hintPrinted) process.stderr.write(formatHint(error && error.code) + '\n');
+    if (!error?.hintPrinted) process.stderr.write(hintForError(error) + '\n');
     if (error?.diagnostics) process.stderr.write(JSON.stringify({ diagnostics: error.diagnostics }) + '\n');
     process.exitCode = 1;
   });
