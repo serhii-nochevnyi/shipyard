@@ -440,7 +440,7 @@ if (require.main === module) {
     if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write('codex-planning-context-host: ' + (error && error.message ? error.message : error) + '\n');
-    process.stderr.write(require('./refusal-hints.cjs').formatHint(error && error.code) + '\n');
+    if (!error?.hintPrinted) process.stderr.write(require('./refusal-hints.cjs').formatHint(error && error.code) + '\n');
     process.exitCode = 1;
   });
 }

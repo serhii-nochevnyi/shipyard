@@ -929,8 +929,13 @@ function runHostPreflight(options, { host, worktree, graphDir, kind = 'launch', 
   });
   emitPreflight(result, { stdout: stdout || { write() {} }, stderr: options.stderr || process.stderr });
   if (!stdout && !result.ok) {
-    fail(result.findings[0].code,
-      `preflight found ${result.findings.length} incompatibilities: ${result.findings.map((item) => item.code).join(', ')}`);
+    try {
+      fail(result.findings[0].code,
+        `preflight found ${result.findings.length} incompatibilities: ${result.findings.map((item) => item.code).join(', ')}`);
+    } catch (refusal) {
+      refusal.hintPrinted = true;
+      throw refusal;
+    }
   }
   return result;
 }
@@ -1485,7 +1490,7 @@ if (require.main === module) {
     if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
     process.stderr.write('codex-decompose-host: ' + (error && error.message ? error.message : error) + '\n');
-    process.stderr.write(formatHint(error && error.code) + '\n');
+    if (!error?.hintPrinted) process.stderr.write(formatHint(error && error.code) + '\n');
     process.exitCode = 1;
   });
 }
