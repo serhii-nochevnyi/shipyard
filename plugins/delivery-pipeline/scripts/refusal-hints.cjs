@@ -179,16 +179,34 @@ function hintFor(code) {
   return DEFAULT_ENTRY;
 }
 
+const CONTROL = /[\u0000-\u001f\u007f]/g;
+
+const TOKEN_FALLBACKS = Object.freeze({
+  host: 'the host script',
+  pid: 'unknown',
+  explicit: 'an explicitly named home',
+  bundle_value: 'a different home',
+  path: 'an unreported path',
+  label: 'unknown',
+  key: 'the refused key',
+  bundle: BUNDLE_ROOT,
+});
+
+// @invariant: a rendered hint never carries a raw placeholder or a control character.
+function stripControl(value) {
+  return String(value).replace(CONTROL, '');
+}
+
 function formatHint(code, vars) {
-  const label = typeof code === 'string' && code.trim() ? code : 'UNKNOWN';
+  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
   const entry = hintFor(code);
   const supplied = vars && typeof vars === 'object' ? vars : {};
   const fill = (text) => text.replace(/\{(\w+)\}/g, (token, name) => {
-    if (Object.hasOwn(supplied, name)) return String(supplied[name]);
-    if (name === 'bundle') return BUNDLE_ROOT;
-    return token;
+    const value = Object.hasOwn(supplied, name) ? supplied[name] : undefined;
+    if (value !== undefined && value !== null && value !== '') return stripControl(value);
+    return Object.hasOwn(TOKEN_FALLBACKS, name) ? TOKEN_FALLBACKS[name] : 'unspecified';
   });
-  return `hint[${label}]: ${fill(entry.hint)} — remedy: ${fill(entry.remedy)}`;
+  return `hint[${label}]: ${fill(entry.hint)} \u2014 remedy: ${fill(entry.remedy)}`;
 }
 
-module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint });
+module.exports = Object.freeze({ HINTS, LAUNCH_CODES, hintFor, formatHint, stripControl });

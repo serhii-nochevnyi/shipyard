@@ -116,11 +116,12 @@ test('every launch code has a frozen entry, including the warning-only codes', (
   }
 });
 
-test('formatHint substitutes supplied tokens, defaults {bundle}, and leaves others visible', () => {
+test('formatHint substitutes supplied tokens, defaults {bundle}, and never leaves a raw token', () => {
   assert.match(formatHint('ENV_CONFLICT', { explicit: 'A', bundle_value: 'B' }), /names A but the installed bundle is B/);
   const bundle = path.resolve(SCRIPTS_DIR, '..');
   assert.ok(formatHint('CODEX_CONFIG_FIX').includes(`node ${bundle}/scripts/gsd-tune.cjs`));
-  assert.ok(formatHint('CODEX_CONFIG_FIX').includes('{key}'));
+  assert.ok(!formatHint('CODEX_CONFIG_FIX').includes('{key}'));
+  assert.ok(formatHint('CODEX_CONFIG_FIX').includes('Fix the refused key in'));
   assert.ok(formatHint('CODEX_CONFIG_FIX', { bundle: '/x', key: 'k' }).includes('Fix k in .planning/config.json, then run: node /x/scripts/gsd-tune.cjs'));
 });
 

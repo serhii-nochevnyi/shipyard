@@ -253,10 +253,11 @@ function resolveDispatchContext(root, options = {}) {
   return Object.freeze(context);
 }
 
-function hostEnvironmentError(code, message) {
+function hostEnvironmentError(code, message, vars) {
   const error = new Error('runtime-context: ' + message);
   error.name = 'HostEnvironmentError';
   error.code = code;
+  if (vars) error.vars = Object.freeze({ ...vars });
   return error;
 }
 
@@ -349,7 +350,8 @@ function checkExplicitSources(env, flags, home, capabilitiesFile, manifest) {
   for (const [value, name] of homes) {
     if (value && (physicalPath(value) || path.resolve(value)) !== home) {
       throw hostEnvironmentError('ENV_CONFLICT',
-        `${name}=${value} disagrees with the Codex home ${home} of the installed bundle that is running`);
+        `${name}=${value} disagrees with the Codex home ${home} of the installed bundle that is running`,
+        { explicit: `${name}=${value}`, bundle_value: home });
     }
   }
   const files = [
@@ -359,7 +361,8 @@ function checkExplicitSources(env, flags, home, capabilitiesFile, manifest) {
   for (const [value, name] of files) {
     if (value && !sameFile(value, capabilitiesFile, manifest.capabilities_digest)) {
       throw hostEnvironmentError('ENV_CONFLICT',
-        `${name}=${value} disagrees with the capability evidence ${capabilitiesFile} of the installed bundle that is running`);
+        `${name}=${value} disagrees with the capability evidence ${capabilitiesFile} of the installed bundle that is running`,
+        { explicit: `${name}=${value}`, bundle_value: capabilitiesFile });
     }
   }
 }
@@ -550,7 +553,7 @@ function preflight(options = {}) {
   const run = (name, fn) => {
     try { fn(); } catch (error) {
       const code = errorCode(error);
-      if (PREFLIGHT_CODES.includes(code)) find(code, error.message);
+      if (PREFLIGHT_CODES.includes(code)) find(code, error.message, error.vars);
       else note('not-evaluated', `${name}: check not evaluated (${code})`);
     }
   };
@@ -653,12 +656,16 @@ function preflight(options = {}) {
 function emitPreflight(result, streams = {}) {
   const stdout = streams.stdout || process.stdout;
   const stderr = streams.stderr || process.stderr;
-  const { formatHint } = require('./refusal-hints.cjs');
+  const { formatHint, stripControl } = require('./refusal-hints.cjs');
   const count = result.findings.length;
   const lines = [count === 0 ? 'preflight: ok' : `preflight: ${count} incompatibilities`];
-  for (const finding of result.findings) lines.push(formatHint(finding.code, finding.vars));
-  for (const warning of result.warnings) lines.push(`preflight: warning[${warning.code}] ${warning.detail}`);
-  for (const item of result.notes) lines.push(`preflight: note ${item.detail}`);
+  const clean = (value) => stripControl(value === undefined || value === null ? '' : value);
+  for (const finding of result.findings) {
+    const detail = clean(finding.detail);
+    lines.push(formatHint(finding.code, finding.vars) + (detail ? ` (detail: ${detail})` : ''));
+  }
+  for (const warning of result.warnings) lines.push(`preflight: warning[${clean(warning.code)}] ${clean(warning.detail)}`);
+  for (const item of result.notes) lines.push(`preflight: note ${clean(item.detail)}`);
   stderr.write(lines.join('\n') + '\n');
   stdout.write(JSON.stringify(result) + '\n');
   return result.ok ? 0 : 1;

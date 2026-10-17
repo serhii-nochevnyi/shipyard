@@ -16,7 +16,7 @@ const { execFileSync } = require('node:child_process');
 const { after, describe, it, mock } = require('node:test');
 const scripts = '../../plugins/delivery-pipeline/scripts/';
 const { preflight, emitPreflight, PREFLIGHT_CODES } = require(scripts + 'runtime-context.cjs');
-const { LAUNCH_CODES } = require(scripts + 'refusal-hints.cjs');
+const { LAUNCH_CODES, HINTS, formatHint } = require(scripts + 'refusal-hints.cjs');
 const { POLICY_HASH } = require(scripts + 'model-policy.cjs');
 const roleArtifact = require(scripts + 'role-artifact.cjs');
 const { codexCapabilities } = require('../smoke/installed-launch/lib.cjs');
@@ -259,6 +259,45 @@ describe('host preflight', () => {
       assert.deepEqual(result.warnings, []);
       assert.equal(result.ok, true);
     }
+  });
+
+  it('never leaves a raw placeholder in a rendered hint', () => {
+    for (const code of Object.keys(HINTS)) {
+      assert.doesNotMatch(formatHint(code), /\{[^}]*\}/, code);
+      assert.doesNotMatch(formatHint(code, { path: '', pid: null }), /\{[^}]*\}/, code);
+      const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
+      const result = { schema: 'x', ok: false, findings: [{ code, detail: 'd', vars: {} }], warnings: [], notes: [] };
+      assert.equal(emitPreflight(result, streams), 1);
+      assert.doesNotMatch(streams.stderr.text, /\{[^}]*\}/, code);
+    }
+    assert.doesNotMatch(formatHint('NOT_A_CODE'), /\{[^}]*\}/);
+  });
+
+  it('names both disagreeing homes and the stale files on stderr', () => {
+    const streams = () => ({ stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } });
+    const layout = installedLayout();
+    const other = tmp('other');
+    const conflict = streams();
+    emitPreflight(preflight(base(layout, { env: { CODEX_HOME: other } })), conflict);
+    assert.ok(conflict.stderr.text.includes(`CODEX_HOME=${other}`), conflict.stderr.text);
+    assert.ok(conflict.stderr.text.includes(layout.home), conflict.stderr.text);
+    const stale = installedLayout();
+    fs.writeFileSync(path.join(stale.home, 'agents', 'a.toml'), 'changed');
+    const agents = streams();
+    emitPreflight(preflight(base(stale)), agents);
+    assert.match(agents.stderr.text, /hint\[STALE_GENERATED_AGENT\].*a\.toml/);
+  });
+
+  it('keeps a control character in a value from forging a preflight line', () => {
+    const layout = installedLayout();
+    const hostile = path.join(tmp('hostile'), 'x\npreflight: ok\u0007');
+    const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
+    emitPreflight(preflight(base(layout, { env: { CODEX_HOME: hostile } })), streams);
+    const lines = streams.stderr.text.split('\n').filter(Boolean);
+    assert.equal(lines.filter((line) => line.startsWith('hint[')).length, 1, streams.stderr.text);
+    assert.ok(lines.every((line) => /^(preflight: (\d+ incompat|note )|hint\[)/.test(line)), streams.stderr.text);
+    assert.doesNotMatch(streams.stderr.text, /[\u0000-\u0009\u000b-\u001f\u007f]/);
+    assert.doesNotMatch(streams.stderr.text, /^preflight: ok/m);
   });
 
   it('keeps runtime-context free of host modules', () => {
