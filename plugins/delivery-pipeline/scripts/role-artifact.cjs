@@ -4093,7 +4093,8 @@ function refuseLegacyFinding(finding) {
   const subject = finding.path ? ' ' + finding.path : '';
   const detail = finding.detail ? ': ' + finding.detail : '';
   fail(finding.code, (unknown ? 'unknown host provenance member before trusted mutation'
-    : 'legacy provenance history is not safe before trusted mutation') + subject + detail);
+    : 'legacy provenance history is not safe before trusted mutation') + subject + detail,
+  finding.path ? { path: finding.path } : {});
 }
 
 function refuseBlockedLegacyHistoryBeforeState(worktree) {

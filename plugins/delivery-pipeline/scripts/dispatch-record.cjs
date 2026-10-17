@@ -1585,7 +1585,7 @@ function refuseLegacyCollision(project, dispatchId, includeAdoptable = false) {
   if (!members.some((member) => member.path === relative)) return;
   if (authority.historicalBookkeepingPins(project).some((pin) => pin.path === relative)) return;
   throw Object.assign(new Error(`dispatch id ${dispatchId} collides with recorded legacy provenance ${relative}`),
-    { code: 'LEGACY_HISTORY_COLLISION' });
+    { code: 'LEGACY_HISTORY_COLLISION', details: { path: relative } });
 }
 
 // @invariant: a provenance sidecar is written once per dispatch_id and never overwritten.

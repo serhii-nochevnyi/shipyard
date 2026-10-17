@@ -2633,6 +2633,7 @@ test('a legacy member named like a new dispatch id is refused and never stands i
       assert.ok(failure, `adopted=${adopted}: the collision is refused`);
       assert.equal(failure.code, 'LEGACY_HISTORY_COLLISION');
       assert.match(failure.message, /colliding-id\.json/);
+      assert.equal(failure.details.path, '.planning/graph/provenance/colliding-id.json');
       assert.ok(!failure.message.includes(secret), 'the message names the path, never the contents');
       assert.deepStrictEqual(treeDigest(legacyDir), before, 'the legacy file is not replaced or rewritten');
       assert.ok(!authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/colliding-id.json')),

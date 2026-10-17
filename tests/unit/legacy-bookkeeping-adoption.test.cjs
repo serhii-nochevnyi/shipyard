@@ -329,6 +329,9 @@ test('a changed legacy member blocks the mutation before the callback and keeps 
   const error = refusal(() => adopt(root, () => { invoked = true; }));
   assert.equal(error.code, 'LEGACY_HISTORY_CHANGED');
   assert.match(error.message, /dispatch-2\.json/);
+  assert.equal(error.details.path, '.planning/graph/provenance/dispatch-2.json');
+  assert.match(require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs').hintForError(error),
+    /history at \.planning\/graph\/provenance\/dispatch-2\.json changed/);
   assert.equal(invoked, false);
   assert.deepEqual(catalogueBytes(root), catalogue);
   assert.deepEqual(snapshot(provenanceDir(root)), after);
