@@ -323,6 +323,26 @@ describe('host preflight', () => {
     assert.doesNotMatch(streams.stderr.text, /^preflight: ok/m);
   });
 
+  it('defaults the host to the delivery host that implements --preflight for the runtime', () => {
+    const layout = installedLayout({ stale: true });
+    const codex = preflight(base(layout));
+    assert.equal(codex.findings[0].vars.host, 'codex-delivery-host.cjs');
+    const claude = preflight({ runtime: 'claude', env: {}, graphDir: null, probe: () => ({ status: 'unavailable', reason: 'runtime_missing' }) });
+    assert.equal(claude.findings[0].vars.host, 'claude-delivery-host.cjs');
+    const named = preflight(base(layout, { host: 'codex-decompose-host.cjs' }));
+    assert.equal(named.findings[0].vars.host, 'codex-decompose-host.cjs');
+    const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
+    emitPreflight(codex, streams);
+    assert.ok(!streams.stderr.text.includes('deliver-dispatch.cjs'));
+  });
+
+  it('words a Claude-reachable remedy for both hosts', () => {
+    for (const code of ['RUNTIME_CAPABILITY_MISSING', 'LEGACY_WRITER_STATE', 'LEGACY_HISTORY_UNKNOWN_MEMBER',
+      'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE', 'ENV_CONFLICT']) {
+      assert.match(formatHint(code), /Claude: claude plugin install shipyard@shipyard; Codex: codex plugin marketplace upgrade shipyard/, code);
+    }
+  });
+
   it('keeps runtime-context free of host modules', () => {
     const source = fs.readFileSync(path.join(__dirname, scripts, 'runtime-context.cjs'), 'utf8');
     assert.ok(!/require\('\.\/(codex|claude)-[a-z-]*host\.cjs'\)/.test(source));

@@ -549,7 +549,9 @@ function preflight(options = {}) {
   const opts = options && typeof options === 'object' ? options : {};
   const env = opts.env || process.env;
   const scope = opts.scope === 'environment' ? 'environment' : 'launch';
-  const host = typeof opts.host === 'string' && opts.host ? opts.host : 'deliver-dispatch.cjs';
+  // @contract: the default host is the delivery host that implements --preflight for the runtime.
+  const DELIVERY_HOSTS = { codex: 'codex-delivery-host.cjs', claude: 'claude-delivery-host.cjs' };
+  const host = typeof opts.host === 'string' && opts.host ? opts.host : (DELIVERY_HOSTS[opts.runtime] || undefined);
   const findings = [], warnings = [], notes = [];
   const note = (kind, detail) => notes.push({ kind, detail });
   const find = (code, detail, vars = {}) => findings.push({ code, detail: String(detail), vars: { host, ...vars } });

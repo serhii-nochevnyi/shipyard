@@ -4,6 +4,8 @@ const path = require('node:path');
 
 const BUNDLE_ROOT = path.resolve(__dirname, '..');
 
+const UPGRADE = 'Claude: claude plugin install shipyard@shipyard; Codex: codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard';
+
 const DEFAULT_ENTRY = Object.freeze({
   hint: 'The host refused the request for a reason this map does not name.',
   remedy: 'Re-run the command and check the surrounding stderr for the underlying cause.',
@@ -12,7 +14,7 @@ const DEFAULT_ENTRY = Object.freeze({
 const HINTS = Object.freeze({
   REFERENCE_UNAVAILABLE: Object.freeze({
     hint: 'A trusted GSD reference file is missing, unreadable, or not a bounded regular file.',
-    remedy: 'Reinstall the plugin from the marketplace (Claude: claude plugin install shipyard@shipyard; Codex: codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard), then re-run.',
+    remedy: `Reinstall the plugin from the marketplace (${UPGRADE}), then re-run.`,
   }),
   INVALID_INPUT: Object.freeze({
     hint: 'The request does not match the shape this host requires.',
@@ -56,7 +58,7 @@ const HINTS = Object.freeze({
   }),
   RUNTIME_UNAVAILABLE: Object.freeze({
     hint: 'The runtime this host needs is not reachable right now.',
-    remedy: 'Run node {bundle}/scripts/{host} --preflight to see the specific cause: a missing CLI needs installing and authenticating, missing or stale capability evidence needs the marketplace upgrade (codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard), then re-run.',
+    remedy: `Run node {bundle}/scripts/{host} --preflight to see the specific cause: a missing CLI needs installing and authenticating, missing or stale capability evidence needs the marketplace upgrade (${UPGRADE}), then re-run.`,
   }),
   STALE_GENERATED_AGENT: Object.freeze({
     hint: 'The installed GSD agent definition no longer matches the current policy.',
@@ -88,11 +90,11 @@ const HINTS = Object.freeze({
   }),
   RUNTIME_CAPABILITY_MISSING: Object.freeze({
     hint: 'The runtime host has no capability evidence for the requested selection.',
-    remedy: 'Run node {bundle}/scripts/{host} --preflight; if evidence is missing, upgrade the bundle (codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard), then retry.',
+    remedy: `Run node {bundle}/scripts/{host} --preflight; if evidence is missing, upgrade the bundle (${UPGRADE}), then retry.`,
   }),
   LEGACY_WRITER_STATE: Object.freeze({
     hint: 'A planning writer state file was written by an older layout.',
-    remedy: 'Upgrade the installed bundle (codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard) and re-run.',
+    remedy: `Upgrade the installed bundle (${UPGRADE}) and re-run.`,
   }),
   UNKNOWN_RUNTIME: Object.freeze({
     hint: 'The runtime could not be recognised from the environment.',
@@ -132,15 +134,15 @@ const HINTS = Object.freeze({
   }),
   ENV_CONFLICT: Object.freeze({
     hint: 'The environment names {explicit} but the installed bundle is {bundle_value}.',
-    remedy: 'Either unset the variable, or reinstall into the named home (codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard) so both agree.',
+    remedy: `Either unset the variable, or reinstall into the named home (${UPGRADE}) so both agree.`,
   }),
   BUNDLE_MANIFEST_INVALID: Object.freeze({
     hint: 'The installed bundle manifest is missing or invalid.',
-    remedy: 'Upgrade the installed bundle (codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard), then run node {bundle}/scripts/{host} --preflight.',
+    remedy: `Upgrade the installed bundle (${UPGRADE}), then run node {bundle}/scripts/{host} --preflight.`,
   }),
   CAPABILITY_EVIDENCE_STALE: Object.freeze({
     hint: 'The capability evidence is older than the installed policy.',
-    remedy: 'Upgrade the installed bundle (codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard), then run node {bundle}/scripts/{host} --preflight.',
+    remedy: `Upgrade the installed bundle (${UPGRADE}), then run node {bundle}/scripts/{host} --preflight.`,
   }),
   CAPABILITY_SNAPSHOT_AGED: Object.freeze({
     hint: 'Warning: the capability snapshot is aged but still usable.',
@@ -156,7 +158,7 @@ const HINTS = Object.freeze({
   }),
   LEGACY_HISTORY_UNKNOWN_MEMBER: Object.freeze({
     hint: 'The legacy history at {path} contains a member this host does not know.',
-    remedy: 'Update the host that wrote the file (codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard), then re-run.',
+    remedy: `Update the host that wrote the file (${UPGRADE}), then re-run.`,
   }),
   LEGACY_HISTORY_COLLISION: Object.freeze({
     hint: 'Adopting the legacy history at {path} would collide with existing content.',
