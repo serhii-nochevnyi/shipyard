@@ -215,6 +215,26 @@ describe('host preflight', () => {
     assert.deepEqual(codes(result), ['ARCHIVE_AUTHORITY_INVALID']);
   });
 
+  it('reports a malformed catalogue as a finding, exits 1 and refuses a launch with the coded hint', () => {
+    for (const body of ['garbage text', '{}', '[]', 'null']) {
+      const layout = installedLayout();
+      const broken = project({ 'one.json': '{}' });
+      roleArtifact.trustedBookkeepingMutation(broken.root, () => {}, []);
+      const directory = roleArtifact.archiveAuthorityDirectory(broken.root);
+      fs.writeFileSync(path.join(directory, 'catalogue.json'), body, { mode: 0o600 });
+      const result = preflight(base(layout, { graphDir: broken.graphDir }));
+      assert.deepEqual(codes(result), ['ARCHIVE_AUTHORITY_INVALID'], body);
+      assert.equal(result.ok, false, body);
+      assert.ok(!result.notes.some((n) => /not evaluated/.test(n.detail) && /legacy history/.test(n.detail)), body);
+      assert.match(result.findings[0].detail, /archive catalogue is not (valid JSON|an authenticated envelope)/, body);
+      const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
+      assert.equal(emitPreflight(result, streams), 1);
+      assert.match(streams.stderr.text, /hint\[ARCHIVE_AUTHORITY_INVALID\]/);
+      assert.throws(() => roleArtifact.trustedBookkeepingMutation(broken.root, () => {}, []),
+        (error) => error.code === 'ARCHIVE_AUTHORITY_INVALID' && !(error instanceof SyntaxError) && !(error instanceof TypeError), body);
+    }
+  });
+
   it('flags an invalid run store and a legacy planning writer', () => {
     const layout = installedLayout();
     const file = path.join(tmp('store'), 'store.json');

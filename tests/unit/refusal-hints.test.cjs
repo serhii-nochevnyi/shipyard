@@ -141,3 +141,51 @@ test('remedies touching history or authority never suggest deleting or moving it
     }
   }
 });
+
+test('a CONFLICTING_OVERRIDE refusal from the Codex remap renders every placeholder', () => {
+  const remap = require('../../plugins/delivery-pipeline/scripts/codex-model-remap.cjs');
+  const rendered = remap.repairFor('CONFLICTING_OVERRIDE', { key: 'model_policy.runtime_tiers.codex.sol' });
+  assert.doesNotMatch(rendered, /[{}]/);
+  assert.ok(rendered.includes('Fix model_policy.runtime_tiers.codex.sol in .planning/config.json'));
+  assert.ok(rendered.includes(`node ${path.resolve(SCRIPTS_DIR, '..')}/scripts/gsd-tune.cjs --runtime codex --apply`));
+  assert.throws(
+    () => remap.loadCodexRemap({ config: { model_profile_overrides: { codex: { sol: 'not-a-model' } } } }),
+    (error) => error.code === 'CONFLICTING_OVERRIDE' && !/[{}]/.test(error.message) && /Fix model_profile_overrides\.codex\.sol in/.test(error.message),
+  );
+});
+
+test('a path substituted into a command remedy is shell-quoted only when it is not plainly safe', () => {
+  const { execFileSync } = require('node:child_process');
+  const safe = formatHint('RUNTIME_UNAVAILABLE', { bundle: '/opt/shipyard/bundle', host: 'codex-delivery-host.cjs' });
+  assert.ok(safe.includes('node /opt/shipyard/bundle/scripts/codex-delivery-host.cjs --preflight'), safe);
+  assert.doesNotMatch(safe, /'/);
+  const spaced = formatHint('RUNTIME_UNAVAILABLE', { bundle: '/tmp/my bundle', host: 'h.cjs' });
+  assert.ok(spaced.includes("node '/tmp/my bundle'/scripts/h.cjs --preflight"), spaced);
+  const hostile = '/tmp/a;touch /tmp/pwned-$(id)`x`\'y';
+  const remedy = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs').renderRemedy('CODEX_CONFIG_FIX', { bundle: hostile, key: 'k' });
+  const command = remedy.slice(remedy.indexOf('node '), remedy.indexOf(' --runtime'));
+  const argv = JSON.parse(execFileSync('sh', ['-c', `set -- ${command.slice('node '.length)}; node -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"`], { encoding: 'utf8' }));
+  assert.deepEqual(argv, [`${hostile}/scripts/gsd-tune.cjs`]);
+  assert.ok(formatHint('CODEX_CONFIG_FIX', { bundle: '/x y;z', key: 'a b' }).includes("Fix a b in .planning/config.json, then run: node '/x y;z'/scripts/gsd-tune.cjs"));
+});
+
+test('prose placeholders are not shell-quoted', () => {
+  assert.ok(formatHint('LEGACY_HISTORY_UNSAFE', { path: '.planning/graph/a b;c.json' }).includes('history at .planning/graph/a b;c.json cannot'));
+  assert.ok(formatHint('ENV_CONFLICT', { explicit: 'CODEX_HOME=/a b', bundle_value: '/c d' }).includes('names CODEX_HOME=/a b but the installed bundle is /c d'));
+});
+
+test('capability, runtime-ambiguity and repository-identity remedies name the real cause and fix', () => {
+  const missing = formatHint('RUNTIME_CAPABILITY_MISSING', { bundle: '/b', host: 'codex-delivery-host.cjs' });
+  assert.doesNotMatch(missing, /--preflight/);
+  assert.match(missing, /SHIPYARD_CODEX_CAPABILITIES_FILE/);
+  assert.match(missing, /Launch and upgrade/);
+  assert.match(missing, /codex plugin marketplace upgrade shipyard/);
+  const ambiguous = formatHint('AMBIGUOUS_RUNTIME');
+  assert.doesNotMatch(ambiguous, /Pass the runtime explicitly/);
+  assert.match(ambiguous, /matching runtime's session/);
+  assert.match(ambiguous, /unset the conflicting runtime marker named in the finding detail/);
+  const identity = formatHint('REPOSITORY_IDENTITY_INVALID');
+  assert.doesNotMatch(identity, /origin remote|unknown/);
+  assert.match(identity, /common directory/);
+  assert.match(identity, /";" or control character/);
+});
