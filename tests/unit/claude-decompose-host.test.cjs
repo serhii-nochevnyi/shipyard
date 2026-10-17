@@ -1109,6 +1109,22 @@ test('--preflight parses alone and with --request-file', () => {
   assert.equal(both.requestFile, 'r.json');
 });
 
+test('a launch whose preflight passes keeps preflight JSON off stdout', () => {
+  const f = preparedPhaseFixture();
+  try {
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(home);
+    const bin = fakeAvailableClaudeBin(f.root);
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const env = hostEnv({ HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, '--request-file', requestFile],
+      { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.match(result.stderr, /preflight: ok/);
+    assert.doesNotMatch(result.stdout, /shipyard\.host-preflight\.v1/);
+  } finally { f.clean(); }
+});
+
 test('a repository identity failure keeps its own code instead of SCOPE_MISMATCH', () => {
   const f = fixture();
   try {
