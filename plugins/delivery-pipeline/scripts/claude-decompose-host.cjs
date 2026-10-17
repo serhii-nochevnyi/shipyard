@@ -553,6 +553,7 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
   const launch = readLaunch(store, dispatchId);
   const scope = canonicalRequest(launch.request);
   if (!dependencies.store && privateStore(scope) !== store) refuse('RECOVERY_EVIDENCE_MISSING', 'launch record belongs to another scope');
+  if (dependencies.environmentGate) dependencies.environmentGate(scope);
   const phaseDir = phaseDirectory(scope.worktree, scope.phase);
   const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'recovery-runs') });
   assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
@@ -724,7 +725,8 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (args.recoverDispatch) {
-    process.stdout.write(`${JSON.stringify(await recoverDecomposition(args.recoverDispatch))}\n`);
+    const environmentGate = (scope) => requirePreflight(scope.worktree, { scope: 'environment' });
+    process.stdout.write(`${JSON.stringify(await recoverDecomposition(args.recoverDispatch, { environmentGate }))}\n`);
     return;
   }
   if (args.capabilityOnly) {

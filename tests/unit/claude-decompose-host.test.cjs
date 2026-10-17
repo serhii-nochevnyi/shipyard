@@ -1169,6 +1169,34 @@ test('a launch whose preflight passes keeps preflight JSON off stdout', () => {
   } finally { f.clean(); }
 });
 
+test('recover --dispatch runs an environment preflight before it creates run-controller state', () => {
+  const f = recoveryFixture('gsd-planner', { cli: true });
+  try {
+    const env = hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, 'recover', '--dispatch', f.dispatchId], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^[A-Z_]+: preflight found/m);
+    assert.match(result.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.equal(fs.existsSync(path.join(f.store, 'recovery-runs')), false);
+  } finally { f.finish(); }
+});
+
+test('recovery runs its environment gate with the original scope before any controller exists', async () => {
+  const f = recoveryFixture('gsd-planner');
+  try {
+    let gated;
+    let controllers = 0;
+    await assert.rejects(recoverDecomposition(f.dispatchId, { ...f.deps,
+      environmentGate: (scope) => { gated = scope.worktree; throw Object.assign(new Error('gate'), { code: 'RUNTIME_UNAVAILABLE' }); },
+      controllerFactory: () => { controllers += 1; throw new Error('controller must not be built'); } }),
+    { code: 'RUNTIME_UNAVAILABLE' });
+    assert.equal(gated, fs.realpathSync(f.worktree));
+    assert.equal(controllers, 0);
+  } finally { f.finish(); }
+});
+
 test('a repository identity failure keeps its own code instead of SCOPE_MISMATCH', () => {
   const f = fixture();
   try {
