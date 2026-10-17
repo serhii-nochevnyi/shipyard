@@ -605,6 +605,7 @@ function preflight(options = {}) {
 
   run('runtime probe', () => {
     if (typeof opts.probe !== 'function') return;
+    if (!resolved) { note('not-evaluated', 'runtime probe: not evaluated, no resolved environment'); return; }
     const result = opts.probe();
     if (result && result.status === 'unavailable') {
       const reason = String(result.reason || 'unknown');

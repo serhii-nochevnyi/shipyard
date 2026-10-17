@@ -109,6 +109,19 @@ describe('host preflight', () => {
     assert.deepEqual(codes(result), ['RUNTIME_CAPABILITY_MISSING']);
   });
 
+  it('does not probe when the environment failed to resolve', () => {
+    const probe = mock.fn(() => ({ status: 'unavailable', reason: 'capability_evidence_missing' }));
+    const layout = installedLayout();
+    const conflict = preflight(base(layout, { env: { CODEX_HOME: tmp('other') }, probe }));
+    assert.deepEqual(codes(conflict), ['ENV_CONFLICT']);
+    const stale = installedLayout();
+    fs.appendFileSync(path.join(stale.bundle, 'codex-capabilities.json'), ' ');
+    const aged = preflight(base(stale, { probe }));
+    assert.deepEqual(codes(aged), ['CAPABILITY_EVIDENCE_STALE']);
+    assert.equal(probe.mock.callCount(), 0);
+    assert.ok(aged.notes.some((n) => /runtime probe: not evaluated/.test(n.detail)));
+  });
+
   it('treats a throwing probe as a not-evaluated note while other checks still report', () => {
     const stale = installedLayout({ stale: true });
     const result = preflight(base(stale, { probe: () => { throw new Error('boom'); } }));
