@@ -1309,8 +1309,10 @@ function inflightBookkeepingRequired(input, cwd) {
   const project = fs.realpathSync(path.resolve(graphDir(cwd), '../..'));
   if (fs.realpathSync(input.worktree) === project) return true;
   const provenance = path.join(project, '.planning', 'graph', 'provenance');
-  if (!fs.existsSync(provenance) || fs.readdirSync(provenance).length === 0) return true;
-  return LEGACY_ADMISSION_STATES.has(require('./role-artifact.cjs').classifyLegacyProvenance(project).state);
+  const authority = require('./role-artifact.cjs');
+  if (!fs.existsSync(provenance)
+      || fs.readdirSync(provenance).every((name) => authority.provenanceInert(provenance, name))) return true;
+  return LEGACY_ADMISSION_STATES.has(authority.classifyLegacyProvenance(project).state);
 }
 
 function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false, authenticate = false) {

@@ -2466,6 +2466,19 @@ test('with no history, the root creates the authority and a linked worker with a
   });
 });
 
+test('a provenance directory holding only noise admits a linked worker as an empty one does', () => withAuthorityHome(() => {
+  const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
+  try {
+    const linked = linkedWorktree(project);
+    const authority = authorityModule();
+    fs.mkdirSync(PROVENANCE_DIR(graph), { recursive: true });
+    fs.writeFileSync(path.join(PROVENANCE_DIR(graph), '.DS_Store'), 'x');
+    recordInflight(admission(graph, linked, 'noisy-linked'));
+    assert.ok(authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/noisy-linked.json')));
+    assert.equal(authority.classifyLegacyProvenance(project).state, 'authenticated');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}));
+
 test('an unreadable authority namespace sends a linked worktree down the trusted path, which fails without writing', () => withAuthorityHome((home) => {
   const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
   try {

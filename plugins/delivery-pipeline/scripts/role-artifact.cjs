@@ -3950,6 +3950,13 @@ function historicalBookkeepingPins(worktreePath) {
 }
 
 const PROVENANCE_MEMBER_PATH = /^\.planning\/graph\/provenance\/[A-Za-z0-9_.-]+\.json$/;
+const PROVENANCE_NOISE_NAMES = new Set(['.DS_Store', '.gitkeep']);
+const PROVENANCE_STAGING_NAME = /^[A-Za-z0-9_.-]+\.json\.[0-9]+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/;
+// @invariant: only a regular file with a known noise or staging name is inert; it is never read, adopted or pinned.
+function provenanceInert(directory, name) {
+  if (!PROVENANCE_NOISE_NAMES.has(name) && !PROVENANCE_STAGING_NAME.test(name)) return false;
+  try { return fs.lstatSync(path.join(directory, name)).isFile(); } catch { return false; }
+}
 const LEGACY_BOOKKEEPING_FIELD = 'legacy_bookkeeping';
 const LEGACY_BOOKKEEPING_SCHEMA = 'shipyard.legacy-bookkeeping.v1';
 const LEGACY_BOOKKEEPING_VERSION = 1;
@@ -4001,6 +4008,7 @@ function classifyLegacyProvenance(worktreePath) {
     unsafe('.planning/graph/provenance', 'provenance directory is not a physical directory');
   else if (directoryStat) {
     for (const name of fs.readdirSync(directory).sort()) {
+      if (provenanceInert(directory, name)) continue;
       const relative = '.planning/graph/provenance/' + name;
       if (!PROVENANCE_MEMBER_PATH.test(relative)) { unsafe(relative, 'member name is not allowed'); continue; }
       const file = path.join(directory, name), stat = fs.lstatSync(file);
@@ -4114,7 +4122,8 @@ function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning
       if (!fs.existsSync(provenance)) return [];
       const stat = fs.lstatSync(provenance);
       if (stat.isSymbolicLink() || !stat.isDirectory()) fail('ARCHIVE_AUTHORITY_INVALID', 'host bookkeeping directory is not physical');
-      return fs.readdirSync(provenance).map(name => '.planning/graph/provenance/' + name).sort();
+      return fs.readdirSync(provenance).filter(name => !provenanceInert(provenance, name))
+        .map(name => '.planning/graph/provenance/' + name).sort();
     };
     const authenticatedPaths = previous.map(pin => pin.path);
     const unknownMember = inventory().find(relative => !authenticatedPaths.includes(relative) && !legacyPaths.has(relative));
@@ -6397,6 +6406,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   assertArchiveInventory,
   historicalBookkeepingPins,
   classifyLegacyProvenance,
+  provenanceInert,
   legacyBookkeepingMembers,
   LEGACY_BOOKKEEPING_FIELD,
   LEGACY_BOOKKEEPING_SCHEMA,
