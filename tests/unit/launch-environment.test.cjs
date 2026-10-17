@@ -245,14 +245,16 @@ describe('classifyLaunch', () => {
     assert.equal(classifyLaunch({ status: 2, stderr: 'hint[BUSY]' }, undefined).kind, 'refused');
   });
 
-  it('maps the archive authority wording to ARCHIVE_AUTHORITY_INVALID', () => {
-    for (const stderr of ['archive authority key is malformed', 'archive authority changed while reading']) {
+  it('counts only a printed hint label, never raw error wording', () => {
+    for (const stderr of ['archive authority key is malformed', 'archive authority changed while reading', 'hint[UNKNOWN]: x']) {
       const outcome = classifyLaunch({ status: 1, stderr }, []);
-      assert.equal(outcome.kind, 'refused', stderr);
-      assert.deepEqual(outcome.labels, ['ARCHIVE_AUTHORITY_INVALID']);
+      assert.equal(outcome.kind, 'unclassified', stderr);
+      assert.deepEqual(outcome.labels, []);
+      assert.equal(outcome.terminal, null);
     }
-    const once = classifyLaunch({ status: 1, stderr: 'hint[ARCHIVE_AUTHORITY_INVALID] key is malformed' }, []);
-    assert.deepEqual(once.labels, ['ARCHIVE_AUTHORITY_INVALID']);
+    const named = classifyLaunch({ status: 1, stderr: 'hint[ARCHIVE_AUTHORITY_INVALID] key is malformed' }, []);
+    assert.equal(named.kind, 'refused');
+    assert.deepEqual(named.labels, ['ARCHIVE_AUTHORITY_INVALID']);
   });
 
   it('leaves every other outcome unclassified with a reason', () => {

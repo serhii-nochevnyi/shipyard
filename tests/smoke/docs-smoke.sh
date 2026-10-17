@@ -107,7 +107,14 @@ grep -qE '^test-installed-launch:' Makefile || fail "Makefile misses test-instal
 if grep -nE 'still needs `?SHIPYARD_CODEX_CAPABILITIES_FILE' README.md; then
   fail "README says a dogfood launch needs SHIPYARD_CODEX_CAPABILITIES_FILE"
 fi
-[[ "$(grep -c 'SHIPYARD_CODEX_CAPABILITIES_FILE' README.md)" -le 2 ]] || fail "README must give one account of Codex capability evidence"
+launch_section="$(awk '/^### Launch and upgrade$/{on=1; next} on && /^#+ /{exit} on' README.md)"
+[[ -n "$launch_section" ]] || fail "README Launch and upgrade section is empty"
+grep -qE 'needs neither `CODEX_HOME` nor `SHIPYARD_CODEX_CAPABILITIES_FILE`' <<<"$launch_section" \
+  || fail "Launch and upgrade must say a launch needs no exported CODEX_HOME or capability path"
+grep -qE 'SHIPYARD_CODEX_CAPABILITIES_FILE`?\. This is the only case that does' <<<"$launch_section" \
+  || fail "Launch and upgrade must name the single remaining case that needs SHIPYARD_CODEX_CAPABILITIES_FILE"
+[[ "$(grep -c 'This is the only case that does' <<<"$launch_section")" -eq 1 ]] \
+  || fail "Launch and upgrade must name exactly one remaining case"
 
 grep -q 'make test-fast-rest' .github/workflows/test.yml || fail "CI must run the non-unit part of make test-fast"
 grep -q 'UNIT_SHARD' .github/workflows/test.yml || fail "CI must run the sharded unit suite"
