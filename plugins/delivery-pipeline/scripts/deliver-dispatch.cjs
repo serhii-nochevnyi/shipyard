@@ -21,6 +21,9 @@ const modelPolicy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const runWaker = require('./run-waker.cjs');
 const overhead = require('./orchestration-overhead.cjs');
+const { repositoryIdentity } = require('./architecture-target.cjs');
+const { preflight, emitPreflight, launchEnvironment, resolveHostEnvironment } = require('./runtime-context.cjs');
+const { formatHint } = require('./refusal-hints.cjs');
 
 const ROLE_BUCKETS = Object.freeze({
   executor: Object.freeze(['execute']),
@@ -251,7 +254,7 @@ function spawnDetached({ dir, dispatchId, hostScript, hostArgs, worktreePath, gr
       cwd: worktreePath,
       detached: true,
       stdio: ['ignore', outFd, errFd],
-      env: { ...process.env, ...(options.env || {}), SHIPYARD_GRAPH_DIR: graphDir },
+      env: launchEnvironment(options.launchResolved || null, { ...process.env, ...(options.env || {}), SHIPYARD_GRAPH_DIR: graphDir }),
     });
   } finally {
     fs.closeSync(outFd);
@@ -327,6 +330,20 @@ async function launch(argv, options = {}) {
   if (!isActionable) fail('NOT_ACTIONABLE', `${args.ticket} is not actionable for role ${args.role}`);
 
   const projectRoot = path.resolve(graphDir, '..', '..');
+  const launchEnv = { ...process.env, ...(options.env || {}), SHIPYARD_GRAPH_DIR: graphDir };
+  const scriptDir = options.hostScriptDir || __dirname;
+  const gate = preflight({
+    host: 'deliver-dispatch.cjs', runtime: args.runtime, scriptDir, worktree: worktreePath,
+    scope: 'launch', graphDir, env: launchEnv,
+  });
+  if (!gate.ok) {
+    emitPreflight(gate, { stdout: { write() {} }, stderr: options.preflightStderr || process.stderr });
+    fail('PREFLIGHT_REFUSED', `preflight refused the launch with ${gate.findings.length} incompatibilities`);
+  }
+  let launchResolved = null;
+  try { launchResolved = resolveHostEnvironment({ scriptDir, runtime: args.runtime, env: launchEnv, flags: {} }); }
+  catch { launchResolved = null; }
+  options = { ...options, launchResolved };
   const { dispatchId, dir } = prepareDispatchDir(options);
 
   if (args.role === 'pr-sentinel') {
@@ -802,15 +819,6 @@ function linkedAdrPlanningSources(projectRoot, problemSource, inputId) {
   return [planningSource(projectRoot, relative)];
 }
 
-function planningRepository(projectRoot) {
-  try {
-    const remote = git(projectRoot, ['config', '--get', 'remote.origin.url']);
-    const github = remote.match(/(?:github\.com[:/])([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
-    if (github) return github[1].toLowerCase();
-  } catch { /* A local fixture or target project may not have an origin. */ }
-  return projectRoot;
-}
-
 function planningSourceRevision(projectRoot) {
   try { return git(projectRoot, ['rev-parse', '--verify', 'HEAD^{commit}']); }
   catch { buildFail('sourceRevision', 'planning source revision cannot be resolved'); }
@@ -908,7 +916,7 @@ function buildPlanningRequest(args, options) {
     const requiredPaths = new Set(requiredRefs.map((source) => source.path));
     const optionalRefs = sourceRefs.filter((source) => !requiredPaths.has(source.path));
     const prompt = planningPrompt({ operation: 'research', inputId: args.ticket, sourceRefs });
-    const repository = planningRepository(context.projectRoot);
+    const repository = repositoryIdentity(context.projectRoot);
     const sourceRevision = planningSourceRevision(context.projectRoot);
     const refs = packetSourceRefs(context, sourceRefs);
     const lines = RESEARCH_LINE_IDS.map((id) => ({
@@ -1013,7 +1021,7 @@ function buildPlanningRequest(args, options) {
     validateBuildRequest(args.role, (value) => claudeDecomposeHost.canonicalRequest(value), request);
     return request;
   }
-  const repository = planningRepository(context.projectRoot);
+  const repository = repositoryIdentity(context.projectRoot);
   const sourceRevision = planningSourceRevision(context.projectRoot);
   const refs = packetSourceRefs(context, sourceRefs);
   const subject = `phase=${args.phase};input=${args.ticket};repository=${repository}`;
@@ -1156,7 +1164,7 @@ function buildPhaseArchitectureRequest(args, options) {
   const state = stateRaw?.tickets || stateRaw;
   if (!object(state)) buildFail('state', 'canonical phase evidence is unavailable');
   const live = requireArchitectureTarget({ ...input, row, branch, stateRow: {} }, args, options);
-  const repository = fs.realpathSync(git(input.worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+  const repository = repositoryIdentity(input.worktree);
   const binding = require('./architecture-target.cjs').phaseBinding({ graph: input.graph, state,
     phase: args.phase, repository, repo, branch, pr: args.pr, head: live.headRefOid, base: live.baseRefOid });
   if (args.ticket !== binding.phase) buildFail('<phase>', 'phase selector must name its canonical directory');
@@ -1297,6 +1305,7 @@ module.exports = Object.freeze({
 if (require.main === module) {
   main().then((code) => { process.exitCode = code; }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
+    if (error && typeof error.code === 'string' && error.code !== 'PREFLIGHT_REFUSED') process.stderr.write(`${formatHint(error.code)}\n`);
     process.exitCode = error && error.exitCode === 2 ? 2 : 1;
   });
 }
