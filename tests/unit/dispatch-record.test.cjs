@@ -2628,6 +2628,29 @@ test('a legacy member named like a new dispatch id is refused and never stands i
   }
 }));
 
+test('a refused legacy collision leaves no in-flight row, adoption or catalogue behind', () => withAuthorityHome(() => {
+  for (const adopted of [false, true]) {
+    const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
+    try {
+      const authority = authorityModule();
+      legacySidecars(graph, ['legacy-a']);
+      if (adopted) authority.trustedBookkeepingMutation(project, () => {});
+      const storeFile = path.join(graph, 'dispatches.json');
+      const storeBefore = fs.existsSync(storeFile) ? fs.readFileSync(storeFile, 'utf8') : null;
+      const catalogue = path.join(authority.archiveAuthorityDirectory(project), 'catalogue.json');
+      const catalogueBefore = fs.existsSync(catalogue) ? fs.readFileSync(catalogue, 'utf8') : null;
+      let failure;
+      try { recordInflight(admission(graph, project, 'legacy-a')); } catch (error) { failure = error; }
+      assert.equal(failure && failure.code, 'LEGACY_HISTORY_COLLISION', `adopted=${adopted}`);
+      const storeAfter = fs.existsSync(storeFile) ? fs.readFileSync(storeFile, 'utf8') : null;
+      assert.equal(storeAfter, storeBefore, `adopted=${adopted}: dispatches.json is untouched`);
+      assert.ok(!storeAfter || !JSON.parse(storeAfter).inflight?.['legacy-a'], 'no in-flight row survives the refusal');
+      assert.equal(fs.existsSync(catalogue) ? fs.readFileSync(catalogue, 'utf8') : null, catalogueBefore,
+        `adopted=${adopted}: the refusal adopts nothing`);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+}));
+
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   if (value && typeof value === 'object') {
