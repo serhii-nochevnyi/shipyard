@@ -781,7 +781,7 @@ if (!CONFIG_REFUSAL && runtime === 'claude' && pipeline.fable === 'auto') {
 // unconditionally would put a Codex finding in front of every Claude delivery on
 // this host — a report nobody in that session can act on, which is how a report
 // teaches its reader to skip it.
-const codexConfig = path.join(process.env.CODEX_HOME || path.join(process.env.HOME || '', '.codex'), 'config.toml');
+const codexConfig = path.join(require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env: process.env }), 'config.toml');
 const codexDir = path.dirname(codexConfig);
 let codexToml = '';
 // ENOENT is silence, honestly: no config.toml yet is not a finding. Any other

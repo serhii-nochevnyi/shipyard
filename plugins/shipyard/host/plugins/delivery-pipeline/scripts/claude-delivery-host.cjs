@@ -18,6 +18,8 @@ const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { resolveBaseRef, resolveGraphDir } = require('./graph-dir.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
+const { formatHint } = require('./refusal-hints.cjs');
+const { preflight, emitPreflight } = require('./runtime-context.cjs');
 const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 
@@ -303,6 +305,18 @@ function canonicalBase(worktree, value, expected) {
   return resolved;
 }
 
+// @contract: once a primary parent is merged its merge destination is the canonical base; otherwise pr_base.
+function canonicalTicketBase(options, row, worktree) {
+  if (!row.primary_parent) return row.pr_base;
+  const state = readGraphFile(options, 'delivery-state.json', worktree);
+  const parent = state && state[row.primary_parent];
+  if (!object(parent) || parent.branch !== row.pr_base || parent.status !== 'merged') return row.pr_base;
+  if (typeof parent.merged_into !== 'string' || !parent.merged_into.trim()) {
+    reject(`primary parent ${row.primary_parent} is merged without a destination`);
+  }
+  return parent.merged_into;
+}
+
 function boardTicket(options, entry, row, worktree) {
   const state = readGraphFile(options, 'delivery-state.json', worktree);
   const board = state && state[entry.id];
@@ -411,7 +425,7 @@ function driftPreflight(options, entry, args) {
   const row = graphTicket(options, entry.id, worktree);
   canonicalPlan(options, row, entry);
   const base = entry.baseRef || args.baseRef;
-  canonicalBase(worktree, base, row.pr_base);
+  canonicalBase(worktree, base, canonicalTicketBase(options, row, worktree));
   return deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree });
 }
 
@@ -1037,12 +1051,31 @@ function createClaudeDeliveryHost(options = {}) {
 }
 
 function parseCli(argv) {
-  if (!Array.isArray(argv) || argv.length !== 4 || argv[0] !== '--workflow'
-      || argv[2] !== '--request-file' || !WORKFLOWS.includes(argv[1])
-      || typeof argv[3] !== 'string' || !argv[3]) {
-    reject('usage: claude-delivery-host.cjs --workflow <executors|fix-round|drift-gate|investigation-research> --request-file <json>');
-  }
-  return { workflow: argv[1], requestFile: argv[3] };
+  const usage = 'usage: claude-delivery-host.cjs [--preflight] [--workflow <executors|fix-round|drift-gate|investigation-research> --request-file <json>]';
+  if (!Array.isArray(argv)) reject(usage);
+  if (argv.length === 1 && argv[0] === '--preflight') return { preflightOnly: true };
+  const preflightOnly = argv[0] === '--preflight';
+  const rest = preflightOnly ? argv.slice(1) : argv;
+  if (rest.length !== 4 || rest[0] !== '--workflow'
+      || rest[2] !== '--request-file' || !WORKFLOWS.includes(rest[1])
+      || typeof rest[3] !== 'string' || !rest[3]) reject(usage);
+  return { workflow: rest[1], requestFile: rest[3], preflightOnly };
+}
+
+function launchPreflight(worktree, hostOptions, output) {
+  const stderr = hostOptions.stderr || process.stderr;
+  const result = preflight({
+    runtime: 'claude',
+    scriptDir: __dirname,
+    worktree,
+    graphDir: inflightGraphDir(hostOptions, worktree),
+    scope: 'launch',
+    host: 'claude-delivery-host.cjs',
+    env: hostOptions.preflightEnv || process.env,
+    probe: () => hostOptions.probe || probeClaudeRuntime({ env: process.env }),
+  });
+  emitPreflight(result, { stdout: output, stderr });
+  return result;
 }
 
 function readRequest(file) {
@@ -1110,13 +1143,23 @@ function cliDispatch(workflow, args) {
 }
 
 async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = process.stdout, hostOptions = {}) {
-  const { workflow, requestFile } = parseCli(argv);
-  const request = readRequest(requestFile);
+  const { workflow, requestFile, preflightOnly } = parseCli(argv);
   if (!object(hostOptions)) reject('CLI host options must be an object');
+  if (preflightOnly && !requestFile) {
+    return launchPreflight(fs.realpathSync(process.cwd()), hostOptions, output);
+  }
+  const request = readRequest(requestFile);
   const { hostScope } = validateRequest(workflow, request);
   const worktree = fs.realpathSync(hostScope.worktree);
   if (worktree !== hostScope.worktree || git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
     reject('CLI run scope must name the canonical repository root');
+  }
+  const checked = launchPreflight(worktree, hostOptions, preflightOnly ? output : { write() {} });
+  if (preflightOnly) return checked;
+  if (!checked.ok) {
+    const error = new Error(`claude-delivery-host: preflight found ${checked.findings.length} incompatibilities: ${checked.findings.map((item) => item.code).join(', ')}`);
+    error.code = checked.findings[0].code;
+    throw error;
   }
   const ownerId = `claude-cli-${crypto.randomUUID()}`;
   const dispatch = cliDispatch(workflow, request.args);
@@ -1174,8 +1217,11 @@ module.exports = Object.freeze({
 });
 
 if (require.main === module) {
-  runClaudeDeliveryCli().catch((error) => {
+  runClaudeDeliveryCli().then((result) => {
+    if (result && result.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
+  }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
+    process.stderr.write(`${formatHint(error && error.code)}\n`);
     process.exitCode = 1;
   });
 }
