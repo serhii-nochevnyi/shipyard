@@ -122,6 +122,16 @@ describe('host preflight', () => {
     assert.ok(aged.notes.some((n) => /runtime probe: not evaluated/.test(n.detail)));
   });
 
+  it('reports a home conflict once when the resolver and the probe both see it', () => {
+    const probe = mock.fn(() => ({ status: 'unavailable', reason: 'ENV_CONFLICT' }));
+    const layout = installedLayout();
+    const conflict = preflight(base(layout, { env: { CODEX_HOME: tmp('other') }, probe }));
+    assert.deepEqual(codes(conflict), ['ENV_CONFLICT']);
+    assert.equal(probe.mock.callCount(), 0);
+    const probed = preflight(base(layout, { probe }));
+    assert.deepEqual(codes(probed), ['ENV_CONFLICT']);
+  });
+
   it('refuses an installed bundle whose evidence file is missing', () => {
     const layout = installedLayout();
     fs.rmSync(path.join(layout.bundle, 'codex-capabilities.json'));
@@ -311,6 +321,7 @@ describe('host preflight', () => {
       capability_help_unavailable: 'RUNTIME_UNAVAILABLE',
       runtime_missing: 'RUNTIME_UNAVAILABLE',
       probe_failed: 'RUNTIME_UNAVAILABLE',
+      ENV_CONFLICT: 'ENV_CONFLICT',
     };
     for (const [reason, code] of Object.entries(table)) {
       assert.equal(probeReasonToCode(reason), code, reason);

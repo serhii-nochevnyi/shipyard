@@ -3748,11 +3748,15 @@ function parseCliArguments(argv) {
   return Object.freeze(values);
 }
 
-function emitProbeHint(probe) {
+function emitProbeHint(probe, vars) {
   if (!probe || probe.status !== 'unavailable') return;
   const { formatHint } = require('./refusal-hints.cjs');
+  const homes = {};
+  for (const key of ['explicit', 'bundle_value']) {
+    if (vars && typeof vars[key] === 'string' && vars[key]) homes[key] = vars[key];
+  }
   process.stderr.write(formatHint(probeReasonToCode(probe.reason),
-    { host: 'codex-delivery-host.cjs', reason: probe.reason }) + '\n');
+    { host: 'codex-delivery-host.cjs', reason: probe.reason, ...homes }) + '\n');
 }
 
 if (require.main === module) {
@@ -3769,7 +3773,7 @@ if (require.main === module) {
       reason: error.code || 'probe_failed',
       detail: error.message,
     }) + '\n');
-    emitProbeHint({ status: 'unavailable', reason: error.code || 'probe_failed' });
+    emitProbeHint({ status: 'unavailable', reason: error.code || 'probe_failed' }, error.vars);
     process.exitCode = 0;
   }
 }

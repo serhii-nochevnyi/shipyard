@@ -535,10 +535,11 @@ function preflightGraphDir(graphDir, worktree, env) {
 
 const CAPABILITY_PROBE_REASONS = new Set(['capability_evidence_missing', 'RUNTIME_CAPABILITY_MISSING']);
 
-// @contract: only absent capability evidence is a capability error; any other unavailable probe is RUNTIME_UNAVAILABLE.
+// @contract: absent capability evidence and a home conflict keep their own codes; any other probe reason is RUNTIME_UNAVAILABLE.
 function probeReasonToCode(reason) {
-  return CAPABILITY_PROBE_REASONS.has(String(reason === undefined || reason === null ? '' : reason))
-    ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
+  const text = String(reason === undefined || reason === null ? '' : reason);
+  if (text === 'ENV_CONFLICT') return 'ENV_CONFLICT';
+  return CAPABILITY_PROBE_REASONS.has(text) ? 'RUNTIME_CAPABILITY_MISSING' : 'RUNTIME_UNAVAILABLE';
 }
 
 function errorCode(error) {

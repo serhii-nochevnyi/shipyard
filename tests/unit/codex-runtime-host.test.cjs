@@ -604,8 +604,9 @@ test('installed bundle resolves its own evidence with an empty env and refuses a
     assert.equal(JSON.parse(conflict.stdout).status, 'unavailable');
     assert.equal(JSON.parse(conflict.stdout).reason, 'ENV_CONFLICT');
     assert.match(JSON.parse(conflict.stdout).detail, /disagrees/);
-    assert.match(conflict.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
-    assert.doesNotMatch(conflict.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
+    assert.match(conflict.stderr, /hint\[ENV_CONFLICT\]/);
+    assert.match(conflict.stderr, /CODEX_HOME=/);
+    assert.doesNotMatch(conflict.stderr, /hint\[RUNTIME_UNAVAILABLE\]|hint\[RUNTIME_CAPABILITY_MISSING\]/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
