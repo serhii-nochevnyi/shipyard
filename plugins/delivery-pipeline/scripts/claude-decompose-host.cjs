@@ -700,7 +700,8 @@ function writerPreflight(scope) {
 function launchPreflight(worktree, { stdout = { write() {} }, scope = 'launch', ...extra } = {}) {
   const result = preflight({
     runtime: 'claude', scriptDir: __dirname, worktree, graphDir: undefined, scope,
-    host: 'claude-decompose-host.cjs', env: process.env, probe: () => probeClaudeRuntime(),
+    host: 'claude-decompose-host.cjs', env: process.env,
+    probe: scope === 'environment' ? undefined : () => probeClaudeRuntime(),
     needsRepositoryIdentity: true, ...extra,
   });
   emitPreflight(result, { stdout, stderr: process.stderr });

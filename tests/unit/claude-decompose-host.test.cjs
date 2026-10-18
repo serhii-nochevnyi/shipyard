@@ -1172,14 +1172,25 @@ test('a launch whose preflight passes keeps preflight JSON off stdout', () => {
 test('recover --dispatch runs an environment preflight before it creates run-controller state', () => {
   const f = recoveryFixture('gsd-planner', { cli: true });
   try {
-    const env = hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config });
+    const env = { ...hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config }), CODEX_SANDBOX: 'seatbelt' };
     const result = require('node:child_process').spawnSync(process.execPath,
       [HOST_SCRIPT, 'recover', '--dispatch', f.dispatchId], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
     assert.equal(result.status, 1, result.stderr);
     assert.equal(result.stdout, '');
     assert.match(result.stderr, /^[A-Z_]+: preflight found/m);
-    assert.match(result.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.match(result.stderr, /hint\[AMBIGUOUS_RUNTIME\]/);
     assert.equal(fs.existsSync(path.join(f.store, 'recovery-runs')), false);
+  } finally { f.finish(); }
+});
+
+test('recover --dispatch does not probe the Claude CLI, which recovery never launches', () => {
+  const f = recoveryFixture('gsd-planner', { cli: true });
+  try {
+    const env = hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, 'recover', '--dispatch', f.dispatchId], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.match(result.stderr, /preflight: ok/, result.stderr);
+    assert.doesNotMatch(result.stderr, /RUNTIME_UNAVAILABLE|preflight found/, result.stderr);
   } finally { f.finish(); }
 });
 
