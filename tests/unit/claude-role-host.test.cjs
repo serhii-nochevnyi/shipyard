@@ -1016,6 +1016,39 @@ test('integrator judges the code diff without conveyor planning state', async ()
   }
 });
 
+function bulkSource(lines) {
+  return Array.from({ length: lines }, (_, index) => `${String(index).padStart(8, '0')} ${'x'.repeat(70)}\n`).join('');
+}
+
+test('integrator admits a role diff above the former 1 MiB bound', async () => {
+  const fixture = setupRepository('integrator', { sourceContent: bulkSource(14000) });
+  let launched;
+  try {
+    await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt) { launched = prompt; },
+    })).run(request(fixture));
+    const diff = packetFromPrompt(launched).role_context.combined_diff.content;
+    assert.ok(Buffer.byteLength(diff, 'utf8') > 1024 * 1024);
+    assert.ok(Buffer.byteLength(diff, 'utf8') <= 2 * 1024 * 1024);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('a 1.5 MB role diff passes the diff bound and meets only the integrator packet token bound', async () => {
+  const fixture = setupRepository('integrator', { sourceContent: bulkSource(18000) });
+  try {
+    await assert.rejects(
+      createClaudeRoleHost(hostOptions(fixture)).run(request(fixture)),
+      (error) => error.code === 'CONTEXT_PACKET_OVER_BOUND'
+        && error.message.includes('integrator context packet is')
+        && !error.message.includes('role diff exceeds'),
+    );
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
 test('integrator resolves a marker-matched merged PR on its recorded head branch', async () => {
   const fixture = setupRepository('integrator');
   let launched;
