@@ -231,3 +231,20 @@ test('hintForError names a script only when it implements --preflight', () => {
     assert.ok(render('deliver-dispatch.cjs', 'codex-delivery-host.cjs').includes('/scripts/codex-delivery-host.cjs --preflight'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('formatHint and renderRemedy with no host never print a placeholder script or a command naming one', () => {
+  const { renderRemedy } = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs');
+  let preflightCodes = 0;
+  for (const code of Object.keys(HINTS)) {
+    for (const rendered of [formatHint(code), formatHint(code, {}), formatHint(code, { bundle: '/b' }), renderRemedy(code)]) {
+      assert.doesNotMatch(rendered, /the host script/, code);
+      for (const found of rendered.matchAll(/\bnode (\S+)/g)) assert.match(found[1], /\.cjs$/, `${code}: ${rendered}`);
+    }
+    if (HINTS[code].remedy.includes('{host}')) {
+      preflightCodes += 1;
+      assert.match(formatHint(code), /the host you launched with --preflight/, code);
+      assert.ok(formatHint(code, { host: 'h.cjs', bundle: '/b' }).includes('node /b/scripts/h.cjs --preflight'), code);
+    }
+  }
+  assert.ok(preflightCodes >= 5);
+});

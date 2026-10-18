@@ -220,20 +220,32 @@ function fillText(text, vars, quoted = false) {
   });
 }
 
+const PREFLIGHT_COMMAND = 'node {bundle}/scripts/{host} --preflight';
+const UNNAMED_HOST_PREFLIGHT = 'the host you launched with --preflight';
+
+function hostNamed(vars) {
+  const host = vars && typeof vars === 'object' && Object.hasOwn(vars, 'host') ? vars.host : undefined;
+  return typeof host === 'string' && host !== '';
+}
+
+// @contract: with no host named, a remedy never prints a runnable-looking command for a placeholder script.
+function remedyText(entry, vars) {
+  return hostNamed(vars) ? entry.remedy : entry.remedy.split(PREFLIGHT_COMMAND).join(UNNAMED_HOST_PREFLIGHT);
+}
+
 function renderRemedy(code, vars) {
-  return fillText(hintFor(code).remedy, vars, true);
+  return fillText(remedyText(hintFor(code), vars), vars, true);
 }
 
 function formatHint(code, vars) {
   const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
   const entry = hintFor(code);
-  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(entry.remedy, vars, true)}`;
+  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(remedyText(entry, vars), vars, true)}`;
 }
 
 const PREFLIGHT_HOSTS = Object.freeze(['codex-delivery-host.cjs', 'codex-decompose-host.cjs', 'codex-planning-context-host.cjs',
   'claude-delivery-host.cjs', 'claude-role-host.cjs', 'claude-decompose-host.cjs', 'claude-investigation-host.cjs']);
 const DETAIL_TOKENS = Object.freeze(['pid', 'path', 'label', 'key', 'explicit', 'bundle_value']);
-const PREFLIGHT_COMMAND = 'node {bundle}/scripts/{host} --preflight';
 const DELIVERY_PREFLIGHT_PROSE = "the runtime's delivery host with --preflight (claude-delivery-host.cjs or codex-delivery-host.cjs in {bundle}/scripts)";
 const PLANNING_PATH_IN_MESSAGE = /(?:^|\s)(\.planning\/.*?)(?:: |$)/;
 
