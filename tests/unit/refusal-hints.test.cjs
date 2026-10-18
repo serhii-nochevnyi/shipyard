@@ -262,3 +262,12 @@ test('hintForError honours a refined remedy entry and keeps the error code as th
   assert.equal(hintForError({ code: 'RUNTIME_CAPABILITY_MISSING', details: { hint_code: '__proto__' } }),
     hintForError({ code: 'RUNTIME_CAPABILITY_MISSING' }));
 });
+
+test('an ENV_CONFLICT remedy tells a flag to be dropped and a variable to be unset', () => {
+  const flag = formatHint('ENV_CONFLICT', { explicit: '--agent-dir=/a', bundle_value: '/b' });
+  assert.match(flag, /Either drop the --agent-dir flag, or reinstall/);
+  assert.doesNotMatch(flag, /unset the variable|\{\w+\}/);
+  for (const vars of [{ explicit: 'CODEX_HOME=/a', bundle_value: '/b' }, {}, undefined]) {
+    assert.match(formatHint('ENV_CONFLICT', vars), /Either unset the variable, or reinstall/);
+  }
+});

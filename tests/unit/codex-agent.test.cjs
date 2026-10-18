@@ -372,7 +372,9 @@ test('an installed bundle supplies the agents dir and capability evidence with a
     fs.mkdirSync(other);
     const conflict = run({ PATH: process.env.PATH, GSD_RUNTIME: 'codex', CODEX_HOME: other });
     assert.notEqual(conflict.status, 0);
-    assert.match(conflict.stderr, /ENV_CONFLICT|disagrees/);
+    assert.match(conflict.stderr, /disagrees with the Codex home/);
+    assert.match(conflict.stderr, /Either unset the variable, or reinstall into the named home/);
+    assert.doesNotMatch(conflict.stderr, /\{\w+\}/);
   } finally { clean(f); fs.rmSync(layout.base, { recursive: true, force: true }); }
 });
 
@@ -398,7 +400,8 @@ test('an installed bundle refuses a disagreeing explicit agent dir or evidence f
     const disagreeingDir = run('--agent-dir', f.agentDir);
     assert.notEqual(disagreeingDir.status, 0);
     assert.match(disagreeingDir.stderr, /--agent-dir=.*disagrees with the agent directory/);
-    assert.match(disagreeingDir.stderr, /unset the variable, or reinstall into the named home/);
+    assert.match(disagreeingDir.stderr, /Either drop the --agent-dir flag, or reinstall into the named home/);
+    assert.doesNotMatch(disagreeingDir.stderr, /unset the variable/);
     assert.doesNotMatch(disagreeingDir.stderr, /generated agent/i);
   } finally { clean(f); fs.rmSync(layout.base, { recursive: true, force: true }); }
 });

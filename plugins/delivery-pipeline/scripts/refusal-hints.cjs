@@ -144,7 +144,7 @@ const HINTS = Object.freeze({
   }),
   ENV_CONFLICT: Object.freeze({
     hint: 'The environment names {explicit} but the installed bundle is {bundle_value}.',
-    remedy: `Either unset the variable, or reinstall into the named home (${UPGRADE}) so both agree.`,
+    remedy: `Either {fix}, or reinstall into the named home (${UPGRADE}) so both agree.`,
   }),
   BUNDLE_MANIFEST_INVALID: Object.freeze({
     hint: 'The installed bundle manifest is missing or invalid.',
@@ -217,9 +217,18 @@ function shellQuote(value) {
   return SAFE_SHELL_WORD.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+const EXPLICIT_FLAG = /^--([A-Za-z][\w-]*)=/;
+
+// @contract: the fix for a conflicting explicit setting names the flag to drop or the variable to unset.
+function conflictFix(supplied) {
+  const flag = typeof supplied.explicit === 'string' ? EXPLICIT_FLAG.exec(stripControl(supplied.explicit)) : null;
+  return flag ? `drop the --${flag[1]} flag` : 'unset the variable';
+}
+
 function fillText(text, vars, quoted = false) {
   const supplied = vars && typeof vars === 'object' ? vars : {};
   return text.replace(/\{(\w+)\}/g, (token, name) => {
+    if (name === 'fix') return conflictFix(supplied);
     const value = Object.hasOwn(supplied, name) ? supplied[name] : undefined;
     if (value !== undefined && value !== null && value !== '') {
       const clean = stripControl(value);
