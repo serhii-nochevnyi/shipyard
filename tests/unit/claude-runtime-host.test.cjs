@@ -647,6 +647,34 @@ test('typed GSD launch refuses a symlinked agent definition before spawning', as
   }
 });
 
+test('Claude capability refusals render a Claude-specific remedy, never the Codex capability file', async () => {
+  const { hintForError } = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-hint-'));
+  const launch = createClaudeCliLauncher({
+    scope: { ...SCOPE, worktree: root },
+    env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude') },
+    spawn: () => { throw new Error('unexpected spawn'); },
+  });
+  try {
+    const missing = await launch('check', { model: 'claude-opus-5-5', effort: 'low', gsd_role: 'gsd-plan-checker' }).catch((error) => error);
+    assert.equal(missing.code, 'RUNTIME_CAPABILITY_MISSING');
+    const agentHint = hintForError(missing, 'claude-role-host.cjs');
+    assert.match(agentHint, /^hint\[RUNTIME_CAPABILITY_MISSING\]: /);
+    assert.match(agentHint, /Install or update the GSD plugin/);
+    assert.doesNotMatch(agentHint, /SHIPYARD_CODEX_CAPABILITIES_FILE|codex plugin/);
+    for (const bad of [{ model: 'claude-nope-1', effort: 'low' }, { model: 'claude-opus-5-5', effort: 'nope' }]) {
+      const refused = await launch('check', bad).catch((error) => error);
+      assert.equal(refused.code, 'RUNTIME_CAPABILITY_MISSING');
+      const selectionHint = hintForError(refused, 'claude-role-host.cjs');
+      assert.match(selectionHint, /not one this Shipyard version supports/);
+      assert.match(selectionHint, /claude plugin update shipyard/);
+      assert.doesNotMatch(selectionHint, /SHIPYARD_CODEX_CAPABILITIES_FILE|codex plugin/);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('probe requires the scoped permission and sandbox CLI surface', () => {
   const calls = [];
   const result = probeClaudeRuntime({

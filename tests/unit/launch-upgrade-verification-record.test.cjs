@@ -103,3 +103,17 @@ test('UI-smoke driver check quotes its driver_check status and the producing env
   const status = /^Status: (\S+)/m.exec(text)[1];
   assert.strictEqual(status, quoted === 'found' ? 'closed' : 'limitation', 'status must follow the driver check');
 });
+
+test('the record cites source by name, never by line number', () => {
+  const text = fs.readFileSync(RECORD, 'utf8');
+  assert.doesNotMatch(text, /\.(?:cjs|sh|md)`?:\d+/, 'a file:line citation rots');
+  assert.doesNotMatch(text, /`:\d+(?:-\d+)?`/, 'a bare :line citation rots');
+});
+
+test('the UI-smoke section says the hermetic scenario cannot establish A7 on a real install', () => {
+  const text = sections().get(UI_HEADING).lines.join('\n');
+  assert.match(text, /driver-lookup plumbing/);
+  assert.match(text, /release's live receipt|release live receipt/);
+  assert.match(text, /A7/);
+  assert.doesNotMatch(text, /EPERM|executor sandbox/);
+});

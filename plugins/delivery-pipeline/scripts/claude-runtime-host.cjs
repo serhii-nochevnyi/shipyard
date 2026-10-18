@@ -60,6 +60,9 @@ function hostError(code, message, details = {}) {
   return error;
 }
 
+const GSD_AGENT_HINT = Object.freeze({ hint_code: 'CLAUDE_GSD_AGENT_UNAVAILABLE' });
+const SELECTION_HINT = Object.freeze({ hint_code: 'CLAUDE_SELECTION_UNSUPPORTED' });
+
 function fail(code, message, details = {}) {
   throw hostError(code, message, details);
 }
@@ -380,25 +383,25 @@ function gsdAgentDefinition(role, environment, configuredRoot, schema) {
     parent = fs.lstatSync(directory);
     stat = fs.lstatSync(file);
   } catch (error) {
-    fail('RUNTIME_CAPABILITY_MISSING', `GSD agent definition is unavailable: ${error.message}`);
+    fail('RUNTIME_CAPABILITY_MISSING', `GSD agent definition is unavailable: ${error.message}`, GSD_AGENT_HINT);
   }
   if (!parent.isDirectory() || parent.isSymbolicLink() || !stat.isFile() || stat.isSymbolicLink()
       || stat.size > 256 * 1024
       || fs.realpathSync(file) !== path.join(fs.realpathSync(directory), `${role}.md`)) {
-    fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition is not a bounded regular file');
+    fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition is not a bounded regular file', GSD_AGENT_HINT);
   }
   const raw = fs.readFileSync(file, 'utf8');
   const parts = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]+)$/.exec(raw);
-  if (!parts) fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition lacks frontmatter and prompt');
+  if (!parts) fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition lacks frontmatter and prompt', GSD_AGENT_HINT);
   const field = (name) => parts[1].split(/\r?\n/).find((line) => line.startsWith(`${name}: `))?.slice(name.length + 2).trim();
   if (field('name') !== role || !field('description') || !field('tools')) {
-    fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition has invalid identity or tools');
+    fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition has invalid identity or tools', GSD_AGENT_HINT);
   }
   const available = field('tools').split(',').map((item) => item.trim());
   const disallowed = (field('disallowedTools') || '').split(',').map((item) => item.trim());
   const allowed = ALLOWED_TOOLS.split(',').filter((tool) => available.includes(tool) && !disallowed.includes(tool));
   if (!allowed.includes('Bash') || !allowed.includes('Read') || !allowed.includes('Glob') || !allowed.includes('Grep')) {
-    fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition lacks required scoped tools');
+    fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition lacks required scoped tools', GSD_AGENT_HINT);
   }
   if (schema !== undefined) allowed.push('StructuredOutput');
   return Object.freeze({
@@ -706,8 +709,8 @@ function createClaudeCliLauncher(options = {}) {
       fail('INVALID_INPUT', 'archive authority paths are fixed by the trusted host');
     const model = text(launchOptions.model, 'model', 128);
     const effort = text(launchOptions.effort, 'effort', 32);
-    if (!Object.values(CLAUDE_MODEL_ALIASES).includes(model)) fail('RUNTIME_CAPABILITY_MISSING', `unsupported Claude model alias ${model}`);
-    if (!EFFORTS.includes(effort)) fail('RUNTIME_CAPABILITY_MISSING', `unsupported Claude effort ${effort}`);
+    if (!Object.values(CLAUDE_MODEL_ALIASES).includes(model)) fail('RUNTIME_CAPABILITY_MISSING', `unsupported Claude model alias ${model}`, SELECTION_HINT);
+    if (!EFFORTS.includes(effort)) fail('RUNTIME_CAPABILITY_MISSING', `unsupported Claude effort ${effort}`, SELECTION_HINT);
     const sessionId = text(launchOptions.session_id || launchOptions.sessionId || uuid(), 'session_id', 128);
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) {
       fail('INVALID_INPUT', 'session_id must be a UUID');

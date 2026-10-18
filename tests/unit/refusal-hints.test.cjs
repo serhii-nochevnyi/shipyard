@@ -184,6 +184,8 @@ test('capability, runtime-ambiguity and repository-identity remedies name the re
   assert.doesNotMatch(ambiguous, /Pass the runtime explicitly/);
   assert.match(ambiguous, /matching runtime's session/);
   assert.match(ambiguous, /unset the conflicting runtime marker named in the finding detail/);
+  assert.match(ambiguous, /no active runtime was found, run the host from inside the Claude or Codex session or set SHIPYARD_RUNTIME/);
+  assert.match(ambiguous, /If it names a conflict/);
   const identity = formatHint('REPOSITORY_IDENTITY_INVALID');
   assert.doesNotMatch(identity, /origin remote|unknown/);
   assert.match(identity, /common directory/);
@@ -230,4 +232,50 @@ test('hintForError names a script only when it implements --preflight', () => {
     }
     assert.ok(render('deliver-dispatch.cjs', 'codex-delivery-host.cjs').includes('/scripts/codex-delivery-host.cjs --preflight'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('formatHint and renderRemedy with no host never print a placeholder script or a command naming one', () => {
+  const { renderRemedy } = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs');
+  let preflightCodes = 0;
+  for (const code of Object.keys(HINTS)) {
+    for (const rendered of [formatHint(code), formatHint(code, {}), formatHint(code, { bundle: '/b' }), renderRemedy(code)]) {
+      assert.doesNotMatch(rendered, /the host script/, code);
+      for (const found of rendered.matchAll(/\bnode (\S+)/g)) assert.match(found[1], /\.cjs$/, `${code}: ${rendered}`);
+    }
+    if (HINTS[code].remedy.includes('{host}')) {
+      preflightCodes += 1;
+      assert.match(formatHint(code), /the host you launched with --preflight/, code);
+      assert.ok(formatHint(code, { host: 'h.cjs', bundle: '/b' }).includes('node /b/scripts/h.cjs --preflight'), code);
+    }
+  }
+  assert.ok(preflightCodes >= 5);
+});
+
+test('hintForError honours a refined remedy entry and keeps the error code as the label', () => {
+  for (const refined of ['CLAUDE_GSD_AGENT_UNAVAILABLE', 'CLAUDE_SELECTION_UNSUPPORTED']) {
+    assert.ok(Object.isFrozen(HINTS[refined]));
+    const text = hintForError({ code: 'RUNTIME_CAPABILITY_MISSING', details: { hint_code: refined } });
+    assert.match(text, /^hint\[RUNTIME_CAPABILITY_MISSING\]: .+ — remedy: .+$/);
+    assert.ok(text.includes(HINTS[refined].remedy.replace(/\$\{.*\}/, '')) || text.includes('Claude Code'), text);
+    assert.doesNotMatch(text, /SHIPYARD_CODEX_CAPABILITIES_FILE|codex plugin|the host script/);
+  }
+  assert.equal(hintForError({ code: 'RUNTIME_CAPABILITY_MISSING', details: { hint_code: 'NO_SUCH' } }),
+    hintForError({ code: 'RUNTIME_CAPABILITY_MISSING' }));
+  assert.equal(hintForError({ code: 'RUNTIME_CAPABILITY_MISSING', details: { hint_code: '__proto__' } }),
+    hintForError({ code: 'RUNTIME_CAPABILITY_MISSING' }));
+});
+
+test('an ENV_CONFLICT remedy tells a flag to be dropped and a variable to be unset', () => {
+  const flag = formatHint('ENV_CONFLICT', { explicit: '--agent-dir=/a', bundle_value: '/b' });
+  assert.match(flag, /Either drop the --agent-dir flag, or reinstall/);
+  assert.doesNotMatch(flag, /unset the variable|\{\w+\}/);
+  for (const vars of [{ explicit: 'CODEX_HOME=/a', bundle_value: '/b' }, {}, undefined]) {
+    assert.match(formatHint('ENV_CONFLICT', vars), /Either unset the variable, or reinstall/);
+  }
+});
+
+test('a supplied value that contains a template token is emitted as given and a missing value never leaves one', () => {
+  const given = formatHint('LEGACY_HISTORY_UNSAFE', { path: '.planning/{weird}/x.json' });
+  assert.ok(given.includes('history at .planning/{weird}/x.json cannot'), given);
+  for (const code of Object.keys(HINTS)) assert.doesNotMatch(formatHint(code, {}), /\{\w+\}/, code);
 });
