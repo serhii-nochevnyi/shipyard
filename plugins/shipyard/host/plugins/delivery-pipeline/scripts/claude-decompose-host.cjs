@@ -15,7 +15,7 @@ const { createRunScope } = require('./run-scope.cjs');
 const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
-const { resolveClaudeHome, preflight, emitPreflight } = require('./runtime-context.cjs');
+const { resolveClaudeHome, preflight, emitPreflight, stateRefusalOf } = require('./runtime-context.cjs');
 const { repositoryIdentity } = require('./architecture-target.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
@@ -692,15 +692,22 @@ function parseArguments(argv) {
 function writerPreflight(scope) {
   let phaseDir;
   try { phaseDir = phaseDirectory(scope.worktree, scope.phase); } catch { return {}; }
-  return { gsdRole: scope.role, phaseDir,
-    writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-      repository: scope.repository, privateRoots: [path.join(privateStore(scope), 'writer')] }) };
+  try {
+    return { gsdRole: scope.role, phaseDir,
+      writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+        repository: scope.repository, privateRoots: [path.join(privateStore(scope), 'writer')] }) };
+  } catch (error) {
+    const writerStateError = stateRefusalOf(error);
+    if (!writerStateError) throw error;
+    return { writerStateError };
+  }
 }
 
 function launchPreflight(worktree, { stdout = { write() {} }, scope = 'launch', ...extra } = {}) {
   const result = preflight({
     runtime: 'claude', scriptDir: __dirname, worktree, graphDir: undefined, scope,
-    host: 'claude-decompose-host.cjs', env: process.env, probe: () => probeClaudeRuntime(),
+    host: 'claude-decompose-host.cjs', env: process.env,
+    probe: scope === 'environment' ? undefined : () => probeClaudeRuntime(),
     needsRepositoryIdentity: true, ...extra,
   });
   emitPreflight(result, { stdout, stderr: process.stderr });
@@ -754,7 +761,17 @@ async function main(argv = process.argv.slice(2)) {
   const stat = fs.lstatSync(args.requestFile);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_PROMPT) refuse('INVALID_INPUT', 'request file is not bounded and regular');
   const request = JSON.parse(fs.readFileSync(args.requestFile, 'utf8'));
-  const scope = canonicalRequest(request);
+  let scope;
+  try { scope = canonicalRequest(request); } catch (error) {
+    if (!args.preflightOnly || error.code !== 'REPOSITORY_IDENTITY_INVALID') throw error;
+    // @contract: --preflight reports a path no identity can carry as a finding instead of throwing.
+    let worktree;
+    try { worktree = fs.realpathSync(request.worktree); } catch { throw error; }
+    const reported = launchPreflight(worktree, { stdout: process.stdout });
+    if (reported.ok) throw error;
+    process.exitCode = 1;
+    return;
+  }
   process.chdir(scope.worktree);
   const gateOptions = writerPreflight(scope);
   if (args.preflightOnly) {

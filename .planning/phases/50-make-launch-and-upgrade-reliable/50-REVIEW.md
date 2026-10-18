@@ -1,264 +1,212 @@
 ---
 phase: 50-make-launch-and-upgrade-reliable
-reviewed: 2026-10-17T00:00:00Z
+reviewed: 2026-10-18T00:00:00Z
 depth: deep
-iteration: 3
-files_reviewed: 37
+iteration: 4
+scope: "git diff 3d5c385c...b8b20168 (44 fix commits of review rounds 1-3), excluding plugins/shipyard and .planning"
+files_reviewed: 51
 files_reviewed_list:
-  - plugins/delivery-pipeline/scripts/runtime-context.cjs
-  - plugins/delivery-pipeline/scripts/refusal-hints.cjs
-  - plugins/delivery-pipeline/scripts/role-artifact.cjs
+  - README.md
+  - docs/audits/phase50/launch-upgrade-verification.md
   - plugins/delivery-pipeline/scripts/architecture-target.cjs
-  - plugins/delivery-pipeline/scripts/run-contract.cjs
-  - plugins/delivery-pipeline/scripts/planning-result-sealer.cjs
-  - plugins/delivery-pipeline/scripts/dispatch-record.cjs
-  - plugins/delivery-pipeline/scripts/dispatch-boundary.cjs
-  - plugins/delivery-pipeline/scripts/deliver-dispatch.cjs
-  - plugins/delivery-pipeline/scripts/codex-delivery-host.cjs
+  - plugins/delivery-pipeline/scripts/claude-decompose-host.cjs
+  - plugins/delivery-pipeline/scripts/claude-delivery-host.cjs
+  - plugins/delivery-pipeline/scripts/claude-investigation-host.cjs
+  - plugins/delivery-pipeline/scripts/claude-role-host.cjs
+  - plugins/delivery-pipeline/scripts/codex-agent.cjs
   - plugins/delivery-pipeline/scripts/codex-decompose-host.cjs
+  - plugins/delivery-pipeline/scripts/codex-delivery-host.cjs
+  - plugins/delivery-pipeline/scripts/codex-model-remap.cjs
+  - plugins/delivery-pipeline/scripts/codex-notify.cjs
   - plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs
   - plugins/delivery-pipeline/scripts/codex-runtime-host.cjs
-  - plugins/delivery-pipeline/scripts/codex-agent.cjs
-  - plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs
-  - plugins/delivery-pipeline/scripts/codex-model-remap.cjs
-  - plugins/delivery-pipeline/scripts/claude-delivery-host.cjs
-  - plugins/delivery-pipeline/scripts/claude-role-host.cjs
-  - plugins/delivery-pipeline/scripts/claude-decompose-host.cjs
-  - plugins/delivery-pipeline/scripts/claude-runtime-host.cjs
-  - plugins/delivery-pipeline/scripts/claude-investigation-host.cjs
-  - plugins/delivery-pipeline/scripts/session-observer.cjs
+  - plugins/delivery-pipeline/scripts/deliver-dispatch.cjs
+  - plugins/delivery-pipeline/scripts/dispatch-boundary.cjs
+  - plugins/delivery-pipeline/scripts/dispatch-record.cjs
   - plugins/delivery-pipeline/scripts/gsd-tune.cjs
-  - scripts/gen-codex-shipyard.cjs
-  - Makefile
-  - README.md
-  - CLAUDE.md
-  - .github/workflows/test.yml
-  - tests/smoke/claude-hook-smoke.sh
+  - plugins/delivery-pipeline/scripts/planning-result-sealer.cjs
+  - plugins/delivery-pipeline/scripts/refusal-hints.cjs
+  - plugins/delivery-pipeline/scripts/role-artifact.cjs
+  - plugins/delivery-pipeline/scripts/runtime-context.cjs
+  - plugins/delivery-pipeline/scripts/session-observer.cjs
   - tests/smoke/docs-smoke.sh
-  - tests/smoke/installed-launch-smoke.sh
   - tests/smoke/installed-launch/lib.cjs
   - tests/smoke/installed-launch/scenario-claude-no-env.cjs
-  - tests/smoke/installed-launch/scenario-codex-no-env.cjs
-  - tests/smoke/installed-launch/scenario-concurrency.cjs
   - tests/smoke/installed-launch/scenario-ui-smoke.cjs
-  - tests/smoke/installed-launch/scenario-upgrade-history.cjs
+  - tests/unit/architecture-target.test.cjs
+  - tests/unit/archive-lock-liveness.test.cjs
+  - tests/unit/claude-decompose-host.test.cjs
+  - tests/unit/claude-delivery-host.test.cjs
+  - tests/unit/claude-role-host.test.cjs
+  - tests/unit/codex-agent.test.cjs
+  - tests/unit/codex-decompose-host.test.cjs
+  - tests/unit/codex-delivery-host.test.cjs
+  - tests/unit/codex-planning-context-host.test.cjs
+  - tests/unit/codex-runtime-host.test.cjs
+  - tests/unit/configure-codex-notify.test.cjs
+  - tests/unit/deliver-dispatch.test.cjs
+  - tests/unit/dispatch-boundary.test.cjs
+  - tests/unit/dispatch-record.test.cjs
+  - tests/unit/gsd-tune.test.cjs
+  - tests/unit/host-preflight.test.cjs
+  - tests/unit/host-single-hint.test.cjs
+  - tests/unit/launch-environment.test.cjs
+  - tests/unit/legacy-bookkeeping-adoption.test.cjs
+  - tests/unit/planning-result-sealer.test.cjs
+  - tests/unit/refusal-hints.test.cjs
+  - tests/unit/session-observer.test.cjs
+  - tests/unit/subject-contract.test.cjs
+  - tests/unit/ui-smoke-record.test.cjs
 findings:
   critical: 0
-  warning: 6
-  info: 4
-  total: 10
+  warning: 8
+  info: 6
+  total: 14
 status: issues_found
 ---
 
-# Phase 50: Code Review Report (iteration 3)
+# Phase 50: Code Review Report (iteration 4)
 
-**Reviewed:** 2026-10-17
+**Reviewed:** 2026-10-18
 **Depth:** deep
-**Files Reviewed:** 37
+**Files Reviewed:** 51
 **Status:** issues_found
 
 ## Summary
 
-Reviewed `git diff origin/main...HEAD` at `02b29e12` in the epic-50-planning checkout, with the two earlier rounds' fixes treated as given. This round concentrated on interactions between the fixes and on regressions the fixes introduced.
+Scope was the 44 fix commits since `3d5c385c`. All 24 touched unit-test files and the docs smoke and the installed-launch smoke pass at `b8b20168` (run locally), so every finding below is a defect the existing tests do not catch; several are pinned by a test that was edited to match the new behaviour.
 
-Executed during review: `tests/smoke/installed-launch-smoke.sh` (all five scenarios pass), `tests/smoke/docs-smoke.sh` (passes), and eleven related unit files (`refusal-hints`, `runtime-context`, `host-preflight`, `host-single-hint`, `launch-environment*`, `legacy-*`, `planning-result-sealer`, `architecture-target`, `adoption-ordering`), all of which pass with the runtime markers unset. The defects below are therefore in paths the existing tests do not exercise. No Critical issue was found. Six Warnings and four Info items were confirmed by reading or running the code, and each one cites its evidence.
+No data-loss or authentication defect was found in the security-sensitive changes. I checked these specifically and found them sound: `provenanceInert` (names match the real `writeAtomic` temp `.<id>.json.<pid>.<uuid>.tmp.tmp-<pid>` and the staging name, `lstat().isFile()` guard, never read), `protectedRecordsWithoutKey` (never re-keys), the catalogue error mapping, the lock `lstat` race handling, `verifySealedLine` `acceptedRepositories` (only widens to forms of the same worktree), `legacyRepositoryForms` path forms, the `\x7f` repository class (a single definition), and `ticketFromContext` (consistent with `run-contract.normalizeTicketIdentity`, which allows whitespace only for `phase=` subjects).
 
-The five installed-launch scenarios were also read for reliability. Their assertions are real and none passes vacuously: the held-lock cases (1.5 s hold against a 5 s lock wait, 8 s hold for the refusal arm, 6 s margin, 120 s spawn timeout) leave workable margin, every `upgrade-history` case asserts byte identity and adoption state, and `ui-smoke` is a declared gap by design with a stub-driver control that does assert. The scenarios do not cover the Warnings below that concern upgrade-time repository forms (WR-03), provenance crash residue (WR-04) and a damaged authority namespace (WR-06).
-
-Themes:
-1. The refusal-hint layer is only fully correct on the preflight path. The host top-level handlers drop the variables the hints need.
-2. Preflight does not evaluate some conditions that its own hint catalogue, the writers or the README claim it covers (WR-02, WR-06).
-3. Three of the earlier fixes are narrower than the failure class they target: the legacy repository forms, the inert provenance names and the probe classification.
+The weaknesses are in the hint and preflight layer: a literal placeholder fallback that renders a non-existent command, hint codes that disagree with the real cause, preflights that report "ok" for launches that then refuse, and one inter-host inconsistency.
 
 ## Warnings
 
-### WR-01: Host top-level handlers call `formatHint(error.code)` without variables, so remedies print a non-runnable command and lose the known pid and path
+### WR-01: a hint rendered without a host prints the command `.../scripts/the host script --preflight`
 
-**File:** `plugins/delivery-pipeline/scripts/refusal-hints.cjs:186-195,210-221`; call sites `codex-decompose-host.cjs:1493`, `codex-delivery-host.cjs:3715`, `claude-delivery-host.cjs:1227`, `claude-role-host.cjs:1649`, `claude-decompose-host.cjs:771`, `claude-investigation-host.cjs:154`, `codex-planning-context-host.cjs:443`, `deliver-dispatch.cjs:1312`; error shape in `dispatch-boundary.cjs:1010-1016`
-
-**Issue:** The fix for unfilled `{placeholders}` added fallbacks. The `host` fallback is the prose `the host script`, and it is substituted unquoted into a command. Every host `main().catch` handler calls `formatHint(error && error.code)` with no vars.
-
-- Errors raised through `boundaryError`, which includes everything `role-artifact.cjs` raises via `fail()`, carry `error.details`, not `error.vars`. Only `HostEnvironmentError` and the `codex-agent` `ENV_CONFLICT` carry `vars`.
-- The hosts never pass `error.details` or `error.vars` to `formatHint` in any case.
-
-Reproduced:
+**File:** `plugins/delivery-pipeline/scripts/refusal-hints.cjs:187` (fallback), callers `plugins/delivery-pipeline/scripts/gsd-tune.cjs:804` and `plugins/delivery-pipeline/scripts/session-observer.cjs:302-303` (reached from `codex-notify.cjs:28-29`)
+**Issue:** `TOKEN_FALLBACKS.host` is the literal `'the host script'`. `hintForError` was fixed to avoid it, but `formatHint` still substitutes it, and two of the new refusal channels call `formatHint(error.code, error.vars)` with no `host`. `BUNDLE_MANIFEST_INVALID` and `CAPABILITY_EVIDENCE_STALE` (raised by `resolveHostEnvironment` with no vars) both contain `node {bundle}/scripts/{host} --preflight`. Reproduced on an installed fixture whose `codex-capabilities.json` was removed:
 
 ```
-formatHint('INVALID_STORE', {})   // and ARCHIVE_AUTHORITY_INVALID, BUNDLE_MANIFEST_INVALID, CAPABILITY_EVIDENCE_STALE, RUNTIME_UNAVAILABLE
--> remedy: Run node /…/plugins/delivery-pipeline/scripts/the host script --preflight and report its output
+$ node codex-home/shipyard/scripts/gsd-tune.cjs --global --runtime codex --json   (blocker "why")
+hint[CAPABILITY_EVIDENCE_STALE]: ... then run node /private/tmp/.../codex-home/shipyard/scripts/the host script --preflight.
+$ node codex-home/shipyard/scripts/codex-notify.cjs '{"cwd":"..."}'   (stderr, every turn end)
+hint[CAPABILITY_EVIDENCE_STALE]: ... node /private/tmp/.../scripts/the host script --preflight.
 ```
+The tests that were meant to prevent this do not: `refusal-hints.test.cjs` "hintForError names a script only when it implements --preflight" only exercises `hintForError`; `host-preflight.test.cjs` "never leaves a raw placeholder" only asserts the absence of `{...}`, which the fallback satisfies; `gsd-tune.test.cjs` and `session-observer.test.cjs` assert the placeholder check only for `ENV_CONFLICT`, whose remedy has no `{host}`, and only assert the code for the stale case.
+**Fix:** make the unspecified-host case produce the same prose as `hintForError` (move the `PREFLIGHT_COMMAND` to `DELIVERY_PREFLIGHT_PROSE` rewrite into `fillText`/`formatHint` so no caller can skip it), or at minimum give `TOKEN_FALLBACKS.host` a real default (`codex-delivery-host.cjs`) and have gsd-tune and session-observer pass `{ host: 'codex-delivery-host.cjs', ...error.vars }`. Add `assert.doesNotMatch(text, /the host script/)` to the placeholder test over every code, and a stale-evidence case to the gsd-tune and session-observer tests.
 
-Pasting that runs `node …/scripts/the` with extra arguments and fails with "Cannot find module". Other hints degrade the same way:
+### WR-02: an ENV_CONFLICT in the Codex capability probe is reported as `RUNTIME_UNAVAILABLE`, and a test pins the wrong label
 
-- `ARCHIVE_AUTHORITY_BUSY` renders "owner pid unknown", although `role-artifact.cjs:4217-4223` computed the pid and put it in `details`.
-- `LEGACY_HISTORY_UNSAFE`, `LEGACY_HISTORY_CHANGED` and `LEGACY_HISTORY_UNKNOWN_MEMBER`, raised by `refuseLegacyFinding` (`role-artifact.cjs:4076-4082`), render "the legacy history at an unreported path". The path is only in the message.
-- `ENV_CONFLICT` raised from `codex-agent` renders "names an explicitly named home … is a different home", because `error.vars` is dropped.
-
-So on the real refusal path of a launch, the hint contradicts what the earlier rounds intended. Only the preflight path (`emitPreflight`) is correct.
-
-The smoke tests mask this. `scenario-concurrency.cjs` asserts `/pid \d+/` in stderr, which the error message satisfies, while the hint printed beside it says "owner pid unknown". `scenario-upgrade-history.cjs` case 4 asserts only that the message names the file, while the hint says "unreported path".
-
-**Fix:** Give each host a single `printRefusalHint(error, host)` that calls `formatHint(error.code, { host: '<this host file>', ...(error.details || {}), ...(error.vars || {}) })`, and use it in all eight handlers. Make the `host` fallback command-safe by omitting the `--preflight` clause when no host is known. For example, make the remedy templates two-part (`Run node {bundle}/scripts/{host} --preflight` only when `host` is supplied). Alternatively fall back to a host that exists, such as `codex-delivery-host.cjs` or `claude-delivery-host.cjs`. Never substitute prose into a command position.
-
----
-
-### WR-02: `--preflight` reports `ok` for a repository whose path contains `;` or a control character, although every launch then refuses with `REPOSITORY_IDENTITY_INVALID`
-
-**File:** `plugins/delivery-pipeline/scripts/runtime-context.cjs:509-514,548-660` (no `repositoryIdentity` check); `architecture-target.cjs:93-103`; README "Launch and upgrade" ("collects every incompatibility")
-
-**Issue:** The new `repositoryIdentity` refuses real paths containing `;` or control characters. The refusal is raised from:
-
-- `claude-role-host.cjs` `canonicalWorktree`
-- `claude-decompose-host.cjs` `canonicalRequest`
-- `deliver-dispatch.cjs` `buildPlanningRequest` and `buildPhaseArchitectureRequest`
-- `role-artifact.cjs` `judgmentSubject`
-- `codex-planning-context-host.cjs` `waitRecorder`
-
-`LAUNCH_CODES` has a hint for `REPOSITORY_IDENTITY_INVALID`, but `PREFLIGHT_CODES` omits it and `preflight()` never calls `repositoryIdentity`. Reproduced in a temp repo at `…/semi;colon`:
+**File:** `plugins/delivery-pipeline/scripts/codex-runtime-host.cjs:196` (rethrow), `:3751-3756` and `:3761-3773` (CLI), `tests/unit/codex-runtime-host.test.cjs` (the "installed bundle resolves its own evidence ..." test, assertion `hint\[RUNTIME_UNAVAILABLE\]`)
+**Issue:** Round 3 made `probeCodexRuntime` rethrow `ENV_CONFLICT` instead of reporting `capability_evidence_missing`. The `--capability-only` CLI catches it and prints `reason: "ENV_CONFLICT"`, but `emitProbeHint` maps every reason other than two capability strings to `RUNTIME_UNAVAILABLE`. Reproduced (installed fixture, `CODEX_HOME=/tmp/elsewhere`):
 
 ```
-preflight({runtime:'claude', worktree, scope:'launch', …}) -> ok=true, findings=[], notes=[]
-repositoryIdentity(worktree)                               -> REPOSITORY_IDENTITY_INVALID
+{"status":"unavailable","reason":"ENV_CONFLICT","detail":"... CODEX_HOME=/tmp/elsewhere disagrees with the Codex home ..."}
+hint[RUNTIME_UNAVAILABLE]: The runtime this host needs is not reachable right now. — remedy: ... a missing CLI needs installing and authenticating ...
 ```
+The user is told the CLI is unreachable when the cause is an environment disagreement with a precise remedy (`ENV_CONFLICT`). The unit test was edited from `RUNTIME_CAPABILITY_MISSING` to `RUNTIME_UNAVAILABLE`, which asserts the wrong label rather than the right one.
+**Fix:** in `emitProbeHint` render a resolver code with its own hint and the error's vars, e.g. in the CLI catch call `formatHint(error.code, { host: 'codex-delivery-host.cjs', ...error.vars })` when `RESOLVER_CODES.includes(error.code)`; change the test to expect `hint[ENV_CONFLICT]` naming both values.
 
-The README promises that preflight is the check to run before launching and that it collects every incompatibility. For this condition it gives a false green. Because the preflight run is the gate in `deliver-dispatch launch` and in every host's launch gate, the launch is admitted past preflight and then fails mid-launch.
+### WR-03: `writerPreflight` swallows the refusals it exists to surface, so preflight reports ok while the launch refuses; the Claude variant behaves the opposite way
 
-**Fix:** Add a `repository identity` step to `preflight()` that calls `require('./architecture-target.cjs').repositoryIdentity(opts.worktree)` when `opts.worktree` is a string. Add `REPOSITORY_IDENTITY_INVALID` to `PREFLIGHT_CODES` and to the host-preflight test's code list. A step like this, consistent with the other steps, would be:
+**File:** `plugins/delivery-pipeline/scripts/codex-decompose-host.cjs:911-921` (and `codex-planning-context-host.cjs:318-322` which wraps it again), `plugins/delivery-pipeline/scripts/claude-decompose-host.cjs:692-698`
+**Issue:** The Codex `writerPreflight` wraps `phaseDirectory`, `defaultRunStoreDir` and `legacyPlanningWriterRoots` in one `try { ... } catch { return {}; }`. `legacyPlanningWriterRoots` throws `LEGACY_WRITER_STATE` (a `PREFLIGHT_CODES` member) for a symlink in the private Claude writer root, and `defaultRunStoreDir` throws `INVALID_STATE_DIR`. Both become `{}`, so `preflight()` never sees `gsdRole`, skips the "planning writer state" check, and adds no "not evaluated" note. Reproduced with a symlink under `~/.local/state/shipyard/claude-decompose/`: `writerPreflight(...)` returns `{}` while `legacyPlanningWriterRoots(...)` throws `LEGACY_WRITER_STATE: private Claude writer root has a symbolic link`. `--preflight` therefore prints `preflight: ok` and the real launch refuses. The Claude `writerPreflight` only guards `phaseDirectory`, and the inline spread in `codex-delivery-host.cjs:3512` has no guard at all; the same condition there escapes as a raw throw, so `--preflight` produces no report (read, not run). Three hosts, two behaviours. The launch side is confirmed: `codex-decompose-host.cjs:1369-1370` calls `assertNoLegacyPlanningWriter` with `legacyPlanningWriterRoots(...)` after the preflight, so the refusal does occur at launch.
+**Fix:** catch only the `phaseDirectory` failure (no phase directory means the check genuinely does not apply). For the rest, either let `preflight()` run the root enumeration inside its `run('planning writer state', ...)` wrapper (pass the inputs `{ worktree, phase, repository, privateRoots }` instead of the computed `writerRoots`), or convert the caught error into a `note('not-evaluated', ...)`/finding. Use the same shape for both hosts.
 
-```js
-run('repository identity', () => {
-  if (typeof opts.worktree === 'string' && opts.worktree) require('./architecture-target.cjs').repositoryIdentity(opts.worktree);
-});
-```
+### WR-04: `roleNeedsRepositoryIdentity` excludes `pr-sentinel`, but the Claude role host builds the repository identity for every role
 
----
-
-### WR-03: Resuming a research round started before the upgrade fails for repositories without a GitHub `origin`: the accepted legacy forms omit the old `projectRoot` form
-
-**File:** `plugins/delivery-pipeline/scripts/architecture-target.cjs:105-117`; callers `codex-delivery-host.cjs:1168-1169`, `claude-delivery-host.cjs:464-465`; old behaviour `git show origin/main:…/deliver-dispatch.cjs` `planningRepository` (lines 805-812)
-
-**Issue:** Before this phase, `planningRepository(projectRoot)` returned the lower-cased `owner/repo` only for a `github.com` origin. For every other repository it returned `projectRoot`, which `planningBuildContext` computed as `realpath(graphDir/../..)` (the project root that owns the graph, not necessarily the checkout the host runs in):
-
-- no remote at all
-- GitLab, Bitbucket or GitHub Enterprise
-- a local fixture
-
-`legacyRepositoryForms` reproduces only the GitHub branch. For any other repository, sibling research lines sealed before the upgrade carry `envelope.repository === <projectRoot>`. The new check is `repositories.has(envelope.repository)` with accepted values `[<realpath of .git>]` only. Reproduced for a repo with `origin = https://gitlab.example.com/team/proj.git`:
+**File:** `plugins/delivery-pipeline/scripts/runtime-context.cjs:555-560`, `plugins/delivery-pipeline/scripts/claude-role-host.cjs:182` (via `canonicalWorktree`, called for every role at `:904`), `tests/unit/host-preflight.test.cjs` ("refuses a path no identity subject can carry only for a launch that builds one")
+**Issue:** `IDENTITY_ROLES` is `research, decomposition, integrator, arch-review`. In `claude-role-host.cjs`, `canonicalWorktree` calls `repositoryIdentity(worktree)` unconditionally and `prepareInvocation` calls `canonicalWorktree` for `arch-review`, `integrator` and `pr-sentinel`. Reproduced in a clean git repo under `.../semi;colon` with the runtime probe injected:
 
 ```
-acceptedRepositoryValues(dir) -> ['/…/proj/.git']      // the old value '/…/proj' is absent
+role=pr-sentinel  -> preflight: ok
+                     THROWN REPOSITORY_IDENTITY_INVALID repository identity: path contains ";" or a control character
+role=integrator   -> preflight: 1 incompatibilities / hint[REPOSITORY_IDENTITY_INVALID]
 ```
+So a Claude pr-sentinel launch passes preflight and is then refused, which is exactly the false-green the `needsRepositoryIdentity` option was added to remove. The unit test asserts `launch('pr-sentinel').ok === true`, enshrining the wrong classification. (`host-single-hint.test.cjs` separately pins that `claude-role-host.cjs --preflight` with no request does not evaluate the identity; that is a deliberate contract and is not part of this finding.)
+**Fix:** when a request names a role, the Claude role host should pass `needsRepositoryIdentity: true` for every one of its `ROLES` (all three call `canonicalWorktree`); keep `roleNeedsRepositoryIdentity` for the Codex delivery host, whose roles differ. Replace the `pr-sentinel` assertion with a per-host expectation.
 
-So `verifySealedLine` refuses with `RESEARCH_VERIFY_IDENTITY_MISMATCH`. The earlier round's fix for "sealed under the old owner/repo form" covers only half of the old behaviour. A research round that spans the upgrade (the case this phase targets) is unrecoverable for those repositories without re-running research.
+### WR-05: `claude-decompose-host --preflight --request-file` throws instead of reporting for a repository path no launch can use; Codex reports it
 
-**Fix:** Accept the old `projectRoot` form as a legacy value whenever the origin is not a GitHub one. The old fallback applied only in that case. The value is `realpath(<graph dir>/../..)`, so the two hosts must derive it from the same graph project root they already resolve (`inflightGraphDir` in `codex-delivery-host.cjs`, `investigationProject` in `claude-delivery-host.cjs`), not from the worktree. The worktree top-level is a second, weaker candidate to add as well. For example, give `acceptedRepositoryValues(cwd, { graphProjectRoot })` an optional second argument:
-
-```js
-function legacyRepositoryForms(cwd, { graphProjectRoot } = {}) {
-  const forms = githubForms(cwd);               // today's behaviour
-  if (!forms.length) {                          // old fallback: projectRoot
-    for (const root of [graphProjectRoot, cwd]) if (root) forms.push(fs.realpathSync(root));
-  }
-  return [...new Set(forms)];
-}
-```
-
-Add unit cases with a GitLab origin and with no origin, including a graph whose project root differs from the worktree.
-
----
-
-### WR-04: The `writeAtomic` temp file in the provenance directory is not recognised as inert, so a crash residue blocks every later trusted mutation permanently
-
-**File:** `plugins/delivery-pipeline/scripts/role-artifact.cjs:3960-3966,4076-4082`; `dispatch-record.cjs:1592-1612`; `lock.cjs:422-433`
-
-**Issue:** The "stray provenance-directory files" fix recognises `<id>.json.<pid>.<uuid>.tmp` (`PROVENANCE_STAGING_NAME`), the name `writeProvenanceOnce` gives its staged file. But that staged file is written with `writeAtomic(staged, …)`, which itself creates `.<basename(staged)>.tmp-<pid>` in the same directory and then renames it. A process killed between the write and the rename leaves `.<id>.json.<pid>.<uuid>.tmp.tmp-<pid>`. Reproduced:
+**File:** `plugins/delivery-pipeline/scripts/claude-decompose-host.cjs:757` (`canonicalRequest` before any preflight), `:128-133` (identity moved out of the `SCOPE_MISMATCH` wrapper)
+**Issue:** `main()` calls `canonicalRequest(request)` before `launchPreflight`. With a `;` worktree path `canonicalRequest` now throws `REPOSITORY_IDENTITY_INVALID` (the wrapper that turned it into `SCOPE_MISMATCH` was removed in this round), so the `needsRepositoryIdentity: true` option passed on that path can never fire. Reproduced:
 
 ```
-provenanceInert(dir, 'T-1.json.<pid>.<uuid>.tmp')              -> true
-provenanceInert(dir, '.T-1.json.<pid>.<uuid>.tmp.tmp-<pid>')   -> false
+$ node claude-decompose-host.cjs --preflight --request-file req.json     (worktree .../semi;colon)
+REPOSITORY_IDENTITY_INVALID: repository identity: path contains ";" or a control character
+hint[REPOSITORY_IDENTITY_INVALID]: ...
+exit 1
 ```
+No `preflight:` header and no `shipyard.host-preflight.v1` JSON, contrary to README ("prints ... a `shipyard.host-preflight.v1` JSON result on stdout"). `codex-decompose-host.cjs --preflight` reports the same condition as a finding. `host-single-hint.test.cjs` omits `claude-decompose-host.cjs` from its identity cases, so this is untested.
+**Fix:** in preflight-only mode run `launchPreflight(request.worktree, { needsRepositoryIdentity: true, stdout: process.stdout })` before `canonicalRequest`, or catch `REPOSITORY_IDENTITY_INVALID` around `canonicalRequest` there and turn it into the report. Add the host to the identity test list.
 
-Such a file fails `PROVENANCE_MEMBER_PATH` (it does not end in `.json`), so `classifyLegacyProvenance` reports `LEGACY_HISTORY_UNSAFE` ("member name is not allowed"). `trustedBookkeepingMutation` then refuses every later mutation, and `inflightBookkeepingRequired` treats the state as `blocked`. The hint tells the user to "leave the history in place and report it … until the host that wrote it is updated". No remedy lets the user continue short of manually deleting the file.
+### WR-06: the Claude half of every "upgrade" remedy names `claude plugin install`, which is not the upgrade command
 
-The README says only that an orphaned `<id>.json.<pid>.<uuid>.tmp` staging file never blocks, so this is not a contradiction of the README. It is a gap in the fix: the residue that `writeAtomic` actually leaves on a crash is not the name the fix recognises.
+**File:** `plugins/delivery-pipeline/scripts/refusal-hints.cjs:7` (`UPGRADE`, interpolated into 8 remedies)
+**Issue:** Round 3 made every upgrade remedy read `Claude: claude plugin install shipyard@shipyard; Codex: codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard`. The verified core: the Codex half names a marketplace refresh and then the add, while the Claude half has no refresh step, and the Claude CLI has dedicated verbs for this that the hint does not use: `claude plugin update <plugin>` ("Update a plugin to the latest version (restart required to apply)") and `claude plugin marketplace update [name]`; `install` is documented only as "Install a plugin from available marketplaces". I did not run `install` against an installed plugin, so whether it refreshes a stale copy is unverified; if it does not, a user following the hint hits the same refusal again. README documents `claude plugin install` only as first-time setup (`README.md:35-37`) and has no Claude upgrade instructions, so the hint is the only guidance. `host-preflight.test.cjs` "words a Claude-reachable remedy for both hosts" pins the exact string.
+**Fix:** suggested wording, to be checked against the Claude CLI before adopting: `Claude: claude plugin marketplace update shipyard, then claude plugin update shipyard@shipyard (restart Claude Code); Codex: ...`. Update the pinning test and add the Claude upgrade steps to the README "Launch and upgrade" section. Hints reachable only on Codex (`ENV_CONFLICT`, `STALE_GENERATED_AGENT`) could keep the Codex half only.
 
-**Fix:** Extend the inert pattern to the real temp names (`writeAtomic`'s `^\.[A-Za-z0-9_.-]+\.tmp-[0-9]+$`, and the staged name), still requiring a regular file and still never reading or pinning it. Better, have `writeProvenanceOnce` publish with a single temp name that the pattern already covers, instead of nesting `writeAtomic`. Add a fixture with the nested name to `legacy-bookkeeping-adoption.test.cjs`.
+### WR-07: `codex-agent.cjs select` reports a `CODEX_HOME` conflict with no remedy, while `--agent-dir` gets one
 
----
-
-### WR-05: Probe failures are classified inconsistently, and an outdated Codex CLI is told to reinstall Shipyard instead of upgrading Codex
-
-**File:** `plugins/delivery-pipeline/scripts/runtime-context.cjs:611-620`; `codex-runtime-host.cjs:187-222,3750-3757,3760-3773`; `claude-role-host.cjs` `--capability-only` branch
-
-**Issue:**
-
-- **Misclassification.** `preflight()` maps a probe reason to `RUNTIME_CAPABILITY_MISSING` whenever the reason contains `capability`. `probeCodexRuntime` returns `runtime_capability_missing` and `capability_help_unavailable` when the installed Codex CLI lacks the required `exec` flags. Reproduced with a stub CLI whose `exec --help` lacks them: the finding is `RUNTIME_CAPABILITY_MISSING`, whose remedy says "Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall … or point SHIPYARD_CODEX_CAPABILITIES_FILE at an evidence file". That is the wrong remedy. The cause is the Codex CLI, so the user should upgrade or reinstall Codex.
-- **Inconsistent classifier.** `emitProbeHint` in `codex-runtime-host.cjs` uses a stricter test (`capability_evidence_missing` or `RUNTIME_CAPABILITY_MISSING` only). The same probe result therefore prints `RUNTIME_UNAVAILABLE` there and `RUNTIME_CAPABILITY_MISSING` in preflight.
-- **Swallowed environment errors.** `probeCodexRuntime` swallows every `capabilitiesFrom` error as `capability_evidence_missing`, including `ENV_CONFLICT`, `BUNDLE_MANIFEST_INVALID` and `CAPABILITY_EVIDENCE_STALE` raised by `resolveHostEnvironment`. The `--capability-only` CLI therefore never shows the specific `ENV_CONFLICT` hint.
-- **Circular remedy.** `emitProbeHint` passes `host: 'codex-runtime-host.cjs'`. The `RUNTIME_UNAVAILABLE` remedy then says to run `node …/codex-runtime-host.cjs --preflight`, a flag that script does not accept. Reproduced: `node codex-runtime-host.cjs --preflight` prints `unknown CLI argument "--preflight"` followed by the same hint again. An argument error (`reason: INVALID_INPUT`) is also hinted as "runtime not reachable".
-
-**Fix:**
-
-1. Define one `classifyProbe(reason, code)` in `runtime-context.cjs`, used by the preflight, by `emitProbeHint` and by the `claude-role-host` `--capability-only` branch. Map `capability_evidence_missing` and `RUNTIME_CAPABILITY_MISSING` to `RUNTIME_CAPABILITY_MISSING`. Map `runtime_capability_missing`, `capability_help_unavailable` and `runtime_missing` to `RUNTIME_UNAVAILABLE`, and give that hint a clause about upgrading the Codex CLI.
-2. In `probeCodexRuntime`, let a thrown error that has a code in `RESOLVER_CODES` surface as its own `reason`.
-3. Do not pass a host that has no `--preflight` into command hints. Use `codex-delivery-host.cjs` for the Codex probe CLI.
-
----
-
-### WR-06: A catalogue without its HMAC key is a note in `--preflight` but a refusal in every trusted mutation
-
-**File:** `plugins/delivery-pipeline/scripts/role-artifact.cjs:3972-3998` (`legacyAuthoritySide`, the `unreadable` mapping) against `authorityState` at `role-artifact.cjs:1074-1105`; consumer `runtime-context.cjs:626-631`
-
-**Issue:** `legacyAuthoritySide` classifies any error carrying a `syscall` as `unreadable`. In `authorityState` a missing `hmac.key` raises `ENOENT` from `authorityFile`'s `lstat`, so it takes that branch. `preflight()` turns `unreadable` into a not-evaluated note only. Yet `trustedBookkeepingMutation` (which calls `authorityState(worktree, true)`) refuses the identical state with `ARCHIVE_AUTHORITY_INVALID: existing protected records require their original authority key`. Reproduced with a `catalogue.json` and no `hmac.key`:
+**File:** `plugins/delivery-pipeline/scripts/codex-agent.cjs:296-299` (`agentDir: agentDirFrom(flags)` evaluated in `main()` outside `selectAgent`'s catch), `:221-228`, `:336-354`
+**Issue:** The remedy for `ENV_CONFLICT` is appended only inside `selectAgent`'s catch. `main()` evaluates `agentDirFrom(flags)` as an argument expression before `selectAgent` is entered, so a `HostEnvironmentError` from `resolveHostEnvironment` (the common case: `CODEX_HOME` disagrees) escapes without it. Reproduced on an installed fixture:
 
 ```
-preflight(...)                       -> ok=true, findings=[], notes=[legacy history: not evaluated, authority namespace unreadable (ENOENT)]
-trustedBookkeepingMutation(P, ...)   -> ARCHIVE_AUTHORITY_INVALID  existing protected records require their original authority key
+CODEX_HOME=/tmp/elsewhere codex-agent.cjs select executor
+codex-agent: runtime-context: CODEX_HOME=/tmp/elsewhere disagrees with the Codex home .../codex-home of the installed bundle that is running
+--agent-dir /tmp/elsewhere
+codex-agent: --agent-dir=/tmp/elsewhere disagrees ... Either unset the variable, or reinstall into the named home (Claude: ...) so both agree.
 ```
+The same conflict gets a remedy for one input and none for the other, and the remedy for the flag case says "unset the variable" although the offender is a flag. `codex-agent.test.cjs` covers the flag/option path only.
+**Fix:** compute `agentDir` inside the `try` (pass `flags` and let `selectAgentInternal` resolve it; `options.agentDir` is already honoured there), or wrap the whole of `main()`'s resolution in the same repair mapping. Reword the `ENV_CONFLICT` remedy to "unset the variable or flag".
 
-This is the same false-green class as WR-02, from the catalogue error-mapping fix. A damaged authority namespace (a deleted key beside a surviving catalogue) is exactly the condition the README lists under `ARCHIVE_AUTHORITY_INVALID`, and the preflight is meant to catch it before a launch.
+### WR-08: `RUNTIME_CAPABILITY_MISSING` raised by the Claude runtime host gets a Codex-capability remedy
 
-**Fix:** In `legacyAuthoritySide`, treat `ENOENT` on `hmac.key` while `catalogue.json` exists as `ARCHIVE_AUTHORITY_INVALID` (a finding), keeping `unreadable` for genuine permission or I/O errors such as `EACCES` and `EIO`. For example, check `fs.existsSync(path.join(directory, 'hmac.key'))` right after the catalogue `lstat` succeeds and set `side.finding` when the key is absent. Add a case to `host-preflight.test.cjs` and `scenario-upgrade-history.cjs`.
+**File:** `plugins/delivery-pipeline/scripts/refusal-hints.cjs` (`RUNTIME_CAPABILITY_MISSING`), thrown at `plugins/delivery-pipeline/scripts/claude-runtime-host.cjs:383-401`, `:709-710`, reached through the typed launch at `:734`
+**Issue:** Round 3 rewrote this remedy around Codex capability evidence: "Installed bundle: its capability evidence is missing or stale ... Source checkout or direct installer run: point `SHIPYARD_CODEX_CAPABILITIES_FILE` at a capability evidence file ... If the runtime CLI itself reports an unsupported option, upgrade that CLI instead." The Claude runtime host raises the same code for a missing or invalid GSD agent definition (`gsdAgentDefinition`) and for an unsupported Claude model alias or effort. A Claude launch that fails this way prints, via the host's top-level `hintForError(error)`, `hint[RUNTIME_CAPABILITY_MISSING]` with a remedy about a Codex environment variable that has no meaning on that host, and nothing about reinstalling GSD or fixing the agent definition. I confirmed the rendered text and the throw sites by reading and by `hintForError({ code: 'RUNTIME_CAPABILITY_MISSING' }, 'claude-delivery-host.cjs')`; I did not drive a Claude launch to the failure end to end. `host-preflight.test.cjs` "words a Claude-reachable remedy for both hosts" only checks that the upgrade sentence is present for both hosts, not that the remainder applies.
+**Fix:** give the Claude host its own code or sub-text (for example `GSD_AGENT_UNAVAILABLE`, remedy: reinstall the GSD plugin/runtime payload) or make the remedy host-conditional via `{host}`; keep the Codex wording on the Codex path only.
 
 ## Info
 
-### IN-01: `observeCodexNotify`'s refusal handling is unreachable in production
+### IN-01: `ui-smoke` no longer checks the real environment, so the declared-gap record is justified by a check that cannot find a driver
 
-**File:** `plugins/delivery-pipeline/scripts/session-observer.cjs:294-309`; `plugins/delivery-pipeline/scripts/codex-notify.cjs:26-29`
+**File:** `tests/smoke/installed-launch/scenario-ui-smoke.cjs:149-152` (`resolveFixtureRoots`), `README.md:219-222`
+**Issue:** The security fix correctly stops executing a driver found under the process `HOME`, but the roots are now only `fixture.home` and `fixture.codexHome`. The first `GAP` record then always reports `absent` with `candidate_roots` inside the temp fixture, while README still says the target "first checks whether a non-interactive driver of the GSD UI path exists". The found-branch is now covered only by the stub driver the scenario writes itself. The `driver_check` carried by the real record proves nothing about the host.
+**Fix:** reword the README sentence and the GAP reason to say the check is made against a hermetic fixture, or add a read-only discovery (existence of the verbs, no execution) against the real roots.
 
-**Issue:** The earlier session-observer crash fix changed `observeCodexNotify`. Nothing in production calls it: the only caller is `tests/unit/session-observer.test.cjs`. The actual Codex notify hook (`codex-notify.cjs`) was not changed and computes its home as `process.env.CODEX_HOME || path.resolve(__dirname, '..', '..')`. That value is installed-bundle-correct, but it bypasses `resolveCodexHome` and so never reports `ENV_CONFLICT`. The `{ refused: true, … }` return shape is dead code with a passing test.
+### IN-02: audit document line citations are stale at `b8b20168`
 
-**Fix:** Either route `codex-notify.cjs` through `resolveCodexHome` (and decide silently what a refusal means in a notify hook) or delete `observeCodexNotify`'s new branch and its test.
+**File:** `docs/audits/phase50/launch-upgrade-verification.md:25,30`
+**Issue:** The edit updated citations to `role-artifact.cjs:4195`, `:3960-3963`, `:3976-3980`, `:1089`, `refusal-hints.cjs:85-88`, but later commits moved them: `withArchiveAuthorityLock` is at `:4218`, the legacy constants at `:3978-3981`, the malformed-record refusal at `:4002`, the catalogue label at `:1098`/`:1114`, `ARCHIVE_AUTHORITY_BUSY` at `refusal-hints.cjs:87-90`. A reader following the evidence lands on unrelated code.
+**Fix:** cite symbols (function names, test titles) rather than line numbers, or regenerate the numbers as the last step.
 
-### IN-02: The installed-launch smoke hard-codes `PATH=/usr/bin:/bin` for git
+### IN-03: shared tables were introduced but not used by all consumers
 
-**File:** `tests/smoke/installed-launch/lib.cjs:153,244`; `tests/smoke/installed-launch/scenario-upgrade-history.cjs:12`
+**File:** `plugins/delivery-pipeline/scripts/runtime-context.cjs:568`, `plugins/delivery-pipeline/scripts/deliver-dispatch.cjs:28`, `plugins/delivery-pipeline/scripts/refusal-hints.cjs` (`PREFLIGHT_HOSTS`), `plugins/delivery-pipeline/scripts/conveyor-coverage.cjs:21`, `plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs:358`
+**Issue:** The runtime-to-delivery-host map exists twice (`DELIVERY_HOSTS` in `runtime-context.cjs`, re-declared inside `preflight()` on every call, and in `deliver-dispatch.cjs`) next to the third list `PREFLIGHT_HOSTS`. `GIT_SCOPE_KEYS` was exported from `architecture-target.cjs` and adopted by `codex-delivery-host.cjs`, but `conveyor-coverage.cjs` and `delivery-commit-finalizer.cjs` still carry their own copies of the same four keys. Adding a host or a scrubbed variable now needs several edits.
+**Fix:** export one `DELIVERY_HOSTS` from `refusal-hints.cjs` (or `runtime-context.cjs`) and one git-scrub helper; consume them everywhere.
 
-**Issue:** CLAUDE.md says `make test-fast` needs only the host shell and Node. `test-installed-launch` is now part of `TEST_FAST_REST`, and it fails with an opaque `assert.equal(result.status, 0)` on any host whose `git` is not under `/usr/bin` or `/bin` (Nix, some container images, Homebrew-only git). `hermeticGit` in `lib.cjs` already uses `process.env.PATH`, so the harness is inconsistent with itself.
+### IN-04: dead code left by the fixes
 
-**Fix:** Resolve `git` once through `process.env.PATH` (for example `command -v`) and pass its directory, or use the `PATH` that `hermeticGit` uses, in all three places. Fail early with a message that names the missing tool.
+**File:** `plugins/delivery-pipeline/scripts/codex-delivery-host.cjs:3397,3481,3514`; `plugins/delivery-pipeline/scripts/role-artifact.cjs:1109`; `plugins/delivery-pipeline/scripts/codex-runtime-host.cjs:3755`
+**Issue:** `runHostPreflight` now throws on any failing non-report preflight and returns `code: 0` otherwise, so `if (gate.code !== 0) return gate.result;` at `:3397` and `:3481`, and the `|| gate.code !== 0` at `:3514`, can never be true. `role-artifact.cjs:1109` repeats `!object(envelope.payload)` that the new check at `:1106` already made. `emitProbeHint` passes a `reason` token no remedy uses.
+**Fix:** delete the unreachable conditions and the unused var.
 
-### IN-03: Stale or divergent small details around the new whitespace and probe handling
+### IN-05: `AMBIGUOUS_RUNTIME` remedy refers to a marker the "no active runtime" variant does not name
 
-**File:** `plugins/delivery-pipeline/scripts/dispatch-boundary.cjs:1057`; `claude-delivery-host.cjs:1077`; `claude-role-host.cjs:1590`
+**File:** `plugins/delivery-pipeline/scripts/refusal-hints.cjs` (`AMBIGUOUS_RUNTIME`), `plugins/delivery-pipeline/scripts/runtime-context.cjs:230-233`
+**Issue:** The remedy says "unset the conflicting runtime marker named in the finding detail", but `AMBIGUOUS_RUNTIME` is also raised with detail `no active runtime; project-config-legacy, CODEX_HOME and defaultRuntime are compatibility-only`, where there is no conflicting marker to unset; the sentence then points at nothing.
+**Fix:** split into "if the detail names a conflicting marker, unset it; if it says no active runtime, run from a Claude or Codex session".
 
-**Issue:**
+### IN-06: the Codex delivery host writes preflight warnings without `stripControl`
 
-- `ticketFromContext` now accepts whitespace inside a parsed subject's repository field, but its refusal still says "whitespace-free string". That misdirects a user who passes an unparseable subject.
-- The Claude hosts' preflight probe is `() => hostOptions.probe || probeClaudeRuntime(…)`, so a function-valued `hostOptions.probe` is returned without being called and never evaluated. The Codex hosts handle both a function and a value.
-
-**Fix:** Reword the message ("whitespace-free, or a planning or review subject"). Use `typeof hostOptions.probe === 'function' ? hostOptions.probe() : hostOptions.probe || probeClaudeRuntime(…)` in both Claude hosts.
-
-### IN-04: Subjects are now built with a git-environment-scrubbed identity, but the readers that verify them are not scrubbed
-
-**File:** `plugins/delivery-pipeline/scripts/architecture-target.cjs:11-16,93-103`; readers `role-artifact.cjs:2811-2813` (`reviewGit`), `3699`, `3726`, `3798`
-
-**Issue:** `repositoryIdentity` deletes `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and `GIT_COMMON_DIR` before it asks git for the common directory, and the integrator subject is now built from it. The verifying side (`currentIntegrationVerdict` and its helpers) derives `common` through `reviewGit` and plain `execFileSync` calls that inherit the environment. If a launch runs with an inherited `GIT_DIR` (for example from a git hook), the writer and the reader can compute different identities for the same repository, and `subject.repository !== common` then skips every authenticated integrator record. This is read from the code only; I did not reproduce it.
-
-**Fix:** Route `reviewGit` and the other `git rev-parse --git-common-dir` calls in `role-artifact.cjs` through `require('./architecture-target.cjs').repositoryIdentity`, or give them the same `GIT_SCOPE_KEYS` scrub.
+**File:** `plugins/delivery-pipeline/scripts/codex-delivery-host.cjs:3380-3384` (the `result.ok` branch of `runHostPreflight`)
+**Issue:** `emitPreflight` now strips control characters from every detail so a value cannot forge a `preflight:` line (test "keeps a control character in a value from forging a preflight line"). The new quiet-success branch in `runHostPreflight` writes `preflight: warning[${warning.code}] ${warning.detail}` directly and bypasses that protection. Warning details today are file names bounded by `PROVENANCE_MEMBER_PATH` and CLI version strings, so the practical exposure is small, but the two paths now differ.
+**Fix:** reuse the emitter's `clean` helper (`stripControl`) here, or route the warnings through `emitPreflight` with a no-op stdout.
 
 ---
 
-_Reviewed: 2026-10-17_
+_Reviewed: 2026-10-18_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: deep_

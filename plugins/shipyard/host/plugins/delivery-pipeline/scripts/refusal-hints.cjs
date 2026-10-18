@@ -4,7 +4,9 @@ const path = require('node:path');
 
 const BUNDLE_ROOT = path.resolve(__dirname, '..');
 
-const UPGRADE = 'Claude: claude plugin install shipyard@shipyard; Codex: codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard';
+const CLAUDE_UPGRADE = 'claude plugin marketplace update shipyard, then claude plugin update shipyard and restart Claude Code';
+const CODEX_UPGRADE = 'codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard';
+const UPGRADE = `Claude: ${CLAUDE_UPGRADE}; Codex: ${CODEX_UPGRADE}`;
 
 const DEFAULT_ENTRY = Object.freeze({
   hint: 'The host refused the request for a reason this map does not name.',
@@ -92,6 +94,14 @@ const HINTS = Object.freeze({
     hint: 'The runtime host has no capability evidence for the requested selection.',
     remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). If the runtime CLI itself reports an unsupported option, upgrade that CLI instead. Then retry.`,
   }),
+  CLAUDE_GSD_AGENT_UNAVAILABLE: Object.freeze({
+    hint: 'The GSD agent definition for this role is missing, unreadable, or lacks the scoped tools the launch needs.',
+    remedy: 'Install or update the GSD plugin (gsd-core from open-gsd/gsd-core) with the Claude plugin manager, restart Claude Code, then re-run.',
+  }),
+  CLAUDE_SELECTION_UNSUPPORTED: Object.freeze({
+    hint: 'The Claude model or effort chosen for this launch is not one this Shipyard version supports.',
+    remedy: `Update Shipyard (${CLAUDE_UPGRADE}) so the plugin and the installed host agree, then re-run.`,
+  }),
   LEGACY_WRITER_STATE: Object.freeze({
     hint: 'A planning writer state file was written by an older layout.',
     remedy: `Upgrade the installed bundle (${UPGRADE}) and re-run.`,
@@ -102,7 +112,7 @@ const HINTS = Object.freeze({
   }),
   AMBIGUOUS_RUNTIME: Object.freeze({
     hint: 'More than one runtime was detected and the host cannot choose.',
-    remedy: "Run the host from the matching runtime's session, or unset the conflicting runtime marker named in the finding detail; an explicit runtime argument does not override a conflicting marker. Then re-run.",
+    remedy: "If the finding says no active runtime was found, run the host from inside the Claude or Codex session or set SHIPYARD_RUNTIME to claude or codex. If it names a conflict, run the host from the matching runtime's session or unset the conflicting runtime marker named in the finding detail; an explicit runtime argument does not override a conflicting marker. Then re-run.",
   }),
   INVALID_STORE: Object.freeze({
     hint: 'The run store content does not match the expected schema.',
@@ -134,7 +144,7 @@ const HINTS = Object.freeze({
   }),
   ENV_CONFLICT: Object.freeze({
     hint: 'The environment names {explicit} but the installed bundle is {bundle_value}.',
-    remedy: `Either unset the variable, or reinstall into the named home (${UPGRADE}) so both agree.`,
+    remedy: `Either {fix}, or reinstall into the named home (${UPGRADE}) so both agree.`,
   }),
   BUNDLE_MANIFEST_INVALID: Object.freeze({
     hint: 'The installed bundle manifest is missing or invalid.',
@@ -189,12 +199,11 @@ const TOKEN_FALLBACKS = Object.freeze({
   explicit: 'an explicitly named home',
   bundle_value: 'a different home',
   path: 'an unreported path',
-  label: 'unknown',
   key: 'the refused key',
   bundle: BUNDLE_ROOT,
 });
 
-// @invariant: a rendered hint never carries a raw placeholder or a control character.
+// @invariant: a rendered hint has no unfilled template token and no control character; supplied values stay as given.
 function stripControl(value) {
   return String(value).replace(CONTROL, '');
 }
@@ -207,9 +216,18 @@ function shellQuote(value) {
   return SAFE_SHELL_WORD.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+const EXPLICIT_FLAG = /^--([A-Za-z][\w-]*)=/;
+
+// @contract: the fix for a conflicting explicit setting names the flag to drop or the variable to unset.
+function conflictFix(supplied) {
+  const flag = typeof supplied.explicit === 'string' ? EXPLICIT_FLAG.exec(stripControl(supplied.explicit)) : null;
+  return flag ? `drop the --${flag[1]} flag` : 'unset the variable';
+}
+
 function fillText(text, vars, quoted = false) {
   const supplied = vars && typeof vars === 'object' ? vars : {};
   return text.replace(/\{(\w+)\}/g, (token, name) => {
+    if (name === 'fix') return conflictFix(supplied);
     const value = Object.hasOwn(supplied, name) ? supplied[name] : undefined;
     if (value !== undefined && value !== null && value !== '') {
       const clean = stripControl(value);
@@ -220,20 +238,32 @@ function fillText(text, vars, quoted = false) {
   });
 }
 
+const PREFLIGHT_COMMAND = 'node {bundle}/scripts/{host} --preflight';
+const UNNAMED_HOST_PREFLIGHT = 'the host you launched with --preflight';
+
+function hostNamed(vars) {
+  const host = vars && typeof vars === 'object' && Object.hasOwn(vars, 'host') ? vars.host : undefined;
+  return typeof host === 'string' && host !== '';
+}
+
+// @contract: with no host named, a remedy never prints a runnable-looking command for a placeholder script.
+function remedyText(entry, vars) {
+  return hostNamed(vars) ? entry.remedy : entry.remedy.split(PREFLIGHT_COMMAND).join(UNNAMED_HOST_PREFLIGHT);
+}
+
 function renderRemedy(code, vars) {
-  return fillText(hintFor(code).remedy, vars, true);
+  return fillText(remedyText(hintFor(code), vars), vars, true);
 }
 
 function formatHint(code, vars) {
   const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
   const entry = hintFor(code);
-  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(entry.remedy, vars, true)}`;
+  return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(remedyText(entry, vars), vars, true)}`;
 }
 
 const PREFLIGHT_HOSTS = Object.freeze(['codex-delivery-host.cjs', 'codex-decompose-host.cjs', 'codex-planning-context-host.cjs',
   'claude-delivery-host.cjs', 'claude-role-host.cjs', 'claude-decompose-host.cjs', 'claude-investigation-host.cjs']);
-const DETAIL_TOKENS = Object.freeze(['pid', 'path', 'label', 'key', 'explicit', 'bundle_value']);
-const PREFLIGHT_COMMAND = 'node {bundle}/scripts/{host} --preflight';
+const DETAIL_TOKENS = Object.freeze(['pid', 'path', 'key', 'explicit', 'bundle_value']);
 const DELIVERY_PREFLIGHT_PROSE = "the runtime's delivery host with --preflight (claude-delivery-host.cjs or codex-delivery-host.cjs in {bundle}/scripts)";
 const PLANNING_PATH_IN_MESSAGE = /(?:^|\s)(\.planning\/.*?)(?:: |$)/;
 
@@ -260,6 +290,13 @@ function errorVars(error) {
   return vars;
 }
 
+// @contract: an error may name a more specific remedy entry through details.hint_code; the printed code stays its own.
+function refinedCode(error) {
+  const bag = error && typeof error === 'object' ? error.details : undefined;
+  const refined = bag && typeof bag === 'object' ? bag.hint_code : undefined;
+  return typeof refined === 'string' && Object.hasOwn(HINTS, refined) ? refined : null;
+}
+
 function preflightHostName(host) {
   const candidate = host === undefined ? process.argv[1] : host;
   if (typeof candidate !== 'string' || !candidate) return null;
@@ -272,9 +309,14 @@ function hintForError(error, host) {
   const code = error && error.code;
   const vars = errorVars(error);
   const name = preflightHostName(host);
+  const override = refinedCode(error);
+  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
+  if (override) {
+    const refined = HINTS[override];
+    return `hint[${label}]: ${fillText(refined.hint, vars)} \u2014 remedy: ${fillText(refined.remedy, vars, true)}`;
+  }
   if (name) return formatHint(code, { ...vars, host: name });
   const entry = hintFor(code);
-  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
   const remedy = entry.remedy.split(PREFLIGHT_COMMAND).join(DELIVERY_PREFLIGHT_PROSE);
   return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(remedy, vars, true)}`;
 }

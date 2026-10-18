@@ -228,6 +228,15 @@ function selectAgent(role, options = {}) {
   }
 }
 
+// @contract: a refused installed-bundle environment prints its remedy from the command line too.
+function withEnvironmentRemedy(error) {
+  if (error && error.name === 'HostEnvironmentError') {
+    const repair = renderRemedy(error.code, error.vars);
+    if (!error.message.includes(repair)) error.message += '. ' + repair;
+  }
+  return error;
+}
+
 function launchAgent(role, options = {}) {
   const flags = options.flags || new Map();
   const selection = selectAgentInternal(role, { ...options, flags });
@@ -312,6 +321,7 @@ module.exports = Object.freeze({
 if (require.main === module) {
   try { main(); }
   catch (error) {
+    withEnvironmentRemedy(error);
     process.stderr.write('codex-agent: ' + error.message + '\n');
     process.exitCode = error.exitCode || 1;
   }

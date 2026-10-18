@@ -10,7 +10,7 @@ const {
   createCodexRuntimeHost, installedGsdAgent, normalizeScope, parseCodexStream, verifyCompletedNativeLaunch,
   probeCodexRuntime,
 } = require('./codex-runtime-host.cjs');
-const { preflight, emitPreflight, launchEnvironment, resolveHostEnvironment, resolveCodexHome } = require('./runtime-context.cjs');
+const { preflight, emitPreflight, launchEnvironment, resolveHostEnvironment, resolveCodexHome, stateRefusalOf } = require('./runtime-context.cjs');
 const { repositoryIdentity } = require('./architecture-target.cjs');
 const { launchAgent, selectAgent } = require('./codex-agent.cjs');
 const { createCodexDispatchAdapter } = require('./codex-dispatch-adapter.cjs');
@@ -915,7 +915,10 @@ function writerPreflight(options, scope, launch) {
     return { gsdRole: launch.gsd_role, phaseDir,
       writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
         repository: scope.repository, privateRoots: [path.join(hostStateDir, 'writer')] }) };
-  } catch { return {}; }
+  } catch (error) {
+    const writerStateError = stateRefusalOf(error);
+    return writerStateError ? { writerStateError } : {};
+  }
 }
 
 function runHostPreflight(options, { host, worktree, graphDir, kind = 'launch', stdout, ...extra }) {
