@@ -25,7 +25,7 @@ const {
 } = require('./conveyor-scratch.cjs');
 const { preflightRound } = require('./sentinel-preflight.cjs');
 const { repositoryIdentity, buildSubject } = require('./architecture-target.cjs');
-const { preflight, emitPreflight, probeReasonToCode, roleNeedsRepositoryIdentity } = require('./runtime-context.cjs');
+const { preflight, emitPreflight, probeReasonToCode } = require('./runtime-context.cjs');
 const { formatHint, hintForError } = require('./refusal-hints.cjs');
 
 const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
@@ -1576,7 +1576,7 @@ function parseCli(argv) {
   return Object.freeze(values);
 }
 
-function launchPreflight(worktree, hostOptions, output, role) {
+function launchPreflight(worktree, hostOptions, output) {
   const stderr = hostOptions.stderr || process.stderr;
   const graphDir = hostOptions.graphDir ? path.resolve(hostOptions.graphDir) : path.join(worktree, '.planning', 'graph');
   const result = preflight({
@@ -1585,7 +1585,8 @@ function launchPreflight(worktree, hostOptions, output, role) {
     worktree,
     graphDir,
     scope: 'launch',
-    needsRepositoryIdentity: roleNeedsRepositoryIdentity(role),
+    // @contract: every Claude role launch derives the canonical worktree identity, so preflight always checks it.
+    needsRepositoryIdentity: true,
     host: 'claude-role-host.cjs',
     env: hostOptions.preflightEnv || process.env,
     probe: () => (typeof hostOptions.probe === 'function' ? hostOptions.probe()
@@ -1612,7 +1613,7 @@ function runClaudeRoleCli(argv = process.argv.slice(2), output = process.stdout,
     request = parseRequest(readJsonFile(args.argsFile, 'args file', REQUEST_MAX_BYTES));
   }
   const checked = launchPreflight(request ? fs.realpathSync(request.worktree) : fs.realpathSync(process.cwd()), hostOptions,
-    args.preflight ? output : { write() {} }, request ? request.role : undefined);
+    args.preflight ? output : { write() {} });
   if (args.preflight) return checked;
   if (!checked.ok) {
     const error = new Error(`claude-role-host: preflight found ${checked.findings.length} incompatibilities: ${checked.findings.map((item) => item.code).join(', ')}`);

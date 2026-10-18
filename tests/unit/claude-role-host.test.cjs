@@ -1865,6 +1865,26 @@ test('role host --preflight exits by result and starts nothing', () => {
   } finally { cleanupRoleCli(fixture); }
 });
 
+test('role host preflight and launch refuse a pr-sentinel round on a path no identity can carry', () => {
+  const fixture = roleCliFixture();
+  try {
+    const moved = path.join(fixture.aux, 'semi;colon');
+    fs.renameSync(fixture.root, moved);
+    fixture.root = moved;
+    fs.writeFileSync(fixture.argsFile, JSON.stringify({ schema: REQUEST_SCHEMA, role: 'pr-sentinel',
+      worktree: moved, phase: '38-sentinel-role-test' }));
+    const check = spawnRoleHost(fixture, ['--preflight', '--args-file', fixture.argsFile]);
+    assert.equal(check.status, 1, check.stderr);
+    const payload = JSON.parse(check.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.deepEqual(payload.findings.map((finding) => finding.code), ['REPOSITORY_IDENTITY_INVALID']);
+    assert.match(check.stderr, /hint\[REPOSITORY_IDENTITY_INVALID\]/);
+    const launch = spawnRoleHost(fixture, ['--args-file', fixture.argsFile]);
+    assert.notEqual(launch.status, 0);
+    assert.match(launch.stderr, /preflight found 1 incompatibilities: REPOSITORY_IDENTITY_INVALID/);
+    assert.equal(launch.stdout, '');
+  } finally { cleanupRoleCli(fixture); }
+});
+
 test('role host --capability-only keeps exit 0 and stdout and adds a stderr hint when the probe is unavailable', () => {
   const fixture = roleCliFixture();
   try {

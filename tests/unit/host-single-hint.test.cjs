@@ -89,7 +89,7 @@ for (const host of HOSTS.filter((item) => item.file !== 'claude-investigation-ho
   });
 }
 
-for (const [file, runtime] of [['codex-delivery-host.cjs', 'codex'], ['claude-delivery-host.cjs', 'claude'], ['claude-role-host.cjs', 'claude']]) {
+for (const [file, runtime] of [['codex-delivery-host.cjs', 'codex'], ['claude-delivery-host.cjs', 'claude']]) {
   test(`${file} --preflight under a semicolon path does not evaluate the repository identity`, () => {
     const w = world(`no-identity-${file}`, 'semi;colon');
     const report = identityReport(run(file, ['--preflight'], w, runtime));
@@ -97,6 +97,13 @@ for (const [file, runtime] of [['codex-delivery-host.cjs', 'codex'], ['claude-de
     assert.equal(report.findings.some((finding) => finding.code === 'REPOSITORY_IDENTITY_INVALID'), false);
   });
 }
+
+test('claude-role-host.cjs --preflight under a semicolon path evaluates the identity every role launch derives', () => {
+  const w = world('bare-identity-claude-role-host', 'semi;colon');
+  const report = identityReport(run('claude-role-host.cjs', ['--preflight'], w, 'claude'));
+  assert.ok(report, 'a preflight report is printed');
+  assert.equal(report.findings.some((finding) => finding.code === 'REPOSITORY_IDENTITY_INVALID'), true);
+});
 
 function capabilityEvidence(file) {
   const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');

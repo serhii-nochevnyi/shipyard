@@ -555,7 +555,7 @@ function installedCodexCliVersion() {
 
 const IDENTITY_ROLES = new Set(['research', 'decomposition', 'integrator', 'arch-review']);
 
-// @contract: only the roles that build a subject from the repository identity need it to be representable.
+// @contract: the Codex delivery host checks the identity only for roles that build a subject from it.
 function roleNeedsRepositoryIdentity(role) {
   return IDENTITY_ROLES.has(role);
 }
