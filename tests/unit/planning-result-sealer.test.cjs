@@ -258,6 +258,24 @@ test('verifySealedLine refuses a manifest sealed under a different investigation
   } finally { fixture.clean(); }
 });
 
+test('verifySealedLine accepts a seal written under an accepted older repository form only when listed', () => {
+  const fixture = researchFixture();
+  try {
+    const sealed = sealFixtureLines(fixture);
+    const line = { id: 'system-state', artifact_ref: sealed.artifact_ref, artifact_digest: sealed.artifact_digest };
+    const scope = { ...verifyFixtureScope(fixture), repository: '/work/repo/.git' };
+    const mismatch = (error) => error.code === 'RESEARCH_VERIFY_IDENTITY_MISMATCH';
+    assert.throws(() => verifySealedLine({ root: fixture.archiveRoot, scope, line }), mismatch);
+    assert.throws(() => verifySealedLine({ root: fixture.archiveRoot, scope, line,
+      acceptedRepositories: ['/work/repo/.git', 'other/repo'] }), mismatch);
+    const verified = verifySealedLine({ root: fixture.archiveRoot, scope, line,
+      acceptedRepositories: ['/work/repo/.git', 'acme/shipyard'] });
+    assert.equal(verified.id, 'system-state');
+    assert.throws(() => verifySealedLine({ root: fixture.archiveRoot, scope, line, acceptedRepositories: 'acme/shipyard' }),
+      (error) => error.code === 'RESEARCH_VERIFY_SCOPE_INVALID');
+  } finally { fixture.clean(); }
+});
+
 function decompositionFixture(fileCount) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sealer-decompose-'));
   const worktree = fs.realpathSync(root);

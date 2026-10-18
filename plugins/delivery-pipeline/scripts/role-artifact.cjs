@@ -9,7 +9,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { acquire } = require('./lock.cjs');
+const { acquire, sleepSync, DEFAULT_TTL_MS } = require('./lock.cjs');
 const { execFileSync } = require('node:child_process');
 const {
   boundaryError,
@@ -1046,6 +1046,41 @@ function authorityFile(file, maximum = 4 * 1024 * 1024) {
   } finally { fs.closeSync(fd); }
 }
 
+const AUTHORITY_READ_ATTEMPTS = 5;
+const AUTHORITY_READ_RETRY_MS = 10;
+const AUTHORITY_TRANSIENT_CHANGE = /^archive authority changed (before bounded reading|while reading)$/;
+
+function stableAuthorityFile(file, maximum) {
+  for (let attempt = 1; ; attempt++) {
+    try { return authorityFile(file, maximum); }
+    catch (error) {
+      if (error.code !== 'ARCHIVE_AUTHORITY_INVALID' || !AUTHORITY_TRANSIENT_CHANGE.test(error.message)
+          || attempt >= AUTHORITY_READ_ATTEMPTS) throw error;
+      sleepSync(AUTHORITY_READ_RETRY_MS);
+    }
+  }
+}
+
+function publishAuthorityKey(directory, keyFile) {
+  const temporary = path.join(directory, 'hmac.key.' + process.pid + '.' + crypto.randomUUID() + '.tmp');
+  try {
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try { fs.writeFileSync(fd, crypto.randomBytes(32)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    try { fs.linkSync(temporary, keyFile); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  } finally { try { fs.unlinkSync(temporary); } catch {} }
+}
+
+const PROTECTED_RECORDS_NEED_KEY = 'existing protected records require their original authority key';
+// @invariant: protected records without their authority key are never re-keyed, by a launch or by a preflight.
+function protectedRecordsWithoutKey(directory) {
+  if (fs.existsSync(path.join(directory, 'hmac.key'))) return false;
+  let names;
+  try { names = fs.readdirSync(directory); }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  return names.some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-'));
+}
+
 function authorityState(worktree, create = false, requireCatalogue = true, readCatalogue = true) {
   const directory = archiveAuthorityDirectory(worktree, create);
   if (create) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -1053,18 +1088,23 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
       || (fs.lstatSync(directory).mode & 0o077))
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority directory is not private or contains symlinks');
   const keyFile = path.join(directory, 'hmac.key');
-  if (create) {
-    if (!fs.existsSync(keyFile) && fs.readdirSync(directory).some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-')))
-      fail('ARCHIVE_AUTHORITY_INVALID', 'existing protected records require their original authority key');
-    try { fs.writeFileSync(keyFile, crypto.randomBytes(32), { flag: 'wx', mode: 0o600 }); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  if (create && !fs.existsSync(keyFile)) {
+    if (protectedRecordsWithoutKey(directory)) fail('ARCHIVE_AUTHORITY_INVALID', PROTECTED_RECORDS_NEED_KEY);
+    publishAuthorityKey(directory, keyFile);
   }
-  const key = authorityFile(keyFile, 32);
+  const key = stableAuthorityFile(keyFile, 32);
   if (key.length !== 32) fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority key is malformed');
   const file = path.join(directory, 'catalogue.json');
   let payload = { schema: 'shipyard.role-archive-catalogue.v1', worktree, records: {} };
   if (readCatalogue && fs.existsSync(file)) {
-    const envelope = JSON.parse(authorityFile(file));
+    let envelope;
+    try { envelope = JSON.parse(stableAuthorityFile(file)); }
+    catch (error) {
+      if (error instanceof SyntaxError) fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue is not valid JSON');
+      throw error;
+    }
+    if (!object(envelope) || !object(envelope.payload))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue is not an authenticated envelope');
     const mac = crypto.createHmac('sha256', key).update(stable(envelope.payload)).digest('hex');
     if (!object(envelope.payload) || !/^[a-f0-9]{64}$/.test(envelope.mac || '')
         || !crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex')))
@@ -2534,6 +2574,11 @@ function selectedArchiveRecord(scope, row, trusted) {
   return { worktree: row.worktree, dispatch_id: row.dispatch_id, receipt: row.receipt, files };
 }
 
+function phaseSubjectFields(subject) {
+  const target = require('./architecture-target.cjs');
+  return target.parseSubject('integrator', subject) || target.parseSubject('architecture-review', subject);
+}
+
 function authenticatedRecordSubject(record) {
   const retained = record.review_current || record.review_baseline;
   const original = record.receipt?.role === 'integrator'
@@ -2609,7 +2654,7 @@ function originalReviewRetention(worktree, trusted) {
       || runtime.review_continuation || runtime.native_child_evidence) return null;
   const native = runtime.native_session_evidence;
   if (!object(native) || !/^[a-f0-9]{64}$/.test(native.sha256 || '') || native.session_id !== runtime.session_id) return null;
-  const codexHome = process.env.CODEX_HOME || path.join(require('node:os').homedir(), '.codex');
+  const codexHome = require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env: process.env });
   try {
     const candidates = require('./codex-runtime-host.cjs').nativeSessionCandidates(path.join(codexHome, 'sessions'), native.session_id);
     if (candidates.length !== 1) return null;
@@ -2665,8 +2710,8 @@ function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
       for (const record of Object.values(state.payload.records)) {
         if (record.receipt?.role !== current.role || record.dispatch_id === excludeDispatchId) continue;
         if (++count > 1000) return fallback('baseline-discovery-over-bound', rejected);
-        const hint = /^phase=([^;]+);repository=([^;]+);/.exec(authenticatedRecordSubject(record) || '');
-        if (!hint || hint[2] !== current.repository || Number(hint[1].split('-')[0]) !== Number(current.phase)) continue;
+        const hint = phaseSubjectFields(authenticatedRecordSubject(record));
+        if (!hint || hint.repository !== current.repository || Number(hint.phase.split('-')[0]) !== Number(current.phase)) continue;
         try {
           const retained = record.review_baseline;
           if (retained?.schema !== 'shipyard.review-baseline-authority.v1'
@@ -2684,9 +2729,9 @@ function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
           const evidence = Buffer.from(archive.files.find(pin => pin.path === manifest.files.evidence.path).content);
           if (manifest.current_review !== undefined) fail('REVIEW_BASELINE_UNSUPPORTED', 'extended current lineage is not a supported original full baseline');
           if (manifest.artifact_kind !== 'judgment') fail('REVIEW_BASELINE_INVALID', 'baseline is not a judgment');
-          const phaseSubject = /^phase=([^;]+);repository=([^;]+);tickets=([a-f0-9]{64})(?:;|$)/.exec(subject);
-          if (!phaseSubject || phaseSubject[2] !== current.repository
-              || Number(phaseSubject[1].split('-')[0]) !== Number(current.phase))
+          const phaseSubject = phaseSubjectFields(subject);
+          if (!phaseSubject || phaseSubject.repository !== current.repository
+              || Number(phaseSubject.phase.split('-')[0]) !== Number(current.phase))
             fail('REVIEW_BASELINE_INVALID', 'baseline is not the same complete phase/repository');
           const identity = { worktree, repository: { root: manifest.repository_realpath, identity: current.repository },
             head: manifest.head, head_tree: manifest.head_tree, base: manifest.base, base_commit: manifest.base_commit,
@@ -2695,11 +2740,11 @@ function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
               || git({}, worktree, ['merge-base', manifest.base_commit, manifest.head], 'original ancestry') !== manifest.merge_base)
             fail('REVIEW_BASELINE_INVALID', 'original base ancestry differs');
           const data = judgmentResultData(findings, { ...trustedMetadata({ role: current.role }, trusted, identity), trusted }, {
-            phase: manifest.phase || phaseSubject[1], ticketSet: findings.ticket_set, ticketSetDigest: manifest.ticket_set_digest,
+            phase: manifest.phase || phaseSubject.phase, ticketSet: findings.ticket_set, ticketSetDigest: manifest.ticket_set_digest,
             pr: manifest.pr, base: manifest.base,
           }, identity);
           if (manifest.subject !== data.subject || stable(manifest.reviewed) !== stable(data.reviewed)
-              || manifest.ticket_set_digest !== data.ticket_set_digest || phaseSubject[3] !== data.ticket_set_digest
+              || manifest.ticket_set_digest !== data.ticket_set_digest || phaseSubject.tickets !== data.ticket_set_digest
               || stable(manifest.envelope) !== stable(judgmentEnvelope(data, {
                 evidence: { relative: manifest.files.evidence.path, content: evidence },
                 findings: { relative: manifest.files.findings.path, content: Buffer.from(archive.files.find(pin => pin.path === manifest.files.findings.path).content) },
@@ -3063,7 +3108,7 @@ function currentClaudeSemanticPin(trusted) {
   try { fs.lstatSync(saved); return { ...pin, path: saved }; }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const home = process.env.HOME || require('node:os').homedir();
-  const config = process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+  const config = require('./runtime-context.cjs').resolveClaudeHome({ env: process.env });
   const root = path.resolve(config.startsWith('~/') ? path.join(home, config.slice(2)) : config, 'projects');
   return { ...pin, path: path.join(root, ...parts) };
 }
@@ -3465,7 +3510,7 @@ function currentReviewRetention(worktree, trusted) {
       native: { path: progress.native_file, bytes: native.bytes, sha256: native.sha256 } };
   }
   if (trusted.receipt.runtime === 'codex' && runtime?.input_transport === 'host-files' && runtime.native_child_evidence) {
-    const home = process.env.CODEX_HOME || path.join(require('node:os').homedir(), '.codex');
+    const home = require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env: process.env });
     const files = require('./codex-runtime-host.cjs').nativeSessionCandidates(path.join(home, 'sessions'), runtime.native_session_evidence.session_id);
     if (files.length !== 1) return null;
     const content = readImmutableFile(fs, files[0], 'original typed current reviewer', 128 * 1024 * 1024);
@@ -3701,22 +3746,23 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
     const state = authorityState(worktree);
     for (const record of Object.values(state.payload.records)) {
       if (record.receipt?.role !== 'integrator') continue;
-      const subject = /^phase=([^;]+);repository=([^;]+);tickets=([a-f0-9]{64})$/.exec(authenticatedRecordSubject(record));
-      if (!subject || subject[1] !== [...phaseNames][0] || subject[2] !== common) continue;
+      const recordSubject = authenticatedRecordSubject(record);
+      const subject = require('./architecture-target.cjs').parseSubject('integrator', recordSubject);
+      if (!subject || subject.phase !== [...phaseNames][0] || subject.repository !== common) continue;
       const runtime = record.receipt.runtime_evidence;
       const checkedInput = runtime?.input_bundle
         ? require('./codex-arch-review-context.cjs').verifyFileInput(runtime.input_bundle, { sealed: true, historical: true }) : null;
       if (checkedInput && (checkedInput.manifest.snapshot.repository !== common
           || checkedInput.manifest.snapshot.head !== head || checkedInput.manifest.binding?.base !== baseCommit
-          || checkedInput.manifest.ticket !== subject[0]
-          || checkedInput.manifest.binding.ticket_set_digest !== subject[3]
+          || checkedInput.manifest.ticket !== recordSubject
+          || checkedInput.manifest.binding.ticket_set_digest !== subject.tickets
           || stable(checkedInput.manifest.binding.ticket_set) !== stable(ids))) continue;
 
       if (++count > 1000) fail('REVIEW_COVERAGE_INVALID', 'current integration discovery exceeds its bound');
       const pin = record.pins.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
       const manifest = JSON.parse(readPinnedArchiveFile(worktree, pin, 'current integration manifest'));
-      if (manifest.boundary_subject !== authenticatedRecordSubject(record) || manifest.subject !== subject[0]
-          || manifest.ticket_set_digest !== subject[3] || manifest.role !== 'integrator' || manifest.head !== head || manifest.base_commit !== baseCommit
+      if (manifest.boundary_subject !== recordSubject || manifest.subject !== recordSubject
+          || manifest.ticket_set_digest !== subject.tickets || manifest.role !== 'integrator' || manifest.head !== head || manifest.base_commit !== baseCommit
           || manifest.repository_identity !== common || manifest.envelope?.outcome !== 'passed'
           || manifest.base.replace(/^(?:refs\/remotes\/origin\/|origin\/)/, '') !== baseName) continue;
       try {
@@ -3919,6 +3965,115 @@ function historicalBookkeepingPins(worktreePath) {
   return pins;
 }
 
+const PROVENANCE_MEMBER_PATH = /^\.planning\/graph\/provenance\/[A-Za-z0-9_.-]+\.json$/;
+const PROVENANCE_NOISE_NAMES = new Set(['.DS_Store', '.gitkeep']);
+const PROVENANCE_STAGING_BODY = '[A-Za-z0-9_.-]+\\.json\\.[0-9]+\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp';
+const PROVENANCE_STAGING_NAME = new RegExp(`^${PROVENANCE_STAGING_BODY}$`);
+const PROVENANCE_WRITER_NAME = new RegExp(`^\\.${PROVENANCE_STAGING_BODY}\\.tmp-[0-9]+$`);
+// @invariant: only a regular file with a known noise or staging name is inert; it is never read, adopted or pinned.
+function provenanceInert(directory, name) {
+  if (!PROVENANCE_NOISE_NAMES.has(name) && !PROVENANCE_STAGING_NAME.test(name) && !PROVENANCE_WRITER_NAME.test(name)) return false;
+  try { return fs.lstatSync(path.join(directory, name)).isFile(); } catch { return false; }
+}
+const LEGACY_BOOKKEEPING_FIELD = 'legacy_bookkeeping';
+const LEGACY_BOOKKEEPING_SCHEMA = 'shipyard.legacy-bookkeeping.v1';
+const LEGACY_BOOKKEEPING_VERSION = 1;
+const LEGACY_STATUS = 'historical-unverified';
+
+function legacyAuthoritySide(worktree) {
+  const side = { pins: [], legacy: null, finding: null, unreadable: null };
+  try {
+    const directory = archiveAuthorityDirectory(worktree);
+    if (protectedRecordsWithoutKey(directory)) {
+      side.finding = { code: 'ARCHIVE_AUTHORITY_INVALID', path: '', detail: PROTECTED_RECORDS_NEED_KEY };
+      return side;
+    }
+    const catalogue = path.join(directory, 'catalogue.json');
+    try { fs.lstatSync(catalogue); }
+    catch (error) { if (error.code === 'ENOENT') return side; throw error; }
+    const { payload } = authorityState(worktree);
+    side.pins = historicalBookkeepingPins(worktree);
+    const record = payload[LEGACY_BOOKKEEPING_FIELD];
+    if (record !== undefined) {
+      if (!object(record) || record.schema !== LEGACY_BOOKKEEPING_SCHEMA || record.version !== LEGACY_BOOKKEEPING_VERSION
+          || record.status !== LEGACY_STATUS || !Array.isArray(record.members)
+          || record.members.some(member => !object(member) || !PROVENANCE_MEMBER_PATH.test(member.path || '')
+            || !Number.isSafeInteger(member.bytes) || !/^[a-f0-9]{64}$/.test(member.sha256 || '')))
+        fail('ARCHIVE_AUTHORITY_INVALID', 'legacy bookkeeping record is malformed');
+      side.legacy = record;
+    }
+  } catch (error) {
+    const code = error && error.code;
+    if (typeof code === 'string' && code.startsWith('ARCHIVE_AUTHORITY_'))
+      side.finding = { code: 'ARCHIVE_AUTHORITY_INVALID', path: '', detail: String(error.message).slice(0, 200) };
+    else if (error && (error.syscall || /^E[A-Z0-9]+$/.test(code || '')))
+      side.unreadable = { code: code || 'UNKNOWN', syscall: error.syscall || 'unknown' };
+    else throw error;
+  }
+  return side;
+}
+
+function legacyBookkeepingMembers(worktreePath) {
+  const side = legacyAuthoritySide(fs.realpathSync(worktreePath));
+  return side.legacy ? side.legacy.members.map(member => ({ ...member })) : [];
+}
+
+function classifyLegacyProvenance(worktreePath) {
+  const worktree = fs.realpathSync(worktreePath);
+  const members = [], findings = [], warnings = [];
+  const unsafe = (relative, detail) => findings.push({ code: 'LEGACY_HISTORY_UNSAFE', path: relative, detail });
+  const directory = fixedPath(worktree, '.planning/graph/provenance', 'host provenance directory');
+  let directoryStat = null;
+  try { directoryStat = fs.lstatSync(directory); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (directoryStat && (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()))
+    unsafe('.planning/graph/provenance', 'provenance directory is not a physical directory');
+  else if (directoryStat) {
+    for (const name of fs.readdirSync(directory).sort()) {
+      if (provenanceInert(directory, name)) continue;
+      const relative = '.planning/graph/provenance/' + name;
+      if (!PROVENANCE_MEMBER_PATH.test(relative)) { unsafe(relative, 'member name is not allowed'); continue; }
+      const file = path.join(directory, name), stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink()) { unsafe(relative, 'member is a symlink'); continue; }
+      if (!stat.isFile()) { unsafe(relative, 'member is not a regular file'); continue; }
+      if (stat.size > HISTORICAL_ARCHIVE_MAX_BYTES) { unsafe(relative, 'member exceeds the archive byte bound'); continue; }
+      try {
+        const content = readImmutableFile(fs, file, 'legacy provenance member', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size);
+        members.push({ path: relative, bytes: content.length, sha256: digest(content) });
+      } catch (error) { unsafe(relative, 'member could not be read stably'); }
+    }
+  }
+  const projected = JSON.stringify({ payload: { schema: 'shipyard.role-archive-catalogue.v1', worktree, records: {},
+    [LEGACY_BOOKKEEPING_FIELD]: { schema: LEGACY_BOOKKEEPING_SCHEMA, version: LEGACY_BOOKKEEPING_VERSION,
+      status: LEGACY_STATUS, members } }, mac: '0'.repeat(64) }) + '\n';
+  if (Buffer.byteLength(projected) > HISTORICAL_ARCHIVE_MAX_BYTES)
+    unsafe('.planning/graph/provenance', 'inventory would exceed the catalogue byte bound');
+  const side = legacyAuthoritySide(worktree);
+  const result = (state, extra = {}) => ({ state, members, findings, warnings, unreadable: null, ...extra });
+  if (side.finding) findings.push(side.finding);
+  if (findings.length) return result('blocked');
+  if (side.unreadable) return { state: 'unreadable', members: [], findings: [], warnings: [], unreadable: side.unreadable };
+  const pinned = new Set(side.pins.map(pin => pin.path));
+  const recorded = new Map((side.legacy ? side.legacy.members : []).map(member => [member.path, member]));
+  const catalogued = side.pins.length > 0 || side.legacy !== null;
+  for (const entry of recorded.values()) {
+    const present = members.find(member => member.path === entry.path);
+    if (!present) warnings.push({ code: 'LEGACY_HISTORY_MISSING', path: entry.path });
+    else if (present.sha256 !== entry.sha256 || present.bytes !== entry.bytes)
+      findings.push({ code: 'LEGACY_HISTORY_CHANGED', path: entry.path, detail: 'recorded legacy member bytes differ' });
+  }
+  if (catalogued) {
+    for (const member of members)
+      if (!pinned.has(member.path) && !recorded.has(member.path))
+        findings.push({ code: 'LEGACY_HISTORY_UNKNOWN_MEMBER', path: member.path,
+          detail: 'member is neither an authenticated pin nor a recorded legacy member' });
+  }
+  if (findings.length) return result('blocked');
+  if (side.legacy) return result('adopted');
+  if (side.pins.length) return result('authenticated');
+  return result(members.length ? 'adoptable' : 'absent');
+}
+
 function writeArchiveCatalogue(state) {
   const envelope = { payload: state.payload,
     mac: crypto.createHmac('sha256', state.key).update(stable(state.payload)).digest('hex') };
@@ -3933,26 +4088,69 @@ function writeArchiveCatalogue(state) {
     fs.renameSync(temporary, state.file);
   } finally { try { assertArchiveLock(state.payload.worktree); fs.unlinkSync(temporary); } catch {} }
 }
+function refuseLegacyFinding(finding) {
+  const unknown = finding.code === 'LEGACY_HISTORY_UNKNOWN_MEMBER';
+  const subject = finding.path ? ' ' + finding.path : '';
+  const detail = finding.detail ? ': ' + finding.detail : '';
+  fail(finding.code, (unknown ? 'unknown host provenance member before trusted mutation'
+    : 'legacy provenance history is not safe before trusted mutation') + subject + detail,
+  finding.path ? { path: finding.path } : {});
+}
+
+function refuseBlockedLegacyHistoryBeforeState(worktree) {
+  try { fs.lstatSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json')); return; }
+  catch (error) { if (error.code !== 'ENOENT') return; }
+  const result = classifyLegacyProvenance(worktree);
+  if (result.state === 'blocked') refuseLegacyFinding(result.findings[0]);
+}
+
+function assertLegacyMembersUnchanged(worktree, members) {
+  for (const entry of members) {
+    const file = fixedPath(worktree, entry.path, 'legacy provenance member');
+    let stat;
+    try { stat = fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    let content = null;
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= HISTORICAL_ARCHIVE_MAX_BYTES) {
+      try { content = readImmutableFile(fs, file, 'legacy provenance member', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size); }
+      catch { content = null; }
+    }
+    if (!content || content.length !== entry.bytes || digest(content) !== entry.sha256)
+      refuseLegacyFinding({ code: 'LEGACY_HISTORY_CHANGED', path: entry.path, detail: 'recorded legacy member bytes differ' });
+  }
+}
+
 function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning/graph/dispatches.json']) {
   const worktree = fs.realpathSync(worktreePath);
   const allowed = relative => relative === '.planning/graph/dispatches.json'
-    || /^\.planning\/graph\/provenance\/[A-Za-z0-9_.-]+\.json$/.test(relative);
+    || PROVENANCE_MEMBER_PATH.test(relative);
   if (!Array.isArray(writtenPaths) || writtenPaths.some(relative => !allowed(relative)))
     fail('ARCHIVE_AUTHORITY_INVALID', 'trusted writer paths are malformed');
+  refuseBlockedLegacyHistoryBeforeState(worktree);
   return withArchiveAuthorityLock(worktree, () => {
     const state = authorityState(worktree, true);
     const previous = historicalBookkeepingPins(worktree);
+    const classification = classifyLegacyProvenance(worktree);
+    if (classification.state === 'blocked') refuseLegacyFinding(classification.findings[0]);
+    const adopting = classification.state === 'adoptable';
+    const legacyMembers = adopting ? classification.members.map(member => ({ ...member }))
+      : classification.state === 'adopted' ? legacyBookkeepingMembers(worktree) : [];
+    const legacyPaths = new Set(legacyMembers.map(member => member.path));
+    const overwritten = writtenPaths.find(relative => legacyPaths.has(relative));
+    if (overwritten) refuseLegacyFinding({ code: 'LEGACY_HISTORY_CHANGED', path: overwritten,
+      detail: 'a trusted writer may not overwrite recorded legacy history' });
     const validatedPrevious = [];
     const provenance = fixedPath(worktree, '.planning/graph/provenance', 'host bookkeeping directory');
     const inventory = () => {
       if (!fs.existsSync(provenance)) return [];
       const stat = fs.lstatSync(provenance);
       if (stat.isSymbolicLink() || !stat.isDirectory()) fail('ARCHIVE_AUTHORITY_INVALID', 'host bookkeeping directory is not physical');
-      return fs.readdirSync(provenance).map(name => '.planning/graph/provenance/' + name).sort();
+      return fs.readdirSync(provenance).filter(name => !provenanceInert(provenance, name))
+        .map(name => '.planning/graph/provenance/' + name).sort();
     };
     const authenticatedPaths = previous.map(pin => pin.path);
-    if (inventory().some(relative => !authenticatedPaths.includes(relative)))
-      fail('ARCHIVE_AUTHORITY_INVALID', 'unknown host provenance member before trusted mutation');
+    const unknownMember = inventory().find(relative => !authenticatedPaths.includes(relative) && !legacyPaths.has(relative));
+    if (unknownMember) refuseLegacyFinding({ code: 'LEGACY_HISTORY_UNKNOWN_MEMBER', path: unknownMember });
     for (const pin of previous) {
       const legacy = !state.payload.bookkeeping_state && (state.payload.latest_bookkeeping || []).find(item => item.path === pin.path);
       let actual = pin;
@@ -3980,8 +4178,9 @@ function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning
         readPinnedArchiveFile(worktree, pin, 'undeclared authenticated bookkeeping');
     }
     const paths = [...new Set([...authenticatedPaths, ...writtenPaths])].sort();
-    if (inventory().some(relative => !paths.includes(relative)))
+    if (inventory().some(relative => !paths.includes(relative) && !legacyPaths.has(relative)))
       fail('ARCHIVE_AUTHORITY_INVALID', 'trusted mutation published an undeclared provenance member');
+    assertLegacyMembersUnchanged(worktree, legacyMembers);
     state.payload.bookkeeping_state = paths.filter(relative =>
       validatedPrevious.some(pin => pin.path === relative && !writtenPaths.includes(relative))
       || fs.existsSync(fixedPath(worktree, relative, 'host bookkeeping')))
@@ -3993,33 +4192,58 @@ function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning
         const content = readImmutableFile(fs, file, 'host bookkeeping', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size);
         return { path: relative, bytes: content.length, sha256: digest(content) };
       });
+    if (adopting) state.payload[LEGACY_BOOKKEEPING_FIELD] = { schema: LEGACY_BOOKKEEPING_SCHEMA,
+      version: LEGACY_BOOKKEEPING_VERSION, status: LEGACY_STATUS, adopted_at: new Date().toISOString(), members: legacyMembers };
     writeArchiveCatalogue(state);
     return result;
   });
 }
 
 const archivePublicationFrames = [];
+const ARCHIVE_LOCK_WAIT_MS = 5000;
+const LOCK_OWNERSHIP_LOST = 'archive catalogue lock ownership was lost: it was taken over after outliving its TTL '
+  + 'or removed while this session held it; retry the operation';
+
+function archiveLockOwner(lockPath) {
+  try { return JSON.parse(readImmutableFile(fs, path.join(lockPath, 'owner.json'), 'archive catalogue lock owner', 4096)); }
+  catch { return undefined; }
+}
+function describeArchiveLockOwner(owner) {
+  return (owner.label || 'an unlabelled session') + ' (pid ' + owner.pid + ', since ' + (owner.at || 'an unknown time') + ')';
+}
+function ownerPidIsLive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+}
+
 function withArchiveAuthorityLock(worktree, fn) {
   const active = archivePublicationFrames.at(-1);
   if (active?.worktree === worktree) { assertArchiveLock(worktree); return fn(); }
   const state = authorityState(worktree, true);
   const lockPath = path.join(state.directory, 'catalogue.lock');
-  if (fs.existsSync(lockPath)) {
-    const stat = fs.lstatSync(lockPath);
+  let stat = null;
+  try { stat = fs.lstatSync(lockPath); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (stat) {
     if (stat.isSymbolicLink() || !stat.isDirectory())
-      fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock is not a physical directory');
-    let owner;
-    try { owner = JSON.parse(readImmutableFile(fs, path.join(lockPath, 'owner.json'), 'archive catalogue lock owner', 4096)); } catch {}
-    if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
-      let live = true;
-      try { process.kill(owner.pid, 0); } catch (error) { if (error.code === 'ESRCH') live = false; }
-      if (live) fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock has a live owner');
-    }
+      fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock is not a physical directory: a file or symlink sits where '
+        + 'the lock directory belongs; remove ' + lockPath + ' and retry');
+    const owner = archiveLockOwner(lockPath);
+    if (Number.isSafeInteger(owner?.pid) && owner.pid > 0 && ownerPidIsLive(owner.pid)
+        && !(Date.now() - Date.parse(owner.at) < DEFAULT_TTL_MS))
+      fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock owner record ' + describeArchiveLockOwner(owner)
+        + ' is older than the lock TTL (' + DEFAULT_TTL_MS / 1000 + ' s) or has no readable time, and its pid may '
+        + 'have been reused by an unrelated process; end pid ' + owner.pid + ' if it is not a Shipyard session, then retry',
+      { pid: owner.pid });
   }
   let lock;
-  try { lock = acquire(state.directory, 'catalogue', { waitMs: 1000, label: 'role-archive-authority' }); }
+  try { lock = acquire(state.directory, 'catalogue', { waitMs: ARCHIVE_LOCK_WAIT_MS, label: 'role-archive-authority' }); }
   catch (error) { fail('ARCHIVE_AUTHORITY_BUSY', error.message); }
-  if (!lock) fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock acquisition timed out');
+  if (!lock) {
+    const holder = archiveLockOwner(lockPath);
+    fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock is held by '
+      + (holder ? describeArchiveLockOwner(holder) : 'another session') + ' and stayed held for '
+      + ARCHIVE_LOCK_WAIT_MS + ' ms; retry when it finishes', holder ? { pid: holder.pid } : {});
+  }
   const frame = { worktree, lockOnly: true, lock };
   archivePublicationFrames.push(frame);
   try { assertArchiveLock(worktree); return fn(); } finally { archivePublicationFrames.pop(); lock.release(); }
@@ -4031,9 +4255,9 @@ function assertArchiveLock(worktree) {
     const stat = fs.lstatSync(frame.lock.path);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('lock is not physical');
     owner = JSON.parse(readImmutableFile(fs, path.join(frame.lock.path, 'owner.json'), 'archive catalogue lock owner', 4096));
-  } catch { fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock ownership was lost'); }
+  } catch { fail('ARCHIVE_AUTHORITY_BUSY', LOCK_OWNERSHIP_LOST); }
   if (!frame?.lock.owner.token || owner?.token !== frame.lock.owner.token)
-    fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock ownership was lost');
+    fail('ARCHIVE_AUTHORITY_BUSY', LOCK_OWNERSHIP_LOST);
 }
 
 function withArchivePublication(worktree, fn) {
@@ -4093,7 +4317,7 @@ function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest)
   const bookkeeping = trusted.receipt.role === 'arch-review' ? findings.host_context?.bookkeeping || [] : [];
   const record = { dispatch_id: trusted.dispatchId, receipt: trusted.receipt, pins, bookkeeping,
     ...((require('./architecture-target.cjs').PHASE_SUBJECT.test(manifest.boundary_subject || '')
-      || /^phase=[^;]+;repository=[^;]+;tickets=[a-f0-9]{64}$/.test(manifest.boundary_subject || ''))
+      || require('./architecture-target.cjs').parseSubject('integrator', manifest.boundary_subject || ''))
       ? { ticket: reconciledRecordTicket(trusted), receipt_store: trusted.recorder.storeDir } : {}) };
   const previous = state.payload.records[trusted.dispatchId];
   if (manifest.current_review) {
@@ -4936,7 +5160,10 @@ function judgmentSubject(role, metadata, identity, input, ticketSet, pr) {
   if (role === 'pr-sentinel') return `round:${ticketSet.digest}`;
   if (role === 'integrator') {
     const phase = compactIdentity(input.phase, 'integration phase');
-    return `phase=${phase};repository=${identity.repository.identity};tickets=${ticketSet.digest}`;
+    const target = require('./architecture-target.cjs');
+    const repository = target.repositoryIdentity(identity.worktree);
+    try { return target.buildSubject('integrator', { phase, repository, tickets: ticketSet.digest }); }
+    catch { return fail('INVALID_RESULT', 'integration subject needs a numbered phase directory and a 64-hex ticket digest'); }
   }
   if (role === 'arch-review' && metadata.ticket.startsWith('phase=')) {
     const aggregate = require('./architecture-target.cjs').PHASE_SUBJECT.exec(metadata.ticket);
@@ -6201,6 +6428,13 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   phaseArchitectureEvidenceDigest,
   assertArchiveInventory,
   historicalBookkeepingPins,
+  classifyLegacyProvenance,
+  provenanceInert,
+  legacyBookkeepingMembers,
+  LEGACY_BOOKKEEPING_FIELD,
+  LEGACY_BOOKKEEPING_SCHEMA,
+  LEGACY_BOOKKEEPING_VERSION,
+  LEGACY_STATUS,
   trustedBookkeepingMutation,
   admitHistoricalArchive,
   prepareRoleArtifact,

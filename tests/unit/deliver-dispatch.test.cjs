@@ -5,6 +5,20 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
+const { mock } = require('node:test');
+const testAuthorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-home-')));
+const testOriginalHomedir = os.homedir;
+os.homedir = () => testAuthorityHome;
+const testHomeEnv = Object.fromEntries(['HOME', 'XDG_STATE_HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR']
+  .map((name) => [name, process.env[name]]));
+for (const name of Object.keys(testHomeEnv)) process.env[name] = testAuthorityHome;
+process.on('exit', () => {
+  os.homedir = testOriginalHomedir;
+  for (const [name, value] of Object.entries(testHomeEnv)) {
+    if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
+  fs.rmSync(testAuthorityHome, { recursive: true, force: true });
+});
 
 const targetBin = fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-gh-'));
 fs.writeFileSync(path.join(targetBin, 'gh'), `#!/usr/bin/env node
@@ -27,7 +41,7 @@ process.env.PATH = targetBin + path.delimiter + targetOldPath;
 process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
-const codexSessionEnv = Object.fromEntries(['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED']
+const codexSessionEnv = Object.fromEntries(['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CLAUDE_PLUGIN_ROOT', 'CLAUDE_CODE_ENTRYPOINT', 'SHIPYARD_RUNTIME', 'GSD_RUNTIME', 'SHIPYARD_GRAPH_DIR']
   .map((name) => [name, process.env[name]]));
 for (const name of Object.keys(codexSessionEnv)) delete process.env[name];
 process.on('exit', () => {
@@ -117,8 +131,8 @@ function writeShipyardManifest(root) {
   writeJson(path.join(root, 'plugins', 'delivery-pipeline', '.claude-plugin', 'plugin.json'), { name: 'shipyard' });
 }
 
-function shipyardFixture(id = 'T-01-01') {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-sy-'));
+function shipyardFixture(id = 'T-01-01', prefix = 'shipyard-deliver-dispatch-sy-') {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   initRepo(root);
   writeShipyardManifest(root);
   writeJson(path.join(root, '.planning', 'graph', 'tickets.json'), { tickets: { [id]: ticketRow() } });
@@ -141,8 +155,8 @@ function builderFixture(id = 'T-11-11') {
   return fixture;
 }
 
-function planningBuilderFixture(invId = 'INV-43-15') {
-  const fixture = shipyardFixture('T-43-15');
+function planningBuilderFixture(invId = 'INV-43-15', prefix) {
+  const fixture = shipyardFixture('T-43-15', prefix);
   const invPath = path.join(fixture.root, '.planning', 'investigations', invId);
   fs.mkdirSync(path.join(invPath, 'research'), { recursive: true });
   fs.mkdirSync(path.join(fixture.root, '.planning', 'architecture'), { recursive: true });
@@ -920,6 +934,140 @@ test('a target-project fixture gets NEUTRAL guides; a fixture with a committed s
     validateRequest('executors', shipyardCaptured);
   } finally {
     cleanup(target.projectRoot, target.ticketWorktree, shipyard.root);
+  }
+});
+
+function brokenBundle(runtimeRoot) {
+  const bundle = path.join(runtimeRoot, 'shipyard');
+  fs.mkdirSync(path.join(bundle, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), '{}');
+  return path.join(bundle, 'scripts');
+}
+
+function noSpawn() {
+  return () => { throw new Error('spawn must not be called'); };
+}
+
+function dispatchDirs(stateDir) {
+  try { return fs.readdirSync(stateDir).filter((name) => name.startsWith('dd-')); } catch { return []; }
+}
+
+test('launch isolates os.homedir from the real authority namespace', () => {
+  assert.equal(os.homedir(), testAuthorityHome);
+});
+
+test('launch refuses a broken installed bundle before creating a dispatch directory or spawning', async () => {
+  const fixture = shipyardFixture('T-50-61');
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-refuse-'));
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-bundle-'));
+  const stderr = [];
+  try {
+    await assert.rejects(deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: fixture.root, stateDir, hostScriptDir: brokenBundle(runtimeRoot), spawn: noSpawn(),
+      preflightStderr: { write(text) { stderr.push(text); } },
+    }), (error) => error.code === 'PREFLIGHT_REFUSED');
+    assert.match(stderr.join(''), /hint\[BUNDLE_MANIFEST_INVALID\]/);
+    assert.deepEqual(dispatchDirs(stateDir), []);
+  } finally {
+    cleanup(fixture.root, stateDir, runtimeRoot);
+  }
+});
+
+test('launch hands the spawned host the launchEnvironment output with the preserved variables', async () => {
+  const fixture = shipyardFixture('T-50-62');
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-env-'));
+  try {
+    let seen;
+    await deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: fixture.root, stateDir, env: { SHIPYARD_TEST_PRESERVED: 'kept' },
+      spawn(_command, _args, spawnOptions) { seen = spawnOptions.env; return { pid: 999999, unref() {}, on() {} }; },
+    });
+    assert.equal(seen.SHIPYARD_TEST_PRESERVED, 'kept');
+    assert.equal(seen.SHIPYARD_GRAPH_DIR, fs.realpathSync(fixture.graphDir));
+    assert.equal(seen.HOME, process.env.HOME);
+  } finally {
+    cleanup(fixture.root, stateDir);
+  }
+});
+
+test('an unreadable authority namespace does not stop a healthy launch but other findings still refuse', async () => {
+  const fixture = shipyardFixture('T-50-63');
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-eperm-'));
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-bundle-'));
+  const original = fs.lstatSync;
+  const injected = mock.method(fs, 'lstatSync', function (target, ...rest) {
+    if (String(target).includes('role-artifact-authority')) {
+      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    }
+    return original.call(this, target, ...rest);
+  });
+  const stderr = [];
+  const sink = { write(text) { stderr.push(text); } };
+  try {
+    let spawned = 0;
+    await deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: fixture.root, stateDir, preflightStderr: sink,
+      spawn() { spawned += 1; return { pid: 999999, unref() {}, on() {} }; },
+    });
+    assert.equal(spawned, 1);
+    assert.equal(/hint\[/.test(stderr.join('')), false);
+    const before = dispatchDirs(stateDir).length;
+    await assert.rejects(deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: fixture.root, stateDir, hostScriptDir: brokenBundle(runtimeRoot), spawn: noSpawn(), preflightStderr: sink,
+    }), (error) => error.code === 'PREFLIGHT_REFUSED');
+    assert.equal(dispatchDirs(stateDir).length, before);
+  } finally {
+    injected.mock.restore();
+    cleanup(fixture.root, stateDir, runtimeRoot);
+  }
+});
+
+test('a refused launch names the runtime delivery host in its remedy, never deliver-dispatch', async () => {
+  const fixture = shipyardFixture('T-50-64');
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-host-name-'));
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-host-bundle-'));
+  const stderr = [];
+  try {
+    await assert.rejects(deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: fixture.root, stateDir, hostScriptDir: brokenBundle(runtimeRoot), spawn: noSpawn(),
+      preflightStderr: { write(text) { stderr.push(text); } },
+    }), (error) => error.code === 'PREFLIGHT_REFUSED');
+    const text = stderr.join('');
+    assert.match(text, /codex-delivery-host\.cjs --preflight/);
+    assert.equal(text.includes('deliver-dispatch.cjs'), false);
+  } finally {
+    cleanup(fixture.root, stateDir, runtimeRoot);
+  }
+});
+
+test('decomposition build carries repositoryIdentity for a path with a space and an origin remote', () => {
+  const fixture = planningBuilderFixture('INV-50-20', 'shipyard deliver dispatch id-');
+  try {
+    git(fixture.root, 'remote', 'add', 'origin', 'https://github.com/Example/Repo.git');
+    const identity = fs.realpathSync(path.join(fixture.root, '.git'));
+    const request = deliverDispatch.build(['decomposition', fixture.invId, '--phase', '44', '--runtime', 'codex'],
+      { cwd: fixture.root, graphDir: fixture.graphDir });
+    assert.equal(request.scope.repository, identity);
+    assert.ok(request.subject.endsWith(`;repository=${identity}`));
+    assert.equal(request.scope.ticket, request.subject);
+    assert.equal(request.subject.includes('example/repo'), false);
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('preflight reads the launch graph directory project, not the worktree project', async () => {
+  const fixture = shipyardFixture('T-50-64');
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-graph-'));
+  try {
+    let graphSeen;
+    await deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: fixture.root, stateDir,
+      spawn(_command, _args, spawnOptions) { graphSeen = spawnOptions.env.SHIPYARD_GRAPH_DIR; return { pid: 999999, unref() {}, on() {} }; },
+    });
+    assert.equal(graphSeen, fs.realpathSync(fixture.graphDir));
+  } finally {
+    cleanup(fixture.root, stateDir);
   }
 });
 

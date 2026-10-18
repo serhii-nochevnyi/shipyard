@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8df5cb6ad3859d1a9783a562e8f2fc51af303b399712e630ebc4f18acbb8ae8e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8b8c7c1d8060f8868bfa821078f08cd8c8e98d48e0873ee75e99df740d749609
 phase: 46
 status: gaps_found
-shipyard_source_fingerprint: 8df5cb6ad3859d1a9783a562e8f2fc51af303b399712e630ebc4f18acbb8ae8e
+shipyard_source_fingerprint: 8b8c7c1d8060f8868bfa821078f08cd8c8e98d48e0873ee75e99df740d749609
 ---
 
 # Phase 46: Refresh the native runtime model ladder — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 8df5cb6ad3859d1a9783a562e8f2fc51af303b399712e630ebc
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 4/6 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 6/6 delivery records are merged | ✓ VERIFIED |
 | Integration is coherent | integration evidence records a finding or failed verdict | ✗ FAILED |
 | Verification evidence is present | integration evidence records a finding or failed verdict | ✗ FAILED |
 
@@ -25,12 +25,11 @@ shipyard_source_fingerprint: 8df5cb6ad3859d1a9783a562e8f2fc51af303b399712e630ebc
 | T-46-04 | merged | ✓ VERIFIED |
 | T-46-05 | merged | ✓ VERIFIED |
 | T-46-06 | merged | ✓ VERIFIED |
-| T-46-07 | pr-open | ? UNCERTAIN |
-| T-46-08 | pending | ? UNCERTAIN |
+| T-46-07 | merged | ✓ VERIFIED |
+| T-46-08 | merged | ✓ VERIFIED |
 
 ## Verification Commands
 
-- `node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json`
 - `gsd-tools phase uat-passed 46 --raw`
 
 ## Gaps Summary

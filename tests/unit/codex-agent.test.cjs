@@ -97,17 +97,17 @@ test('missing escalation file refuses instead of selecting the existing ordinary
   try {
     fs.unlinkSync(path.join(f.agentDir, 'shipyard-arch-review-critical.toml'));
     assert.throws(() => selectAgent('arch-review', { ...f.options, signals: { critical: true } }),
-      /exact generated file.*install-shipyard-codex/);
+      /exact generated file.*codex plugin marketplace upgrade shipyard/);
   } finally { clean(f); }
 });
 
-test('a stale or missing generated agent refusal keeps the exact historical reinstall remedy', () => {
+test('a stale or missing generated agent refusal names the marketplace upgrade remedy', () => {
   const f = fixture();
   try {
     fs.unlinkSync(path.join(f.agentDir, 'shipyard-arch-review-critical.toml'));
     assert.throws(() => selectAgent('arch-review', { ...f.options, signals: { critical: true } }), (error) =>
       error.code === 'STALE_GENERATED_AGENT'
-      && error.message.includes('Install an ADR-014-capable Codex host and regenerate agents with install-shipyard-codex.sh --phase 2; provide current host capabilities and retry the exact selection.')
+      && error.message.includes('Install an ADR-014-capable Codex host by running codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard; provide current host capabilities and retry the exact selection.')
       && !error.message.includes('gsd-tune.cjs'));
   } finally { clean(f); }
 });
@@ -340,6 +340,70 @@ test('CLI plain and JSON output both preserve explicit dynamic model and effort'
     assert.equal(refused.stdout, '');
     assert.match(refused.stderr, /capabilities-file/);
   } finally { clean(f); }
+});
+
+function installedCodexLayout(extraManifest = {}) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-installed-agent-')));
+  const home = path.join(base, 'codex-home');
+  const bundle = path.join(home, 'shipyard');
+  fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'plugins/delivery-pipeline/scripts'), path.join(bundle, 'scripts'), { recursive: true });
+  const evidence = Buffer.from(JSON.stringify(require('../smoke/installed-launch/lib.cjs').codexCapabilities()));
+  fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
+  const manifest = { phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
+    capabilities_digest: crypto.createHash('sha256').update(evidence).digest('hex'), ...extraManifest };
+  fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify(manifest));
+  return { base, home, bundle, scripts: path.join(bundle, 'scripts'), manifest };
+}
+
+test('an installed bundle supplies the agents dir and capability evidence with an empty env', () => {
+  const f = fixture();
+  const layout = installedCodexLayout();
+  try {
+    for (const name of fs.readdirSync(f.agentDir)) fs.copyFileSync(path.join(f.agentDir, name), path.join(layout.home, 'agents', name));
+    const agentManifest = JSON.parse(fs.readFileSync(path.join(f.agentDir, '.shipyard-manifest.json'), 'utf8'));
+    fs.writeFileSync(path.join(layout.home, 'agents', '.shipyard-manifest.json'), JSON.stringify({ ...agentManifest, ...layout.manifest }));
+    const run = (env) => spawnSync(process.execPath, [path.join(layout.scripts, 'codex-agent.cjs'), 'select', 'research',
+      '--project-dir', f.root, '--json'], { encoding: 'utf8', env });
+    const ok = run({ PATH: process.env.PATH, GSD_RUNTIME: 'codex' });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.equal(JSON.parse(ok.stdout).agent_path, path.join(layout.home, 'agents', 'shipyard-inv-research.toml'));
+    const other = path.join(layout.base, 'elsewhere');
+    fs.mkdirSync(other);
+    const conflict = run({ PATH: process.env.PATH, GSD_RUNTIME: 'codex', CODEX_HOME: other });
+    assert.notEqual(conflict.status, 0);
+    assert.match(conflict.stderr, /disagrees with the Codex home/);
+    assert.match(conflict.stderr, /Either unset the variable, or reinstall into the named home/);
+    assert.doesNotMatch(conflict.stderr, /\{\w+\}/);
+  } finally { clean(f); fs.rmSync(layout.base, { recursive: true, force: true }); }
+});
+
+test('an installed bundle refuses a disagreeing explicit agent dir or evidence file and accepts agreeing ones', () => {
+  const f = fixture();
+  const layout = installedCodexLayout();
+  try {
+    for (const name of fs.readdirSync(f.agentDir)) fs.copyFileSync(path.join(f.agentDir, name), path.join(layout.home, 'agents', name));
+    const agentManifest = JSON.parse(fs.readFileSync(path.join(f.agentDir, '.shipyard-manifest.json'), 'utf8'));
+    fs.writeFileSync(path.join(layout.home, 'agents', '.shipyard-manifest.json'), JSON.stringify({ ...agentManifest, ...layout.manifest }));
+    const env = { PATH: process.env.PATH, GSD_RUNTIME: 'codex', HOME: layout.base };
+    const run = (...extra) => spawnSync(process.execPath, [path.join(layout.scripts, 'codex-agent.cjs'), 'select', 'research',
+      '--project-dir', f.root, '--json', ...extra], { encoding: 'utf8', env });
+    const bundleEvidence = path.join(layout.bundle, 'codex-capabilities.json');
+    const bundleAgents = path.join(layout.home, 'agents');
+    assert.equal(run().status, 0);
+    assert.equal(run('--capabilities-file', bundleEvidence, '--agent-dir', bundleAgents).status, 0);
+    assert.equal(run('--capabilities-file', '~/codex-home/shipyard/codex-capabilities.json', '--agent-dir', '~/codex-home/agents').status, 0);
+    const foreign = path.join(f.root, 'capabilities.json');
+    const disagreeingFile = run('--capabilities-file', foreign);
+    assert.notEqual(disagreeingFile.status, 0);
+    assert.match(disagreeingFile.stderr, /--capabilities-file=.*disagrees with the capability evidence/);
+    const disagreeingDir = run('--agent-dir', f.agentDir);
+    assert.notEqual(disagreeingDir.status, 0);
+    assert.match(disagreeingDir.stderr, /--agent-dir=.*disagrees with the agent directory/);
+    assert.match(disagreeingDir.stderr, /Either drop the --agent-dir flag, or reinstall into the named home/);
+    assert.doesNotMatch(disagreeingDir.stderr, /unset the variable/);
+    assert.doesNotMatch(disagreeingDir.stderr, /generated agent/i);
+  } finally { clean(f); fs.rmSync(layout.base, { recursive: true, force: true }); }
 });
 
 done();

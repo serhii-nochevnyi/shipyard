@@ -2929,4 +2929,82 @@ test('integration measurement restoration refuses caller-created measurement cus
     { code: 'REVIEW_SOURCE_REQUIRED' });
 });
 
+async function relocatedAggregate(parentName) {
+  const f = fixture();
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'identity-parent-')));
+  const moved = path.join(parent, parentName, 'repo');
+  fs.mkdirSync(path.dirname(moved), { recursive: true });
+  fs.renameSync(f.root, moved);
+  f.root = moved;
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'identity-storage-')));
+  const member = canonicalReviewMember(f, true);
+  const original = await unitJudgment(f);
+  const graphDir = path.join(f.root, '.planning/graph');
+  const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
+  graph.tickets[member].epic = 'epic/38-codex-arch-review';
+  write(f.root, '.planning/graph/tickets.json', JSON.stringify(graph));
+  write(f.root, '.planning/phases/38-codex-arch-review/SUMMARY.md', 'Original native obligations remain HOLD.');
+  git(f.root, ['switch', '-c', graph.tickets[member].epic]);
+  git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'fixture: aggregate evidence']);
+  f.head = git(f.root, ['rev-parse', 'HEAD']);
+  f.pr.headRefName = graph.tickets[member].epic; f.pr.headRefOid = f.head;
+  const dispatch = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
+  const buildRequest = () => dispatch.build(
+    ['arch-review', '38-codex-arch-review', '--phase', '38', '--pr', String(f.pr.number), '--runtime', 'codex'],
+    { cwd: f.root, graphDir });
+  return { f, parent, storage, original, graphDir, buildRequest, member };
+}
+
+function cleanupRelocated(c) {
+  cleanupJudgment(c.f);
+  fs.rmSync(c.storage, { recursive: true, force: true });
+  fs.rmSync(c.parent, { recursive: true, force: true });
+}
+
+for (const [label, parentName] of [['plain', 'plain'], ['space', 'with space'], ['non-ASCII', 'répertoire-ü']]) {
+  test('aggregate producer builds its repository identity through repositoryIdentity (' + label + ' path)', async () => {
+    const architecture = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+    const c = await relocatedAggregate(parentName);
+    try {
+      const request = c.buildRequest();
+      const requestPath = path.join(c.storage, 'request.json');
+      fs.writeFileSync(requestPath, JSON.stringify(request));
+      const parsed = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').readRequestFile(requestPath);
+      const calls = [];
+      const recorder = (...args) => { calls.push(args); return execFileSync(...args); };
+      registerAggregateRoster(c.f, c.original, c.graphDir, c.storage);
+      const value = contextBuilder.prepare(parsed.scope, parsed.launch,
+        { graphDir: c.graphDir, refreshGit: false, getPullRequest: () => c.f.pr, execFileSync: recorder });
+      const identity = architecture.repositoryIdentity(c.f.root);
+      assert.ok(calls.some(args => args[0] === 'git' && args[1].includes('--git-common-dir')),
+        'the injected runner serves the identity call');
+      assert.equal(parsed.scope.ticket, value.prepared.binding.subject);
+      const parts = architecture.parseSubject('architecture-review', parsed.scope.ticket);
+      assert.ok(JSON.stringify(parts).includes(identity));
+      const { normalizeTicketIdentity } = require('../../plugins/delivery-pipeline/scripts/run-contract.cjs');
+      assert.equal(normalizeTicketIdentity(parsed.scope.ticket, { role: 'arch-review', phase: 38 }).ticket, parsed.scope.ticket);
+      const snapshot = contextBuilder.prepareFileInput({ worktree: c.f.root, ticket: c.member, phase: 38, run_id: 'identity-run' },
+        'x'.repeat(1024), { role: 'integrator', dispatchId: 'identity-file-input', storageRoot: c.storage });
+      assert.equal(snapshot.manifest.snapshot.repository, identity);
+    } finally { cleanupRelocated(c); }
+  });
+}
+
+test('aggregate producer refuses a repository path containing a semicolon at the producer', () => {
+  const f = fixture();
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'identity-parent-')));
+  try {
+    const moved = path.join(parent, 'semi;colon', 'repo');
+    fs.mkdirSync(path.dirname(moved), { recursive: true });
+    fs.renameSync(f.root, moved); f.root = moved;
+    assert.throws(() => prepared(f), { code: 'REPOSITORY_IDENTITY_INVALID' });
+    const aggregate = contextBuilder.prepare({ ticket: 'phase=38-codex-arch-review;repository=x', phase: 38, worktree: moved },
+      { role: 'arch-review', context: {}, signals: {} },
+      { graphDir: path.join(moved, '.planning/graph'), refreshGit: false, getPullRequest: () => f.pr });
+    assert.fail('unreachable ' + aggregate);
+  } catch (error) {
+    assert.equal(error.code, 'REPOSITORY_IDENTITY_INVALID');
+  } finally { cleanupJudgment(f); fs.rmSync(parent, { recursive: true, force: true }); }
+});
+
 if (require.main === module) registerTests(require('node:test'));

@@ -781,8 +781,8 @@ if (!CONFIG_REFUSAL && runtime === 'claude' && pipeline.fable === 'auto') {
 // unconditionally would put a Codex finding in front of every Claude delivery on
 // this host — a report nobody in that session can act on, which is how a report
 // teaches its reader to skip it.
-const codexConfig = path.join(process.env.CODEX_HOME || path.join(process.env.HOME || '', '.codex'), 'config.toml');
-const codexDir = path.dirname(codexConfig);
+let codexConfig = null;
+let codexDir = null;
 let codexToml = '';
 // ENOENT is silence, honestly: no config.toml yet is not a finding. Any other
 // read failure (permissions, EISDIR, …) is NOT the same fact as absence — the
@@ -791,10 +791,21 @@ let codexToml = '';
 // the exact false-green class this ticket removes one layer along.
 if (runtime === 'codex') {
   try {
+    codexConfig = path.join(require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env: process.env }), 'config.toml');
+    codexDir = path.dirname(codexConfig);
     codexToml = fs.readFileSync(codexConfig, 'utf8');
   } catch (e) {
     codexToml = '';
-    if (e.code !== 'ENOENT' && !CONFIG_REFUSAL) {
+    // @contract: a refused installed bundle becomes a blocker; any other resolver failure still throws.
+    if (e && e.name === 'HostEnvironmentError') {
+      blockers.push({
+        what: 'codex-environment-refused',
+        head: `${e.code}: ${String(e.message).replace(/[\u0000-\u001f\u007f]/g, '')}`,
+        why: require('./refusal-hints.cjs').formatHint(e.code, e.vars),
+      });
+    } else if (!codexConfig) {
+      throw e;
+    } else if (e.code !== 'ENOENT' && !CONFIG_REFUSAL) {
       blockers.push({
         what: 'codex-config-unreadable',
         file: codexConfig,

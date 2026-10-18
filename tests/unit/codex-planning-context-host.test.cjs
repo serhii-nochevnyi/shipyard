@@ -10,6 +10,17 @@ const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs
 const { buildContextPacket } = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
 const planningHost = require('../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs');
 
+const AVAILABLE_PROBE = { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities: {} };
+
+function soleEnv(extra) {
+  const { SHIPYARD_GRAPH_DIR } = process.env;
+  return { ...(SHIPYARD_GRAPH_DIR ? { SHIPYARD_GRAPH_DIR } : {}), ...extra };
+}
+
+function runCli(argv, stdout, options = {}) {
+  return planningHost.runCli(argv, stdout, { probe: AVAILABLE_PROBE, ...options, env: soleEnv(options.env) });
+}
+
 function git(root, ...args) {
   return execFileSync('git', ['-C', root, '-c', 'commit.gpgsign=false', '-c', 'user.name=test', '-c', 'user.email=test@example.invalid', ...args], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
@@ -80,7 +91,7 @@ test('validates the packet at launch and delegates only the typed prompt to the 
     let delegated;
     let delegatedFile;
     const stateDir = path.join(f.root, 'dispatch');
-    await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, {
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
       stateDir, waitOptions: { pidLive: () => false },
       runHost: async (argv, stdout, options) => {
         assert.deepEqual(argv.slice(0, 2), ['--detach', '--args-file']);
@@ -111,7 +122,7 @@ test('refuses source edits made after packet construction before invoking the ho
     const file = argsFile(f.root, request);
     fs.appendFileSync(path.join(f.root, 'source.md'), 'changed\n');
     let launched = false;
-    await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, {
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
       runHost: async () => { launched = true; },
     }), (error) => error.code === 'STALE_CONTEXT_PACKET' && /changed after packet construction/.test(error.message));
     assert.equal(launched, false);
@@ -125,7 +136,7 @@ test('refuses a moved source revision before invoking the host', async () => {
     const file = argsFile(f.root, request);
     git(f.root, 'commit', '--allow-empty', '-q', '-m', 'advance source revision');
     let launched = false;
-    await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, {
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
       runHost: async () => { launched = true; },
     }), (error) => error.code === 'STALE_CONTEXT_PACKET' && /source revision differs/.test(error.message));
     assert.equal(launched, false);
@@ -150,7 +161,7 @@ for (const [name, result, code] of [
       runHost: async (argv, stdout) => {
         launches++;
         const host = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
-        await host.runCli(argv, stdout, { stateDir,
+        await host.runCli(argv, stdout, { stateDir, probe: AVAILABLE_PROBE, env: soleEnv(),
           spawn: () => ({ pid: 999999, on() {}, unref() {} }) });
         const terminal = { ...result, ...(result.receipt ? { receipt: {
           dispatch_id: request.dispatch_id, ...result.receipt } } : {}) };
@@ -158,7 +169,7 @@ for (const [name, result, code] of [
       } };
     for (let attempt = 0; attempt < 2; attempt++) {
       let output = '';
-      await assert.rejects(() => planningHost.runCli(['--args-file', file], { write(chunk) { output += chunk; } }, options),
+      await assert.rejects(() => runCli(['--args-file', file], { write(chunk) { output += chunk; } }, options),
         (error) => error.code === code && error.dispatch_id === request.dispatch_id && error.wait.result.status === result.status);
       assert.equal(output, '');
     }
@@ -178,11 +189,11 @@ test('timeout and lost recovery retain the original dispatch and copied private 
       launches++;
       tempFile = argv[2];
       await require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs').runCli(argv, stdout,
-        { stateDir, spawn: () => ({ pid: 999999, on() {}, unref() {} }) });
+        { stateDir, probe: AVAILABLE_PROBE, env: soleEnv(), spawn: () => ({ pid: 999999, on() {}, unref() {} }) });
     } };
     for (let attempt = 0; attempt < 2; attempt++) {
       let tick = 0;
-      await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, { ...options,
+      await assert.rejects(() => runCli(['--args-file', file], { write() {} }, { ...options,
         waitOptions: { pidLive: () => true, timeoutMs: 10, intervalMs: 10,
           clock: () => tick, sleep: async (ms) => { tick += ms; } } }),
       (error) => error.code === 'DISPATCH_TIMEOUT' && error.dispatch_id === request.dispatch_id);
@@ -190,12 +201,12 @@ test('timeout and lost recovery retain the original dispatch and copied private 
       assert.equal(fs.existsSync(path.join(stateDir, request.dispatch_id, 'args.json')), true);
       const copied = fs.readFileSync(path.join(stateDir, request.dispatch_id, 'args.json'));
       fs.writeFileSync(file, JSON.stringify({ ...request, prompt: 'concurrent changed input' }));
-      await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, options),
+      await assert.rejects(() => runCli(['--args-file', file], { write() {} }, options),
         (error) => error.code === 'INVALID_DISPATCH');
       assert.deepEqual(fs.readFileSync(path.join(stateDir, request.dispatch_id, 'args.json')), copied);
       fs.writeFileSync(file, JSON.stringify(request));
     }
-    await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, { ...options,
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, { ...options,
       waitOptions: { pidLive: () => false, recordWakeEvent() {} } }),
     (error) => error.code === 'DISPATCH_UNAVAILABLE' && error.dispatch_id === request.dispatch_id);
     assert.equal(launches, 1);
@@ -223,7 +234,7 @@ test('supported caller retains genuine blocking parent polls outside its writer 
       },
     };
     let diagnostic;
-    await assert.rejects(planningHost.runCli(['--args-file', file], { write() {} }, {
+    await assert.rejects(runCli(['--args-file', file], { write() {} }, {
       ...options, onWaitAccounting(value) { diagnostic = value; },
     }), error => error.code === 'DISPATCH_TIMEOUT');
     assert.ok(diagnostic.parent_rows.length > 0);
@@ -288,7 +299,7 @@ for (const failure of [false, true, 'stream-alias', 'lock-alias']) test('trusted
     const readings = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       let tick = 1000;
-      await assert.rejects(planningHost.runCli(['--args-file', file], { write() {} }, { ...options,
+      await assert.rejects(runCli(['--args-file', file], { write() {} }, { ...options,
         onWaitAccounting: value => readings.push(value), waitOptions: { overheadRecorder: recorder,
           pidLive: () => true, timeoutMs: 10, intervalMs: 10, clock: () => tick,
           sleep: async ms => { tick += ms; }, recordWakeEvent() {} },
@@ -307,4 +318,122 @@ for (const failure of [false, true, 'stream-alias', 'lock-alias']) test('trusted
     }
     assert.equal(fs.existsSync(path.join(f.root, '.planning/graph/orchestration-overhead.jsonl')), false);
   } finally { f.clean(); fs.rmSync(external, { recursive: true, force: true }); }
+});
+
+function captured() {
+  const chunks = [];
+  return { write(chunk) { chunks.push(String(chunk)); }, text: () => chunks.join('') };
+}
+
+function brokenOptions(extra = {}) {
+  return { probe: { status: 'unavailable', reason: 'runtime_missing' }, ...extra, env: soleEnv(extra.env) };
+}
+
+function snapshotTree(dir) {
+  return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : null;
+}
+
+test('a broken environment refuses in the caller process with hints before any detached child or state', async () => {
+  const f = fixture();
+  try {
+    const file = argsFile(f.root, requestFor(f.root));
+    const stateDir = path.join(f.root, 'dispatch');
+    const stderr = captured();
+    let launched = false;
+    await assert.rejects(() => planningHost.runCli(['--args-file', file], captured(), brokenOptions({
+      stateDir, stderr, runHost: async () => { launched = true; },
+    })), (error) => error.code === 'RUNTIME_UNAVAILABLE');
+    assert.equal(launched, false);
+    assert.match(stderr.text(), /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.equal(snapshotTree(stateDir), null);
+  } finally { f.clean(); }
+});
+
+test('legacy writer state refuses in the caller process before any detached child, and --preflight names it', async () => {
+  const f = fixture();
+  try {
+    const { defaultRunStoreDir } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
+    const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
+    const phaseDir = path.join(f.root, '.planning', 'phases', '43-planning');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const request = requestFor(f.root);
+    const testStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'planning-context-state-'));
+    const hostState = path.dirname(defaultRunStoreDir(request.scope, testStateRoot));
+    const lease = createPlanningWriterLease({ stateRoot: path.join(hostState, 'writer'), worktree: f.root, phaseDir });
+    lease.acquire({ owner: 'private-legacy', base_revision: git(f.root, 'rev-parse', 'HEAD') });
+    fs.writeFileSync(lease.file, '{invalid', { mode: 0o600 });
+    const file = argsFile(f.root, request);
+    let launched = false;
+    const stderr = captured();
+    await assert.rejects(() => runCli(['--args-file', file], captured(), {
+      stateDir: path.join(f.root, 'dispatch'), stderr, testStateRoot, runHost: async () => { launched = true; },
+    }), (error) => error.code === 'LEGACY_WRITER_STATE');
+    assert.equal(launched, false);
+    assert.match(stderr.text(), /hint\[LEGACY_WRITER_STATE\]/);
+    const check = await runCli(['--preflight', '--args-file', file], captured(), {
+      stateDir: path.join(f.root, 'dispatch'), stderr: captured(), testStateRoot, runHost: async () => { launched = true; } });
+    assert.ok(check.findings.some((finding) => finding.code === 'LEGACY_WRITER_STATE'));
+    fs.rmSync(testStateRoot, { recursive: true, force: true });
+  } finally { f.clean(); }
+});
+
+test('--preflight alone checks the current directory, prints the JSON line and starts nothing', async () => {
+  const f = fixture();
+  const previous = process.cwd();
+  try {
+    process.chdir(f.root);
+    const stateDir = path.join(f.root, 'dispatch');
+    let launched = false;
+    const runHost = async () => { launched = true; };
+    const okOut = captured();
+    const ok = await runCli(['--preflight'], okOut, { stateDir, runHost, stderr: captured() });
+    assert.equal(ok.ok, true);
+    assert.equal(JSON.parse(okOut.text().trim()).schema, 'shipyard.host-preflight.v1');
+    const badOut = captured();
+    const badErr = captured();
+    const bad = await planningHost.runCli(['--preflight'], badOut, brokenOptions({ stateDir, runHost, stderr: badErr }));
+    assert.equal(bad.ok, false);
+    assert.match(badErr.text(), /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.equal(JSON.parse(badOut.text().trim()).ok, false);
+    assert.equal(launched, false);
+    assert.equal(snapshotTree(stateDir), null);
+  } finally { process.chdir(previous); f.clean(); }
+});
+
+test('--preflight --args-file checks the request worktree and starts nothing', async () => {
+  const f = fixture();
+  try {
+    const file = argsFile(f.root, requestFor(f.root));
+    const stateDir = path.join(f.root, 'dispatch');
+    let launched = false;
+    const runHost = async () => { launched = true; };
+    const okOut = captured();
+    const ok = await runCli(['--preflight', '--args-file', file], okOut, { stateDir, runHost, stderr: captured() });
+    assert.equal(ok.ok, true);
+    const badErr = captured();
+    const bad = await planningHost.runCli(['--preflight', '--args-file', file], captured(),
+      brokenOptions({ stateDir, runHost, stderr: badErr }));
+    assert.equal(bad.ok, false);
+    assert.match(badErr.text(), /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.equal(launched, false);
+    assert.equal(snapshotTree(stateDir), null);
+    await assert.rejects(() => runCli(['--preflight', '--detach'], captured()), (error) => error.code === 'INVALID_INPUT');
+  } finally { f.clean(); }
+});
+
+test('the wait recorder repository identity is the git common directory, including for a path with a space', () => {
+  const { repositoryIdentity } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'planning identity ')));
+  try {
+    const root = path.join(base, 'work tree');
+    fs.mkdirSync(root);
+    git(root, 'init', '-q');
+    const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'planning-identity-state-')));
+    try {
+      const read = planningHost.readWaitAccounting({ scope: { worktree: root, run_id: 'r', ticket: 't', runtime: 'codex' },
+        dispatchId: 'd', graphDir: path.join(root, '.planning/graph') }, { testStateRoot: external });
+      assert.equal(read.repository, repositoryIdentity(root));
+      assert.ok(read.repository.includes('work tree'));
+    } finally { fs.rmSync(external, { recursive: true, force: true }); }
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });

@@ -95,5 +95,68 @@ test('Codex log facts retain model, effort and turn token deltas', () => {
   assert.strictEqual(turns[1].total_tokens, 55);
   assert.strictEqual(turns[1].usage_basis, 'turn_delta');
 });
+const crypto = require('node:crypto');
+const ROOT = path.join(__dirname, '..', '..');
+
+function installedCodexLayout(extraManifest = {}) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-installed-observer-')));
+  const home = path.join(base, 'codex-home');
+  const bundle = path.join(home, 'shipyard');
+  fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'plugins/delivery-pipeline/scripts'), path.join(bundle, 'scripts'), { recursive: true });
+  const evidence = Buffer.from(JSON.stringify(require('../smoke/installed-launch/lib.cjs').codexCapabilities()));
+  fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
+  const manifest = { phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
+    capabilities_digest: crypto.createHash('sha256').update(evidence).digest('hex'), ...extraManifest };
+  fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify(manifest));
+  return { base, home, bundle, scripts: path.join(bundle, 'scripts'), manifest };
+}
+
+test('an installed bundle supplies the sessions home and a disagreeing CODEX_HOME refuses', () => {
+  const layout = installedCodexLayout();
+  try {
+    const script = path.join(layout.scripts, 'session-observer.cjs');
+    const probe = (env) => require('node:child_process').spawnSync(process.execPath, ['-e',
+      "const o=require(process.argv[1]);try{const r=o.observeCodexNotify({},process.argv[2],{});console.log(JSON.stringify(r))}catch(e){console.log('THROWN '+e.message)}",
+      script, path.join(layout.base, 'graph')], { encoding: 'utf8', env });
+    const ok = probe({ PATH: process.env.PATH });
+    assert.ok(ok.stdout.includes(path.join(layout.home, 'logs_2.sqlite')) || !/disagrees/.test(ok.stdout), ok.stdout + ok.stderr);
+    const conflict = probe({ PATH: process.env.PATH, CODEX_HOME: path.join(layout.base, 'elsewhere') });
+    assert.match(conflict.stdout, /disagrees/);
+    assert.doesNotMatch(conflict.stdout, /THROWN/);
+    const refusal = JSON.parse(conflict.stdout);
+    assert.equal(refusal.refused, true);
+    assert.equal(refusal.code, 'ENV_CONFLICT');
+    assert.match(refusal.hint, /^hint\[ENV_CONFLICT\]/);
+    assert.doesNotMatch(refusal.hint, /\{[^}]*\}/);
+    const stale = installedCodexLayout();
+    try {
+      fs.rmSync(path.join(stale.bundle, 'codex-capabilities.json'));
+      const missing = require('node:child_process').spawnSync(process.execPath, ['-e',
+        "const o=require(process.argv[1]);console.log(JSON.stringify(o.observeCodexNotify({},process.argv[2],{})))",
+        path.join(stale.scripts, 'session-observer.cjs'), path.join(stale.base, 'graph')],
+      { encoding: 'utf8', env: { PATH: process.env.PATH } });
+      assert.equal(JSON.parse(missing.stdout).code, 'CAPABILITY_EVIDENCE_STALE', missing.stdout + missing.stderr);
+    } finally { fs.rmSync(stale.base, { recursive: true, force: true }); }
+    assert.doesNotMatch(conflict.stderr, /\n\s+at /);
+  } finally { fs.rmSync(layout.base, { recursive: true, force: true }); }
+});
+
+test('the Codex notify hook prints a bundle refusal to stderr and still exits 0', () => {
+  const layout = installedCodexLayout();
+  try {
+    const script = path.join(layout.scripts, 'codex-notify.cjs');
+    const run = (env) => require('node:child_process').spawnSync(process.execPath,
+      [script, JSON.stringify({ thread_id: 't', turn_id: 'u', cwd: layout.base })],
+      { encoding: 'utf8', env: { SHIPYARD_CODEX_NOTIFY_DELEGATE: path.join(layout.base, 'none.json'), ...env } });
+    const refused = run({ PATH: process.env.PATH, CODEX_HOME: path.join(layout.base, 'elsewhere') });
+    assert.equal(refused.status, 0, refused.stderr);
+    assert.match(refused.stderr, /^hint\[ENV_CONFLICT\]/m);
+    assert.doesNotMatch(refused.stderr, /\{[^}]*\}|\n\s+at /);
+    const quiet = run({ PATH: process.env.PATH });
+    assert.equal(quiet.status, 0, quiet.stderr);
+    assert.doesNotMatch(quiet.stderr, /hint\[/);
+  } finally { fs.rmSync(layout.base, { recursive: true, force: true }); }
+});
 
 done();

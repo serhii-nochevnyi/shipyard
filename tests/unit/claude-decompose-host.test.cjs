@@ -394,6 +394,9 @@ test('a live Claude decomposition blocks both genuine Codex typed CLIs before a 
     role: 'decomposition', gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }));
   const owner = runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps);
   let childCalls = 0;
+  const codexCapabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
+    supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+  const probe = { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities: codexCapabilities };
   try {
     await launched;
     const lease = createPlanningWriterLease({ stateRoot: sharedRoot, worktree: f.worktree,
@@ -401,10 +404,12 @@ test('a live Claude decomposition blocks both genuine Codex typed CLIs before a 
     const original = fs.readFileSync(lease.file, 'utf8');
     await assert.rejects(runCodexDecomposeCli(['--args-file', decomposeRequest], { write() {} }, {
       testStateRoot: path.join(f.root, 'codex-private'), testWriterStateRoot: sharedRoot,
+      capabilities: codexCapabilities, probe,
       spawn: () => { childCalls++; throw new Error('second paid child'); },
     }), { code: 'WRITER_LEASED' });
     await assert.rejects(runCodexDeliveryCli(['--args-file', deliveryRequest], { write() {} }, {
       testWriterStateRoot: sharedRoot, storageRoot: path.join(f.root, 'delivery-private'),
+      capabilities: codexCapabilities, probe,
       spawn: () => { childCalls++; throw new Error('second paid child'); },
     }), { code: 'WRITER_LEASED' });
     assert.equal(childCalls, 0);
@@ -1053,5 +1058,259 @@ test('decomposition seals plans whose phase prefix has leading zeros', async () 
     const { deps } = successDependencies(f, { store: path.join(f.root, 'zero-padded-store') });
     const output = await nativeRunDecomposition(request(f.worktree, 'gsd-planner'), deps);
     assert.ok(output.envelope);
+  } finally { f.clean(); }
+});
+
+const HOST_SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
+
+function hostEnv(extra) {
+  const env = { ...process.env, ...extra };
+  for (const key of ['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'SHIPYARD_RUNTIME',
+    'GSD_RUNTIME', 'SHIPYARD_GSD_TOOLS', 'GSD_TOOLS', 'GSD_CORE_HOME']) delete env[key];
+  return env;
+}
+
+test('request-file launch with a broken environment refuses with hints and creates no state', () => {
+  const f = fixture();
+  try {
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(home);
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const env = hostEnv({ HOME: home, PATH: '/nonexistent-shipyard-bin', CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, '--request-file', requestFile], { cwd: f.root, encoding: 'utf8', timeout: 20000, env });
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}${result.stderr}`, /hint\[[A-Z_]+\]:/);
+    assert.equal(fs.existsSync(path.join(home, '.local', 'state', 'shipyard', 'claude-decompose')), false);
+    assert.equal(fs.existsSync(path.join(f.worktree, '.planning', 'phases')), false);
+  } finally { f.clean(); }
+});
+
+test('--preflight starts nothing and exits by its result', () => {
+  const f = fixture();
+  try {
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(home);
+    const env = hostEnv({ HOME: home, PATH: '/nonexistent-shipyard-bin', CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, '--preflight'],
+      { cwd: f.worktree, encoding: 'utf8', timeout: 20000, env });
+    const payload = JSON.parse(result.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.equal(payload.schema, 'shipyard.host-preflight.v1');
+    assert.equal(result.status, payload.ok ? 0 : 1);
+    assert.equal(fs.existsSync(path.join(home, '.local')), false);
+  } finally { f.clean(); }
+});
+
+test('--preflight parses alone and with --request-file', () => {
+  assert.equal(parseArguments(['--preflight']).preflightOnly, true);
+  const both = parseArguments(['--preflight', '--request-file', 'r.json']);
+  assert.equal(both.preflightOnly, true);
+  assert.equal(both.requestFile, 'r.json');
+});
+
+function legacyWriterFixture() {
+  const f = preparedPhaseFixture();
+  const worktree = fs.realpathSync(f.worktree);
+  const sha = (text) => crypto.createHash('sha256').update(text).digest('hex');
+  const leaseDir = path.join(f.root, '.local', 'state', 'shipyard', 'codex-decompose', sha(worktree), 'writer',
+    sha(`${worktree}\n${fs.realpathSync(f.phaseDir)}`));
+  fs.mkdirSync(leaseDir, { recursive: true });
+  fs.writeFileSync(path.join(leaseDir, 'lease.json'), '{}');
+  return { ...f, claudeState: path.join(f.root, '.local', 'state', 'shipyard', 'claude-decompose') };
+}
+
+test('a refused decomposition because of legacy writer state creates no private store', async () => {
+  const f = legacyWriterFixture();
+  const home = process.env.HOME;
+  process.env.HOME = f.root;
+  try {
+    await assert.rejects(nativeRunDecomposition(request(f.worktree, 'gsd-planner'), {}), { code: 'LEGACY_WRITER_STATE' });
+    assert.equal(fs.existsSync(f.claudeState), false);
+  } finally { process.env.HOME = home; f.clean(); }
+});
+
+test('--preflight with a request reports LEGACY_WRITER_STATE and a launch refuses with its code and no state', () => {
+  const f = legacyWriterFixture();
+  try {
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const env = hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config });
+    const run = (args) => require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, ...args],
+      { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    const check = run(['--preflight', '--request-file', requestFile]);
+    const payload = JSON.parse(check.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.ok(payload.findings.some((finding) => finding.code === 'LEGACY_WRITER_STATE'), check.stderr);
+    const launch = run(['--request-file', requestFile]);
+    assert.equal(launch.status, 1, launch.stderr);
+    assert.equal(launch.stdout, '');
+    const first = /^([A-Z_]+): preflight found/m.exec(launch.stderr);
+    assert.ok(first, launch.stderr);
+    assert.equal(first[1], payload.findings[0].code);
+    assert.match(launch.stderr, /hint\[LEGACY_WRITER_STATE\]/);
+    assert.equal(launch.stderr.split('\n').filter((line) => line.startsWith(`hint[${first[1]}]`)).length, 1);
+    assert.equal(fs.existsSync(f.claudeState), false);
+  } finally { f.clean(); }
+});
+
+test('--preflight with a request reports an unreadable private writer root as LEGACY_WRITER_STATE', () => {
+  const f = preparedPhaseFixture();
+  try {
+    const home = path.join(f.root, 'home');
+    const base = path.join(home, '.local', 'state', 'shipyard', 'claude-decompose');
+    fs.mkdirSync(base, { recursive: true });
+    fs.symlinkSync(f.root, path.join(base, 'linked'));
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const bin = fakeAvailableClaudeBin(f.root);
+    const env = hostEnv({ HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: f.config });
+    const check = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, '--preflight', '--request-file', requestFile], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.equal(check.status, 1, check.stderr);
+    const payload = JSON.parse(check.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.deepEqual(payload.findings.map((item) => item.code), ['LEGACY_WRITER_STATE']);
+    assert.match(check.stderr, /hint\[LEGACY_WRITER_STATE\]/);
+  } finally { f.clean(); }
+});
+
+test('a launch whose preflight passes keeps preflight JSON off stdout', () => {
+  const f = preparedPhaseFixture();
+  try {
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(home);
+    const bin = fakeAvailableClaudeBin(f.root);
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const env = hostEnv({ HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, '--request-file', requestFile],
+      { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.match(result.stderr, /preflight: ok/);
+    assert.doesNotMatch(result.stdout, /shipyard\.host-preflight\.v1/);
+  } finally { f.clean(); }
+});
+
+test('recover --dispatch runs an environment preflight before it creates run-controller state', () => {
+  const f = recoveryFixture('gsd-planner', { cli: true });
+  try {
+    const env = { ...hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config }), CODEX_SANDBOX: 'seatbelt' };
+    const result = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, 'recover', '--dispatch', f.dispatchId], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^[A-Z_]+: preflight found/m);
+    assert.match(result.stderr, /hint\[AMBIGUOUS_RUNTIME\]/);
+    assert.equal(fs.existsSync(path.join(f.store, 'recovery-runs')), false);
+  } finally { f.finish(); }
+});
+
+test('recover --dispatch does not probe the Claude CLI, which recovery never launches', () => {
+  const f = recoveryFixture('gsd-planner', { cli: true });
+  try {
+    const env = hostEnv({ HOME: f.root, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: f.config });
+    const result = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, 'recover', '--dispatch', f.dispatchId], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.match(result.stderr, /preflight: ok/, result.stderr);
+    assert.doesNotMatch(result.stderr, /RUNTIME_UNAVAILABLE|preflight found/, result.stderr);
+  } finally { f.finish(); }
+});
+
+test('recovery runs its environment gate with the original scope before any controller exists', async () => {
+  const f = recoveryFixture('gsd-planner');
+  try {
+    let gated;
+    let controllers = 0;
+    await assert.rejects(recoverDecomposition(f.dispatchId, { ...f.deps,
+      environmentGate: (scope) => { gated = scope.worktree; throw Object.assign(new Error('gate'), { code: 'RUNTIME_UNAVAILABLE' }); },
+      controllerFactory: () => { controllers += 1; throw new Error('controller must not be built'); } }),
+    { code: 'RUNTIME_UNAVAILABLE' });
+    assert.equal(gated, fs.realpathSync(f.worktree));
+    assert.equal(controllers, 0);
+  } finally { f.finish(); }
+});
+
+test('a repository identity failure keeps its own code instead of SCOPE_MISMATCH', () => {
+  const f = fixture();
+  try {
+    const odd = path.join(f.root, 'semi;colon');
+    fs.renameSync(f.worktree, odd);
+    assert.throws(() => canonicalRequest(request(odd, 'gsd-planner')), { code: 'REPOSITORY_IDENTITY_INVALID' });
+  } finally { f.clean(); }
+});
+
+test('--preflight with a request on a path no identity can carry reports the finding, exits 1 and starts nothing', () => {
+  const f = fixture();
+  try {
+    const odd = path.join(f.root, 'semi;colon');
+    fs.renameSync(f.worktree, odd);
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(odd, 'gsd-planner')));
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(home);
+    const bin = fakeAvailableClaudeBin(f.root);
+    const env = hostEnv({ HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: f.config });
+    const check = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, '--preflight', '--request-file', requestFile], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.equal(check.status, 1, check.stderr);
+    const payload = JSON.parse(check.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.deepEqual(payload.findings.map((item) => item.code), ['REPOSITORY_IDENTITY_INVALID']);
+    assert.match(check.stderr, /hint\[REPOSITORY_IDENTITY_INVALID\]/);
+    assert.doesNotMatch(check.stderr, /^REPOSITORY_IDENTITY_INVALID:/m);
+    assert.equal(fs.existsSync(path.join(home, '.local')), false);
+  } finally { f.clean(); }
+});
+
+test('config root follows CLAUDE_CONFIG_DIR, then HOME/.claude, and ignores CLAUDE_HOME', () => {
+  const f = fixture();
+  try {
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(path.join(home, '.claude', 'agents'), { recursive: true });
+    const bin = fakeAvailableClaudeBin(f.root);
+    const run = (extra) => {
+      const env = hostEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: home, ...extra });
+      delete env.CLAUDE_CONFIG_DIR;
+      Object.assign(env, extra);
+      const result = require('node:child_process').spawnSync(process.execPath, [HOST_SCRIPT, '--capability-only'],
+        { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', timeout: 20000, env });
+      return JSON.parse(result.stdout);
+    };
+    const unset = run({ CLAUDE_HOME: f.config });
+    assert.notEqual(unset.status, 'available');
+    assert.ok(JSON.stringify(unset).includes(path.join(home, '.claude')));
+    assert.ok(!JSON.stringify(unset).includes(f.config));
+    const set = run({ CLAUDE_CONFIG_DIR: f.config });
+    assert.equal(set.status, 'available');
+  } finally { f.clean(); }
+});
+
+test('the seal repository is the shared identity for a worktree under a path with a space', () => {
+  const f = fixture();
+  try {
+    const spaced = path.join(f.root, 'with space');
+    fs.renameSync(f.worktree, spaced);
+    const scope = canonicalRequest(request(spaced, 'gsd-planner'));
+    assert.equal(scope.repository, require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs')
+      .repositoryIdentity(spaced));
+    assert.equal(scope.repository, fs.realpathSync(path.join(spaced, '.git')));
+  } finally { f.clean(); }
+});
+
+test('a seal subject with the old owner/repo form verifies through acceptedRepositoryValues', () => {
+  const f = fixture();
+  try {
+    const arch = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+    const { decompositionAdr } = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+    fs.mkdirSync(path.join(f.worktree, '.planning/architecture'), { recursive: true });
+    fs.writeFileSync(path.join(f.worktree, ADR_PATH), ADR_TEXT);
+    const adr = decompositionAdr.resolveAdr(f.worktree, ADR_PATH);
+    const accepted = arch.acceptedRepositoryValues(f.worktree);
+    const repository = arch.repositoryIdentity(f.worktree);
+    const legacy = accepted.find((value) => value !== repository && /^[^/\s]+\/[^/\s]+$/.test(value));
+    const forms = [repository, ...(legacy ? [legacy] : [])];
+    for (const form of forms) {
+      const subject = arch.buildSubject('decomposition-seal', { phase: 3, repository: form, adr: adr.sha256 });
+      assert.equal(decompositionAdr.assertDecompositionSubject(subject, { worktree: f.worktree, repository, adr, acceptedRepositories: accepted }).repository, form);
+    }
+    const old = arch.buildSubject('decomposition-seal', { phase: 3, repository: 'owner/repo', adr: adr.sha256 });
+    assert.equal(decompositionAdr.assertDecompositionSubject(old, { worktree: f.worktree, repository, adr, acceptedRepositories: [...accepted, 'owner/repo'] }).repository, 'owner/repo');
   } finally { f.clean(); }
 });

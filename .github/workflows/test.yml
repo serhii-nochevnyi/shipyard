@@ -71,6 +71,7 @@ jobs:
         env:
           SHIPYARD_REQUIRE_OS_SANDBOX: "1"
           UNIT_SHARD: ${{ matrix.shard }}/4
+          COMMENT_POLICY_BASE: origin/${{ github.base_ref || 'main' }}
         run: ./tests/unit/run.sh
 
   rest:

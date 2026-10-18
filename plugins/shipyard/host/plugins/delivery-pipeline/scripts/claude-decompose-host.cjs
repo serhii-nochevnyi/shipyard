@@ -14,7 +14,9 @@ const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
-const { formatHint } = require('./refusal-hints.cjs');
+const { hintForError } = require('./refusal-hints.cjs');
+const { resolveClaudeHome, preflight, emitPreflight, stateRefusalOf } = require('./runtime-context.cjs');
+const { repositoryIdentity } = require('./architecture-target.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
   assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
@@ -128,7 +130,7 @@ function canonicalRequest(input) {
   for (const key of ['critical', 'checkpoint']) {
     if (signals[key] !== undefined && typeof signals[key] !== 'boolean') refuse('INVALID_SIGNAL', `invalid ${key} signal`);
   }
-  const common = fs.realpathSync(path.resolve(worktree, git(worktree, 'rev-parse', '--git-common-dir')));
+  const common = repositoryIdentity(worktree);
   let adr = null;
   if (ROLES[role] === 'decomposition' || input.adr !== undefined) {
     try { adr = decompositionAdr.resolveAdr(worktree, input.adr); }
@@ -332,14 +334,14 @@ function validateJudgmentWriter(scope, directory, writerLease, leaseHandle, snap
 async function runDecomposition(request, dependencies = {}) {
   const scope = canonicalRequest(request);
   const store = dependencies.store || privateStore(scope);
-  ensurePrivateStore(store);
   const phaseDir = phaseDirectory(scope.worktree, scope.phase);
-  const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'runs') });
-  const runId = `decompose-${crypto.randomUUID()}`;
-  const dispatchId = `decompose-${crypto.randomUUID()}`;
   assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
     roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
       repository: scope.repository, privateRoots: [path.join(store, 'writer')] }) });
+  ensurePrivateStore(store);
+  const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'runs') });
+  const runId = `decompose-${crypto.randomUUID()}`;
+  const dispatchId = `decompose-${crypto.randomUUID()}`;
   const writerLease = dependencies.writerLease || createPlanningWriterLease({
     worktree: scope.worktree, phaseDir, stateRoot: sharedPlanningWriterRoot(dependencies.testWriterStateRoot),
   });
@@ -359,7 +361,7 @@ async function runDecomposition(request, dependencies = {}) {
         || typeof resolution.effort !== 'string') {
       refuse('CONFLICTING_OVERRIDE', 'routed resolution does not match the requested GSD launch');
     }
-    const configRoot = dependencies.configRoot || process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude');
+    const configRoot = dependencies.configRoot || resolveClaudeHome();
     const definition = trustedAgent(scope.role, configRoot);
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-definition-'));
     fs.chmodSync(temporary, 0o700);
@@ -551,6 +553,7 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
   const launch = readLaunch(store, dispatchId);
   const scope = canonicalRequest(launch.request);
   if (!dependencies.store && privateStore(scope) !== store) refuse('RECOVERY_EVIDENCE_MISSING', 'launch record belongs to another scope');
+  if (dependencies.environmentGate) dependencies.environmentGate(scope);
   const phaseDir = phaseDirectory(scope.worktree, scope.phase);
   const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'recovery-runs') });
   assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
@@ -612,8 +615,7 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
       verified = await verifyCompletedClaudeLaunch({ session_id: launch.session_id,
         start_evidence_file: expectedStart, transcript_path: expectedTranscript,
         saved_native_transcript: launch.saved_native_transcript,
-        original_projects_root: path.join(dependencies.configRoot || process.env.CLAUDE_CONFIG_DIR
-          || path.join(process.env.HOME || os.homedir(), '.claude'), 'projects'),
+        original_projects_root: path.join(dependencies.configRoot || resolveClaudeHome(), 'projects'),
         model: resolution.model, effort: resolution.effort, gsd_role: scope.role,
         worktree: scope.worktree });
     } catch (error) {
@@ -678,6 +680,8 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
 
 function parseArguments(argv) {
   if (argv.length === 1 && argv[0] === '--capability-only') return { capabilityOnly: true };
+  if (argv.length === 1 && argv[0] === '--preflight') return { preflightOnly: true };
+  if (argv[0] === '--preflight') return { ...parseArguments(argv.slice(1)), preflightOnly: true };
   if (argv.length === 3 && argv[0] === 'recover' && argv[1] === '--dispatch') {
     return { recoverDispatch: safeText(argv[2], 'dispatch id', 128) };
   }
@@ -685,10 +689,52 @@ function parseArguments(argv) {
   return { requestFile: argv[1] };
 }
 
+function writerPreflight(scope) {
+  let phaseDir;
+  try { phaseDir = phaseDirectory(scope.worktree, scope.phase); } catch { return {}; }
+  try {
+    return { gsdRole: scope.role, phaseDir,
+      writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+        repository: scope.repository, privateRoots: [path.join(privateStore(scope), 'writer')] }) };
+  } catch (error) {
+    const writerStateError = stateRefusalOf(error);
+    if (!writerStateError) throw error;
+    return { writerStateError };
+  }
+}
+
+function launchPreflight(worktree, { stdout = { write() {} }, scope = 'launch', ...extra } = {}) {
+  const result = preflight({
+    runtime: 'claude', scriptDir: __dirname, worktree, graphDir: undefined, scope,
+    host: 'claude-decompose-host.cjs', env: process.env,
+    probe: scope === 'environment' ? undefined : () => probeClaudeRuntime(),
+    needsRepositoryIdentity: true, ...extra,
+  });
+  emitPreflight(result, { stdout, stderr: process.stderr });
+  return result;
+}
+
+// @contract: a refused preflight throws the first finding's code with its hints already on stderr.
+function requirePreflight(worktree, options) {
+  const result = launchPreflight(worktree, options);
+  if (!result.ok) {
+    const error = new Error(`preflight found ${result.findings.length} incompatibilities: ${result.findings.map((item) => item.code).join(', ')}`);
+    error.code = result.findings[0].code;
+    error.hintPrinted = true;
+    throw error;
+  }
+  return result;
+}
+
 async function main(argv = process.argv.slice(2)) {
   const args = parseArguments(argv);
+  if (args.preflightOnly && !args.requestFile) {
+    if (!launchPreflight(process.cwd(), { stdout: process.stdout }).ok) process.exitCode = 1;
+    return;
+  }
   if (args.recoverDispatch) {
-    process.stdout.write(`${JSON.stringify(await recoverDecomposition(args.recoverDispatch))}\n`);
+    const environmentGate = (scope) => requirePreflight(scope.worktree, { scope: 'environment' });
+    process.stdout.write(`${JSON.stringify(await recoverDecomposition(args.recoverDispatch, { environmentGate }))}\n`);
     return;
   }
   if (args.capabilityOnly) {
@@ -698,7 +744,7 @@ async function main(argv = process.argv.slice(2)) {
       return;
     }
     try {
-      const configRoot = process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude');
+      const configRoot = resolveClaudeHome();
       for (const [role, boundaryRole] of Object.entries(ROLES)) {
         pipelineConfig.resolveDispatch({ root: process.cwd(), runtime: 'claude',
           role: boundaryRole, signals: {}, dispatch_id: `capability-${role}` });
@@ -708,15 +754,31 @@ async function main(argv = process.argv.slice(2)) {
         roles: Object.keys(ROLES), live_execution: 'not_run' })}\n`);
     } catch (error) {
       process.stdout.write(`${JSON.stringify({ status: 'unavailable', reason: error.code || 'role_unavailable',
-        detail: error.message, live_execution: 'not_run', hint: formatHint(error.code) })}\n`);
+        detail: error.message, live_execution: 'not_run', hint: hintForError(error) })}\n`);
     }
     return;
   }
   const stat = fs.lstatSync(args.requestFile);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_PROMPT) refuse('INVALID_INPUT', 'request file is not bounded and regular');
   const request = JSON.parse(fs.readFileSync(args.requestFile, 'utf8'));
-  const scope = canonicalRequest(request);
+  let scope;
+  try { scope = canonicalRequest(request); } catch (error) {
+    if (!args.preflightOnly || error.code !== 'REPOSITORY_IDENTITY_INVALID') throw error;
+    // @contract: --preflight reports a path no identity can carry as a finding instead of throwing.
+    let worktree;
+    try { worktree = fs.realpathSync(request.worktree); } catch { throw error; }
+    const reported = launchPreflight(worktree, { stdout: process.stdout });
+    if (reported.ok) throw error;
+    process.exitCode = 1;
+    return;
+  }
   process.chdir(scope.worktree);
+  const gateOptions = writerPreflight(scope);
+  if (args.preflightOnly) {
+    if (!launchPreflight(scope.worktree, { stdout: process.stdout, ...gateOptions }).ok) process.exitCode = 1;
+    return;
+  }
+  requirePreflight(scope.worktree, gateOptions);
   const output = await runDecomposition(request);
   process.stdout.write(`${JSON.stringify(output)}\n`);
 }
@@ -724,7 +786,7 @@ async function main(argv = process.argv.slice(2)) {
 if (require.main === module) {
   main().catch((error) => {
     process.stderr.write(`${error.code || 'FAILED'}: ${error.message}\n`);
-    process.stderr.write(`${formatHint(error.code)}\n`);
+    if (!error.hintPrinted) process.stderr.write(`${hintForError(error)}\n`);
     process.exitCode = 1;
   });
 }

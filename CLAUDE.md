@@ -45,6 +45,7 @@ make test-docs          # user documentation and command-surface contract
 make test-hooks         # Claude hook dependency bundle and migration
 make test-codex-shipyard # generator, installer and capability integration
 make test-releases      # release metadata contract
+make test-installed-launch # installed bundle launches without exported variables
 make test               # test-fast plus the host Codex and release checks
 make capture-fixtures    # manual, scrubbed boundary-fixture capture; needs BOUNDARY=
 make test-live           # one live round per runtime; needs gh auth and SHIPYARD_LIVE_REPO

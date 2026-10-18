@@ -1340,5 +1340,58 @@ test('Codex static variants: research is workspace-write, arch-review and drift-
   }
   assert.deepEqual([...new Set(codexStaticVariants(1).map((variant) => variant.sandbox))], ['workspace-write']);
 });
+const crypto = require('crypto');
+const ROOT = path.join(__dirname, '..', '..');
+
+function installedCodexLayout(extraManifest = {}) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-installed-tune-')));
+  const home = path.join(base, 'codex-home');
+  const bundle = path.join(home, 'shipyard');
+  fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'plugins/delivery-pipeline/scripts'), path.join(bundle, 'scripts'), { recursive: true });
+  const evidence = Buffer.from(JSON.stringify(require('../smoke/installed-launch/lib.cjs').codexCapabilities()));
+  fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
+  const manifest = { phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
+    capabilities_digest: crypto.createHash('sha256').update(evidence).digest('hex'), ...extraManifest };
+  fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify(manifest));
+  return { base, home, bundle, scripts: path.join(bundle, 'scripts'), manifest };
+}
+
+test('an installed bundle: a disagreeing CODEX_HOME refuses, and validate-codex-bundle still demands explicit evidence', () => {
+  const layout = installedCodexLayout();
+  try {
+    const tune = path.join(layout.scripts, 'gsd-tune.cjs');
+    const conflict = spawnSync(process.execPath, [tune, '--global', '--runtime', 'codex'], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, HOME: layout.base, CODEX_HOME: path.join(layout.base, 'elsewhere') } });
+    assert.match(conflict.stderr + conflict.stdout, /disagrees/);
+    assert.doesNotMatch(conflict.stderr, /\n\s+at /);
+    const bare = spawnSync(process.execPath, [SCRIPT, '--validate-codex-bundle', layout.base], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, HOME: layout.base } });
+    assert.notEqual(bare.status, 0);
+  } finally { fs.rmSync(layout.base, { recursive: true, force: true }); }
+});
+
+test('an installed bundle in conflict is reported for codex and never crashes another runtime', () => {
+  const layout = installedCodexLayout();
+  try {
+    const tune = path.join(layout.scripts, 'gsd-tune.cjs');
+    const env = { PATH: process.env.PATH, HOME: layout.base, CODEX_HOME: path.join(layout.base, 'elsewhere') };
+    const codex = spawnSync(process.execPath, [tune, '--global', '--runtime', 'codex', '--json'], { encoding: 'utf8', env });
+    assert.equal(codex.status, 1, codex.stderr + codex.stdout);
+    assert.doesNotMatch(codex.stderr, /\n\s+at /);
+    const refused = JSON.parse(codex.stdout).blockers.find((b) => b.what === 'codex-environment-refused');
+    assert.ok(refused, codex.stdout);
+    assert.match(refused.head, /ENV_CONFLICT/);
+    assert.match(refused.head, /disagrees/);
+    assert.doesNotMatch(refused.why, /\{[^}]*\}/);
+    const claude = spawnSync(process.execPath, [tune, '--global', '--runtime', 'claude', '--json'], { encoding: 'utf8', env });
+    assert.doesNotMatch(claude.stderr, /disagrees|HostEnvironmentError/);
+    assert.deepEqual(JSON.parse(claude.stdout).blockers, []);
+    fs.rmSync(path.join(layout.bundle, 'codex-capabilities.json'));
+    const stale = spawnSync(process.execPath, [tune, '--global', '--runtime', 'codex', '--json'],
+      { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: layout.base } });
+    assert.match(JSON.parse(stale.stdout).blockers[0].head, /CAPABILITY_EVIDENCE_STALE/);
+  } finally { fs.rmSync(layout.base, { recursive: true, force: true }); }
+});
 
 done();

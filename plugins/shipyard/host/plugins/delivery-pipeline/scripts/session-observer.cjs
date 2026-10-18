@@ -292,8 +292,17 @@ function observeCodexDatabase(dbPath, graphDir, options = {}) {
 }
 
 function observeCodexNotify(payload, graphDir, options = {}) {
-  const home = process.env.CODEX_HOME || path.join(require('node:os').homedir(), '.codex');
-  const db = options.dbPath || process.env.SHIPYARD_CODEX_LOG_DB || path.join(home, 'logs_2.sqlite');
+  let db = options.dbPath || process.env.SHIPYARD_CODEX_LOG_DB;
+  if (!db) {
+    try {
+      db = path.join(require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env: process.env }), 'logs_2.sqlite');
+    } catch (error) {
+      if (!error || error.name !== 'HostEnvironmentError') throw error;
+      // @contract: a refused installed bundle returns a printable refusal instead of throwing.
+      const { formatHint, stripControl } = require('./refusal-hints.cjs');
+      return { refused: true, code: error.code, detail: stripControl(error.message), hint: formatHint(error.code, error.vars) };
+    }
+  }
   return observeCodexDatabase(db, graphDir, {
     ...options,
     threadId: payload?.thread_id || payload?.threadId,

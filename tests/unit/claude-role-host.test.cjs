@@ -56,7 +56,7 @@ function writeCorpus(root, { adrs = [], backlogFiles = [], investigations = [] }
 }
 
 function setupRepository(kind, options = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), options.spaced ? 'shipyard claude role ' : 'shipyard-claude-role-')));
   const storageRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-state-')));
   git(root, ['init', '-b', 'main']);
   git(root, ['config', 'user.name', 'Shipyard Test']);
@@ -164,7 +164,7 @@ test('native inline preparation preserves shared logical coverage and refuses in
     assert.deepEqual(packetFromPrompt(prompt), packets.decodeUniqueContent(encoded));
     assert.ok(prompt.includes('no semantic reading credit'));
     assert.ok(!prompt.includes('INPUT_MANIFEST='));
-    assert.throws(() => prepareInlineReview('integrator', packet.subject, encoded, 'x'.repeat(1500000)),
+    assert.throws(() => prepareInlineReview('integrator', packet.subject, encoded, 'x'.repeat(3000000)),
       error => error.code === 'CONTEXT_PACKET_OVER_BOUND'
         && error.refusal.limiting_field === 'complete_inline_prompt_bytes'
         && error.refusal.required > error.refusal.observed);
@@ -1016,6 +1016,92 @@ test('integrator judges the code diff without conveyor planning state', async ()
   }
 });
 
+function bulkSource(lines) {
+  return Array.from({ length: lines }, (_, index) => `${String(index).padStart(8, '0')} ${'x'.repeat(70)}\n`).join('');
+}
+
+test('integrator admits a role diff above the former 1 MiB bound', async () => {
+  const fixture = setupRepository('integrator', { sourceContent: bulkSource(14000) });
+  let launched;
+  try {
+    await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt) { launched = prompt; },
+    })).run(request(fixture));
+    const diff = packetFromPrompt(launched).role_context.combined_diff.content;
+    assert.ok(Buffer.byteLength(diff, 'utf8') > 1024 * 1024);
+    assert.ok(Buffer.byteLength(diff, 'utf8') <= 2 * 1024 * 1024);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('an integrator diff of about 2 MB prepares within the packet and prompt bounds', async () => {
+  const fixture = setupRepository('integrator', { sourceContent: bulkSource(25000) });
+  let launched;
+  try {
+    await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt) { launched = prompt; },
+    })).run(request(fixture));
+    const packet = packetFromPrompt(launched);
+    const diffBytes = Buffer.byteLength(packet.role_context.combined_diff.content, 'utf8');
+    assert.ok(diffBytes > 1.9 * 1024 * 1024 && diffBytes <= 2 * 1024 * 1024);
+    assert.ok(packet.accounting.estimated_tokens > 320000);
+    assert.equal(packet.accounting.overflow, false);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('an integrator packet above its diff-scaled token bound is refused as over bound', async () => {
+  const bigBody = (label) => `# ${label}\n\n- **Status:** accepted\n\n${'x'.repeat(150 * 1024)}\n`;
+  const corpus = { adrs: [201, 202, 203, 204, 205].map((number) => ({
+    name: `ADR-${number}-big.md`, content: bigBody(`ADR-${number} — big`) })) };
+  const planExtra = ['References ADR-201, ADR-202, ADR-203, ADR-204 and ADR-205 for scale.'];
+  const fixture = setupRepository('integrator', { corpus, planExtra, sourceContent: bulkSource(12000) });
+  try {
+    await assert.rejects(
+      createClaudeRoleHost(hostOptions(fixture)).run(request(fixture)),
+      (error) => error.code === 'CONTEXT_PACKET_OVER_BOUND'
+        && error.message.includes('integrator context packet is')
+        && error.message.includes('remedy: split the phase'),
+    );
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('integrator refuses a role diff above the 2 MiB bound as too large, not as a failed preflight', async () => {
+  const fixture = setupRepository('integrator', { sourceContent: bulkSource(26000) });
+  try {
+    await assert.rejects(
+      createClaudeRoleHost(hostOptions(fixture)).run(request(fixture)),
+      (error) => error.message.includes('role diff exceeds the bounded context packet')
+        && !error.message.includes('preflight failed'),
+    );
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('an overflowing change-metadata listing is refused as too large with the bound named', async () => {
+  const fixture = setupRepository('arch-review');
+  try {
+    await assert.rejects(
+      createClaudeRoleHost({ ...hostOptions(fixture),
+        execFileSync(executable, args, runOptions) {
+          if (args.includes('--name-only')) throw Object.assign(new Error('spawnSync git ENOBUFS'), { code: 'ENOBUFS', stdout: 'a\0b' });
+          return execFileSync(executable, args, runOptions);
+        },
+      }).run(request(fixture)),
+      (error) => error.code === 'INPUT_TOO_LARGE'
+        && error.message.includes('git output exceeds its 2097152 byte bound')
+        && !error.message.includes('preflight failed'),
+    );
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
 test('integrator resolves a marker-matched merged PR on its recorded head branch', async () => {
   const fixture = setupRepository('integrator');
   let launched;
@@ -1410,7 +1496,7 @@ test('role packets carry their explicit token bounds', async () => {
       onLaunch(prompt) { integratorPacket = packetFromPrompt(prompt); },
     })).run(request(integratorFixture));
     const diffBytes = Buffer.byteLength(integratorPacket.role_context.combined_diff.content, 'utf8');
-    assert.equal(integratorPacket.accounting.soft_ceiling, 60000 + Math.ceil(diffBytes / 4));
+    assert.equal(integratorPacket.accounting.soft_ceiling, 60000 + Math.ceil(diffBytes / 3));
 
     let sentinelPacket;
     await createClaudeRoleHost(hostOptions(sentinelFixture, {
@@ -1727,4 +1813,226 @@ test('Claude architecture selection includes an uncited governing ADR without im
     } })).run(request(fixture)), /focused selection inspected/);
     assert.equal(inspected, true);
   } finally { cleanupFixture(fixture); }
+});
+
+test('integrator subject for a space-path worktree is accepted by the authority modules and round-trips inflight', () => {
+  const fixture = setupRepository('integrator', { spaced: true });
+  const targets = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const records = require('../../plugins/delivery-pipeline/scripts/dispatch-record.cjs');
+  const { prepareIntegratorContext } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const prepared = prepareIntegratorContext(hostOptions(fixture), request(fixture));
+    const parsed = targets.parseSubject('integrator', prepared.ticket);
+    assert.ok(parsed, 'integrator subject parses');
+    assert.ok(parsed.repository.includes(' '));
+    assert.equal(parsed.repository, targets.repositoryIdentity(fixture.root));
+    const graphDir = path.join(fixture.root, '.planning/graph');
+    const input = { graphDir, worktree: fixture.root, dispatch_id: records.newDispatchId(), pid: process.pid,
+      role: 'integrator', host: 'claude', ticket: prepared.ticket };
+    records.recordInflight(input);
+    const rows = Object.values(JSON.parse(fs.readFileSync(path.join(graphDir, 'dispatches.json'), 'utf8')).inflight || {});
+    assert.ok(rows.some((row) => row.ticket === prepared.ticket));
+    records.clearInflight(input);
+  } finally { cleanupFixture(fixture); }
+});
+
+test('aggregate architecture review for a space-path worktree builds its phase binding from repositoryIdentity', async () => {
+  const fixture = setupRepository('arch-review', { spaced: true });
+  const targets = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const original = targets.phaseBinding;
+  const seen = [];
+  try {
+    const epic = `epic/${PHASE}`;
+    git(fixture.root, ['branch', '-m', epic]);
+    fixture.branch = epic;
+    const graphFile = path.join(fixture.root, '.planning/graph/tickets.json');
+    const graph = JSON.parse(fs.readFileSync(graphFile));
+    graph.tickets[TICKET].epic = epic;
+    fs.writeFileSync(graphFile, JSON.stringify(graph));
+    git(fixture.root, ['add', '.planning']);
+    git(fixture.root, ['commit', '-m', 'chore: bind canonical phase epic']);
+    fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
+    targets.phaseBinding = (input) => {
+      const binding = original(input);
+      seen.push({ input, binding });
+      return binding;
+    };
+    await createClaudeRoleHost(hostOptions(fixture)).run({ ...request(fixture), ticket: undefined, phase: PHASE, pr: 101 }).catch(() => {});
+    assert.ok(seen.length >= 1, 'the host built a phase binding');
+    const identity = targets.repositoryIdentity(fixture.root);
+    assert.ok(identity.includes(' '));
+    for (const { input, binding } of seen) {
+      assert.equal(input.repository, identity);
+      assert.equal(targets.parseSubject('architecture-review', binding.subject).repository, identity);
+    }
+  } finally {
+    targets.phaseBinding = original;
+    cleanupFixture(fixture);
+  }
+});
+
+const { spawnSync: spawnRole } = require('node:child_process');
+const ROLE_SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+
+function roleTree(dir) {
+  const out = [];
+  const walk = (entry) => {
+    if (path.basename(entry) === '.git') return;
+    out.push(entry);
+    if (fs.lstatSync(entry).isDirectory()) for (const name of fs.readdirSync(entry).sort()) walk(path.join(entry, name));
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return out;
+}
+
+function roleCliFixture() {
+  const fixture = setupRepository('arch-review');
+  const aux = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-role-cli-')));
+  const home = path.join(aux, 'home');
+  const bin = path.join(aux, 'bin');
+  fs.mkdirSync(home);
+  fs.mkdirSync(bin);
+  const help = ['--model', '--effort', '--output-format', 'stream-json', '--session-id', '--permission-mode',
+    '--permission-prompts', '--allowedTools', '--tools', '--restricted', '--strict-mcp-config', '--settings',
+    '--setting-sources', '--agent', '--agents'].join(' ');
+  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo "9.9.9 (Claude Code)";;
+  --help) echo "${help}";;
+  auth) echo '{"loggedIn":true}';;
+esac
+`, { mode: 0o755 });
+  const argsFile = path.join(aux, 'args.json');
+  fs.writeFileSync(argsFile, JSON.stringify(request(fixture)));
+  return { ...fixture, aux, home, bin, argsFile };
+}
+
+function spawnRoleHost(fixture, args, env = {}) {
+  return spawnRole(process.execPath, [ROLE_SCRIPT, ...args], {
+    encoding: 'utf8', cwd: fixture.root, timeout: 30000,
+    env: { ...process.env, HOME: fixture.home, PATH: `${fixture.bin}:${process.env.PATH}`, ...env },
+  });
+}
+
+function cleanupRoleCli(fixture) {
+  fs.rmSync(fixture.aux, { recursive: true, force: true });
+  cleanupFixture(fixture);
+}
+
+test('role host --args-file refuses with hints before any private file, run store or authority exists', () => {
+  const fixture = roleCliFixture();
+  try {
+    const provenance = path.join(fixture.root, '.planning/graph/provenance');
+    fs.mkdirSync(provenance, { recursive: true });
+    fs.writeFileSync(path.join(provenance, 'one.json'), '{}');
+    fs.symlinkSync('one.json', path.join(provenance, 'link.json'));
+    const before = [roleTree(fixture.root), roleTree(fixture.home), roleTree(fixture.storageRoot)];
+    const result = spawnRoleHost(fixture, ['--args-file', fixture.argsFile]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+    assert.deepEqual([roleTree(fixture.root), roleTree(fixture.home), roleTree(fixture.storageRoot)], before);
+  } finally { cleanupRoleCli(fixture); }
+});
+
+test('role host --preflight exits by result and starts nothing', () => {
+  const fixture = roleCliFixture();
+  try {
+    const before = [roleTree(fixture.root), roleTree(fixture.home)];
+    const bare = spawnRoleHost(fixture, ['--preflight']);
+    assert.equal(bare.status, 0, bare.stderr);
+    assert.match(bare.stderr, /^preflight: ok/);
+    const withArgs = spawnRoleHost(fixture, ['--preflight', '--args-file', fixture.argsFile]);
+    assert.equal(withArgs.status, 0, withArgs.stderr);
+    assert.deepEqual([roleTree(fixture.root), roleTree(fixture.home)], before);
+    const missing = spawnRoleHost(fixture, ['--preflight'], { PATH: '/nonexistent' });
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.equal(spawnRoleHost(fixture, ['--preflight', '--capability-only']).status, 1);
+  } finally { cleanupRoleCli(fixture); }
+});
+
+test('role host preflight and launch refuse a pr-sentinel round on a path no identity can carry', () => {
+  const fixture = roleCliFixture();
+  try {
+    const moved = path.join(fixture.aux, 'semi;colon');
+    fs.renameSync(fixture.root, moved);
+    fixture.root = moved;
+    fs.writeFileSync(fixture.argsFile, JSON.stringify({ schema: REQUEST_SCHEMA, role: 'pr-sentinel',
+      worktree: moved, phase: '38-sentinel-role-test' }));
+    const check = spawnRoleHost(fixture, ['--preflight', '--args-file', fixture.argsFile]);
+    assert.equal(check.status, 1, check.stderr);
+    const payload = JSON.parse(check.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.deepEqual(payload.findings.map((finding) => finding.code), ['REPOSITORY_IDENTITY_INVALID']);
+    assert.match(check.stderr, /hint\[REPOSITORY_IDENTITY_INVALID\]/);
+    const launch = spawnRoleHost(fixture, ['--args-file', fixture.argsFile]);
+    assert.notEqual(launch.status, 0);
+    assert.match(launch.stderr, /preflight found 1 incompatibilities: REPOSITORY_IDENTITY_INVALID/);
+    assert.equal(launch.stdout, '');
+  } finally { cleanupRoleCli(fixture); }
+});
+
+test('role host --capability-only keeps exit 0 and stdout and adds a stderr hint when the probe is unavailable', () => {
+  const fixture = roleCliFixture();
+  try {
+    const ok = spawnRoleHost(fixture, ['--capability-only']);
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.equal(JSON.parse(ok.stdout).status, 'available');
+    assert.doesNotMatch(ok.stderr, /hint\[/);
+    const missing = spawnRoleHost(fixture, ['--capability-only'], { PATH: '/nonexistent' });
+    assert.equal(missing.status, 0);
+    assert.equal(JSON.parse(missing.stdout).status, 'unavailable');
+    assert.match(missing.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+  } finally { cleanupRoleCli(fixture); }
+});
+
+test('role host --capability-only maps an outdated CLI help to RUNTIME_UNAVAILABLE, not a capability error', () => {
+  const fixture = roleCliFixture();
+  try {
+    fs.writeFileSync(path.join(fixture.bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo "9.9.9 (Claude Code)";;
+  --help) echo "--model";;
+esac
+`, { mode: 0o755 });
+    const outdated = spawnRoleHost(fixture, ['--capability-only']);
+    assert.equal(outdated.status, 0);
+    assert.equal(JSON.parse(outdated.stdout).reason, 'runtime_capability_missing');
+    assert.match(outdated.stderr, /hint\[RUNTIME_UNAVAILABLE\]/);
+    assert.doesNotMatch(outdated.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
+  } finally { cleanupRoleCli(fixture); }
+});
+
+test('role host preflight calls an injected probe function and keeps a probe value', () => {
+  const project = roleCliFixture();
+  try {
+    const { runClaudeRoleCli } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+    const codes = (probe) => runClaudeRoleCli(['--preflight', '--args-file', project.argsFile], { write() {} },
+      { probe, stderr: { write() {} } }).findings.map((finding) => finding.code);
+    const unavailable = { status: 'unavailable', reason: 'claude binary missing' };
+    assert.deepEqual(codes(unavailable), ['RUNTIME_UNAVAILABLE']);
+    let calls = 0;
+    assert.deepEqual(codes(() => { calls += 1; return unavailable; }), ['RUNTIME_UNAVAILABLE']);
+    assert.equal(calls, 1);
+    assert.deepEqual(codes(() => ({ status: 'available' })), []);
+  } finally { cleanupRoleCli(project); }
+});
+
+test('role host preflight judges the legacy history of the host graph directory project', () => {
+  const worktreeProject = roleCliFixture();
+  const graphProject = setupRepository('arch-review');
+  try {
+    const provenance = path.join(graphProject.root, '.planning/graph/provenance');
+    fs.mkdirSync(provenance, { recursive: true });
+    fs.writeFileSync(path.join(provenance, 'one.json'), '{}');
+    fs.symlinkSync('one.json', path.join(provenance, 'link.json'));
+    const { runClaudeRoleCli } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+    const out = [];
+    const result = runClaudeRoleCli(['--preflight', '--args-file', worktreeProject.argsFile], { write: (value) => out.push(value) },
+      { graphDir: path.join(graphProject.root, '.planning/graph'), probe: { status: 'available' }, stderr: { write() {} } });
+    assert.equal(result.ok, false);
+    assert.ok(result.findings.some((finding) => finding.code === 'LEGACY_HISTORY_UNSAFE'));
+  } finally {
+    cleanupRoleCli(worktreeProject);
+    cleanupFixture(graphProject);
+  }
 });

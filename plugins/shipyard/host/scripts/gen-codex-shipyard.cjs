@@ -67,6 +67,13 @@ function readCodexCliCapabilities() {
   };
 }
 
+function readCodexCliVersion() {
+  const result = spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 10_000 });
+  if (!result || result.error || result.status !== 0) return null;
+  const match = /(\d+\.\d+(?:\.\d+)*)/.exec(`${result.stdout || ''} ${result.stderr || ''}`);
+  return match ? match[1] : null;
+}
+
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
@@ -365,6 +372,7 @@ function main() {
     policy_hash: policy.POLICY_HASH,
     capabilities_file: CODEX_CAPABILITIES_BUNDLE_FILE,
     capabilities_digest: digest(capabilitiesRaw),
+    codex_cli_version: readCodexCliVersion(),
     agent_digests: agentDigests,
     config_digest: digest(fs.readFileSync(path.join(stageDir, 'config.fragment.toml'))),
     dynamic_roles: policy.DYNAMIC_ROLES,

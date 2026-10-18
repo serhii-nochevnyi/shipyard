@@ -59,7 +59,10 @@ if (process.env.SHIPYARD_RESEARCH_HANDBACK_FIXTURE) {
     };
   }
   const runtime = require(runtimeFile);
-  require.cache[runtimeFile].exports = { ...runtime, createCodexRuntimeHost(options) {
+  require.cache[runtimeFile].exports = { ...runtime,
+    probeCodexRuntime: () => ({ schema: 'shipyard.codex-runtime-probe.v1', version: 1, status: 'available',
+      executable: 'codex', runtime_version: 'fixture', capabilities }),
+    createCodexRuntimeHost(options) {
     const recorder = createDurableRecorder(options.recorderDir);
     return { scope: options.scope, capabilities, recorder, launchStatic(selection, context) {
       fs.appendFileSync(config.calls, context.research_line + '\n');
@@ -122,8 +125,10 @@ if (process.env.SHIPYARD_RESEARCH_HANDBACK_FIXTURE) {
     fs.mkdirSync(agentDir, { recursive: true });
     const configFile = path.join(temporary, 'gitconfig');
     fs.writeFileSync(configFile, '');
+    const capabilitiesFile = path.join(temporary, 'codex-capabilities.json');
+    fs.writeFileSync(capabilitiesFile, JSON.stringify(capabilities));
     const env = { ...process.env, GIT_CONFIG_GLOBAL: configFile, GIT_CONFIG_NOSYSTEM: '1',
-      CODEX_HOME: path.join(home, '.codex') };
+      CODEX_HOME: path.join(home, '.codex'), SHIPYARD_CODEX_CAPABILITIES_FILE: capabilitiesFile };
     delete env.SHIPYARD_GRAPH_DIR;
     const git = (...args) => execFileSync('git', ['-C', root, ...args],
       { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();

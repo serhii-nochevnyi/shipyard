@@ -13,6 +13,8 @@ const policy = require('./model-policy.cjs');
 const { createCodexDispatchAdapter, repairFor } = require('./codex-dispatch-adapter.cjs');
 const { validateCodexConfiguration } = require('./codex-model-remap.cjs');
 const { createCodexRuntimeHost } = require('./codex-runtime-host.cjs');
+const { renderRemedy } = require('./refusal-hints.cjs');
+const runtimeContext = require('./runtime-context.cjs');
 
 const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
 const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
@@ -66,9 +68,37 @@ function signalsFrom(flags) {
 function projectDirFrom(flags) {
   return path.resolve(expandHome(flags.get('project-dir')) || process.cwd());
 }
-function agentDirFrom(flags, env = process.env) {
-  return path.resolve(expandHome(flags.get('agent-dir'))
-    || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents'));
+function hostFlags(flags, capabilitiesFile) {
+  const file = capabilitiesFile || (flags && flags.get('capabilities-file'));
+  return { capabilitiesFile: file ? expandHome(file) : undefined };
+}
+function physical(value) {
+  try { return fs.realpathSync(value); } catch { return path.resolve(value); }
+}
+function envConflict(message, vars) {
+  const error = policy.policyError('ENV_CONFLICT', message + '. ' + renderRemedy('ENV_CONFLICT', vars), { ...vars });
+  error.vars = Object.freeze({ ...vars });
+  return error;
+}
+// @contract: from an installed bundle a disagreeing explicit agent directory refuses with ENV_CONFLICT.
+function agentDirFrom(flags, env = process.env, explicitDir) {
+  const given = explicitDir || flags.get('agent-dir');
+  const explicit = given ? expandHome(given) : undefined;
+  const resolved = runtimeContext.resolveHostEnvironment({
+    scriptDir: __dirname, runtime: 'codex', env, flags: hostFlags(flags),
+  });
+  if (explicit) {
+    const chosen = path.resolve(explicit);
+    if (resolved.mode === 'installed' && physical(chosen) !== physical(resolved.agentsDir)) {
+      throw envConflict(`--agent-dir=${given} disagrees with the agent directory ${resolved.agentsDir} of the installed bundle that is running`,
+        { explicit: `--agent-dir=${given}`, bundle_value: resolved.agentsDir });
+    }
+    return chosen;
+  }
+  const home = resolved.mode === 'installed' ? resolved.home : runtimeContext.resolveCodexHome({
+    scriptDir: __dirname, env, flags: hostFlags(flags),
+  });
+  return path.resolve(path.join(home, 'agents'));
 }
 function readCapabilities(file) {
   if (!file) fail(CAPABILITIES_CONTRACT, 'UNSUPPORTED_SELECTION');
@@ -81,7 +111,7 @@ function readCapabilities(file) {
   return capabilities;
 }
 
-function capabilitiesFrom(options, flags) {
+function capabilitiesFrom(options, flags, env = process.env) {
   if (Object.prototype.hasOwnProperty.call(options, 'capabilities') && options.capabilities !== undefined) {
     return options.capabilities;
   }
@@ -91,7 +121,14 @@ function capabilitiesFrom(options, flags) {
         && options.host.capabilities !== undefined) return options.host.capabilities;
   }
   const file = options.capabilitiesFile || flags.get('capabilities-file');
-  if (!file) fail(CAPABILITIES_CONTRACT, 'UNSUPPORTED_SELECTION');
+  // @contract: from an installed bundle a disagreeing explicit evidence file refuses with ENV_CONFLICT.
+  const resolved = runtimeContext.resolveHostEnvironment({
+    scriptDir: __dirname, runtime: 'codex', env, flags: hostFlags(flags, file),
+  });
+  if (!file) {
+    if (resolved.mode === 'installed') return resolved.capabilities;
+    fail(CAPABILITIES_CONTRACT, 'UNSUPPORTED_SELECTION');
+  }
   return readCapabilities(file);
 }
 
@@ -161,7 +198,7 @@ function selectAgentInternal(role, options) {
   const env = options.env || process.env;
   if (options.runtime !== undefined && options.runtime !== 'codex') fail('Codex selector cannot launch another runtime');
   const loaded = pc.loadConfig(cwd, { runtime: 'codex', env, routed: true });
-  const capabilities = capabilitiesFrom(options, flags);
+  const capabilities = capabilitiesFrom(options, flags, env);
   const resolutionConfig = routedConfigForCodexResolution(loaded.config, cwd, env);
   const resolution = pc.resolveDispatch({
     ...options, config: resolutionConfig, runtime: 'codex',
@@ -169,7 +206,7 @@ function selectAgentInternal(role, options) {
     dispatch_id: options.dispatch_id === undefined ? boundary.newDispatchId() : options.dispatch_id,
   });
   validateCodexConfiguration(resolution, loaded.config.dispatch_context.configuration, capabilities);
-  const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, env));
+  const agentsDir = agentDirFrom(flags, env, options.agentDir);
   const adapter = createCodexDispatchAdapter({ agentsDir, agentManifest: options.agentManifest, capabilities });
   boundary.validateDispatch(resolution, { adapters: { codex: adapter } });
   const evidence = resolution.agent_file ? adapter.validateGeneratedAgent(resolution) : null;
@@ -184,17 +221,27 @@ function selectAgentInternal(role, options) {
 function selectAgent(role, options = {}) {
   try { return selectAgentInternal(role, options); }
   catch (error) {
-    const repair = repairFor(error.code, error.details);
+    const repair = error.code === 'ENV_CONFLICT'
+      ? renderRemedy('ENV_CONFLICT', error.vars) : repairFor(error.code, error.details);
     if (!error.message.includes(repair)) error.message += '. ' + repair;
     throw error;
   }
 }
 
+// @contract: a refused installed-bundle environment prints its remedy from the command line too.
+function withEnvironmentRemedy(error) {
+  if (error && error.name === 'HostEnvironmentError') {
+    const repair = renderRemedy(error.code, error.vars);
+    if (!error.message.includes(repair)) error.message += '. ' + repair;
+  }
+  return error;
+}
+
 function launchAgent(role, options = {}) {
   const flags = options.flags || new Map();
   const selection = selectAgentInternal(role, { ...options, flags });
-  const capabilities = capabilitiesFrom(options, flags);
-  const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, options.env || process.env));
+  const capabilities = capabilitiesFrom(options, flags, options.env || process.env);
+  const agentsDir = agentDirFrom(flags, options.env || process.env, options.agentDir);
   const host = options.host || createCodexRuntimeHost({
     scope: options.scope || options.runScope,
     run_id: options.run_id || options.runId,
@@ -274,6 +321,7 @@ module.exports = Object.freeze({
 if (require.main === module) {
   try { main(); }
   catch (error) {
+    withEnvironmentRemedy(error);
     process.stderr.write('codex-agent: ' + error.message + '\n');
     process.exitCode = error.exitCode || 1;
   }

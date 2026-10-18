@@ -106,7 +106,8 @@ The bootstrap reads available models from `codex debug models`, validates the
 native ADR-014 grid, and installs the GSD runtime payload at the dependency
 plugin's version. It uses the existing Codex subscription login and does not
 call a model or require an API key. `CODEX_HOME` and `AGENTS_SKILLS_DIR` remain
-supported; `SHIPYARD_CODEX_CAPABILITIES_FILE` can supply explicit host evidence.
+supported for the installer. Launching needs no exported variable; see
+[Launch and upgrade](#launch-and-upgrade).
 
 For a published Git marketplace, upgrade and reinstall, then start a new
 session:
@@ -114,6 +115,14 @@ session:
 ```bash
 codex plugin marketplace upgrade shipyard
 codex plugin add shipyard@shipyard
+```
+
+For Claude Code, refresh the marketplace, update the installed plugin, and
+restart Claude Code to apply it:
+
+```bash
+claude plugin marketplace update shipyard
+claude plugin update shipyard
 ```
 
 For local development, regenerate the package and run the one-command installer
@@ -160,8 +169,8 @@ explicit value always wins over the default. A Codex dogfood install
 explicitly aimed at the shared default `CODEX_HOME` (or `~/.codex`) is
 refused, and the message names the dedicated path instead.
 
-The Codex dogfood install still needs `SHIPYARD_CODEX_CAPABILITIES_FILE`, like
-any direct Codex host install. Each writes a `.shipyard-provenance.json` record
+Codex capability evidence for these installs is covered in
+[Launch and upgrade](#launch-and-upgrade). Each writes a `.shipyard-provenance.json` record
 (install kind, source sha, source root, dirty flag, version) into the dogfood
 root instead of `$CLAUDE_HOME` / `$CODEX_HOME`'s release cache; the Claude
 installer prints the `claude --plugin-dir <dir>` launch line and leaves hooks
@@ -172,6 +181,51 @@ when the recorded source root matches this checkout, `foreign dogfood` when it
 was installed from a different one. A dogfood host is refused by the sentinel
 the same way every host is when a PR targets the repository's default
 integration branch, so dogfooding cannot reach a default-branch merge.
+
+### Launch and upgrade
+
+Hosts locate their own installed bundle, its Codex home and its capability
+evidence. A Claude or Codex launch, including a marketplace or dogfood launch,
+needs neither `CODEX_HOME` nor `SHIPYARD_CODEX_CAPABILITIES_FILE` exported.
+
+- An explicit `CODEX_HOME` or capability path that disagrees with the installed
+  bundle is refused with an `ENV_CONFLICT` message naming both values. Either
+  unset the variable, or reinstall into the named home so both agree.
+- A source checkout without an installed bundle, and a direct installer run
+  (`scripts/install-shipyard-codex.sh`), still need explicit evidence through
+  `SHIPYARD_CODEX_CAPABILITIES_FILE`. This is the only case that does.
+- Check a host from the project root before launching. Every host entry takes
+  `--preflight`, alone or with the host's usual request argument:
+  `node <bundle>/scripts/<host>.cjs --preflight`, for `claude-delivery-host.cjs`,
+  `claude-investigation-host.cjs`, `claude-decompose-host.cjs`,
+  `claude-role-host.cjs`, `codex-delivery-host.cjs`, `codex-decompose-host.cjs`
+  and `codex-planning-context-host.cjs`. It is read-only, collects every
+  incompatibility, prints `preflight: ok` or `preflight: <n> incompatibilities`
+  with a remedy per finding, warnings and notes on stderr, and a
+  `shipyard.host-preflight.v1` JSON result on stdout. It exits 0 when nothing is
+  incompatible and 1 otherwise. `deliver-dispatch.cjs launch` runs the same check
+  in-process and prints the same findings before it spawns anything; it has no
+  `--preflight` flag of its own. The Codex capability probe with
+  `--capability-only` keeps exiting 0.
+- Old provenance history is adopted once, automatically, as historical and
+  unverified. Files stay in place; nothing is deleted, archived or moved. A
+  `.DS_Store`, a `.gitkeep` and an orphaned `<id>.json.<pid>.<uuid>.tmp` staging
+  file are not records and never block. Adoption and every later mutation are
+  refused when the history is not safe to adopt (`LEGACY_HISTORY_UNSAFE`: a
+  symlink, a directory, an unexpected file name, a file over the byte bound, or a
+  history that would overflow the catalogue bound), when the authority catalogue
+  is malformed or forged (`ARCHIVE_AUTHORITY_INVALID`), when a recorded file
+  differs from what was recorded (`LEGACY_HISTORY_CHANGED`, during adoption and on
+  any later edit) or when a file is neither recorded nor authenticated
+  (`LEGACY_HISTORY_UNKNOWN_MEMBER`). A recorded file that has been removed is
+  allowed. Leave the history as it is; the remedy is to update the host that wrote
+  it (`codex plugin marketplace upgrade shipyard`, then
+  `codex plugin add shipyard@shipyard`) and re-run.
+- `make test-installed-launch` runs the installed-launch acceptance core. It
+  first checks, against a fixture install only, whether a non-interactive driver
+  of the GSD UI path is found and prints either a run record or a declared-gap
+  record carrying the check that justified it. It never reads the operator's
+  GSD install, so a real install is covered by the live receipts at release.
 
 ## First run
 

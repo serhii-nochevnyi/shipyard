@@ -546,6 +546,57 @@ test('drift preflight rejects a base that differs from the canonical ticket grap
   }
 });
 
+function stackTicketOnParent(fixture, parentState) {
+  const parentBranch = 'ticket/T-38-02-merged-parent';
+  const graphFile = path.join(fixture.graphDir, 'tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+  Object.assign(graph.tickets['T-38-03'], { pr_base: parentBranch, primary_parent: 'T-38-02', epic: 'main' });
+  graph.tickets['T-38-02'] = { branch: parentBranch, pr_base: 'main', epic: 'main', files: ['src/owned.txt'] };
+  fs.writeFileSync(graphFile, JSON.stringify(graph));
+  const boardFile = path.join(fixture.graphDir, 'delivery-state.json');
+  const board = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+  board['T-38-02'] = { branch: parentBranch, base: 'main', epic: 'main', ...parentState };
+  fs.writeFileSync(boardFile, JSON.stringify(board));
+  return parentBranch;
+}
+
+const driftArgs = (fixture, baseRef) => ({
+  tickets: [{
+    id: 'T-38-03', worktreePath: fixture.worktree, planPath: fixture.planPath, baseRef,
+    model: CLAUDE_DRIFT.model, effort: CLAUDE_DRIFT.effort,
+  }],
+  driftRefPath: REFERENCE_PATHS['drift-check'],
+});
+
+test('drift preflight takes the merge destination as the base once the primary parent is merged', async () => {
+  const fixture = repairFixture();
+  const parentBranch = stackTicketOnParent(fixture, { status: 'merged', merged_into: 'main' });
+  const { host } = driftCapableHost(fixture);
+  try {
+    await host.run('drift-gate', driftArgs(fixture, 'main'));
+    fs.rmSync(path.join(fixture.worktree, '.shipyard-drift-evidence.md'), { force: true });
+    assert.throws(() => host.run('drift-gate', driftArgs(fixture, parentBranch)),
+      /base differs from the canonical graph/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('drift preflight keeps the parent branch as the base while the primary parent is open', async () => {
+  const fixture = repairFixture();
+  const parentBranch = stackTicketOnParent(fixture, { status: 'open' });
+  git(fixture.worktree, 'branch', parentBranch, 'main');
+  const { host } = driftCapableHost(fixture);
+  try {
+    await host.run('drift-gate', driftArgs(fixture, parentBranch));
+    fs.rmSync(path.join(fixture.worktree, '.shipyard-drift-evidence.md'), { force: true });
+    assert.throws(() => host.run('drift-gate', driftArgs(fixture, 'main')),
+      /base differs from the canonical graph/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('moved repair base fails closed when the trusted host cannot fetch origin', () => {
   const fixture = repairFixture();
   try {
@@ -1003,6 +1054,7 @@ test('the host accepts a single-line re-dispatch only once its three siblings ve
     git(root, 'init', '-q', '-b', 'main');
     git(root, 'config', 'user.name', 'Investigation Redispatch Test');
     git(root, 'config', 'user.email', 'investigation-redispatch@example.test');
+    git(root, 'remote', 'add', 'origin', 'git@github.com:Shipyard/Test.git');
     fs.writeFileSync(path.join(root, 'base.txt'), 'base\n');
     git(root, 'add', 'base.txt');
     git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
@@ -1091,6 +1143,15 @@ test('the host accepts a single-line re-dispatch only once its three siblings ve
     }
     const redispatched = second.find((line) => line.id === 'alternatives');
     assert.notEqual(redispatched.artifact_ref, first.find((line) => line.id === 'alternatives').artifact_ref);
+
+    note = 'upgraded';
+    const upgraded = await host.run('investigation-research', {
+      ...baseArgs,
+      repository: fs.realpathSync(path.join(root, '.git')),
+      lines: [{ id: 'alternatives', label: labels.alternatives, model: CLAUDE_RESEARCH.model, effort: CLAUDE_RESEARCH.effort, signals: { type: 'facts' } }],
+      sealedLines: siblings,
+    });
+    assert.equal(upgraded.length, 4, 'siblings sealed under the older owner/repo form still verify');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1597,6 +1658,150 @@ test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main workt
     else process.env.SHIPYARD_GRAPH_DIR = previousGraph;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+const { classifyLegacyProvenance } = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+const { spawnSync } = require('node:child_process');
+
+const DELIVERY_SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+
+function preflightProject(members = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-preflight-')));
+  const home = path.join(root, 'home');
+  fs.mkdirSync(home);
+  const worktree = path.join(root, 'project');
+  fs.mkdirSync(path.join(worktree, '.planning', 'graph', 'provenance'), { recursive: true });
+  git(worktree, 'init', '-q');
+  fs.writeFileSync(path.join(worktree, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {} }));
+  for (const [name, body] of Object.entries(members)) {
+    fs.writeFileSync(path.join(worktree, '.planning', 'graph', 'provenance', name), body);
+  }
+  const requestFile = path.join(root, 'request.json');
+  fs.writeFileSync(requestFile, JSON.stringify({
+    schema: REQUEST_SCHEMA,
+    scope: { run_id: 'pf-run', ticket: 'T-50-16', phase: 50, worktree },
+    args: { tickets: [{ id: 'T-50-16', worktreePath: worktree }] },
+  }));
+  fakeClaude(root);
+  return { root, home, worktree, requestFile, graphDir: path.join(worktree, '.planning', 'graph') };
+}
+
+function fakeClaude(root) {
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const help = ['--model', '--effort', '--output-format', 'stream-json', '--session-id', '--permission-mode',
+    '--permission-prompts', '--allowedTools', '--tools', '--restricted', '--strict-mcp-config', '--settings',
+    '--setting-sources', '--agent', '--agents'].join(' ');
+  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh
+case "$1" in
+  --version) echo "9.9.9 (Claude Code)";;
+  --help) echo "${help}";;
+  auth) echo '{"loggedIn":true}';;
+esac
+`, { mode: 0o755 });
+  return bin;
+}
+
+function spawnHost(fixture, args, extraEnv = {}) {
+  return spawnSync(process.execPath, [DELIVERY_SCRIPT, ...args], {
+    encoding: 'utf8', cwd: fixture.worktree, timeout: 30000,
+    env: { ...process.env, HOME: fixture.home, SHIPYARD_GRAPH_DIR: fixture.graphDir, PATH: `${path.join(fixture.root, 'bin')}:${process.env.PATH}`, ...extraEnv },
+  });
+}
+
+function treeSnapshot(dir) {
+  const out = [];
+  const walk = (entry) => {
+    out.push(entry);
+    if (fs.lstatSync(entry).isDirectory()) for (const name of fs.readdirSync(entry).sort()) walk(path.join(entry, name));
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return out;
+}
+
+test('Claude delivery CLI refuses an unsafe legacy member before any run state exists', () => {
+  const fixture = preflightProject({ 'one.json': '{}' });
+  try {
+    fs.symlinkSync('one.json', path.join(fixture.graphDir, 'provenance', 'link.json'));
+    const before = treeSnapshot(fixture.root);
+    const result = spawnHost(fixture, ['--workflow', 'executors', '--request-file', fixture.requestFile]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+    assert.deepEqual(treeSnapshot(fixture.root), before);
+    assert.equal(fs.existsSync(path.join(fixture.home, '.local')), false);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test('Claude delivery CLI adopts adoptable legacy history on first launch and refuses a changed member', () => {
+  const fixture = preflightProject({ 'one.json': '{}' });
+  const state = () => spawnSync(process.execPath, ['-e',
+    `process.stdout.write(require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))}).classifyLegacyProvenance(${JSON.stringify(fixture.worktree)}).state)`],
+  { encoding: 'utf8', env: { ...process.env, HOME: fixture.home } }).stdout;
+  const launch = () => spawnHost(fixture, ['--workflow', 'executors', '--request-file', fixture.requestFile]);
+  try {
+    assert.equal(state(), 'adoptable');
+    const first = launch();
+    assert.doesNotMatch(first.stderr, /hint\[LEGACY_HISTORY/);
+    assert.equal(state(), 'adopted');
+    fs.writeFileSync(path.join(fixture.graphDir, 'provenance', 'one.json'), '{"changed":1}');
+    const second = launch();
+    assert.notEqual(second.status, 0);
+    assert.match(second.stderr, /hint\[LEGACY_HISTORY_CHANGED\]/);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test('Claude delivery preflight judges the legacy history of the graph directory project', async () => {
+  const worktreeProject = preflightProject();
+  const graphProject = preflightProject({ 'one.json': '{}' });
+  fs.symlinkSync('one.json', path.join(graphProject.graphDir, 'provenance', 'link.json'));
+  try {
+    const out = [];
+    await assert.rejects(() => runClaudeDeliveryCli(
+      ['--preflight', '--workflow', 'executors', '--request-file', worktreeProject.requestFile],
+      { write: (value) => out.push(value) },
+      { graphDir: graphProject.graphDir, probe: { status: 'available' }, stderr: { write() {} } },
+    ).then((result) => { if (!result.ok) throw Object.assign(new Error('refused'), { findings: result.findings }); }),
+    (error) => error.findings.some((finding) => finding.code === 'LEGACY_HISTORY_UNSAFE'));
+  } finally {
+    fs.rmSync(worktreeProject.root, { recursive: true, force: true });
+    fs.rmSync(graphProject.root, { recursive: true, force: true });
+  }
+});
+
+test('Claude delivery preflight calls an injected probe function and keeps a probe value', async () => {
+  const project = preflightProject();
+  const argv = ['--preflight', '--workflow', 'executors', '--request-file', project.requestFile];
+  const codes = async (probe) => (await runClaudeDeliveryCli(argv, { write() {} },
+    { graphDir: project.graphDir, probe, stderr: { write() {} } })).findings.map((finding) => finding.code);
+  try {
+    const unavailable = { status: 'unavailable', reason: 'claude binary missing' };
+    assert.deepEqual(await codes(unavailable), ['RUNTIME_UNAVAILABLE']);
+    let calls = 0;
+    assert.deepEqual(await codes(() => { calls += 1; return unavailable; }), ['RUNTIME_UNAVAILABLE']);
+    assert.equal(calls, 1);
+    assert.deepEqual(await codes(() => ({ status: 'available' })), []);
+  } finally { fs.rmSync(project.root, { recursive: true, force: true }); }
+});
+
+test('Claude delivery --preflight exits by result and starts nothing, with and without a request', () => {
+  const fixture = preflightProject({ 'one.json': '{}' });
+  try {
+    const before = treeSnapshot(fixture.root);
+    const bare = spawnHost(fixture, ['--preflight']);
+    assert.equal(bare.status, 0, bare.stderr);
+    assert.match(bare.stderr, /^preflight: ok/);
+    const withRequest = spawnHost(fixture, ['--preflight', '--workflow', 'executors', '--request-file', fixture.requestFile]);
+    assert.equal(withRequest.status, 0, withRequest.stderr);
+    assert.deepEqual(treeSnapshot(fixture.root), before);
+    const unsafe = path.join(fixture.graphDir, 'provenance', 'link.json');
+    fs.symlinkSync('one.json', unsafe);
+    const refused = spawnHost(fixture, ['--preflight']);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+    const bad = spawnHost(fixture, ['--preflight', '--workflow', 'executors']);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /usage: claude-delivery-host\.cjs/);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
 done();

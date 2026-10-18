@@ -1,30 +1,60 @@
 {
-  "generated_at": "2026-10-02T08:34:39.574Z",
-  "observed_at": "2026-10-02T08:34:39.574Z",
-  "generation": 419,
+  "generated_at": "2026-10-16T08:29:31.519Z",
+  "observed_at": "2026-10-16T08:29:31.519Z",
+  "generation": 424,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-10-02T08:34:39.574Z",
+  "dispatches_applied_at": "2026-10-16T08:29:31.519Z",
   "actionable": {
     "execute": [
-      "T-46-08"
+      "T-50-07",
+      "T-50-10"
     ],
     "publish": [],
     "fix": [
-      "T-46-07"
+      "T-50-04",
+      "T-50-02",
+      "T-50-05"
     ],
     "finalize": [],
     "merge": []
   },
   "waiting": {
-    "ci": [],
-    "dispatched": [],
+    "ci": [
+      "T-50-06"
+    ],
+    "dispatched": [
+      "T-50-01"
+    ],
     "parent": [],
     "merge_human": [],
     "human": []
   },
   "parked": {
-    "blocked": [],
+    "blocked": [
+      "T-50-03",
+      "T-50-08",
+      "T-50-09",
+      "T-50-11",
+      "T-50-12",
+      "T-50-13",
+      "T-50-14",
+      "T-50-15",
+      "T-50-16",
+      "T-50-18",
+      "T-50-17",
+      "T-50-19",
+      "T-50-20",
+      "T-50-21",
+      "T-50-28",
+      "T-50-29",
+      "T-50-22",
+      "T-50-23",
+      "T-50-24",
+      "T-50-25",
+      "T-50-26",
+      "T-50-27"
+    ],
     "done": [
       "T-20-01",
       "T-20-02",
@@ -276,42 +306,75 @@
       "T-46-01",
       "T-46-04",
       "T-46-05",
-      "T-46-06"
+      "T-46-06",
+      "T-46-07",
+      "T-46-08"
     ]
   },
   "why": {
-    "T-46-07": "PR #412: 1 failing check(s)",
-    "T-46-08": "ready — worktree + executor"
+    "T-50-01": "dispatched to executor 25m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (a branch or a PR appears) or after 90m; `dispatch-record.cjs clear T-50-01 dispatch-2a8f6d83-0008-4d1d-984b-c7fe0b092755` returns it now.",
+    "T-50-02": "PR #490: 2 failing check(s)",
+    "T-50-03": "T-50-01 (parent has no branch yet (nothing to cascade from))",
+    "T-50-04": "PR #491: 2 failing check(s)",
+    "T-50-05": "PR #488: 3 failing check(s)",
+    "T-50-06": "PR #489: 1 check(s) still running",
+    "T-50-07": "ready — worktree + executor",
+    "T-50-08": "T-50-07 (parent has no branch yet (nothing to cascade from))",
+    "T-50-09": "T-50-08 (parent has no branch yet (nothing to cascade from))",
+    "T-50-10": "ready — worktree + executor",
+    "T-50-11": "T-50-01 (parent has no branch yet (nothing to cascade from)); T-50-03 (parent has no branch yet (nothing to cascade from)); T-50-07 (parent has no branch yet (nothing to cascade from)); T-50-02 (non-primary parent T-50-02 is pr-open — T-50-11's worktree is cut from T-50-03 and receives T-50-02 only through epic/50-make-launch-and-upgrade-reliable; T-50-02 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-02 is pr-open))",
+    "T-50-12": "T-50-11 (parent has no branch yet (nothing to cascade from))",
+    "T-50-13": "T-50-01 (parent has no branch yet (nothing to cascade from)); T-50-03 (parent has no branch yet (nothing to cascade from))",
+    "T-50-14": "T-50-11 (parent has no branch yet (nothing to cascade from))",
+    "T-50-15": "T-50-11 (parent has no branch yet (nothing to cascade from)); T-50-10 (parent has no branch yet (nothing to cascade from))",
+    "T-50-16": "T-50-11 (parent has no branch yet (nothing to cascade from))",
+    "T-50-18": "T-50-09 (parent has no branch yet (nothing to cascade from)); T-50-03 (parent has no branch yet (nothing to cascade from)); T-50-05 (non-primary parent T-50-05 is pr-open — T-50-18's worktree is cut from T-50-09 and receives T-50-05 only through epic/50-make-launch-and-upgrade-reliable; T-50-05 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-05 is pr-open))",
+    "T-50-17": "T-50-11 (parent has no branch yet (nothing to cascade from)); T-50-18 (parent has no branch yet (nothing to cascade from))",
+    "T-50-19": "T-50-11 (parent has no branch yet (nothing to cascade from)); T-50-10 (parent has no branch yet (nothing to cascade from))",
+    "T-50-20": "T-50-11 (parent has no branch yet (nothing to cascade from)); T-50-15 (parent has no branch yet (nothing to cascade from))",
+    "T-50-21": "T-50-03 (parent has no branch yet (nothing to cascade from))",
+    "T-50-28": "T-50-01 (parent has no branch yet (nothing to cascade from)); T-50-03 (parent has no branch yet (nothing to cascade from))",
+    "T-50-29": "T-50-10 (parent has no branch yet (nothing to cascade from)); T-50-05 (non-primary parent T-50-05 is pr-open — T-50-29's worktree is cut from T-50-10 and receives T-50-05 only through epic/50-make-launch-and-upgrade-reliable; T-50-05 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-05 is pr-open))",
+    "T-50-22": "T-50-13 (parent has no branch yet (nothing to cascade from)); T-50-14 (parent has no branch yet (nothing to cascade from)); T-50-15 (parent has no branch yet (nothing to cascade from)); T-50-16 (parent has no branch yet (nothing to cascade from)); T-50-17 (parent has no branch yet (nothing to cascade from)); T-50-18 (parent has no branch yet (nothing to cascade from)); T-50-19 (parent has no branch yet (nothing to cascade from)); T-50-20 (parent has no branch yet (nothing to cascade from)); T-50-21 (parent has no branch yet (nothing to cascade from)); T-50-29 (parent has no branch yet (nothing to cascade from))",
+    "T-50-23": "T-50-22 (parent has no branch yet (nothing to cascade from)); T-50-28 (parent has no branch yet (nothing to cascade from))",
+    "T-50-24": "T-50-22 (parent has no branch yet (nothing to cascade from)); T-50-09 (parent has no branch yet (nothing to cascade from)); T-50-28 (parent has no branch yet (nothing to cascade from))",
+    "T-50-25": "T-50-22 (parent has no branch yet (nothing to cascade from)); T-50-08 (parent has no branch yet (nothing to cascade from)); T-50-09 (parent has no branch yet (nothing to cascade from)); T-50-28 (parent has no branch yet (nothing to cascade from)); T-50-06 (non-primary parent T-50-06 is pr-open — T-50-25's worktree is cut from T-50-22 and receives T-50-06 only through epic/50-make-launch-and-upgrade-reliable; T-50-06 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-06 is pr-open))",
+    "T-50-26": "T-50-22 (parent has no branch yet (nothing to cascade from)); T-50-28 (parent has no branch yet (nothing to cascade from))",
+    "T-50-27": "T-50-12 (parent has no branch yet (nothing to cascade from)); T-50-23 (parent has no branch yet (nothing to cascade from)); T-50-24 (parent has no branch yet (nothing to cascade from)); T-50-25 (parent has no branch yet (nothing to cascade from)); T-50-26 (parent has no branch yet (nothing to cascade from)); T-50-29 (parent has no branch yet (nothing to cascade from)); T-50-06 (non-primary parent T-50-06 is pr-open — T-50-27's worktree is cut from T-50-23 and receives T-50-06 only through epic/50-make-launch-and-upgrade-reliable; T-50-06 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-06 is pr-open))"
   },
   "counts": {
-    "execute": 1,
+    "execute": 2,
     "publish": 0,
-    "fix": 1,
+    "fix": 3,
     "finalize": 0,
     "merge": 0,
-    "ci": 0,
-    "dispatched": 0,
+    "ci": 1,
+    "dispatched": 1,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 0,
-    "done": 251
+    "blocked": 22,
+    "done": 253
   },
   "parent_of": {},
-  "actionable_count": 2,
+  "actionable_count": 5,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
   "capacity": {
     "max": 4,
-    "in_flight": 0,
-    "free": 4
+    "in_flight": 1,
+    "free": 3
   },
   "sentinel": {
     "duty": [
-      "T-46-07"
+      "T-50-04",
+      "T-50-02",
+      "T-50-05"
     ],
-    "waiting_ci": [],
+    "waiting_ci": [
+      "T-50-06"
+    ],
     "waiting_parent": [],
     "dispatched": [],
     "clear": false

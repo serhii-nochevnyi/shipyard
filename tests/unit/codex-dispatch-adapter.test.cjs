@@ -78,7 +78,7 @@ function clean(f) {
   fs.rmSync(f.root + '-writer', { recursive: true, force: true });
 }
 function rejected(fn, code) {
-  assert.throws(fn, (error) => error.code === code && /install-shipyard-codex/.test(error.message));
+  assert.throws(fn, (error) => error.code === code && /codex plugin marketplace upgrade shipyard/.test(error.message));
 }
 function runtimeEvidence(selection, context, overrides = {}) {
   const sessionId = '11111111-1111-4111-8111-111111111111';
@@ -505,7 +505,7 @@ test('launch context cannot override explicit selection or request inheritance',
       { launch_arguments: { model: 'gpt-6-astra' } }, { session: { inherit: true } },
     ]) {
       assert.throws(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }, context),
-        /launch context.*install-shipyard-codex/);
+        /launch context.*codex plugin marketplace upgrade shipyard/);
     }
     assert.equal(f.calls.length, 0);
   } finally { clean(f); }

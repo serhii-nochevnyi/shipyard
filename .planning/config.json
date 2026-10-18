@@ -73,7 +73,7 @@
     "source_grounding_authority": "grep"
   },
   "mode": "standard",
-  "granularity": "standard",
+  "granularity": "fine",
   "intel": {
     "enabled": false
   },
@@ -91,11 +91,10 @@
     "routing_tier_defaults": {
       "light": "low",
       "standard": "high",
-      "heavy": "xhigh"
+      "heavy": "high"
     },
     "agent_overrides": {}
   },
-  "model_overrides": {},
   "delivery_pipeline": {
     "max_concurrent_agents": 4,
     "model_ladder": "adaptive",
@@ -523,6 +522,397 @@
             "tests/unit/phase47-package-publication.test.cjs",
             "--group",
             "complete"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "bash",
+            "tests/smoke/installed-launch-smoke.sh",
+            "scenario-claude-no-env"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "bash",
+            "tests/smoke/installed-launch-smoke.sh",
+            "scenario-codex-no-env"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "bash",
+            "tests/smoke/installed-launch-smoke.sh",
+            "scenario-concurrency"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "bash",
+            "tests/smoke/installed-launch-smoke.sh",
+            "scenario-ui-smoke"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "bash",
+            "tests/smoke/installed-launch-smoke.sh",
+            "scenario-upgrade-history"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "make",
+            "-n",
+            "test-installed-launch"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/archive-lock-liveness.test.cjs",
+            "tests/unit/archive-authority-race.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/claude-decompose-host.test.cjs",
+            "tests/unit/claude-runtime-host.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/claude-delivery-host.test.cjs",
+            "tests/unit/claude-investigation-host.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/claude-role-host.test.cjs",
+            "tests/unit/dispatch-record.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-agent.test.cjs",
+            "tests/unit/session-observer.test.cjs",
+            "tests/unit/gsd-tune.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-arch-review-context.test.cjs",
+            "tests/unit/legacy-bookkeeping-adoption.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-arch-review-context.test.cjs",
+            "tests/unit/subject-contract.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-decompose-host.test.cjs",
+            "tests/unit/codex-planning-context-host.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-delivery-host.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-runtime-host.test.cjs",
+            "tests/unit/launch-environment.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/deliver-dispatch.test.cjs",
+            "tests/unit/subject-contract.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/dispatch-record.test.cjs",
+            "tests/unit/adoption-ordering.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/gen-codex-shipyard.test.cjs",
+            "tests/unit/host-preflight.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/host-entry-contract.test.cjs",
+            "tests/unit/subject-contract.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/host-preflight.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/host-preflight.test.cjs",
+            "tests/unit/runtime-context.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/launch-environment-layouts.test.cjs",
+            "tests/unit/installed-launch-driver.test.cjs",
+            "tests/unit/installed-launch-claude-layout.test.cjs",
+            "tests/unit/installed-launch-claude-project.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/launch-environment.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/launch-environment.test.cjs",
+            "tests/unit/refusal-hints.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/launch-environment.test.cjs",
+            "tests/unit/runtime-context.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/launch-upgrade-verification-record.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/legacy-bookkeeping-adoption.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/legacy-bookkeeping-adoption.test.cjs",
+            "tests/unit/archive-lock-liveness.test.cjs",
+            "tests/unit/archive-authority-race.test.cjs",
+            "tests/unit/adoption-ordering.test.cjs",
+            "tests/unit/subject-contract.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/legacy-pin-readers.test.cjs",
+            "tests/unit/launch-upgrade-verification-record.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/planning-result-sealer.test.cjs",
+            "tests/unit/decomposition-adr.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/refusal-hints.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/role-artifact.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/role-artifact.test.cjs",
+            "tests/unit/dispatch-record.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/runtime-context.test.cjs",
+            "tests/unit/codex-runtime-host.test.cjs",
+            "tests/unit/codex-delivery-host.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/subject-contract.test.cjs",
+            "tests/unit/architecture-target.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/subject-contract.test.cjs",
+            "tests/unit/planning-result-sealer.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/subject-contract.test.cjs",
+            "tests/unit/run-contract.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/ui-smoke-record.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "tests/smoke/installed-launch/scenario-codex-no-env.cjs"
           ],
           "profile": "sandbox",
           "timeout_s": 600
