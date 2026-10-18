@@ -4,7 +4,7 @@ const path = require('node:path');
 
 const BUNDLE_ROOT = path.resolve(__dirname, '..');
 
-const UPGRADE = 'Claude: claude plugin install shipyard@shipyard; Codex: codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard';
+const UPGRADE = 'Claude: claude plugin marketplace update shipyard, then claude plugin update shipyard and restart Claude Code; Codex: codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard';
 
 const DEFAULT_ENTRY = Object.freeze({
   hint: 'The host refused the request for a reason this map does not name.',

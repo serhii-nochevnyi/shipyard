@@ -117,6 +117,14 @@ codex plugin marketplace upgrade shipyard
 codex plugin add shipyard@shipyard
 ```
 
+For Claude Code, refresh the marketplace, update the installed plugin, and
+restart Claude Code to apply it:
+
+```bash
+claude plugin marketplace update shipyard
+claude plugin update shipyard
+```
+
 For local development, regenerate the package and run the one-command installer
 again. The generated version suffix changes when package contents change, so
 Codex does not reuse stale cached files. The package fingerprint also causes

@@ -454,7 +454,8 @@ describe('host preflight', () => {
   it('words a Claude-reachable remedy for both hosts', () => {
     for (const code of ['RUNTIME_CAPABILITY_MISSING', 'LEGACY_WRITER_STATE', 'LEGACY_HISTORY_UNKNOWN_MEMBER',
       'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE', 'ENV_CONFLICT']) {
-      assert.match(formatHint(code), /Claude: claude plugin install shipyard@shipyard; Codex: codex plugin marketplace upgrade shipyard/, code);
+      assert.match(formatHint(code), /Claude: claude plugin marketplace update shipyard, then claude plugin update shipyard and restart Claude Code; Codex: codex plugin marketplace upgrade shipyard/, code);
+      assert.doesNotMatch(formatHint(code), /claude plugin install/, code);
     }
   });
 
