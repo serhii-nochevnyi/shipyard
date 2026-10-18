@@ -755,7 +755,17 @@ async function main(argv = process.argv.slice(2)) {
   const stat = fs.lstatSync(args.requestFile);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_PROMPT) refuse('INVALID_INPUT', 'request file is not bounded and regular');
   const request = JSON.parse(fs.readFileSync(args.requestFile, 'utf8'));
-  const scope = canonicalRequest(request);
+  let scope;
+  try { scope = canonicalRequest(request); } catch (error) {
+    if (!args.preflightOnly || error.code !== 'REPOSITORY_IDENTITY_INVALID') throw error;
+    // @contract: --preflight reports a path no identity can carry as a finding instead of throwing.
+    let worktree;
+    try { worktree = fs.realpathSync(request.worktree); } catch { throw error; }
+    const reported = launchPreflight(worktree, { stdout: process.stdout });
+    if (reported.ok) throw error;
+    process.exitCode = 1;
+    return;
+  }
   process.chdir(scope.worktree);
   const gateOptions = writerPreflight(scope);
   if (args.preflightOnly) {

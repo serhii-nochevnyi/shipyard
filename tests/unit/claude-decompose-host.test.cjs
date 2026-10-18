@@ -1217,6 +1217,28 @@ test('a repository identity failure keeps its own code instead of SCOPE_MISMATCH
   } finally { f.clean(); }
 });
 
+test('--preflight with a request on a path no identity can carry reports the finding, exits 1 and starts nothing', () => {
+  const f = fixture();
+  try {
+    const odd = path.join(f.root, 'semi;colon');
+    fs.renameSync(f.worktree, odd);
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(odd, 'gsd-planner')));
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(home);
+    const bin = fakeAvailableClaudeBin(f.root);
+    const env = hostEnv({ HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: f.config });
+    const check = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, '--preflight', '--request-file', requestFile], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.equal(check.status, 1, check.stderr);
+    const payload = JSON.parse(check.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.deepEqual(payload.findings.map((item) => item.code), ['REPOSITORY_IDENTITY_INVALID']);
+    assert.match(check.stderr, /hint\[REPOSITORY_IDENTITY_INVALID\]/);
+    assert.doesNotMatch(check.stderr, /^REPOSITORY_IDENTITY_INVALID:/m);
+    assert.equal(fs.existsSync(path.join(home, '.local')), false);
+  } finally { f.clean(); }
+});
+
 test('config root follows CLAUDE_CONFIG_DIR, then HOME/.claude, and ignores CLAUDE_HOME', () => {
   const f = fixture();
   try {
