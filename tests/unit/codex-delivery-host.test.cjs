@@ -3524,6 +3524,19 @@ test('a launch that passes preflight prints warnings on stderr without a bare ok
   assert.doesNotMatch(launch.stdout, /shipyard\.host-preflight\.v1/);
 });
 
+test('a launch preflight warning is printed without control characters from the recorded values', () => {
+  const f = preflightFixture();
+  const manifestFile = path.join(f.home, 'agents', '.shipyard-manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+  fs.writeFileSync(manifestFile, JSON.stringify({ ...manifest, codex_cli_version: '1.0.0\u001b[2Jx\nforged: line' }));
+  fs.writeFileSync(path.join(f.root, 'bin', 'codex'),
+    `#!/bin/sh\nif [ "$1" = "--version" ]; then echo codex-cli 2.0.0; exit 0; fi\necho "${HELP_MARKERS}"\n`, { mode: 0o755 });
+  const launch = runScript(f, ['--args-file', requestFor(f)]);
+  assert.match(launch.stderr, /preflight: warning\[CAPABILITY_SNAPSHOT_AGED\]/);
+  assert.doesNotMatch(launch.stderr, /\u001b/);
+  assert.doesNotMatch(launch.stderr, /^forged: line/m);
+});
+
 test('a symlinked provenance member in the host graph directory refuses the launch with no state', () => {
   const f = preflightFixture();
   const foreign = path.join(f.root, 'foreign');

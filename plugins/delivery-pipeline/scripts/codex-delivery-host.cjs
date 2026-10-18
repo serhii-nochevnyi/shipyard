@@ -24,7 +24,7 @@ const hostVerification = require('./host-verification.cjs');
 const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
-const { hintForError } = require('./refusal-hints.cjs');
+const { hintForError, stripControl } = require('./refusal-hints.cjs');
 const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, emitPreflight,
   roleNeedsRepositoryIdentity } = require('./runtime-context.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
@@ -3378,7 +3378,8 @@ function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
   }
   if (result.ok) {
     if (result.warnings.length) {
-      stderr.write(result.warnings.map((warning) => `preflight: warning[${warning.code}] ${warning.detail}\n`).join(''));
+      stderr.write(result.warnings.map((warning) =>
+        `preflight: warning[${stripControl(warning.code)}] ${stripControl(warning.detail)}\n`).join(''));
     }
     return { result, code: 0 };
   }
