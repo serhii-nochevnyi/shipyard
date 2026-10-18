@@ -1,9 +1,9 @@
 ---
-status: proposed
+status: accepted
 ---
 # ADR-033 — Review input routing
 
-- **Status:** proposed; INV-019 Gate 1 closed 2026-10-18, awaiting acceptance by the repository operator
+- **Status:** accepted; authenticated INV-019 Gate 1, accepted by the repository operator on 2026-10-18
 - **Date:** 2026-10-18
 - **Decision owner:** repository operator; every decision below was selected in the INV-019 dialogue on 2026-10-18
 - **Scope:** how the integrator and architecture-review roles receive the change under review on the Claude and Codex hosts, so that a review can run whatever the size of the diff, and what the host proves about coverage
