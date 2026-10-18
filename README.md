@@ -222,9 +222,10 @@ needs neither `CODEX_HOME` nor `SHIPYARD_CODEX_CAPABILITIES_FILE` exported.
   it (`codex plugin marketplace upgrade shipyard`, then
   `codex plugin add shipyard@shipyard`) and re-run.
 - `make test-installed-launch` runs the installed-launch acceptance core. It
-  first checks whether a non-interactive driver of the GSD UI path exists and
-  prints either a run record or a declared-gap record carrying the check that
-  justified it. Live receipts at release cover a real run.
+  first checks, against a fixture install only, whether a non-interactive driver
+  of the GSD UI path is found and prints either a run record or a declared-gap
+  record carrying the check that justified it. It never reads the operator's
+  GSD install, so a real install is covered by the live receipts at release.
 
 ## First run
 

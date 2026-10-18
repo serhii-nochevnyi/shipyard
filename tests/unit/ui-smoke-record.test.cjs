@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
-  candidateRoots, classifyDriverCheck, validateUiSmokeRecord, resolveFixtureRoots, toolInsideFixture,
+  candidateRoots, classifyDriverCheck, gapReason, validateUiSmokeRecord, resolveFixtureRoots, toolInsideFixture,
 } = require('../smoke/installed-launch/scenario-ui-smoke.cjs');
 
 const COMMANDS = ['gsd-ui-phase', 'gsd-ui-review'];
@@ -145,5 +145,15 @@ test('the scenario never reads or runs a driver installed under the real home', 
     assert.match(result.stdout, /^GAP: /m);
   } finally {
     fs.rmSync(decoy, { recursive: true, force: true });
+  }
+});
+
+test('every gap reason says the scenario checks only fixture plumbing and leaves A7 to the live receipt', () => {
+  for (const check of [notInstalled, absent, unreadable]) {
+    const reason = gapReason(check);
+    assert.match(reason, /fixture/);
+    assert.match(reason, /driver-lookup plumbing against a fixture/);
+    assert.match(reason, /A7 on a real install is established by the release live receipt, not by this scenario/);
+    assert.doesNotMatch(reason, /in this environment|machine that (can read|has GSD)/);
   }
 });

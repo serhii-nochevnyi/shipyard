@@ -114,14 +114,16 @@ function validateUiSmokeRecord(lines) {
   return { kind, record };
 }
 
+const PLUMBING_ONLY = 'this scenario checks only the driver-lookup plumbing against a fixture, and A7 on a real install is established by the release live receipt, not by this scenario';
+
 function gapReason(check) {
   if (check.status === 'absent') {
-    return 'both commands need a model run and the hermetic core launches no model; a real UI path run belongs to the live receipts at release';
+    return `the fixture GSD core carries no non-interactive driver for either command; ${PLUMBING_ONLY}`;
   }
   if (check.status === 'unreadable') {
-    return `the install could not be read (${check.blocked_read.code} at ${check.blocked_read.path}); A7 stays unverified until a release receipt on a machine that can read the install`;
+    return `the fixture install could not be read (${check.blocked_read.code} at ${check.blocked_read.path}); ${PLUMBING_ONLY}`;
   }
-  return 'no GSD core install exists in this environment so the check had nothing to read; A7 stays unverified until a release receipt on a machine that has GSD installed';
+  return `the fixture holds no GSD core install; ${PLUMBING_ONLY}`;
 }
 
 function realProbe() {
@@ -213,6 +215,6 @@ function runScenario() {
   }
 }
 
-module.exports = { candidateRoots, classifyDriverCheck, validateUiSmokeRecord, markCandidates, resolveFixtureRoots, toolInsideFixture };
+module.exports = { candidateRoots, classifyDriverCheck, gapReason, validateUiSmokeRecord, markCandidates, resolveFixtureRoots, toolInsideFixture };
 
 if (require.main === module) runScenario();
