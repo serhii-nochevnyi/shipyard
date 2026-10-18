@@ -145,6 +145,10 @@ function command(options, executable, args, cwd, maxBuffer = 65536, preserveWhit
     const text = Buffer.isBuffer(value) ? value.toString('utf8') : String(value);
     return preserveWhitespace ? text : text.trim();
   } catch (error) {
+    if (error && (error.code === 'ENOBUFS' || error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+      || /maxBuffer/i.test(String(error.message)))) {
+      reject(`${executable} output exceeds its ${maxBuffer} byte bound`, 'INPUT_TOO_LARGE');
+    }
     const detail = String(error.stderr || error.stdout || error.message || error).trim().slice(0, 800);
     reject(`${executable} preflight failed: ${detail}`, 'PREFLIGHT_FAILED');
   }
@@ -453,7 +457,13 @@ function phaseSelection(graph, requested) {
 }
 
 function diffText(options, worktree, base, head, pathspec = productPathspec()) {
-  const diff = git(options, worktree, ['diff', '--no-ext-diff', '--unified=50', `${base}...${head}`, ...pathspec], DIFF_MAX_BYTES + 1);
+  let diff;
+  try {
+    diff = git(options, worktree, ['diff', '--no-ext-diff', '--unified=50', `${base}...${head}`, ...pathspec], DIFF_MAX_BYTES + 1);
+  } catch (error) {
+    if (error?.code === 'INPUT_TOO_LARGE') reject('role diff exceeds the bounded context packet');
+    throw error;
+  }
   if (Buffer.byteLength(diff, 'utf8') > DIFF_MAX_BYTES) reject('role diff exceeds the bounded context packet');
   return diff;
 }

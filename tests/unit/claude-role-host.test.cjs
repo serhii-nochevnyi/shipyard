@@ -1049,6 +1049,38 @@ test('a 1.5 MB role diff passes the diff bound and meets only the integrator pac
   }
 });
 
+test('integrator refuses a role diff above the 2 MiB bound as too large, not as a failed preflight', async () => {
+  const fixture = setupRepository('integrator', { sourceContent: bulkSource(26000) });
+  try {
+    await assert.rejects(
+      createClaudeRoleHost(hostOptions(fixture)).run(request(fixture)),
+      (error) => error.message.includes('role diff exceeds the bounded context packet')
+        && !error.message.includes('preflight failed'),
+    );
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('an overflowing change-metadata listing is refused as too large with the bound named', async () => {
+  const fixture = setupRepository('arch-review');
+  try {
+    await assert.rejects(
+      createClaudeRoleHost({ ...hostOptions(fixture),
+        execFileSync(executable, args, runOptions) {
+          if (args.includes('--name-only')) throw Object.assign(new Error('spawnSync git ENOBUFS'), { code: 'ENOBUFS', stdout: 'a\0b' });
+          return execFileSync(executable, args, runOptions);
+        },
+      }).run(request(fixture)),
+      (error) => error.code === 'INPUT_TOO_LARGE'
+        && error.message.includes('git output exceeds its 2097152 byte bound')
+        && !error.message.includes('preflight failed'),
+    );
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
 test('integrator resolves a marker-matched merged PR on its recorded head branch', async () => {
   const fixture = setupRepository('integrator');
   let launched;
