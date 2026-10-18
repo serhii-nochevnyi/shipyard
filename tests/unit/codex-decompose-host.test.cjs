@@ -2697,6 +2697,28 @@ test('legacy writer state is a preflight finding: launch and detach refuse befor
   } finally { f.clean(); }
 });
 
+test('--preflight reports an unreadable private writer root and a state directory inside the worktree', async () => {
+  const f = fixture();
+  const home = process.env.HOME;
+  try {
+    const file = requestFileFor(f);
+    const inside = await runCli(['--preflight', '--args-file', file], preflightSink(), {
+      env: {}, probe: PROBE_OK, stderr: preflightSink(), testStateRoot: path.join(f.root, 'state-inside') });
+    assert.equal(inside.ok, false);
+    assert.deepEqual(inside.findings.map((finding) => finding.code), ['INVALID_STATE_DIR']);
+    const claudeBase = path.join(f.root, 'private-home', '.local', 'state', 'shipyard', 'claude-decompose');
+    fs.mkdirSync(claudeBase, { recursive: true });
+    fs.symlinkSync(f.root, path.join(claudeBase, 'linked'));
+    process.env.HOME = path.join(f.root, 'private-home');
+    const stderr = preflightSink();
+    const legacy = await runCli(['--preflight', '--args-file', file], preflightSink(), {
+      env: {}, probe: PROBE_OK, stderr, testStateRoot: f.stateRoot });
+    assert.equal(legacy.ok, false);
+    assert.deepEqual(legacy.findings.map((finding) => finding.code), ['LEGACY_WRITER_STATE']);
+    assert.match(stderr.text(), /hint\[LEGACY_WRITER_STATE\]/);
+  } finally { process.env.HOME = home; f.clean(); }
+});
+
 test('recover refuses a broken environment before it touches any recovery state', async () => {
   const f = fixture();
   try {

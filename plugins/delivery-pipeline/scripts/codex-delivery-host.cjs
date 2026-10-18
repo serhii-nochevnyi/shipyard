@@ -26,7 +26,7 @@ const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { hintForError, stripControl } = require('./refusal-hints.cjs');
 const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, emitPreflight,
-  roleNeedsRepositoryIdentity } = require('./runtime-context.cjs');
+  roleNeedsRepositoryIdentity, stateRefusalOf } = require('./runtime-context.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
@@ -3504,14 +3504,26 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   if (gsdRole !== undefined) {
     try { phaseDir = typedPhaseDirectory(scope.worktree, scope.phase); } catch { phaseDir = undefined; }
   }
+  // @contract: a state refusal met while gathering preflight inputs is reported as a finding, not thrown.
+  const stateInputs = () => {
+    try {
+      return {
+        ...(parsed ? { runStoreFile: path.join(storageRootOf(options, scope),
+          crypto.createHash('sha256').update(`${scope.run_id}\0${scope.worktree}`).digest('hex'), 'runs', 'runs.json') } : {}),
+        ...(gsdRole !== undefined && phaseDir ? { gsdRole, phaseDir,
+          writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+            repository: scope.repository }) } : {}),
+      };
+    } catch (error) {
+      const writerStateError = stateRefusalOf(error);
+      if (!writerStateError) throw error;
+      return { writerStateError };
+    }
+  };
   const gate = runHostPreflight(options, scope, { report: checkOnly, scope: 'launch', probe: environmentRefused ? undefined : hostProbe(options),
     needsRepositoryIdentity: parsed ? roleNeedsRepositoryIdentity(parsed.launch.role) : false,
     graphDir: inflightGraphDir(options, scope.worktree),
-    ...(parsed ? { runStoreFile: path.join(storageRootOf(options, scope),
-      crypto.createHash('sha256').update(`${scope.run_id}\0${scope.worktree}`).digest('hex'), 'runs', 'runs.json') } : {}),
-    ...(gsdRole !== undefined && phaseDir ? { gsdRole, phaseDir,
-      writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-        repository: scope.repository }) } : {}) });
+    ...stateInputs() });
   if (checkOnly || gate.code !== 0) return gate.result;
   const archDispatchId = parsed.launch.role === 'arch-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
   const preparedArchReview = parsed.launch.role === 'arch-review'

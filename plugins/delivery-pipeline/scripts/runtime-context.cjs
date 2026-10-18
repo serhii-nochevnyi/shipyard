@@ -513,6 +513,13 @@ const PREFLIGHT_CODES = Object.freeze([
   'ARCHIVE_AUTHORITY_INVALID', 'LEGACY_WRITER_STATE', 'INVALID_STORE', 'REPOSITORY_IDENTITY_INVALID',
 ]);
 
+const STATE_REFUSAL_CODES = Object.freeze(['LEGACY_WRITER_STATE', 'INVALID_STATE_DIR']);
+
+// @contract: a state refusal raised while a host gathers preflight inputs reaches preflight() as a finding.
+function stateRefusalOf(error) {
+  return error && STATE_REFUSAL_CODES.includes(error.code) ? error : null;
+}
+
 function preflightGraphDir(graphDir, worktree, env) {
   if (graphDir === null) return null;
   let candidate = graphDir;
@@ -574,7 +581,7 @@ function preflight(options = {}) {
   const run = (name, fn) => {
     try { fn(); } catch (error) {
       const code = errorCode(error);
-      if (PREFLIGHT_CODES.includes(code)) find(code, error.message, error.vars);
+      if (PREFLIGHT_CODES.includes(code) || STATE_REFUSAL_CODES.includes(code)) find(code, error.message, error.vars);
       else note('not-evaluated', `${name}: check not evaluated (${code})`);
     }
   };
@@ -662,6 +669,7 @@ function preflight(options = {}) {
       }
       if (result.state === 'adoptable') note('adoptable', `legacy history: adoption will record ${result.members.length} member(s)`);
     });
+    if (opts.writerStateError) run('host state', () => { throw opts.writerStateError; });
     if (typeof opts.gsdRole === 'string' && opts.gsdRole && opts.worktree && opts.phaseDir) {
       run('planning writer state', () => {
         require('./planning-writer-lease.cjs').assertNoLegacyPlanningWriter({
@@ -722,6 +730,7 @@ module.exports = {
   preflight,
   probeReasonToCode,
   roleNeedsRepositoryIdentity,
+  stateRefusalOf,
   emitPreflight,
   reportTransferCapability,
   readInheritedConfig,

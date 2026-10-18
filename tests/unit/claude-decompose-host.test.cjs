@@ -1153,6 +1153,26 @@ test('--preflight with a request reports LEGACY_WRITER_STATE and a launch refuse
   } finally { f.clean(); }
 });
 
+test('--preflight with a request reports an unreadable private writer root as LEGACY_WRITER_STATE', () => {
+  const f = preparedPhaseFixture();
+  try {
+    const home = path.join(f.root, 'home');
+    const base = path.join(home, '.local', 'state', 'shipyard', 'claude-decompose');
+    fs.mkdirSync(base, { recursive: true });
+    fs.symlinkSync(f.root, path.join(base, 'linked'));
+    const requestFile = path.join(f.root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(request(f.worktree, 'gsd-planner')));
+    const bin = fakeAvailableClaudeBin(f.root);
+    const env = hostEnv({ HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: f.config });
+    const check = require('node:child_process').spawnSync(process.execPath,
+      [HOST_SCRIPT, '--preflight', '--request-file', requestFile], { cwd: f.root, encoding: 'utf8', timeout: 30000, env });
+    assert.equal(check.status, 1, check.stderr);
+    const payload = JSON.parse(check.stdout.split('\n').filter((line) => line.startsWith('{')).pop());
+    assert.deepEqual(payload.findings.map((item) => item.code), ['LEGACY_WRITER_STATE']);
+    assert.match(check.stderr, /hint\[LEGACY_WRITER_STATE\]/);
+  } finally { f.clean(); }
+});
+
 test('a launch whose preflight passes keeps preflight JSON off stdout', () => {
   const f = preparedPhaseFixture();
   try {

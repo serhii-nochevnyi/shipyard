@@ -15,7 +15,7 @@ const { createRunScope } = require('./run-scope.cjs');
 const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
-const { resolveClaudeHome, preflight, emitPreflight } = require('./runtime-context.cjs');
+const { resolveClaudeHome, preflight, emitPreflight, stateRefusalOf } = require('./runtime-context.cjs');
 const { repositoryIdentity } = require('./architecture-target.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
@@ -692,9 +692,15 @@ function parseArguments(argv) {
 function writerPreflight(scope) {
   let phaseDir;
   try { phaseDir = phaseDirectory(scope.worktree, scope.phase); } catch { return {}; }
-  return { gsdRole: scope.role, phaseDir,
-    writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-      repository: scope.repository, privateRoots: [path.join(privateStore(scope), 'writer')] }) };
+  try {
+    return { gsdRole: scope.role, phaseDir,
+      writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+        repository: scope.repository, privateRoots: [path.join(privateStore(scope), 'writer')] }) };
+  } catch (error) {
+    const writerStateError = stateRefusalOf(error);
+    if (!writerStateError) throw error;
+    return { writerStateError };
+  }
 }
 
 function launchPreflight(worktree, { stdout = { write() {} }, scope = 'launch', ...extra } = {}) {
