@@ -248,3 +248,17 @@ test('formatHint and renderRemedy with no host never print a placeholder script 
   }
   assert.ok(preflightCodes >= 5);
 });
+
+test('hintForError honours a refined remedy entry and keeps the error code as the label', () => {
+  for (const refined of ['CLAUDE_GSD_AGENT_UNAVAILABLE', 'CLAUDE_SELECTION_UNSUPPORTED']) {
+    assert.ok(Object.isFrozen(HINTS[refined]));
+    const text = hintForError({ code: 'RUNTIME_CAPABILITY_MISSING', details: { hint_code: refined } });
+    assert.match(text, /^hint\[RUNTIME_CAPABILITY_MISSING\]: .+ — remedy: .+$/);
+    assert.ok(text.includes(HINTS[refined].remedy.replace(/\$\{.*\}/, '')) || text.includes('Claude Code'), text);
+    assert.doesNotMatch(text, /SHIPYARD_CODEX_CAPABILITIES_FILE|codex plugin|the host script/);
+  }
+  assert.equal(hintForError({ code: 'RUNTIME_CAPABILITY_MISSING', details: { hint_code: 'NO_SUCH' } }),
+    hintForError({ code: 'RUNTIME_CAPABILITY_MISSING' }));
+  assert.equal(hintForError({ code: 'RUNTIME_CAPABILITY_MISSING', details: { hint_code: '__proto__' } }),
+    hintForError({ code: 'RUNTIME_CAPABILITY_MISSING' }));
+});

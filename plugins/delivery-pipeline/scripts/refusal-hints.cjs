@@ -4,7 +4,9 @@ const path = require('node:path');
 
 const BUNDLE_ROOT = path.resolve(__dirname, '..');
 
-const UPGRADE = 'Claude: claude plugin marketplace update shipyard, then claude plugin update shipyard and restart Claude Code; Codex: codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard';
+const CLAUDE_UPGRADE = 'claude plugin marketplace update shipyard, then claude plugin update shipyard and restart Claude Code';
+const CODEX_UPGRADE = 'codex plugin marketplace upgrade shipyard, then codex plugin add shipyard@shipyard';
+const UPGRADE = `Claude: ${CLAUDE_UPGRADE}; Codex: ${CODEX_UPGRADE}`;
 
 const DEFAULT_ENTRY = Object.freeze({
   hint: 'The host refused the request for a reason this map does not name.',
@@ -91,6 +93,14 @@ const HINTS = Object.freeze({
   RUNTIME_CAPABILITY_MISSING: Object.freeze({
     hint: 'The runtime host has no capability evidence for the requested selection.',
     remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). If the runtime CLI itself reports an unsupported option, upgrade that CLI instead. Then retry.`,
+  }),
+  CLAUDE_GSD_AGENT_UNAVAILABLE: Object.freeze({
+    hint: 'The GSD agent definition for this role is missing, unreadable, or lacks the scoped tools the launch needs.',
+    remedy: 'Install or update the GSD plugin (gsd-core from open-gsd/gsd-core) with the Claude plugin manager, restart Claude Code, then re-run.',
+  }),
+  CLAUDE_SELECTION_UNSUPPORTED: Object.freeze({
+    hint: 'The Claude model or effort chosen for this launch is not one this Shipyard version supports.',
+    remedy: `Update Shipyard (${CLAUDE_UPGRADE}) so the plugin and the installed host agree, then re-run.`,
   }),
   LEGACY_WRITER_STATE: Object.freeze({
     hint: 'A planning writer state file was written by an older layout.',
@@ -272,6 +282,13 @@ function errorVars(error) {
   return vars;
 }
 
+// @contract: an error may name a more specific remedy entry through details.hint_code; the printed code stays its own.
+function refinedCode(error) {
+  const bag = error && typeof error === 'object' ? error.details : undefined;
+  const refined = bag && typeof bag === 'object' ? bag.hint_code : undefined;
+  return typeof refined === 'string' && Object.hasOwn(HINTS, refined) ? refined : null;
+}
+
 function preflightHostName(host) {
   const candidate = host === undefined ? process.argv[1] : host;
   if (typeof candidate !== 'string' || !candidate) return null;
@@ -284,9 +301,14 @@ function hintForError(error, host) {
   const code = error && error.code;
   const vars = errorVars(error);
   const name = preflightHostName(host);
+  const override = refinedCode(error);
+  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
+  if (override) {
+    const refined = HINTS[override];
+    return `hint[${label}]: ${fillText(refined.hint, vars)} \u2014 remedy: ${fillText(refined.remedy, vars, true)}`;
+  }
   if (name) return formatHint(code, { ...vars, host: name });
   const entry = hintFor(code);
-  const label = stripControl(typeof code === 'string' && code.trim() ? code : 'UNKNOWN');
   const remedy = entry.remedy.split(PREFLIGHT_COMMAND).join(DELIVERY_PREFLIGHT_PROSE);
   return `hint[${label}]: ${fillText(entry.hint, vars)} \u2014 remedy: ${fillText(remedy, vars, true)}`;
 }
