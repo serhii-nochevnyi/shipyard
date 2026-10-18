@@ -32,12 +32,12 @@ const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
 const REQUEST_MAX_BYTES = 32768;
 const SOURCE_MAX_BYTES = 768 * 1024;
 const DIFF_MAX_BYTES = 2 * 1024 * 1024;
-const PROMPT_MAX_BYTES = 1500000;
+const PROMPT_MAX_BYTES = 3000000;
 const RESULT_MAX_BYTES = 128 * 1024;
 const ARCH_REVIEW_PACKET_TOKENS = 60000;
 const PR_SENTINEL_PACKET_TOKENS = 40000;
 const INTEGRATOR_CONTEXT_TOKENS = 60000;
-const INTEGRATOR_MAX_PACKET_TOKENS = 320000;
+const INTEGRATOR_MAX_PACKET_TOKENS = 750000;
 const ROLES = Object.freeze(['arch-review', 'integrator', 'pr-sentinel']);
 const BACKLOG_EXCLUDED_STATUSES = new Set(['verified_closed', 'deferred', 'superseded']);
 const ADR_ID_RE = /\bADR-(\d{3})\b/g;
@@ -825,7 +825,7 @@ function packetBound(role, roleContext) {
   if (role === 'arch-review') return ARCH_REVIEW_PACKET_TOKENS;
   if (role === 'pr-sentinel') return PR_SENTINEL_PACKET_TOKENS;
   const diffBytes = Buffer.byteLength(roleContext.combined_diff.content, 'utf8');
-  return Math.min(INTEGRATOR_MAX_PACKET_TOKENS, INTEGRATOR_CONTEXT_TOKENS + Math.ceil(diffBytes / 4));
+  return Math.min(INTEGRATOR_MAX_PACKET_TOKENS, INTEGRATOR_CONTEXT_TOKENS + Math.ceil(diffBytes / 3));
 }
 
 function packetRemedy(role) {

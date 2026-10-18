@@ -164,7 +164,7 @@ test('native inline preparation preserves shared logical coverage and refuses in
     assert.deepEqual(packetFromPrompt(prompt), packets.decodeUniqueContent(encoded));
     assert.ok(prompt.includes('no semantic reading credit'));
     assert.ok(!prompt.includes('INPUT_MANIFEST='));
-    assert.throws(() => prepareInlineReview('integrator', packet.subject, encoded, 'x'.repeat(1500000)),
+    assert.throws(() => prepareInlineReview('integrator', packet.subject, encoded, 'x'.repeat(3000000)),
       error => error.code === 'CONTEXT_PACKET_OVER_BOUND'
         && error.refusal.limiting_field === 'complete_inline_prompt_bytes'
         && error.refusal.required > error.refusal.observed);
@@ -1035,14 +1035,35 @@ test('integrator admits a role diff above the former 1 MiB bound', async () => {
   }
 });
 
-test('a 1.5 MB role diff passes the diff bound and meets only the integrator packet token bound', async () => {
-  const fixture = setupRepository('integrator', { sourceContent: bulkSource(18000) });
+test('an integrator diff of about 2 MB prepares within the packet and prompt bounds', async () => {
+  const fixture = setupRepository('integrator', { sourceContent: bulkSource(25000) });
+  let launched;
+  try {
+    await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt) { launched = prompt; },
+    })).run(request(fixture));
+    const packet = packetFromPrompt(launched);
+    const diffBytes = Buffer.byteLength(packet.role_context.combined_diff.content, 'utf8');
+    assert.ok(diffBytes > 1.9 * 1024 * 1024 && diffBytes <= 2 * 1024 * 1024);
+    assert.ok(packet.accounting.estimated_tokens > 320000);
+    assert.equal(packet.accounting.overflow, false);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('an integrator packet above its diff-scaled token bound is refused as over bound', async () => {
+  const bigBody = (label) => `# ${label}\n\n- **Status:** accepted\n\n${'x'.repeat(150 * 1024)}\n`;
+  const corpus = { adrs: [201, 202, 203, 204, 205].map((number) => ({
+    name: `ADR-${number}-big.md`, content: bigBody(`ADR-${number} — big`) })) };
+  const planExtra = ['References ADR-201, ADR-202, ADR-203, ADR-204 and ADR-205 for scale.'];
+  const fixture = setupRepository('integrator', { corpus, planExtra, sourceContent: bulkSource(12000) });
   try {
     await assert.rejects(
       createClaudeRoleHost(hostOptions(fixture)).run(request(fixture)),
       (error) => error.code === 'CONTEXT_PACKET_OVER_BOUND'
         && error.message.includes('integrator context packet is')
-        && !error.message.includes('role diff exceeds'),
+        && error.message.includes('remedy: split the phase'),
     );
   } finally {
     cleanupFixture(fixture);
@@ -1475,7 +1496,7 @@ test('role packets carry their explicit token bounds', async () => {
       onLaunch(prompt) { integratorPacket = packetFromPrompt(prompt); },
     })).run(request(integratorFixture));
     const diffBytes = Buffer.byteLength(integratorPacket.role_context.combined_diff.content, 'utf8');
-    assert.equal(integratorPacket.accounting.soft_ceiling, 60000 + Math.ceil(diffBytes / 4));
+    assert.equal(integratorPacket.accounting.soft_ceiling, 60000 + Math.ceil(diffBytes / 3));
 
     let sentinelPacket;
     await createClaudeRoleHost(hostOptions(sentinelFixture, {
