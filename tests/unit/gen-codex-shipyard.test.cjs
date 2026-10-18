@@ -312,6 +312,17 @@ test('the manifest records the Codex CLI version, or null when unreadable', () =
   });
 });
 
+test('the Codex CLI version probe leaves no helper links in the configured Codex home', () => {
+  withFixture({}, (f) => {
+    write(f.codexFile, '#!/bin/sh\nmkdir -p "$CODEX_HOME/tmp/arg0/codex-arg0probe"\nln -s /bin/sh "$CODEX_HOME/tmp/arg0/codex-arg0probe/apply_patch"\necho "codex-cli 0.147.0"\n');
+    fs.chmodSync(f.codexFile, 0o755);
+    const r = f.run();
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(json(path.join(f.out, 'manifest.json')).codex_cli_version, '0.147.0');
+    assert.strictEqual(fs.existsSync(path.join(f.codexHome, 'tmp')), false);
+  });
+});
+
 test('the bundle carries canonical payloads and rewrites installed Shipyard references', () => {
   withFixture({}, (f) => {
     const manifest = generated(f);

@@ -68,7 +68,17 @@ function readCodexCliCapabilities() {
 }
 
 function readCodexCliVersion() {
-  const result = spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 10_000 });
+  // @contract: the version probe runs against a throwaway CODEX_HOME so its helper links never land in the install root.
+  let scratch;
+  let result;
+  try {
+    scratch = fs.mkdtempSync(path.join(require('os').tmpdir(), 'shipyard-codex-version-'));
+    result = spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 10_000, env: { ...process.env, CODEX_HOME: scratch } });
+  } catch (_) {
+    return null;
+  } finally {
+    if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+  }
   if (!result || result.error || result.status !== 0) return null;
   const match = /(\d+\.\d+(?:\.\d+)*)/.exec(`${result.stdout || ''} ${result.stderr || ''}`);
   return match ? match[1] : null;

@@ -1,6 +1,6 @@
 {
-  "version": "0.72.2+codex.b69a204b7e7a506d",
-  "digest": "6f99536156b008b0e5d4cee4b6634553b5c487778e7bdcb86724d345918abf1c",
+  "version": "0.73.0+codex.1632d8e19debc9b0",
+  "digest": "6439dfa6121ad71077ac5de653b2d7a37684b9bef38a4b40eac58ba84cb9804b",
   "skills": [
     "shipyard-route",
     "shipyard-investigate",
