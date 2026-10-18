@@ -184,6 +184,8 @@ test('capability, runtime-ambiguity and repository-identity remedies name the re
   assert.doesNotMatch(ambiguous, /Pass the runtime explicitly/);
   assert.match(ambiguous, /matching runtime's session/);
   assert.match(ambiguous, /unset the conflicting runtime marker named in the finding detail/);
+  assert.match(ambiguous, /no active runtime was found, run the host from inside the Claude or Codex session or set SHIPYARD_RUNTIME/);
+  assert.match(ambiguous, /If it names a conflict/);
   const identity = formatHint('REPOSITORY_IDENTITY_INVALID');
   assert.doesNotMatch(identity, /origin remote|unknown/);
   assert.match(identity, /common directory/);
@@ -270,4 +272,10 @@ test('an ENV_CONFLICT remedy tells a flag to be dropped and a variable to be uns
   for (const vars of [{ explicit: 'CODEX_HOME=/a', bundle_value: '/b' }, {}, undefined]) {
     assert.match(formatHint('ENV_CONFLICT', vars), /Either unset the variable, or reinstall/);
   }
+});
+
+test('a supplied value that contains a template token is emitted as given and a missing value never leaves one', () => {
+  const given = formatHint('LEGACY_HISTORY_UNSAFE', { path: '.planning/{weird}/x.json' });
+  assert.ok(given.includes('history at .planning/{weird}/x.json cannot'), given);
+  for (const code of Object.keys(HINTS)) assert.doesNotMatch(formatHint(code, {}), /\{\w+\}/, code);
 });

@@ -112,7 +112,7 @@ const HINTS = Object.freeze({
   }),
   AMBIGUOUS_RUNTIME: Object.freeze({
     hint: 'More than one runtime was detected and the host cannot choose.',
-    remedy: "Run the host from the matching runtime's session, or unset the conflicting runtime marker named in the finding detail; an explicit runtime argument does not override a conflicting marker. Then re-run.",
+    remedy: "If the finding says no active runtime was found, run the host from inside the Claude or Codex session or set SHIPYARD_RUNTIME to claude or codex. If it names a conflict, run the host from the matching runtime's session or unset the conflicting runtime marker named in the finding detail; an explicit runtime argument does not override a conflicting marker. Then re-run.",
   }),
   INVALID_STORE: Object.freeze({
     hint: 'The run store content does not match the expected schema.',
@@ -199,12 +199,11 @@ const TOKEN_FALLBACKS = Object.freeze({
   explicit: 'an explicitly named home',
   bundle_value: 'a different home',
   path: 'an unreported path',
-  label: 'unknown',
   key: 'the refused key',
   bundle: BUNDLE_ROOT,
 });
 
-// @invariant: a rendered hint never carries a raw placeholder or a control character.
+// @invariant: a rendered hint has no unfilled template token and no control character; supplied values stay as given.
 function stripControl(value) {
   return String(value).replace(CONTROL, '');
 }
@@ -264,7 +263,7 @@ function formatHint(code, vars) {
 
 const PREFLIGHT_HOSTS = Object.freeze(['codex-delivery-host.cjs', 'codex-decompose-host.cjs', 'codex-planning-context-host.cjs',
   'claude-delivery-host.cjs', 'claude-role-host.cjs', 'claude-decompose-host.cjs', 'claude-investigation-host.cjs']);
-const DETAIL_TOKENS = Object.freeze(['pid', 'path', 'label', 'key', 'explicit', 'bundle_value']);
+const DETAIL_TOKENS = Object.freeze(['pid', 'path', 'key', 'explicit', 'bundle_value']);
 const DELIVERY_PREFLIGHT_PROSE = "the runtime's delivery host with --preflight (claude-delivery-host.cjs or codex-delivery-host.cjs in {bundle}/scripts)";
 const PLANNING_PATH_IN_MESSAGE = /(?:^|\s)(\.planning\/.*?)(?:: |$)/;
 
