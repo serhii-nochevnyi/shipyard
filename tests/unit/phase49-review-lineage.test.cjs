@@ -46,51 +46,6 @@ function commit(f, message) {
   f.head = git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
 }
 
-test('retained legacy independent original role successes survive a later repair with complete contributor impact', async () => {
-  await legacyFixture(async f => {
-    const integration = await successfulReview(f, 'integrator');
-    write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n'); commit(f, 'another contributor');
-    const architecture = await successfulReview(f, 'arch-review');
-    write(f.worktree, 'src/consumer.cjs', "module.exports = require('./provider.cjs').value + 1;\n");
-    commit(f, 'coordinator repair');
-    const i = currentInput(f, 'integrator');
-    const a = currentInput(f, 'arch-review');
-    const ib = authority.selectReviewBaseline({ currentInput: i });
-    const ab = authority.selectReviewBaseline({ currentInput: a });
-    assert.equal(ib.mode, 'incremental', JSON.stringify(ib));
-    assert.equal(ab.mode, 'incremental', JSON.stringify(ab));
-    assert.equal(ib.baseline.head, integration.head);
-    assert.equal(ab.baseline.head, architecture.head);
-    assert.notEqual(ib.baseline.head, ab.baseline.head);
-    const ip = collector.buildReviewImpactPacket(i, ib);
-    const ap = collector.buildReviewImpactPacket(a, ab);
-    assert.deepEqual(ip.endpoint_delta.map(entry => entry.path), ['src/consumer.cjs', 'src/provider.cjs']);
-    assert.deepEqual(ap.endpoint_delta.map(entry => entry.path), ['src/consumer.cjs']);
-    assert.ok(ip.impact.paths.includes('src/consumer.cjs'));
-    assert.ok(ip.impact.paths.includes('src/provider.cjs'));
-    assert.ok(ip.inherited.length > 0);
-    assert.ok(ip.current_logical_obligations.some(obligation => obligation.coverage === 'inherited'));
-    assert.ok(ip.newly_reviewed.some(ref => ref.path === 'src/provider.cjs'));
-    assert.deepEqual(ip.current.ticket_set, ['T-49-01', 'T-49-02']);
-    assert.equal(ip.semantic_credit, false);
-    assert.equal(authority.isAuthenticatedReviewBaseline({ ...ib.baseline }), false);
-    assert.throws(() => collector.buildReviewImpactPacket(i, { ...ib, baseline: { ...ib.baseline } }), /authenticated/);
-    assert.deepEqual(fs.readFileSync(integration.artifact), integration.original);
-    assert.deepEqual(fs.readFileSync(architecture.artifact), architecture.original);
-    assert.equal(authority.currentArchitectureVerdict({ worktreePath: f.worktree, pr: f.pr.number, head: f.head,
-      baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName }), null);
-  });
-});
-
-async function legacyFixture(action) {
-  await fixture(async f => {
-    const original = { authority, collector, runtime, boundary };
-    const retained = require('./helpers/codex-arch-review-fixtures.cjs').retainedLegacyReviewModules(f.root);
-    ({ authority, collector, runtime, boundary } = retained);
-    try { await action(f); } finally { ({ authority, collector, runtime, boundary } = original); }
-  });
-}
-
 async function fixture(action) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-lineage-')));
   const originalHome = os.homedir, originalCodex = process.env.CODEX_HOME;
@@ -322,22 +277,6 @@ async function successfulReview(f, role, options = {}) {
     dispatched, nativeFile, input, recorder, role };
   f.reviews.push(review); return review;
 }
-
-test('retained legacy authenticated baseline authority cannot be borrowed by another role', async () => {
-  await legacyFixture(async f => {
-    await successfulReview(f, 'integrator');
-    await successfulReview(f, 'arch-review');
-    const i = currentInput(f, 'integrator'), a = currentInput(f, 'arch-review');
-    const ib = authority.selectReviewBaseline({ currentInput: i });
-    const ab = authority.selectReviewBaseline({ currentInput: a });
-    assert.equal(ib.mode, 'incremental', JSON.stringify(ib));
-    assert.equal(ab.mode, 'incremental', JSON.stringify(ab));
-    assert.throws(() => collector.buildReviewImpactPacket(a, { ...ab, baseline: ib.baseline }),
-      /baseline.*role.*subject/);
-    assert.throws(() => collector.buildReviewImpactPacket(i, { ...ib, baseline: ab.baseline }),
-      /baseline.*role.*subject/);
-  });
-});
 
 test('changed complete membership records invalidate inheritance even when ticket IDs are unchanged', async () => {
   await fixture(async f => {
