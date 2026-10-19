@@ -483,9 +483,10 @@ make refresh-runtime-digests
 ```
 
 It rewrites `tests/unit/runtime-file-digests.json` and prints one
-`Runtime-Digest-Refresh: <path>` line per changed file. Carry those lines as
-commit trailers on the commit that changes the pin; CI rejects a pin change
-without a matching trailer.
+`Runtime-Digest-Refresh: <path>` line per changed file. The existing refresh
+checks and source-contract tests compare actual current runtime bytes against
+the checked-in SHA-256 pins and continue rejecting stale pins or corrupted
+runtime bytes that do not match those pins.
 
 ## Release and live verification
 
