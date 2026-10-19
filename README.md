@@ -488,6 +488,10 @@ checks and source-contract tests compare actual current runtime bytes against
 the checked-in SHA-256 pins and continue rejecting stale pins or corrupted
 runtime bytes that do not match those pins.
 
+The legacy `node scripts/check-runtime-digest-trailer.cjs` command delegates to
+`refresh-runtime-digests.cjs --check` without writing pins. It checks current
+bytes only, ignores the legacy `--base` argument, and does not inspect history.
+
 ## Release and live verification
 
 `make test-live` runs one live round per runtime (`bash tests/live/live-round.sh

@@ -116,4 +116,70 @@ test('refuses when a listed file is missing', () => {
   assert.match(result.stderr, /runtime-adapters\.cjs/);
 });
 
+suite('check-runtime-digest-trailer — read-only current-byte compatibility alias');
+
+function runAlias(repo, script = path.join(ROOT, 'scripts', 'check-runtime-digest-trailer.cjs')) {
+  return spawnSync(process.execPath, [script, '--base', 'nonexistent-base'], {
+    cwd: repo, encoding: 'utf8',
+  });
+}
+
+test('accepts current pins without Git history and leaves pins unchanged', () => {
+  const { repo } = fixture();
+  fs.rmSync(path.join(repo, '.git'), { recursive: true });
+  const before = fs.readFileSync(path.join(repo, PIN_REL), 'utf8');
+  const result = runAlias(repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(path.join(repo, PIN_REL), 'utf8'), before);
+});
+
+test('rejects corrupt current bytes without writing pins', () => {
+  const { repo } = fixture();
+  const before = fs.readFileSync(path.join(repo, PIN_REL), 'utf8');
+  writeFile(repo, FILE_A, 'corrupt bytes');
+  assert.notEqual(runAlias(repo).status, 0);
+  assert.equal(fs.readFileSync(path.join(repo, PIN_REL), 'utf8'), before);
+});
+
+test('rejects missing pins', () => {
+  const { repo } = fixture();
+  fs.rmSync(path.join(repo, PIN_REL));
+  assert.notEqual(runAlias(repo).status, 0);
+  assert.equal(fs.existsSync(path.join(repo, PIN_REL)), false);
+});
+
+test('rejects missing runtime files without writing pins', () => {
+  const { repo } = fixture();
+  const before = fs.readFileSync(path.join(repo, PIN_REL), 'utf8');
+  fs.rmSync(path.join(repo, FILE_A));
+  assert.notEqual(runAlias(repo).status, 0);
+  assert.equal(fs.readFileSync(path.join(repo, PIN_REL), 'utf8'), before);
+});
+
+test('rejects an unavailable child script', () => {
+  const { repo } = fixture();
+  const isolated = path.join(repo, 'check-runtime-digest-trailer.cjs');
+  fs.copyFileSync(path.join(ROOT, 'scripts', 'check-runtime-digest-trailer.cjs'), isolated);
+  const before = fs.readFileSync(path.join(repo, PIN_REL), 'utf8');
+  assert.notEqual(runAlias(repo, isolated).status, 0);
+  assert.equal(fs.readFileSync(path.join(repo, PIN_REL), 'utf8'), before);
+});
+
+test('propagates a child launch failure as nonzero', () => {
+  const script = path.join(ROOT, 'scripts', 'check-runtime-digest-trailer.cjs');
+  let exitCode;
+  require('vm').runInNewContext(fs.readFileSync(script, 'utf8'), {
+    __dirname: path.dirname(script),
+    require(name) {
+      if (name === 'child_process') return {
+        spawnSync: () => ({ status: null, error: new Error('spawn failed') }),
+      };
+      return require(name);
+    },
+    console: { error() {} },
+    process: { execPath: process.execPath, exit(code) { exitCode = code; } },
+  });
+  assert.equal(exitCode, 1);
+});
+
 done();
