@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { buildSubject, PHASE_ONLY_ROLES } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { createCodexDispatchAdapter, CODEX_MODEL_IDS, REPAIR, repairFor } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
@@ -14,6 +15,14 @@ const capabilities = {
   supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   observedModel: false, observedEffort: false,
 };
+function subjectContext(role) {
+  return PHASE_ONLY_ROLES.includes(role) ? {
+    subject_kind: 'phase', ticket: buildSubject('architecture-review', {
+      phase: '52-adapter-fixture', repository: '/tmp/worktree/.git', tickets: 'a'.repeat(64),
+      pr: '91', head: 'b'.repeat(40), base: 'c'.repeat(40),
+    }),
+  } : {};
+}
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-adapter-'));
   const manifest = { policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
@@ -132,7 +141,7 @@ test('all base roles receive explicit ADR-014 selections', () => {
   };
   try {
     for (const [role, [model, effort]] of Object.entries(expected)) {
-      const result = f.boundary.dispatch({ runtime: 'codex', role });
+      const result = f.boundary.dispatch({ runtime: 'codex', role }, subjectContext(role));
       const launch = f.calls.at(-1);
       assert.equal(launch.model, model);
       assert.equal(launch.reasoning_effort, effort);
@@ -314,7 +323,7 @@ test('default sandbox per role: researchers write, the plan-checker stays read-o
       launchTypedGsd: launch } });
     try {
       const run = () => f.boundary.dispatch({ runtime: 'codex', ...request },
-        { preRecordValidation: f.preRecordValidation });
+        { ...subjectContext(request.role), preRecordValidation: f.preRecordValidation });
       if (accepted) assert.equal(run().receipt.compliance, 'verified');
       else assert.throws(run, (error) => error.code === 'MISSING_RECEIPT');
     } finally { clean(f); }
@@ -341,7 +350,7 @@ test('static judgment receipts accept only their named evidence file write grant
         },
       } });
       try {
-        const run = () => f.boundary.dispatch({ runtime: 'codex', role });
+        const run = () => f.boundary.dispatch({ runtime: 'codex', role }, subjectContext(role));
         if (accepted) assert.equal(run().receipt.compliance, 'verified');
         else assert.throws(run, (error) => error.code === 'MISSING_RECEIPT');
       } finally { clean(f); }
