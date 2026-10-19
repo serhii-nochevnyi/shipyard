@@ -2390,7 +2390,7 @@ test('role-artifact holds no private subject grammar or home expression', () => 
   assert.ok(!/process\.env\.CODEX_HOME/.test(source), 'the Codex home has one resolver');
   assert.ok(!/process\.env\.CLAUDE_CONFIG_DIR/.test(source), 'the Claude home has one resolver');
   assert.ok(!/'\.codex'/.test(source) && !/'\.claude'/.test(source), 'no private home fallback');
-  assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 3, 'definition plus the two phase-record sites');
+  assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 5, 'definition plus the architecture and code-review phase-record sites');
   assert.equal((source.match(/parseSubject\('integrator'/g) || []).length >= 3, true);
   assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 2);
   assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 2,
@@ -2419,6 +2419,74 @@ test('the Claude semantic transcript falls back through the shared Claude home',
     assert.equal(currentClaudeSemanticPin(trusted).path, '/home/isolated/.claude/projects/project-a/session-1.jsonl',
       'a blank CLAUDE_CONFIG_DIR is unset, as the resolver reads it');
   } finally { restore('CLAUDE_CONFIG_DIR', saved.config); restore('HOME', saved.home); }
+});
+
+test('code-review lineage survives real fix-ticket membership changes and keeps reuse exact', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const f = reviewFixture();
+  try {
+    const digests = [], snapshots = [], verdicts = [];
+    for (let round=1; round<=3; round++) {
+      const binding = f.advance(round); digests.push(binding.membership);
+      snapshots.push(structuredClone({graph:f.graph,state:f.state}));
+      const input = f.input(binding,round,verdicts.at(-1)?.head || null);
+      const sealed = roleArtifact.sealJudgment(input);
+      const validated = roleArtifact.validateJudgmentManifest({...input,artifactPath:sealed.artifact_ref,artifactDigest:sealed.artifact_digest});
+      assert.equal(validated.manifest.repository_identity,target.repositoryIdentity(f.root));
+      const prior = roleArtifact.priorCodeReviewVerdicts({worktreePath:f.root,repository:target.repositoryIdentity(f.root),phaseDir:f.phase,graphDir:f.graphDir});
+      assert.equal(prior.length,round); assert.deepEqual(prior.map(v=>v.review_round),Array.from({length:round},(_,i)=>i+1));
+      verdicts.push(prior.at(-1));
+      const next = core.nextRound({priorVerdicts:prior,head:input.result.head,isAncestor:(a,b)=>{try{f.git(['merge-base','--is-ancestor',a,b]);return true;}catch{return false;}}});
+      assert.equal(next.rounds_used,round); assert.equal(next.round,round===3?null:round+1);
+      assert.equal(next.state,round===3?'limit':'ready');
+      if(round<3) assert.equal(next.scope,'delta');
+      assert.equal(f.lookup().artifact_digest,sealed.artifact_digest);
+    }
+    const latestBinding=require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').phaseBinding({graph:f.graph,state:f.state,phase:52,repository:target.repositoryIdentity(f.root),pr:52,head:f.git(['rev-parse','HEAD']),base:f.base,branch:f.branch});
+    const otherPhase={...latestBinding,subject:latestBinding.subject.replace('phase=52-review;','phase=53-other;')};
+    roleArtifact.sealJudgment(f.input(otherPhase));
+    const arch=f.dispatch('arch-review',latestBinding.subject);
+    const archEvidence=path.join(f.root,'.shipyard-arch-review-evidence.md');fs.writeFileSync(archEvidence,'Complete architecture evidence');
+    roleArtifact.sealJudgment({worktreePath:f.root,base:'main',role:'arch-review',ticket:latestBinding.subject,pr:52,ticketSet:latestBinding.ticketSet,ticketSetDigest:latestBinding.membership,recorder:f.recorder,dispatchId:arch.receipt.dispatch_id,evidencePath:archEvidence,result:{id:latestBinding.subject,pr:52,head:f.git(['rev-parse','HEAD']),base_tree:f.git(['rev-parse',f.base+'^{tree}']),ticket_set:latestBinding.ticketSet,ticket_set_digest:latestBinding.membership,verdict:'conform',blocking_count:0,findings:[]}});
+    const integrationSubject=target.buildSubject('integrator',{phase:f.phase,repository:target.repositoryIdentity(f.root),tickets:latestBinding.membership});
+    const integration=f.dispatch('integrator',integrationSubject);
+    const integrationEvidence=path.join(f.root,'.planning/phases',f.phase,'INTEGRATION.md');fs.mkdirSync(path.dirname(integrationEvidence),{recursive:true});fs.writeFileSync(integrationEvidence,'Complete integration evidence');
+    roleArtifact.sealJudgment({worktreePath:f.root,base:'main',role:'integrator',ticket:integrationSubject,phase:f.phase,ticketSet:latestBinding.ticketSet,ticketSetDigest:latestBinding.membership,recorder:f.recorder,dispatchId:integration.receipt.dispatch_id,evidencePath:integrationEvidence,result:{phase:f.phase,head:f.git(['rev-parse','HEAD']),base:'main',base_tree:f.git(['rev-parse',f.base+'^{tree}']),ticket_set:latestBinding.ticketSet,ticket_set_digest:latestBinding.membership,outcome:'passed',blocking_count:0,findings:[]}});
+    assert.equal(roleArtifact.priorCodeReviewVerdicts({worktreePath:f.root,repository:target.repositoryIdentity(f.root),phaseDir:f.phase}).length,3);
+    assert.equal(new Set(digests).size,3);
+    assert.equal(core.lineageComplete({verdict:verdicts[2],priorVerdicts:verdicts}),true);
+    assert.deepEqual(roleArtifact.priorCodeReviewVerdicts({worktreePath:f.root,repository:target.repositoryIdentity(f.root),phaseDir:'54-absent'}),[]);
+    assert.deepEqual(roleArtifact.priorCodeReviewVerdicts({worktreePath:f.root,repository:'/another/repository',phaseDir:f.phase}),[]);
+    for(const snapshot of snapshots.slice(0,2)) {
+      fs.writeFileSync(path.join(f.graphDir,'tickets.json'),JSON.stringify(snapshot.graph));
+      fs.writeFileSync(path.join(f.graphDir,'delivery-state.json'),JSON.stringify({tickets:snapshot.state}));
+      assert.equal(f.lookup(),null);
+    }
+    f.writeGraph();
+    f.git(['commit','--allow-empty','--quiet','-m','moved head']); assert.equal(f.lookup(),null);
+  } finally { f.cleanup(); }
+});
+
+test('code-review reuse refuses a moved base or reference contract and ticket-form subject', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const f = reviewFixture();
+  try {
+    const binding=f.advance(1), input=f.input(binding);
+    const originalReference=fs.readFileSync(path.join(__dirname,'../../plugins/delivery-pipeline/references/code-review.md'));
+    const changedReference=require('node:crypto').createHash('sha256').update(originalReference).update('Changed reference').digest('hex');
+    input.result.contract_digest=core.contractDigest(changedReference);
+    input.result.reuse_key=core.reuseKey({head:input.result.head,baseCommit:f.base,contractDigest:input.result.contract_digest});
+    roleArtifact.sealJudgment(input); assert.equal(f.lookup(),null);
+    roleArtifact.sealJudgment(f.input(binding)); assert.equal(f.lookup().authenticated,true);
+    const head=f.git(['rev-parse','HEAD']);
+    f.git(['update-ref','refs/remotes/origin/main',head]); assert.equal(f.lookup(),null);
+    f.git(['update-ref','refs/remotes/origin/main',f.base]); assert.equal(f.lookup().authenticated,true);
+    const {judgmentSubject}=roleArtifactInternals(['judgmentSubject']);
+    assert.throws(()=>judgmentSubject('code-review',{ticket:'T-52-01'},{repository:{identity:'/repo'},head,base_commit:f.base},{},{digest:binding.membership},52));
+  } finally {f.cleanup();}
 });
 
 done();

@@ -75,18 +75,21 @@ function canonicalInputs(repository) {
   return rows.sort((a, b) => a.path.localeCompare(b.path));
 }
 function currentSourceInventories(outputCount) {
-  const reference = 'plugins/delivery-pipeline/references/code-review.md';
+  const added = ['plugins/delivery-pipeline/references/code-review.md',
+    'plugins/delivery-pipeline/scripts/code-review-core.cjs'];
   const inputs = canonicalInputs(ROOT).map(row => row.path);
   const outputs = inventory(path.join(ROOT, 'plugins/shipyard')).map(row => row.path);
-  assert.equal(inputs.length, 163);
+  assert.equal(inputs.length, 164);
   assert.equal(outputs.length, 161);
-  assert(inputs.includes(reference), 'missing canonical code-review reference');
-  assert(!outputs.includes('host/' + reference), 'committed package unexpectedly regenerated');
-  assert([161, 162].includes(outputCount));
-  if (outputCount === 162) outputs.push('host/' + reference);
+  for (const relative of added) {
+    assert(inputs.includes(relative), 'missing canonical code-review member');
+    assert(!outputs.includes('host/' + relative), 'committed package unexpectedly regenerated');
+  }
+  assert([161, 163].includes(outputCount));
+  if (outputCount === 163) outputs.push(...added.map(relative => 'host/' + relative));
   assert.equal(outputs.length, outputCount);
   for (const rows of [inputs, outputs]) assert.equal(new Set(rows).size, rows.length);
-  return { inputs: 163, outputs: outputCount, inputPaths: inputs.sort(), outputPaths: outputs.sort() };
+  return { inputs: 164, outputs: outputCount, inputPaths: inputs.sort(), outputPaths: outputs.sort() };
 }
 function assertInventoryExpectations(selection, expected) {
   for (const [field, paths] of [['inputs', expected.inputPaths], ['outputs', expected.outputPaths]]) {
@@ -376,7 +379,7 @@ test('combined batch successor admits only the six-source/eight-output union and
   const observed = inspectBatchDelta(selected, historical, inventories);
   assert.deepEqual(observed.changed_inputs, [...BATCH_INPUTS].sort());
   assert.deepEqual(observed.changed_outputs, [...BATCH_OUTPUTS].sort());
-  assert.equal(observed.unchanged_inputs, 157); assert.equal(observed.unchanged_outputs, 153);
+  assert.equal(observed.unchanged_inputs, 158); assert.equal(observed.unchanged_outputs, 153);
   for (const mutate of [
     value => { value.inputs.pop(); },
     value => { value.outputs.pop(); },
@@ -397,7 +400,7 @@ test('combined batch successor admits only the six-source/eight-output union and
     const row = unchanged[field].find(item => item.path === (field === 'inputs' ? BATCH_INPUTS[0] : 'host/' + BATCH_INPUTS[0]));
     row.sha256 = historical[field].find(item => item.path === row.path).sha256;
   }
-  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_inputs, 158);
+  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_inputs, 159);
   assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_outputs, 154);
 });
 
@@ -941,7 +944,7 @@ test('mode-only successor rejects same-version old identity and complete invento
   const repository = path.join(temporary, 'repository');
   try {
     build(stage);
-    const inventories = currentSourceInventories(162);
+    const inventories = currentSourceInventories(163);
     const inputs = canonicalInputs(ROOT);
     for (const input of inputs) {
       const target = path.join(repository, input.path);
@@ -977,8 +980,8 @@ test('mode-only successor rejects same-version old identity and complete invento
     assert(!crypto.verify(null, oldBytes, publicKey, signature));
     const consume = (value = bytes, pins = expected) => withoutWrites(() =>
       inspectModeSuccessor(value, pins, repository, stage, oldBytes, oldExpected, inventories));
-    assert.equal(consume().unchanged_outputs, 161);
-    assert.equal(consume().unchanged_output_bytes, 162);
+    assert.equal(consume().unchanged_outputs, 162);
+    assert.equal(consume().unchanged_output_bytes, 163);
     assert.equal(consume().inspector_build_calls, 0);
     assert.throws(() => consume(oldBytes, oldExpected), /old selection substituted/);
     for (const mutate of [
@@ -1067,7 +1070,7 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     const selection = { schema: 'shipyard.phase49.selected-package.v1', source: { head: 'fixture-head', tree: 'fixture-tree' },
       stage, build_calls: 1, builder_sha256: sha(read(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))), inputs, outputs,
       package: JSON.parse(read(path.join(stage, 'package-build.json'))) };
-    const inventories = currentSourceInventories(162);
+    const inventories = currentSourceInventories(163);
     assertInventoryExpectations(selection, inventories);
     const bytes = Buffer.from(JSON.stringify(selection));
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -1322,7 +1325,7 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     try {
       const admitted = withoutWrites(() => inspectAccountingSuccessor(distinctBytes, { selection_sha256: sha(distinctBytes),
         head: distinctSelection.source.head, tree: distinctSelection.source.tree }, repository, distinct, selection, inventories));
-      assert.equal(admitted.unchanged_outputs, 158);
+      assert.equal(admitted.unchanged_outputs, 159);
       for (const mutate of [
         value => { value.source = selection.source; },
         value => { value.stage = selection.stage; },

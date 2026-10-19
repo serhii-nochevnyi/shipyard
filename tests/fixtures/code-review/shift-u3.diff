@@ -1,0 +1,19 @@
+diff --git a/source.js b/source.js
+--- a/source.js
++++ b/source.js
+@@ -1,3 +1,15 @@
++padding0();
++padding1();
++padding2();
++padding3();
++padding4();
++padding5();
++padding6();
++padding7();
++padding8();
++padding9();
++padding10();
++padding11();
+ const value1 = 1;
+ const value2 = 2;
+ const value3 = 3;

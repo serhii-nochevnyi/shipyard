@@ -793,4 +793,69 @@ test('integrator resolves a bare reported base with the live origin preference',
   }
 });
 
+test('code-review tracer validates in plain, spaced and non-ASCII worktrees and refuses tampering', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  for(const suffix of ['plain','with space','українська']) {
+    const f = reviewFixture(suffix);
+    try {
+      const binding=f.advance(1), input=f.input(binding), sealed=roleArtifact.sealJudgment(input);
+      const validated=roleArtifact.validateJudgmentManifest({...input,artifactPath:sealed.artifact_ref,artifactDigest:sealed.artifact_digest});
+      assert.equal(validated.manifest.repository_identity,require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').repositoryIdentity(f.root));
+      assert.equal(f.lookup().verdict,'needs-fix'); assert.equal(f.lookup().blocking_count,1);
+      fs.appendFileSync(path.join(f.root,'.shipyard-code-review-evidence.md'),'altered');
+      assert.throws(()=>roleArtifact.validateJudgmentManifest({...input,artifactPath:sealed.artifact_ref,artifactDigest:sealed.artifact_digest}));
+    } finally { f.cleanup(); }
+  }
+});
+
+test('code-review artifact rejects false passes, invalid citations and missing repair evidence', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const f=reviewFixture();
+  try {
+    const binding=f.advance(1);
+    for(const mutate of [
+      r=>{r.verdict='pass';}, r=>{r.verdict='pass';r.review_completeness='incomplete';},
+      r=>{delete r.findings[0].fix_ticket;},r=>{delete r.findings[0].identity;},
+      r=>{r.findings[0].line_text=null;},r=>{r.findings[0].occurrence=null;},
+      r=>{r.findings[0].citation='unmatched';},r=>{r.findings[0].citation='missing';},
+      r=>{r.id='T-52-01';},r=>{r.head='a'.repeat(40);},r=>{r.ticket_set_digest='a'.repeat(64);},
+      r=>{r.base_commit='a'.repeat(40);},
+    ]) {const input=f.input(binding);mutate(input.result);assert.throws(()=>roleArtifact.sealJudgment(input));}
+    const raw=JSON.parse(fs.readFileSync(path.join(__dirname,'../fixtures/code-review/review.json'),'utf8'));
+    raw.review_completeness='incomplete';raw.limitations=['Unread source'];
+    const input=f.input(binding,1,null,raw);roleArtifact.sealJudgment(input);
+    assert.equal(f.lookup().review_completeness,'incomplete'); assert.equal(f.lookup().verdict,'incomplete');
+  } finally {f.cleanup();}
+});
+
+test('code-review suppressed index survives sealing, while evidence and findings tampering cannot authenticate', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const f=reviewFixture();
+  try {
+    const binding=f.advance(1), first=f.input(binding), current=first.result.findings[0];
+    const prior=core.carryPriorFindings({priorFindings:first.result.findings,deltaDiff:'',readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8'),disagreements:{[current.identity]:{reason:'Caller guarantees acknowledgement',recorded_by:'operator'}}});
+    const normalized=core.normalizeResult({review_completeness:'complete',limitations:[],unresolved_sources:[],findings:[],dispositions:[]},{round:1,scope:'full',priorFindings:prior,readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8')});
+    first.result={...first.result,...normalized};
+    const sealed=roleArtifact.sealJudgment(first);
+    const checked=roleArtifact.validateJudgmentManifest({...first,artifactPath:sealed.artifact_ref,artifactDigest:sealed.artifact_digest});
+    assert.equal(checked.findings.findings[0].suppressed,true);
+    assert.equal(f.lookup().disagreement_suppressed,1); assert.equal(f.lookup().verdict,'pass');
+    fs.appendFileSync(path.join(f.root,checked.manifest.files.findings.path),' ');
+    assert.equal(f.lookup(),null);
+    assert.throws(()=>roleArtifact.validateJudgmentManifest({...first,artifactPath:sealed.artifact_ref,artifactDigest:sealed.artifact_digest}));
+  } finally {f.cleanup();}
+});
+
+test('code-review incomplete first round cannot authorize a complete delta pass', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const f=reviewFixture();
+  try {
+    const raw={review_completeness:'incomplete',limitations:['unread diff'],unresolved_sources:[],findings:[],dispositions:[]};
+    const first=f.input(f.advance(1),1,null,raw);roleArtifact.sealJudgment(first);
+    const second=f.input(f.advance(2),2,first.result.head,{...raw,review_completeness:'complete',limitations:[]});
+    assert.throws(()=>roleArtifact.sealJudgment(second),error=>error.code==='JUDGMENT_OUTCOME_MISMATCH');
+  } finally {f.cleanup();}
+});
+
 done();
