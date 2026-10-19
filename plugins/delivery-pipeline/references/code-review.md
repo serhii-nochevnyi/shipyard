@@ -60,8 +60,9 @@ cannot also appear in returned findings at the same host identity.
    quote. It normalizes Unicode NFC and whitespace, preserving case and
    punctuation. Identity hashes the relative path, normalized source text and
    occurrence ordinal, separated by line feeds. Identical normalized lines
-   have different ordinals. `rule` is an optional lowercase kebab label of at
-   most 64 characters; absent becomes `unlabelled`. The rule, id, severity,
+   have different ordinals. `rule` is an optional free label selected by the
+   reviewer, with no registry or identity role. Its serialized form is lowercase
+   kebab, at most 64 characters; absent becomes `unlabelled`. The rule, id, severity,
    line number and prose do not enter the identity.
 4. A missing or unmatched citation remains a new finding at its severity;
    it cannot match or be suppressed. Only a BLOCKER missing a valid path or
@@ -75,6 +76,12 @@ cannot also appear in returned findings at the same host identity.
    Mark an untested claim as an assumption or unknown. Finding prose describes
    product behaviour; do not put pipeline, ticket, plan or decision identifiers
    in `summary`, `failure_scenario` or `rule`.
+
+## Verification contract
+
+Every checkable claim about the codebase, a test, delivery state, or a completed action must name the exact command that checked it and the relevant path, output, or exit status.
+Mark an untested claim as an assumption or unknown and state the next check.
+A claim without command-backed evidence is not verification.
 
 ## Output
 
