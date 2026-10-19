@@ -89,6 +89,7 @@ const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-re
 const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 const hostProvenance = require(path.join(__dirname, 'host-provenance.cjs'));
 const { normalizeTicketIdentity, normalizePhaseIdentity } = require('./run-contract.cjs');
+const { PHASE_SUBJECT, PHASE_SUBJECT_ROLES, PHASE_ONLY_ROLES } = require('./architecture-target.cjs');
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -1508,8 +1509,8 @@ const INFLIGHT_TOKEN = /^[A-Za-z0-9._:-]{1,200}$/;
 
 function inflightSubject(ticket, role) {
   if (typeof ticket !== 'string' || ticket.length > 4096) return false;
-  if (INFLIGHT_TICKET.test(ticket)) return true;
-  if (role === 'arch-review') return require('./architecture-target.cjs').PHASE_SUBJECT.test(ticket);
+  if (!PHASE_ONLY_ROLES.includes(role) && INFLIGHT_TICKET.test(ticket)) return true;
+  if (PHASE_SUBJECT_ROLES.includes(role)) return PHASE_SUBJECT.test(ticket);
   if (['research', 'decomposition'].includes(role)) {
     try {
       const phaseInput = /^phase=(\d+);/.exec(ticket);

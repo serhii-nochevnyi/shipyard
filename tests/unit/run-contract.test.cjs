@@ -338,3 +338,56 @@ test('architecture phase identity binds repository, PR, head and base without a 
   assert.throws(() => makeScope({ ticket: subject.replace(';pr=91', ';pr=0'),
     dispatch: { dispatch_id: 'bad', role: 'arch-review', model: 'sol', effort: 'high' } }), { code: 'INVALID_INPUT' });
 });
+
+for (const repository of ['/plain/.git', '/work/my repo/.git', '/work/дім/.git']) {
+  const subject = `phase=52-policy;repository=${repository};tickets=${'a'.repeat(64)}`
+    + `;pr=91;head=${'b'.repeat(40)};base=${'c'.repeat(40)}`;
+  test(`code-review ticket identity admits only the matching phase for ${repository}`, () => {
+    assert.equal(contract.normalizeTicketIdentity(subject, { role: 'code-review', phase: 52 }).ticket, subject);
+    assert.throws(() => contract.normalizeTicketIdentity(subject, { role: 'code-review', phase: 51 }),
+      { code: 'INVALID_INPUT' });
+    for (const role of currentPolicy.ROLES.filter((value) => !['arch-review', 'code-review'].includes(value))) {
+      assert.throws(() => contract.normalizeTicketIdentity(subject, { role, phase: 52 }), { code: 'INVALID_INPUT' });
+    }
+  });
+
+  for (const hashed of [false, true]) {
+    test(`code-review run binds the ${hashed ? 'hashed' : 'raw'} repository identity for ${repository}`, () => {
+      const repository_id = hashed
+        ? 'git-common:' + require('node:crypto').createHash('sha256').update(repository).digest('hex')
+        : repository;
+      const run = makeScope({ phase: 52, ticket: subject, repository_id,
+        dispatch: { dispatch_id: 'code-review-phase', role: 'code-review', model: 'sol', effort: 'high' } });
+      assert.equal(run.repository.repository_id, repository_id);
+      assert.equal(contract.normalizeRunContract(run).ticket.ticket, subject);
+      for (const foreign of ['/other/.git', 'owner/repo',
+        'git-common:' + require('node:crypto').createHash('sha256').update('/other/.git').digest('hex')]) {
+        assert.throws(() => contract.normalizeRunContract({ ...run,
+          repository: { ...run.repository, repository_id: foreign } }), { code: 'SCOPE_MISMATCH' });
+      }
+      assert.throws(() => contract.normalizeRunContract({ ...run, phase: { phase: 51 } }), { code: 'INVALID_INPUT' });
+    });
+  }
+}
+
+test('code-review ticket identities refuse ticket form and other subject families', () => {
+  for (const ticket of ['T-52-04', 'INV-014-runtime',
+    `phase=52-policy;repository=/plain/.git;tickets=${'a'.repeat(64)}`,
+    'phase=52;input=ADR-025-runtime;repository=/plain/.git']) {
+    assert.throws(() => contract.normalizeTicketIdentity(ticket, { role: 'code-review', phase: 52 }),
+      { code: 'INVALID_INPUT' });
+    assert.throws(() => makeScope({ phase: 52, ticket,
+      dispatch: { dispatch_id: 'code-review-ticket', role: 'code-review', model: 'sol', effort: 'high' } }),
+    { code: 'INVALID_INPUT' });
+  }
+  assert.equal(contract.normalizeTicketIdentity('T-52-04', { role: 'arch-review', phase: 52 }).ticket, 'T-52-04');
+});
+
+test('code-review ticket identities refuse malformed phase subjects', () => {
+  for (const repository of ['/a;b/.git', '/a\tb/.git', '/a\nb/.git', '/a\u0001b/.git', '/a\x7fb/.git', '']) {
+    const ticket = `phase=52-policy;repository=${repository};tickets=${'a'.repeat(64)}`
+      + `;pr=91;head=${'b'.repeat(40)};base=${'c'.repeat(40)}`;
+    assert.throws(() => contract.normalizeTicketIdentity(ticket, { role: 'code-review', phase: 52 }),
+      { code: 'INVALID_INPUT' });
+  }
+});

@@ -193,11 +193,17 @@ fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipelin
     repeat: { signatureState: 'repeat' }, repeat_exhausted: { signatureState: 'repeat_exhausted' },
   };
   const smokeContext = { ticket: 'T-36-11-runtime-ladder-smoke' };
+  const { buildSubject, PHASE_ONLY_ROLES } = require(path.join(installedScripts, 'architecture-target.cjs'));
+  const phaseContext = { subject_kind: 'phase', ticket: buildSubject('architecture-review', {
+    phase: '52-runtime-ladder-smoke', repository: project, tickets: hash('T-52-04'),
+    pr: '528', head: 'a'.repeat(40), base: 'b'.repeat(40),
+  }) };
   let cases = 0;
   for (const runtime of policy.SUPPORTED_RUNTIMES) {
     const boundary = boundaries[runtime];
     const models = runtime === 'codex' ? policy.CODEX_MODEL_IDS : policy.CLAUDE_MODEL_ALIASES;
     for (const [role, rungs] of Object.entries(policy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime])) {
+      const context = PHASE_ONLY_ROLES.includes(role) ? phaseContext : smokeContext;
       let previous;
       for (const rung of rungs) {
         assert.ok(Object.hasOwn(rungSignals, rung.name), 'new rung needs an explicit smoke trigger');
@@ -205,13 +211,13 @@ fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipelin
         const result = boundary.dispatch({ runtime, role, dispatch_id: `${runtime}-${role}-${rung.name}`,
           signals: { ...rungSignals[rung.name], ...(repair ? { priorApplied: previous.receipt } : {}) },
           ...(repair ? { previous_dispatch_id: previous.dispatch_id } : {}),
-        }, smokeContext);
+        }, context);
         assert.deepEqual([result.resolution.logical_rung, result.applied_model, result.applied_effort],
           [rung.name, models[rung.model_key], rung.effort], `${runtime}/${role}/${rung.name}`);
         assert.deepEqual(calls.at(-1), { runtime, model: models[rung.model_key], effort: rung.effort });
         assert.equal(result.receipt.compliance, 'verified');
         assert.deepEqual(recorders[runtime].getVerifiedRecord(result.dispatch_id).receipt, result.receipt);
-        assert.equal(boundary.reconcile(result.dispatch_id, smokeContext).applied_effort, rung.effort);
+        assert.equal(boundary.reconcile(result.dispatch_id, context).applied_effort, rung.effort);
         previous = result;
         cases++;
       }
