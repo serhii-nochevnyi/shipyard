@@ -1294,6 +1294,7 @@ const AGENT_CARDINALITY = {
   'ci-fix': 'ticket',
   'review-fix': 'ticket',
   'arch-review': 'ticket',
+  'code-review': 'ticket',
   'drift-check': 'ticket',
   research: 'ticket',
   integrator: 'ticket',

@@ -703,6 +703,9 @@ integrator    opus     high     the last mechanical judgment before a person mer
 arch-review   opus     high     reads a whole diff against every ADR; its effort is
                                 fixed by the compatibility reader, not by a runtime
                                 model preference
+code-review   opus     high     a balanced general review of the whole epic diff; its
+                                effort is fixed by the compatibility reader, not by a
+                                runtime model preference
 executor      opus     high     it implements a contract; falsifying that contract
                                 belongs upstream of it
 ci-fix        opus     high     diagnosing a failing pipeline
@@ -778,6 +781,7 @@ The canonical role/rung/signal ladder is:
 | `integrator` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` |
 | `drift-check` | Sol/low, fixed; no automatic tier promotion | Sonnet/medium, fixed; reroute uncertain scope through a policy amendment |
 | `arch-review` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, or `contested: true`; Fable/medium on measured `inputTokens > 250000` with `pipeline.fable: auto` consent |
+| `code-review` | Sol/high → Sol/xhigh on `critical: true` or `checkpoint: true` | Sonnet/xhigh → Opus/high on `critical: true` or `checkpoint: true` |
 | `ci-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |
 | `review-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |
 
@@ -852,6 +856,7 @@ are:
 | `integrator` | `shipyard-integrator.toml`, `shipyard-integrator-critical.toml` |
 | `drift-check` | `shipyard-drift-check.toml` |
 | `arch-review` | `shipyard-arch-review.toml`, `shipyard-arch-review-critical.toml` |
+| `code-review` | `shipyard-code-review.toml`, `shipyard-code-review-critical.toml` |
 | `ci-fix` | `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
 | `review-fix` | `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 

@@ -179,7 +179,7 @@ test('tuner leaves native planner and reviewer selection to routed policy', () =
       assert.equal(readCfg(dir).pipeline.fable, fable);
       const { config } = pc.loadConfig(dir, { runtime, env: {}, routed: true });
       const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-      for (const role of ['decomposition', 'arch-review']) {
+      for (const role of ['decomposition', 'arch-review', 'code-review']) {
         assert.deepEqual(pc.resolveDispatch({ config, role }), policy.resolveDispatch({ runtime, role }));
       }
     }
@@ -1331,10 +1331,10 @@ test('Codex tuning preserves foreign planner and executor skills', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('Codex static variants: research is workspace-write, arch-review and drift-check stay read-only', () => {
+test('Codex static variants: research is workspace-write, arch-review, code-review and drift-check stay read-only', () => {
   const { codexStaticVariants } = require(SCRIPT);
   const variants = codexStaticVariants(2);
-  for (const role of ['research', 'arch-review', 'drift-check']) {
+  for (const role of ['research', 'arch-review', 'code-review', 'drift-check']) {
     const sandboxes = new Set(variants.filter((variant) => variant.role === role).map((variant) => variant.sandbox));
     assert.deepEqual([...sandboxes], [role === 'research' ? 'workspace-write' : 'read-only']);
   }

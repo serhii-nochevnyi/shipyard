@@ -191,7 +191,7 @@ function normalizeModel(runtime, value, field = 'model', version = policy.POLICY
   const entry = Object.entries(map).find(([key, native]) => (keyOnly ? key === value : concreteOnly ? native === value : key === value || native === value));
   if (entry) return { model_key: entry[0], model: entry[1] };
   const foreign = RUNTIMES.some(candidate => candidate !== runtime && Object.entries(adapters.recordedPalette(version, candidate)).some(([key, native]) => key === value || native === value));
-  const crossed = ['adr-014.v6', 'adr-014.v7'].some(candidate => Object.values(adapters.recordedPalette(candidate, runtime)).includes(value));
+  const crossed = ['adr-014.v6', 'adr-014.v7', 'adr-014.v8'].some(candidate => Object.values(adapters.recordedPalette(candidate, runtime)).includes(value));
   refuse(foreign || crossed ? 'RUNTIME_MODEL_MISMATCH' : 'UNSUPPORTED_MODEL', `${field} is not registered for recorded runtime/policy`);
 }
 

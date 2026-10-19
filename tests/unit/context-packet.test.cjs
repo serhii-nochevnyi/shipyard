@@ -13,6 +13,7 @@ const {
   estimateTokens,
   buildContextPacket,
   validateContextPacket,
+  ROLE_REQUIRED_INPUTS,
 } = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
 const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
 const { createDispatchBoundary, createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -98,6 +99,15 @@ test('builds a serializable packet with complete policy, scope, refs and explici
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
   }
+});
+
+test('every routed role that builds a packet has its required inputs, code-review included', () => {
+  assert.deepStrictEqual([...ROLE_REQUIRED_INPUTS['code-review']],
+    ['exact_diff', 'integration_base', 'ticket_set', 'plan_acceptance', 'prior_findings']);
+  for (const role of Object.keys(ROLE_REQUIRED_INPUTS)) {
+    assert.ok(modelPolicy.ROLES.includes(role), `${role} is a routed role`);
+  }
+  assert.ok(Object.isFrozen(ROLE_REQUIRED_INPUTS['code-review']));
 });
 
 test('reads the full selected backlog section and binds its source hash', () => {

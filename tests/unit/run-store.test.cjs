@@ -92,26 +92,27 @@ test('persisted historical Sol survives actual read and unrelated transaction', 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('synthetic v6/v7 store matrix preserves siblings and refuses invalid input atomically', () => {
+test('synthetic v6/v7/v8 store matrix preserves siblings and refuses invalid input atomically', () => {
   const root = tempDir();
   try {
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
     const store = createRunStore({ storeDir: root, now: () => 1000 });
     const palettes = { codex: { sol: 'gpt-6-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' } };
     const runs = {};
-    for (const version of ['adr-014.v6', 'adr-014.v7']) for (const [runtime, palette] of Object.entries(palettes)) for (const [key, oldModel] of Object.entries(palette)) {
+    const hashes = { 'adr-014.v6': '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968', 'adr-014.v7': '3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570', 'adr-014.v8': policy.POLICY_HASH };
+    for (const version of ['adr-014.v6', 'adr-014.v7', 'adr-014.v8']) for (const [runtime, palette] of Object.entries(palettes)) for (const [key, oldModel] of Object.entries(palette)) {
       const run = JSON.parse(JSON.stringify(makeRun('owner-a', `fixture-${runtime}-${version}-${key}`)));
-      const model = version.endsWith('v7') && key === 'sol' ? 'gpt-6.1-sol' : version.endsWith('v7') && key === 'sonnet' ? 'claude-sonnet-5-5' : oldModel;
+      const model = !version.endsWith('v6') && key === 'sol' ? 'gpt-6.1-sol' : !version.endsWith('v6') && key === 'sonnet' ? 'claude-sonnet-5-5' : oldModel;
       run.runtime = { ...run.runtime, runtime, provider: runtime === 'codex' ? 'openai' : 'anthropic' };
-      run.dispatch = { ...run.dispatch, runtime, provider: run.runtime.provider, model_key: key, model, policy_version: version, policy_hash: version.endsWith('v6') ? '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968' : policy.POLICY_HASH };
+      run.dispatch = { ...run.dispatch, runtime, provider: run.runtime.provider, model_key: key, model, policy_version: version, policy_hash: hashes[version] };
       runs[run.run_id] = { schema: 'shipyard.run-record.v1', version: 1, run, owner: { owner_id: 'owner-a', lease_id: run.lease.lease_id, epoch: 0, acquired_at: 1000, heartbeat_at: 1000, expires_at: 2000, status: 'active' }, retry: {}, checkpoint: null, successor: null, idempotency: {}, history: [] };
     }
-    assert.equal(Object.keys(runs).length, 12);
-    assert.equal(new Set(Object.keys(runs)).size, 12);
+    assert.equal(Object.keys(runs).length, 18);
+    assert.equal(new Set(Object.keys(runs)).size, 18);
     fs.writeFileSync(store.storeFile, JSON.stringify({ schema: 'shipyard.run-store.v1', version: 1, generation: 0, updated_at: null, runs }));
     const bytes = fs.readFileSync(store.storeFile, 'utf8');
     const before = store.read();
-    assert.equal(Object.keys(before.runs).length, 12);
+    assert.equal(Object.keys(before.runs).length, 18);
     assert.equal(fs.readFileSync(store.storeFile, 'utf8'), bytes);
     for (const [id, record] of Object.entries(runs)) assert.deepEqual(store.get(id).run, record.run);
     store.transact(() => {});
@@ -126,11 +127,11 @@ test('synthetic v6/v7 store matrix preserves siblings and refuses invalid input 
       const expected = { ...before.runs[id], history: [{ event: 'synthetic-note' }] };
       assert.deepEqual(after.runs[id], expected);
     }
-    assert.equal(Object.keys(after.runs).length, 12);
-    assert.equal(Object.keys(disk.runs).length, 12);
+    assert.equal(Object.keys(after.runs).length, 18);
+    assert.equal(Object.keys(disk.runs).length, 18);
     for (const [recordId, original] of Object.entries(runs)) {
       const version = original.run.dispatch.policy_version;
-      for (const invalid of [version.endsWith('v6') ? policy.POLICY_HASH : '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968', 'a'.repeat(64)]) {
+      for (const invalid of [...Object.values(hashes).filter((other) => other !== hashes[version]), 'a'.repeat(64)]) {
         const valid = fs.readFileSync(store.storeFile, 'utf8');
         assert.throws(() => store.transaction(recordId, record => { record.run = { ...record.run, dispatch: { ...record.run.dispatch, policy_hash: invalid } }; }), { code: 'POLICY_IDENTITY_CONFLICT' });
         assert.equal(fs.readFileSync(store.storeFile, 'utf8'), valid);

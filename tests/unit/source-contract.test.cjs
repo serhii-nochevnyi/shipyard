@@ -457,6 +457,7 @@ const VERIFICATION_EVIDENCE = 'A claim without command-backed evidence is not ve
 const ROLE_REFERENCES = [
   'plugins/delivery-pipeline/references/arch-review.md',
   'plugins/delivery-pipeline/references/ci-fix.md',
+  'plugins/delivery-pipeline/references/code-review.md',
   'plugins/delivery-pipeline/references/drift-check.md',
   'plugins/delivery-pipeline/references/integrator.md',
   'plugins/delivery-pipeline/references/inv-research.md',
@@ -977,7 +978,7 @@ test('delivery launch docs route every role through the boundary and the generat
 
   for (const role of [
     'executor', 'pr-sentinel', 'drift-check', 'ci-fix', 'review-fix',
-    'arch-review', 'integrator',
+    'arch-review', 'code-review', 'integrator',
   ]) {
     assert.ok(compact.includes(normalized(role)), `delivery docs must name routed role ${role}`);
   }
@@ -1014,6 +1015,7 @@ test('delivery launch docs route every role through the boundary and the generat
     '| `integrator` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` |',
     '| `drift-check` | Sol/low, fixed; no automatic tier promotion | Sonnet/medium, fixed; reroute uncertain scope through a policy amendment |',
     '| `arch-review` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, or `contested: true`; Fable/medium on measured `inputTokens > 250000` with `pipeline.fable: auto` consent |',
+    '| `code-review` | Sol/high → Sol/xhigh on `critical: true` or `checkpoint: true` | Sonnet/xhigh → Opus/high on `critical: true` or `checkpoint: true` |',
     '| `ci-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |',
     '| `review-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |',
   ]);

@@ -25,6 +25,7 @@ const ROLE_REQUIRED_INPUTS = Object.freeze({
   'review-fix': Object.freeze(['failure_evidence', 'prior_hypothesis']),
   'drift-check': Object.freeze(['integration_base', 'plan']),
   'arch-review': Object.freeze(['adr_refs', 'exact_diff', 'integration_base']),
+  'code-review': Object.freeze(['exact_diff', 'integration_base', 'ticket_set', 'plan_acceptance', 'prior_findings']),
   integrator: Object.freeze(['phase_contracts', 'combined_diff']),
   research: Object.freeze(['problem_statement', 'source_refs']),
   decomposition: Object.freeze(['adr_refs', 'requirements', 'research_refs', 'context']),

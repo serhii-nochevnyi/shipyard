@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { SCRATCH_FILES, SCRATCH_DIRS, isScratch, statusIgnoringScratch } =
+const { SCRATCH_FILES, SCRATCH_DIRS, CODE_REVIEW_EVIDENCE_NAME, isScratch, statusIgnoringScratch } =
   require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 function repository(action) {
@@ -23,8 +23,9 @@ test('only the declared root files and the non-judge archive directory are scrat
   assert.deepEqual(SCRATCH_FILES, [
     '.shipyard-role-artifact.json', '.shipyard-pr-body.md', '.shipyard-evidence.md',
     '.shipyard-repair-evidence.md', '.shipyard-drift-evidence.md',
-    '.shipyard-arch-review-evidence.md', '.shipyard-sentinel-evidence.md',
+    '.shipyard-arch-review-evidence.md', '.shipyard-code-review-evidence.md', '.shipyard-sentinel-evidence.md',
   ]);
+  assert.equal(CODE_REVIEW_EVIDENCE_NAME, '.shipyard-code-review-evidence.md');
   assert.deepEqual(SCRATCH_DIRS, ['.shipyard-role-artifacts']);
   for (const name of SCRATCH_FILES) assert.equal(isScratch(name, { forJudge: true }), true);
   assert.equal(isScratch('.shipyard-x.js', { forJudge: true }), false);

@@ -750,7 +750,7 @@ const DEFAULTS = {
 
 const KNOWN_KEYS = new Set(Object.keys(DEFAULTS));
 const KNOWN_JIRA_KEYS = new Set(['enabled', 'project', 'issue_type', 'epic_issue_type']);
-const COMPATIBILITY_ROLES = Object.freeze(['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research', 'pr-sentinel']);
+const COMPATIBILITY_ROLES = Object.freeze(['integrator', 'arch-review', 'code-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research', 'pr-sentinel']);
 // Existing board/recorder consumers use ROLES with their compatibility tables.
 // Routed consumers share the canonical vocabulary, including decomposition,
 // explicitly; expanding ROLES would advertise support those tables do not have.
@@ -763,7 +763,7 @@ const ROUTED_ROLES = modelPolicy.ROLES;
 // exactly one reader, `fableRoute`'s contested route, because a re-judgement is
 // the only thing `--contested` can mean. The other half of the invariant (neither
 // of these may ever join SONNET_ROLES) is asserted in the unit test.
-const JUDGMENT_ROLES = new Set(['integrator', 'arch-review']);
+const JUDGMENT_ROLES = new Set(['integrator', 'arch-review', 'code-review']);
 // ── the floor, and its two named exemptions (ADR-005 D1, amended D2) ─────────
 //
 // The floor is `opus`: the conveyor's failure mode is a wrong green reaching an
@@ -801,7 +801,7 @@ const SONNET_ROLES = new Map([
 //   executor                     high    xhigh at risk: high or a checkpoint
 //   ci-fix, review-fix,
 //     pr-sentinel                high
-//   arch-review, integrator      xhigh
+//   arch-review, integrator, code-review  xhigh
 //   any repair role on a
 //     repeated signature         max     (see resolveEffort — it outranks this
 //                                        table, and it is the ONLY built-in path
@@ -840,6 +840,7 @@ const EFFORT_ROWS = {
   'review-fix': () => 'high',
   'pr-sentinel': () => 'high',
   'arch-review': () => 'xhigh',
+  'code-review': () => 'xhigh',
   integrator: () => 'xhigh',
 };
 const DEFAULT_EFFORT_ROW = 'high';
@@ -1449,21 +1450,7 @@ function loadConfig(root, options = {}) {
       'Remove the top-level "runtime" key from .planning/config.json so both runtimes can share this checkout.'
     );
   }
-  // Same collision as branching_strategy, one level down. GSD's writer workflows
-  // fork their own git worktree when this is true — and the conveyor calls
-  // `/gsd-code-review --fix` from INSIDE a ticket worktree, so the fixer would
-  // nest a worktree within ours and commit the fix where no PR is watching.
-  // GSD 1.9.1 made `--fix` honor this setting, which is what makes `false` the
-  // correct value rather than a preference.
-  // No warning: `true` is GSD's own default and is fine here. This used to warn,
-  // on the belief that `/gsd-code-review --fix` — which the conveyor DOES call
-  // from inside a ticket worktree — would fork a nested one. Checked against the
-  // source (1.9.1): code-review never mentions worktrees, and `git worktree add`
-  // lives only in execute-phase, new-workspace and worktree-safety.cjs, none of
-  // which the conveyor invokes. The boundary that DOES matter is stated
-  // elsewhere and is about wave parallelism, not this flag: no shipyard path may
-  // call `execute-phase`, because two orchestrators creating worktrees for the
-  // same plans would collide. Keep the check keyed to that, not to a setting.
+  // @invariant: no shipyard path may call execute-phase; workflow.use_worktrees is not warned on.
   // GSD's phase/milestone strategies create their own branches; the conveyor owns
   // branching (epic/<phase> + ticket/<id>) and the two would fight over it.
   if (cfg.gsd.branching_strategy && cfg.gsd.branching_strategy !== 'none') {
@@ -1537,6 +1524,7 @@ const GSD_ROLE_KEYS = Object.freeze({
   integrator: ['verification', 'gsd-integration-checker'],
   'drift-check': ['verification', 'gsd-verifier'],
   'arch-review': ['verification'],
+  'code-review': ['verification'],
   'ci-fix': ['execution', 'gsd-debugger'],
   'review-fix': ['execution', 'gsd-code-fixer'],
 });
