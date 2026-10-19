@@ -31,6 +31,7 @@ const { execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const { nativeModel, transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { buildSubject, PHASE_ONLY_ROLES } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 const {
   createDispatchBoundary,
   createDurableRecorder,
@@ -1237,8 +1238,13 @@ function claudeFixture(extra = {}) {
 
 test('Claude base roles carry exact-session native model and effort evidence', () => {
   const f = claudeFixture();
+  const phaseContext = { subject_kind: 'phase', ticket: buildSubject('architecture-review', {
+    phase: '52-adapter-fixture', repository: '/tmp/worktree/.git', tickets: 'a'.repeat(64),
+    pr: '91', head: 'b'.repeat(40), base: 'c'.repeat(40),
+  }) };
   for (const role of policy.ROLES) {
-    const result = f.boundary.dispatch({ runtime: 'claude', role });
+    const context = PHASE_ONLY_ROLES.includes(role) ? phaseContext : {};
+    const result = f.boundary.dispatch({ runtime: 'claude', role }, context);
     const launch = f.calls.at(-1);
     assert.ok(Object.values(CLAUDE_MODEL_ALIASES).includes(launch.model), `${role} must use a Claude alias`);
     assert.ok(!/^gpt-/.test(launch.model), `${role} must not receive a Codex model id`);

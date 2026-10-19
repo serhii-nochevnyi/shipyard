@@ -12,7 +12,14 @@ process.on('exit', () => {
   fs.rmSync(authorityHome,{recursive:true,force:true});
 });
 const { resolveIntegrationBranch, architectureTarget, phaseBinding, PHASE_SUBJECT, buildSubject, parseSubject,
-  repositoryIdentity, acceptedRepositoryValues } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  repositoryIdentity, acceptedRepositoryValues, PHASE_SUBJECT_ROLES, PHASE_ONLY_ROLES } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+
+test('phase subject roles and phase-only roles are exact frozen shared lists', () => {
+  assert.deepEqual(PHASE_SUBJECT_ROLES, ['arch-review', 'code-review']);
+  assert.deepEqual(PHASE_ONLY_ROLES, ['code-review']);
+  assert.ok(Object.isFrozen(PHASE_SUBJECT_ROLES));
+  assert.ok(Object.isFrozen(PHASE_ONLY_ROLES));
+});
 
 test('configuration wins for the project; foreign repositories keep their own default', () => {
   const config = { git: { base_branch: 'develop' } };

@@ -519,6 +519,41 @@ test('aggregate architecture in-flight records retain exact PR identity and role
   assert.throws(() => recordInflight({ ...input, ticket: ticket.replace(';pr=91', ';pr=0') }), /ticket/);
 });
 
+for (const repository of ['/plain/.git', '/work/my repo/.git', '/work/дім/.git']) {
+  test(`code-review in-flight records retain their phase subject for ${repository}`, () => {
+    const { dir, project, graph } = scratch({ 'T-52-04': { ...READY } });
+    try {
+      const ticket = `phase=52-policy;repository=${repository};tickets=${'a'.repeat(64)}`
+        + `;pr=91;head=${'b'.repeat(40)};base=${'c'.repeat(40)}`;
+      const input = { graphDir: graph, ticket, role: 'code-review', dispatch_id: 'code-review-phase',
+        pid: process.pid, host: 'codex', refreshBoard: false };
+      recordInflight(input);
+      assert.equal(inflightStore(graph)[input.dispatch_id].ticket, ticket);
+      assert.equal(activeDispatches(project)[ticket].role, 'code-review');
+      rewriteInflight(graph, input.dispatch_id, { ticket: 'T-52-04' });
+      assert.equal(activeDispatches(project)['T-52-04'], undefined);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
+test('code-review in-flight records refuse ticket form and malformed phase subjects', () => {
+  const { dir, graph } = scratch({ 'T-52-04': { ...READY } });
+  try {
+    const input = { graphDir: graph, role: 'code-review', dispatch_id: 'code-review-refused',
+      pid: process.pid, host: 'codex', refreshBoard: false };
+    const subject = (repository) => `phase=52-policy;repository=${repository};tickets=${'a'.repeat(64)}`
+      + `;pr=91;head=${'b'.repeat(40)};base=${'c'.repeat(40)}`;
+    for (const ticket of ['T-52-04', 'INV-014-runtime',
+      `phase=52-policy;repository=/plain/.git;tickets=${'a'.repeat(64)}`,
+      ...['/a;b/.git', '/a\tb/.git', '/a\nb/.git', '/a\u0001b/.git', '/a\x7fb/.git', ''].map(subject)]) {
+      assert.throws(() => recordInflight({ ...input, ticket }), /in-flight ticket is invalid/);
+      assert.equal(inflightStore(graph)[input.dispatch_id], undefined);
+    }
+    recordInflight({ ...input, role: 'arch-review', ticket: 'T-52-04' });
+    assert.equal(inflightStore(graph)[input.dispatch_id].ticket, 'T-52-04');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('integrator and pr-sentinel in-flight subjects use the shared repository class', () => {
   const { graph } = scratch({ 'T-01-01': { ...READY } });
   const digests = { integrator: 'a'.repeat(64), 'pr-sentinel': 'b'.repeat(64) };

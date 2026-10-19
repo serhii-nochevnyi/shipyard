@@ -17,6 +17,7 @@ const canonicalStableStringify = canonicalPolicy.stableStringify;
 const { resolveTaskLevel } = require('./pipeline-config.cjs');
 const modelCapability = require('./model-capability.cjs');
 const { matchesModelObservation } = require('./runtime-adapters.cjs');
+const { PHASE_SUBJECT, PHASE_SUBJECT_ROLES, PHASE_ONLY_ROLES } = require('./architecture-target.cjs');
 const {
   capabilityForBoundary,
   createSessionHandoff,
@@ -1069,16 +1070,19 @@ function isSubjectTicket(ticket) {
 }
 
 function subjectKindFromContext(context, role, ticket) {
+  role = typeof role === 'string' ? role.trim() : role;
   const kind = isObject(context) && context.subject_kind !== undefined
     ? context.subject_kind
     : 'ticket';
   if (kind === 'phase') {
-    if (role !== 'arch-review' || !require('./architecture-target.cjs').PHASE_SUBJECT.test(ticket || ''))
+    if (!PHASE_SUBJECT_ROLES.includes(role) || !PHASE_SUBJECT.test(ticket || ''))
       refuse('INVALID_INPUT', 'phase subjects require an exact aggregate architecture identity');
     return kind;
   }
   if (kind === 'ticket') {
-    if (role === 'arch-review' && typeof ticket === 'string' && ticket.startsWith('phase='))
+    if (PHASE_ONLY_ROLES.includes(role))
+      refuse('INVALID_INPUT', `${role} requires subject_kind: 'phase'`);
+    if (PHASE_SUBJECT_ROLES.includes(role) && typeof ticket === 'string' && ticket.startsWith('phase='))
       refuse('INVALID_INPUT', 'phase subjects require subject_kind phase');
     if (typeof ticket === 'string' && ticket.startsWith('round:')) {
       refuse('INVALID_INPUT', 'round subjects require subject_kind round');
