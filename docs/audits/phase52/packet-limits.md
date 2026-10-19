@@ -213,6 +213,25 @@ Rows 1, 2, 3, 5 and 6 are **proposals derived from sections 1 and 2** for the op
 
 If the operator rejects row 3 or row 4's interim value, the constraint to keep is: `DIFF_MAX_BYTES` times 2 plus the references budget must stay at or under row 2's ceiling, or an admitted diff can still be refused by the relay.
 
+### Operator choices (2026-10-19)
+
+Revision 12 of the delivered T-52-05 PLAN authorizes these operator choices derived from the existing measured evidence. This subsection supersedes Section 4's proposals for implementation. The proposal rows above, measurement history, derivations, assumptions and unknowns remain historical evidence; these choices do not assert a new source measurement. The file's measurement status remains `measured`.
+
+| Quantity | Value and unit | Meaning |
+|---|---|---|
+| Claude `CODE_REVIEW_PACKET_TOKENS` | 262144 estimated packet tokens | Inline packet estimate, derived as 1048576 bytes / 4; independent of actual prompt-byte relay routing. |
+| Claude file-relay threshold | 1048576 prompt bytes, unchanged | The existing byte check routes a prompt above this threshold through files; the token estimate does not replace it. |
+| Claude `CODE_REVIEW_MATERIAL_MAX_BYTES` | 16777216 material bytes per launch | Complete-input material capacity for one launch, including the packet and all partition material; no processed-token spending meter. |
+| Codex `INPUT_MAX_BYTES` | 1048576 bytes, unchanged | Inline/relay routing and launch-prompt byte bound. |
+| Codex `FILE_LIMITS.material` | 16777216 material bytes, unchanged | Complete-input material capacity. |
+| Claude `DIFF_MAX_BYTES` | 6291456 diff bytes | The supported 6 MiB choice from Section 4 row 3. |
+| Claude `ARCH_REVIEW_PACKET_TOKENS` | 550000 estimated packet tokens | The supported packet-size choice from Section 4 row 4. |
+| Processed-token cost observations | Claude 550000; Codex 4250000 processed tokens per launch | Retained cost evidence with the C1/C2 cache-read and context-window caveats; neither figure defines input capacity or an implemented token-spending meter. |
+
+The equal numeric Claude packet and cost figures, 550000, have different units: estimated packet tokens versus processed tokens per launch. Material capacity, inline packet estimates, prompt-byte routing and processed-token cost are separate quantities. Material bytes do not equal cost tokens. Up to three rounds may run three launches; the material ceiling applies independently to each launch and asserts neither a token cost nor a phase-wide capacity.
+
+A diff under 6291456 bytes can still exceed the complete-material ceiling after references and packet metadata are included. This supersedes row 3's historical inference that an admitted diff always fits row 2. The full material bound is enforced independently, with no admission inferred from the diff bound and no partial review of input above the ceiling. Source partitions preserve all admitted material above inline size. Product tests pin constants with their units and the separate byte-routing boundary; this audit subsection records execution evidence and is not a product-test target (DS-11).
+
 ## Commands run by the executor
 
 All from the worktree; each result is quoted above.

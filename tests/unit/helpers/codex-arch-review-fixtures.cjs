@@ -283,4 +283,36 @@ function cleanupJudgment(f) {
   if (f.storage) fs.rmSync(f.storage, { recursive: true, force: true });
 }
 
-module.exports = { retainedLegacyReviewModules, TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, legacyUnitJudgment, focusedNativeSession, cleanupJudgment };
+function partitionPacket(root, head, { role = 'code-review', diffBytes = 3 * 1024 * 1024, references = [], paddingBytes = 0 } = {}) {
+  const packets = require('../../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const line = '+ ' + 'x'.repeat(125) + '\n';
+  const content = line.repeat(Math.floor(diffBytes / line.length)) + 'x'.repeat(diffBytes % line.length);
+  return packets.buildContextPacket({ root, role, subject: 'partition-fixture', sourceRevision: head,
+    policy: policy.POLICY, policyHash: policy.POLICY_HASH, scope: { files_modified: ['src/reviewed.txt'] },
+    requiredRefs: references, tokenCeiling: 550000,
+    roleContext: { exact_diff: { content }, reference_digest: { bytes: 100 }, focused: {},
+      integration_base: 'main', ticket_set: [], plan_acceptance: [], prior_findings: [], padding: 'p'.repeat(paddingBytes),
+      adr_refs: [], phase_contracts: [], acceptance_criteria: [] } });
+}
+
+function rewriteInputManifest(input, mutate) {
+  const manifest = structuredClone(input.manifest);
+  mutate(manifest);
+  let raw;
+  for (let i = 0; i < 10; i++) {
+    raw = JSON.stringify(manifest) + '\n';
+    if (manifest.accounting.manifest_bytes === Buffer.byteLength(raw)) break;
+    manifest.accounting.manifest_bytes = Buffer.byteLength(raw);
+  }
+  const filename = input.input_bundle.manifest_path;
+  fs.chmodSync(filename, 0o600);
+  fs.writeFileSync(filename, raw);
+  fs.chmodSync(filename, 0o400);
+  const stat = fs.statSync(filename);
+  return { ...input.input_bundle,
+    manifest_sha256: require('node:crypto').createHash('sha256').update(raw).digest('hex'),
+    manifest_identity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode'].map(key => [key, stat[key]])) };
+}
+
+module.exports = { partitionPacket, rewriteInputManifest, retainedLegacyReviewModules, TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, legacyUnitJudgment, focusedNativeSession, cleanupJudgment };
