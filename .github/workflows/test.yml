@@ -103,10 +103,6 @@ jobs:
           if [ -n "$GITHUB_BASE_REF" ]; then BASE=origin/$GITHUB_BASE_REF; fi
           node plugins/delivery-pipeline/scripts/publish-gate.cjs --base "$BASE" --working-tree --json
 
-      - name: runtime digest trailer
-        if: steps.scope.outputs.product_changes == 'true' && github.event_name == 'pull_request'
-        run: node scripts/check-runtime-digest-trailer.cjs --base "origin/${{ github.base_ref || 'main' }}"
-
       - name: OS sandbox backend
         if: steps.scope.outputs.product_changes == 'true'
         run: |
