@@ -3537,7 +3537,11 @@ test('--preflight reports a state directory inside the worktree and an unreadabl
     assert.deepEqual(legacy.findings.map((finding) => finding.code), ['LEGACY_WRITER_STATE']);
     assert.equal(legacy.ok, false);
     assert.match(stderr.join(''), /hint\[LEGACY_WRITER_STATE\]/);
-  } finally { process.env.HOME = home; }
+  } finally {
+    if (home === undefined) delete process.env.HOME;
+    else process.env.HOME = home;
+  }
+  assert.strictEqual(process.env.HOME, home);
 });
 
 test('a launch that passes preflight prints warnings on stderr without a bare ok line and no preflight JSON', () => {
