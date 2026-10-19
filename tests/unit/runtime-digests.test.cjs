@@ -9,7 +9,6 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const REFRESH = path.join(ROOT, 'scripts', 'refresh-runtime-digests.cjs');
-const CHECK_TRAILER = path.join(ROOT, 'scripts', 'check-runtime-digest-trailer.cjs');
 
 const FILE_A = 'plugins/delivery-pipeline/scripts/runtime-adapters.cjs';
 const FILE_B = 'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs';
@@ -79,10 +78,6 @@ function runRefresh(repo, args) {
   return spawnSync(process.execPath, [REFRESH, ...args], { cwd: repo, encoding: 'utf8' });
 }
 
-function runCheckTrailer(repo, args) {
-  return spawnSync(process.execPath, [CHECK_TRAILER, ...args], { cwd: repo, encoding: 'utf8' });
-}
-
 suite('refresh-runtime-digests — recompute and print the trailer lines to add');
 
 test('rewrites a stale digest and prints the trailer line for only the changed file', () => {
@@ -121,107 +116,70 @@ test('refuses when a listed file is missing', () => {
   assert.match(result.stderr, /runtime-adapters\.cjs/);
 });
 
-suite('check-runtime-digest-trailer — CI-verified commit trailer over the pin');
+suite('check-runtime-digest-trailer — read-only current-byte compatibility alias');
 
-test('passes an annotated pin commit', () => {
-  const { repo, env } = fixture();
-  const base = git(repo, ['rev-parse', 'HEAD'], env);
-  writeFile(repo, FILE_A, 'const a = 2;\n');
-  writePin(repo, { [FILE_A]: sha256('const a = 2;\n'), [FILE_B]: sha256('const b = 2;\n') });
-  git(repo, ['add', '-A'], env);
-  git(repo, ['commit', '-q', '-m', `Refresh pin\n\nRuntime-Digest-Refresh: ${FILE_A}`], env);
-  const result = runCheckTrailer(repo, ['--base', base]);
-  assert.equal(result.status, 0, result.stderr);
-});
-
-for (const [name, message, passes] of [
-  ['accepts trailers at original commit ends in a GitHub squash',
-    `Refresh runtime (#412)\n\n* refresh pin\n\nRuntime-Digest-Refresh: ${FILE_A}\nShipyard-Verification-Evidence: original\n\n* finalize verification\n\nShipyard-Verification-Evidence: final`, true],
-  ['rejects ordinary body text posing as a trailer',
-    `Refresh runtime\n\nRuntime-Digest-Refresh: ${FILE_A}\n\nAdditional explanation`, false],
-  ['rejects a trailer inside a squash section body',
-    `Refresh runtime (#412)\n\n* refresh pin\n\nRuntime-Digest-Refresh: ${FILE_A}\n\nAdditional explanation\n\n* finalize verification\n\nShipyard-Verification-Evidence: final`, false],
-  ['rejects a squash trailer for a different path',
-    `Refresh runtime (#412)\n\n* refresh pin\n\nRuntime-Digest-Refresh: ${FILE_B}\n\n* finalize verification\n\nShipyard-Verification-Evidence: final`, false],
-  ['does not interpret bullets in ordinary commit messages as squash sections',
-    `Refresh runtime\n\n* refresh pin\n\nRuntime-Digest-Refresh: ${FILE_A}\n\n* finalize verification\n\nShipyard-Verification-Evidence: final`, false],
-]) {
-  test(name, () => {
-    const { repo, env } = fixture();
-    const base = git(repo, ['rev-parse', 'HEAD'], env);
-    writeFile(repo, FILE_A, 'const a = 2;\n');
-    writePin(repo, { [FILE_A]: sha256('const a = 2;\n'), [FILE_B]: sha256('const b = 2;\n') });
-    git(repo, ['add', '-A'], env);
-    git(repo, ['commit', '-q', '-m', message], env);
-    const result = runCheckTrailer(repo, ['--base', base]);
-    assert.equal(result.status === 0, passes, result.stderr);
+function runAlias(repo, script = path.join(ROOT, 'scripts', 'check-runtime-digest-trailer.cjs')) {
+  return spawnSync(process.execPath, [script, '--base', 'nonexistent-base'], {
+    cwd: repo, encoding: 'utf8',
   });
 }
 
-test('fails an unannotated pin commit, naming the commit and the missing path', () => {
-  const { repo, env } = fixture();
-  const base = git(repo, ['rev-parse', 'HEAD'], env);
-  writeFile(repo, FILE_A, 'const a = 2;\n');
-  writePin(repo, { [FILE_A]: sha256('const a = 2;\n'), [FILE_B]: sha256('const b = 2;\n') });
-  git(repo, ['add', '-A'], env);
-  git(repo, ['commit', '-q', '-m', 'Refresh pin'], env);
-  const head = git(repo, ['rev-parse', 'HEAD'], env);
-  const result = runCheckTrailer(repo, ['--base', base]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, new RegExp(head));
-  assert.match(result.stderr, /runtime-adapters\.cjs/);
-});
-
-test('fails a trailer naming the wrong file', () => {
-  const { repo, env } = fixture();
-  const base = git(repo, ['rev-parse', 'HEAD'], env);
-  writeFile(repo, FILE_A, 'const a = 2;\n');
-  writePin(repo, { [FILE_A]: sha256('const a = 2;\n'), [FILE_B]: sha256('const b = 2;\n') });
-  git(repo, ['add', '-A'], env);
-  git(repo, ['commit', '-q', '-m', `Refresh pin\n\nRuntime-Digest-Refresh: ${FILE_B}`], env);
-  const result = runCheckTrailer(repo, ['--base', base]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /runtime-adapters\.cjs/);
-});
-
-test('ignores commits that do not touch the JSON', () => {
-  const { repo, env } = fixture();
-  const base = git(repo, ['rev-parse', 'HEAD'], env);
-  writeFile(repo, 'README.md', 'unrelated change\n');
-  git(repo, ['add', '-A'], env);
-  git(repo, ['commit', '-q', '-m', 'unrelated'], env);
-  const result = runCheckTrailer(repo, ['--base', base]);
+test('accepts current pins without Git history and leaves pins unchanged', () => {
+  const { repo } = fixture();
+  fs.rmSync(path.join(repo, '.git'), { recursive: true });
+  const before = fs.readFileSync(path.join(repo, PIN_REL), 'utf8');
+  const result = runAlias(repo);
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(path.join(repo, PIN_REL), 'utf8'), before);
 });
 
-test('treats a pin file missing from the parent as no previous pin', () => {
-  const { repo, env } = fixture();
-  git(repo, ['rm', '-q', PIN_REL], env);
-  git(repo, ['commit', '-q', '-m', 'drop pin'], env);
-  const base = git(repo, ['rev-parse', 'HEAD'], env);
-  writePin(repo, { [FILE_A]: sha256('const a = 1;\n'), [FILE_B]: sha256('const b = 2;\n') });
-  git(repo, ['add', '-A'], env);
-  git(repo, ['commit', '-q', '-m', 'seed pin'], env);
-  const result = runCheckTrailer(repo, ['--base', base]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.doesNotMatch(result.stderr, /fatal/);
+test('rejects corrupt current bytes without writing pins', () => {
+  const { repo } = fixture();
+  const before = fs.readFileSync(path.join(repo, PIN_REL), 'utf8');
+  writeFile(repo, FILE_A, 'corrupt bytes');
+  assert.notEqual(runAlias(repo).status, 0);
+  assert.equal(fs.readFileSync(path.join(repo, PIN_REL), 'utf8'), before);
 });
 
-test('ignores pin commits a base merge brought in', () => {
-  const { repo, env } = fixture();
-  git(repo, ['checkout', '-q', '-b', 'ticket'], env);
-  writeFile(repo, 'README.md', 'ticket change\n');
-  git(repo, ['add', '-A'], env);
-  git(repo, ['commit', '-q', '-m', 'ticket work'], env);
-  git(repo, ['checkout', '-q', 'main'], env);
-  writeFile(repo, FILE_B, 'const b = 3;\n');
-  writePin(repo, { [FILE_A]: sha256('const a = 1;\n'), [FILE_B]: sha256('const b = 3;\n') });
-  git(repo, ['add', '-A'], env);
-  git(repo, ['commit', '-q', '-m', 'unannotated pin change on main'], env);
-  git(repo, ['checkout', '-q', 'ticket'], env);
-  git(repo, ['merge', '-q', '--no-edit', 'main'], env);
-  const result = runCheckTrailer(repo, ['--base', 'main']);
-  assert.equal(result.status, 0, result.stderr);
+test('rejects missing pins', () => {
+  const { repo } = fixture();
+  fs.rmSync(path.join(repo, PIN_REL));
+  assert.notEqual(runAlias(repo).status, 0);
+  assert.equal(fs.existsSync(path.join(repo, PIN_REL)), false);
+});
+
+test('rejects missing runtime files without writing pins', () => {
+  const { repo } = fixture();
+  const before = fs.readFileSync(path.join(repo, PIN_REL), 'utf8');
+  fs.rmSync(path.join(repo, FILE_A));
+  assert.notEqual(runAlias(repo).status, 0);
+  assert.equal(fs.readFileSync(path.join(repo, PIN_REL), 'utf8'), before);
+});
+
+test('rejects an unavailable child script', () => {
+  const { repo } = fixture();
+  const isolated = path.join(repo, 'check-runtime-digest-trailer.cjs');
+  fs.copyFileSync(path.join(ROOT, 'scripts', 'check-runtime-digest-trailer.cjs'), isolated);
+  const before = fs.readFileSync(path.join(repo, PIN_REL), 'utf8');
+  assert.notEqual(runAlias(repo, isolated).status, 0);
+  assert.equal(fs.readFileSync(path.join(repo, PIN_REL), 'utf8'), before);
+});
+
+test('propagates a child launch failure as nonzero', () => {
+  const script = path.join(ROOT, 'scripts', 'check-runtime-digest-trailer.cjs');
+  let exitCode;
+  require('vm').runInNewContext(fs.readFileSync(script, 'utf8'), {
+    __dirname: path.dirname(script),
+    require(name) {
+      if (name === 'child_process') return {
+        spawnSync: () => ({ status: null, error: new Error('spawn failed') }),
+      };
+      return require(name);
+    },
+    console: { error() {} },
+    process: { execPath: process.execPath, exit(code) { exitCode = code; } },
+  });
+  assert.equal(exitCode, 1);
 });
 
 done();
