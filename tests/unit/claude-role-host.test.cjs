@@ -26,6 +26,114 @@ const POLICY_MD = '# ADR-014 test\nExplicit model and effort are required.\n';
 const PHASE = '38-role-host-test';
 const TICKET = 'T-38-01-role-host';
 
+for (const [name, value, unit] of [
+  ['DIFF_MAX_BYTES', 6291456, 'diff bytes'],
+  ['ARCH_REVIEW_PACKET_TOKENS', 550000, 'estimated packet tokens'],
+  ['CODE_REVIEW_PACKET_TOKENS', 262144, 'estimated packet tokens'],
+  ['CODE_REVIEW_MATERIAL_MAX_BYTES', 16777216, 'material bytes per launch'],
+]) test('Claude ' + name + ' = ' + value + ' ' + unit, () => {
+  assert.equal(require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')[name], value, unit);
+});
+
+test('code-review packet bound is 262144 estimated packet tokens without adding a launch role', () => {
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  assert.equal(host.packetBound('code-review', {}), 262144, 'estimated packet tokens');
+  assert.deepEqual(host.ROLES, ['arch-review', 'integrator', 'pr-sentinel']);
+  assert.throws(() => host.parseRequest({ schema: REQUEST_SCHEMA, role: 'code-review' }), /role/);
+});
+
+function reviewInputFixture(fixture, packet, promptBytes) {
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const material = JSON.stringify(packets.encodeUniqueContent(packet));
+  let prompt = '<AUTHENTICATED_CONTEXT_PACKET>\n' + material + '\n</AUTHENTICATED_CONTEXT_PACKET>';
+  if (promptBytes !== undefined) prompt += ' '.repeat(promptBytes - Buffer.byteLength(prompt));
+  return { role: packet.role, packet, prompt, canonical: { worktree: fixture.root },
+    ticket: TICKET, phaseNumber: 38, graph: { directory: path.join(fixture.root, '.planning/graph') } };
+}
+
+for (const promptBytes of [1048575, 1048576, 1048577])
+test('arch-review relay routes at ' + promptBytes + ' prompt bytes independently of estimated packet tokens', () => {
+  const role = 'arch-review';
+  const fixture = setupRepository('arch-review');
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  try {
+    const packet = require('./helpers/codex-arch-review-fixtures.cjs').partitionPacket(fixture.root, fixture.head,
+      { role, diffBytes: 1024 });
+    const prepared = reviewInputFixture(fixture, packet, promptBytes);
+    assert.equal(Buffer.byteLength(prepared.prompt), promptBytes, 'prompt bytes');
+    assert.ok(packet.accounting.estimated_tokens < 262144, 'estimated packet tokens stay below the inline estimate');
+    const result = host.prepareReviewInput(prepared, { runId: 'routing-run', dispatchId: 'routing-dispatch',
+      storageRoot: fixture.storageRoot });
+    if (promptBytes <= 1048576) {
+      assert.equal(result, prepared);
+      assert.equal(result.prompt, prepared.prompt);
+    } else {
+      const checked = collector.verifyFileInput(result.focusedInput);
+      assert.equal(checked.manifest.role, role);
+      assert.deepEqual(JSON.parse(checked.material[0]), packetsForTest(packet));
+      assert.ok(Buffer.byteLength(result.prompt) < 1048576, 'relayed prompt bytes');
+      assert.equal(result.focusedInput.input_bundle.review_contract, collector.FOCUSED_CONTRACT);
+    }
+  } finally { cleanupFixture(fixture); }
+});
+
+function packetsForTest(packet) {
+  return JSON.parse(JSON.stringify(require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').encodeUniqueContent(packet)));
+}
+
+for (const materialBytes of [16777215, 16777216, 16777217])
+test('Claude capacity boundary ' + materialBytes + ' material bytes per launch preserves complete input before runtime', () => {
+  const fixture = setupRepository('arch-review');
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const buildPacket = require('./helpers/codex-arch-review-fixtures.cjs').partitionPacket;
+  try {
+    let paddingBytes = 0, packet, required;
+    for (let i = 0; i < 10; i++) {
+      packet = buildPacket(fixture.root, fixture.head, { paddingBytes });
+      required = Buffer.byteLength(JSON.stringify(packetsForTest(packet))) + Buffer.byteLength(packet.role_context.exact_diff.content);
+      if (required === materialBytes) break;
+      paddingBytes += materialBytes - required;
+    }
+    assert.equal(required, materialBytes, 'complete material bytes per launch, including packet metadata and partitions');
+    assert.ok(Buffer.byteLength(packet.role_context.exact_diff.content) < host.DIFF_MAX_BYTES, 'diff bytes fit independently');
+    const scope = { worktree: fixture.root, ticket: TICKET, phase: 38, run_id: 'capacity-run' };
+    const options = { role: 'code-review', dispatchId: 'capacity-dispatch', storageRoot: fixture.storageRoot,
+      binding: { review_contract: collector.CODE_REVIEW_CONTRACT } };
+    if (materialBytes > 16777216) {
+      const overBound = error =>
+        error.code === 'CONTEXT_PACKET_OVER_BOUND' && error.refusal.limiting_field === 'complete_material_bytes'
+        && error.refusal.observed === 16777216 && error.refusal.required === materialBytes;
+      assert.throws(() => host.preflightCodeReviewMaterial(packet), overBound);
+      assert.throws(() => collector.prepareFileInput(scope, JSON.stringify(packetsForTest(packet)), options), overBound);
+      assert.equal(fs.readdirSync(fixture.storageRoot).length, 0);
+    } else {
+      const material = host.preflightCodeReviewMaterial(packet);
+      const checked = collector.verifyFileInput(collector.prepareFileInput(scope, material, options));
+      assert.equal(checked.manifest.accounting.material_bytes, materialBytes, 'material bytes per launch');
+      assert.ok(checked.material[0].equals(Buffer.from(JSON.stringify(packetsForTest(packet)))));
+      assert.equal(Buffer.concat(checked.material.slice(1)).toString(), packet.role_context.exact_diff.content);
+    }
+  } finally { cleanupFixture(fixture); }
+});
+
+test('Claude refuses references over 16777216 material bytes per launch even with a 3145728 diff byte input', () => {
+  const fixture = setupRepository('arch-review');
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    write(fixture.root, 'large-reference.txt', 'r'.repeat(5 * 1024 * 1024));
+    const packet = require('./helpers/codex-arch-review-fixtures.cjs').partitionPacket(fixture.root, fixture.head,
+      { references: ['large-reference.txt'] });
+    const required = Buffer.byteLength(JSON.stringify(packetsForTest(packet)))
+      + Buffer.byteLength(packet.role_context.exact_diff.content) + Buffer.byteLength(packet.required_refs[0].content);
+    assert.ok(required > 16777216, 'material bytes per launch');
+    assert.throws(() => host.preflightCodeReviewMaterial(packet), error => error.code === 'CONTEXT_PACKET_OVER_BOUND'
+      && error.refusal.limiting_field === 'complete_material_bytes' && error.refusal.required === required);
+    assert.equal(fs.readdirSync(fixture.storageRoot).length, 0);
+  } finally { cleanupFixture(fixture); }
+});
+
 function git(root, args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
@@ -1070,8 +1178,8 @@ test('an integrator packet above its diff-scaled token bound is refused as over 
   }
 });
 
-test('integrator refuses a role diff above the 2 MiB bound as too large, not as a failed preflight', async () => {
-  const fixture = setupRepository('integrator', { sourceContent: bulkSource(26000) });
+test('integrator refuses a role diff above the 6291456 diff byte bound as too large, not as a failed preflight', async () => {
+  const fixture = setupRepository('integrator', { sourceContent: bulkSource(80000) });
   try {
     await assert.rejects(
       createClaudeRoleHost(hostOptions(fixture)).run(request(fixture)),
@@ -1094,7 +1202,7 @@ test('an overflowing change-metadata listing is refused as too large with the bo
         },
       }).run(request(fixture)),
       (error) => error.code === 'INPUT_TOO_LARGE'
-        && error.message.includes('git output exceeds its 2097152 byte bound')
+        && error.message.includes('git output exceeds its 6291456 byte bound')
         && !error.message.includes('preflight failed'),
     );
   } finally {
@@ -1439,7 +1547,7 @@ test('architecture above its typical target stays complete while other role boun
   ] };
   const planExtra = ['References ADR-201 and ADR-202 for scale.'];
 
-  const archFixture = setupRepository('arch-review', { corpus, planExtra });
+  const archFixture = setupRepository('arch-review', { corpus, planExtra, sourceContent: bulkSource(30000) });
   try {
     let launched = false;
     const reviewed = await createClaudeRoleHost(hostOptions(archFixture, { onLaunch(prompt) {
@@ -1489,7 +1597,7 @@ test('role packets carry their explicit token bounds', async () => {
     await createClaudeRoleHost(hostOptions(archFixture, {
       onLaunch(prompt) { archPacket = packetFromPrompt(prompt); },
     })).run(request(archFixture));
-    assert.equal(archPacket.accounting.soft_ceiling, 60000);
+    assert.equal(archPacket.accounting.soft_ceiling, 550000, 'estimated packet tokens');
 
     let integratorPacket;
     await createClaudeRoleHost(hostOptions(integratorFixture, {

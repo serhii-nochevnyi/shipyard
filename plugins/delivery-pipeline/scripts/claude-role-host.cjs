@@ -31,10 +31,12 @@ const { formatHint, hintForError } = require('./refusal-hints.cjs');
 const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
 const REQUEST_MAX_BYTES = 32768;
 const SOURCE_MAX_BYTES = 768 * 1024;
-const DIFF_MAX_BYTES = 2 * 1024 * 1024;
+const DIFF_MAX_BYTES = 6291456;
 const PROMPT_MAX_BYTES = 3000000;
 const RESULT_MAX_BYTES = 128 * 1024;
-const ARCH_REVIEW_PACKET_TOKENS = 60000;
+const ARCH_REVIEW_PACKET_TOKENS = 550000;
+const CODE_REVIEW_PACKET_TOKENS = 262144;
+const CODE_REVIEW_MATERIAL_MAX_BYTES = 16777216;
 const PR_SENTINEL_PACKET_TOKENS = 40000;
 const INTEGRATOR_CONTEXT_TOKENS = 60000;
 const INTEGRATOR_MAX_PACKET_TOKENS = 750000;
@@ -823,6 +825,7 @@ function prepareSentinel(options, request, canonical, graph) {
 
 function packetBound(role, roleContext) {
   if (role === 'arch-review') return ARCH_REVIEW_PACKET_TOKENS;
+  if (role === 'code-review') return CODE_REVIEW_PACKET_TOKENS;
   if (role === 'pr-sentinel') return PR_SENTINEL_PACKET_TOKENS;
   const diffBytes = Buffer.byteLength(roleContext.combined_diff.content, 'utf8');
   return Math.min(INTEGRATOR_MAX_PACKET_TOKENS, INTEGRATOR_CONTEXT_TOKENS + Math.ceil(diffBytes / 3));
@@ -1429,6 +1432,39 @@ function sealResult(prepared, result, recorder, dispatchId) {
   return { artifact, validated };
 }
 
+function preflightCodeReviewMaterial(packet) {
+  const material = JSON.stringify(encodeUniqueContent(packet));
+  const sources = [{ content: packet.diff?.content ?? packet.role_context?.exact_diff?.content },
+    ...(packet.refs || packet.required_refs)];
+  const required = Buffer.byteLength(material) + sources.reduce((sum, source) => sum + Buffer.byteLength(source.content), 0);
+  if (required > CODE_REVIEW_MATERIAL_MAX_BYTES) {
+    const error = new Error('code-review complete material exceeds its material bytes per launch bound');
+    error.code = 'CONTEXT_PACKET_OVER_BOUND';
+    error.refusal = { schema: 'shipyard.review-preflight-refusal.v1', limiting_field: 'complete_material_bytes',
+      observed: CODE_REVIEW_MATERIAL_MAX_BYTES, required };
+    throw error;
+  }
+  return material;
+}
+
+function prepareReviewInput(prepared, options) {
+  if (prepared.role !== 'arch-review' || Buffer.byteLength(prepared.prompt) <= 1024 * 1024) return prepared;
+  const collector = require('./codex-arch-review-context.cjs');
+  const prefix = prepared.prompt.slice(0, prepared.prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>'));
+  const input = collector.prepareFileInput({ worktree: prepared.canonical.worktree, ticket: prepared.ticket,
+    phase: prepared.phaseNumber, run_id: options.runId }, JSON.stringify(encodeUniqueContent(prepared.packet)), {
+    role: 'arch-review', dispatchId: options.dispatchId, storageRoot: options.storageRoot, graphDir: prepared.graph.directory,
+    generatedInstructionBytes: prepared.packet.role_context.reference_digest.bytes, relayPrefix: prefix,
+    binding: { review_contract: collector.FOCUSED_CONTRACT,
+      focused: { ...prepared.packet.role_context.focused, context_digest: sha(canonicalJson(prepared.packet)) },
+      packet_digest: sha(canonicalJson(prepared.packet)) } });
+  const prompt = input.prompt + '\n\n<AUTHENTICATED_FOCUSED_INPUT>\n'
+    + JSON.stringify(input.input_bundle) + '\n</AUTHENTICATED_FOCUSED_INPUT>';
+  if (Buffer.byteLength(prompt) + input.manifest.accounting.generated_instruction_bytes > 1024 * 1024)
+    reject('focused file relay and instructions exceed ordinary launch capacity', 'CONTEXT_PACKET_OVER_BOUND');
+  return Object.freeze({ ...prepared, focusedInput: input, prompt });
+}
+
 function createClaudeRoleHost(options = {}) {
   if (!object(options)) reject('host options must be an object');
   let used = false;
@@ -1443,22 +1479,7 @@ function createClaudeRoleHost(options = {}) {
       const ownerId = `claude-role-owner-${crypto.randomUUID()}`;
       const scope = makeRuntimeScope(prepared, runId, dispatchId, ownerId);
       const storage = storageDirectory(options, runId, prepared.canonical.worktree);
-      if (prepared.role === 'arch-review' && Buffer.byteLength(prepared.prompt) > 1024 * 1024) {
-        const collector = require('./codex-arch-review-context.cjs');
-        const prefix = prepared.prompt.slice(0, prepared.prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>'));
-        const input = collector.prepareFileInput({ worktree: prepared.canonical.worktree, ticket: prepared.ticket,
-          phase: prepared.phaseNumber, run_id: runId }, JSON.stringify(encodeUniqueContent(prepared.packet)), {
-          role: 'arch-review', dispatchId, storageRoot: storage, graphDir: prepared.graph.directory,
-          generatedInstructionBytes: prepared.packet.role_context.reference_digest.bytes, relayPrefix: prefix,
-          binding: { review_contract: collector.FOCUSED_CONTRACT,
-            focused: { ...prepared.packet.role_context.focused, context_digest: sha(canonicalJson(prepared.packet)) },
-            packet_digest: sha(canonicalJson(prepared.packet)) } });
-        const prompt = input.prompt + '\n\n<AUTHENTICATED_FOCUSED_INPUT>\n'
-          + JSON.stringify(input.input_bundle) + '\n</AUTHENTICATED_FOCUSED_INPUT>';
-        if (Buffer.byteLength(prompt) + input.manifest.accounting.generated_instruction_bytes > 1024 * 1024)
-          reject('focused file relay and instructions exceed ordinary launch capacity', 'CONTEXT_PACKET_OVER_BOUND');
-        prepared = Object.freeze({ ...prepared, focusedInput: input, prompt });
-      }
+      prepared = prepareReviewInput(prepared, { runId, dispatchId, storageRoot: storage });
       const controller = options.controller === false ? null : createRunController({
         storeDir: path.join(storage, 'controller'), ownerId,
       });
@@ -1638,6 +1659,13 @@ function runClaudeRoleCli(argv = process.argv.slice(2), output = process.stdout,
 }
 
 module.exports = Object.freeze({
+  DIFF_MAX_BYTES,
+  ARCH_REVIEW_PACKET_TOKENS,
+  CODE_REVIEW_PACKET_TOKENS,
+  CODE_REVIEW_MATERIAL_MAX_BYTES,
+  packetBound,
+  preflightCodeReviewMaterial,
+  prepareReviewInput,
   REQUEST_SCHEMA,
   ROLES,
   parseRequest,
