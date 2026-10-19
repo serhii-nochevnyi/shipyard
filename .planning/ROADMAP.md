@@ -997,11 +997,11 @@ Plans:
 
 ### Phase 53: Route review input by size
 
-**Status**: operator-approved scope from accepted ADR-033 (INV-019 Gate 1, 2026-10-18); decomposition in progress; no executable plans or accepted ticket graph yet
+**Status**: operator-approved scope from accepted ADR-033 (INV-019 Gate 1, 2026-10-18); decomposed 2026-10-19 into 31 tickets (Gate 2 passed, 18 waves, 17 pre-authorized merge checkpoints); delivery not started
 **Goal**: the integrator and architecture-review roles run on both runtimes whatever the size of the diff, through a size-routed hybrid (inline, pull, partitioned) with a review-specific pathspec that excludes the generated mirror and planning noise, a new review contract version v3 that records the route and the coverage ledger, host-side proof of coverage per route, the receipt, graph-directory and stderr defects fixed, and measured thresholds.
 **Requirements**: REQ-215, REQ-216, REQ-217, REQ-218, REQ-219, REQ-220, REQ-221, REQ-222
 **Depends on**: none declared; establish exact ticket dependencies during decomposition against the then-current source (`v0.73.0`); phases 51 and 52 overlap the same host files, merge order is not agreed
-**Plans**: 0; plan against the then-current source before execution
+**Plans**: 31 (T-53-01…T-53-31); plan against the then-current source before execution
 
 Plans:
 

@@ -235,6 +235,15 @@
       "phaseDir": "50-make-launch-and-upgrade-reliable",
       "jira": null
     },
+    "53": {
+      "branch": "epic/53-route-review-input-by-size",
+      "base": null,
+      "repos": [
+        null
+      ],
+      "phaseDir": "53-route-review-input-by-size",
+      "jira": null
+    },
     "33-reduce-orchestration-context-and-transfer-sessions-safely": {
       "branch": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
       "base": null,
@@ -9056,7 +9065,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/runtime-context.cjs",
         "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
@@ -9116,7 +9125,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/runtime-context.cjs",
         "tests/unit/launch-environment.test.cjs",
@@ -9196,7 +9205,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "docs/audits/phase50/launch-upgrade-verification.md",
         "tests/unit/launch-upgrade-verification-record.test.cjs"
@@ -9253,7 +9262,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/role-artifact.cjs",
         "tests/unit/archive-lock-liveness.test.cjs",
@@ -9282,7 +9291,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
         "tests/unit/dispatch-record.test.cjs",
@@ -9346,7 +9355,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/runtime-context.cjs",
         "tests/unit/host-preflight.test.cjs",
@@ -9375,7 +9384,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "scripts/gen-codex-shipyard.cjs",
         "tests/unit/gen-codex-shipyard.test.cjs",
@@ -9678,7 +9687,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/smoke/installed-launch-smoke.sh",
         "Makefile",
@@ -9749,7 +9758,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/unit/host-entry-contract.test.cjs",
         "tests/unit/subject-contract.test.cjs"
@@ -9778,7 +9787,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/smoke/installed-launch/scenario-claude-no-env.cjs"
       ],
@@ -9807,7 +9816,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/smoke/installed-launch/scenario-upgrade-history.cjs"
       ],
@@ -9838,7 +9847,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/smoke/installed-launch/scenario-concurrency.cjs",
         "tests/smoke/installed-launch/scenario-ui-smoke.cjs",
@@ -9903,7 +9912,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "docs/audits/phase50/launch-upgrade-verification.md",
         "tests/unit/launch-upgrade-verification-record.test.cjs",
@@ -9920,6 +9929,920 @@
       "epic": "epic/50-make-launch-and-upgrade-reliable",
       "primary_parent": "T-50-23",
       "pr_base": "ticket/T-50-23-installed-package-scenario-a-claude-host",
+      "jira": null
+    },
+    "T-53-01": {
+      "title": "Review-specific diff scope module applied at every Claude review diff site",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-01-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-diff-scope.cjs",
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/helpers/isolated-environment.cjs",
+        "tests/unit/review-routing-isolation.test.cjs",
+        "tests/unit/review-diff-scope.test.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-01-review-specific-diff-scope-module-applie",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": null,
+      "pr_base": "epic/53-route-review-input-by-size",
+      "jira": null
+    },
+    "T-53-02": {
+      "title": "Phase architecture review packet carries a receipt-free roster view",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-02-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-53-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-02-phase-architecture-review-packet-carries",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-01",
+      "pr_base": "ticket/T-53-01-review-specific-diff-scope-module-applie",
+      "jira": null
+    },
+    "T-53-03": {
+      "title": "Claude role host CLI takes a selectable graph directory and keeps the clean-tree guard",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-03-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-53-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-03-claude-role-host-cli-takes-a-selectable",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-02",
+      "pr_base": "ticket/T-53-02-phase-architecture-review-packet-carries",
+      "jira": null
+    },
+    "T-53-04": {
+      "title": "Pin that editing a producer file, an installed Codex source or the arch-review reference refuses a sealed architecture review, and record the in-flight and rollout procedure",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-04-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-53-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "tests/unit/review-routing-pin-invalidation.test.cjs",
+        "tests/unit/review-routing-procedure-doc.test.cjs",
+        "docs/audits/phase53/in-flight-pr-procedure.md"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-04-pin-that-editing-a-producer-file-an-inst",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-01",
+      "pr_base": "ticket/T-53-01-review-specific-diff-scope-module-applie",
+      "jira": null
+    },
+    "T-53-05": {
+      "title": "Codex architecture-review collector builds its diff, lists and inventory through the review scope",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-05-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-53-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs",
+        "tests/unit/review-routing-codex-collector.test.cjs",
+        "tests/unit/architecture-target.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-05-codex-architecture-review-collector-buil",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-01",
+      "pr_base": "ticket/T-53-01-review-specific-diff-scope-module-applie",
+      "jira": null
+    },
+    "T-53-06": {
+      "title": "Claude child failures surface a bounded, sanitized stderr excerpt and the stream's terminal reason",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-06-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/child-output.cjs",
+        "plugins/delivery-pipeline/scripts/claude-runtime-host.cjs",
+        "tests/unit/child-output.test.cjs",
+        "tests/unit/claude-runtime-host.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-06-claude-child-failures-surface-a-bounded",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": null,
+      "pr_base": "epic/53-route-review-input-by-size",
+      "jira": null
+    },
+    "T-53-07": {
+      "title": "Measurement record contract: every ADR-033 R-10 obligation has evidence or a recorded limitation, and operator-signed items unlock thresholds",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-07-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-53-04"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-measure.cjs",
+        "tests/unit/review-measure.test.cjs",
+        "plugins/delivery-pipeline/references/review-routing-measurements.json",
+        "docs/audits/phase53/review-routing-measurements.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-07-measurement-record-contract-every-adr-03",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-04",
+      "pr_base": "ticket/T-53-04-pin-that-editing-a-producer-file-an-inst",
+      "jira": null
+    },
+    "T-53-08": {
+      "title": "Offline measurement of seam-aware partition sizes over the review change set",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-08-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-53-07"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-measure.cjs",
+        "tests/unit/review-measure.test.cjs",
+        "plugins/delivery-pipeline/references/review-routing-measurements.json",
+        "docs/audits/phase53/review-routing-measurements.md"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-08-offline-measurement-of-seam-aware-partit",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-07",
+      "pr_base": "ticket/T-53-07-measurement-record-contract-every-adr-03",
+      "jira": null
+    },
+    "T-53-09": {
+      "title": "Claude measurement tooling: window and estimator probes, compaction, tool-result and reachability evidence ingest",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-09-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-53-08"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-measure-claude.cjs",
+        "plugins/delivery-pipeline/scripts/review-measure.cjs",
+        "tests/unit/review-measure-claude.test.cjs",
+        "plugins/delivery-pipeline/references/review-routing-measurements.json",
+        "docs/audits/phase53/review-routing-measurements.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-09-claude-measurement-tooling-window-and-es",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-08",
+      "pr_base": "ticket/T-53-08-offline-measurement-of-seam-aware-partit",
+      "jira": null
+    },
+    "T-53-10": {
+      "title": "Codex and operator measurement tooling: batch-reader capacity, native session evidence, receipt model, effort and sandbox",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-10-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 6,
+      "depends_on": [
+        "T-53-09"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-measure-codex.cjs",
+        "plugins/delivery-pipeline/scripts/review-measure.cjs",
+        "tests/unit/review-measure-codex.test.cjs",
+        "plugins/delivery-pipeline/references/review-routing-measurements.json",
+        "docs/audits/phase53/review-routing-measurements.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-10-codex-and-operator-measurement-tooling-b",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-09",
+      "pr_base": "ticket/T-53-09-claude-measurement-tooling-window-and-es",
+      "jira": null
+    },
+    "T-53-11": {
+      "title": "Configurable conservative route thresholds, the signed-record gate that keeps them conservative, and the review router with calibration from the record",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-11-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-53-07"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "tests/unit/pipeline-config.test.cjs",
+        "plugins/delivery-pipeline/scripts/review-route.cjs",
+        "tests/unit/review-route.test.cjs",
+        "tests/unit/helpers/review-routing-fixtures.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-11-configurable-conservative-route-threshol",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-07",
+      "pr_base": "ticket/T-53-07-measurement-record-contract-every-adr-03",
+      "jira": null
+    },
+    "T-53-12": {
+      "title": "Record on ADR-014 that the routing signal for review roles counts the work, not the prompt",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-12-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        ".planning/architecture/ADR-014-mandatory-runtime-model-ladder.md",
+        "tests/unit/review-routing-signal-note.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-12-record-on-adr-014-that-the-routing-signa",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": null,
+      "pr_base": "epic/53-route-review-input-by-size",
+      "jira": null
+    },
+    "T-53-13": {
+      "title": "Pull-route manifest builder and declared-coverage validator",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-13-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-53-11"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-manifest.cjs",
+        "tests/unit/review-manifest.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-13-pull-route-manifest-builder-and-declared",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-11",
+      "pr_base": "ticket/T-53-11-configurable-conservative-route-threshol",
+      "jira": null
+    },
+    "T-53-14": {
+      "title": "Partition planner and seam inventory for the partitioned route",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-14-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 7,
+      "depends_on": [
+        "T-53-13",
+        "T-53-10"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-partition.cjs",
+        "tests/unit/review-partition.test.cjs",
+        "plugins/delivery-pipeline/scripts/review-measure.cjs",
+        "tests/unit/review-measure.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-14-partition-planner-and-seam-inventory-for",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-10",
+      "pr_base": "ticket/T-53-10-codex-and-operator-measurement-tooling-b",
+      "jira": null
+    },
+    "T-53-15": {
+      "title": "Review ledger authority outside the worktree: plan, unit records, set-cover verification and verdict ceiling",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-15-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 8,
+      "depends_on": [
+        "T-53-14"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-ledger.cjs",
+        "tests/unit/review-ledger.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-15-review-ledger-authority-outside-the-work",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-14",
+      "pr_base": "ticket/T-53-14-partition-planner-and-seam-inventory-for",
+      "jira": null
+    },
+    "T-53-16": {
+      "title": "Tree reduction for very large unit counts, recorded in the ledger",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-16-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 9,
+      "depends_on": [
+        "T-53-15"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-reduction.cjs",
+        "tests/unit/review-reduction.test.cjs",
+        "plugins/delivery-pipeline/scripts/review-ledger.cjs",
+        "tests/unit/review-ledger.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-16-tree-reduction-for-very-large-unit-count",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-15",
+      "pr_base": "ticket/T-53-15-review-ledger-authority-outside-the-work",
+      "jira": null
+    },
+    "T-53-17": {
+      "title": "Hybrid review contract: route record binding, request selectors and per-route result validators",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-17-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 10,
+      "depends_on": [
+        "T-53-16"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-contract-v3.cjs",
+        "tests/unit/review-contract-v3.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-17-hybrid-review-contract-route-record-bind",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-16",
+      "pr_base": "ticket/T-53-16-tree-reduction-for-very-large-unit-count",
+      "jira": null
+    },
+    "T-53-18": {
+      "title": "review-part dispatch plumbing: subject family, boundary subject kind and scratch evidence for unit and reducer dispatches",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-18-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-53-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/architecture-target.cjs",
+        "plugins/delivery-pipeline/scripts/dispatch-boundary.cjs",
+        "plugins/delivery-pipeline/scripts/conveyor-scratch.cjs",
+        "tests/unit/subject-contract.test.cjs",
+        "tests/unit/dispatch-boundary.test.cjs",
+        "tests/unit/conveyor-scratch.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-18-review-part-dispatch-plumbing-subject-fa",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-01",
+      "pr_base": "ticket/T-53-01-review-specific-diff-scope-module-applie",
+      "jira": null
+    },
+    "T-53-19": {
+      "title": "Judgment sealing and validation accept the hybrid contract and review-part subjects",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-19-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 11,
+      "depends_on": [
+        "T-53-17",
+        "T-53-18"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/role-artifact.cjs",
+        "tests/unit/role-artifact.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-19-judgment-sealing-and-validation-accept-t",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-17",
+      "pr_base": "ticket/T-53-17-hybrid-review-contract-route-record-bind",
+      "jira": null
+    },
+    "T-53-20": {
+      "title": "Claude role host: hybrid contract request, measured route selection, inline route and work-size routing signal",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-20-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 12,
+      "depends_on": [
+        "T-53-19",
+        "T-53-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-20-claude-role-host-hybrid-contract-request",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-19",
+      "pr_base": "ticket/T-53-19-judgment-sealing-and-validation-accept-t",
+      "jira": null
+    },
+    "T-53-21": {
+      "title": "Claude role host: pull route with a digest-bound manifest and declared coverage proof",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-21-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 13,
+      "depends_on": [
+        "T-53-20"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-21-claude-role-host-pull-route-with-a-diges",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-20",
+      "pr_base": "ticket/T-53-20-claude-role-host-hybrid-contract-request",
+      "jira": null
+    },
+    "T-53-22": {
+      "title": "Claude role host: unit, reducer and aggregate dispatches for the partitioned route",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-22-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 14,
+      "depends_on": [
+        "T-53-21"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-22-claude-role-host-unit-reducer-and-aggreg",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-21",
+      "pr_base": "ticket/T-53-21-claude-role-host-pull-route-with-a-diges",
+      "jira": null
+    },
+    "T-53-23": {
+      "title": "Codex architecture review: hybrid contract, measured route, inline and pull routes and work-size signal",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-23-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 12,
+      "depends_on": [
+        "T-53-19",
+        "T-53-05"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs",
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
+        "tests/unit/review-routing-codex-arch.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-23-codex-architecture-review-hybrid-contrac",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-19",
+      "pr_base": "ticket/T-53-19-judgment-sealing-and-validation-accept-t",
+      "jira": null
+    },
+    "T-53-24": {
+      "title": "Codex architecture review: unit, reducer and aggregate dispatches for the partitioned route",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-24-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 13,
+      "depends_on": [
+        "T-53-23"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs",
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
+        "tests/unit/review-routing-codex-arch.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-24-codex-architecture-review-unit-reducer-a",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-23",
+      "pr_base": "ticket/T-53-23-codex-architecture-review-hybrid-contrac",
+      "jira": null
+    },
+    "T-53-25": {
+      "title": "Codex integrator: hybrid contract, measured route, inline and pull routes and work-size signal",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-25-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 14,
+      "depends_on": [
+        "T-53-24",
+        "T-53-21"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "tests/unit/phase49-incremental-integration.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-25-codex-integrator-hybrid-contract-measure",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-21",
+      "pr_base": "ticket/T-53-21-claude-role-host-pull-route-with-a-diges",
+      "jira": null
+    },
+    "T-53-26": {
+      "title": "Codex integrator: unit, reducer and aggregate dispatches for the partitioned route",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-26-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 15,
+      "depends_on": [
+        "T-53-25",
+        "T-53-22"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-26-codex-integrator-unit-reducer-and-aggreg",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-22",
+      "pr_base": "ticket/T-53-22-claude-role-host-unit-reducer-and-aggreg",
+      "jira": null
+    },
+    "T-53-27": {
+      "title": "Current-verdict consumers authenticate hybrid artifacts: route proof, manifest coverage and the ledger",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-27-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 16,
+      "depends_on": [
+        "T-53-26"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/role-artifact.cjs",
+        "tests/unit/role-artifact.test.cjs",
+        "tests/unit/claude-role-host.test.cjs",
+        "tests/unit/review-routing-consumers-codex.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-27-current-verdict-consumers-authenticate-h",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-26",
+      "pr_base": "ticket/T-53-26-codex-integrator-unit-reducer-and-aggreg",
+      "jira": null
+    },
+    "T-53-28": {
+      "title": "Integration-review impact reading becomes lazy: a full-mode review never reads repository-sized material",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-28-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 17,
+      "depends_on": [
+        "T-53-27"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs",
+        "plugins/delivery-pipeline/scripts/role-artifact.cjs",
+        "tests/unit/review-routing-impact.test.cjs",
+        "tests/unit/role-artifact.test.cjs",
+        "tests/unit/phase49-review-lineage.test.cjs",
+        "tests/unit/phase49-incremental-integration.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "merge",
+      "preauthorized": true,
+      "branch": "ticket/T-53-28-integration-review-impact-reading-become",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-27",
+      "pr_base": "ticket/T-53-27-current-verdict-consumers-authenticate-h",
+      "jira": null
+    },
+    "T-53-29": {
+      "title": "Review coordinator: route escalation, sequential units, resume, reduction levels and runtime adapters",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-29-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 16,
+      "depends_on": [
+        "T-53-26"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/review-coordinator.cjs",
+        "tests/unit/review-coordinator.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-29-review-coordinator-route-escalation-sequ",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-26",
+      "pr_base": "ticket/T-53-26-codex-integrator-unit-reducer-and-aggreg",
+      "jira": null
+    },
+    "T-53-30": {
+      "title": "Acceptance: a phase-50-shaped epic is reviewed on every route, rolls back by selection and keeps the mirror out of every review diff",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-30-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 17,
+      "depends_on": [
+        "T-53-29"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "tests/unit/review-routing-acceptance.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-30-acceptance-a-phase-50-shaped-epic-is-rev",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-29",
+      "pr_base": "ticket/T-53-29-review-coordinator-route-escalation-sequ",
+      "jira": null
+    },
+    "T-53-31": {
+      "title": "Conveyor prose and reviewer references describe the routes, the knobs, the diff builder for caller-built reviews and the rollback",
+      "plan": ".planning/phases/53-route-review-input-by-size/53-31-PLAN.md",
+      "phase": "53",
+      "repo": null,
+      "wave": 18,
+      "depends_on": [
+        "T-53-29",
+        "T-53-28"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "plugins/delivery-pipeline/references/integrator.md",
+        "plugins/delivery-pipeline/references/arch-review.md",
+        "docs/gsd_multilevel_delivery_pipeline.md",
+        "tests/unit/review-routing-docs.test.cjs",
+        "tests/unit/phase49-incremental-integration.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "checkpoint": null,
+      "preauthorized": false,
+      "branch": "ticket/T-53-31-conveyor-prose-and-reviewer-references-d",
+      "epic": "epic/53-route-review-input-by-size",
+      "primary_parent": "T-53-28",
+      "pr_base": "ticket/T-53-28-integration-review-impact-reading-become",
       "jira": null
     }
   }

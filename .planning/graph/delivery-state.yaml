@@ -2400,10 +2400,13 @@
   branch: "ticket/T-41-09-align-first-response-usage-with-the-usag"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
   epic_pr: {"base":"main","branch":"epic/41-reduce-pipeline-subscription-overhead","landed":true,"number":239,"state":"MERGED"}
+  matched_by: "previous-merged"
   merge_sha: "1e57b5163fbd4c30b60b7f0386aa0a23d69af586"
   merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 250
+  pr_branch: "ticket/T-41-09-align-first-response-usage-with-the-usag"
   reapable: true
+  recorded_pr: 250
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/250"
 "T-42-01":
@@ -3077,355 +3080,359 @@
   base_reason: "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable"
   branch: "ticket/T-50-01-tracer-an-installed-codex-bundle-launche"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merge_sha: "da0d2f2f6c81667de07f736fe0ee4fa229a1c186"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 497
+  reapable: true
+  recorded_pr: 497
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/497"
 "T-50-02":
-  architecture: {"integration_branch":"main","required":false,"status":"skipped-by-target","target":"epic/50-make-launch-and-upgrade-reliable"}
   base: "epic/50-make-launch-and-upgrade-reliable"
   base_reason: "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable"
-  behind_by: 0
   branch: "ticket/T-50-02-name-every-launch-and-upgrade-refusal-wi"
-  checks: {"failing":2,"none_reported":false,"pending":2,"total":5,"unavailable":false}
-  draft: true
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  head_sha: "2fddfee409c6c840762fee49be19f1d4a8a11bf4"
-  integration_branch: "main"
-  merge_scope: "stacked"
-  merge_state: "UNSTABLE"
+  merge_sha: "1cf251560e9a7f5dca3057676b5c6db737b70ea6"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
   pr: 490
-  pr_base: "epic/50-make-launch-and-upgrade-reliable"
-  pr_base_sha: "be7ab4f3407b017a50e9fe2a49bf54e22e7d3202"
-  pr_created_at: "2026-10-16T08:23:44Z"
-  reapable: false
+  reapable: true
   recorded_pr: 490
-  review_decision: null
-  status: "pr-open"
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/490"
 "T-50-03":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-01 has no branch on the remote yet (status pending) — ticket/T-50-01-tracer-an-installed-codex-bundle-launche is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-01"]
-  blocked_reasons: {"T-50-01":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-50-01 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-50-03-complete-the-resolver-agreement-matrix-s"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "665bc7c7c910b5bbd94b1ed771d49a2121c56ba1"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 499
+  reapable: true
+  recorded_pr: 499
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/499"
 "T-50-04":
-  architecture: {"integration_branch":"main","required":false,"status":"skipped-by-target","target":"epic/50-make-launch-and-upgrade-reliable"}
   base: "epic/50-make-launch-and-upgrade-reliable"
   base_reason: "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable"
-  behind_by: 0
   branch: "ticket/T-50-04-classify-legacy-provenance-read-only-and"
-  checks: {"failing":2,"none_reported":false,"pending":2,"total":5,"unavailable":false}
-  draft: true
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  head_sha: "6119f70c55382174715733d6fdb4eb1a14c19a3b"
-  integration_branch: "main"
-  merge_scope: "stacked"
-  merge_state: "UNSTABLE"
+  merge_sha: "4066bff91cdf3e3ae530fb4df37b1149ffb9a845"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
   pr: 491
-  pr_base: "epic/50-make-launch-and-upgrade-reliable"
-  pr_base_sha: "be7ab4f3407b017a50e9fe2a49bf54e22e7d3202"
-  pr_created_at: "2026-10-16T08:24:14Z"
-  reapable: false
+  reapable: true
   recorded_pr: 491
-  review_decision: null
-  status: "pr-open"
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/491"
 "T-50-05":
-  architecture: {"integration_branch":"main","required":false,"status":"skipped-by-target","target":"epic/50-make-launch-and-upgrade-reliable"}
   base: "epic/50-make-launch-and-upgrade-reliable"
   base_reason: "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable"
-  behind_by: 0
   branch: "ticket/T-50-05-one-repositoryidentity-and-one-subject-g"
-  checks: {"failing":3,"none_reported":false,"pending":0,"total":6,"unavailable":false}
-  draft: true
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  head_sha: "0ae1f97fed39cd832a0398e1ec928ba7688eb278"
-  integration_branch: "main"
-  merge_scope: "stacked"
-  merge_state: "UNSTABLE"
+  merge_sha: "95296344c71f66661de429a0c6f5b9207147eabb"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
   pr: 488
-  pr_base: "epic/50-make-launch-and-upgrade-reliable"
-  pr_base_sha: "be7ab4f3407b017a50e9fe2a49bf54e22e7d3202"
-  pr_created_at: "2026-10-16T08:19:22Z"
-  reapable: false
+  reapable: true
   recorded_pr: 488
-  review_decision: null
-  status: "pr-open"
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/488"
 "T-50-06":
-  architecture: {"integration_branch":"main","required":false,"status":"skipped-by-target","target":"epic/50-make-launch-and-upgrade-reliable"}
   base: "epic/50-make-launch-and-upgrade-reliable"
   base_reason: "no primary parent — a root ticket PRs into epic/50-make-launch-and-upgrade-reliable"
-  behind_by: 0
   branch: "ticket/T-50-06-open-the-l-11-verification-record-with-t"
-  checks: {"failing":0,"none_reported":false,"pending":1,"total":5,"unavailable":false}
-  draft: true
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  head_sha: "da50bfdda18066222193fdfd603645dfa1d08682"
-  integration_branch: "main"
-  merge_scope: "stacked"
-  merge_state: "UNSTABLE"
+  merge_sha: "995e817cc991eefa1b6e9e06150fc454475792e8"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
   pr: 489
-  pr_base: "epic/50-make-launch-and-upgrade-reliable"
-  pr_base_sha: "be7ab4f3407b017a50e9fe2a49bf54e22e7d3202"
-  pr_created_at: "2026-10-16T08:23:13Z"
-  reapable: false
+  reapable: true
   recorded_pr: 489
-  review_decision: null
-  status: "pr-open"
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/489"
 "T-50-07":
-  base: "ticket/T-50-04-classify-legacy-provenance-read-only-and"
-  base_reason: "T-50-04 is pr-open — cascade off ticket/T-50-04-classify-legacy-provenance-read-only-and; the sentinel retargets this PR onto epic/50-make-launch-and-upgrade-reliable when T-50-04 lands"
+  base: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-04 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-50-07-adopt-pre-existing-provenance-once-as-hi"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merge_sha: "b42409f6463d575ecb9e77f2e979e1db60dbf302"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 494
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/494"
 "T-50-08":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-07 has no branch on the remote yet (status pending) — ticket/T-50-07-adopt-pre-existing-provenance-once-as-hi is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-07"]
-  blocked_reasons: {"T-50-07":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-50-07 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-50-08-give-a-contended-catalogue-lock-a-bounde"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "b189c39b32c4a33d1c0d5bf493f35cc020f0e5ea"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 496
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/496"
 "T-50-09":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-08 has no branch on the remote yet (status pending) — ticket/T-50-08-give-a-contended-catalogue-lock-a-bounde is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-08"]
-  blocked_reasons: {"T-50-08":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-08 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-10"
   branch: "ticket/T-50-09-route-legacy-bearing-host-admission-thro"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "2cebc761a362dbd8b4cd98a5ed158f5948d2a5f2"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 500
+  reapable: true
+  recorded_pr: 500
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/500"
 "T-50-10":
-  base: "ticket/T-50-05-one-repositoryidentity-and-one-subject-g"
-  base_reason: "T-50-05 is pr-open — cascade off ticket/T-50-05-one-repositoryidentity-and-one-subject-g; the sentinel retargets this PR onto epic/50-make-launch-and-upgrade-reliable when T-50-05 lands"
+  base: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-05 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-50-10-planning-seal-and-review-subject-consume"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merge_sha: "01ce3fc8e03a6c039b1613aacabe3ed877bed154"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 493
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/493"
 "T-50-11":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-03 has no branch on the remote yet (status pending) — ticket/T-50-03-complete-the-resolver-agreement-matrix-s is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-01","T-50-03","T-50-07","T-50-02"]
-  blocked_reasons: {"T-50-01":"parent has no branch yet (nothing to cascade from)","T-50-02":"non-primary parent T-50-02 is pr-open — T-50-11's worktree is cut from T-50-03 and receives T-50-02 only through epic/50-make-launch-and-upgrade-reliable; T-50-02 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-02 is pr-open)","T-50-03":"parent has no branch yet (nothing to cascade from)","T-50-07":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-03 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-01, T-50-02, T-50-07"
   branch: "ticket/T-50-11-shared-host-preflight-that-reports-every"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "bb5a045f438ed0c395a3bd2a58a230bfc4d6253a"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 501
+  reapable: true
+  recorded_pr: 501
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/501"
 "T-50-12":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-11"]
-  blocked_reasons: {"T-50-11":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-50-11 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-50-12-record-the-codex-cli-version-beside-the"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "dbb7ca2fa391de3107c101ae2cee87e6850a3e64"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 507
+  reapable: true
+  recorded_pr: 507
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/507"
 "T-50-13":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-03 has no branch on the remote yet (status pending) — ticket/T-50-03-complete-the-resolver-agreement-matrix-s is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-01","T-50-03"]
-  blocked_reasons: {"T-50-01":"parent has no branch yet (nothing to cascade from)","T-50-03":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-03 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-01"
   branch: "ticket/T-50-13-codex-runtime-host-resolves-its-home-and"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "81b1d379f0b82f9110cfb1b0d136a6be01fdbf48"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 504
+  reapable: true
+  recorded_pr: 504
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/504"
 "T-50-14":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-11"]
-  blocked_reasons: {"T-50-11":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-50-11 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-50-14-codex-delivery-host-runs-shared-prefligh"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "91d41e4577a6d3a50cdf5ec8fdde46dbcdefcfa9"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 510
+  reapable: true
+  recorded_pr: 510
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/510"
 "T-50-15":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-11","T-50-10"]
-  blocked_reasons: {"T-50-10":"parent has no branch yet (nothing to cascade from)","T-50-11":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-11 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-10"
   branch: "ticket/T-50-15-codex-decomposition-hosts-preflight-befo"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "c96cdaebc2cbdce11ef600c51ca08fb22c8aa8d9"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 512
+  reapable: true
+  recorded_pr: 512
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/512"
 "T-50-16":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-11"]
-  blocked_reasons: {"T-50-11":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-50-11 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-50-16-claude-delivery-and-investigation-hosts"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "19fedcf19a9ea7f237d1139191ebc75c0c4dba58"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 506
+  reapable: true
+  recorded_pr: 506
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/506"
 "T-50-17":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-18 has no branch on the remote yet (status pending) — ticket/T-50-18-integrator-subject-and-remaining-home-si is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-11","T-50-18"]
-  blocked_reasons: {"T-50-11":"parent has no branch yet (nothing to cascade from)","T-50-18":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-18 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-11"
   branch: "ticket/T-50-17-claude-role-host-preflights-before-begin"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "2bc4aff5e41abc1f15d7e55bac19abb19162aaf6"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 509
+  reapable: true
+  recorded_pr: 509
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/509"
 "T-50-18":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-09 has no branch on the remote yet (status pending) — ticket/T-50-09-route-legacy-bearing-host-admission-thro is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-09","T-50-03","T-50-05"]
-  blocked_reasons: {"T-50-03":"parent has no branch yet (nothing to cascade from)","T-50-05":"non-primary parent T-50-05 is pr-open — T-50-18's worktree is cut from T-50-09 and receives T-50-05 only through epic/50-make-launch-and-upgrade-reliable; T-50-05 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-05 is pr-open)","T-50-09":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-09 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-05, T-50-03"
   branch: "ticket/T-50-18-integrator-subject-and-remaining-home-si"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "5ab152fdd880c2d27963e0e59831284549acdc72"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 505
+  reapable: true
+  recorded_pr: 505
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/505"
 "T-50-19":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-11 has no branch on the remote yet (status pending) — ticket/T-50-11-shared-host-preflight-that-reports-every is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-11","T-50-10"]
-  blocked_reasons: {"T-50-10":"parent has no branch yet (nothing to cascade from)","T-50-11":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-11 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-10"
   branch: "ticket/T-50-19-claude-decomposition-and-runtime-hosts-p"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "2933b5f41424739b938812c00a1b33a3421c41ff"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 511
+  reapable: true
+  recorded_pr: 511
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/511"
 "T-50-20":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-15 has no branch on the remote yet (status pending) — ticket/T-50-15-codex-decomposition-hosts-preflight-befo is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-11","T-50-15"]
-  blocked_reasons: {"T-50-11":"parent has no branch yet (nothing to cascade from)","T-50-15":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-15 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-11"
   branch: "ticket/T-50-20-deliver-dispatch-runs-preflight-before-s"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "97e071abd526af36584abfac97b688d51b5da6f9"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 514
+  reapable: true
+  recorded_pr: 514
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/514"
 "T-50-21":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-03 has no branch on the remote yet (status pending) — ticket/T-50-03-complete-the-resolver-agreement-matrix-s is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-03"]
-  blocked_reasons: {"T-50-03":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-03 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-02"
   branch: "ticket/T-50-21-agent-definitions-session-observer-and-t"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "a51f33187ffc46863df574345777a5a94c8cc9a5"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 502
+  reapable: true
+  recorded_pr: 502
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/502"
 "T-50-22":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-17 has no branch on the remote yet (status pending) — ticket/T-50-17-claude-role-host-preflights-before-begin is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-13","T-50-14","T-50-15","T-50-16","T-50-17","T-50-18","T-50-19","T-50-20","T-50-21","T-50-29"]
-  blocked_reasons: {"T-50-13":"parent has no branch yet (nothing to cascade from)","T-50-14":"parent has no branch yet (nothing to cascade from)","T-50-15":"parent has no branch yet (nothing to cascade from)","T-50-16":"parent has no branch yet (nothing to cascade from)","T-50-17":"parent has no branch yet (nothing to cascade from)","T-50-18":"parent has no branch yet (nothing to cascade from)","T-50-19":"parent has no branch yet (nothing to cascade from)","T-50-20":"parent has no branch yet (nothing to cascade from)","T-50-21":"parent has no branch yet (nothing to cascade from)","T-50-29":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-17 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-13, T-50-14, T-50-15, T-50-16, T-50-18, T-50-19, T-50-20, T-50-21, T-50-29"
   branch: "ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "54fa29b63b21b9c7837f2428c9eb0c2f1f997b57"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 515
+  reapable: true
+  recorded_pr: 515
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/515"
 "T-50-23":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-22 has no branch on the remote yet (status pending) — ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-22","T-50-28"]
-  blocked_reasons: {"T-50-22":"parent has no branch yet (nothing to cascade from)","T-50-28":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-22 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-28"
   branch: "ticket/T-50-23-installed-package-scenario-a-claude-host"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "cda5258d2eb969f52f444bcef54df93b5720f7c1"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 516
+  reapable: true
+  recorded_pr: 516
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/516"
 "T-50-24":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-22 has no branch on the remote yet (status pending) — ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-22","T-50-09","T-50-28"]
-  blocked_reasons: {"T-50-09":"parent has no branch yet (nothing to cascade from)","T-50-22":"parent has no branch yet (nothing to cascade from)","T-50-28":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-22 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-09, T-50-28"
   branch: "ticket/T-50-24-installed-package-scenario-upgrade-a-pro"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "9f65c6292915aff95bb2566fe275d365e9351bd1"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 518
+  reapable: true
+  recorded_pr: 518
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/518"
 "T-50-25":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-22 has no branch on the remote yet (status pending) — ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-22","T-50-08","T-50-09","T-50-28","T-50-06"]
-  blocked_reasons: {"T-50-06":"non-primary parent T-50-06 is pr-open — T-50-25's worktree is cut from T-50-22 and receives T-50-06 only through epic/50-make-launch-and-upgrade-reliable; T-50-06 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-06 is pr-open)","T-50-08":"parent has no branch yet (nothing to cascade from)","T-50-09":"parent has no branch yet (nothing to cascade from)","T-50-22":"parent has no branch yet (nothing to cascade from)","T-50-28":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-22 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-08, T-50-09, T-50-28, T-50-06"
   branch: "ticket/T-50-25-installed-package-scenarios-concurrent-c"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "de7690b094642e899b9a7edde2429362602fce87"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 519
+  reapable: true
+  recorded_pr: 519
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/519"
 "T-50-26":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-22 has no branch on the remote yet (status pending) — ticket/T-50-22-enumerate-every-host-entry-and-pin-the-p is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-22","T-50-28"]
-  blocked_reasons: {"T-50-22":"parent has no branch yet (nothing to cascade from)","T-50-28":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-22 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-28"
   branch: "ticket/T-50-26-document-launch-without-variables-prefli"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "9ffd524d0daddfa996a9145c129dffa35b33ede4"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 517
+  reapable: true
+  recorded_pr: 517
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/517"
 "T-50-27":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-23 has no branch on the remote yet (status pending) — ticket/T-50-23-installed-package-scenario-a-claude-host is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-12","T-50-23","T-50-24","T-50-25","T-50-26","T-50-29","T-50-06"]
-  blocked_reasons: {"T-50-06":"non-primary parent T-50-06 is pr-open — T-50-27's worktree is cut from T-50-23 and receives T-50-06 only through epic/50-make-launch-and-upgrade-reliable; T-50-06 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-06 is pr-open)","T-50-12":"parent has no branch yet (nothing to cascade from)","T-50-23":"parent has no branch yet (nothing to cascade from)","T-50-24":"parent has no branch yet (nothing to cascade from)","T-50-25":"parent has no branch yet (nothing to cascade from)","T-50-26":"parent has no branch yet (nothing to cascade from)","T-50-29":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-23 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-06, T-50-12, T-50-24, T-50-25, T-50-26, T-50-29"
   branch: "ticket/T-50-27-close-the-l-11-obligations-and-write-the"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "d91e374c5cdff2473bef73df0f1591577be987b8"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 520
+  reapable: true
+  recorded_pr: 520
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/520"
 "T-50-28":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-03 has no branch on the remote yet (status pending) — ticket/T-50-03-complete-the-resolver-agreement-matrix-s is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-01","T-50-03"]
-  blocked_reasons: {"T-50-01":"parent has no branch yet (nothing to cascade from)","T-50-03":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-03 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-01"
   branch: "ticket/T-50-28-pin-the-resolver-across-every-installed"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "441945c573a61214d6e489a52cf58cfa4538ee90"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 508
+  reapable: true
+  recorded_pr: 508
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/508"
 "T-50-29":
   base: "epic/50-make-launch-and-upgrade-reliable"
-  base_reason: "T-50-10 has no branch on the remote yet (status pending) — ticket/T-50-10-planning-seal-and-review-subject-consume is not a base that exists, so the base is epic/50-make-launch-and-upgrade-reliable"
-  blocked_by: ["T-50-10","T-50-05"]
-  blocked_reasons: {"T-50-05":"non-primary parent T-50-05 is pr-open — T-50-29's worktree is cut from T-50-10 and receives T-50-05 only through epic/50-make-launch-and-upgrade-reliable; T-50-05 must merge into epic/50-make-launch-and-upgrade-reliable first (T-50-05 is pr-open)","T-50-10":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/50-make-launch-and-upgrade-reliable"
+  base_reason: "T-50-10 is MERGED, so its branch is no longer where work lands — the base is epic/50-make-launch-and-upgrade-reliable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/50-make-launch-and-upgrade-reliable in for non-primary parent(s) T-50-05"
   branch: "ticket/T-50-29-codex-architecture-review-context-builds"
   epic: "epic/50-make-launch-and-upgrade-reliable"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merge_sha: "7f1f59da47741aae595646abde2c90e83067fc5c"
+  merged_into: "epic/50-make-launch-and-upgrade-reliable"
+  pr: 495
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/495"

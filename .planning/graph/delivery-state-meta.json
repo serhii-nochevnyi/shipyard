@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 424,
-  "generation_identity": "bdd1f3a4-14e9-4c29-accd-b1cf841a3622",
-  "previous_generation_identity": "16777244:12943905905:1792139307747928300:b60c2df6a267ab43a52430c59da653969ed76c306d78b4486923585b2b55b2a8",
-  "observed_at": "2026-10-16T08:29:31.519Z",
-  "generated_at": "2026-10-16T08:29:31.519Z",
+  "generation": 491,
+  "generation_identity": "97673df6-3e2d-4061-8bd8-4475dde17708",
+  "previous_generation_identity": "16777244:12944367869:1792234302425142800:3dfa8ffe2ef3b4888876550beeaa475008db77c15919c289cde009fc8ca41398",
+  "observed_at": "2026-10-17T10:52:13.910Z",
+  "generated_at": "2026-10-17T10:52:13.910Z",
   "by": "state-sync",
-  "pid": 89634,
-  "observation_generation": 424,
+  "pid": 73090,
+  "observation_generation": 491,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2794,9 +2794,9 @@
         "checks": null
       },
       "T-50-01": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 497,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2805,26 +2805,20 @@
         "checks": null
       },
       "T-50-02": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 490,
-        "head": "2fddfee409c6c840762fee49be19f1d4a8a11bf4",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
-        "merge_state": "UNSTABLE",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 5,
-          "pending": 2,
-          "failing": 2,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-50-03": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 499,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2833,71 +2827,53 @@
         "checks": null
       },
       "T-50-04": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 491,
-        "head": "6119f70c55382174715733d6fdb4eb1a14c19a3b",
-        "draft": true,
-        "base": "epic/50-make-launch-and-upgrade-reliable",
-        "merge_state": "UNSTABLE",
-        "review_decision": null,
-        "checks": {
-          "total": 5,
-          "pending": 2,
-          "failing": 2,
-          "none_reported": false,
-          "unavailable": false
-        }
-      },
-      "T-50-05": {
-        "status": "pr-open",
-        "repository": null,
-        "pr": 488,
-        "head": "0ae1f97fed39cd832a0398e1ec928ba7688eb278",
-        "draft": true,
-        "base": "epic/50-make-launch-and-upgrade-reliable",
-        "merge_state": "UNSTABLE",
-        "review_decision": null,
-        "checks": {
-          "total": 6,
-          "pending": 0,
-          "failing": 3,
-          "none_reported": false,
-          "unavailable": false
-        }
-      },
-      "T-50-06": {
-        "status": "pr-open",
-        "repository": null,
-        "pr": 489,
-        "head": "da50bfdda18066222193fdfd603645dfa1d08682",
-        "draft": true,
-        "base": "epic/50-make-launch-and-upgrade-reliable",
-        "merge_state": "UNSTABLE",
-        "review_decision": null,
-        "checks": {
-          "total": 5,
-          "pending": 1,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
-      },
-      "T-50-07": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-50-04-classify-legacy-provenance-read-only-and",
+        "base": "epic/50-make-launch-and-upgrade-reliable",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-50-05": {
+        "status": "merged",
+        "repository": null,
+        "pr": 488,
+        "head": null,
+        "draft": false,
+        "base": "epic/50-make-launch-and-upgrade-reliable",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-50-06": {
+        "status": "merged",
+        "repository": null,
+        "pr": 489,
+        "head": null,
+        "draft": false,
+        "base": "epic/50-make-launch-and-upgrade-reliable",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-50-07": {
+        "status": "merged",
+        "repository": null,
+        "pr": 494,
+        "head": null,
+        "draft": false,
+        "base": "epic/50-make-launch-and-upgrade-reliable",
         "merge_state": null,
         "review_decision": null,
         "checks": null
       },
       "T-50-08": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 496,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2906,9 +2882,9 @@
         "checks": null
       },
       "T-50-09": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 500,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2917,20 +2893,20 @@
         "checks": null
       },
       "T-50-10": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 493,
         "head": null,
         "draft": false,
-        "base": "ticket/T-50-05-one-repositoryidentity-and-one-subject-g",
+        "base": "epic/50-make-launch-and-upgrade-reliable",
         "merge_state": null,
         "review_decision": null,
         "checks": null
       },
       "T-50-11": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 501,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2939,9 +2915,9 @@
         "checks": null
       },
       "T-50-12": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 507,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2950,9 +2926,9 @@
         "checks": null
       },
       "T-50-13": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 504,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2961,9 +2937,9 @@
         "checks": null
       },
       "T-50-14": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 510,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2972,9 +2948,9 @@
         "checks": null
       },
       "T-50-15": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 512,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2983,9 +2959,9 @@
         "checks": null
       },
       "T-50-16": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 506,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -2994,9 +2970,9 @@
         "checks": null
       },
       "T-50-17": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 509,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3005,9 +2981,9 @@
         "checks": null
       },
       "T-50-18": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 505,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3016,9 +2992,9 @@
         "checks": null
       },
       "T-50-19": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 511,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3027,9 +3003,9 @@
         "checks": null
       },
       "T-50-20": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 514,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3038,9 +3014,9 @@
         "checks": null
       },
       "T-50-21": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 502,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3049,9 +3025,9 @@
         "checks": null
       },
       "T-50-22": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 515,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3060,9 +3036,9 @@
         "checks": null
       },
       "T-50-23": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 516,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3071,9 +3047,9 @@
         "checks": null
       },
       "T-50-24": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 518,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3082,9 +3058,9 @@
         "checks": null
       },
       "T-50-25": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 519,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3093,9 +3069,9 @@
         "checks": null
       },
       "T-50-26": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 517,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3104,9 +3080,9 @@
         "checks": null
       },
       "T-50-27": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 520,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3115,9 +3091,9 @@
         "checks": null
       },
       "T-50-28": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 508,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3126,9 +3102,9 @@
         "checks": null
       },
       "T-50-29": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 495,
         "head": null,
         "draft": false,
         "base": "epic/50-make-launch-and-upgrade-reliable",
@@ -3140,9 +3116,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "9d4956e815b1c8476653cd8be62cdae3c4948bea9e66c7edab2fd47339a277ec",
-    "front_digest": "0315400231eaf1102aa143137a484c179df8a11839f1bddcf4cf04eb3e04e066",
-    "observation_digest": "e309467e47bdfbce48f16da1a99a516854eab735ed5725ad248143ca7de75a15",
-    "observation_generation": 424
+    "state_digest": "2fcf5408dbef34d3e16a2cbcf28a2881516dbb9042af135d3357fe26be8c8d27",
+    "front_digest": "b226e9a39212ba28fe8a10a2d5ae5d0d82607eb825dd9f6193069e50f65e5de3",
+    "observation_digest": "7511ff09759c3a174d31fee9fc63cdf53c8f3592707ce6c4d358bdcb8c9788f1",
+    "observation_generation": 491
   }
 }
