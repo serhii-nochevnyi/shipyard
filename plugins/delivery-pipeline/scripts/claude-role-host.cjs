@@ -56,8 +56,8 @@ function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function reject(message, code = 'INVALID_HOST') {
-  const error = new Error(`claude-role-host: ${message}`);
+function reject(message, code = 'INVALID_HOST', cause) {
+  const error = new Error(`claude-role-host: ${message}`, { cause });
   error.code = code;
   throw error;
 }
@@ -159,7 +159,7 @@ function command(options, executable, args, cwd, maxBuffer = 65536, preserveWhit
       reject(`${executable} output exceeds its ${maxBuffer} byte bound`, 'INPUT_TOO_LARGE');
     }
     const detail = String(error.stderr || error.stdout || error.message || error).trim().slice(0, 800);
-    reject(`${executable} preflight failed: ${detail}`, 'PREFLIGHT_FAILED');
+    reject(`${executable} preflight failed: ${detail}`, 'PREFLIGHT_FAILED', error);
   }
 }
 
@@ -611,7 +611,11 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
     const key = `${earlier}:${current}`;
     if (!ancestry.has(key)) {
       try { ancestry.set(key, git(options, canonical.worktree, ['merge-base', earlier, current]) === earlier); }
-      catch { ancestry.set(key, false); }
+      catch (error) {
+        if (error.code !== 'PREFLIGHT_FAILED' || error.cause?.status !== 1 || error.cause.signal || error.cause.code)
+          throw error;
+        ancestry.set(key, false);
+      }
     }
     return ancestry.get(key);
   } };
@@ -1592,10 +1596,38 @@ function firstResponseUsage(evidence) {
   return { status: 'observed', dispatch_identity: { session_id: evidence.session_id, launch_id: evidence.launch_id || null }, counters };
 }
 
-function sealResult(prepared, result, recorder, dispatchId) {
+function codeReviewEvidenceFs(evidencePath, markdown) {
+  if (typeof markdown !== 'string') reject('code-review evidence_markdown must be a string', 'INVALID_RESULT');
+  const expected = Buffer.from(markdown, 'utf8');
+  const sourceDescriptors = new Set();
+  return Object.freeze({ ...fs,
+    openSync(file, ...args) {
+      const fd = fs.openSync(file, ...args);
+      if (file === evidencePath) sourceDescriptors.add(fd);
+      return fd;
+    },
+    readSync(fd, buffer, offset, length, position) {
+      const count = fs.readSync(fd, buffer, offset, length, position);
+      // @security: Compare the exact source bytes consumed by sealJudgment before any archive publication.
+      if (sourceDescriptors.has(fd) && (!Number.isSafeInteger(position) || position < 0
+          || position + count > expected.length || (count === 0 && position !== expected.length)
+          || !buffer.subarray(offset, offset + count).equals(expected.subarray(position, position + count))))
+        reject('focused original evidence differs from the role-owned file', 'INVALID_RESULT');
+      return count;
+    },
+    closeSync(fd) {
+      sourceDescriptors.delete(fd);
+      return fs.closeSync(fd);
+    },
+  });
+}
+
+function sealResult(prepared, result, recorder, dispatchId, evidenceMarkdown) {
   const common = { worktreePath: prepared.canonical.worktree, role: prepared.role,
     ticket: prepared.ticket, base: prepared.base, recorder, dispatchId, result,
     ...(prepared.binding ? { phase: prepared.binding.phase, ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest } : {}),
+    ...(prepared.role === 'code-review' ? { io: { fs: codeReviewEvidenceFs(
+      path.join(prepared.canonical.worktree, prepared.evidencePath), evidenceMarkdown) } } : {}),
     evidencePath: prepared.evidencePath };
   const input = ['arch-review', 'code-review'].includes(prepared.role)
     ? { ...common, pr: prepared.pr }
@@ -1696,9 +1728,8 @@ function createClaudeRoleHost(options = {}) {
         const evidence_markdown = originalResult.evidence_markdown;
         const validatedResult = { ...originalResult };
         if (['arch-review', 'code-review'].includes(prepared.role)) delete validatedResult.evidence_markdown;
-        if (['arch-review', 'code-review'].includes(prepared.role) && (typeof evidence_markdown !== 'string'
-            || (prepared.role === 'code-review' ? evidence_markdown !== fs.readFileSync(path.join(prepared.canonical.worktree, prepared.evidencePath), 'utf8')
-              : evidence_markdown.trim() !== fs.readFileSync(path.join(prepared.canonical.worktree, prepared.evidencePath), 'utf8').trim())))
+        if (prepared.role === 'arch-review' && (typeof evidence_markdown !== 'string'
+            || evidence_markdown.trim() !== fs.readFileSync(path.join(prepared.canonical.worktree, prepared.evidencePath), 'utf8').trim()))
           reject('focused original evidence differs from the role-owned file', 'INVALID_RESULT');
         const result = prepared.role === 'arch-review' ? { ...validatedResult, host_context: {
           focused: { ...prepared.packet.role_context.focused, context_digest: sha(canonicalJson(prepared.packet)) },
@@ -1706,7 +1737,7 @@ function createClaudeRoleHost(options = {}) {
           ...(prepared.binding ? { phase_repo: prepared.binding.repo, phase_archive_selection: prepared.phaseArchiveSelection, phase_evidence_digest: prepared.packet.role_context.retained_history_digest } : {}),
           selected_refs: prepared.packet.required_refs.map(ref => ({ path: ref.path, sha256: ref.sha256, bytes: ref.bytes })),
         } } : validatedResult;
-        const { artifact, validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id);
+        const { artifact, validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id, evidence_markdown);
         const round = prepared.role === 'pr-sentinel'
           ? require('./dispatch-record.cjs').recordRound(
             path.resolve(prepared.graph.directory, '..', '..'),

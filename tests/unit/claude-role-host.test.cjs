@@ -2351,6 +2351,104 @@ test(`code-review refuses ${scenario} changed during launch before sealing`, asy
   } finally { cleanupFixture(fixture); }
 });
 
+for (const mutation of ['replacement', 'in-place'])
+test(`code-review refuses ${mutation} evidence after equality and before the sealer snapshot`, async (t) => {
+  const fixture = setupCodeReview();
+  const evidencePath = path.join(fixture.root, '.shipyard-code-review-evidence.md');
+  const originalLstat = fs.lstatSync;
+  let mutated = false, launches = 0;
+  try {
+    await assert.rejects(runCodeReview(fixture, {
+      onLaunch() { launches++; },
+      mutateResult(result) {
+        const different = Buffer.alloc(Buffer.byteLength(result.evidence_markdown), 88);
+        t.mock.method(fs, 'lstatSync', (file, ...args) => {
+          if (!mutated && file === evidencePath) {
+            mutated = true;
+            if (mutation === 'replacement') {
+              const replacement = path.join(fixture.storageRoot, 'replacement-evidence');
+              fs.writeFileSync(replacement, different);
+              fs.renameSync(replacement, evidencePath);
+            } else fs.writeFileSync(evidencePath, different);
+          }
+          return originalLstat(file, ...args);
+        });
+      },
+    }), { code: 'INVALID_RESULT' });
+    assert.equal(mutated, true);
+    assert.equal(launches, 1);
+    assert.equal(reviewHistory(fixture).length, 0);
+    assert.deepEqual(reviewArtifacts.authenticatedArchivePins(fixture.root), []);
+    assert.equal(fs.existsSync(path.join(fixture.root, '.shipyard-role-artifacts')), false);
+  } finally { t.mock.restoreAll(); cleanupFixture(fixture); }
+});
+
+test('code-review compares the bytes consumed by the bounded sealer descriptor', async (t) => {
+  const fixture = setupCodeReview();
+  const evidencePath = path.join(fixture.root, '.shipyard-code-review-evidence.md');
+  const originalRead = fs.readSync;
+  let corrupted = false;
+  try {
+    await assert.rejects(runCodeReview(fixture, { mutateResult() {
+      const source = fs.statSync(evidencePath);
+      t.mock.method(fs, 'readSync', (fd, buffer, offset, length, position) => {
+        const count = originalRead(fd, buffer, offset, length, position);
+        const stat = fs.fstatSync(fd);
+        if (count && stat.dev === source.dev && stat.ino === source.ino) {
+          buffer[offset] ^= 1;
+          corrupted = true;
+        }
+        return count;
+      });
+    } }), { code: 'INVALID_RESULT' });
+    assert.equal(corrupted, true);
+    assert.equal(reviewHistory(fixture).length, 0);
+    assert.deepEqual(reviewArtifacts.authenticatedArchivePins(fixture.root), []);
+  } finally { t.mock.restoreAll(); cleanupFixture(fixture); }
+});
+
+test('code-review refuses invalid UTF-8 evidence that decodes to the returned markdown', async () => {
+  const fixture = setupCodeReview();
+  try {
+    await assert.rejects(runCodeReview(fixture, { mutateResult(result) {
+      result.evidence_markdown = '\ufffd\n';
+      fs.writeFileSync(path.join(fixture.root, '.shipyard-code-review-evidence.md'), Buffer.from([255, 10]));
+    } }), { code: 'INVALID_RESULT' });
+    assert.equal(reviewHistory(fixture).length, 0);
+    assert.deepEqual(reviewArtifacts.authenticatedArchivePins(fixture.root), []);
+  } finally { cleanupFixture(fixture); }
+});
+
+test('code-review seals exact Unicode and whitespace evidence through partial bounded reads', async (t) => {
+  const fixture = setupCodeReview();
+  const evidencePath = path.join(fixture.root, '.shipyard-code-review-evidence.md');
+  const markdown = '  Reviewed caf\u00e9 and \u4ee3\u7801.\r\n\n';
+  const expected = Buffer.from(markdown, 'utf8');
+  const originalRead = fs.readSync;
+  let sourceReads = 0;
+  try {
+    const result = await runCodeReview(fixture, { mutateResult(result) {
+      result.evidence_markdown = markdown;
+      fs.writeFileSync(evidencePath, expected);
+      const source = fs.statSync(evidencePath);
+      t.mock.method(fs, 'readSync', (fd, buffer, offset, length, position) => {
+        const stat = fs.fstatSync(fd);
+        if (stat.dev === source.dev && stat.ino === source.ino) {
+          sourceReads++;
+          return originalRead(fd, buffer, offset, Math.min(length, 2), position);
+        }
+        return originalRead(fd, buffer, offset, length, position);
+      });
+    } });
+    assert.ok(sourceReads > 2);
+    assert.equal(result.artifact.outcome, 'pass');
+    const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
+    assert.deepEqual(fs.readFileSync(path.join(fixture.root, manifest.files.evidence.path)), expected);
+    assert.equal(manifest.files.evidence.sha256, crypto.createHash('sha256').update(expected).digest('hex'));
+    assert.equal(reviewHistory(fixture).length, 1);
+  } finally { t.mock.restoreAll(); cleanupFixture(fixture); }
+});
+
 for (const field of ['review_contract', 'repository', 'id', 'pr', 'head', 'base_commit', 'merge_base', 'base_tree',
   'ticket_set_digest', 'context_digest', 'launch_digest', 'ticket_set', 'head_tree', 'merge_base_tree'])
 test(`code-review refuses a returned ${field} identity mismatch`, async () => {
@@ -2424,6 +2522,96 @@ test('code-review rounds 2 and 3 authenticate previous sealed archives and refus
     await assert.rejects(runCodeReview(fixture, { onLaunch() { launches++; } }), error =>
       error.code === 'CODE_REVIEW_ROUND_LIMIT' && /three rounds/.test(error.message));
     assert.equal(launches, 3);
+  } finally { cleanupFixture(fixture); }
+});
+
+for (const failure of ['missing-object', 'permission', 'timeout', 'output-limit'])
+test(`code-review refuses ${failure} ancestry errors with three sealed rounds before creating a runtime`, async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  let launches = 0, runtimes = 0, ancestryFailures = 0;
+  try {
+    const heads = new Set();
+    for (let round = 1; round <= 3; round++) {
+      await runCodeReview(fixture);
+      heads.add(fixture.head);
+      write(fixture.root, 'src/role.txt', `fixed change ${round}\n`);
+      codeReviewCommit(fixture);
+    }
+    const pins = reviewArtifacts.authenticatedArchivePins(fixture.root);
+    const history = reviewHistory(fixture);
+    assert.equal(pins.length, 9);
+    assert.equal(history.length, 3);
+    const options = hostOptions(fixture, { onLaunch() { launches++; } });
+    const factory = options.createRuntimeHost;
+    options.createRuntimeHost = input => { runtimes++; return factory(input); };
+    options.execFileSync = (executable, args, settings) => {
+      if (executable === 'git' && args[2] === 'merge-base' && heads.has(args[3]) && args[4] === fixture.head) {
+        ancestryFailures++;
+        throw Object.assign(new Error(failure), failure === 'missing-object'
+          ? { status: 128, stderr: 'fatal: could not read object' }
+          : failure === 'permission' ? { code: 'EACCES' }
+          : failure === 'timeout' ? { code: 'ETIMEDOUT', signal: 'SIGTERM', status: null }
+          : { code: 'ENOBUFS' });
+      }
+      return execFileSync(executable, args, settings);
+    };
+    await assert.rejects(createClaudeRoleHost(options).run(codeReviewRequest(fixture)), {
+      code: failure === 'output-limit' ? 'INPUT_TOO_LARGE' : 'PREFLIGHT_FAILED',
+    });
+    assert.equal(ancestryFailures, 1);
+    assert.equal(runtimes, 0);
+    assert.equal(launches, 0);
+    assert.deepEqual(reviewHistory(fixture), history);
+    assert.deepEqual(reviewArtifacts.authenticatedArchivePins(fixture.root), pins);
+  } finally { cleanupFixture(fixture); }
+});
+
+for (const unrelated of ['divergent', 'no-common-ancestor'])
+test(`code-review excludes genuinely ${unrelated} history without refusing a full review`, async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  let probes = 0, launches = 0;
+  try {
+    await runCodeReview(fixture);
+    const priorHead = fixture.head;
+    if (unrelated === 'divergent') git(fixture.root, ['reset', '--soft', fixture.base]);
+    if (unrelated === 'no-common-ancestor') {
+      git(fixture.root, ['checkout', '--orphan', 'unrelated-root']);
+      git(fixture.root, ['branch', '-D', fixture.branch]);
+      git(fixture.root, ['symbolic-ref', 'HEAD', `refs/heads/${fixture.branch}`]);
+    }
+    write(fixture.root, 'src/role.txt', 'independent change\n');
+    codeReviewCommit(fixture);
+    assert.throws(() => git(fixture.root, ['merge-base', '--is-ancestor', priorHead, fixture.head]), { status: 1 });
+    if (unrelated === 'no-common-ancestor') {
+      git(fixture.root, ['branch', '-f', 'main', fixture.head]);
+      git(fixture.root, ['update-ref', 'refs/remotes/origin/main', fixture.head]);
+      fixture.base = fixture.head;
+      fixture.baseTree = fixture.headTree;
+      fixture.mergeBase = fixture.head;
+      fixture.mergeBaseTree = fixture.headTree;
+      write(fixture.root, 'src/role.txt', 'independent fix\n');
+      codeReviewCommit(fixture);
+      assert.throws(() => git(fixture.root, ['merge-base', priorHead, fixture.head]), { status: 1 });
+    }
+    const options = hostOptions(fixture, { onLaunch(prompt) {
+      launches++;
+      const context = packetFromPrompt(prompt).role_context;
+      assert.equal(context.review_round, 1);
+      assert.equal(context.review_scope, 'full');
+      assert.equal(context.prior_head, null);
+      assert.deepEqual(context.prior_findings, []);
+    } });
+    options.execFileSync = (executable, args, settings) => {
+      if (executable === 'git' && args[2] === 'merge-base' && args[3] === priorHead && args[4] === fixture.head) probes++;
+      return execFileSync(executable, args, settings);
+    };
+    const result = await createClaudeRoleHost(options).run(codeReviewRequest(fixture));
+    assert.equal(probes, 1);
+    assert.equal(launches, 1);
+    assert.equal(result.result.review_round, 1);
+    assert.equal(result.result.review_scope, 'full');
+    assert.equal(result.artifact.outcome, 'pass');
+    assert.equal(reviewHistory(fixture).length, 2);
   } finally { cleanupFixture(fixture); }
 });
 
