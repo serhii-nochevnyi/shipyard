@@ -1,0 +1,13 @@
+diff --git a/source.js b/source.js
+--- a/source.js
++++ b/source.js
+@@ -88,6 +88,9 @@
+ const value88 = 88;
+ const value89 = 89;
+ const value90 = 90;
++insertedOne();
++insertedTwo();
++insertedThree();
+ const value91 = 91;
+ const value92 = 92;
+ const value93 = 93;
