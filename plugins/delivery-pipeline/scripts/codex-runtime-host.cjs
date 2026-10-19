@@ -17,7 +17,8 @@ const REQUIRED_HELP_MARKERS = Object.freeze(['--json', '--model', '--config', '-
 const NATIVE_SESSION_MAX_BYTES = 128 * 1024 * 1024;
 const NATIVE_SESSION_WAIT_MS = 5000;
 const REVIEW_AGENT_ROLES = Object.freeze({ 'shipyard-arch-review': 'arch-review',
-  'shipyard-arch-review-critical': 'arch-review', 'shipyard-integrator': 'integrator' });
+  'shipyard-arch-review-critical': 'arch-review', 'shipyard-code-review': 'code-review',
+  'shipyard-code-review-critical': 'code-review', 'shipyard-integrator': 'integrator' });
 const GSD_ROLES = new Set(['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker', ...Object.keys(REVIEW_AGENT_ROLES)]);
 const GSD_AGENT_MAX_BYTES = 256 * 1024;
 const PERMISSION_PROFILE = 'shipyard-runtime';
@@ -2537,6 +2538,8 @@ function staticEvidenceWritePath(worktree, launchOptions, sandbox) {
     'shipyard-drift-check.toml': '.shipyard-drift-evidence.md',
     'shipyard-arch-review.toml': '.shipyard-arch-review-evidence.md',
     'shipyard-arch-review-critical.toml': '.shipyard-arch-review-evidence.md',
+    'shipyard-code-review.toml': '.shipyard-code-review-evidence.md',
+    'shipyard-code-review-critical.toml': '.shipyard-code-review-evidence.md',
   };
   const name = names[launchOptions.agent_file];
   if (!name) return null;

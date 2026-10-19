@@ -115,7 +115,7 @@ function expectedVariants(phase) {
     .flatMap((role) => policy.CODEX_ROLE_RUNG_DEFINITIONS[role].map((rung) => ({
       role, rung: rung.name, file: policy.codexAgentFile(role, rung.name),
       model: policy.CODEX_MODEL_IDS[rung.model_key], effort: rung.effort,
-      sandbox: ['arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write',
+      sandbox: ['arch-review', 'code-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write',
     })));
 }
 
@@ -392,7 +392,7 @@ test('the generated bundle keeps recommendation, checkpoint and capability refus
   });
 });
 
-test('the generated bundle covers all nine canonical roles and planning references', () => {
+test('the generated bundle covers all ten canonical roles and planning references', () => {
   withFixture({}, (f) => {
     const manifest = generated(f);
     const bundle = path.join(f.out, 'bundle');
@@ -420,8 +420,13 @@ test('the generated bundle covers all nine canonical roles and planning referenc
     }
     assert.deepStrictEqual(new Set(policy.ROLES), new Set([
       'research', 'decomposition', 'executor', 'pr-sentinel', 'integrator',
-      'drift-check', 'arch-review', 'ci-fix', 'review-fix',
+      'drift-check', 'arch-review', 'code-review', 'ci-fix', 'review-fix',
     ]));
+    for (const file of ['shipyard-code-review.toml', 'shipyard-code-review-critical.toml']) {
+      const agent = read(path.join(f.out, 'agents', file));
+      assert.ok(agent.includes('# code-review agent'), `${file} must be generated from references/code-review.md`);
+      assert.ok(agent.includes('sandbox_mode = "read-only"'), `${file} must be read-only`);
+    }
     assert.ok(read(path.join(f.out, 'skills/shipyard-investigate/SKILL.md')).includes('planning.v1'));
     assert.ok(read(path.join(f.out, 'skills/shipyard-decompose/SKILL.md')).includes('artifact_index'));
   });

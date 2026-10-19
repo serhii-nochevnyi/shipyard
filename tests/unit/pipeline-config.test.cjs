@@ -331,7 +331,7 @@ test('jira defaults are present and unknown jira keys warn', () => {
 
 suite('resolveModel — only tier aliases, ever');
 
-const ALL_ROLES = ['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research'];
+const ALL_ROLES = ['integrator', 'arch-review', 'code-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research'];
 
 test('every role × profile × risk combination returns a valid tier alias', () => {
   for (const profile of ['economy', 'balanced', 'premium']) {
@@ -426,12 +426,12 @@ test('the two exemptions hold at high risk and under a checkpoint — the reason
   assert.strictEqual(resolveModel('drift-check', {}, cfg({ model_policy: 'premium' })), 'sonnet');
 });
 
-test('the two judgment roles can never join the exempt set', () => {
+test('the judgment roles can never join the exempt set', () => {
   // JUDGMENT_ROLES decides no TIER any more (the floor covers every role) and has
   // one reader left, R3. The other half of what that set used to mean lives here:
   // there is no mechanical safety net above a verdict, which is exactly the
   // opposite of what makes pr-sentinel and drift-check exemptible.
-  for (const judge of ['arch-review', 'integrator']) {
+  for (const judge of ['arch-review', 'code-review', 'integrator']) {
     assert.ok(!SONNET_ROLES.has(judge), judge);
   }
   assert.deepStrictEqual([...SONNET_ROLES.keys()].sort(), ['drift-check', 'pr-sentinel']);
@@ -1986,14 +1986,14 @@ test('R3 contested judgment: a verdict that has already been faulted once', () =
   assert.strictEqual(runCli(['model', 'arch-review'], CONSENTED).out, 'opus', 'absent, it cannot fire');
 });
 
-test('R3 is scoped to the two judgment roles — one stray flag must not open the ceiling', () => {
+test('R3 is scoped to the judgment roles — one stray flag must not open the ceiling', () => {
   // Both facts that set the flag are a JUDGE's own prior verdict (a journalled
   // `arch_review … verdict=violation`, or an integrator `needs-fix` on this
   // epic). A fixer carrying it is not a re-judgement, and a route any role could
   // open with one flag is not a ceiling that has to be earned.
   for (const role of ROLES) {
     const got = runCli(['model', role, '--contested'], CONSENTED).out;
-    if (role === 'arch-review' || role === 'integrator') assert.strictEqual(got, 'fable', role);
+    if (role === 'arch-review' || role === 'code-review' || role === 'integrator') assert.strictEqual(got, 'fable', role);
     else assert.notStrictEqual(got, 'fable', `${role} reached the ceiling on --contested`);
   }
   assert.strictEqual(fableRoute('executor', { contested: true },
@@ -2509,7 +2509,7 @@ test('shares the canonical role vocabulary including decomposition', () => {
 test('legacy role consumers retain the compatibility vocabulary', () => {
   assert.strictEqual(ROLES, COMPATIBILITY_ROLES);
   assert.deepStrictEqual(ROLES, [
-    'integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix',
+    'integrator', 'arch-review', 'code-review', 'executor', 'ci-fix', 'review-fix',
     'drift-check', 'research', 'pr-sentinel',
   ]);
   for (const role of ROLES) assert.ok(ROUTED_ROLES.includes(role), role);
@@ -2862,10 +2862,10 @@ test('only GSD stage tier aliases are exempt, not concrete or inherited selectio
   refusesSource(() => resolveDispatch({ config, role: 'decomposition' }), 'config.model_overrides.gsd-planner');
 });
 
-test('GSD code-reviewer overrides do not select arch-review, while direct arch-review overrides still refuse', () => {
-  for (const runtime of ['claude', 'codex']) {
+test('GSD code-reviewer overrides do not select arch-review or code-review, while direct overrides still refuse', () => {
+  for (const reviewRole of ['arch-review', 'code-review']) for (const runtime of ['claude', 'codex']) {
     for (const signals of [{}, { critical: true }]) {
-      const expected = canonicalPolicy.resolveDispatch({ runtime, role: 'arch-review', signals });
+      const expected = canonicalPolicy.resolveDispatch({ runtime, role: reviewRole, signals });
       for (const [namespace, wrap, sourcePrefix] of [
         ['root', (value) => value, 'config'],
         ['gsd', (value) => ({ gsd: value }), 'gsd'],
@@ -2875,17 +2875,17 @@ test('GSD code-reviewer overrides do not select arch-review, while direct arch-r
           { effort: { agent_overrides: { 'gsd-code-reviewer': 'low' } } },
         ]) {
           const { config } = routedConfig(wrap(selection), runtime);
-          assert.deepStrictEqual(resolveDispatch({ config, role: 'arch-review', signals }), expected,
-            `${runtime} ${JSON.stringify(signals)} ${namespace} GSD code-reviewer preference`);
+          assert.deepStrictEqual(resolveDispatch({ config, role: reviewRole, signals }), expected,
+            `${runtime} ${reviewRole} ${JSON.stringify(signals)} ${namespace} GSD code-reviewer preference`);
         }
 
         for (const [selection, source] of [
-          [{ model_overrides: { 'arch-review': 'haiku' } }, `${sourcePrefix}.model_overrides.arch-review`],
-          [{ effort: { agent_overrides: { 'arch-review': 'low' } } },
-            `${sourcePrefix}.effort.agent_overrides.arch-review`],
+          [{ model_overrides: { [reviewRole]: 'haiku' } }, `${sourcePrefix}.model_overrides.${reviewRole}`],
+          [{ effort: { agent_overrides: { [reviewRole]: 'low' } } },
+            `${sourcePrefix}.effort.agent_overrides.${reviewRole}`],
         ]) {
           const { config } = routedConfig(wrap(selection), runtime);
-          refusesSource(() => resolveDispatch({ config, role: 'arch-review', signals }), source);
+          refusesSource(() => resolveDispatch({ config, role: reviewRole, signals }), source);
         }
       }
     }
