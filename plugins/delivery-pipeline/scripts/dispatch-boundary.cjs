@@ -1070,6 +1070,7 @@ function isSubjectTicket(ticket) {
 }
 
 function subjectKindFromContext(context, role, ticket) {
+  role = typeof role === 'string' ? role.trim() : role;
   const kind = isObject(context) && context.subject_kind !== undefined
     ? context.subject_kind
     : 'ticket';

@@ -549,6 +549,54 @@ for (const repository of ['/plain/.git', '/work/my repo/.git', '/work/дім/.gi
   });
 }
 
+for (const runtime of policy.SUPPORTED_RUNTIMES) {
+  for (const role of [' code-review', 'code-review ', 'code-review\t']) {
+    for (const subject_kind of ['ticket', undefined]) {
+      test(`${runtime} refuses padded role ${JSON.stringify(role)} with ${subject_kind || 'default'} ticket kind before launch`, () => {
+        const recorded = [];
+        let launches = 0;
+        const boundary = boundaryModule.createDispatchBoundary({
+          adapters: { [runtime]: fakeAdapter({ onLaunch: () => { launches++; } }) },
+          recorder: (trace) => { recorded.push(trace); return true; },
+        });
+        const context = { ticket: 'T-52-04', ...(subject_kind === undefined ? {} : { subject_kind }) };
+        assert.throws(() => boundary.dispatch({ runtime, role, dispatch_id: 'padded-code-review-ticket' }, context),
+          (error) => error.code === 'INVALID_INPUT' && /code-review.*subject_kind.*phase/.test(error.message));
+        assert.equal(launches, 0);
+        assert.equal(recorded.length, 0);
+      });
+    }
+
+    test(`${runtime} records canonical code-review for padded role ${JSON.stringify(role)} with a phase subject`, () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-padded-code-review-'));
+      try {
+        const launched = [];
+        const recorder = boundaryModule.createDurableRecorder(directory);
+        const boundary = boundaryModule.createDispatchBoundary({
+          adapters: { [runtime]: fakeAdapter({ onLaunch: (resolution) => launched.push(resolution) }) },
+          recorder,
+        });
+        const ticket = `phase=52-policy;repository=/plain/.git;tickets=${'a'.repeat(64)}`
+          + `;pr=91;head=${'b'.repeat(40)};base=${'c'.repeat(40)}`;
+        const context = { ticket, subject_kind: 'phase' };
+        const result = boundary.dispatch({ runtime, role, dispatch_id: 'padded-code-review-phase' }, context);
+        assert.equal(launched.length, 1);
+        assert.equal(launched[0].role, 'code-review');
+        assert.equal(result.resolution.role, 'code-review');
+        const stored = recorder.getVerifiedRecord(result.dispatch_id);
+        assert.equal(stored.runtime, runtime);
+        assert.equal(stored.role, 'code-review');
+        assert.equal(stored.resolution.role, 'code-review');
+        assert.equal(stored.receipt.role, 'code-review');
+        assert.equal(stored.receipt.compliance, 'verified');
+        assert.equal(stored.ticket, ticket);
+        assert.equal(stored.subject_kind, 'phase');
+        assert.equal(boundary.reconcile(result.dispatch_id, context).role, 'code-review');
+      } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+    });
+  }
+}
+
 test('code-review boundary refuses ticket subjects and malformed phase repositories before launch', () => {
   const recorded = [];
   let launches = 0;
