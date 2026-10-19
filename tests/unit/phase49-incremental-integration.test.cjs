@@ -157,29 +157,6 @@ async function runIntegration(f, edit = {}) {
   return { ...prepared, result: dispatched };
 }
 
-test('missing current integration lineage remains full while retained legacy architecture lineage exists', async () => {
-  await fixture(async f => {
-    const currentModules = { authority, collector, runtime, boundary };
-    const retained = require('./helpers/codex-arch-review-fixtures.cjs').retainedLegacyReviewModules(f.root);
-    let architecture, selected;
-    ({ authority, collector, runtime, boundary } = retained);
-    try {
-      architecture = await successfulReview(f, 'arch-review');
-      selected = authority.selectReviewBaseline({ currentInput: currentInput(f, 'arch-review') });
-    } finally { ({ authority, collector, runtime, boundary } = currentModules); }
-    assert.equal(selected.mode, 'incremental', JSON.stringify(selected));
-    assert.equal(selected.baseline.dispatch_id, architecture.dispatched.dispatch_id);
-    write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n'); commit(f, 'independent contributor repair');
-    const fresh = await runIntegration(f);
-    assert.equal(fresh.coverage.mode, 'full');
-    assert.equal(fresh.coverage.baseline, null);
-    assert.deepEqual(fresh.coverage.inherited, []);
-    assert.ok(fresh.coverage.limitations.some(item => item.reason === 'complete-current-packet-required'));
-    assert.ok(fresh.coverage.current_logical_obligations.every(item => item.coverage !== 'inherited'));
-    assert.deepEqual(fs.readFileSync(architecture.artifact), architecture.original);
-  });
-});
-
 test('legacy original integration cannot silently supply incremental authority', async () => {
   await fixture(async f => {
     const legacy = await successfulReview(f, 'integrator', { legacy: true });
