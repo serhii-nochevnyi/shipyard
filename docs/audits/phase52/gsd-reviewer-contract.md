@@ -1,10 +1,10 @@
 # R-31: GSD reviewer finding identity
 
-status: pending-operator
+status: not-verified
 date: 2026-10-19
 host: executor sandbox, macOS Darwin 27.0.0, node v24.21.0, git 2.54.0 (Apple Git-157), worktree T-52-02 at HEAD e8299ce01e729f5e0c19e99477a33bb066ef4806 (main 1c34583b, Shipyard 0.73.0)
 
-Gate: the fallback code review role does not ship without a `verified` finding identity (planning gate adopted from INV-018 `RISKS.md` R-31; plans 52-03, 52-06 and 52-12 assert it as a precondition). `not-verified` stops the phase. The verdict at the bottom of this file is `pending-operator` until the operator has read the reviewer agent and replayed a fix round.
+Gate: the fallback code review role does not ship without a `verified` finding identity (planning gate adopted from INV-018 `RISKS.md` R-31; plans 52-03, 52-06 and 52-12 assert it as a precondition). `not-verified` stops the phase. The verdict at the bottom of this file is `not-verified`: the reviewer agent was read and three real reports from successive review iterations of one phase were compared, but the planned same-head replay (section 6) was not run, so no defect meets the criterion of unchanged identity.
 
 Section status:
 
@@ -13,9 +13,9 @@ Section status:
 | 1. Observed report schema and id grammar | verified from one real report | a tracked GSD review report exists in the tree and was read |
 | 2. Where `rule`, `path` and `line` come from | verified from the same report | counted over its 14 findings |
 | 3. Mapping onto `findingIdentity` | not-verified | the observed report has no rule field; the mapping and its stability need the replay |
-| 4. Reviewer agent file, GSD version, prompt | pending-operator | outside the executor sandbox |
-| 5. Prior dispositions as input | pending-operator | depends on the agent prompt |
-| 6. Replayed fix round | pending-operator | needs live model runs |
+| 4. Reviewer agent file, GSD version, prompt | verified | read from the operator's installed GSD 1.17.0 |
+| 5. Prior dispositions as input | verified (no) | the agent's `<config>` block has no input for them |
+| 6. Replayed fix round | not run; replaced by a comparison of three existing iteration reports | a same-head replay needs new live model runs |
 | 7. Disposition sources | recorded | quoted from the plan; ADR-032 itself was not readable here |
 
 ## Inputs
@@ -80,35 +80,55 @@ What this means for plan 52-03 (the reference) and plan 52-06 (the core): the id
 
 ## 4. Reviewer agent file, GSD version and prompt (operator)
 
-Status: pending-operator. The executor cannot read the operator's home directory (the sandbox refuses reads outside the worktree), and the repository carries no copy of the agent. `Makefile` sets `GSD_CORE_VERSION ?= latest` (a deliberate no-pin, so the version cannot be read from the repository). Record, with the command that produced each value:
+Status: verified. Read on 2026-10-19 from the operator's installed GSD.
 
 | Item | Command | Result |
 |---|---|---|
-| GSD version | for example `node <gsd-core>/bin/gsd-tools.cjs --version`, or the `version` field of the installed `package.json`; name the command used | PENDING-OPERATOR |
-| Reviewer agent path | `find ~/.claude ~/.codex -name 'gsd-code-reviewer*' -not -path '*/projects/*' -not -path '*/sessions/*' 2>/dev/null` (the location is an assumption to confirm) | PENDING-OPERATOR |
-| Reviewer agent sha256 | `shasum -a 256 <path from the row above>` | PENDING-OPERATOR |
-| Reviewer prompt excerpt (at most 60 lines: the output-format and finding-id instructions, with the line range) | `sed -n '<a>,<b>p' <path>` | PENDING-OPERATOR |
-| `CR-NN` grammar and whether `CR`, `WR` and `IN` numbering restarts per review | read from the prompt, and confirmed on one report that has a critical finding | PENDING-OPERATOR |
-| Reviewer model and effort used for the replay | the dispatch record of the replay | PENDING-OPERATOR |
+| GSD version | `cat ~/.claude/gsd-core/VERSION` | `1.17.0` (the Codex cache `~/.codex/plugins/cache/gsd-core/gsd-core/1.17.0` carries the same version) |
+| Reviewer agent path | `find ~/.claude ~/.codex -name 'gsd-code-reviewer*' -not -path '*/projects/*' -not -path '*/sessions/*'` | `~/.claude/gsd-core/agents/gsd-code-reviewer.md` (403 lines; the same bytes are in the marketplace and plugin cache copies); `~/.claude/agents/gsd-code-reviewer.md` (404 lines; a per-runtime copy that differs only by `effort: high` and `/gsd-code-review` against `/gsd:code-review` in two lines); `~/.codex/agents/gsd-code-reviewer.{md,toml,compact.md}` for Codex |
+| Reviewer agent sha256 | `shasum -a 256 <path>` | `7cb900ef23bf373d46499baef051822a057354b2ed72aec228b91b33902cc963` for `~/.claude/gsd-core/agents/gsd-code-reviewer.md` and for the plugin-cache copy; `353743f58b268d2f838b0eca222b63c64943906b4bff3de49afb8f7c65d5449d` for `~/.claude/agents/gsd-code-reviewer.md` |
+| Reviewer prompt excerpt | `sed -n '255,360p' ~/.claude/gsd-core/agents/gsd-code-reviewer.md` | summarised below, not copied |
+| `CR-NN` grammar and numbering | read from the prompt, lines 296-352 | ids are `CR-01`, `WR-01`, `IN-01` in the template: a severity prefix and a two-digit number; the template restarts at `01` in every report and nothing in the prompt carries numbering over from an earlier report. `BL-` is accepted as a Critical-tier equivalent of `CR-`, and the frontmatter key `critical:` is canonical with `blocker:` accepted (line 300). A report that contains a `CR` finding was not in the tree, so the `CR` shape rests on the template alone |
+| Reviewer model and effort | no replay was run | not applicable; the three compared reports are signed `Claude (gsd-code-reviewer)` and record no model or effort |
+
+What the prompt says about findings (lines 255-352, paraphrased): every finding carries `file`, `line` (a number or a range such as `42-45`), `issue` and `fix`; the report has a frontmatter with `critical`, `warning` and `info` counts and a `files_reviewed_list`, a `## Summary`, and `## Critical Issues`, `## Warnings` and `## Info` sections whose headings are `### <ID>: <title>` followed by `**File:**`, `**Issue:**` and `**Fix:**`. There is no `rule`, `category` or stable-slug field anywhere in the template.
 
 ## 5. Does the reviewer accept prior dispositions as input?
 
-Status: pending-operator. Observed: the iteration-4 report carries no prior-finding or disposition section, and its `scope` names a fix-commit range, so earlier rounds reach the reviewer, if at all, as a diff range. Whether the agent accepts a list of prior findings, their dispositions or a recorded disagreement as a prompt input is unknown until section 4 is filled. Answer: PENDING-OPERATOR (yes or no, with the prompt lines that show it).
+Status: verified, no. The agent reads a `<config>` block (prompt lines 106-111) whose keys are `depth`, `phase_dir`, `review_path`, `files` and `diff_base`, plus a `<required_reading>` block. Nothing in the prompt reads a list of earlier findings, a disposition or a recorded disagreement, and it does not read an earlier `REVIEW.md`. Earlier rounds reach it only through the `diff_base` range or the file list. A pipeline role that must not re-raise a dispositioned finding therefore has to add that input to its own prompt; GSD's agent does not provide it.
 
 ## 6. Replayed fix round (operator)
 
-Status: pending-operator. Procedure:
+Status: not run. The procedure that was planned (same head twice, then the same head plus an unrelated fix commit with and without shifted lines) needs new live reviewer launches, and the instruction for this fill was to use data from existing sessions. Existing data was used instead, and it is not equivalent: it is a comparison of three real reports of one phase, taken at three different heads, not a same-input replay.
 
-1. Choose a real head `H` and its base (a past phase or ticket diff the operator can reproduce). Run the reviewer on `H` twice with the same prompt, model and effort: runs `A1` and `A2`.
-2. Make one unrelated fix commit `F` on top of `H`: a change in a different file, and a second variant that inserts at least 10 lines above a known defect in the same file. Run the reviewer on `H+F`: runs `B1` (different file) and `B2` (lines shifted).
-3. A human matches findings across runs as the same defect or not. For each matched defect, compute the identity (`findingIdentity` over the mapping chosen in section 3) in each run.
-4. Record the table below, and commit scrubbed outputs under `docs/audits/phase52/samples/` (public repository content or synthetic diffs only; no tokens, account ids or private transcripts).
+The three reports of `.planning/phases/50-make-launch-and-upgrade-reliable/50-REVIEW.md` (the same path at three points in time; the first two are untracked copies in review worktrees, the third is the tracked file):
+
+| Report | sha256 (first 16 hex) | iteration | reviewed | files | findings |
+|---|---|---|---|---|---|
+| R1 | `556e7ed4ca628` | none stated (a deep review of the original diff) | 2026-10-17 | 29 | 6 WR, 8 IN |
+| R2 | `f930cbba6ab6a` | 3 | 2026-10-17 | 37 | 6 WR, 4 IN |
+| R3 | `21c91b48e7fae` | 4 | 2026-10-18 | 51 | 8 WR, 6 IN |
+
+Between the reports the code changed: each report reviews the fixes of the previous one. The id numbers restart at `WR-01` and `IN-01` in every report and name different defects each time (R1 `WR-01` is a malformed catalogue passing preflight, R2 `WR-01` is `formatHint` called without variables, R3 `WR-01` is a hint printed with the literal text `the host script`). The id is therefore not an identity across reports, which section 1 predicted from one report and this comparison confirms on three.
+
+The same defect family recurs across reports with a different id and a different location, which is the instability the replay was meant to measure:
+
+| Defect family | R1 (id, first location) | R2 | R3 (id, first location) | path unchanged | line unchanged |
+|---|---|---|---|---|---|
+| a remedy hint renders a non-runnable command (unfilled `{host}`, then missing variables, then the literal `the host script`) | `WR-03` `claude-role-host.cjs:1618, 1648` | `WR-01` `refusal-hints.cjs:186-195,210-221` | `WR-01` `refusal-hints.cjs:187` | R1 differs from R2 and R3; R2 = R3 | no (R2 range starts at 186, R3 cites 187) |
+| the `RUNTIME_CAPABILITY_MISSING` remedy is wrong | `WR-06` `refusal-hints.cjs:91-94` | not reported | `WR-08` `refusal-hints.cjs` with the code name and no line | yes | R3 has no line |
+| the `AMBIGUOUS_RUNTIME` remedy is wrong | `IN-04` `refusal-hints.cjs:103-106` | not reported | `IN-05` `refusal-hints.cjs` with the code name and no line | yes | R3 has no line |
+| preflight reports ok while the launch refuses (catalogue or key state) | `WR-01` `role-artifact.cjs:1091-1093` | `WR-06` `role-artifact.cjs:3972-3998` and `WR-02` `runtime-context.cjs:509-514` | `WR-03` `codex-decompose-host.cjs:911-921` | no | no |
+
+The `rule_class` field does not exist in any of the three reports (0 of 38 findings), so `findingIdentity` returns `known: false` for every finding that has a line, and `missing-path-or-location` for those that cite only a symbol. The comparison is confounded by the code changes between reports (a line can move because the code was edited, not because the reviewer drifted), so it does not measure the reviewer's run-to-run variance. It does show that the identity fields the review would need are absent or move between successive reviews of the same area.
+
+Replay table (the planned same-head runs `A1`, `A2`, `B1`, `B2` were not executed, so no row can be filled; no figure is invented):
 
 | Defect (id in A1) | In A2 | Identity A1 = A2 | In B1 | Identity A1 = B1 | In B2 | Identity A1 = B2 |
 |---|---|---|---|---|---|---|
-| PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
+| not run | not run | not run | not run | not run | not run | not run |
 
-Proposed criterion (the operator may tighten it, not loosen it): `verified` only if at least 5 defects are matched across all four runs and every matched defect keeps the same identity in all four. Anything less is `not-verified`, with the unstable field named (`rule_class`, `path` or `line`).
+Criterion (unchanged from the plan): `verified` only if at least 5 defects are matched across all four runs and every matched defect keeps the same identity in all four. Defects matched across four runs: 0. Defects whose identity is unchanged between the three existing reports: 0 of 4 families. The unstable fields: `rule_class` (absent from the report format) and `line` (moves with edits and is absent when a finding cites only a symbol).
 
 ## 7. Disposition sources
 
@@ -122,9 +142,15 @@ disposition_sources:
 
 ## Verdict
 
-verdict: pending-operator
+verdict: not-verified
 
-The executor's reading is that the verdict will be `not-verified` unless the mapping gains a stable rule slug and a line anchor, because the real report has no rule field and its lines are positional at one head (sections 2 and 3). That is a prediction, not a result; the operator replaces this line with `verified` or `not-verified` after section 6.
+Unstable fields: `rule_class` (no GSD field supplies it, 0 of 38 findings in the three reports) and `line` (moves between reports and is absent for symbol-only citations). The gate in plans 52-03, 52-06 and 52-12 treats `not-verified` as a stop. What would turn it into `verified` is a pipeline-owned reviewer prompt that requires a `**Rule:**` slug and a line anchor, followed by the section 6 replay on one real head, which needs four live reviewer runs the operator has not authorised. This verdict is the measured state of the existing data, and the operator decides whether to authorise that replay or to accept the stop.
+
+## Commands run to fill sections 4 to 6 (2026-10-19)
+
+- `cat ~/.claude/gsd-core/VERSION`; `find ~/.claude ~/.codex -name 'gsd-code-reviewer*' ...`; `shasum -a 256` of the agent copies; `wc -l`; `diff` of the two Claude copies
+- `sed -n` and `grep -n` over the agent for the config block, the finding template and the label-equivalence note
+- `shasum -a 256` of every `50-REVIEW.md` in the review worktrees (R1 appears byte-identical in three worktrees and R2 in two, so those are copies, not independent runs) and an `awk` extraction of each report's finding ids and `**File:**` lines
 
 ## Commands run by the executor
 

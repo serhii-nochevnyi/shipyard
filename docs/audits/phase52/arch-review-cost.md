@@ -1,6 +1,6 @@
 # R-30: arch-review launch-cost baseline and the effect of a raised packet limit
 
-status: pending-operator
+status: measured
 date: 2026-10-19
 host: executor sandbox, macOS Darwin 27.0.0, node v24.21.0, git 2.54.0 (Apple Git-157), worktree T-52-02 at HEAD e8299ce01e729f5e0c19e99477a33bb066ef4806 (main 1c34583b, Shipyard 0.73.0)
 
@@ -8,7 +8,7 @@ Section status:
 
 | Section | Status | Why |
 |---|---|---|
-| 1. Baseline figures (tokens per phase review and per launch) | pending-operator; would be `inconclusive` if left as is | the attribution ledger `.planning/graph/usage-attribution.jsonl` is absent from this tree and the tracked journal cannot stand in for it (evidence below). The executor must not guess a figure |
+| 1. Baseline figures (tokens per phase review and per launch) | measured, with the caveats listed in the results | the attribution ledger is absent from the tree (evidence below), so a ledger was built on 2026-10-19 from the host launch receipts and the runtime transcripts they point to, and `usage-report.cjs` was run over it; the report was comparable with 0 warnings |
 | 2. ADR-022 launch-cost assumptions | verified | quoted from the file at the digest below |
 | 3. Structural bound | verified | read from `model-policy-internal.cjs` and `claude-role-host.cjs` at the digests below |
 
@@ -76,20 +76,51 @@ for (const runtime of ["claude", "codex"]) {
 
 (The statistic definitions match `packet-limits.md`: median is the mean of the two middle values; 90th percentile is the nearest rank. If a runtime has no launches the line prints `NaN`; record `0 launches`, not a figure.)
 
-### Results (to be filled by the operator)
+### How the figures were produced (2026-10-19)
+
+No attribution ledger exists anywhere on the host (a search found only unit-test fixtures), so the command above was run over a ledger built for this purpose, not an existing one:
+
+1. The host launch receipts (`~/.local/state/shipyard/{claude,codex}/*/receipts/record-*.json`) of role `arch-review` for phases 43 to 49 gave 85 launches, each with a `dispatch_id`, the runtime, the ticket or phase subject, the resolved model and effort and the path of the runtime transcript it produced (Codex transcripts are zstd-compressed rollouts under `~/.codex/sessions`; they were decompressed into a scratch directory).
+2. One attribution row per launch was written through `usage-attribution.cjs record` into a scratch graph directory outside the repository (85 rows recorded, none refused).
+3. `usage-report.cjs` ran over the 85 transcripts with that ledger: `comparable: true`, 0 warnings, 2,418 observations; units are tokens processed, including cache reads, not subscription quota.
+4. The per-launch and per-phase figures below are the plan's script applied to the report, plus a second pass that keeps launches whose subject is an epic or a phase instead of a ticket (the plan's script drops them because it parses the phase from a `T-NN-NN` ticket id).
+
+The scratch ledger and the raw report carry session and dispatch ids and stay out of the repository; only the derived tables are committed. A reader can rebuild the ledger from the receipts with the same four steps; the figures depend on the receipts present on the operator's host.
+
+### Results
 
 | Runtime | Phases with launches | Launches | Per-launch median tokens | Per-launch 90th percentile | Per-phase median tokens | Per-phase 90th percentile | Warnings from the report |
 |---|---|---|---|---|---|---|---|
-| Claude | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
-| Codex | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
+| Claude | 43, 44, 45 | 22 | 303,730.5 | 524,773 | 2,969,713 | 3,504,828 | 0 |
+| Codex (ticket launches) | 43, 45, 46, 47 | 59 | 2,580,329 | 4,248,540 | 40,968,751 | 70,030,785 | 0 |
 
-Per-phase table (one row per phase 43 to 49 and per runtime):
+Ranges: Claude per launch 121,018 to 961,675; Codex per launch 638,139 to 6,960,073. Of the tokens processed, almost all are cache reads: the uncached input plus output per launch has a median of 122.5 tokens on Claude (90th percentile 155) and 183,132 on Codex (90th percentile 363,647). The input that the arch-review judged, where the transcript records it, has a median of 17,699 tokens and a maximum of 34,656 on Claude, and a median of 86,942 and a maximum of 239,194 on Codex.
 
-| Phase | Runtime | Launches | Re-owed launches | Tokens per phase review |
-|---|---|---|---|---|
-| 43 to 49 | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
+Per-phase table (the plan's script counts only launches whose subject is a ticket; epic launches are shown on their own rows and are not in the medians above):
 
-If the ledger is not available at merge, set this section's status to `inconclusive`, write the reason ("attribution ledger absent") and the next check ("obtain `usage-attribution.jsonl` for phases 43 to 49 and rerun the command above"). Never write a guessed figure. The per-launch ceilings in `packet-limits.md` rows C1 and C2 take the per-launch 90th percentile from this table.
+| Phase | Runtime | Subject | Launches | Re-owed launches | Tokens per phase review |
+|---|---|---|---|---|---|
+| 43 | Claude | ticket | 2 | 0 | 1,296,005 |
+| 44 | Claude | ticket | 9 | 1 | 2,969,713 |
+| 45 | Claude | ticket | 11 | 1 | 3,504,828 |
+| 43 | Codex | ticket | 30 | 13 | 70,030,785 |
+| 45 | Codex | ticket | 20 | 13 | 69,240,093 |
+| 46 | Codex | ticket | 7 | 2 | 12,697,409 |
+| 47 | Codex | ticket | 2 | 0 | 6,038,592 |
+| 47 | Codex | epic | 1 | 0 | 128,112,237 |
+| 49 | Codex | epic | 3 | 2 | 23,906,967 (10,544,751, 2,925,450 and 10,436,766 per launch) |
+
+"Re-owed launches" is the number of launches minus the number of distinct subjects in the phase and runtime. The receipts do not say why a launch repeated, so it counts every repeat (a moved head or base, a changed input, a repaired violation) and cannot be split into the cohorts ADR-022 asks for. Phase 48 has no arch-review launches in the receipts.
+
+Caveats the operator must read before accepting the ceilings:
+
+- **The Claude data is the old grid.** The 22 Claude launches ran `claude-opus-5-5` at medium or high effort under the policy of the time (v6), not the current Sonnet at xhigh base rung; a Sonnet launch would not cost the same. Claude has no data for phases 46 to 49: those phases ran on Codex only.
+- **Phase 49 has only epic-subject launches**, which is also the only case that resembles the phase-level review this ADR adds. The epic launches (4 in all, from phases 47 and 49) processed 128,112,237, 10,544,751, 2,925,450 and 10,436,766 tokens, with a judged input of 1,699,400 to 2,105,467 tokens, 10 to 60 times the ticket launches' judged input.
+- **The unit is processed tokens, not packet tokens.** A multi-turn launch re-reads its context from cache on each turn, so the processed total is many times the packet. The ceilings in `packet-limits.md` are therefore stated in the measured unit and are not packet sizes.
+- **No matched cohorts.** ADR-022 requires matched cohorts keyed by runtime, siblings per epic and stack depth; none were built, so a comparison between phases is not claimed.
+- **Ledger built from receipts, not an existing ledger**, as described above; a launch missing a receipt is missing here.
+
+Rule-derived ceilings from these figures (`packet-limits.md` rows C1 and C2): the smallest multiple of 50,000 above the per-launch 90th percentile, which is 550,000 for Claude and 4,250,000 for Codex, with the unit caveat above.
 
 ## 2. ADR-022 launch-cost assumptions
 
@@ -118,7 +149,7 @@ Next check for point 2: `grep -n "WINDOW_THRESHOLD_TOKENS\|inputTokens" plugins/
 Read from `model-policy-internal.cjs` (the ladders) and `claude-role-host.cjs` (the packet bound); the dispatch policy for this ticket is `adr-014.v7`.
 
 - **Base rung.** The fallback code review runs no higher than the base rung of `arch-review` on its runtime: Claude `sonnet` at `xhigh`; Codex `sol` at `high`. An escalation above base follows the same signal rules as `arch-review` (`critical`, `checkpoint`, `contested`, and input tokens over `WINDOW_THRESHOLD_TOKENS`), so the review role cannot become dearer than `arch-review` per launch by choosing a higher base.
-- **Material.** The material of one launch is capped by the per-launch ceiling in `packet-limits.md` rows C1 and C2 (PENDING-OPERATOR until section 1 is filled), and never above the model window in `packet-limits.md` section 3.
+- **Material.** The material of one launch is capped by the per-launch ceiling in `packet-limits.md` rows C1 and C2 (Claude 550,000 and Codex 4,250,000 processed tokens, section 1), and never above the model window in `packet-limits.md` section 3.
 - **Rounds.** At most three code-review rounds run per phase. The ceiling applies per launch and per round (the same value). The per-phase worst case is `3 x` the per-launch ceiling. It is not a per-phase budget.
 
 ## Commands run by the executor

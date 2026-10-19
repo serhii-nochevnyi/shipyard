@@ -1,19 +1,19 @@
 # R-27: packet limits for the fallback code review and the raised arch-review packet
 
-status: pending-operator
+status: measured
 date: 2026-10-19
 host: executor sandbox, macOS Darwin 27.0.0, node v24.21.0, git 2.54.0 (Apple Git-157), worktree T-52-02 at HEAD e8299ce01e729f5e0c19e99477a33bb066ef4806 (main 1c34583b, Shipyard 0.73.0)
 
-Section status (the header status becomes `measured` or `inconclusive` only when the operator has filled every `PENDING-OPERATOR` cell):
+Section status:
 
 | Section | Status | Why |
 |---|---|---|
 | 1. Landing diff sizes | measured | produced by the tool in this ticket, 30 landing commits |
 | 2. Which bound refuses a large review | verified | read from the symbols named below at the input digests below; no model run was needed |
-| 3. Model context windows | pending-operator | operator-supplied by definition; the executor has no source it may quote |
-| 4. Chosen values | pending-operator | rows 1, 2, 3, 5, 6 are proposals derived from sections 1 and 2; rows 4 and C depend on sections 3 and the R-30 figures |
+| 3. Model context windows | measured (runtime-reported) | read from the model-usage and token-count records of existing Claude Code and Codex sessions on this host; not from vendor documentation |
+| 4. Chosen values | proposals, for the operator to accept | rows 1 to 6 and C1 to C3 are derived from sections 1 to 3 and the R-30 figures in `arch-review-cost.md`; they are decisions, not measurements |
 
-Downstream rule (from the plan): if this file is `inconclusive` at merge, plan 52-05 and every ticket after it stay blocked until the measurement is repeated. A `pending-operator` cell at merge is a defect of this ticket.
+Downstream rule (from the plan): if this file is `inconclusive` at merge, plan 52-05 and every ticket after it stay blocked until the measurement is repeated. Section 3 is `measured`, so the file is not `inconclusive`, but the Codex maximum output is not exposed by the runtime and is recorded as unknown.
 
 ## Inputs
 
@@ -125,7 +125,7 @@ The phase-49 landing `c7633d9e` measures 3,598,345 product diff bytes. With no p
 The figure 6,530,992 is not a diff size. It is `material_bytes` in `tests/smoke/phase49-final-review-acceptance.cjs` (the assertions `value.benchmark.material_bytes, 6530992` and `runtime.input_accounting.material_bytes, 6530992`) with `successful_reads: 830`: the byte total of the review input material that `prepareFileInput` in `codex-arch-review-context.cjs` hands the reader. For the focused contract that material is `[packet JSON, ...128 KiB partitions of current-pr.diff and every required reference]`, so the diff and references are counted twice (once inside the packet JSON, once as partitions) plus packet metadata. Two consequences, both read from `prepareFileInput` and not measured:
 
 - material bytes are about `2 x (diff + references) + metadata`, so the largest landing here (3,598,345 B) needs about 7.2 MB of material plus references; and
-- 6,530,992 B of material corresponds to a diff-plus-references of about 3.27 MB, which is less than the final landing's 3.60 MB. This is consistent with the benchmark having been taken at an earlier epic head than the squash. The benchmark head is recorded only in a private ledger (`/Users/serhii/.local/state/shipyard/phase49-focused-review-T49-11-original-pre-focused-ledger/phase49-final-review-acceptance.json`, sha256 `f461880d2719d951df4e7381f450fa3fa24770a0494cadae0b055fdbd3640ef8`, per the `historical_ledger` field of `docs/audits/phase49-final-review-acceptance.json`), which the executor cannot read.
+- 6,530,992 B of material corresponds to a diff-plus-references of about 3.27 MB, which is less than the final landing's 3.60 MB. This is consistent with the benchmark having been taken at an earlier epic head than the squash. The benchmark head is recorded only in a private ledger (`~/.local/state/shipyard/phase49-focused-review-T49-11-original-pre-focused-ledger/phase49-final-review-acceptance.json`, sha256 `f461880d2719d951df4e7381f450fa3fa24770a0494cadae0b055fdbd3640ef8`, per the `historical_ledger` field of `docs/audits/phase49-final-review-acceptance.json`), which the executor cannot read.
 
 Assumption, with the next check: the earlier-head explanation is an inference. The operator can confirm it by running the tool on the epic head named in the private ledger.
 
@@ -171,32 +171,44 @@ Which bound refuses a large review on Claude:
 
 Which bound refuses a large review on Codex: the 16 MiB material bound of `prepareFileInput` (or the 2,064-read bound just before it at the default 8 KiB chunk). `INPUT_MAX_BYTES` does not refuse a large review; it decides that the review goes through file input and caps the launch prompt itself. The recorded phase-49 Codex benchmark (6,530,992 B of material, 830 successful reads; the acceptance record requires `runtime: codex`) was inside both bounds. The Codex integrator host was not read for this table, so no integrator bound is claimed for Codex.
 
-## 3. Model context windows (operator-supplied)
+## 3. Model context windows (runtime-reported)
 
-Status: pending-operator. The executor has no first-hand source for any model window and invents none. Fill each row with the figure, its source (document, page or command output) and the date it was read. The model identifiers are the ones in the dispatch policy (`claude-sonnet-5-5`, `claude-opus-5-5`, `gpt-6.1-sol`).
+Status: measured. The figures are the runtime's own reports, read from existing session records on 2026-10-19; none comes from vendor documentation. Label: `runtime-reported`. The model identifiers are the ones in the dispatch policy.
 
 | Model | Context window (tokens) | Maximum output (tokens) | Source | Date read | Label |
 |---|---|---|---|---|---|
-| Claude Sonnet (`claude-sonnet-5-5`) | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | operator-supplied |
-| Claude Opus (`claude-opus-5-5`) | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | operator-supplied |
-| Codex Sol (`gpt-6.1-sol`) | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | operator-supplied |
+| Claude Sonnet (`claude-sonnet-5-5`) | 1,000,000 | 128,000 | the `modelUsage` object (`contextWindow`, `maxOutputTokens`) in a Claude Code session transcript and in the transcript of the decomposition host launch of 2026-10-16 | 2026-10-19 | runtime-reported |
+| Claude Opus (`claude-opus-5-5`) | 1,000,000 | 128,000 | the same `modelUsage` fields in 4 Claude Code session transcripts, among them the arch-review role launch of the phase-45 ticket T-45-03 | 2026-10-19 | runtime-reported |
+| Codex Sol (`gpt-6.1-sol`) | 258,400 in 10 launches and 475,000 in 3 launches | not exposed (the rollout events carry no output limit) | `model_context_window` in the `task_started` and `token_count` events of the Codex rollouts (`~/.codex/sessions/**/rollout-*.jsonl.zst`) of the arch-review launches counted in `arch-review-cost.md`; the previous Sol id `gpt-6-sol` reported 258,400 in 50 launches | 2026-10-19 | runtime-reported |
 
-Comparison to complete once the windows are in (the numbers are from section 1): the diff alone of the largest landing is 899,587 estimated tokens; the 90th percentile landing is 610,555; the median is 143,307. A model whose window is below the largest landing's diff plus the instructions and references cannot hold that review in one context, so it must read through bounded partitions or the review must be split. Record here which of the three models can hold the largest, the 90th percentile and the median landing in one context: PENDING-OPERATOR.
+An older Claude alias `claude-sonnet-5` (not used by the current grid) reported a maximum output of 64,000 in the same records; it is listed only so the 128,000 above is not read as universal.
+
+The spread between 258,400 and 475,000 for the same Codex model id is unexplained by the records (it may follow the launch configuration); the smaller value is the safe bound until a launch is shown to carry the larger.
+
+Comparison (diff sizes from section 1, estimated tokens). A review needs the diff plus the instructions and references and room for the verdict. The instruction overhead is taken as about 60,000 tokens (the current `ARCH_REVIEW_PACKET_TOKENS` soft ceiling is the nearest recorded figure; it is an assumption, not a measurement), and the output reserve is the model's maximum output.
+
+| Landing | Diff tokens | Claude (1,000,000 window, 128,000 output reserved; room for the diff about 812,000) | Codex Sol (258,400 window; output unknown) |
+|---|---|---|---|
+| Median | 143,307 | fits in one context | fits only if instructions and output stay under about 115,000 tokens; no reference budget is left |
+| 90th percentile | 610,555 | fits in one context, with about 200,000 left for references | does not fit; needs partitioned complete-input reading |
+| Largest (phase 49) | 899,587 | does not fit (diff plus overhead is about 1,087,587 including the output reserve); needs partitioned complete-input reading | does not fit, even at 475,000 |
+
+Which of the three models can hold the largest, the 90th percentile and the median landing in one context: Claude Sonnet and Claude Opus hold the median and the 90th percentile, not the largest; Codex Sol holds at most the median. Consequence for the design: phases like 47 (859,000) and 49 (899,587) exceed what a Claude single packet can carry, and every phase above the median needs partitioning on Codex, so the complete-input partitioned approach is required on both runtimes, as ADR-032 already assumes.
 
 ## 4. Chosen values
 
-Rows 1, 2, 3, 5 and 6 are **proposals derived from sections 1 and 2** for the operator to accept or change; they are decisions, not measurements, and the derivation is shown so each can be re-derived. Rows 4 and C need the section 3 windows and the R-30 figures, so they carry an interim rule and a PENDING-OPERATOR cell. No product constant changes in this ticket; plan 52-05 copies the accepted values into constants whose own tests pin them.
+Rows 1, 2, 3, 5 and 6 are **proposals derived from sections 1 and 2** for the operator to accept or change; they are decisions, not measurements, and the derivation is shown so each can be re-derived. Rows 4 and C use the section 3 windows and the R-30 figures. No product constant changes in this ticket; plan 52-05 copies the accepted values into constants whose own tests pin them.
 
 | # | Limit | Current on main 1c34583b | Proposed value | Derivation (measurement behind it) |
 |---|---|---|---|---|
 | 1 | Claude inline packet bound for the code review (complete prompt bytes above which the host relays through files) | no code-review constant exists; arch-review relays above the literal 1,048,576 in `run` | 1,048,576 bytes, unchanged | 21 of 30 landings have a product diff at or under 1 MiB before prompt overhead (median 573,226.5 B). The other 9 are carried by the relay path, whose bound is row 2, so the inline bound need not rise to admit the largest phase |
 | 2 | Claude complete-input ceiling for the code review (material carried through the relay) | `FILE_LIMITS.material` = 16,777,216 for arch-review | 16,777,216 bytes, unchanged | by `prepareFileInput`, material is about `2 x (diff + references) + metadata`; the largest landing (3,598,345 B) needs about 7.2 MB plus references, about 43 percent of the ceiling. The same `prepareFileInput` admitted the recorded phase-49 benchmark on Codex (6,530,992 B, 830 reads); no Claude run of a large review was observed by this ticket. Assumption: the factor 2 is read from code, not measured; the operator can measure it by building the focused packet for the phase-49 landing and reading `manifest.accounting.material_bytes` |
 | 3 | `DIFF_MAX_BYTES` | 2,097,152 | 6,291,456 bytes (6 MiB) | 4 of 30 landings exceed 2 MiB today, so the integrator refuses them. 6 MiB is 1.75 x the largest landing (3,598,345 B) and `2 x 6 MiB = 12 MiB` leaves 4 MiB of the 16 MiB material ceiling for references and packet metadata, so an admitted diff always fits row 2 |
-| 4 | `ARCH_REVIEW_PACKET_TOKENS` | 60,000 | interim 1,632,864 estimated tokens (`ceil(6,291,456 / 4) + 60,000`); final value PENDING-OPERATOR | 25 of 30 landings exceed 60,000 tokens on the diff alone, so the soft ceiling flags nearly every review as overflow while changing no content (section 2). The interim value stops an admitted diff from being flagged. The final value is the per-launch arch-review ceiling of row C once R-30 is filled |
+| 4 | `ARCH_REVIEW_PACKET_TOKENS` | 60,000 | 550,000 estimated tokens (the Claude value of C2 below; the interim 1,632,864 is rejected because it exceeds the 1,000,000 window of section 3, and no packet may exceed about 800,000 = 1,000,000 window - 128,000 output - about 60,000 instructions, rounded down) | 25 of 30 landings exceed 60,000 tokens on the diff alone, so the soft ceiling flags nearly every review as overflow while changing no content (section 2). Above 550,000 the host partitions the complete input instead of carrying it in one packet. The value is the Claude C2 of this table; the unit caveat of C1 and C2 applies (a packet size and a processed-token cost are different quantities) |
 | 5 | Codex `INPUT_MAX_BYTES` | 1,048,576 | 1,048,576 bytes, unchanged | it does not refuse a large review (section 2); it routes it to file input and caps the launch prompt (relay plus generated instructions). Raising it would enlarge the launch prompt, not the material a review can read. Same 21 of 30 split as row 1 |
 | 6 | Codex `FILE_LIMITS.material` (the Codex-side bound that refuses a large review) | 16,777,216 | 16,777,216 bytes, unchanged | same derivation as row 2: the largest landing needs about 7.2 MB plus references, and the phase-49 benchmark was admitted at 6,530,992 B with 830 of 2,064 reads |
-| C1 | Per-launch cost ceiling, code review (estimated tokens per launch) | none | PENDING-OPERATOR | rule: the smallest multiple of 50,000 above the 90th percentile tokens per launch measured for `arch-review` in `arch-review-cost.md`, and never above the section 3 window of the model the launch runs on. The per-round ceiling equals the per-launch ceiling |
-| C2 | Per-launch cost ceiling, `arch-review` (estimated tokens per launch) | none | PENDING-OPERATOR | same rule; this is the final value for row 4 |
+| C1 | Per-launch cost ceiling, code review (estimated tokens per launch) | none | Claude 550,000; Codex 4,250,000 (processed tokens per launch; see the caveat below) | rule: the smallest multiple of 50,000 above the 90th percentile tokens per launch measured for `arch-review` in `arch-review-cost.md` (Claude p90 524,773, Codex p90 4,248,540), and never above the section 3 window of the model the launch runs on. The per-round ceiling equals the per-launch ceiling. Caveat: the measured unit counts every token a multi-turn launch processed, cache reads included, and a window bounds one context; the rule's cap by the window can therefore only be applied to the Claude value (550,000 is under the 1,000,000 window), and applying it to the Codex value would set a ceiling of 258,400 under the Codex median of 2,580,329 processed tokens, which no launch could meet. The Codex ceiling is therefore stated in the measured unit and the operator must accept that reading |
+| C2 | Per-launch cost ceiling, `arch-review` (estimated tokens per launch) | none | Claude 550,000; Codex 4,250,000 | same rule and caveat; the Claude value is the final value for row 4. The code-review role has no measured launches yet, so its ceiling starts equal to this one, which is the structural bound of ADR-032 (no more than one `arch-review` per phase) |
 | C3 | Per-phase worst case | none | `3 x` the per-launch ceiling | the plan allows at most three code-review rounds per phase, so a phase can run three launches; the ceiling is per launch and per round, never a per-phase figure |
 
 If the operator rejects row 3 or row 4's interim value, the constraint to keep is: `DIFF_MAX_BYTES` times 2 plus the references budget must stay at or under row 2's ceiling, or an admitted diff can still be refused by the relay.

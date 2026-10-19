@@ -1,6 +1,6 @@
 # R-32: same-family catch rate against the defects Copilot found in phases 27-29
 
-status: pending-operator
+status: inconclusive
 date: 2026-10-19
 host: executor sandbox, macOS Darwin 27.0.0, node v24.21.0, git 2.54.0 (Apple Git-157), worktree T-52-02 at HEAD e8299ce01e729f5e0c19e99477a33bb066ef4806 (main 1c34583b, Shipyard 0.73.0)
 
@@ -10,13 +10,13 @@ Section status:
 
 | Section | Status | Why |
 |---|---|---|
-| 1. Defect corpus | partial: 6 of 13 defects identified, plus 1 false-positive control | the backlog notes name six defects individually; the other seven exist only as counts and need the GitHub review threads, which the executor cannot reach |
+| 1. Defect corpus | partial: 6 of 13 defects identified with PR, file and line, plus 1 false-positive control | the PR threads were read on 2026-10-19 with `gh`; the notes' remaining seven defects are counts, and the threads do not say which of them the notes counted as real (section 1) |
 | 2. Replay protocol | recorded | a procedure, not a result |
-| 3. Per-defect results and catch rate per runtime | pending-operator | needs live model runs |
-| 4. Cascaded fraction (R-35) | pending-operator | needs the complete corpus and the ticket graph per defect; one documented cascade instance is recorded |
+| 3. Per-defect results and catch rate per runtime | not run | needs new blind live reviewer runs on pre-fix diffs; the fill used existing session data only, and no past session reviewed those diffs blind |
+| 4. Cascaded fraction (R-35) | measured on the 6 identified defects only | 1 of 6; the 7 unidentified defects are not counted |
 | 5. Conclusion sentence | recorded | required by the plan; it does not depend on the figures |
 
-A result is `inconclusive` rather than guessed if the operator cannot complete the corpus (say so and name the PRs that could not be read). No figure in this file was invented by the executor.
+This file is `inconclusive`: the corpus has 6 of 13 defects identified and the replay was not run (reasons in sections 1 and 3). No figure in this file was invented; every number comes from the cited note, a `gh` read of a pull request, or a count over those reads.
 
 ## Inputs
 
@@ -39,19 +39,39 @@ Identified by the notes (6 real defects):
 
 | ID | Phase | PR | File and line | Class | Introducing ticket | Built on by later tickets | Source |
 |---|---|---|---|---|---|---|---|
-| D-01 | 27 | unknown | `plugins/delivery-pipeline/scripts/epic-branch.sh`, line unknown (a second `cleanup()` and a second `trap cleanup EXIT INT TERM`) | duplicate definition left by a clean merge (bash -n does not catch it) | T-27-04 added the block; a later branch in the same cascade added a byte-identical one | yes, per the note: "it recurred on the very next base-merge in the same round" | `a-clean-merge-can-duplicate-a-block-two-branches-added-alike.md`, section "What happened". The guard found it first; Copilot "independently flagged the same defect on its next review pass" |
-| D-02 | 28 | unknown (ticket T-28-07) | `plugins/delivery-pipeline/scripts/base-merge.cjs`, the dirtiness check, line unknown | fail-open on an error path: a failed `git status` read as clean after the check was relaxed to `--untracked-files=no` | T-28-07 | no evidence either way (caught inside the introducing PR) | `phase-27-followups.md`, section "Two guards failed on real work, one phase after they shipped": "Copilot found it; the check now fails closed" |
-| D-03 | 29 | #87 | unknown | dropped diagnostic: `loadConfig()` warnings dropped | unknown (a phase-29 ticket) | unknown | `a-disabled-reviewer-has-no-way-to-say-so.md`, 2026-09-10 section |
-| D-04 | 29 | #87 | unknown | duplicated helper: `projectRootFor` and `lockRootFor` | unknown | unknown | same |
-| D-05 | 29 | #87 | unknown | incomplete message: a missing `error.relative` in an error string | unknown | unknown | same |
-| D-06 | 29 | #89 | `plugins/delivery-pipeline/commands/deliver.md`, line unknown | doc and contract mismatch: a line describes the planner's emitted item without its `ts` field | unknown | unknown | same |
+| D-01 | 27 | #70 (T-27-06; the note names no PR, the Copilot thread on this PR matches its description: "the cleanup/trap + lock bookkeeping block is duplicated back-to-back") | `plugins/delivery-pipeline/scripts/epic-branch.sh:121` (a second `cleanup()` and a second `trap cleanup EXIT INT TERM`) | duplicate definition left by a clean merge (bash -n does not catch it) | T-27-04 added the block; a later branch in the same cascade added a byte-identical one | yes, per the note: "it recurred on the very next base-merge in the same round" | `a-clean-merge-can-duplicate-a-block-two-branches-added-alike.md`, section "What happened". The guard found it first; Copilot "independently flagged the same defect on its next review pass" |
+| D-02 | 28 | #75 (T-28-07) | `plugins/delivery-pipeline/scripts/base-merge.cjs:166`, the dirtiness check | fail-open on an error path: a failed `git status` read as clean after the check was relaxed to `--untracked-files=no` | T-28-07 | no: caught inside the introducing PR, and no PR is stacked on its branch | `phase-27-followups.md`, section "Two guards failed on real work, one phase after they shipped": "Copilot found it; the check now fails closed" |
+| D-03 | 29 | #87 (T-29-04) | `plugins/delivery-pipeline/scripts/jira-project.cjs:450` | dropped diagnostic: `loadConfig()` warnings dropped | T-29-04 (the PR that carried the thread) | no: caught in its own PR before merge, and no PR in GitHub has a base on that ticket branch (0 of the PRs of phases 27 to 29 are stacked on a ticket branch; read with `gh pr list --state all --base <branch>`) | `a-disabled-reviewer-has-no-way-to-say-so.md`, 2026-09-10 section |
+| D-04 | 29 | #87 (T-29-04) | `plugins/delivery-pipeline/scripts/jira-project.cjs:272` | duplicated helper: `projectRootFor` and `lockRootFor` | T-29-04 | no (same reason as D-03) | same |
+| D-05 | 29 | #87 (T-29-04) | `plugins/delivery-pipeline/scripts/jira-project.cjs:451` | incomplete message: a missing `error.relative` in an error string | T-29-04 | no (same reason as D-03) | same |
+| D-06 | 29 | #89 (T-29-06) | `plugins/delivery-pipeline/commands/deliver.md:724` | doc and contract mismatch: a line describes the planner's emitted item without its `ts` field | T-29-06 | no: caught in its own PR before merge; no PR is stacked on its branch | same |
 
-Not individually identified (7 real defects; the operator fetches them): 3 in phase 27 (to reach four with D-01) and 4 in phase 28's first wave (to reach five with D-02). Rows D-07 to D-13:
+Not individually identified (7 real defects): 3 in phase 27 (to reach four with D-01) and 4 in phase 28's first wave (to reach five with D-02). The notes give only the counts. The PR threads were read on 2026-10-19 (`gh api repos/<owner>/<repo>/pulls/<n>/comments`, Copilot author only), and they do not say which threads the notes counted as real, so choosing seven of them here would be a guess. The candidates, by PR (Copilot line comments; threads on pre-fix heads are included, declined and proven-wrong ones are not separated):
+
+| Phase | PR (ticket) | Copilot line comments | Examples of the threads (path:line, topic) |
+|---|---|---|---|
+| 27 | #63 (T-27-01) | 8 | `ci-wait.cjs:201` and `stop-gate.cjs:528` `capNum()` treats `null` as 0; `ci-wait.cjs:208` and `stop-gate.cjs:529` negative capacity accepted; `drift-gate.mjs:13` stale header comment |
+| 27 | #64 (T-27-02) | 1 | `gate-trailer.cjs:457` `gh pr view` run without a working directory |
+| 27 | #65 (T-27-07) | 5 | `source-contract.test.cjs:68,69,110,111` brittle assertions; `docs-smoke.sh:246` message inaccurate |
+| 27 | #66 (T-27-03) | 4 | `sentinel.cjs:201,202` (the control C-01); `sentinel.cjs:676`, `front.cjs:451` redundant `limbBaseOf` scans |
+| 27 | #68 (T-27-04) | 2 | `epic-branch.sh:51` `stat -f` on GNU stat; `ticket-worktree.sh:7` misleading usage text |
+| 27 | #69 (T-27-05) | 5 | `deliver.md:125` agent-file naming; `pipeline-config.cjs:802` `runtimeToken()` can return `-`; `dispatch-record.cjs:367` route not cross-checked; two test-quality threads |
+| 27 | #71 (T-27-08) | 2 | `pipeline-config.test.cjs:127` misleading comment; `front.cjs:1392` wording |
+| 27 | #72 (T-27-09) | 0 | none |
+| 28 | #73 (T-28-02) | 3 | not itemised here |
+| 28 | #74 (T-28-04) | 3 | not itemised here |
+| 28 | #76 (T-28-01) | 2 | not itemised here |
+| 28 | #78 (T-28-05) | 4 | not itemised here |
+| 28 | #80 (T-28-03) | 6 | not itemised here |
+| 28 | #81 (T-28-06) | 4 | not itemised here |
+| 28 | #77, #82 (T-28-08, T-28-09) | 0 | none |
+
+Phase 29's #83 to #90: only #87 (3 threads) and #89 (1) have Copilot threads that the notes count (D-03 to D-06); #90 (T-29-07) has 2 more that the notes do not mention. Phase 28's first wave is not identified in the notes and the phase's own ticket PRs carry 23 Copilot threads (22 outside D-02's), so the four missing defects cannot be narrowed to a PR.
 
 | ID | Phase | PR | File and line | Class | Introducing ticket | Built on by later tickets |
 |---|---|---|---|---|---|---|
-| D-07 to D-09 | 27 | PENDING-OPERATOR (PRs #63 to #72) | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
-| D-10 to D-13 | 28 | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
+| D-07 to D-09 | 27 | one or more of the candidates above | not identified | not identified | not identified | not counted |
+| D-10 to D-13 | 28 | one or more of the candidates above | not identified | not identified | not identified | not counted |
 
 False-positive control (not counted as a defect):
 
@@ -84,21 +104,17 @@ For each PR in the phase (phase 27: #63 to #72; phase 29: #83 to #90, of which t
 
 ## 3. Per-defect results and catch rate per runtime
 
-Status: pending-operator.
+Status: not run. The protocol in section 2 needs a blind reviewer run on the pre-fix diff of each defect, on Claude Sonnet/xhigh and on Codex Sol/high, with a person judging the findings. The fill used only data from existing sessions, and no past session reviewed these pre-fix diffs without Copilot's comment or the notes in view, so there is nothing to score. No result was estimated.
 
-| Defect | Claude Sonnet/xhigh | Codex Sol/high | Notes (finding text, path and line reported) |
+| Defect | Claude Sonnet/xhigh | Codex Sol/high | Notes |
 |---|---|---|---|
-| D-01 to D-13 | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
-| C-01 (control) | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
+| D-01 to D-06 | not run | not run | the PR, path and line of each are in section 1, so a replay can start from them |
+| D-07 to D-13 | not run | not run | not yet identified (section 1) |
+| C-01 (control) | not run | not run | |
 
-Catch rate per runtime, over the real defects only (N is the number of corpus rows with a recorded result; it is 13 if the corpus is complete):
+Catch rate per runtime: N = 0 recorded results on both runtimes, so no rate is stated. The planned columns (found, found-with-different-identity, missed, strict and loose rate, unmatched findings, whether C-01 is reported) have no values.
 
-| Runtime | N | found | found-with-different-identity | missed | Strict rate (found / N) | Loose rate ((found + different identity) / N) | Unmatched findings | C-01 reported |
-|---|---|---|---|---|---|---|---|---|
-| Claude Sonnet/xhigh | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
-| Codex Sol/high | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR | PENDING-OPERATOR |
-
-Commit scrubbed replay outputs under `docs/audits/phase52/samples/` (public repository content only; no tokens, account ids or private transcripts), and name each file here.
+What is needed to turn this file into `measured`: (1) the operator classifies the phase-27 (28 threads, one of them D-01's) and phase-28 (23 threads, one of them D-02's) candidate threads and names the seven missing defects; (2) one blind run per defect and runtime, 13 defects by 2 runtimes plus the control, on the `original_commit_id` heads; (3) the scrubbed outputs under `docs/audits/phase52/samples/`. That is up to 28 live reviewer launches. The operator has not authorised them, so the status stays `inconclusive`. Plan 52-05 and the tickets after it are blocked by an `inconclusive` R-27, not R-32; the downstream consequence of an `inconclusive` R-32 is the one the plan states for it (the catch-rate figure stays unknown and the ADR's statement that a same-family reviewer reduces rather than removes the dependence on independent reviewers stands without a figure).
 
 ## 4. Cascaded fraction (R-35)
 
@@ -108,15 +124,17 @@ Seed observations from the notes (these are not the fraction):
 
 - D-01 is documented as recurring: "it recurred on the very next base-merge in the same round" (`a-clean-merge-can-duplicate-a-block-two-branches-added-alike.md`).
 - A cascade of a CI failure, not a Copilot defect, is documented in `phase-27-followups.md`, section "The board offers a fix at a child whose failure is its parent's": T-27-03's red assertion was inherited by T-27-04 and again by T-27-05 ("Three PRs, three offers, one cause"). It shows the mechanism (a parent's divergence propagates to every descendant already cut) and is excluded from the Copilot corpus because it was a failing check.
-- Of the 6 identified defects, 1 (D-01) is documented as cascaded, 1 (D-02) was caught inside its introducing PR, and for 4 the notes say nothing; those 4 are `unknown`.
+- Of the 6 identified defects, 1 (D-01) is documented as cascaded and 5 (D-02 to D-06) were caught inside their introducing PR. For those 5 the ticket graph rule applies: no PR of phases 27 to 29 has a base on a ticket branch (`gh pr list --state all --base <ticket branch>` returned nothing for T-27-06, T-28-07, T-29-04 and T-29-06, and a count over the last 400 PRs found 0 with a `ticket/T-27`, `ticket/T-28` or `ticket/T-29` base), so no ticket was stacked on them, and a ticket cut from the epic after the merge received the fixed code. They are counted `no`, not `unknown`. D-01's cascade is by base-merge of the epic into a parallel branch, a different route.
 
 | Quantity | Value |
 |---|---|
-| Corpus defects with a recorded introducing ticket | PENDING-OPERATOR |
-| Of those, built on by at least one later ticket | PENDING-OPERATOR |
-| Of those, `unknown` | PENDING-OPERATOR |
-| Cascaded fraction (built on / recorded) | PENDING-OPERATOR |
-| Mean number of later tickets that carried a cascaded defect | PENDING-OPERATOR |
+| Corpus defects with a recorded introducing ticket | 6 of the 6 identified (D-01 T-27-04; D-02 T-28-07; D-03 to D-05 T-29-04; D-06 T-29-06); the other 7 are not identified |
+| Of those, built on by at least one later ticket | 1 (D-01) |
+| Of those, `unknown` | 0 |
+| Cascaded fraction (built on / recorded) | 1 of 6 (about 17 percent), over the identified defects only |
+| Mean number of later tickets that carried a cascaded defect | at least 1 for D-01 (the note records one recurrence on the next base-merge); the exact count is not recorded, so no mean is stated |
+
+Reading the fraction: the 6 identified defects are the ones the backlog notes chose to describe, so they are not a random sample of the 13, and a fraction over 6 is a weak estimate (one defect moves it by 17 points). It does show the topology: in phases 27 to 29 tickets are cut from the epic and merged one at a time, so a Copilot-found defect rarely lives long enough to be built on; the cascading cases in the notes arise from parallel branches (D-01) or from a red check inherited by descendants (the T-27-03 case above), not from stacked tickets.
 
 ## 5. Conclusion that does not depend on the figures
 
@@ -127,3 +145,9 @@ The role reduces rather than removes the dependence on independent reviewers: a 
 - `shasum -a 256 <each backlog note in the Inputs table>`
 - the Grep tool over `.planning/backlog` for `Copilot` (24 matching lines across 6 notes) and over `phase-27-followups.md` for section headings and `Copilot`
 - reading `a-disabled-reviewer-has-no-way-to-say-so.md` lines 64 to 95 with the Read tool
+
+Commands run on 2026-10-19 to fill sections 1, 3 and 4 (read-only):
+
+- `gh repo view --json nameWithOwner`; `gh pr view <n> --json number,title,state,mergedAt,headRefName,baseRefName,reviews,comments` for #63 to #72, #87 and #89; the same with `createdAt`, `mergedAt` and `commits` for #70, #75, #87 and #89
+- `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate` filtered to the Copilot author for #63 to #66, #68 to #72, #75, #87 and #89, and a comment count for #73 to #90
+- `gh pr list --state all --base <ticket branch>` for the four ticket branches above, and a count of PRs among the last 400 whose base starts with `ticket/T-27`, `ticket/T-28` or `ticket/T-29`
