@@ -2469,6 +2469,63 @@ test('code-review lineage survives real fix-ticket membership changes and keeps 
   } finally { f.cleanup(); }
 });
 
+test('sealed disagreements retain their original target through three rounds and twin ordinal shifts', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const source = name => fs.readFileSync(path.join(__dirname, '../fixtures/code-review', name), 'utf8');
+  for (const lines of [[2,4,6], [4]]) {
+    const f = reviewFixture();
+    try {
+      fs.writeFileSync(path.join(f.root, 'source.js'), source('twins.js'));
+      f.git(['add', 'source.js']);
+      const raw = JSON.parse(source('review.json'));
+      const first = f.input(f.advance(1), 1, null, { ...raw, findings: lines.map((line, index) => ({
+        ...raw.findings[0], id: 'CR-' + index, line, line_text: 'return null;',
+      })) });
+      roleArtifact.sealJudgment(first);
+      const file = JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [{
+        path: 'source.js', line_text: 'return null;', occurrence: 2,
+        reason: 'The middle caller handles absence', recorded_by: 'operator',
+      }] });
+      const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
+      let previous = first.result.head;
+      for (const round of [2,3]) {
+        if (round === 2) {
+          fs.writeFileSync(path.join(f.root, 'source.js'), source('twins-added.js'));
+          f.git(['add', 'source.js']);
+        }
+        const binding = f.advance(round);
+        const prior = roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+          repository: target.repositoryIdentity(f.root), phaseDir: f.phase }).at(-1);
+        const deltaDiff = f.git(['diff', '--unified=50', previous, 'HEAD']);
+        const preCarry = core.carryPriorFindings({ priorFindings: prior, deltaDiff, readSource });
+        const disagreements = core.parseDisagreements(file, { priorFindings: preCarry });
+        const priorFindings = core.carryPriorFindings({ priorFindings: prior, deltaDiff, disagreements, readSource });
+        assert.deepEqual(priorFindings.filter(finding => finding.disagreement).map(finding => finding.line), [5]);
+        const blank = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [] };
+        const result = core.normalizeResult({ ...blank,
+          findings: round === 2 ? [{ ...raw.findings[0], line: 5, line_text: 'return null;' }] : [],
+          dispositions: priorFindings.filter(finding => !finding.disagreement).map(finding => ({
+            ref: finding.ref, disposition: 'unresolved', justification: 'The other caller still fails',
+          })),
+        }, { round, scope: 'delta', priorFindings, readSource });
+        const input = f.input(binding, round, previous, blank);
+        input.result = { ...input.result, ...result };
+        const sealed = roleArtifact.sealJudgment(input);
+        const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+        const suppressed = validated.findings.findings.filter(finding => finding.suppressed);
+        assert.deepEqual(suppressed.map(finding => finding.line), [5]);
+        assert.equal(suppressed[0].occurrence, 3);
+        assert.equal(suppressed[0].disagreement_identity, first.result.findings.find(finding => finding.line === 4).identity);
+        assert.equal(f.lookup().disagreement_suppressed, 1);
+        assert.equal(f.lookup().blocking_count, lines.length - 1);
+        previous = input.result.head;
+      }
+    } finally { f.cleanup(); }
+  }
+});
+
 test('code-review reuse refuses a moved base or reference contract and ticket-form subject', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');

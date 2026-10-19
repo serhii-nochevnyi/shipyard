@@ -837,6 +837,15 @@ test('code-review suppressed index survives sealing, while evidence and findings
     const prior=core.carryPriorFindings({priorFindings:first.result.findings,deltaDiff:'',readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8'),disagreements:{[current.identity]:{reason:'Caller guarantees acknowledgement',recorded_by:'operator'}}});
     const normalized=core.normalizeResult({review_completeness:'complete',limitations:[],unresolved_sources:[],findings:[],dispositions:[]},{round:1,scope:'full',priorFindings:prior,readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8')});
     first.result={...first.result,...normalized};
+    for (const disagreement_identity of [null, {}, ['a'.repeat(64)], 'a'.repeat(63), 'A'.repeat(64)]) {
+      const invalid = structuredClone(first.result);
+      invalid.findings[0].disagreement_identity = disagreement_identity;
+      assert.throws(() => roleArtifact.sealJudgment({ ...first, result: invalid }), error => error.code === 'INCOMPLETE_FINDING');
+    }
+    const duplicate = structuredClone(first.result);
+    duplicate.findings[1] = { ...duplicate.findings[1], classification: 'prior', ref: 'P-02',
+      disagreement_identity: duplicate.findings[0].disagreement_identity };
+    assert.throws(() => roleArtifact.sealJudgment({ ...first, result: duplicate }), error => error.code === 'JUDGMENT_OUTCOME_MISMATCH');
     const sealed=roleArtifact.sealJudgment(first);
     const checked=roleArtifact.validateJudgmentManifest({...first,artifactPath:sealed.artifact_ref,artifactDigest:sealed.artifact_digest});
     assert.equal(checked.findings.findings[0].suppressed,true);
@@ -845,6 +854,97 @@ test('code-review suppressed index survives sealing, while evidence and findings
     assert.equal(f.lookup(),null);
     assert.throws(()=>roleArtifact.validateJudgmentManifest({...first,artifactPath:sealed.artifact_ref,artifactDigest:sealed.artifact_digest}));
   } finally {f.cleanup();}
+});
+
+test('code-review seals a recorded WARNING returned with BLOCKER severity without repair fields', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const f = reviewFixture();
+  try {
+    const input = f.input(f.advance(1));
+    const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
+    const warning = { ...input.result.findings[0], severity: 'WARNING', blocking: false };
+    delete warning.fix_ticket;
+    const priorFindings = core.carryPriorFindings({ priorFindings: [warning], deltaDiff: '', readSource,
+      disagreements: { [warning.identity]: { reason: 'Caller handles this case', recorded_by: 'operator' } } });
+    const normalized = core.normalizeResult({ review_completeness: 'complete', limitations: [], unresolved_sources: [],
+      findings: [input.result.findings[0]], dispositions: [] }, { round: 1, scope: 'full', priorFindings, readSource });
+    input.result = { ...input.result, ...normalized };
+    const sealed = roleArtifact.sealJudgment(input);
+    const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+    assert.equal(validated.findings.findings[0].severity, 'WARNING');
+    assert.equal(validated.findings.findings[0].suppressed, true);
+    assert.equal(validated.findings.findings[0].fix_ticket, undefined);
+    assert.equal(f.lookup().verdict, 'pass');
+  } finally { f.cleanup(); }
+});
+
+test('code-review seals 129 small reviewed references within the shared asset capacity', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const { FILE_LIMITS } = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const f = reviewFixture();
+  try {
+    const binding = f.advance(1);
+    const coverage = Array.from({ length: 129 }, (_, index) => {
+      const content = 'reference-' + index;
+      return { path: `src/reference-${index}.js`, bytes: Buffer.byteLength(content),
+        sha256: crypto.createHash('sha256').update(content).digest('hex'), status: 'reviewed' };
+    });
+    assert(coverage.reduce((total, ref) => total + ref.bytes, 0) < FILE_LIMITS.material);
+    assert(coverage.length <= FILE_LIMITS.assets);
+    for (const count of [129, FILE_LIMITS.assets]) {
+      const refs = Array.from({ length: count }, (_, index) => ({ ...coverage[index % coverage.length], path: `src/reference-${index}.js` }));
+      const raw = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [], coverage: refs };
+      const input = f.input(binding, 1, null, raw);
+      assert.equal(input.result.coverage.length, count);
+      const sealed = roleArtifact.sealJudgment(input);
+      const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+      assert.equal(validated.manifest.partitions_total, count);
+      assert.equal(validated.manifest.partitions_not_reviewed, 0);
+      assert.equal(f.lookup().verdict, 'pass');
+    }
+    for (const coverage of [Array(FILE_LIMITS.assets + 1).fill({ status: 'reviewed' }), [{ status: 'unknown' }]]) {
+      const input = f.input(binding);
+      input.result.coverage = coverage;
+      assert.throws(() => roleArtifact.sealJudgment(input), error => error.code === 'INVALID_RESULT');
+    }
+    const input = f.input(binding);
+    input.result.coverage = coverage.map((ref, index) => ({ ...ref, status: index ? 'reviewed' : 'not-reviewed' }));
+    assert.throws(() => roleArtifact.sealJudgment(input), error => error.code === 'JUDGMENT_OUTCOME_MISMATCH');
+    input.result.verdict = 'incomplete';
+    input.result.review_completeness = 'incomplete';
+    input.result.limitations = ['One source was not reviewed'];
+    const sealed = roleArtifact.sealJudgment(input);
+    const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+    assert.equal(validated.manifest.partitions_total, 129);
+    assert.equal(validated.manifest.partitions_not_reviewed, 1);
+    assert.equal(f.lookup().review_completeness, 'incomplete');
+  } finally { f.cleanup(); }
+});
+
+test('code-review seals colliding 128-byte labels after normalization', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const f = reviewFixture();
+  try {
+    const binding = f.advance(1);
+    for (const id of ['x'.repeat(128), 'é'.repeat(64), '界'.repeat(42) + 'ab']) {
+      const input = f.input(binding);
+      const first = { ...input.result.findings[0], id };
+      const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
+      const priorFindings = core.carryPriorFindings({ priorFindings: [first], deltaDiff: '', readSource });
+      const result = core.normalizeResult({ review_completeness: 'complete', limitations: [], unresolved_sources: [],
+        findings: [{ id, severity: 'WARNING', path: 'source.js', line: 101, summary: 'Another statement' }],
+        dispositions: [{ ref: 'P-01', disposition: 'unresolved', justification: 'Still fails' }] },
+      { round: 1, scope: 'full', priorFindings, readSource });
+      input.result = { ...input.result, ...result };
+      const sealed = roleArtifact.sealJudgment(input);
+      const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+      assert.equal(validated.findings.findings.length, 2);
+      assert.equal(new Set(validated.findings.findings.map(finding => finding.id)).size, 2);
+      assert(validated.findings.findings.every(finding => Buffer.byteLength(finding.id) <= 128));
+    }
+  } finally { f.cleanup(); }
 });
 
 test('code-review incomplete first round cannot authorize a complete delta pass', () => {

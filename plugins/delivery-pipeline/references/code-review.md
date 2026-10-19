@@ -31,9 +31,9 @@ Each `prior_findings` entry carries `ref` (`P-01`, `P-02`, …), `id`, `rule`,
 `severity`, `path`, `line`, `line_text`, `occurrence`, `summary`,
 `failure_scenario`, `fix_ticket` (BLOCKER only), `disposition`, `delta_touch`
 and `disagreement`. `disposition` is the sealed prior disposition or null.
-`disagreement` is `{reason, recorded_by}` or null. The packet exposes neither
-`identity` nor `stored_identity`. The host maps earlier lines through the fix
-and rereads the current source. `delta_touch: true` means the earlier cited
+`disagreement` is `{reason, recorded_by}` or null. The packet omits `identity`,
+`stored_identity` and `disagreement_identity`. The host maps earlier lines through
+the fix and rereads the current source. `delta_touch: true` means the earlier cited
 line was removed, replaced, renamed, deleted or cannot be resolved now.
 
 A recorded disagreement is a human's justified answer to an earlier finding.
@@ -98,8 +98,10 @@ sealing; do not invent host citation identities, classifications or suppression.
 | `evidence_markdown` | Full evidence identical to the role-owned evidence file |
 
 A returned finding requires `id`, `severity` and `summary`. `id` is a non-empty
-string of at most 128 bytes. `summary` and any `failure_scenario` are non-empty
-strings of at most 1,024 bytes. Severity is `BLOCKER`, `WARNING` or `INFO`;
+string of at most 128 UTF-8 bytes. When a returned label collides with a carried
+label, the host assigns a deterministic unique label within the same byte bound.
+Labels never affect finding identity. `summary` and any `failure_scenario` are
+non-empty strings of at most 1,024 bytes. Severity is `BLOCKER`, `WARNING` or `INFO`;
 GSD `CR`, `WR` and `IN` map respectively. INFO entries are dropped and counted
 in `info_dropped`. A missing `id`, `severity` or `summary` is invalid even on
 INFO. Kept findings carry `path`, `line`, `line_text` and optional `rule`.
@@ -133,6 +135,20 @@ with severity unchanged, `suppressed: true` and `blocking: false`.
 `disagreement_suppressed` counts those entries. A matching returned finding is
 merged into the carried entry. Unresolved citations cannot match.
 
+The host seals an optional `disagreement_identity` on a prior finding when a
+recorded disagreement targets it. It is a 64-character lowercase hexadecimal
+digest, unique within the sealed index, retaining the identity named in the
+carrier. The current citation's `identity` and `occurrence` still reflect the
+current source. If identical lines are inserted above the finding, the retained
+binding takes precedence over another finding's current ordinal, so the carrier
+continues to target its original finding across rounds. This binding remains on
+carried findings and is never accepted from a returned model finding or exposed
+in the reviewer packet. Keep the original carrier's `path`, `line_text` and
+`occurrence` when updating its reason; an already bound finding continues to
+use that original identity. An entry for a finding without a retained binding
+must match its current stored identity and cannot claim another finding's
+retained binding.
+
 Normalized output also includes `finding_count`, `blocking_count`,
 `demoted_for_evidence`, `review_round`, `review_scope`, `prior_head`,
 `contract_digest`, `reuse_key` and `dispositions_digest`. `reuse_key` hashes
@@ -143,9 +159,10 @@ do not change the head or reuse key. `dispositions_digest` is null for a missing
 carrier, otherwise the SHA-256 of the exact file bytes.
 
 For a partitioned input, `coverage` is the validated list of partition entries
-with `status: "reviewed" | "not-reviewed"`. The input-manifest validator belongs
-to the host. The artifact records `partitions_total` and
-`partitions_not_reviewed` from this list (both zero for inline input). Any
+with `status: "reviewed" | "not-reviewed"`, bounded by the shared 2000-asset
+limit. The input-manifest validator belongs to the host and retains its bounds,
+duplicate and unknown-reference refusals. The artifact records `partitions_total`
+and `partitions_not_reviewed` from this list (both zero for inline input). Any
 unreviewed partition requires an incomplete verdict.
 
 Example reviewer output before host normalization:

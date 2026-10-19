@@ -186,6 +186,8 @@ test('packet hides host digests, binds subject identity and refuses missing voca
   const packet = core.assemblePacket(options);
   assert.equal(packet.focused.id,'subject'); assert.equal(packet.review_contract,core.CONTRACT_ID);
   assert(!Object.hasOwn(packet.prior_findings[0],'identity')); assert(!Object.hasOwn(packet.prior_findings[0],'stored_identity'));
+  const retained = core.assemblePacket({ ...options, priorFindings: [{ ...options.priorFindings[0], disagreement_identity: 'a'.repeat(64) }] });
+  assert(!Object.hasOwn(retained.prior_findings[0], 'disagreement_identity'));
   for(const key of ['exactDiff','integrationBase','ticketSet','planAcceptance','priorFindings']) { const value={...options}; delete value[key]; assert.throws(()=>core.assemblePacket(value)); }
   assert.throws(()=>core.assemblePacket({...options,subject:'different'}));
   const key = core.reuseKey({head:'h',baseCommit:'b',contractDigest:'c'});
@@ -240,4 +242,109 @@ test('diff sections support standalone unified, spaces and Git quoted UTF-8 path
   assert.deepEqual(core.mapLineThroughDiff(file,2,'diff --git '+quoted+'\n--- "a/\\303\\251.js"\n+++ "b/\\303\\251.js"\n'+hunk),{line:3});
   const noNewlineExtra='diff --git a/source.js b/source.js\n@@ -1 +1 @@\n one\n\\ No newline at end of file\n extra\n';
   assert.deepEqual(core.mapLineThroughDiff('source.js',4,noNewlineExtra),{touched:true});
+});
+
+test('a recorded disagreement stays on its original twin through three rounds', () => {
+  const first = review({ ...raw(), findings: [2,4,6].map((line, index) => ({
+    ...raw().findings[0], id: 'CR-' + index, line, line_text: 'return null;',
+  })) }, { readSource: read('twins.js') });
+  const text = JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [{
+    path: 'source.js', line_text: 'return null;', occurrence: 2,
+    reason: 'The middle caller handles absence', recorded_by: 'operator',
+  }] });
+  let carried = carry(first.findings, '', 'twins.js');
+  const entries = core.parseDisagreements(text, { priorFindings: carried });
+  carried = carry(first.findings, fixture('twins.diff'), 'twins-added.js', entries);
+  const second = review({ ...raw(), findings: [], dispositions: [
+    { ref: 'P-01', disposition: 'unresolved', justification: 'First caller still fails' },
+    { ref: 'P-03', disposition: 'unresolved', justification: 'Last caller still fails' },
+  ] }, { round: 2, scope: 'delta', priorFindings: carried, readSource: read('twins-added.js') });
+  assert.deepEqual(second.findings.map(f => [f.line, f.suppressed === true]), [[3,false],[5,true],[7,false]]);
+  const latest = carry(second, '', 'twins-added.js');
+  const unchangedFile = core.parseDisagreements(text, { priorFindings: latest });
+  const thirdPrior = carry(second, '', 'twins-added.js', unchangedFile);
+  assert.deepEqual(thirdPrior.map(f => Boolean(f.disagreement)), [false,true,false]);
+  const third = review({ ...raw(), findings: [], dispositions: second.dispositions.filter(d => d.source === 'reviewer') },
+    { round: 3, scope: 'delta', priorFindings: thirdPrior, readSource: read('twins-added.js') });
+  assert.deepEqual(third.findings.map(f => [f.line, f.suppressed === true]), [[3,false],[5,true],[7,false]]);
+  assert.equal(third.blocking_count, 2);
+  assert.equal(third.disagreement_suppressed, 1);
+});
+
+test('a single recorded target remains known after its occurrence ordinal changes', () => {
+  const first = review({ ...raw(), findings: [{ ...raw().findings[0], line: 4, line_text: 'return null;' }] }, { readSource: read('twins.js') });
+  const text = JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [{
+    path: 'source.js', line_text: 'return null;', occurrence: 2, reason: 'Caller handles absence', recorded_by: 'operator',
+  }] });
+  const entries = core.parseDisagreements(text, { priorFindings: carry(first.findings, '', 'twins.js') });
+  const prior = carry(first.findings, fixture('twins.diff'), 'twins-added.js', entries);
+  const second = review({ ...raw(), findings: [] }, { round: 2, scope: 'delta', priorFindings: prior, readSource: read('twins-added.js') });
+  const latest = carry(second, '', 'twins-added.js');
+  const reloaded = core.parseDisagreements(text, { priorFindings: latest });
+  const thirdPrior = carry(second, '', 'twins-added.js', reloaded);
+  assert.equal(thirdPrior[0].disagreement.reason, 'Caller handles absence');
+  const third = review({ ...raw(), findings: [] }, { round: 3, scope: 'delta', priorFindings: thirdPrior, readSource: read('twins-added.js') });
+  assert.equal(third.blocking_count, 0);
+  assert.equal(third.disagreement_suppressed, 1);
+});
+
+test('colliding boundary-size finding labels remain deterministic, unique and within 128 UTF-8 bytes', () => {
+  for (const id of ['x'.repeat(128), 'é'.repeat(64), '界'.repeat(42) + 'ab']) {
+    const first = review({ ...raw(), findings: [{ ...raw().findings[0], id }] });
+    const prior = carry(first.findings);
+    const result = { ...raw(), findings: [{ id, severity: 'WARNING', summary: 'Another statement', path: 'source.js', line: 101 }],
+      dispositions: [{ ref: 'P-01', disposition: 'unresolved', justification: 'Still fails' }] };
+    const options = { round: 2, scope: 'delta', priorFindings: prior };
+    const second = review(result, options);
+    assert.equal(new Set(second.findings.map(f => f.id)).size, 2);
+    for (const finding of second.findings) assert(Buffer.byteLength(finding.id) <= 128, finding.id);
+    assert.deepEqual(second, review(result, options));
+  }
+});
+
+test('retained disagreements keep their original carrier identity and ignore model-supplied bindings', () => {
+  const first = review({ ...raw(), findings: [{ ...raw().findings[0], line: 4, line_text: 'return null;' }] }, { readSource: read('twins.js') });
+  const entry = { path: 'source.js', line_text: 'return null;', occurrence: 2, reason: 'Caller handles absence', recorded_by: 'operator' };
+  const text = JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [entry] });
+  const disagreements = core.parseDisagreements(text, { priorFindings: carry(first.findings, '', 'twins.js') });
+  const priorFindings = carry(first.findings, fixture('twins.diff'), 'twins-added.js', disagreements);
+  const second = review({ ...raw(), findings: [] }, { round: 2, scope: 'delta', priorFindings, readSource: read('twins-added.js') });
+  const latest = carry(second, '', 'twins-added.js');
+  const duplicate = JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [entry, entry] });
+  assert.throws(() => core.parseDisagreements(duplicate, { priorFindings: latest }), code('DISPOSITIONS_INVALID'));
+  assert.throws(() => core.parseDisagreements(JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [{ ...entry, occurrence: 3 }] }), { priorFindings: latest }), code('DISPOSITION_TARGET_UNKNOWN'));
+  assert.equal(latest[0].disagreement_identity, first.findings[0].identity);
+  const forged = review({ ...raw(), findings: [{ ...raw().findings[0], disagreement_identity: first.findings[0].identity, suppressed: true }] });
+  assert.equal(forged.blocking_count, 1);
+  assert(!Object.hasOwn(forged.findings[0], 'disagreement_identity'));
+});
+
+test('generated collision labels cannot steal a model label reserved elsewhere in the index', () => {
+  const id = 'x'.repeat(128);
+  const first = review({ ...raw(), findings: [{ ...raw().findings[0], id }] });
+  const priorFindings = carry(first.findings);
+  const reserved = 'finding-3-' + require('node:crypto').createHash('sha256').update(id).digest('hex');
+  const result = { ...raw(), findings: [
+    { id, severity: 'WARNING', summary: 'Another statement', path: 'source.js', line: 101 },
+    { id: reserved, severity: 'WARNING', summary: 'A third statement', path: 'source.js', line: 102 },
+  ], dispositions: [{ ref: 'P-01', disposition: 'unresolved', justification: 'Still fails' }] };
+  const normalized = review(result, { priorFindings });
+  assert.equal(normalized.findings.length, 3);
+  assert.equal(new Set(normalized.findings.map(finding => finding.id)).size, 3);
+  assert.equal(normalized.findings[1].id, reserved);
+  assert(normalized.findings.every(finding => Buffer.byteLength(finding.id) <= 128));
+});
+
+test('a recorded WARNING keeps its original severity and sealable shape when returned as a BLOCKER', () => {
+  const first = review({ ...raw(), findings: [{ ...raw().findings[0], severity: 'WARNING' }] });
+  const priorFindings = carry(first.findings, '', 'source.js', {
+    [first.findings[0].identity]: { reason: 'The caller handles this case', recorded_by: 'operator' },
+  });
+  const second = review({ ...raw(), findings: [raw().findings[0]] }, { priorFindings });
+  assert.equal(second.findings.length, 1);
+  assert.equal(second.findings[0].severity, 'WARNING');
+  assert.equal(second.findings[0].suppressed, true);
+  assert.equal(second.blocking_count, 0);
+  assert.equal(second.disagreement_suppressed, 1);
+  assert(!Object.hasOwn(second.findings[0], 'fix_ticket'));
 });

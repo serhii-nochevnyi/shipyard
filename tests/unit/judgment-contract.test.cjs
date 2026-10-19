@@ -586,7 +586,8 @@ test('the recorder, not log-event, owns tracker_override', () => {
 
 test('code-review reference names the normalized input, output and disposition vocabulary', () => {
   const reference=fs.readFileSync(path.join(PLUGIN,'references/code-review.md'),'utf8');
-  for(const field of ['review_completeness','limitations','unresolved_sources','line_text','occurrence','rule','ref','dispositions','source','recorded_disagreement','classification','new','prior','suppressed','disagreement','disagreement_suppressed','citations_unresolved','fix_ticket','depends_on','prior_head','contract_digest','reuse_key']) assert(reference.includes(field),'missing code-review contract field '+field);
+  for(const field of ['review_completeness','limitations','unresolved_sources','line_text','occurrence','rule','ref','dispositions','source','recorded_disagreement','classification','new','prior','suppressed','disagreement','disagreement_identity','disagreement_suppressed','citations_unresolved','fix_ticket','depends_on','prior_head','contract_digest','reuse_key']) assert(reference.includes(field),'missing code-review contract field '+field);
+  assert(reference.includes('2000-asset'));
   assert(!reference.includes('still-present'));
 });
 

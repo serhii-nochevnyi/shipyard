@@ -4873,6 +4873,9 @@ function completeCodeReviewFinding(finding, index, id) {
   if (finding.suppressed !== undefined && typeof finding.suppressed !== 'boolean') fail('INCOMPLETE_FINDING', 'suppressed must be boolean');
   const suppressed = finding.suppressed === true;
   if (suppressed && finding.classification !== 'prior') fail('INCOMPLETE_FINDING', 'only a prior finding can be suppressed');
+  if (finding.disagreement_identity !== undefined && (finding.classification !== 'prior' || typeof finding.disagreement_identity !== 'string'
+      || !/^[a-f0-9]{64}$/.test(finding.disagreement_identity)))
+    fail('INCOMPLETE_FINDING', 'a retained disagreement identity requires a prior finding and a SHA-256 digest');
   if (finding.severity === 'BLOCKER') {
     if (!(finding.blocking === true && !suppressed) && !(finding.blocking === false && suppressed))
       fail('INCOMPLETE_FINDING', 'a BLOCKER blocks unless held by a recorded disagreement');
@@ -4956,11 +4959,14 @@ function codeReviewResultData(result, metadata, input, identity, ticketSet) {
     refs.add(entry.ref);
   }
   const suppressed = findings.findings.filter(finding => finding.suppressed);
+  const disagreementIdentities = findings.findings.map(finding => finding.disagreement_identity).filter(Boolean);
+  if (new Set(disagreementIdentities).size !== disagreementIdentities.length)
+    fail('JUDGMENT_OUTCOME_MISMATCH', 'retained disagreement identities must name unique findings');
   if (suppressed.length !== result.disagreement_suppressed || suppressed.some(finding => !result.dispositions.some(entry =>
     entry.ref === finding.ref && entry.source === 'recorded_disagreement' && entry.disposition === 'disputed')))
     fail('JUDGMENT_OUTCOME_MISMATCH', 'suppressed findings require their recorded disagreement dispositions');
   const coverage = result.coverage === undefined ? [] : result.coverage;
-  if (!Array.isArray(coverage) || coverage.length > 128 || coverage.some(entry => !object(entry)
+  if (!Array.isArray(coverage) || coverage.length > require('./codex-arch-review-context.cjs').FILE_LIMITS.assets || coverage.some(entry => !object(entry)
       || !['reviewed', 'not-reviewed'].includes(entry.status))) fail('INVALID_RESULT', 'code-review coverage must be a validated partition list');
   const notReviewed = coverage.filter(entry => entry.status !== 'reviewed').length;
   if (notReviewed && result.review_completeness !== 'incomplete') fail('JUDGMENT_OUTCOME_MISMATCH', 'unreviewed partitions require incomplete');

@@ -22,7 +22,7 @@ function normalizeCitedPath(value) {
   if (typeof value !== 'string' || !value || Buffer.byteLength(value) > 1024
       || /[\\\x00-\x1f\x7f]/.test(value) || path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)
       || value.split('/').includes('..')) return null;
-  const normalized = path.posix.normalize(value.replace(/^\.\//, ''));
+  const normalized = path.posix.normalize(value.replace(/^[.][/]/, ''));
   return normalized === '.' ? null : normalized;
 }
 function lineIdentity({ path: file, lineText, ordinal }) {
@@ -154,27 +154,35 @@ function normalizeResult(result, { round, scope, priorFindings = [], readSource 
         identity: prior.identity || null, line_text: prior.identity ? prior.line_text : null,
         occurrence: prior.identity ? prior.occurrence : null, blocking: prior.severity === 'BLOCKER' };
     };
-    if (prior.disagreement && prior.stored_identity) {
+    const matched = matches[0] ? { ...matches[0], ...(prior.disagreement_identity ? { disagreement_identity: prior.disagreement_identity } : {}) } : carried();
+    if (prior.disagreement && (prior.stored_identity || prior.disagreement_identity)) {
       dispositionMap.set(prior.ref, { ref: prior.ref, disposition: 'disputed', source: 'recorded_disagreement', justification: prior.disagreement.reason });
-      findings.push({ ...(matches[0] || carried()), severity: prior.severity, ...(prior.severity === 'BLOCKER' ? { fix_ticket: prior.fix_ticket, failure_scenario: prior.failure_scenario } : {}),
+      const { fix_ticket, ...finding } = matched;
+      findings.push({ ...finding, severity: prior.severity, ...(prior.severity === 'BLOCKER' ? { fix_ticket: prior.fix_ticket, failure_scenario: prior.failure_scenario } : {}),
+        disagreement_identity: prior.disagreement_identity || prior.stored_identity,
         suppressed: true, blocking: false, classification: 'prior', ref: prior.ref });
       stats.disagreement_suppressed++;
     } else if (prior.severity === 'BLOCKER') {
       const disposition = dispositionMap.get(prior.ref);
       if (!disposition) fail('JUDGMENT_OUTCOME_MISMATCH', `missing disposition for ${prior.ref}`);
       if (disposition.disposition === 'resolved' && matches.length) fail('JUDGMENT_OUTCOME_MISMATCH', `resolved finding ${prior.ref} was returned again`);
-      if (disposition.disposition === 'unresolved') findings.push({ ...(matches[0] || carried()), severity: 'BLOCKER', blocking: true,
+      if (disposition.disposition === 'unresolved') findings.push({ ...matched, severity: 'BLOCKER', blocking: true,
         failure_scenario: prior.failure_scenario, fix_ticket: prior.fix_ticket });
     } else if (prior.identity && !prior.delta_touch) {
-      const { fix_ticket, ...finding } = matches[0] || carried();
+      const { fix_ticket, ...finding } = matched;
       findings.push({ ...finding, severity: 'WARNING', blocking: false });
     }
   }
   if (findings.length > 128) fail('INVALID_RESULT', 'normalized review exceeds 128 findings');
+  const reservedIds = new Set(findings.map(finding => finding.id));
   const finalIds = new Set();
-  for (const finding of findings) {
-    if (finalIds.has(finding.id)) finding.id = `${finding.ref || 'new'}:${finding.id}`;
-    if (finalIds.has(finding.id)) fail('DUPLICATE_FINDING_ID', 'normalized finding ids collide');
+  for (const [index, finding] of findings.entries()) {
+    if (finalIds.has(finding.id)) {
+      const label = `finding-${index + 1}-${hash(finding.id)}`;
+      let candidate = label, suffix = 0;
+      while (reservedIds.has(candidate) || finalIds.has(candidate)) candidate = `${label}-${++suffix}`;
+      finding.id = candidate;
+    }
     finalIds.add(finding.id);
   }
   const blockingCount = findings.filter(finding => finding.blocking).length;
@@ -297,21 +305,34 @@ function mapLineThroughDiff(file, line, diffText) {
   }
   return malformed || renamed ? { touched: true } : mapped || { line: line + shift };
 }
+function disagreementTargets(priorFindings) {
+  const targets = new Map();
+  for (const [index, finding] of priorFindings.entries()) {
+    if (finding.disagreement_identity) {
+      if (targets.has(finding.disagreement_identity)) fail('DISPOSITIONS_INVALID', 'duplicate retained disagreement target');
+      targets.set(finding.disagreement_identity, index);
+    }
+  }
+  for (const [index, finding] of priorFindings.entries()) {
+    if (!finding.disagreement_identity && finding.stored_identity && !targets.has(finding.stored_identity))
+      targets.set(finding.stored_identity, index);
+  }
+  return targets;
+}
 function carryPriorFindings({ priorFindings, deltaDiff, disagreements = {}, readSource }) {
   const sealed = Array.isArray(priorFindings) ? { findings: priorFindings, dispositions: [] } : priorFindings;
   if (!object(sealed) || !Array.isArray(sealed.findings) || sealed.findings.length > 128) fail('INVALID_RESULT', 'prior findings must be a sealed index');
-  const entries = disagreements.entries || disagreements;
-  return sealed.findings.map((finding, index) => {
+  const entries = disagreements instanceof Map ? disagreements : disagreements.entries || disagreements;
+  const carried = sealed.findings.map((finding, index) => {
     const storedIdentity = finding.citation === 'resolved' ? finding.identity : null;
     const entry = { id: finding.id, rule: finding.rule || 'unlabelled', severity: finding.severity, path: finding.path, line: finding.line,
       line_text: finding.line_text, occurrence: finding.occurrence, summary: finding.summary, failure_scenario: finding.failure_scenario,
       ...(finding.severity === 'BLOCKER' ? { fix_ticket: finding.fix_ticket } : {}),
       disposition: (sealed.dispositions || []).find(value => value.ref === finding.ref)?.disposition || finding.disposition || null,
       ref: 'P-' + String(index+1).padStart(2,'0'), delta_touch: false, stored_identity: storedIdentity, identity: null,
+      ...(finding.disagreement_identity ? { disagreement_identity: finding.disagreement_identity } : {}),
       disagreement: null };
     if (!storedIdentity) return entry;
-    const disagreement = entries instanceof Map ? entries.get(storedIdentity) : entries[storedIdentity];
-    if (disagreement) entry.disagreement = { reason: disagreement.reason, recorded_by: disagreement.recorded_by };
     const mapped = mapLineThroughDiff(finding.path, finding.line, deltaDiff);
     if (mapped.touched) return { ...entry, delta_touch: true };
     const citation = resolveCitation({ path: finding.path, line: mapped.line, quotedText: finding.line_text, readSource });
@@ -319,6 +340,14 @@ function carryPriorFindings({ priorFindings, deltaDiff, disagreements = {}, read
       ? { line_text: citation.line_text, occurrence: citation.occurrence, identity: citation.identity }
       : { delta_touch: true }) };
   });
+  const targets = disagreementTargets(carried);
+  for (const [identity, disagreement] of entries instanceof Map ? entries : Object.entries(entries)) {
+    const index = targets.get(identity);
+    if (index === undefined) continue;
+    carried[index].disagreement_identity = identity;
+    carried[index].disagreement = { reason: disagreement.reason, recorded_by: disagreement.recorded_by };
+  }
+  return carried;
 }
 function parseDisagreements(text, { priorFindings }) {
   const invalid = message => fail('DISPOSITIONS_INVALID', message);
@@ -327,7 +356,7 @@ function parseDisagreements(text, { priorFindings }) {
   try { file = JSON.parse(text); } catch { invalid('disagreements must be valid JSON'); }
   if (!object(file) || file.schema !== 'shipyard.code-review-disagreements.v1' || !Array.isArray(file.entries) || file.entries.length > 128
       || Object.keys(file).some(key => !['schema','entries'].includes(key))) invalid('invalid disagreements schema');
-  const earlier = new Set(priorFindings.map(finding => finding.stored_identity).filter(Boolean));
+  const earlier = disagreementTargets(priorFindings);
   const entries = {};
   for (const entry of file.entries) {
     if (!object(entry) || !normalizeCitedPath(entry.path) || !bounded(entry.line_text) || !normalizeSourceLine(entry.line_text)
@@ -363,7 +392,7 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
   }
   return { review_contract: CONTRACT_ID, focused, subject, exact_diff: exactDiff, integration_base: integrationBase,
     ticket_set: ticketSet, plan_acceptance: planAcceptance,
-    prior_findings: priorFindings.map(({ identity: _identity, stored_identity: _stored, ...finding }) => finding),
+    prior_findings: priorFindings.map(({ identity: _identity, stored_identity: _stored, disagreement_identity: _disagreement, ...finding }) => finding),
     review_round: round.round, review_scope: round.scope, prior_head: round.priorHead || null,
     change_metadata: changeMetadata, contract_digest: contractDigest(referenceDigest) };
 }
