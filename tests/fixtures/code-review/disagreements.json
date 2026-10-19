@@ -1,0 +1,12 @@
+{
+  "schema": "shipyard.code-review-disagreements.v1",
+  "entries": [
+    {
+      "path": "./source.js",
+      "line_text": " const   value100 = 100; ",
+      "occurrence": 1,
+      "reason": "The caller guarantees acknowledgement.",
+      "recorded_by": "operator"
+    }
+  ]
+}
