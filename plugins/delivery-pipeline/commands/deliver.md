@@ -477,6 +477,7 @@ to bypass the boundary or to launch a different file.
 | `drift-check` | Sol/low | none; gate strategy only | generated `shipyard-drift-check.toml` |
 | `integrator` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-integrator.toml` or `shipyard-integrator-critical.toml` |
 | `arch-review` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml` |
+| `code-review` | Sol/high | `critical` or `checkpoint` → Sol/xhigh; `contested` and the measured window never promote | generated `shipyard-code-review.toml` or `shipyard-code-review-critical.toml` |
 | `ci-fix` | Sol/low | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
 | `review-fix` | Sol/low | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 

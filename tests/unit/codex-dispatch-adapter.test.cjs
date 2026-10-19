@@ -31,7 +31,7 @@ function fixture() {
         'name = "' + file.replace(/\.toml$/, '') + '"',
         'model = "' + CODEX_MODEL_IDS[rung.model_key] + '"',
         'model_reasoning_effort = "' + rung.effort + '"',
-        'sandbox_mode = "' + (['arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write') + '"',
+        'sandbox_mode = "' + (['arch-review', 'code-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write') + '"',
         "developer_instructions = '''\nRun the exact role.\n'''\n",
       ].join('\n');
       fs.writeFileSync(path.join(root, file), content);
@@ -127,8 +127,8 @@ test('all base roles receive explicit ADR-014 selections', () => {
     research: ['gpt-6.1-sol', 'high'], decomposition: ['gpt-6.1-sol', 'high'],
     executor: ['gpt-6.1-sol', 'low'], 'pr-sentinel': ['gpt-6-luna', 'medium'],
     integrator: ['gpt-6.1-sol', 'high'], 'drift-check': ['gpt-6.1-sol', 'low'],
-    'arch-review': ['gpt-6.1-sol', 'high'], 'ci-fix': ['gpt-6.1-sol', 'low'],
-    'review-fix': ['gpt-6.1-sol', 'low'],
+    'arch-review': ['gpt-6.1-sol', 'high'], 'code-review': ['gpt-6.1-sol', 'high'],
+    'ci-fix': ['gpt-6.1-sol', 'low'], 'review-fix': ['gpt-6.1-sol', 'low'],
   };
   try {
     for (const [role, [model, effort]] of Object.entries(expected)) {
@@ -298,6 +298,8 @@ test('default sandbox per role: researchers write, the plan-checker stays read-o
     [{ role: 'decomposition', gsd_role: 'gsd-plan-checker' }, ':workspace', false],
     [{ role: 'arch-review' }, ':read-only', true],
     [{ role: 'arch-review' }, ':workspace', false],
+    [{ role: 'code-review' }, ':read-only', true],
+    [{ role: 'code-review' }, ':workspace', false],
   ];
   for (const [request, baseProfile, accepted] of cases) {
     const launch = (selection, context) => {
@@ -323,6 +325,7 @@ test('static judgment receipts accept only their named evidence file write grant
   for (const [role, evidenceName] of [
     ['drift-check', '.shipyard-drift-evidence.md'],
     ['arch-review', '.shipyard-arch-review-evidence.md'],
+    ['code-review', '.shipyard-code-review-evidence.md'],
   ]) {
     for (const [grant, accepted] of [[evidenceName, true], ['unrelated.md', false]]) {
       const f = setup({ host: {

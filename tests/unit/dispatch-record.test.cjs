@@ -1056,6 +1056,18 @@ test('every role in the ladder has a subject, and no subject names a check tally
   }
 });
 
+test('code-review is expired by the epic head or base moving, and by no tally', () => {
+  assert.deepStrictEqual(DISPATCH_SUBJECT['code-review'].fields, ['head_sha', 'pr_base', 'status']);
+  assert.strictEqual(DISPATCH_SUBJECT['code-review'].lifts, 'the epic head or base moves');
+  const base = { ...OPEN_PR, draft: false, pr_base: 'main', head_sha: 'a'.repeat(40) };
+  assert.notEqual(dispatchFingerprint('code-review', { ...base, head_sha: 'b'.repeat(40) }),
+    dispatchFingerprint('code-review', base), 'a moved head is the review\'s subject');
+  assert.notEqual(dispatchFingerprint('code-review', { ...base, pr_base: 'epic/9-x' }),
+    dispatchFingerprint('code-review', base), 'a moved base is the review\'s subject');
+  assert.equal(dispatchFingerprint('code-review', { ...base, checks: { total: 9, failing: 3, pending: 1 } }),
+    dispatchFingerprint('code-review', base), 'a CI tick is not');
+});
+
 test('a role\'s fingerprint moves only for that role\'s own output', () => {
   const base = { ...OPEN_PR, draft: false, pr_base: 'epic/24-x' };
   const tick = { ...base, checks: { total: 17, failing: 1, pending: 9 } };
@@ -1756,7 +1768,7 @@ test('the accepted agent files are read from the generated Codex agents director
     'the critical roles must include every canonical critical rung');
   assert.equal(CODEX_CRITICAL_SUFFIX, gen.CRITICAL_SUFFIX);
   assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), ['ci-fix', 'review-fix']);
-  assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), ['arch-review', 'integrator', 'inv-research']);
+  assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), ['arch-review', 'code-review', 'integrator', 'inv-research']);
 
   // Every canonical variant is present, including research alternatives and the
   // repeat rung that used to be absent from this contract.

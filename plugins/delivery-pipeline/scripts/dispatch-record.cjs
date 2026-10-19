@@ -134,6 +134,7 @@ const DISPATCH_SUBJECT = {
   'review-fix': { fields: ['head_sha', 'status', 'pr'], lifts: "the PR's head moves (a push)" },
   // A judge writes a verdict into the PR body (`gate_status:`) and may undraft.
   'arch-review': { fields: ['gate', 'draft', 'status', 'pr_base', 'head_sha', 'architecture'], lifts: 'the gate trailer or the draft state changes' },
+  'code-review': { fields: ['head_sha', 'pr_base', 'status'], lifts: 'the epic head or base moves' },
   // The guard's output is a merge, or the retarget that follows one.
   'pr-sentinel': { fields: ['status', 'pr_base', 'pr'], lifts: 'the PR merges, or its base moves' },
   integrator: {

@@ -2140,6 +2140,7 @@ test('the boundary launches every native base and escalation tuple for both runt
         integrator: ['gpt-6.1-sol', 'high'],
         'drift-check': ['gpt-6.1-sol', 'low'],
         'arch-review': ['gpt-6.1-sol', 'high'],
+        'code-review': ['gpt-6.1-sol', 'high'],
         'ci-fix': ['gpt-6.1-sol', 'low'],
         'review-fix': ['gpt-6.1-sol', 'low'],
       },
@@ -2151,6 +2152,7 @@ test('the boundary launches every native base and escalation tuple for both runt
         integrator: ['claude-sonnet-5-5', 'xhigh'],
         'drift-check': ['claude-sonnet-5-5', 'medium'],
         'arch-review': ['claude-sonnet-5-5', 'xhigh'],
+        'code-review': ['claude-sonnet-5-5', 'xhigh'],
         'ci-fix': ['claude-sonnet-5-5', 'high'],
         'review-fix': ['claude-sonnet-5-5', 'high'],
       },
@@ -2163,12 +2165,16 @@ test('the boundary launches every native base and escalation tuple for both runt
       ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
       ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.1-sol', 'xhigh'],
       ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+      ['codex', 'code-review', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+      ['codex', 'code-review', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
       ['claude', 'research', { type: 'alternatives' }, 'base', 'claude-sonnet-5-5', 'xhigh'],
       ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'claude-opus-5-5', 'high'],
       ['claude', 'decomposition', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
       ['claude', 'executor', { critical: true }, 'critical', 'claude-sonnet-5-5', 'xhigh'],
       ['claude', 'integrator', { contested: true }, 'critical', 'claude-opus-5-5', 'high'],
       ['claude', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'medium'],
+      ['claude', 'code-review', { critical: true }, 'critical', 'claude-opus-5-5', 'high'],
+      ['claude', 'code-review', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
     ];
     const recorder = boundaryModule.createDurableRecorder(storeDir);
     const launched = [];

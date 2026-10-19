@@ -2453,6 +2453,11 @@ test('every ladder role has a cardinality, and only the guard runs as one agent 
   const perRound = Object.keys(AGENT_CARDINALITY).filter((r) => AGENT_CARDINALITY[r] === 'round');
   assert.deepStrictEqual(perRound, ['pr-sentinel'],
     'the guard is the only role dispatched once per round; every other role is one agent per ticket');
+  assert.ok(ROLES.includes('code-review'), 'code-review is a ladder role');
+  assert.strictEqual(AGENT_CARDINALITY['code-review'], 'ticket', 'code-review is one agent per record');
+  const { roles } = computeFront({}, {});
+  assert.ok(!Object.values(roles).some((list) => list.includes('code-review')),
+    'no bucket hands work to code-review; the flow dispatches it, not the board');
 });
 
 test('one guard holding four guarded PRs is ONE agent — in_flight 1, free 3', () => {

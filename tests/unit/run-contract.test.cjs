@@ -192,6 +192,8 @@ test('checkpoint transitions survive canonical revalidation with an absent diges
 
 // @contract: Synthetic historical metadata does not authenticate runtime execution.
 const historicalHash = '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968';
+const v7Hash = '3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570';
+const v8Hash = 'fc1706bc9272bd0f539fbd71fa966b736df15c2cadfc2a76a8b84924b33584b8';
 test('recorded Sol preserves its native identity and independently checks concrete model', () => {
   const input = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6-sol', policy_version: 'adr-014.v6', policy_hash: historicalHash };
   assert.deepEqual(contract.normalizeDispatchIdentity(input), input);
@@ -203,12 +205,14 @@ const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime
 const fixturePalettes = {
   'adr-014.v6': { codex: { sol: 'gpt-6-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' } },
   'adr-014.v7': { codex: { sol: 'gpt-6.1-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'fable' } },
+  'adr-014.v8': { codex: { sol: 'gpt-6.1-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'fable' } },
 };
+const hashOfVersion = { 'adr-014.v6': historicalHash, 'adr-014.v7': v7Hash, 'adr-014.v8': currentPolicy.POLICY_HASH };
 test('synthetic recorded palette matrix preserves dispatches and receipts, while history stays stale', () => {
   for (const [version, runtimes] of Object.entries(fixturePalettes)) {
     for (const [runtime, palette] of Object.entries(runtimes)) {
       for (const [key, model] of Object.entries(palette)) {
-        const input = { dispatch_id: 'fixture', role: 'executor', runtime, model_key: key, model, policy_version: version, policy_hash: version.endsWith('v6') ? historicalHash : currentPolicy.POLICY_HASH };
+        const input = { dispatch_id: 'fixture', role: 'executor', runtime, model_key: key, model, policy_version: version, policy_hash: hashOfVersion[version] };
         const output = contract.normalizeDispatchIdentity(input);
         assert.equal(output.model, model);
         assert.equal(output.model_key, key);
@@ -219,14 +223,15 @@ test('synthetic recorded palette matrix preserves dispatches and receipts, while
         assert.equal(receipt.observed_model, model);
         assert.equal(receipt.policy_hash, input.policy_hash);
         assert.deepEqual(contract.normalizeReceiptIdentity(receipt), receipt);
-        if (version.endsWith('v6')) {
+        if (version !== currentPolicy.POLICY_VERSION) {
           const resolution = currentPolicy.resolveDispatch({ runtime, role: 'executor', signals: {} });
-          assert.throws(() => currentPolicy.validateResolution({ ...resolution, model, model_key: key, policy_version: version, policy_hash: historicalHash }), { code: 'STALE_POLICY' });
+          assert.throws(() => currentPolicy.validateResolution({ ...resolution, model, model_key: key, policy_version: version, policy_hash: hashOfVersion[version] }), { code: 'STALE_POLICY' });
         }
       }
     }
   }
-  assert.equal(currentPolicy.POLICY_VERSION, 'adr-014.v7');
+  assert.equal(currentPolicy.POLICY_VERSION, 'adr-014.v8');
+  assert.equal(hashOfVersion['adr-014.v8'], v8Hash);
   assert.equal(runtimeAdapters.matchesModelObservation('claude', 'sonnet', 'claude-sonnet-5-5'), false);
   assert.equal(runtimeAdapters.matchesModelObservation('claude', 'claude-fable-1', 'fable'), true);
   assert.equal(contract.normalizeDispatchIdentity({ dispatch_id: 'fresh', runtime: 'codex', role: 'executor', model: 'sol' }).model, 'gpt-6.1-sol');
@@ -275,14 +280,14 @@ test('serialized concrete-only dispatch cannot silently turn a symbolic alias in
 });
 
  test('authoritative policy pairs reject crossed and arbitrary hashes across dispatch and receipts', () => {
-  for (const [version, hash, model] of [['adr-014.v6', historicalHash, 'gpt-6-sol'], ['adr-014.v7', currentPolicy.POLICY_HASH, 'gpt-6.1-sol']]) {
+  for (const [version, hash, model] of [['adr-014.v6', historicalHash, 'gpt-6-sol'], ['adr-014.v7', v7Hash, 'gpt-6.1-sol'], ['adr-014.v8', currentPolicy.POLICY_HASH, 'gpt-6.1-sol']]) {
     const base = { ...makeScope().dispatch, model_key: 'sol', model, policy_version: version, policy_hash: hash };
-    for (const invalid of [version.endsWith('v6') ? currentPolicy.POLICY_HASH : historicalHash, 'a'.repeat(64)]) {
+    for (const invalid of [...[historicalHash, v7Hash, v8Hash].filter((other) => other !== hash), 'a'.repeat(64)]) {
       assert.throws(() => contract.normalizeDispatchIdentity({ ...base, policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
       assert.throws(() => contract.normalizeReceiptIdentity({ ...base, receipt_id: 'r', run_id: 'r', requested_model: model, policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
     }
   }
-  assert.equal(currentPolicy.POLICY_HASH, '3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570');
+  assert.equal(currentPolicy.POLICY_HASH, v8Hash);
 });
 test('serialized requested models require recorded native values while fresh Sonnet aliases remain supported', () => {
   const serialized = {

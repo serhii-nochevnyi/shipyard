@@ -424,9 +424,8 @@ test('read-only judgment roles can write only their evidence file', async () => 
       env: { CODEX_HOME: codeHome },
       spawn: (_executable, args, options) => {
         calls.push(args);
-        const session = count++ === 0
-          ? '44444444-4444-4444-8444-444444444444'
-          : '55555555-5555-4555-8555-555555555555';
+        const session = ['44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555',
+          '66666666-6666-4666-8666-666666666666', '77777777-7777-4777-8777-777777777777'][count++];
         writeSession(options.env.CODEX_HOME, session, 'gpt-6.1-sol', 'high');
         return childFor(stream(session), 0, 24040 + count, []);
       },
@@ -434,6 +433,8 @@ test('read-only judgment roles can write only their evidence file', async () => 
     for (const [agentFile, evidenceName] of [
       ['shipyard-drift-check.toml', '.shipyard-drift-evidence.md'],
       ['shipyard-arch-review-critical.toml', '.shipyard-arch-review-evidence.md'],
+      ['shipyard-code-review.toml', '.shipyard-code-review-evidence.md'],
+      ['shipyard-code-review-critical.toml', '.shipyard-code-review-evidence.md'],
     ]) {
       const result = await launch('judge', {
         model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only',
@@ -451,7 +452,7 @@ test('read-only judgment roles can write only their evidence file', async () => 
       agent_file: 'shipyard-drift-check.toml', agent_file_digest: digest,
       agent_file_content: content, dispatch_id: 'dispatch-evidence-symlink',
     }), (error) => error.code === 'INVALID_INPUT');
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 4);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -14,11 +14,9 @@ const SELECTION_SHA = 'b09e4ab44ee00bd8600fb34774994a37e46dc2c98d1b311d163b881b9
 const PUBLIC_SHA = 'a2831936134d378395058b84e81ae9411c4da03800933700f1d995ebd51f89c3';
 const FINGERPRINT = '2F485C0A455BA33463F66332900FCE87BD1BFF0D';
 const HEAD = 'bd18893c69484c47db9b6d1b0613b4bac962b237';
-const TREE = '60dc53b466502e62a33d8e8d48233e8469e1c60c';
 const OWNED = ['codex-arch-review-context', 'codex-runtime-host', 'codex-delivery-host',
   'context-packet', 'role-artifact', 'claude-role-host', 'phase-integrator-preflight', 'base-merge']
   .map(name => 'host/plugins/delivery-pipeline/scripts/' + name + '.cjs');
-const CURRENT_ROOT = '/Users/serhii/.local/state/shipyard/phase49-selected-package-6325fd1c268d';
 const CURRENT_SHA = '92270f73cc794f9e3d121767c186330e4d50f8fa44a91750da8f50a3a438be36';
 const CURRENT_HEAD = '6325fd1c268d82eb62c8a9c5749d4eb7a2ce50b6';
 const CURRENT_TREE = '0636ae50a23ae4e5d606b9429c8895c9206bd913';
@@ -75,6 +73,27 @@ function canonicalInputs(repository) {
     .map(row => ({ path: directory + '/' + row.path, sha256: row.sha256, mode: row.mode })));
   assert(rows.length > 0 && rows.length <= 1000, 'canonical input inventory exceeds bound');
   return rows.sort((a, b) => a.path.localeCompare(b.path));
+}
+function currentSourceInventories(outputCount) {
+  const reference = 'plugins/delivery-pipeline/references/code-review.md';
+  const inputs = canonicalInputs(ROOT).map(row => row.path);
+  const outputs = inventory(path.join(ROOT, 'plugins/shipyard')).map(row => row.path);
+  assert.equal(inputs.length, 163);
+  assert.equal(outputs.length, 161);
+  assert(inputs.includes(reference), 'missing canonical code-review reference');
+  assert(!outputs.includes('host/' + reference), 'committed package unexpectedly regenerated');
+  assert([161, 162].includes(outputCount));
+  if (outputCount === 162) outputs.push('host/' + reference);
+  assert.equal(outputs.length, outputCount);
+  for (const rows of [inputs, outputs]) assert.equal(new Set(rows).size, rows.length);
+  return { inputs: 163, outputs: outputCount, inputPaths: inputs.sort(), outputPaths: outputs.sort() };
+}
+function assertInventoryExpectations(selection, expected) {
+  for (const [field, paths] of [['inputs', expected.inputPaths], ['outputs', expected.outputPaths]]) {
+    assert.equal(selection[field].length, expected[field], 'incomplete ' + field + ' inventory');
+    assert.equal(new Set(selection[field].map(row => row.path)).size, expected[field], 'duplicate inventory credit');
+    if (paths) assert.deepEqual(selection[field].map(row => row.path).sort(), paths, 'unexpected ' + field + ' membership');
+  }
 }
 function equalInputs(selected, actual) {
   const ordered = rows => rows.map(({ path, sha256, mode }) => ({ path, sha256, mode }))
@@ -295,178 +314,17 @@ function authenticatePublicSelection(root = STAGE_ROOT, digest = SELECTION_SHA, 
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
 
-test('phase49 original signed host selection: historical immutable stage remains separate', t => {
-  try { fs.accessSync(path.join(STAGE_ROOT, 'selection.json')); }
-  catch (error) {
-    if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
-    t.skip('HOLD: original private host selection unavailable; no native or installed acceptance');
-    return;
-  }
-  const bytes = authenticatePublicSelection();
-  const selection = JSON.parse(bytes);
-  assert.equal(selection.source.head, HEAD);
-  assert.equal(selection.source.tree, TREE);
-  assert.equal(selection.build_calls, 1);
-  const originalInventory = withoutWrites(() => inventory(path.join(STAGE_ROOT, 'candidate'), '', true));
-  assert.equal(originalInventory.length, 161);
-  assert.deepEqual(originalInventory, selection.outputs.map(row => ({ path: row.path, sha256: row.sha256,
-    bytes: row.bytes, mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })));
-  assert.deepEqual(read(path.join(STAGE_ROOT, 'selection.json'), SELECTION_SHA), bytes);
-  const git = (...args) => execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', timeout: 10000 }).trim();
-  assert.equal(git('rev-parse', HEAD + '^{tree}'), TREE);
-  assert.equal(git('rev-parse', HEAD), HEAD);
-  for (const input of selection.inputs) {
-    const committed = execFileSync('git', ['-C', ROOT, 'show', HEAD + ':' + input.path], { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
-    assert.equal(sha(committed), input.sha256, 'original producer source drift');
-    const mode = git('ls-tree', HEAD, '--', input.path).split(' ')[0];
-    assert.equal(mode, input.mode === 0o755 ? '100755' : '100644');
-  }
-  const original = JSON.parse(read(selection.source.original_result, selection.source.original_result_sha256));
-  assert.equal(original.dispatch_id, selection.source.original_dispatch);
-  assert.equal(original.ticket, 'T-49-08');
-  assert.equal(original.receipt.dispatch_id, original.dispatch_id);
-  const transcript = original.receipt.runtime_evidence.transcript;
-  assert.equal(read(transcript.path, transcript.sha256).length, transcript.bytes);
-  t.diagnostic('Signed source attestation and original stream integrity inspected; private DurableRecorder/sealed-artifact authentication remains trusted-host custody. No semantic/native/installed/10x acceptance.');
-});
-
-test('phase49 repaired signed selection: complete161 publication and supported package identity', t => {
-  try { fs.accessSync(path.join(CURRENT_ROOT, 'selection.json')); }
-  catch (error) {
-    if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
-    t.skip('HOLD: original private host selection unavailable; no native or installed acceptance');
-    return;
-  }
-  const bytes = authenticatePublicSelection(CURRENT_ROOT, CURRENT_SHA, 'public-key.asc');
-
-  if (fs.existsSync(path.join(ACCOUNTING_ROOT, 'selection.json'))) {
-    const historical = JSON.parse(bytes);
-    const actual = withoutWrites(() => inventory(historical.stage, '', true));
-    assert.deepEqual(actual, historical.outputs.map(row => ({ path: row.path, sha256: row.sha256,
-      bytes: row.bytes, mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })));
-    assert.equal(historical.source.head, CURRENT_HEAD);
-    assert.equal(historical.source.tree, CURRENT_TREE);
-    assert.equal(historical.build_calls, 1);
-    const git = (...args) => execFileSync('git', ['-C', ROOT, ...args],
-      { encoding: 'utf8', timeout: 10000 }).trim();
-    assert.equal(git('rev-parse', CURRENT_HEAD + '^{tree}'), CURRENT_TREE);
-    for (const input of historical.inputs) {
-      const committed = execFileSync('git', ['-C', ROOT, 'show', CURRENT_HEAD + ':' + input.path],
-        { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
-      assert.equal(sha(committed), input.sha256, 'historical canonical source drift');
-      assert.equal(git('ls-tree', CURRENT_HEAD, '--', input.path).split(' ')[0],
-        input.mode === 0o755 ? '100755' : '100644');
-    }
-    const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
-    const verified = coverage.verify({ commit: CURRENT_HEAD, repo: coverage.repoSlug(ROOT), worktree: ROOT });
-    assert.equal(verified.covered, true, 'historical source authority: ' + verified.reason);
-    const original = JSON.parse(read(historical.source.original_result, historical.source.original_result_sha256));
-    assert.equal(original.ticket, 'T-49-08');
-    assert.equal(original.dispatch_id, historical.source.original_dispatch);
-    assert.deepEqual(coverage.validateFinalizationEvidence(verified.record).receipt, original.receipt);
-    const stream = original.receipt.runtime_evidence.transcript;
-    assert.equal(read(stream.path, stream.sha256).length, stream.bytes);
-    t.diagnostic('Original6325 remains immutable historical authority; changed-source distribution is checked separately.');
-    return;
-  }
-
-  const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
-  const namespace = coverage.repoSlug(ROOT);
-  const history = [CURRENT_HEAD, 'bd2d58b2e3f55d441d0ff3cbd26fba34849e7ea5',
-    '705fdec2f96c90c28c787f49974a66da959638a5', '24c139fabd0d80bbd413ea20175fb3f28e60cd97'];
-  const records = history.map(commit => {
-    const verified = coverage.verify({ commit, repo: namespace, worktree: ROOT });
-    assert.equal(verified.covered, true, 'protected historical source authority: ' + verified.reason);
-    return verified.record;
-  });
-  const gitCurrent = (...args) => execFileSync('git', ['-C', ROOT, ...args],
-    { encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024 }).trim();
-  const successorHead = history[3], successorTree = records[3].tree;
-  assert.equal(records[1].tree, successorTree);
-  assert.equal(records[2].tree, successorTree);
-  assert.equal(gitCurrent('rev-parse', '91611a76d3ff5cb380775cbca4873fb848b7a874^{tree}'), successorTree);
-  assert.equal(gitCurrent('rev-parse', successorHead), successorHead);
-  const changed = gitCurrent('diff', '--name-only', '--no-renames', CURRENT_HEAD, successorHead)
-    .split('\n').filter(Boolean);
-  assert.deepEqual(changed, ['tests/unit/role-artifact.test.cjs']);
-  const selected = JSON.parse(bytes);
-  equalInputs(selected.inputs, canonicalInputs(ROOT));
-  const selectedOriginal = JSON.parse(read(selected.source.original_result, selected.source.original_result_sha256));
-  const successorStored = coverage.validateFinalizationEvidence(records[1]);
-  const originalStored = coverage.validateFinalizationEvidence(records[0]);
-  assert.deepEqual(originalStored.receipt, selectedOriginal.receipt, 'original recorder equality');
-  assert.equal(successorStored.receipt.policy_hash, selectedOriginal.receipt.policy_hash, 'runtime policy changed');
-  for (const receipt of [originalStored.receipt, successorStored.receipt]) {
-    const stream = receipt.runtime_evidence.transcript;
-    assert.equal(read(stream.path, stream.sha256).length, stream.bytes);
-    assert.equal(receipt.compliance, 'verified');
-  }
-  const ci = JSON.parse(read('/Users/serhii/.local/state/shipyard/T-49-08-current-epic-ci-admission.json',
-    '7940bb8157246f0bd11c5cff959aee2b8e1530459dcd50cf4ef31b0d7ea76e2d'));
-  assert.equal(ci.headSha, successorHead);
-  assert.equal(ci.status, 'completed'); assert.equal(ci.conclusion, 'success');
-  const job = ci.jobs.find(row => row.name === 'test-fast');
-  assert(job && job.status === 'completed' && job.conclusion === 'success');
-  for (const name of ['publish gate', 'runtime digest trailer', 'make test-fast']) {
-    const step = job.steps.find(row => row.name === name);
-    assert(step && step.status === 'completed' && step.conclusion === 'success');
-  }
-  const log = read('/Users/serhii/.local/state/shipyard/phase49-T49-08-current-epic-ci-success.log',
-    '9bcf115e27bfe1050178354b96c325421eba82838ddc06d3e05bac3637f1c97f');
-  assert.match(log.toString(), /claude statusline smoke passed/);
-  assert.match(log.toString(), /test-fast\tComplete job\t/);
-  const marker = JSON.parse(read('/Users/serhii/.local/state/shipyard/phase49-T49-09-input-inventory-repair-copies.json'));
-  assert.equal(marker.selection_sha256, CURRENT_SHA);
-  assert.equal(marker.source_head, CURRENT_HEAD);
-  assert.equal(marker.build_calls, 1);
-  assert.equal(marker.complete_inventory, 161);
-  assert.deepEqual(marker.published, COMPLETE_OWNED.map(relative => 'plugins/shipyard/' + relative));
-  t.diagnostic('Historical source/native finalization and full canonical equality checked separately from original selection. CI/copy diagnostics remain coordinator-owned; no current semantic credit or installed acceptance.');
-
-  const result = withoutWrites(() => inspect(bytes, { selection_sha256: CURRENT_SHA, head: CURRENT_HEAD,
-    tree: CURRENT_TREE }, ROOT, path.join(CURRENT_ROOT, 'candidate')));
-  assert.equal(result.complete_publication, true);
-  assert.equal(result.scoped_outputs, 15);
-  inspectRuntimeConsumers(ROOT);
-  const selection = JSON.parse(bytes);
-  const historical = JSON.parse(read(path.join(STAGE_ROOT, 'selection.json'), SELECTION_SHA));
-  assert.deepEqual(selection.outputs.map(row => row.path), historical.outputs.map(row => row.path),
-    'repaired candidate changed original complete package path set');
-  assert.notEqual(selection.package.digest, historical.package.digest, 'old candidate substituted');
-  assert.equal(selection.source.head, CURRENT_HEAD);
-  assert.equal(selection.source.tree, CURRENT_TREE);
-  assert.equal(selection.build_calls, 1);
-  const originalInventory = withoutWrites(() => inventory(path.join(CURRENT_ROOT, 'candidate'), '', true));
-  assert.equal(originalInventory.length, 161);
-  assert.deepEqual(originalInventory, selection.outputs.map(row => ({ path: row.path, sha256: row.sha256,
-    bytes: row.bytes, mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })));
-  assert.deepEqual(read(path.join(CURRENT_ROOT, 'selection.json'), CURRENT_SHA), bytes);
-  const git = (...args) => execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', timeout: 10000 }).trim();
-  assert.equal(git('rev-parse', CURRENT_HEAD + '^{tree}'), CURRENT_TREE);
-  assert.equal(git('rev-parse', CURRENT_HEAD), CURRENT_HEAD);
-  for (const input of selection.inputs) {
-    const committed = execFileSync('git', ['-C', ROOT, 'show', CURRENT_HEAD + ':' + input.path], { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
-    assert.equal(sha(committed), input.sha256, 'original producer source drift');
-    const mode = git('ls-tree', CURRENT_HEAD, '--', input.path).split(' ')[0];
-    assert.equal(mode, input.mode === 0o755 ? '100755' : '100644');
-  }
-  const original = JSON.parse(read(selection.source.original_result, selection.source.original_result_sha256));
-  assert.equal(original.dispatch_id, selection.source.original_dispatch);
-  assert.equal(original.ticket, 'T-49-08');
-  assert.equal(original.receipt.dispatch_id, original.dispatch_id);
-  const transcript = original.receipt.runtime_evidence.transcript;
-  assert.equal(read(transcript.path, transcript.sha256).length, transcript.bytes);
-  t.diagnostic('Signed source attestation and original stream integrity inspected; private DurableRecorder/sealed-artifact authentication remains trusted-host custody. No semantic/native/installed/10x acceptance.');
-});
 
 
-function inspectAccountingSuccessor(bytes, expected, repository, stage, historical) {
+
+function inspectAccountingSuccessor(bytes, expected, repository, stage, historical,
+  inventories = { inputs: 162, outputs: 161 }) {
   const selected = JSON.parse(bytes);
   assert.notEqual(selected.source.head, historical.source.head, 'old producer substituted');
   assert.notEqual(stage, historical.stage, 'historical stage reused');
   assert.notEqual(selected.package.digest, historical.package.digest, 'old package substituted');
-  assert.equal(selected.inputs.length, 162, 'incomplete canonical input inventory');
-  assert.equal(historical.outputs.length, 161);
+  assertInventoryExpectations(selected, inventories);
+  assertInventoryExpectations(historical, inventories);
   assert.deepEqual(selected.inputs.map(row => row.path).sort(), historical.inputs.map(row => row.path).sort(),
     'canonical input paths added or removed');
   const changedInputs = selected.inputs.filter(row => {
@@ -486,7 +344,8 @@ function inspectAccountingSuccessor(bytes, expected, repository, stage, historic
   assert.deepEqual(changed, [...ACCOUNTING_OWNED].sort(), 'unexpected generated delta requires ownership amendment');
   const result = inspect(bytes, expected, repository, stage);
   inspectAccountingAPIs(path.join(repository, 'plugins/shipyard/host/plugins/delivery-pipeline'));
-  return { ...result, unchanged_outputs: 157, installed_acceptance: false, empirical_acceptance: false };
+  return { ...result, unchanged_outputs: inventories.outputs - changed.length,
+    installed_acceptance: false, empirical_acceptance: false };
 }
 
 const MODE_ROOT = '/Users/serhii/.local/state/shipyard/phase49-selected-package-7d1608645431';
@@ -504,6 +363,7 @@ const BATCH_OUTPUTS = BATCH_INPUTS.map(relative => 'host/' + relative)
   .concat('.codex-plugin/plugin.json', 'package-build.json');
 
 test('combined batch successor admits only the six-source/eight-output union and preserves modes', () => {
+  const inventories = currentSourceInventories(161);
   const historical = { source: { head: 'original15', tree: 'original15-tree' }, stage: '/original15',
     build_calls: 1, builder_sha256: 'builder', package: { digest: 'original15' },
     inputs: canonicalInputs(ROOT), outputs: inventory(path.join(ROOT, 'plugins/shipyard'))
@@ -513,10 +373,10 @@ test('combined batch successor admits only the six-source/eight-output union and
   selected.stage = '/combined17'; selected.package.digest = 'combined17';
   for (const row of selected.inputs) if (BATCH_INPUTS.includes(row.path)) row.sha256 = 'a'.repeat(64);
   for (const row of selected.outputs) if (BATCH_OUTPUTS.includes(row.path)) row.sha256 = 'b'.repeat(64);
-  const observed = inspectBatchDelta(selected, historical);
+  const observed = inspectBatchDelta(selected, historical, inventories);
   assert.deepEqual(observed.changed_inputs, [...BATCH_INPUTS].sort());
   assert.deepEqual(observed.changed_outputs, [...BATCH_OUTPUTS].sort());
-  assert.equal(observed.unchanged_inputs, 156); assert.equal(observed.unchanged_outputs, 153);
+  assert.equal(observed.unchanged_inputs, 157); assert.equal(observed.unchanged_outputs, 153);
   for (const mutate of [
     value => { value.inputs.pop(); },
     value => { value.outputs.pop(); },
@@ -530,18 +390,20 @@ test('combined batch successor admits only the six-source/eight-output union and
     value => { value.builder_sha256 = 'foreign'; },
   ]) {
     const altered = structuredClone(selected); mutate(altered);
-    assert.throws(() => inspectBatchDelta(altered, historical));
+    assert.throws(() => inspectBatchDelta(altered, historical, inventories));
   }
   const unchanged = structuredClone(selected);
   for (const field of ['inputs', 'outputs']) {
     const row = unchanged[field].find(item => item.path === (field === 'inputs' ? BATCH_INPUTS[0] : 'host/' + BATCH_INPUTS[0]));
     row.sha256 = historical[field].find(item => item.path === row.path).sha256;
   }
-  assert.equal(inspectBatchDelta(unchanged, historical).unchanged_inputs, 157);
-  assert.equal(inspectBatchDelta(unchanged, historical).unchanged_outputs, 154);
+  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_inputs, 158);
+  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_outputs, 154);
 });
 
-function inspectBatchDelta(selected, historical) {
+function inspectBatchDelta(selected, historical, inventories = { inputs: 162, outputs: 161 }) {
+  assertInventoryExpectations(selected, inventories);
+  assertInventoryExpectations(historical, inventories);
   assert.notEqual(selected.source.head, historical.source.head, 'old producer substituted');
   assert.notEqual(selected.source.tree, historical.source.tree, 'old source tree substituted');
   assert.notEqual(selected.stage, historical.stage, 'historical stage reused');
@@ -550,7 +412,7 @@ function inspectBatchDelta(selected, historical) {
   assert.notEqual(selected.package.digest, historical.package.digest, 'old package substituted');
   const result = {};
   for (const [field, count, mode, allowed] of [
-    ['inputs', 162, 'mode', BATCH_INPUTS], ['outputs', 161, 'publication_mode', BATCH_OUTPUTS],
+    ['inputs', inventories.inputs, 'mode', BATCH_INPUTS], ['outputs', inventories.outputs, 'publication_mode', BATCH_OUTPUTS],
   ]) {
     const rows = selected[field], oldRows = historical[field];
     assert.equal(rows.length, count); assert.equal(oldRows.length, count);
@@ -852,92 +714,7 @@ const BATCH_ROOT = '/Users/serhii/.local/state/shipyard/phase49-selected-package
 const BATCH_SHA = 'ba4be421f42a856091e11d8347ff698a8abfb33dd32ff1427ca855d0926769b7';
 const BATCH_HEAD = '23c54b703811d4ebdebe23b260fd00e12e8c227b';
 const BATCH_TREE = '5998044394d6021e07c7ebebe2d9469f6c9cd03e';
-const BATCH_OBSERVATION = '/Users/serhii/.local/state/shipyard/phase49-T49-17-combined-stage-ready-observation.json';
 
-test('original combined stage independently pins all162/all161 and exact same-stage publication', t => {
-  if (!fs.existsSync(BATCH_OBSERVATION) || !fs.existsSync(path.join(BATCH_ROOT, 'selection.json'))) {
-    t.skip('HOLD: original combined stage unavailable; no installed or empirical acceptance');
-    return;
-  }
-  const marker = JSON.parse(read(BATCH_OBSERVATION,
-    'f8c6eef922fbf703c82cf43902c8fa3d8df327af839e4d3a365f27e27a634ae6'));
-  assert.equal(marker.ready, true); assert.equal(marker.build_calls, 1);
-  assert.equal(marker.root, BATCH_ROOT); assert.equal(marker.selection_sha256, BATCH_SHA);
-  assert.equal(marker.source_head, BATCH_HEAD); assert.equal(marker.source_tree, BATCH_TREE);
-  const copies = JSON.parse(read(marker.original_copies,
-    '6e186575670e53d73b28219c37863b2d61a20d9c2fc298ade853f057d69d33a5'));
-  assert.equal(copies.selection_sha256, BATCH_SHA); assert.equal(copies.source_head, BATCH_HEAD);
-  assert.equal(copies.build_calls, 1); assert.equal(copies.canonical_inputs, 162);
-  assert.equal(copies.complete_outputs, 161);
-  assert.deepEqual(copies.published, BATCH_OUTPUTS.map(relative => 'plugins/shipyard/' + relative).sort());
-  const launch = JSON.parse(read(marker.actual_clean_launch,
-    'b84faa5ac72c5beac9b96b91f17682cd1607bbed216ef01fc88160c13fc0b367'));
-  assert.equal(launch.tracked_clean, true); assert.equal(launch.head_still_pinned, true);
-  assert.equal(launch.baseline_head, '099d92d0d7cff9445e67c06d5a02e777741f5155');
-  assert.equal(launch.baseline_tree, BATCH_TREE); assert.equal(launch.source_head, BATCH_HEAD);
-  assert.equal(launch.worktree, '/Volumes/KINGSTON/worktrees/phase47-1-investigation/.wt-claude-shipyard/T-49-17');
-  assert.equal(launch.ticket, 'T-49-17');
-  assert(Number.isSafeInteger(launch.native_process_id) && launch.native_process_id > 0);
-  read(launch.prelaunch_observation.path, launch.prelaunch_observation.sha256);
-  const gitHistory = (...args) => execFileSync('git', ['-C', ROOT, ...args],
-    { timeout: 10000, encoding: 'utf8' }).trim();
-  const mergedModeSource = '9a44d1fec668148ca349f923757a08fece4cccde';
-  const originalModePublication = '7d39c7e7e85d42b75daa05cd4d0affce96aa0d48';
-  const mergedModePublication = '424cc6dd3c7e2b85376ca493586a0fe5f03a626e';
-  assert.equal(gitHistory('rev-parse', mergedModeSource + '^{tree}'), MODE_TREE);
-  assert.equal(gitHistory('rev-parse', MODE_HEAD + '^{tree}'), MODE_TREE);
-  assert.equal(gitHistory('rev-parse', mergedModeSource + '^'), gitHistory('rev-parse', MODE_HEAD + '^'));
-  assert.equal(gitHistory('rev-parse', originalModePublication + '^'), MODE_HEAD);
-  assert.equal(gitHistory('rev-parse', mergedModePublication + '^'), mergedModeSource);
-  assert.equal(gitHistory('rev-parse', originalModePublication + '^{tree}'),
-    gitHistory('rev-parse', mergedModePublication + '^{tree}'));
-  gitHistory('merge-base', '--is-ancestor', mergedModePublication, BATCH_HEAD);
-  const mergedBatchSource = 'a8261467c4be457b9d4b0640cb713b9dc60f50ef';
-  assert.equal(gitHistory('rev-parse', BATCH_HEAD + '^{tree}'), BATCH_TREE);
-  assert.equal(gitHistory('rev-parse', mergedBatchSource + '^{tree}'), BATCH_TREE);
-  gitHistory('merge-base', '--is-ancestor', mergedModePublication, mergedBatchSource);
-  gitHistory('merge-base', '--is-ancestor', mergedBatchSource, 'HEAD');
-  const bytes = authenticatePublicSelection(BATCH_ROOT, BATCH_SHA, 'public-key.asc');
-  const historicalBytes = authenticatePublicSelection(MODE_ROOT, MODE_SHA, 'public-key.asc');
-  const selected = JSON.parse(bytes), historical = JSON.parse(historicalBytes);
-  const sourceReceipt = authenticateBatchSource(selected, 'T-49-18', BATCH_HEAD, BATCH_TREE);
-  const modeReceipt = authenticateBatchSource(historical, 'T-49-14', MODE_HEAD, MODE_TREE);
-  assert.equal(sourceReceipt.policy_hash, modeReceipt.policy_hash, 'original runtime policy changed');
-  const custody = JSON.parse(read('/Users/serhii/.local/state/shipyard/phase49-T49-18-23c54b7-original-native-custody.json',
-    '798e83b17e188bd4a40ea3da522a7e0a2b31428524eea773128979ddfe600f5c'));
-  assert.equal(custody.length, 2);
-  for (const row of custody) assert.equal(read(row.path, row.sha256).length, row.bytes);
-  const originalNative = custody.find(row => row.sha256 === sourceReceipt.runtime_evidence.native_session_evidence.sha256);
-  assert(originalNative, 'original native SOURCE18 custody association missing');
-  inspectBatchNative(sourceReceipt, originalNative.path);
-  inspectBatchNative(modeReceipt, '/Users/serhii/.codex/sessions/2026/10/11/'
-    + 'rollout-2026-10-11T01-29-19-01a127ef-553a-7b60-9f6a-44b06f65dcd6.jsonl');
-  assert.equal(selected.source.original_dispatch, 'dispatch-mv6qeery-c845642f-c8af-4b56-bb04-b0777b47b944');
-  const producer = JSON.parse(read(marker.source_original_producer,
-    '84b7042fe4feabf504cd0965c5374d22054e6915b314ec4b50dd896789bc643a'));
-  assert.equal(producer.artifact_digest, selected.source.artifact_digest);
-  assert.equal(producer.envelope.role, 'executor'); assert.equal(producer.envelope.ticket, 'T-49-18');
-  const sourceCI = JSON.parse(read(marker.source_full_ci,
-    '87d5a8d6b1236ca243086afba80e08f6198245eb71fd18d79d719d547d71272d'));
-  inspectBatchCI(sourceCI, BATCH_HEAD);
-  const result = historicalAccountingRepository(selected, originalRepository => {
-    assert.deepEqual(withoutWrites(() => inventory(path.join(originalRepository, 'plugins/shipyard'))),
-      selected.outputs.map(row => ({ path: row.path, sha256: row.sha256,
-        bytes: row.bytes, mode: row.publication_mode })), 'original same-stage publication changed');
-    return historicalAccountingRepository(JSON.parse(historicalBytes), historicalRepository =>
-      withoutWrites(() => inspectBatchSuccessor(bytes,
-        { selection_sha256: BATCH_SHA, head: BATCH_HEAD, tree: BATCH_TREE }, originalRepository,
-        path.join(BATCH_ROOT, 'candidate'), historicalBytes,
-        { selection_sha256: MODE_SHA, head: MODE_HEAD, tree: MODE_TREE }, historicalRepository)));
-  });
-  assert.deepEqual(result.changed_inputs, [...BATCH_INPUTS].sort());
-  assert.deepEqual(result.changed_outputs, [...BATCH_OUTPUTS].sort());
-  assert.equal(result.unchanged_inputs, 156); assert.equal(result.unchanged_outputs, 153);
-  assert.equal(result.inspector_build_calls, 0); assert.equal(result.installed_acceptance, false);
-  assert.equal(result.empirical_acceptance, false);
-  assert.deepEqual(read(path.join(MODE_ROOT, 'selection.json'), MODE_SHA), historicalBytes);
-  t.diagnostic('Original combined publication inspected. Supported actual isolated installation and exact publication17 CI remain separate; native11 empirical acceptance stays HOLD.');
-});
 
 function inspectBatchInstalledPhysical(identity, selected, proof) {
   assert.equal(identity.source_dirty, false, 'dirty installed source');
@@ -986,7 +763,9 @@ function inspectBatchInstalledPhysical(identity, selected, proof) {
     actual_isolated_gsd_version: proof.gsd_version.version, empirical_acceptance: false };
 }
 
-function inspectModeDelta(selected, historical) {
+function inspectModeDelta(selected, historical, inventories = { inputs: 162, outputs: 161 }) {
+  assertInventoryExpectations(selected, inventories);
+  assertInventoryExpectations(historical, inventories);
   assert.notEqual(selected.source.head, historical.source.head, 'old producer substituted');
   assert.notEqual(selected.source.tree, historical.source.tree, 'old source tree substituted');
   assert.notEqual(selected.stage, historical.stage, 'historical stage reused');
@@ -994,8 +773,9 @@ function inspectModeDelta(selected, historical) {
   assert.equal(historical.build_calls, 1);
   assert.equal(selected.builder_sha256, historical.builder_sha256, 'builder changed');
   assert.deepEqual(selected.package, historical.package, 'mode-only metadata changed');
+  const result = {};
   for (const [field, count, mode, member] of [
-    ['inputs', 162, 'mode', MODE_INPUT], ['outputs', 161, 'publication_mode', MODE_OUTPUT],
+    ['inputs', inventories.inputs, 'mode', MODE_INPUT], ['outputs', inventories.outputs, 'publication_mode', MODE_OUTPUT],
   ]) {
     const rows = selected[field], oldRows = historical[field];
     assert.equal(rows.length, count); assert.equal(oldRows.length, count);
@@ -1016,23 +796,28 @@ function inspectModeDelta(selected, historical) {
       }
     }
     assert.deepEqual(changed, [member], 'unexpected mode delta requires ownership amendment');
+    result['changed_' + field] = changed;
   }
+  return result;
 }
 
-function inspectModeSuccessor(bytes, expected, repository, stage, historicalBytes, historicalExpected) {
+function inspectModeSuccessor(bytes, expected, repository, stage, historicalBytes, historicalExpected,
+  inventories = { inputs: 162, outputs: 161 }) {
   assert.equal(sha(historicalBytes), historicalExpected.selection_sha256, 'historical selection changed');
   const historical = JSON.parse(historicalBytes), selected = JSON.parse(bytes);
   assert.equal(historical.source.head, historicalExpected.head);
   assert.equal(historical.source.tree, historicalExpected.tree);
   assert.notEqual(expected.selection_sha256, historicalExpected.selection_sha256, 'old selection substituted');
   assert.equal(sha(bytes), expected.selection_sha256);
-  inspectModeDelta(selected, historical);
+  const delta = inspectModeDelta(selected, historical, inventories);
   const oldInventory = inventory(historical.stage, '', true);
   assert.deepEqual(oldInventory, historical.outputs.map(row => ({ path: row.path, sha256: row.sha256,
     bytes: row.bytes, mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })));
   const result = inspect(bytes, expected, repository, stage);
   inspectAccountingAPIs(path.join(repository, 'plugins/shipyard/host/plugins/delivery-pipeline'));
-  return { ...result, changed_modes: 1, unchanged_outputs: 160, unchanged_output_bytes: 161,
+  return { ...result, changed_modes: delta.changed_outputs.length,
+    unchanged_outputs: inventories.outputs - delta.changed_outputs.length,
+    unchanged_output_bytes: inventories.outputs,
     installed_acceptance: false, empirical_acceptance: false };
 }
 
@@ -1156,6 +941,7 @@ test('mode-only successor rejects same-version old identity and complete invento
   const repository = path.join(temporary, 'repository');
   try {
     build(stage);
+    const inventories = currentSourceInventories(162);
     const inputs = canonicalInputs(ROOT);
     for (const input of inputs) {
       const target = path.join(repository, input.path);
@@ -1190,9 +976,9 @@ test('mode-only successor rejects same-version old identity and complete invento
     assert(crypto.verify(null, bytes, publicKey, signature));
     assert(!crypto.verify(null, oldBytes, publicKey, signature));
     const consume = (value = bytes, pins = expected) => withoutWrites(() =>
-      inspectModeSuccessor(value, pins, repository, stage, oldBytes, oldExpected));
-    assert.equal(consume().unchanged_outputs, 160);
-    assert.equal(consume().unchanged_output_bytes, 161);
+      inspectModeSuccessor(value, pins, repository, stage, oldBytes, oldExpected, inventories));
+    assert.equal(consume().unchanged_outputs, 161);
+    assert.equal(consume().unchanged_output_bytes, 162);
     assert.equal(consume().inspector_build_calls, 0);
     assert.throws(() => consume(oldBytes, oldExpected), /old selection substituted/);
     for (const mutate of [
@@ -1256,102 +1042,7 @@ test('installed mode admission refuses forged references and incomplete exact pu
   }
 });
 
-test('distinct signed mode successor independently inspects full162/all161 without production builds', t => {
-  const markerPath = '/Users/serhii/.local/state/shipyard/phase49-T49-15-installed-mode-selected-copies.json';
-  if (!fs.existsSync(markerPath) || !fs.existsSync(path.join(MODE_ROOT, 'selection.json'))) {
-    t.skip('HOLD: coordinator mode selection/copy evidence unavailable; no installed or empirical acceptance');
-    return;
-  }
-  const marker = JSON.parse(read(markerPath));
-  const digest = MODE_SHA;
-  assert.equal(marker.selection_sha256, digest);
-  assert.equal(marker.source_head, MODE_HEAD); assert.equal(marker.build_calls, 1);
-  assert.deepEqual(marker.published, ['plugins/shipyard/' + MODE_OUTPUT]);
-  assert(![ACCOUNTING_SHA, CURRENT_SHA, SELECTION_SHA].includes(digest));
-  const bytes = authenticatePublicSelection(MODE_ROOT, digest, 'public-key.asc');
-  const historicalBytes = authenticatePublicSelection(ACCOUNTING_ROOT, ACCOUNTING_SHA, 'public-key.asc');
-  const expected = { selection_sha256: digest, head: MODE_HEAD, tree: MODE_TREE };
-  const result = historicalAccountingRepository(JSON.parse(bytes), repository => withoutWrites(() =>
-    inspectModeSuccessor(bytes, expected, repository, path.join(MODE_ROOT, 'candidate'),
-      historicalBytes, { selection_sha256: ACCOUNTING_SHA, head: ACCOUNTING_HEAD, tree: ACCOUNTING_TREE })));
-  assert.equal(result.unchanged_outputs, 160); assert.equal(result.inspector_build_calls, 0);
-  const accountingBaseline = JSON.parse(authenticatePublicSelection(CURRENT_ROOT, CURRENT_SHA, 'public-key.asc'));
-  const historical = JSON.parse(historicalBytes);
-  const byteChanges = historical.outputs.filter(row => {
-    const old = accountingBaseline.outputs.find(previous => previous.path === row.path);
-    assert(old, 'cumulative output path missing');
-    return row.sha256 !== old.sha256 || row.bytes !== old.bytes;
-  }).map(row => row.path).sort();
-  assert.deepEqual(byteChanges, [...ACCOUNTING_OWNED].sort(), 'historical four accounting byte changes');
-  const selected = JSON.parse(bytes);
-  const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
-  const verified = coverage.verify({ commit: MODE_HEAD, repo: coverage.repoSlug(ROOT), worktree: ROOT });
-  assert.equal(verified.covered, true, 'protected final14 source authority: ' + verified.reason);
-  assert.equal(verified.record.tree, MODE_TREE);
-  const original = JSON.parse(read(selected.source.original_result, selected.source.original_result_sha256));
-  assert.equal(original.ticket, 'T-49-14'); assert.equal(original.dispatch_id, selected.source.original_dispatch);
-  assert.deepEqual(coverage.validateFinalizationEvidence(verified.record).receipt, original.receipt);
-  const stream = original.receipt.runtime_evidence.transcript;
-  assert.equal(read(stream.path, stream.sha256).length, stream.bytes);
-  const ci = JSON.parse(read('/Users/serhii/.local/state/shipyard/phase49-T49-14-installed-mode-ci-admission.json'));
-  assert.equal(ci.headSha, MODE_HEAD); assert.equal(ci.status, 'completed'); assert.equal(ci.conclusion, 'success');
-  const job = ci.jobs.find(row => row.name === 'test-fast');
-  assert(job && job.status === 'completed' && job.conclusion === 'success');
-  for (const name of ['publish gate', 'runtime digest trailer', 'make test-fast']) {
-    const step = job.steps.find(row => row.name === name);
-    assert(step && step.status === 'completed' && step.conclusion === 'success');
-  }
-  read('/Users/serhii/.local/state/shipyard/phase49-T49-14-full-ci-success.log',
-    'ab76711cf608025ce0f8b03909893b7255be46dc1c71907c40d0cd6b60b29ee1');
-  inspectRuntimeConsumers(ROOT);
-  assert.deepEqual(read(path.join(ACCOUNTING_ROOT, 'selection.json'), ACCOUNTING_SHA), historicalBytes);
-  t.diagnostic('Mode distribution only: exact15-head full CI and actual supported isolated package/bundle admission remain separate trusted-host gates. Original13 failed installation remains historical; no empirical acceptance.');
-});
 
-test('fresh completed-accounting selection independently inspects full162/all161 and unchanged157', t => {
-  try { fs.accessSync(path.join(ACCOUNTING_ROOT, 'selection.json')); }
-  catch (error) {
-    if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
-    t.skip('HOLD: coordinator fresh selection pending; no build, installation or empirical acceptance');
-    return;
-  }
-  const digest = ACCOUNTING_SHA;
-  assert(![CURRENT_SHA, SELECTION_SHA].includes(digest));
-  const bytes = authenticatePublicSelection(ACCOUNTING_ROOT, digest, 'public-key.asc');
-  const historicalBytes = authenticatePublicSelection(CURRENT_ROOT, CURRENT_SHA, 'public-key.asc');
-  const historical = JSON.parse(historicalBytes), selected = JSON.parse(bytes);
-  const expected = { selection_sha256: digest, head: ACCOUNTING_HEAD, tree: ACCOUNTING_TREE };
-  const result = historicalAccountingRepository(selected, repository => withoutWrites(() =>
-    inspectAccountingSuccessor(bytes, expected, repository, path.join(ACCOUNTING_ROOT, 'candidate'), historical)));
-  assert.equal(result.unchanged_outputs, 157);
-  assert.equal(result.inspector_build_calls, 0);
-  assert.equal(result.installed_acceptance, false);
-  const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
-  const verified = coverage.verify({ commit: ACCOUNTING_HEAD, repo: coverage.repoSlug(ROOT), worktree: ROOT });
-  assert.equal(verified.covered, true, 'protected final12 source authority: ' + verified.reason);
-  assert.equal(verified.record.tree, ACCOUNTING_TREE);
-  const stored = coverage.validateFinalizationEvidence(verified.record);
-  const original = JSON.parse(read(selected.source.original_result, selected.source.original_result_sha256));
-  assert.equal(original.ticket, 'T-49-12');
-  assert.equal(original.dispatch_id, selected.source.original_dispatch);
-  assert.deepEqual(stored.receipt, original.receipt, 'original recorder equality');
-  const stream = original.receipt.runtime_evidence.transcript;
-  assert.equal(read(stream.path, stream.sha256).length, stream.bytes);
-  const ci = JSON.parse(read('/Users/serhii/.local/state/shipyard/phase49-T49-12-completed-accounting-ci-admission.json'));
-  assert.equal(ci.headSha, ACCOUNTING_HEAD);
-  assert.equal(ci.status, 'completed'); assert.equal(ci.conclusion, 'success');
-  const job = ci.jobs.find(row => row.name === 'test-fast');
-  assert(job && job.status === 'completed' && job.conclusion === 'success');
-  for (const name of ['publish gate', 'runtime digest trailer', 'make test-fast']) {
-    const step = job.steps.find(row => row.name === name);
-    assert(step && step.status === 'completed' && step.conclusion === 'success');
-  }
-  read('/Users/serhii/.local/state/shipyard/phase49-T49-12-completed-accounting-ci-success.log',
-    'cb89005421c2c770ac4acc2ee1a10fbce9d0d0493a88c6bd0ec85847fef23ca7');
-  assert.deepEqual(read(path.join(CURRENT_ROOT, 'selection.json'), CURRENT_SHA), historicalBytes);
-  inspectRuntimeConsumers(ROOT);
-  t.diagnostic('Fresh distribution inspected; actual supported installation and exact13-head full CI remain separate host gates. No empirical acceptance.');
-});
 
 test('isolated canonical candidate rejects tampering, stale binding and replacement without writes', () => {
   const temporary = temporaryDirectory('phase49-publication-fixture-');
@@ -1376,6 +1067,8 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     const selection = { schema: 'shipyard.phase49.selected-package.v1', source: { head: 'fixture-head', tree: 'fixture-tree' },
       stage, build_calls: 1, builder_sha256: sha(read(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))), inputs, outputs,
       package: JSON.parse(read(path.join(stage, 'package-build.json'))) };
+    const inventories = currentSourceInventories(162);
+    assertInventoryExpectations(selection, inventories);
     const bytes = Buffer.from(JSON.stringify(selection));
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
     const signature = crypto.sign(null, bytes, privateKey);
@@ -1628,8 +1321,8 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     fixtureDirectoryModes(distinct, 0o500);
     try {
       const admitted = withoutWrites(() => inspectAccountingSuccessor(distinctBytes, { selection_sha256: sha(distinctBytes),
-        head: distinctSelection.source.head, tree: distinctSelection.source.tree }, repository, distinct, selection));
-      assert.equal(admitted.unchanged_outputs, 157);
+        head: distinctSelection.source.head, tree: distinctSelection.source.tree }, repository, distinct, selection, inventories));
+      assert.equal(admitted.unchanged_outputs, 158);
       for (const mutate of [
         value => { value.source = selection.source; },
         value => { value.stage = selection.stage; },
@@ -1642,7 +1335,7 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
         const alteredBytes = Buffer.from(JSON.stringify(altered));
         assert.throws(() => withoutWrites(() => inspectAccountingSuccessor(alteredBytes,
           { selection_sha256: sha(alteredBytes), head: distinctSelection.source.head,
-            tree: distinctSelection.source.tree }, repository, distinct, selection)));
+            tree: distinctSelection.source.tree }, repository, distinct, selection, inventories)));
       }
       assert.equal(admitted.complete_publication, true);
       assert.equal(admitted.inspector_build_calls, 0);
@@ -1863,7 +1556,6 @@ const FOCUSED_ROOT = '/Users/serhii/.local/state/shipyard/phase49-selected-packa
 const FOCUSED_SHA = 'a807ba249697875b7fd94981133044a80a850b5f91640264f3646abe262bbe59';
 const FOCUSED_HEAD = 'b51406f524f576178296aee74f602e0805077ee7';
 const FOCUSED_TREE = '2ab50ef18f495d4d1b52f4976cce736594f6b781';
-const FOCUSED_BASE = '2fda4e9451bd6c34cd1aa5034223540c45b83495';
 const FOCUSED_INPUTS = ['codex-arch-review-context', 'codex-delivery-host', 'codex-runtime-host',
   'role-artifact', 'claude-role-host'].map(name => 'plugins/delivery-pipeline/scripts/' + name + '.cjs')
   .concat('plugins/delivery-pipeline/references/arch-review.md');
@@ -2111,52 +1803,6 @@ if (require.main === module) {
     } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
   });
 
-  test('focused original signed source and stage remain distinct from publication and installation', async t => {
-    try { fs.accessSync(path.join(FOCUSED_ROOT, 'selection.json')); }
-    catch (error) {
-      if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
-      t.skip('HOLD: original focused host custody unavailable; no native or installed acceptance');
-      return;
-    }
-    const bytes = authenticatePublicSelection(FOCUSED_ROOT, FOCUSED_SHA, 'public-key.asc');
-    const selected = JSON.parse(bytes);
-    const receipt = authenticateBatchSource(selected, 'T-49-20', FOCUSED_HEAD, FOCUSED_TREE);
-    inspectBatchNative(receipt, '/Users/serhii/.codex/sessions/2026/10/14/' + receipt.runtime_evidence.native_session_evidence.file);
-    const state = '/Users/serhii/.local/state/shipyard/';
-    const launch = JSON.parse(read(state + 'phase49-focused-review-T49-21-actual-clean-native-before-stage.json',
-      'd0de77d8adf11120e9f2e236fc3f6b9e4fc73658a81c488b31227617a86fbdc7'));
-    assert.equal(launch.ticket, 'T-49-21'); assert.equal(launch.role, 'executor');
-    assert.equal(path.basename(selected.source.worktree), 'T-49-20');
-    const publicationWorktree = path.join(path.dirname(selected.source.worktree), launch.ticket);
-    assert.equal(launch.worktree, publicationWorktree);
-    const commonRepository = worktree => fs.realpathSync(execFileSync('git',
-      ['-C', worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-      { encoding: 'utf8', timeout: 10000 }).trim());
-    assert.equal(commonRepository(publicationWorktree), commonRepository(selected.source.worktree));
-    assert.equal(commonRepository(publicationWorktree), commonRepository(ROOT));
-    assert.equal(launch.source_head, FOCUSED_HEAD);
-    assert.equal(launch.baseline_head, FOCUSED_BASE); assert.equal(launch.baseline_tree, FOCUSED_TREE);
-    assert.equal(launch.tracked_clean, true); assert(Number.isSafeInteger(launch.native_process_id));
-    assert.equal(sha(Buffer.from(launch.observed_command)), launch.observed_command_sha256);
-    const built = JSON.parse(read(state + 'phase49-focused-review-T49-21-once-build-result.json',
-      '5a6d671540cabd978990cc71b9ffc782485c333b664c180de155cd15f2a85c99'));
-    assert.equal(built.root, FOCUSED_ROOT); assert.equal(built.selection_sha256, FOCUSED_SHA);
-    assert.equal(built.build_calls, 1); assert.equal(built.published, 0);
-    assert.equal(built.source_head, FOCUSED_HEAD); assert.equal(built.source_tree, FOCUSED_TREE);
-    assert.equal(built.outputs, selected.outputs.length);
-
-    const ci = JSON.parse(read(state + 'phase49-focused-review-T49-20-b51406f-current-green-ci-admission.json'));
-    const custody = JSON.parse(read(state + 'phase49-focused-review-T49-20-b51406f-original-success-ci-custody.json'));
-    ci.original_full_log = { path: state + 'phase49-focused-review-T49-20-b51406f-original-success-full-ci.log',
-      sha256: custody.log_sha256, bytes: custody.log_bytes };
-    inspectBatchCI(ci, FOCUSED_HEAD);
-    const merge = JSON.parse(read(state + 'phase49-focused-review-T49-20-474-approved-actual-merge-proof.json'));
-    assert.equal(merge.state, 'MERGED'); assert.equal(merge.headRefOid, FOCUSED_HEAD);
-    assert.equal(merge.mergeCommit.oid, FOCUSED_BASE);
-    assert.equal(execFileSync('git', ['-C', ROOT, 'rev-parse', FOCUSED_BASE + '^{tree}'], { encoding: 'utf8' }).trim(), FOCUSED_TREE);
-    assert.equal(inspectFocusedPublication(bytes, publicationWorktree).empirical_acceptance, false);
-    await inspectFocusedConsumers(path.join(FOCUSED_ROOT, 'candidate/host/plugins/delivery-pipeline'));
-  });
 
   test('packaged focused producers reach original complete/incomplete and current consumers without read proof', async () => {
     await inspectFocusedConsumers(path.join(ROOT, 'plugins/shipyard/host/plugins/delivery-pipeline'));
@@ -2283,33 +1929,6 @@ if (require.main === module) {
     }
   });
 
-  test('current-review original stage and complete candidate retain separate source and publication custody', t => {
-    try { fs.accessSync(path.join(CURRENT_REVIEW.root, 'selection.json')); }
-    catch (error) {
-      if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
-      t.skip('HOLD: actual current-review custody unavailable; fixtures grant no installed acceptance'); return;
-    }
-    const bytes = authenticatePublicSelection(CURRENT_REVIEW.root, CURRENT_REVIEW.sha256, 'public-key.asc');
-    const custody = inspectCurrentReviewCustody(bytes);
-    assert.notEqual(custody.publication_worktree, ROOT);
-    const observed = inspectCurrentReviewPublication(bytes, custody.publication_worktree);
-    assert.throws(() => inspectCurrentReviewPublication(bytes, ROOT), /publication checkout/);
-    assert.deepEqual(observed.changed_inputs, [...CURRENT_REVIEW_INPUTS].sort());
-    assert.deepEqual(observed.changed_outputs, [...CURRENT_REVIEW_OUTPUTS].sort());
-    assert.equal(observed.installed_acceptance, false);
-    const selected = JSON.parse(bytes);
-    const historical = JSON.parse(read(path.join(FOCUSED_ROOT, 'selection.json'), FOCUSED_SHA));
-    for (const mutate of [
-      value => value.inputs.pop(), value => value.outputs.push(value.outputs[0]),
-      value => value.build_calls++, value => { value.stage = historical.stage; },
-      value => { value.outputs.find(row => !CURRENT_REVIEW_OUTPUTS.includes(row.path)).sha256 = '0'.repeat(64); },
-      value => { value.inputs.find(row => !CURRENT_REVIEW_INPUTS.includes(row.path)).mode ^= 0o111; },
-      value => { value.outputs.find(row => row.path === 'host/' + CURRENT_REVIEW_INPUTS[0]).sha256 = '0'.repeat(64); },
-    ]) {
-      const altered = structuredClone(selected); mutate(altered);
-      assert.throws(() => inspectCurrentReviewDelta(altered, historical));
-    }
-  });
 }
 
 if (require.main === module) test('portable correctness successor bounds complete physical inventories without production custody', () => {
