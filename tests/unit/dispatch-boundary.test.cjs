@@ -526,6 +526,52 @@ test('architecture phase receipts replay only their exact authenticated subject 
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+for (const repository of ['/plain/.git', '/work/my repo/.git', '/work/дім/.git']) {
+  test(`code-review phase dispatch records its exact subject for ${repository}`, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-code-review-'));
+    try {
+      const recorder = boundaryModule.createDurableRecorder(directory);
+      const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: fakeAdapter() }, recorder });
+      const ticket = `phase=52-policy;repository=${repository};tickets=${'a'.repeat(64)}`
+        + `;pr=91;head=${'b'.repeat(40)};base=${'c'.repeat(40)}`;
+      const context = { ticket, subject_kind: 'phase' };
+      const result = boundary.dispatch({ runtime: 'codex', role: 'code-review', dispatch_id: 'code-review-phase' }, context);
+      const stored = recorder.getVerifiedRecord(result.dispatch_id);
+      assert.equal(stored.subject_kind, 'phase');
+      assert.equal(stored.ticket, ticket);
+      assert.equal(stored.receipt.compliance, 'verified');
+      assert.equal(boundary.reconcile(result.dispatch_id, context).subject_kind, 'phase');
+      assert.throws(() => boundary.reconcile(result.dispatch_id, { ticket }), { code: 'INVALID_INPUT' });
+      for (const role of policy.ROLES.filter((value) => !['arch-review', 'code-review'].includes(value))) {
+        assert.throws(() => boundary.dispatch({ runtime: 'codex', role }, context), { code: 'INVALID_INPUT' });
+      }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test('code-review boundary refuses ticket subjects and malformed phase repositories before launch', () => {
+  const recorded = [];
+  let launches = 0;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter({ onLaunch: () => { launches++; } }) },
+    recorder: (trace) => { recorded.push(trace); return true; },
+  });
+  for (const context of [{ ticket: 'T-52-04', subject_kind: 'ticket' }, { ticket: 'T-52-04' }, {}]) {
+    assert.throws(() => boundary.dispatch({ runtime: 'codex', role: 'code-review' }, context),
+      (error) => error.code === 'INVALID_INPUT' && /code-review.*subject_kind.*phase/.test(error.message));
+  }
+  for (const repository of ['/a;b/.git', '/a\tb/.git', '/a\nb/.git', '/a\u0001b/.git', '/a\x7fb/.git', '']) {
+    const ticket = `phase=52-policy;repository=${repository};tickets=${'a'.repeat(64)}`
+      + `;pr=91;head=${'b'.repeat(40)};base=${'c'.repeat(40)}`;
+    for (const subject_kind of ['phase', 'ticket']) {
+      assert.throws(() => boundary.dispatch({ runtime: 'codex', role: 'code-review' }, { ticket, subject_kind }),
+        { code: 'INVALID_INPUT' });
+    }
+  }
+  assert.equal(launches, 0);
+  assert.equal(recorded.length, 0);
+});
+
 test('receipts and repair predecessors remain bound to their launch ticket', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-ticket-binding-'));
   try {
@@ -2187,9 +2233,13 @@ test('the boundary launches every native base and escalation tuple for both runt
     });
     const bases = new Map();
     const dispatchAndAssert = (runtime, role, signals, expected, dispatchId, extra = {}) => {
+      const context = role === 'code-review'
+        ? { ticket: `phase=36-matrix;repository=/tmp/phase.git;tickets=${'a'.repeat(64)}`
+            + `;pr=91;head=${'b'.repeat(40)};base=${'c'.repeat(40)}`, subject_kind: 'phase' }
+        : { ticket: `T-36-MATRIX-${runtime}-${role}` };
       const result = boundary.dispatch(
         { runtime, role, signals, dispatch_id: dispatchId, ...extra },
-        { ticket: `T-36-MATRIX-${runtime}-${role}` },
+        context,
       );
       assert.deepStrictEqual(
         [result.resolution.logical_rung, result.applied_model, result.applied_effort],
@@ -2204,6 +2254,8 @@ test('the boundary launches every native base and escalation tuple for both runt
       assert.equal(result.receipt.observed_effort, result.receipt.applied_effort);
       const stored = recorder.getVerifiedRecord(dispatchId);
       assert.ok(stored, `${dispatchId} must be durably recorded`);
+      assert.equal(stored.ticket, context.ticket);
+      assert.equal(stored.subject_kind || 'ticket', context.subject_kind || 'ticket');
       assert.deepStrictEqual(stored.resolution.signals, result.resolution.signals);
       assert.deepStrictEqual(stored.receipt, result.receipt);
       for (const source of Object.keys(signals)) {
