@@ -176,6 +176,7 @@ for (const leak of ['T-12-03', 'ADR-032', '.planning/private', 'shipyard', 'gsd'
         const manifest = path.join(f.root, 'plugins/delivery-pipeline/.claude-plugin');
         fs.mkdirSync(manifest, { recursive: true });
         fs.writeFileSync(path.join(manifest, 'plugin.json'), JSON.stringify({ name: 'shipyard' }));
+        f.git(['add', 'plugins/delivery-pipeline/.claude-plugin/plugin.json']);
       }
       f.seal(raw(true, [{ ...blocker, summary: leak }]));
       const result = flow.publish(f.input(), f.options);
@@ -484,7 +485,9 @@ test('published retained locator reloads the original target and leaves a later 
 
 for (const linked of [false, true]) test('retained locators require authenticated history or a validated original carrier: linked=' + linked, () => {
   const f = fixture();
+  let coordinatorDirectory;
   try {
+    if (linked) coordinatorDirectory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'publish-coordinator-')));
     const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
     fs.writeFileSync(path.join(f.root, 'source.js'), 'function a() {\nreturn null;\n}\nreturn null;\n');
     f.git(['add', 'source.js']); f.git(['commit', '--quiet', '-m', 'original twins']);
@@ -502,7 +505,7 @@ for (const linked of [false, true]) test('retained locators require authenticate
     assert.equal(prior[0].occurrence, 3);
     f.seal(raw(), 1, null, prior);
     const before = JSON.stringify(f.lookup());
-    const coordinator = linked ? path.join(f.root, 'coordinator') : f.root;
+    const coordinator = linked ? path.join(coordinatorDirectory, 'checkout') : f.root;
     if (linked) {
       f.git(['worktree', 'add', '--detach', coordinator, 'HEAD']);
       fs.cpSync(path.join(f.root, '.planning'), path.join(coordinator, '.planning'), { recursive: true });
@@ -539,5 +542,8 @@ for (const linked of [false, true]) test('retained locators require authenticate
       }
       assert.equal(JSON.stringify(f.lookup()), before);
     }
-  } finally { f.cleanup(); }
+  } finally {
+    try { f.cleanup(); }
+    finally { if (coordinatorDirectory) fs.rmSync(coordinatorDirectory, { recursive: true, force: true }); }
+  }
 });

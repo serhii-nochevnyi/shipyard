@@ -8,6 +8,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'code-context-authority-')));
+const transportBin = path.join(home, 'bin');
+fs.mkdirSync(transportBin);
+fs.writeFileSync(path.join(transportBin, 'gh'), '#!/usr/bin/env node\nthrow new Error("Unexpected uninjected GitHub transport");\n', { mode: 0o755 });
+const originalPath = process.env.PATH;
+process.env.PATH = transportBin + path.delimiter + originalPath;
+process.on('exit', () => { process.env.PATH = originalPath; });
 const originalHomedir = os.homedir;
 os.homedir = () => home;
 process.on('exit', () => { os.homedir = originalHomedir; fs.rmSync(home, { recursive: true, force: true }); });
@@ -96,6 +102,7 @@ function dispatchFixture(f, value, mutate = () => {}, evidence = true, mutateEvi
   const transcript = path.join(f.storage, session + '.jsonl'); fs.writeFileSync(transcript, stream);
   const runtimeEvidence = { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai',
     session_id: session, worktree: f.root, ticket: value.prepared.ticket, phase: 38,
+    ...(input ? { input_transport: 'host-files', input_bundle: input.input_bundle } : {}),
     code_review: binding, transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: hash(stream) } };
   mutateEvidence(runtimeEvidence);
   const agent = admissions.get(value);
@@ -569,5 +576,251 @@ test('only the two admitted host bookkeeping files tolerate local mutation', () 
       assert.throws(() => context.recheckInstalledLaunch(v)); fs.writeFileSync(p, original);
     }
     assert.equal(context.launchDigest(v), originalDigest);
+  } finally { f.cleanup(); }
+});
+
+function foreignFixture(partitioned = false) {
+  const f = fixture();
+  git(f.project, ['worktree', 'remove', '--force', f.root]);
+  execFileSync('git', ['clone', '--quiet', '--no-local', f.project, f.root]);
+  git(f.root, ['config', 'user.name', 'Shipyard Test']);
+  git(f.root, ['config', 'user.email', 'shipyard-test@example.invalid']);
+  git(f.root, ['config', 'commit.gpgsign', 'false']);
+  git(f.root, ['switch', '-c', f.row.epic]);
+  git(f.root, ['update-ref', '-d', 'refs/remotes/origin/' + f.row.epic]);
+  git(f.root, ['update-ref', 'refs/remotes/origin/main', f.pr.baseRefOid]);
+  git(f.root, ['rm', '-r', '.planning']);
+  git(f.root, ['commit', '-m', 'coordinator owns planning']);
+  f.pr.headRefOid = git(f.root, ['rev-parse', 'HEAD']);
+  f.row.repo = 'acme/app';
+  f.graph.epics = { '38': { branch: f.row.epic, phaseDir: '38-codex-arch-review', repos: ['acme/app'] } };
+  write(f.project, '.planning/graph/tickets.json', JSON.stringify(f.graph));
+  write(f.project, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' },
+    delivery_pipeline: { code_review: 'hold', repos: { 'acme/app': f.root } } }));
+  if (partitioned) f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'),
+    ('large line ' + 'x'.repeat(240) + '\n').repeat(5000)));
+  f.options.getPullRequest = ({ worktree, pr, repo }) => {
+    assert.equal(worktree, f.root);
+    assert.equal(pr, f.pr.number);
+    assert.equal(repo, 'acme/app');
+    return f.pr;
+  };
+  f.options.execFileSync = (executable, args, options) => {
+    if (executable === 'gh') {
+      assert.deepEqual(args, ['repo', 'view', 'acme/app', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name']);
+      return 'main\n';
+    }
+    assert.equal(executable, 'git');
+    assert.equal(args.some(arg => ['fetch', 'push', 'pull', 'clone', 'ls-remote'].includes(arg)), false);
+    return execFileSync(executable, args, options);
+  };
+  f.build = (runtime = 'codex') => require(path.join(scripts, 'deliver-dispatch.cjs')).build([
+    'code-review', '38-codex-arch-review', '--phase', '38', '--pr', String(f.pr.number),
+    '--runtime', runtime, '--repo', 'acme/app', '--graph', f.graphDir,
+  ], { ...f.options, cwd: f.root });
+  f.scope = () => f.build().scope;
+  f.prepare = (extra = {}, launch = {}) => {
+    const request = f.build();
+    return context.prepare(request.scope, { role: request.role, context: request.context, signals: request.signals, ...launch },
+      { ...f.options, inflightDispatchId: crypto.randomUUID(), ...extra });
+  };
+  f.lookup = (extra = {}) => artifact.currentCodeReviewVerdict({ worktreePath: f.root, graphDir: f.graphDir,
+    repo: 'acme/app', pr: f.pr.number, head: f.pr.headRefOid, headBranch: f.pr.headRefName,
+    baseName: f.pr.baseRefName, baseCommit: f.pr.baseRefOid, ...extra });
+  f.status = () => require(path.join(scripts, 'phase-code-review.cjs')).status({ worktree: f.root,
+    graphDir: f.graphDir, repo: 'acme/app', pr: f.pr.number, phase: 38, live: f.pr }, f.options);
+  return f;
+}
+
+for (const partitioned of [false, true]) for (const incomplete of [false, true])
+  test('configured foreign builder through seal and hold: partitions=' + partitioned + ', incomplete=' + incomplete, () => {
+    const f = foreignFixture(partitioned);
+    try {
+      assert.notEqual(target.repositoryIdentity(f.root), target.repositoryIdentity(f.project));
+      assert.equal(fs.existsSync(path.join(f.root, '.planning')), false);
+      const request = f.build();
+      assert.deepEqual(request.context, { repo: 'acme/app' });
+      const r = review(f, raw => {
+        if (incomplete) {
+          raw.review_completeness = 'incomplete'; raw.limitations = ['Unread source']; raw.findings = [blocker()];
+        }
+      });
+      const p = r.value.prepared;
+      assert.equal(p.repository, target.repositoryIdentity(f.root));
+      assert.equal(p.canonical.head, f.pr.headRefOid);
+      assert.equal(p.baseCommit, f.pr.baseRefOid);
+      assert.equal(p.packet.canonical_root, f.project);
+      assert.equal(p.packet.role_context.planning_reference.root, f.project);
+      assert.equal(p.packet.role_context.planning_reference.repo, 'acme/app');
+      assert.equal(p.packet.source_revision, f.pr.headRefOid);
+      assert.ok(p.packet.required_refs.some(ref => ref.path === f.row.plan));
+      assert.equal(!!context.admittedFileInput(r.value), partitioned);
+      if (partitioned) {
+        const input = context.admittedFileInput(r.value);
+        assert.deepEqual(input.manifest.snapshot.planning_reference, p.packet.role_context.planning_reference);
+        assert.equal(input.manifest.snapshot.worktree, f.root);
+        assert.equal(input.manifest.snapshot.repository, target.repositoryIdentity(f.root));
+        partitions.verifyFileInput(input);
+      }
+      const prior = artifact.priorCodeReviewVerdicts({ worktreePath: f.root, repository: p.repository,
+        graphDir: f.graphDir, phaseDir: p.binding.phase });
+      assert.equal(prior.length, 1);
+      assert.equal(prior[0].verdict, incomplete ? 'incomplete' : 'pass');
+      assert.equal(f.lookup().artifact_digest, r.result.artifact.digest);
+      const status = f.status(), flow = require(path.join(scripts, 'phase-code-review.cjs'));
+      assert.equal(status.rounds_used, incomplete ? 0 : 1);
+      assert.equal(flow.evaluateGate(status).ok, !incomplete);
+      if (incomplete) {
+        assert.equal(status.state, 'owed'); assert.equal(status.retry, true);
+        const next = f.prepare();
+        assert.equal(next.prepared.round.round, 1);
+        assert.equal(next.prepared.round.scope, 'full');
+      } else {
+        assert.equal(status.state, 'current'); assert.equal(status.verdict, 'pass');
+      }
+      const bytes = fs.readFileSync(r.result.artifact.ref);
+      f.row.title = 'changed membership';
+      write(f.project, '.planning/graph/tickets.json', JSON.stringify(f.graph));
+      assert.equal(f.lookup(), null);
+      assert.equal(flow.evaluateGate(f.status()).ok, false);
+      assert.equal(artifact.priorCodeReviewVerdicts({ worktreePath: f.root, repository: p.repository,
+        graphDir: f.graphDir, phaseDir: p.binding.phase })[0].artifact_digest, r.result.artifact.digest);
+      assert.deepEqual(fs.readFileSync(r.result.artifact.ref), bytes);
+    } finally { f.cleanup(); }
+  });
+
+function preparationOnlyClaudeHost() {
+  const Module = require('node:module');
+  const filename = path.join(scripts, 'claude-role-host.cjs');
+  const loaded = new Module(filename, module);
+  loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+  loaded._compile(fs.readFileSync(filename, 'utf8').replace('module.exports = Object.freeze({',
+    'module.exports = Object.freeze({ prepareInvocation,'), filename);
+  return loaded.exports;
+}
+
+test('explicit foreign pure Claude and Codex preparation retain separate planning and source identities', () => {
+  const f = foreignFixture();
+  try {
+    const codex = f.prepare().prepared;
+    const request = f.build('claude');
+    const claude = preparationOnlyClaudeHost().prepareInvocation(f.options, request);
+    assert.equal(claude.canonical.commonPath, codex.repository);
+    assert.equal(claude.canonical.head, codex.canonical.head);
+    assert.equal(claude.packet.canonical_root, codex.packet.canonical_root);
+    assert.deepEqual(claude.packet.role_context.planning_reference, codex.packet.role_context.planning_reference);
+    assert.deepEqual(claude.binding.ticketSet, codex.binding.ticketSet);
+    assert.equal(claude.baseCommit, codex.baseCommit);
+  } finally { f.cleanup(); }
+});
+
+for (const partitioned of [false, true]) for (const changed of ['graph', 'config', 'plan', 'source', 'head', 'base', 'root'])
+  test('foreign launch and finish reject original identity drift: partitions=' + partitioned + ', ' + changed, () => {
+    const f = foreignFixture(partitioned);
+    try {
+      const id = crypto.randomUUID(), v = f.prepare({ inflightDispatchId: id }, { dispatch_id: id });
+      admit(f, v);
+      const d = dispatchFixture(f, v);
+      if (changed === 'graph') fs.appendFileSync(path.join(f.graphDir, 'tickets.json'), ' ');
+      if (changed === 'config') fs.appendFileSync(path.join(f.project, '.planning/config.json'), ' ');
+      if (changed === 'plan') fs.appendFileSync(path.join(f.project, f.row.plan), '\nChanged acceptance.\n');
+      if (changed === 'source') fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), 'dirty');
+      if (changed === 'head') f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), '\n'));
+      if (changed === 'base') git(f.root, ['update-ref', 'refs/remotes/origin/main', f.pr.headRefOid]);
+      if (changed === 'root') {
+        fs.renameSync(path.join(f.project, '.planning'), path.join(f.project, 'planning-moved'));
+        fs.symlinkSync('planning-moved', path.join(f.project, '.planning'));
+      }
+      assert.throws(() => context.recheckInstalledLaunch(v));
+      assert.throws(() => context.finish(v, d.dispatch, d.recorder));
+      assert.deepEqual(artifact.authenticatedArchivePins(f.root), []);
+    } finally { f.cleanup(); }
+  });
+
+for (const changed of ['missing selector', 'wrong selector', 'missing mapping', 'wrong checkout', 'nested checkout',
+  'epic repo', 'epic directory', 'row epic', 'plan symlink', 'checkout symlink'])
+  test('foreign selection refuses ' + changed, () => {
+    const f = foreignFixture();
+    try {
+      const request = f.build();
+      if (changed === 'missing selector') request.context = {};
+      if (changed === 'wrong selector') request.context.repo = 'acme/wrong';
+      if (['missing mapping', 'wrong checkout', 'nested checkout', 'checkout symlink'].includes(changed)) {
+        let checkout = f.root;
+        if (changed === 'wrong checkout') checkout = f.project;
+        if (changed === 'nested checkout') checkout = path.join(f.root, 'src');
+        if (changed === 'checkout symlink') { checkout = path.join(f.parent, 'alias'); fs.symlinkSync(f.root, checkout); }
+        write(f.project, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' },
+          delivery_pipeline: { repos: changed === 'missing mapping' ? {} : { 'acme/app': checkout } } }));
+      }
+      if (changed === 'epic repo') f.graph.epics['38'].repos = ['acme/wrong'];
+      if (changed === 'epic directory') f.graph.epics['38'].phaseDir = '38-other';
+      if (changed === 'row epic') f.row.epic = 'epic/wrong';
+      write(f.project, '.planning/graph/tickets.json', JSON.stringify(f.graph));
+      if (changed === 'plan symlink') {
+        const plan = path.join(f.project, f.row.plan), outside = path.join(f.storage, 'plan');
+        fs.renameSync(plan, outside); fs.symlinkSync(outside, plan);
+      }
+      assert.throws(() => context.prepare(request.scope,
+        { role: request.role, context: request.context, signals: request.signals }, f.options));
+    } finally { f.cleanup(); }
+  });
+
+for (const partitioned of [false, true]) test('foreign current lookup refuses changed sealed planning bytes: partitions=' + partitioned, () => {
+  const f = foreignFixture(partitioned);
+  try {
+    review(f);
+    const plan = path.join(f.project, f.row.plan), original = fs.readFileSync(plan);
+    fs.appendFileSync(plan, '\nChanged acceptance.\n');
+    assert.equal(f.lookup(), null);
+    assert.equal(require(path.join(scripts, 'phase-code-review.cjs')).evaluateGate(f.status()).ok, false);
+    fs.writeFileSync(plan, original);
+    assert.equal(f.lookup().verdict, 'pass');
+    fs.appendFileSync(path.join(f.project, '.planning/config.json'), ' ');
+    assert.equal(f.lookup(), null);
+  } finally { f.cleanup(); }
+});
+
+for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE'])
+  test('foreign collection keeps Git identity isolated from ambient ' + key, () => {
+    const f = foreignFixture(), saved = process.env[key];
+    try {
+      const request = f.build();
+      process.env[key] = key === 'GIT_WORK_TREE' ? f.project : path.join(f.project, '.git', key === 'GIT_INDEX_FILE' ? 'index' : '');
+      assert.throws(() => context.prepare(request.scope,
+        { role: request.role, context: request.context, signals: request.signals }, f.options), { code: 'STALE_CONTEXT' });
+      assert.throws(() => f.lookup(), { code: 'ARCHIVE_AUTHORITY_INVALID' });
+    } finally {
+      if (saved === undefined) delete process.env[key]; else process.env[key] = saved;
+      f.cleanup();
+    }
+  });
+
+test('foreign full and delta lineage retain original membership across coordinator graph evolution', () => {
+  const f = foreignFixture();
+  try {
+    const first = review(f);
+    const firstManifest = fs.readFileSync(first.result.artifact.ref);
+    f.graph.tickets['T-38-02'] = { ...f.row, plan: '.planning/phases/38-codex-arch-review/38-02-PLAN.md' };
+    f.state['T-38-02'] = { status: 'merged' };
+    write(f.project, f.graph.tickets['T-38-02'].plan, fs.readFileSync(path.join(f.project, f.row.plan)));
+    write(f.project, '.planning/graph/tickets.json', JSON.stringify(f.graph));
+    write(f.project, '.planning/graph/delivery-state.json', JSON.stringify(f.state));
+    f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), '\n'));
+    const second = review(f);
+    assert.equal(second.value.prepared.round.round, 2);
+    assert.equal(second.value.prepared.round.scope, 'delta');
+    assert.equal(second.value.prepared.round.priorHead, first.value.prepared.canonical.head);
+    assert.equal(f.lookup().verdict, 'pass');
+    assert.equal(require(path.join(scripts, 'phase-code-review.cjs')).evaluateGate(f.status()).ok, true);
+    const prior = artifact.priorCodeReviewVerdicts({ worktreePath: f.root, repository: target.repositoryIdentity(f.root),
+      graphDir: f.graphDir, phaseDir: second.value.prepared.binding.phase });
+    assert.equal(prior.length, 2);
+    assert.equal(prior[0].artifact_digest, first.result.artifact.digest);
+    assert.equal(prior[1].artifact_digest, second.result.artifact.digest);
+    assert.deepEqual(fs.readFileSync(first.result.artifact.ref), firstManifest);
+    fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), 'dirty source');
+    assert.equal(f.lookup(), null);
+    assert.equal(require(path.join(scripts, 'phase-code-review.cjs')).evaluateGate(f.status()).ok, false);
   } finally { f.cleanup(); }
 });
