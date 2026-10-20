@@ -927,12 +927,16 @@ function verifyFileInput(value, options = {}) {
     const rawAsset = boundedBytes(fs, asset.path, FILE_LIMITS.material, asset.bytes, asset.identity);
     if (digest(rawAsset) !== asset.sha256) fail('immutable asset changed', 'STALE_CONTEXT');
     try { new TextDecoder('utf-8', { fatal: true }).decode(rawAsset); } catch { fail('asset is invalid UTF-8'); }
-    let semantic;
+    let semantic, materialRoot = referenceRoot;
     try { semantic = JSON.parse(rawAsset.toString('utf8')); } catch {}
     if (typeof semantic?.schema === 'string' && (semantic.schema.startsWith('shipyard.semantic-content.')
         || semantic.schema.startsWith('shipyard.context-packet.'))) {
       const packet = semantic.schema.startsWith('shipyard.semantic-content.')
         ? require('./context-packet.cjs').decodeUniqueContent(semantic) : semantic;
+      if (manifest.binding?.review_contract === CODE_REVIEW_CONTRACT
+          && packet.schema === 'shipyard.context-packet.v1' && packet.role === 'code-review'
+          && packet.role_context?.planning_reference === undefined)
+        materialRoot = manifest.snapshot.worktree;
       if (packet.role_context?.planning_reference !== undefined
           && JSON.stringify(canonical(packet.role_context.planning_reference))
             !== JSON.stringify(canonical(manifest.snapshot.planning_reference)))
@@ -941,7 +945,7 @@ function verifyFileInput(value, options = {}) {
     if (options.historical === true) {
       if (typeof semantic?.schema === 'string' && semantic.schema.startsWith('shipyard.semantic-content.'))
         require('./context-packet.cjs').decodeUniqueContent(semantic);
-    } else preflightReviewMaterial(semantic, { root: referenceRoot, role: manifest.role,
+    } else preflightReviewMaterial(semantic, { root: materialRoot, role: manifest.role,
       sourceRevision: manifest.snapshot.head, policyHash: manifest.snapshot.policy_hash,
       packetDigest: manifest.binding?.packet_digest, architecturePacket: privateOptions.architecturePacket });
     return rawAsset;

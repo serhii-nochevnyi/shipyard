@@ -3029,15 +3029,33 @@ for (const encoded of [false, true]) test('code-review contract partitions a com
   const helpers = require('./helpers/codex-arch-review-fixtures.cjs');
   const f = fileInputFixture('unused');
   try {
+    const coordinator = path.join(f.options.storageRoot, 'coordinator');
+    git(f.f.root, ['worktree', 'add', '--detach', coordinator, 'HEAD']);
+    const graphDir = path.join(coordinator, '.planning/graph');
     const packet = helpers.partitionPacket(f.f.root, f.f.head, {
       references: ['.planning/architecture/ADR-014-host-bound-review.md'] });
     const material = JSON.stringify(encoded
       ? require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').encodeUniqueContent(packet) : packet);
     assert.equal(packet.schema, 'shipyard.context-packet.v1');
     assert.equal(contextBuilder.CODE_REVIEW_CONTRACT, 'shipyard.phase-code-review.v1');
-    const input = contextBuilder.prepareFileInput(f.scope, material, { ...f.options, role: 'code-review',
+    const input = contextBuilder.prepareFileInput(f.scope, material, { ...f.options, graphDir, role: 'code-review',
       binding: { review_contract: contextBuilder.CODE_REVIEW_CONTRACT } });
     const checked = contextBuilder.verifyFileInput(input);
+    assert.equal(checked.manifest.snapshot.worktree, f.f.root);
+    assert.equal(checked.manifest.snapshot.planning_reference.root, coordinator);
+    assert.throws(() => contextBuilder.verifyFileInput({ ...input.input_bundle, trustedRoot: coordinator }),
+      /private producer authority/);
+    for (const [index, change] of [
+      value => { value.canonical_root = coordinator; },
+      value => { value.role_context.planning_reference = { ...checked.manifest.snapshot.planning_reference, root: f.f.root }; },
+    ].entries()) {
+      const wrong = structuredClone(packet); change(wrong);
+      assert.throws(() => contextBuilder.prepareFileInput(f.scope, JSON.stringify(wrong), {
+        ...f.options, graphDir, role: 'code-review', dispatchId: f.options.dispatchId + '-wrong-' + index,
+        binding: { review_contract: contextBuilder.CODE_REVIEW_CONTRACT } }),
+      /root|authority|identity/i);
+    }
+
     assert.equal(input.input_bundle.review_contract, contextBuilder.CODE_REVIEW_CONTRACT);
     assert.equal(checked.material[0].toString(), material);
     let ordinal = 1;

@@ -3479,7 +3479,8 @@ function authenticateSelectedReferences(trusted, findings, worktree, evidence) {
     if (packet.role_context?.planning_reference && findings.host_context.graph_dir !== packet.role_context.planning_reference.directory)
       fail('REVIEW_NATIVE_INVALID', 'selected reference graph differs from original native input');
     root = originalPacketRoot(worktree, packet);
-    if (stable(refs) !== stable(packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes }))))
+    const orderedReferences = entries => entries.map(entry => stable(entry)).sort();
+    if (stable(orderedReferences(refs)) !== stable(orderedReferences(packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })))))
       fail('REVIEW_NATIVE_INVALID', 'selected references differ from original native input');
   } else if (trusted.receipt.runtime === 'codex' && findings.review_contract === context.FOCUSED_CONTRACT
       && findings.host_context.planning_reference !== undefined) {
