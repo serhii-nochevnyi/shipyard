@@ -13,6 +13,7 @@ const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
 const archReviewContext = require('./codex-arch-review-context.cjs');
+const codeReviewContext = require('./codex-code-review-context.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
@@ -99,13 +100,13 @@ function requestValue(input) {
     if (!allowed.has(key)) fail('INVALID_INPUT', 'unsupported delivery request field ' + key);
   }
   if (typeof input.role !== 'string' || !input.role.trim()) fail('INVALID_INPUT', 'role is required');
-  const role = ROLE_ALIASES[input.role] || input.role;
+  const role = ROLE_ALIASES[input.role.trim()] || input.role.trim();
   if (input.signals !== undefined && !object(input.signals)) fail('INVALID_INPUT', 'signals must be an object');
   if (role === 'review-fix' && Object.keys(input.signals || {}).length)
     fail('INVALID_INPUT', 'repair rungs are derived only from original protected repair history');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
   for (const key of Object.keys(input.context || {})) {
-    if (key === 'focused_prepared' || key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment' || key === 'input_prepared') {
+    if (key === 'focused_prepared' || key === 'code_review_prepared' || key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment' || key === 'input_prepared') {
       fail('INVALID_INPUT', 'request context cannot supply host authority');
     }
     if (key.startsWith('plan') && key !== 'plan_sha256') {
@@ -131,6 +132,9 @@ function requestValue(input) {
 // @contract: pure — no fs writes or spawn; the boundary's UNSUPPORTED_SIGNAL surfaces unchanged.
 function validateArgs(args) {
   const request = requestValue(args);
+  if (request.role === 'code-review' && (request.gsd_role !== undefined
+      || Object.keys(request.signals).length || Object.keys(request.context).some(key => key !== 'repo')))
+    fail('INVALID_INPUT', 'code-review accepts only host-built prompts, selectors and signals');
   const resolution = policy.resolveDispatch({
     runtime: 'codex', role: request.role, signals: request.signals,
     ...(request.dispatch_id ? { dispatch_id: request.dispatch_id } : {}),
@@ -747,6 +751,14 @@ function admitArchitectureInput(prepared, request, options, capabilities) {
     if (actual.agent_file === selected.agent_file) return signals;
   }
   fail('CONTEXT_OVER_BOUND', 'selected generated instruction accounting did not stabilize');
+}
+
+function admitCodeReviewInput(prepared, options, capabilities) {
+  const signals = { ...prepared.prepared.signals };
+  const selected = policy.resolveDispatch({ runtime: 'codex', role: 'code-review', signals });
+  codeReviewContext.admitInstalledLaunch(prepared, installedAgentOptions(options, selected, capabilities));
+  const input = codeReviewContext.admittedFileInput(prepared);
+  return input ? { ...signals, inputTokens: input.inputTokens } : signals;
 }
 
 const inlineIntegratorInputs = new WeakMap();
@@ -2957,7 +2969,29 @@ function createCodexDeliveryHost(options = {}) {
         if (fileInput) Object.assign(request.context, { input_transport: 'host-files', input_bundle: fileInput.input_bundle });
         request.context.prompt = archReviewContext.admittedPrompt(prepared);
       }
-      if (request.role !== 'arch-review') fileInput = prepareIntegratorInput(scope, request, { ...options, host: runtimeHost, automaticReader: !options.readerCapacity });
+      if (request.role === 'code-review') {
+        const prepared = options.codeReviewContext;
+        if (!codeReviewContext.isPreparedContext(prepared)
+            || prepared.prepared.ticket !== scope.ticket
+            || prepared.prepared.phaseNumber !== scope.phase
+            || prepared.prepared.canonical.worktree !== scope.worktree
+            || request.dispatch_id !== prepared.launch.dispatch_id
+            || request.context.prompt !== prepared.prepared.prompt
+            || ![prepared.prepared.signals, options.codeReviewSignals].filter(Boolean)
+              .some(signals => JSON.stringify(request.signals) === JSON.stringify(signals)))
+          fail('CODE_REVIEW_CONTEXT_REQUIRED', 'code-review context must be host-built and graph-bound');
+        if (Object.hasOwn(request.context, 'sandbox_mode'))
+          fail('CONFLICTING_OVERRIDE', 'sandbox mode is owned by the generated role');
+        if (Object.keys(request.context).some(key => !['prompt', 'input_transport', 'input_bundle'].includes(key)))
+          fail('INVALID_INPUT', 'code-review context cannot carry caller selectors or overrides');
+        if (options.codeReviewSignals) codeReviewContext.recheckInstalledLaunch(prepared);
+        request.signals = admitCodeReviewInput(prepared, options, runtimeHost.capabilities);
+        fileInput = codeReviewContext.admittedFileInput(prepared);
+        if (fileInput) Object.assign(request.context, { input_transport: 'host-files', input_bundle: fileInput.input_bundle });
+        request.context.prompt = codeReviewContext.admittedPrompt(prepared);
+      }
+      if (!['arch-review', 'code-review'].includes(request.role))
+        fileInput = prepareIntegratorInput(scope, request, { ...options, host: runtimeHost, automaticReader: !options.readerCapacity });
       let completedSourceReference;
       if (fileInput?.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
         if (options.readerCapacity || options.readerProfile) fail('READER_CAPACITY_UNSUPPORTED', 'automatic candidate accepts no caller profile or capacity');
@@ -3019,6 +3053,7 @@ function createCodexDeliveryHost(options = {}) {
         }
       }
       const context = request.context;
+      if (request.role === 'code-review') context.code_review_prepared = options.codeReviewContext;
       if (request.role === 'arch-review' && archReviewContext.isFocusedContext(options.archReviewContext))
         context.focused_prepared = options.archReviewContext;
       if (fileInput) context.input_prepared = fileInput;
@@ -3033,7 +3068,7 @@ function createCodexDeliveryHost(options = {}) {
       }
       bind(context, 'run_id', scope.run_id);
       bind(context, 'ticket', scope.ticket);
-      if (request.role === 'arch-review' && scope.ticket.startsWith('phase=')) context.subject_kind = 'phase';
+      if (['arch-review', 'code-review'].includes(request.role) && scope.ticket.startsWith('phase=')) context.subject_kind = 'phase';
       bind(context, 'phase', scope.phase);
       bind(context, 'worktreePath', scope.worktree);
       bind(context, 'runtime', 'codex');
@@ -3056,7 +3091,7 @@ function createCodexDeliveryHost(options = {}) {
         const block = planDeliveryBlock(delivery, undefined);
         if (block) context.prompt = originalPrompt + block;
       }
-      const reviewHost = repairPrepared || request.role === 'arch-review' || request.role === 'integrator'
+      const reviewHost = repairPrepared || request.role === 'arch-review' || request.role === 'code-review' || request.role === 'integrator'
         ? { ...runtimeHost } : runtimeHost;
       if (reviewHost !== runtimeHost) {
         for (const method of ['launch', 'launchStatic']) {
@@ -3080,6 +3115,7 @@ function createCodexDeliveryHost(options = {}) {
               recheckRepair(repairPrepared, options, { clean: true });
               return runtimeHost.launchStatic(selection, boundContext);
             }
+            if (request.role === 'code-review') codeReviewContext.recheckInstalledLaunch(options.codeReviewContext);
             if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
             if (fileInput && integrationInputs.has(fileInput)) recheckIntegrationReview(integrationInputs.get(fileInput));
             if (fileInput) archReviewContext.verifyFileInput(fileInput);
@@ -3210,6 +3246,7 @@ function createCodexDeliveryHost(options = {}) {
           throw error;
         }
       };
+      if (request.role === 'code-review') codeReviewContext.recheckInstalledLaunch(options.codeReviewContext);
       if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
       if (request.role === 'integrator') recheckInlineIntegrator(scope, request);
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
@@ -3224,6 +3261,8 @@ function createCodexDeliveryHost(options = {}) {
       }
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
       options.controller?.assertOwner(scope.run_id);
+      if (request.role === 'code-review')
+        return codeReviewContext.finish(options.codeReviewContext, result, runtimeHost.recorder);
       if (request.role === 'arch-review') {
         writeCompletedArchitectureEvidence(options.archReviewContext, result, runtimeHost.recorder);
         const completed = archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
@@ -3313,11 +3352,12 @@ function readRequestFile(file) {
       fail('INVALID_INPUT', 'unsupported scope field ' + key);
     }
   }
-  const { scope, graph_dir: graphDir, ...launch } = request;
-  if (graphDir !== undefined && (!['arch-review', 'review-fix'].includes(launch.role)
+  const { scope, graph_dir: graphDir, ...rawLaunch } = request;
+  const launch = requestValue(rawLaunch);
+  if (graphDir !== undefined && (!['arch-review', 'code-review', 'review-fix'].includes(launch.role)
       || typeof graphDir !== 'string' || !path.isAbsolute(graphDir)))
     fail('INVALID_INPUT', 'graph_dir requires an absolute architecture graph selector');
-  return { scope, launch: requestValue(launch), ...(graphDir ? { graphDir } : {}) };
+  return { scope, launch, ...(graphDir ? { graphDir } : {}) };
 }
 
 function parseResumeArguments(argv) {
@@ -3533,19 +3573,31 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       refreshGit: options.refreshGit,
       inflightDispatchId: archDispatchId, storageRoot: storageDirectory(options, scope),
     }) : null;
-  const request = preparedArchReview ? { ...preparedArchReview.launch, signals: { ...preparedArchReview.launch.signals },
-    context: { ...preparedArchReview.launch.context }, dispatch_id: archDispatchId } : parsed.launch;
+  const codeDispatchId = parsed.launch.role === 'code-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
+  const preparedCodeReview = parsed.launch.role === 'code-review'
+    ? codeReviewContext.prepare(scope, parsed.launch, {
+      graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
+      execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
+      refreshGit: options.refreshGit,
+      inflightDispatchId: codeDispatchId, storageRoot: storageDirectory(options, scope),
+    }) : null;
+  const preparedReview = preparedArchReview || preparedCodeReview;
+  const request = preparedReview ? { ...preparedReview.launch, signals: { ...preparedReview.launch.signals },
+    context: { ...preparedReview.launch.context }, dispatch_id: archDispatchId || codeDispatchId } : parsed.launch;
   request.dispatch_id = request.dispatch_id || newDispatchId();
   const preparedRepair = request.role === 'review-fix' ? prepareRepair(options, scope, request.context) : null;
-  const fileInputContext = preparedArchReview ? null : prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
+  const fileInputContext = preparedReview ? null : prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
   const archReviewSignals = preparedArchReview ? admitArchitectureInput(preparedArchReview, request, { ...options, automaticReader: !options.readerCapacity },
     options.host?.capabilities || options.capabilities || {}) : null;
   if (archReviewSignals) request.signals = archReviewSignals;
+  const codeReviewSignals = preparedCodeReview ? admitCodeReviewInput(preparedCodeReview, options,
+    options.host?.capabilities || options.capabilities || {}) : null;
+  if (codeReviewSignals) request.signals = codeReviewSignals;
 
   if (request.gsd_role !== undefined && GSD_DELIVERY_ROLES[request.gsd_role] !== request.role) {
     fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
   }
-  const dispatchId = archDispatchId || request.dispatch_id || newDispatchId();
+  const dispatchId = archDispatchId || codeDispatchId || request.dispatch_id || newDispatchId();
   const resolution = preparedRepair && preparedRepair.repair.signature_state !== 'first'
     ? resolvePreparedRepair(preparedRepair, dispatchId, options, options.host?.capabilities || options.capabilities || {})
     : policy.resolveDispatch({ runtime: 'codex', role: request.role,
@@ -3605,13 +3657,14 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   heartbeat.unref?.();
   const inflightDir = inflightGraphDir(options, scope.worktree);
   const inflight = inflightDir ? { graphDir: inflightDir, worktree: scope.worktree, dispatch_id: dispatchId, pid: process.pid,
-    ...(preparedArchReview && path.resolve(inflightDir, '../..') === fs.realpathSync(scope.worktree)
+    ...(preparedReview && path.resolve(inflightDir, '../..') === fs.realpathSync(scope.worktree)
       ? { refreshBoard: false } : {}) } : null;
   let result;
   try {
     if (inflight) {
       recordInflight({ ...inflight, ticket: scope.ticket, role: resolution.role, host: 'codex' });
       if (preparedArchReview) archReviewContext.admitBookkeeping(preparedArchReview);
+      if (preparedCodeReview) codeReviewContext.admitBookkeeping(preparedCodeReview);
     }
     const host = createCodexDeliveryHost({
       scope,
@@ -3640,6 +3693,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       host: options.host,
       writerSession,
       archReviewContext: preparedArchReview, archReviewSignals, fileInputContext,
+      codeReviewContext: preparedCodeReview, codeReviewSignals,
       repairContext: preparedRepair, getPullRequest: options.getPullRequest, execFileSync: options.execFileSync,
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });
