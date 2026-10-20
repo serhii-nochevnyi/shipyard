@@ -460,13 +460,29 @@ test('published retained locator reloads the original target and leaves a later 
     assert.equal(third.disagreement_suppressed, 1);
     assert.equal(third.findings.find(finding => finding.id === 'later-twin').blocking, true);
     assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
-    assert.deepEqual(Object.keys(load(core.carryPriorFindings({ priorFindings: third, deltaDiff: '', readSource }))),
-      [first.findings[0].identity]);
+    const thirdLatest = core.carryPriorFindings({ priorFindings: third, deltaDiff: '', readSource });
+    const blocks = f.comments[0].body.split(/(?=BLOCKER \[)/).slice(1);
+    assert.equal(blocks.length, 2);
+    for (const block of blocks) {
+      const targetIndex = third.findings.findIndex(finding => block.startsWith(`BLOCKER [${finding.rule}] ${finding.path}:${finding.line}`));
+      const tupleLine = block.split('\n').find(line => line.startsWith('    {'));
+      if (third.findings[targetIndex].id === 'later-twin') {
+        assert.equal(tupleLine, undefined);
+        assert.match(block, /No reusable original locator is available/);
+      } else {
+        writeCarrier(JSON.parse(tupleLine.trim()));
+        const carried = core.carryPriorFindings({ priorFindings: third, deltaDiff: '', readSource,
+          disagreements: load(thirdLatest) });
+        assert.deepEqual(carried.map((finding, index) => finding.disagreement ? index : null).filter(index => index !== null),
+          [targetIndex]);
+      }
+    }
+    assert.deepEqual(Object.keys(load(thirdLatest)), [first.findings[0].identity]);
   } finally { f.cleanup(); }
 });
 
 
-test('retained locators require authenticated history or a validated original carrier', () => {
+for (const linked of [false, true]) test('retained locators require authenticated history or a validated original carrier: linked=' + linked, () => {
   const f = fixture();
   try {
     const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
@@ -486,18 +502,37 @@ test('retained locators require authenticated history or a validated original ca
     assert.equal(prior[0].occurrence, 3);
     f.seal(raw(), 1, null, prior);
     const before = JSON.stringify(f.lookup());
-    const carrier = path.join(f.root, '.planning/phases', f.phase, 'code-review-disagreements.json');
+    const coordinator = linked ? path.join(f.root, 'coordinator') : f.root;
+    if (linked) {
+      f.git(['worktree', 'add', '--detach', coordinator, 'HEAD']);
+      fs.cpSync(path.join(f.root, '.planning'), path.join(coordinator, '.planning'), { recursive: true });
+    }
+    const publicationInput = () => linked ? { ...f.input(), graphDir: path.join(coordinator, path.relative(f.root, f.graphDir)) } : f.input();
+    const carrier = path.join(coordinator, '.planning/phases', f.phase, 'code-review-disagreements.json');
+    if (linked) {
+      const stale = path.join(f.root, '.planning/phases', f.phase, 'code-review-disagreements.json');
+      fs.mkdirSync(path.dirname(stale), { recursive: true });
+      fs.writeFileSync(stale, JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [original] }));
+    }
     fs.mkdirSync(path.dirname(carrier), { recursive: true });
     for (const patch of [null, { occurrence: 3 }, { path: 'other.js' }, { line_text: 'return true;' },
-      { occurrence: 0 }, {}]) {
-      if (patch) fs.writeFileSync(carrier, JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1',
+      { occurrence: 0 }, 'invalid', 'symlink', {}]) {
+      fs.rmSync(carrier, { force: true });
+      if (patch === 'invalid') fs.writeFileSync(carrier, '{');
+      else if (patch === 'symlink') fs.symlinkSync(path.join(coordinator, '.planning/config.json'), carrier);
+      else if (patch) fs.writeFileSync(carrier, JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1',
         entries: [{ ...original, ...patch }] }));
-      assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
+      assert.equal(flow.publish(publicationInput(), f.options).comment.ok, true);
       const body = f.comments[0].body;
       assert.match(body, /Source line \(full text\), occurrence 3/);
       if (patch && Object.keys(patch).length === 0) {
         const tuple = JSON.parse(body.split('\n').find(line => line.startsWith('    {')).trim());
         assert.deepEqual(tuple, { path: original.path, line_text: original.line_text, occurrence: 2 });
+        const sealed = f.lookup();
+        const latest = core.carryPriorFindings({ priorFindings: sealed, deltaDiff: '', readSource });
+        const loaded = core.loadDisagreements({ projectRoot: coordinator, phaseDirName: f.phase,
+          priorFindings: latest, readFile: file => ({ text: fs.readFileSync(file), stat: fs.lstatSync(file) }) });
+        assert.deepEqual(Object.keys(loaded.entries), [sealed.findings[0].disagreement_identity]);
       } else {
         assert.match(body, /No reusable original locator is available/);
         assert(!body.split('\n').some(line => line.startsWith('    {')));

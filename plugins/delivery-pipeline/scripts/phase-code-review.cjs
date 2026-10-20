@@ -214,16 +214,25 @@ function statusDescription(current) {
   throw new Error('publication requires a sealed verdict for the exact head or the limit state');
 }
 
-function originalLocator(finding, sealed, prior, ctx) {
+function originalLocator(finding, sealed, prior, ctx, readSource) {
   const identity = finding.disagreement_identity || finding.identity;
   if (!identity) return null;
+  const reusable = locator => {
+    try {
+      const priorFindings = core.carryPriorFindings({ priorFindings: sealed, deltaDiff: '', readSource });
+      const disagreements = core.parseDisagreements(JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1',
+        entries: [{ ...locator, reason: 'locator validation', recorded_by: 'publication' }] }), { priorFindings });
+      const carried = core.carryPriorFindings({ priorFindings: sealed, deltaDiff: '', disagreements, readSource });
+      return carried.findIndex(entry => entry.disagreement !== null) === sealed.findings.indexOf(finding) ? locator : null;
+    } catch { return null; }
+  };
   const proven = candidate => {
     if (candidate.citation !== 'resolved' || candidate.identity !== identity
         || (candidate.disagreement_identity && candidate.disagreement_identity !== identity)) return null;
     try {
       if (core.lineIdentity({ path: candidate.path, lineText: candidate.line_text,
         ordinal: candidate.occurrence }) !== identity) return null;
-      return { path: candidate.path, line_text: candidate.line_text, occurrence: candidate.occurrence };
+      return reusable({ path: candidate.path, line_text: candidate.line_text, occurrence: candidate.occurrence });
     } catch { return null; }
   };
   for (const candidate of [finding, ...prior.flatMap(entry => entry.findings)]) {
@@ -233,8 +242,8 @@ function originalLocator(finding, sealed, prior, ctx) {
   if (!finding.disagreement_identity) return null;
   try {
     const priorFindings = core.carryPriorFindings({ priorFindings: sealed, deltaDiff: '',
-      readSource: core.createSourceReader({ git: args => git(ctx.worktree, args), head: sealed.head }) });
-    const loaded = core.loadDisagreements({ projectRoot: ctx.worktree, phaseDirName: ctx.match.phase_dir,
+      readSource });
+    const loaded = core.loadDisagreements({ projectRoot: ctx.mode.project_root, phaseDirName: ctx.match.phase_dir,
       priorFindings, readFile: file => {
         const stat = fs.lstatSync(file);
         if (stat.size > 65536) throw new Error('disagreements exceed their bound');
@@ -243,12 +252,13 @@ function originalLocator(finding, sealed, prior, ctx) {
     const entry = loaded.entries[identity];
     if (entry && core.lineIdentity({ path: entry.path, lineText: entry.line_text,
       ordinal: entry.occurrence }) === identity)
-      return { path: entry.path, line_text: entry.line_text, occurrence: entry.occurrence };
+      return reusable({ path: entry.path, line_text: entry.line_text, occurrence: entry.occurrence });
   } catch {}
   return null;
 }
 
 function findingsComment(current, sealed, prior, ctx) {
+  const readSource = core.createSourceReader({ git: args => git(ctx.worktree, args), head: sealed.head });
   const header = `<!-- code-review -->\nCode review — round ${sealed.round}, scope ${sealed.scope}\nVerdict: ${sealed.verdict}\n\n`;
   const stop = current.mode === 'hold' && !(current.state === 'current' && current.verdict === 'pass');
   const footer = `\n${sealed.disagreement_suppressed} findings not raised again because of a recorded disagreement.\n`
@@ -259,7 +269,7 @@ function findingsComment(current, sealed, prior, ctx) {
       + (finding.suppressed ? ' (recorded disagreement; not blocking)' : '') + '\n'
       + `${finding.summary}\n`;
     if (finding.severity === 'BLOCKER') {
-      const locator = originalLocator(finding, sealed, prior, ctx);
+      const locator = originalLocator(finding, sealed, prior, ctx, readSource);
       text += `Failure scenario: ${finding.failure_scenario}\n`
         + `Proposed fix-ticket title: ${finding.fix_ticket.title}\n`
         + `Source line (full text), occurrence ${finding.occurrence ?? 'unresolved'}:\n`
