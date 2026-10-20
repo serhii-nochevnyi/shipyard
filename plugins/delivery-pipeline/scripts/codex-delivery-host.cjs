@@ -1806,7 +1806,45 @@ function repairScopeIdentity(value) {
     allow_list: value.verificationAllowList };
 }
 
-function recheckHistoricalRepair(prepared, prior, originalHead) {
+function candidateCommit(candidate) {
+  return { worktree: candidate.worktree, ticket: candidate.ticket, expectedHead: candidate.expected_head,
+    expectedBase: candidate.expected_base, expectedBranch: candidate.branch,
+    files_modified: [...candidate.files_modified], expectedSigner: candidate.signer };
+}
+
+function repairHistoricalEndpoint(prepared) {
+  const transition = prepared.repair.signed_transition;
+  if (!transition) return prepared.commit.expectedHead;
+  if (!/^[a-f0-9]{64}$/.test(transition.candidate_id || ''))
+    fail('REPAIR_PREDECESSOR_INVALID', 'signed publication lacks its original candidate identity');
+  const candidate = readSealed(candidateFile(prepared.stateRoot, transition.candidate_id), prepared.key);
+  const { candidate_id: id, ...body } = candidate || {};
+  const finalized = candidate && readSealed(finalizationFile(prepared.stateRoot, id), prepared.key);
+  const publication = candidate && readSealed(path.join(privateDirectory(prepared.stateRoot, 'repair-publications'), id + '.json'), prepared.key);
+  const expectedTransition = candidate && finalized && { candidate_id: id, from: candidate.expected_head,
+    to: finalized.commit, tree: candidate.scoped_tree, signer: candidate.signer };
+  const expectedSubject = candidate && finalized && { ...candidate.repair_subject,
+    live: { ...candidate.repair_subject.live, headRefOid: finalized.commit }, signed_transition: expectedTransition };
+  if (!candidate || candidate.schema !== CANDIDATE_SCHEMA || sha256(canonical(body)) !== id
+      || !finalized || candidate.expected_role !== 'review-fix' || canonical(transition) !== canonical(expectedTransition)
+      || finalized.schema !== FINALIZATION_SCHEMA || finalized.candidate_id !== id || finalized.parent !== candidate.expected_head
+      || finalized.tree !== candidate.scoped_tree || finalized.signer !== candidate.signer
+      || canonical(prepared.repair) !== canonical(expectedSubject)
+      || canonical(candidateCommit(candidate)) !== canonical({ ...prepared.commit, expectedHead: candidate.expected_head })
+      || candidate.repository !== prepared.repository || candidate.repo !== prepared.repo
+      || candidate.graph_sha256 !== prepared.graphDigest || candidate.plan_path !== prepared.plan.path
+      || candidate.plan_sha256 !== prepared.plan.sha256 || candidate.base_ref !== prepared.baseRef
+      || candidate.verification.allow_list_sha256 !== allowListDigest(prepared.verificationAllowList)
+      || transition.to !== prepared.commit.expectedHead || !publication
+      || publication.candidate_id !== id || publication.commit !== finalized.commit
+      || !['pending', 'confirmed'].includes(publication.status)
+      || canonical(publication.subject) !== canonical(publication.status === 'pending' ? candidate.repair_subject : prepared.repair))
+    fail('REPAIR_PREDECESSOR_INVALID', 'historical endpoint lacks its exact authenticated signed publication');
+  verifySignedCommit(prepared.commit.worktree, candidate, finalized.commit);
+  return candidate.expected_head;
+}
+
+function recheckHistoricalRepair(prepared, prior, originalHead, endpoint = prepared.commit.expectedHead) {
   try {
     const root = prepared.commit.worktree, scope = prior.scope_transition, transition = prior.source_transition;
     if (prior.semantic_credit !== false || (!scope && !transition)) throw new Error('missing zero-credit transition');
@@ -1825,10 +1863,10 @@ function recheckHistoricalRepair(prepared, prior, originalHead) {
         throw new Error('historical base signatures or ancestry changed');
     }
     if (!transition) {
-      if (originalHead !== prepared.commit.expectedHead) throw new Error('scope evolution lost its original source head');
+      if (originalHead !== endpoint) throw new Error('scope evolution lost its original source head');
       return;
     }
-    if (transition.from !== originalHead || transition.to !== prepared.commit.expectedHead
+    if (transition.from !== originalHead || transition.to !== endpoint
         || !Array.isArray(transition.records) || !transition.records.length || transition.records.length > 500)
       throw new Error('historical source no longer binds the current head');
     git(root, ['merge-base', '--is-ancestor', transition.from, transition.to]);
@@ -2171,6 +2209,9 @@ function resolvePreparedRepair(prepared, dispatchId, options, capabilities) {
 
 function recheckRepair(prepared, options, { clean = false, feedback = prepared.repair.feedback, signedHead } = {}) {
   const root = prepared.commit.worktree;
+  const historicalEndpoint = repairHistoricalEndpoint(prepared);
+  if (signerFingerprint(root) !== prepared.commit.expectedSigner)
+    fail('REPAIR_SUBJECT_CHANGED', 'configured repair signer changed');
   if (prepared.repair.journal && sha256(fs.readFileSync(prepared.repair.journal.path)) !== prepared.repair.journal.sha256)
     fail('REPAIR_PREDECESSOR_INVALID', 'original complete repair history changed');
   const graph = graphSnapshot(prepared.graphFile, prepared.commit.ticket);
@@ -2196,7 +2237,7 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
     if (prior.historical) {
       const actions = readSealed(file, prepared.key);
       recheckHistoricalRepair(prepared, repairCoverageTransition(prior, prepared.repair.actionable_feedback),
-        actions.subject?.live?.headRefOid);
+        actions.subject?.live?.headRefOid, historicalEndpoint);
     }
     if (prior.reply_review) {
       const actions = readSealed(file, prepared.key);
@@ -2322,8 +2363,7 @@ function performSignedRepairPublication(prepared, signed, options) {
 
 function finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder) {
   const graph = graphSnapshot(graphFile(options, candidate.worktree), candidate.ticket);
-  const prepared = { commit: { worktree: candidate.worktree, ticket: candidate.ticket,
-    expectedHead: candidate.expected_head, expectedBase: candidate.expected_base, expectedBranch: candidate.branch },
+  const prepared = { commit: candidateCommit(candidate),
     graphFile: graphFile(options, candidate.worktree), graphDigest: candidate.graph_sha256,
     plan: planSnapshot(graphFile(options, candidate.worktree), graph.row), baseRef: candidate.base_ref,
     repair: candidate.repair_subject, repo: candidate.repo, repository: candidate.repository,
@@ -2748,8 +2788,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     });
     check('graph', () => graph && graph.snapshot.sha256 === candidate.graph_sha256);
     if (candidate.expected_role === 'review-fix') check('repair-subject', () => {
-      recheckRepair({ commit: { worktree, ticket: candidate.ticket, expectedHead: candidate.expected_head,
-        expectedBase: candidate.expected_base, expectedBranch: candidate.branch }, graphFile: graph.file,
+      recheckRepair({ commit: candidateCommit(candidate), stateRoot, key, graphFile: graph.file,
         graphDigest: candidate.graph_sha256, plan: planSnapshot(graph.file, graph.snapshot.row),
         baseRef: candidate.base_ref, repair: candidate.repair_subject, repo: candidate.repo, repository: candidate.repository,
         verificationAllowList: currentAllowList }, options);
