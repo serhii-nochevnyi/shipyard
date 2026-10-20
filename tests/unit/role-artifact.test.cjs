@@ -2421,6 +2421,50 @@ test('the Claude semantic transcript falls back through the shared Claude home',
   } finally { restore('CLAUDE_CONFIG_DIR', saved.config); restore('HOME', saved.home); }
 });
 
+function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const crypto = require('node:crypto');
+  const refs = input.result.ticket_set.map(item => item.row.plan);
+  for (const plan of refs) {
+    const absolute = path.join(planningRoot, plan);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
+  }
+  const graphDir = path.join(planningRoot, '.planning/graph');
+  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
+    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
+      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
+      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
+      exact_diff: { content: f.git(['diff', f.base, 'HEAD', '--', 'source.js']) },
+      integration_base: { commit: f.base } } });
+  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
+    const session = 'original-' + r.dispatch_id;
+    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
+    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
+      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
+        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
+    fs.writeFileSync(transcript, content);
+    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
+      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
+      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
+      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
+        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
+        transcript: { path: transcript, bytes: Buffer.byteLength(content),
+          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
+  } } } });
+  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
+    { ticket: input.ticket, subject_kind: 'phase' });
+  return { ...input, dispatchId: dispatch.dispatch_id };
+}
+
+function withOriginalPlanning(f) {
+  const input = f.input;
+  f.input = (...args) => retainPlanningInput(f, input(...args));
+  return f;
+}
+
 function reverseReviewKeys(value) {
   if (Array.isArray(value)) return value.map(reverseReviewKeys);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).reverse()
@@ -2432,7 +2476,7 @@ for (const incomplete of [false, true]) test('legacy reordered code-review membe
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
-  const f = reviewFixture();
+  const f = withOriginalPlanning(reviewFixture());
   try {
     f.graph.tickets['T-52-01'].files = ['source.js', 'round.txt'];
     const binding = f.advance(1);
@@ -2483,7 +2527,7 @@ for (const digestForm of ['omitted', 'alias'])
   test('legacy reordered membership preserves supported result digest form: ' + digestForm, () => {
     const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
     const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
-    const f = reviewFixture();
+    const f = withOriginalPlanning(reviewFixture());
     try {
       const binding = f.advance(1), input = f.input(binding);
       input.result.ticket_set = reverseReviewKeys(binding.ticketSet);
@@ -2506,7 +2550,7 @@ for (const mutation of ['manifest', 'file-index', 'mac', 'receipt', 'digest', 's
   test('public legacy code-review consumers reject authentic archive tampering: ' + mutation, () => {
     const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
     const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
-    const f = reviewFixture();
+    const f = withOriginalPlanning(reviewFixture());
     try {
       const binding = f.advance(1), input = f.input(binding);
       input.result.ticket_set = reverseReviewKeys(binding.ticketSet);
@@ -2522,7 +2566,9 @@ for (const mutation of ['manifest', 'file-index', 'mac', 'receipt', 'digest', 's
         else envelope.payload.records[input.dispatchId].pins[0].sha256 = '0'.repeat(64);
         fs.writeFileSync(file, JSON.stringify(envelope));
       } else if (mutation === 'receipt') {
-        const file = fs.readdirSync(f.recorder.storeDir).find(name => name.startsWith('record-'));
+        const file = 'record-' + require('node:crypto').createHash('sha256')
+          .update(manifest.producer_dispatch).digest('hex') + '.json';
+        assert.ok(fs.existsSync(path.join(f.recorder.storeDir, file)));
         fs.appendFileSync(path.join(f.recorder.storeDir, file), 'x');
       } else {
         const file = path.join(f.root, manifest.files.findings.path);
@@ -2541,7 +2587,7 @@ for (const mutation of ['manifest', 'file-index', 'mac', 'receipt', 'digest', 's
 for (const mutation of ['added', 'deleted', 'member-order', 'row', 'evidence', 'array-order', 'digest', 'subject'])
   test('fresh code-review sealing rejects changed membership: ' + mutation, () => {
     const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
-    const f = reviewFixture();
+    const f = withOriginalPlanning(reviewFixture());
     try {
       f.graph.tickets['T-52-01'].files = ['source.js', 'round.txt'];
       const binding = f.advance(2);
@@ -2563,7 +2609,7 @@ test('code-review lineage survives real fix-ticket membership changes and keeps 
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
   const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
-  const f = reviewFixture();
+  const f = withOriginalPlanning(reviewFixture());
   try {
     const digests = [], snapshots = [], verdicts = [];
     for (let round=1; round<=3; round++) {
@@ -2614,7 +2660,7 @@ test('sealed disagreements retain their original target through three rounds and
   const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
   const source = name => fs.readFileSync(path.join(__dirname, '../fixtures/code-review', name), 'utf8');
   for (const lines of [[2,4,6], [4]]) {
-    const f = reviewFixture();
+    const f = withOriginalPlanning(reviewFixture());
     try {
       fs.writeFileSync(path.join(f.root, 'source.js'), source('twins.js'));
       f.git(['add', 'source.js']);
@@ -2668,7 +2714,7 @@ test('sealed disagreements retain their original target through three rounds and
 test('code-review reuse refuses a moved base or reference contract and ticket-form subject', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
-  const f = reviewFixture();
+  const f = withOriginalPlanning(reviewFixture());
   try {
     const binding=f.advance(1), input=f.input(binding);
     const originalReference=fs.readFileSync(path.join(__dirname,'../../plugins/delivery-pipeline/references/code-review.md'));
@@ -2743,7 +2789,7 @@ function foreignCodeReviewArchive() {
     cleanup() { f.cleanup(); fs.rmSync(coordinator, { recursive: true, force: true }); } };
 }
 
-test('existing-format sealed foreign pass reads through current lookup and opens phase hold independently of collector', () => {
+test('existing-format sealed foreign pass remains historical without original planning custody', () => {
   const f = foreignCodeReviewArchive();
   const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
   const flow = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
@@ -2755,15 +2801,15 @@ test('existing-format sealed foreign pass reads through current lookup and opens
     const prior = () => roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root,
       repository: target.repositoryIdentity(f.root), phaseDir: f.phase, graphDir: f.graphDir });
     assert.equal(prior()[0].artifact_digest, seal.artifact_digest);
-    assert.equal(f.lookup().artifact_digest, seal.artifact_digest);
+    assert.equal(f.lookup(), null);
     const status = () => flow.status({ worktree: f.root, graphDir: f.graphDir, repo: 'acme/app',
       phase: 52, pr: 52, live: f.live }, { execFileSync(executable, args) {
         assert.equal(executable, 'gh');
         assert.deepEqual(args, ['repo', 'view', 'acme/app', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name']);
         return 'main\n';
       } });
-    assert.equal(status().state, 'current');
-    assert.equal(flow.evaluateGate(status()).ok, true);
+    assert.equal(status().state, 'owed');
+    assert.equal(flow.evaluateGate(status()).ok, false);
     assert.throws(() => f.lookup({ repo: null }));
     assert.equal(f.lookup({ repo: 'acme/wrong' }), null);
     f.graph.tickets['T-52-01'].title = 'new graph membership';
@@ -2779,7 +2825,7 @@ for (const changed of ['config mapping', 'epic membership', 'graph symlink', 'so
   test('sealed foreign current authority refuses ' + changed, () => {
     const f = foreignCodeReviewArchive();
     try {
-      const seal = roleArtifact.sealJudgment(f.input);
+      const seal = roleArtifact.sealJudgment(retainPlanningInput(f, f.input, f.coordinator, 'acme/app'));
       assert.equal(f.lookup().verdict, 'pass');
       if (changed === 'config mapping') fs.writeFileSync(path.join(f.coordinator, '.planning/config.json'),
         JSON.stringify({ delivery_pipeline: { repos: { 'acme/app': f.coordinator } } }));
@@ -2801,8 +2847,10 @@ for (const changed of ['config mapping', 'epic membership', 'graph symlink', 'so
         fs.writeFileSync(seal.artifact_ref, JSON.stringify(manifest));
       }
       if (changed === 'receipt') {
-        const record = fs.readdirSync(f.recorder.storeDir).find(name => name.startsWith('record-'));
-        assert.ok(record);
+        const manifest = JSON.parse(fs.readFileSync(seal.artifact_ref));
+        const record = 'record-' + require('node:crypto').createHash('sha256')
+          .update(manifest.producer_dispatch).digest('hex') + '.json';
+        assert.ok(fs.existsSync(path.join(f.recorder.storeDir, record)));
         const file = path.join(f.recorder.storeDir, record), raw = JSON.parse(fs.readFileSync(file));
         raw.integrity.mac = '0'.repeat(64); fs.writeFileSync(file, JSON.stringify(raw));
       }

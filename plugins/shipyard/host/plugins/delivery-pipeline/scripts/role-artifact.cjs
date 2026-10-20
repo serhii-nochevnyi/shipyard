@@ -5183,12 +5183,23 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
   catch { return null; }
   let current = null, currentPlanning = null;
   const checkPlanning = context => {
-    if (!context) return;
+    if (!object(context) || stable(Object.keys(context).sort()) !== stable(['planning_reference', 'selected_refs']))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'original planning evidence is required');
     if (stable(context.planning_reference) !== stable(planning))
       fail('ARCHIVE_AUTHORITY_INVALID', 'sealed planning association differs from current selection');
     const sourceRoot = packets.authenticatedPlanningRoot(root, context.planning_reference);
-    for (const pin of context.selected_refs || [])
+    const refs = context.selected_refs;
+    const plans = new Set(binding.rows.map(item => item.row.plan));
+    if (!Array.isArray(refs) || refs.length !== plans.size)
+      fail('ARCHIVE_AUTHORITY_INVALID', 'complete original planning pins are required');
+    const seen = new Set();
+    for (const pin of refs) {
+      if (!object(pin) || stable(Object.keys(pin).sort()) !== stable(['bytes', 'path', 'sha256'])
+          || !plans.has(pin.path) || seen.has(pin.path))
+        fail('ARCHIVE_AUTHORITY_INVALID', 'original planning pin inventory differs from selected plans');
+      seen.add(pin.path);
       readPinnedArchiveFile(sourceRoot, pin, 'current code-review planning source');
+    }
   };
   for (const verdict of prior) {
     if (verdict.head !== head || verdict.base_commit !== baseCommit) continue;
@@ -5198,7 +5209,8 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
     if (manifest.subject !== binding.subject || manifest.ticket_set_digest !== binding.membership
         || manifest.contract_digest !== contract || manifest.reuse_key !== core.reuseKey({ head, baseCommit, contractDigest: contract })) continue;
     const findingBytes = readPinnedArchiveFile(manifest.worktree_realpath, manifest.files.findings, 'current code-review findings');
-    let selectedPlanning = JSON.parse(findingBytes).host_context;
+    const findings = JSON.parse(findingBytes);
+    let selectedPlanning = findings.host_context;
     const record = authorityState(manifest.worktree_realpath).payload.records[manifest.producer_dispatch];
     const trusted = trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: record.receipt_store });
     let originalPacket, originalReference;
@@ -5215,23 +5227,33 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
         fail('ARCHIVE_AUTHORITY_INVALID', 'original packet and snapshot planning differ');
     }
     if (originalPacket) {
-      if (originalPacket.role !== 'code-review' || originalPacket.subject !== manifest.subject
+      if (trusted.receipt.runtime === 'codex') {
+        const originalDigest = digest(JSON.stringify(packets.encodeUniqueContent(originalPacket)));
+        const originalBinding = trusted.receipt.runtime_evidence?.code_review;
+        if (!originalBinding || originalBinding.context_digest !== originalDigest
+            || findings.context_digest !== originalDigest || originalBinding.repository !== repository
+            || originalBinding.id !== manifest.subject || originalBinding.head !== head
+            || originalBinding.base_commit !== baseCommit || originalBinding.ticket_set_digest !== binding.membership)
+          fail('ARCHIVE_AUTHORITY_INVALID', 'original packet differs from authenticated launch');
+      }
+      if (trusted.record.ticket !== manifest.subject || trusted.receipt.role !== 'code-review'
+          || originalPacket.role !== 'code-review' || originalPacket.subject !== manifest.subject
           || originalPacket.source_revision !== head || originalPacket.canonical_root !== planning.root
+          || originalPacket.role_context?.integration_base?.commit !== baseCommit
           || stable(originalPacket.role_context?.ticket_set) !== stable(binding.ticketSet))
         fail('ARCHIVE_AUTHORITY_INVALID', 'original planning packet differs from selected subject');
       originalReference = originalPacket.role_context?.planning_reference || originalReference;
+      if (!originalReference) { current = null; currentPlanning = null; continue; }
       if (originalReference) {
         const originalContext = { planning_reference: originalReference,
           selected_refs: originalPacket.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
-        if (selectedPlanning?.planning_reference && stable(originalContext) !== stable(selectedPlanning))
+        if (selectedPlanning !== undefined && stable(originalContext) !== stable(selectedPlanning))
           fail('ARCHIVE_AUTHORITY_INVALID', 'sealed planning differs from original native input');
         selectedPlanning = originalContext;
       }
     }
-    if (selectedPlanning?.planning_reference) {
-      try { checkPlanning(selectedPlanning); } catch { current = null; currentPlanning = null; continue; }
-    }
-    currentPlanning = selectedPlanning?.planning_reference ? selectedPlanning : null;
+    try { checkPlanning(selectedPlanning); } catch { current = null; currentPlanning = null; continue; }
+    currentPlanning = selectedPlanning;
     current = { authenticated: true, verdict: verdict.verdict, blocking_count: verdict.blocking_count,
       review_completeness: verdict.review_completeness, round: verdict.review_round, scope: verdict.review_scope,
       prior_head: verdict.prior_head, head, base_commit: baseCommit, subject: binding.subject, dispatch_id: manifest.producer_dispatch,
@@ -5240,7 +5262,9 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
       partitions_not_reviewed: verdict.partitions_not_reviewed };
   }
   packets.authenticatedPlanningRoot(root, planning);
-  checkPlanning(currentPlanning);
+  if (current) {
+    try { checkPlanning(currentPlanning); } catch { return null; }
+  }
   return cleanSource(true) && reviewGit(root, ['rev-parse', 'HEAD']) === head && exactCurrentGitSubject(root, branch, head, baseName, baseCommit) ? current : null;
 }
 

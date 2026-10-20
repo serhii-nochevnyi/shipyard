@@ -11,6 +11,7 @@ const homedir = os.homedir;
 os.homedir = () => home;
 process.on('exit', () => { os.homedir = homedir; fs.rmSync(home, { recursive: true, force: true }); });
 const scripts = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts');
+const { createDispatchBoundary } = require(path.join(scripts, 'dispatch-boundary.cjs'));
 const flow = require(path.join(scripts, 'phase-code-review.cjs'));
 const artifact = require(path.join(scripts, 'role-artifact.cjs'));
 const target = require(path.join(scripts, 'architecture-target.cjs'));
@@ -27,6 +28,7 @@ const raw = (complete = true, findings = []) => ({ review_completeness: complete
 
 function fixture(jira = null, mode = 'report') {
   const f = artifactFixture('publish');
+  let planningRoot = f.root;
   const branch = jira ? 'feat/PRJ-42-review' : f.branch;
   if (jira) f.git(['branch', '-m', branch]);
   f.graph.epics = { '052': { branch, phaseDir: f.phase, repos: [null], jira } };
@@ -74,9 +76,12 @@ function fixture(jira = null, mode = 'report') {
     const request = f.input(binding, round, priorHead, raw());
     Object.assign(request.result, core.normalizeResult(result, { round, scope: round === 1 ? 'full' : 'delta',
       priorFindings, readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') }));
-    return artifact.sealJudgment(request);
+    return artifact.sealJudgment(retainPlanningInput(f, request, planningRoot));
   };
   return { ...f, branch, live, input, options, seal, writes, comments,
+    setPlanningRoot: value => { planningRoot = value; },
+    lookup: () => artifact.currentCodeReviewVerdict({ worktreePath: f.root, pr: 52, head: live().headRefOid,
+      baseName: 'main', baseCommit: f.base, graphDir: path.join(planningRoot, '.planning/graph'), headBranch: branch }),
     setTicketHead: value => { ticketHead = value; }, failStatus: () => { failStatus = true; },
     failComment: () => { failComment = true; }, failLookup: () => { failLookup = true; } };
 }
@@ -503,13 +508,14 @@ for (const linked of [false, true]) test('retained locators require authenticate
     const prior = core.carryPriorFindings({ priorFindings: first,
       deltaDiff: f.git(['diff', '--unified=3', originalHead, 'HEAD', '--', 'source.js']), disagreements: entries, readSource });
     assert.equal(prior[0].occurrence, 3);
-    f.seal(raw(), 1, null, prior);
-    const before = JSON.stringify(f.lookup());
     const coordinator = linked ? path.join(coordinatorDirectory, 'checkout') : f.root;
     if (linked) {
       f.git(['worktree', 'add', '--detach', coordinator, 'HEAD']);
       fs.cpSync(path.join(f.root, '.planning'), path.join(coordinator, '.planning'), { recursive: true });
     }
+    f.setPlanningRoot(coordinator);
+    f.seal(raw(), 1, null, prior);
+    const before = JSON.stringify(f.lookup());
     const publicationInput = () => linked ? { ...f.input(), graphDir: path.join(coordinator, path.relative(f.root, f.graphDir)) } : f.input();
     const carrier = path.join(coordinator, '.planning/phases', f.phase, 'code-review-disagreements.json');
     if (linked) {
@@ -547,3 +553,41 @@ for (const linked of [false, true]) test('retained locators require authenticate
     finally { if (coordinatorDirectory) fs.rmSync(coordinatorDirectory, { recursive: true, force: true }); }
   }
 });
+
+function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const crypto = require('node:crypto');
+  const refs = input.result.ticket_set.map(item => item.row.plan);
+  for (const plan of refs) {
+    const absolute = path.join(planningRoot, plan);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
+  }
+  const graphDir = path.join(planningRoot, '.planning/graph');
+  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
+    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
+      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
+      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
+      exact_diff: { content: f.git(['diff', f.base, 'HEAD', '--', 'source.js']) },
+      integration_base: { commit: f.base } } });
+  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
+    const session = 'original-' + r.dispatch_id;
+    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
+    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
+      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
+        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
+    fs.writeFileSync(transcript, content);
+    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
+      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
+      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
+      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
+        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
+        transcript: { path: transcript, bytes: Buffer.byteLength(content),
+          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
+  } } } });
+  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
+    { ticket: input.ticket, subject_kind: 'phase' });
+  return { ...input, dispatchId: dispatch.dispatch_id };
+}

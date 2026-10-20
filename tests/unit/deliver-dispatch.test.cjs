@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -65,6 +66,50 @@ const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-polic
 const prHygiene = require('../../plugins/delivery-pipeline/scripts/pr-hygiene.cjs');
 
 suite('deliver-dispatch — front-to-dispatch entry point');
+
+function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const crypto = require('node:crypto');
+  const refs = input.result.ticket_set.map(item => item.row.plan);
+  for (const plan of refs) {
+    const absolute = path.join(planningRoot, plan);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
+  }
+  const graphDir = path.join(planningRoot, '.planning/graph');
+  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
+    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
+      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
+      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
+      exact_diff: { content: f.git(['diff', f.base, 'HEAD', '--', 'source.js']) },
+      integration_base: { commit: f.base } } });
+  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
+    const session = 'original-' + r.dispatch_id;
+    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
+    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
+      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
+        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
+    fs.writeFileSync(transcript, content);
+    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
+      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
+      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
+      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
+        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
+        transcript: { path: transcript, bytes: Buffer.byteLength(content),
+          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
+  } } } });
+  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
+    { ticket: input.ticket, subject_kind: 'phase' });
+  return { ...input, dispatchId: dispatch.dispatch_id };
+}
+
+function withOriginalPlanning(f) {
+  const input = f.input;
+  f.input = (...args) => retainPlanningInput(f, input(...args));
+  return f;
+}
 
 function git(root, ...args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -803,28 +848,32 @@ test('a Codex request passes the real validateArgs', async () => {
   }
 });
 
-test('the detached child pid is the host process; status/wait report exit and record a dispatch wake', async () => {
-  const fixture = shipyardFixture('T-07-07');
-  const stub = path.join(fixture.root, 'stub-host.cjs');
-  fs.writeFileSync(stub, "process.stdout.write(JSON.stringify({pid: process.pid}) + '\\n');\n");
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-state-'));
-  try {
-    const launched = await deliverDispatch.launch(
-      ['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'],
-      { cwd: fixture.root, stateDir, claudeHostScript: stub },
-    );
-    const waited = await deliverDispatch.waitOnce(launched.dispatch_id, { stateDir, intervalMs: 20, timeoutMs: 5000 });
-    assert.equal(waited.status, 'exited-ok');
-    assert.equal(typeof waited.result.pid, 'number');
-    assert.notEqual(waited.result.pid, process.pid);
-    const status = deliverDispatch.statusOnce(launched.dispatch_id, { stateDir });
-    assert.equal(status.status, 'exited-ok');
-    const events = fs.readFileSync(path.join(fixture.graphDir, 'runs', 'wake-events.jsonl'), 'utf8')
-      .split('\n').filter(Boolean).map((line) => JSON.parse(line));
-    assert.ok(events.some((event) => event.kind === 'dispatch' && event.run_id === launched.dispatch_id));
-  } finally {
-    cleanup(fixture.root, stateDir);
-  }
+let detachedChildRun;
+test('the detached child pid is the host process; status/wait report exit and record a dispatch wake', () => {
+  detachedChildRun = (async () => {
+    const fixture = shipyardFixture('T-07-07');
+    const stub = path.join(fixture.root, 'stub-host.cjs');
+    fs.writeFileSync(stub, "process.stdout.write(JSON.stringify({pid: process.pid}) + '\\n');\n");
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-state-'));
+    try {
+      const launched = await deliverDispatch.launch(
+        ['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'],
+        { cwd: fixture.root, stateDir, claudeHostScript: stub },
+      );
+      const waited = await deliverDispatch.waitOnce(launched.dispatch_id, { stateDir, intervalMs: 20, timeoutMs: 5000 });
+      assert.equal(waited.status, 'exited-ok');
+      assert.equal(typeof waited.result.pid, 'number');
+      assert.notEqual(waited.result.pid, process.pid);
+      const status = deliverDispatch.statusOnce(launched.dispatch_id, { stateDir });
+      assert.equal(status.status, 'exited-ok');
+      const events = fs.readFileSync(path.join(fixture.graphDir, 'runs', 'wake-events.jsonl'), 'utf8')
+        .split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.ok(events.some((event) => event.kind === 'dispatch' && event.run_id === launched.dispatch_id));
+    } finally {
+      cleanup(fixture.root, stateDir);
+    }
+  })();
+  return detachedChildRun;
 });
 
 test('blocking observations are measured once across repeat waits and lost recovery adds no poll', async () => {
@@ -1133,8 +1182,9 @@ test('overlapping authority callbacks wait for the unreadable probe to restore l
 
 for (const jira of [null, 'PRJ-42']) test(`default hold guards phase architecture builders (${jira})`, async () => {
   await unreadableAuthorityRun;
+  await detachedChildRun;
   assert.strictEqual(fs.lstatSync, authorityLstatSync);
-  const f = require('../fixtures/code-review/artifact-fixture.cjs').fixture();
+  const f = withOriginalPlanning(require('../fixtures/code-review/artifact-fixture.cjs').fixture());
   const artifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
   try {
     const branch = jira ? 'feat/PRJ-42-review' : f.branch;
