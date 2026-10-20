@@ -614,4 +614,26 @@ test('an adapter-level refusal without an identified config key keeps the histor
   assert.equal(repairFor('STALE_GENERATED_AGENT', { key: 'anything' }), REPAIR);
 });
 
+for (const [signals, file] of [[{}, 'shipyard-code-review.toml'], [{ critical: true }, 'shipyard-code-review-critical.toml'],
+  [{ checkpoint: true }, 'shipyard-code-review-critical.toml'], [{ contested: true, inputTokens: 1000000 }, 'shipyard-code-review.toml']])
+test('code review adapter selects its static read-only file: ' + JSON.stringify(signals), () => {
+  const f = setup();
+  try {
+    const result = f.boundary.dispatch({ runtime: 'codex', role: 'code-review', signals }, subjectContext('code-review'));
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].agent_file, file);
+    assert.equal(f.calls[0].sandbox_mode, 'read-only');
+    assert.equal(result.receipt.agent_file, file);
+  } finally { clean(f); }
+});
+
+test('code review adapter refuses a changed static agent with the installed upgrade remedy', () => {
+  const f = setup();
+  try {
+    fs.appendFileSync(path.join(f.root, 'shipyard-code-review.toml'), '\nchanged');
+    rejected(() => f.boundary.dispatch({ runtime: 'codex', role: 'code-review' }, subjectContext('code-review')), 'STALE_GENERATED_AGENT');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
 done();

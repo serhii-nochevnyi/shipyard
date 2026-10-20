@@ -2606,6 +2606,20 @@ function createCodexCliLauncher(options = {}) {
     const typedRole = launchOptions.gsd_role;
     const agent = typedRole ? installedGsdAgent(typedRole, environment) : null;
     const fileInput = launchOptions.input_prepared;
+    const isCodeReview = ['shipyard-code-review.toml', 'shipyard-code-review-critical.toml'].includes(launchOptions.agent_file);
+    if ((launchOptions.code_review_prepared !== undefined && !isCodeReview)
+        || (launchOptions.focused_prepared !== undefined && isCodeReview))
+      fail('INVALID_INPUT', 'private review custody belongs to a different role');
+    const codeContext = require('./codex-code-review-context.cjs');
+    const codeReview = isCodeReview
+      ? codeContext.authenticateLaunch(launchOptions.code_review_prepared, prompt, {
+        ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree, dispatch_id: launchOptions.dispatch_id,
+        agent_file: launchOptions.agent_file, agent_file_digest: launchOptions.agent_file_digest }) : null;
+    if (codeReview && (typedRole || launchOptions.resume_review || launchOptions.review_progress || launchOptions.reader_capacity_probe
+        || launchOptions.sandbox_mode !== 'read-only'))
+      fail('INVALID_INPUT', 'code-review requires its original static read-only launch');
+    if (codeReview && (fileInput || null) !== codeContext.admittedFileInput(launchOptions.code_review_prepared))
+      fail('INVALID_INPUT', 'code-review files differ from private launch custody');
     const focused = launchOptions.focused_prepared === undefined ? null
       : require('./codex-arch-review-context.cjs').authenticateFocusedLaunch(launchOptions.focused_prepared, prompt, {
         ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree, dispatch_id: launchOptions.dispatch_id,
@@ -2629,7 +2643,7 @@ function createCodexCliLauncher(options = {}) {
       const normalizeRelay = value => value.replace(/launch_digest=[a-f0-9]{64}/g, 'launch_digest=' + '0'.repeat(64));
       if (typeof prompt !== 'string' || normalizeRelay(prompt) !== normalizeRelay(resumeReview ? resumeReview.prompt : fileInput.prompt))
         fail('INVALID_INPUT', 'native relay differs from private prepared input');
-      if (!capacityProbe && !focused) collector.requireReaderBatchCapacity(fileInput);
+      if (!capacityProbe && !focused && !codeReview) collector.requireReaderBatchCapacity(fileInput);
       if (focused && (fileInput !== collector.admittedFileInput(launchOptions.focused_prepared)
           || fileInput.manifest.binding?.review_contract !== collector.FOCUSED_CONTRACT))
         fail('INVALID_INPUT', 'focused files differ from private launch custody');
@@ -2641,7 +2655,8 @@ function createCodexCliLauncher(options = {}) {
         fail('READER_CAPACITY_UNSUPPORTED', 'review changed its measured instructions or selection');
       const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: capacityProbe ? probeState.association.review_dispatch_id
         : resumeReview ? resumeReview.progress.identity.dispatch_id : launchOptions.dispatch_id,
-        run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase } });
+        run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase,
+        ...(codeReview ? { role: 'code-review' } : {}) } });
       if (checked.manifest.snapshot.worktree !== fs.realpathSync(scope.worktree))
         fail('SCOPE_MISMATCH', 'prepared review input belongs to a different physical worktree');
       if ((checked.manifest.binding?.agent_sha256 && checked.manifest.binding.agent_sha256 !== launchOptions.agent_file_digest)
@@ -2727,7 +2742,7 @@ function createCodexCliLauncher(options = {}) {
       applied_model: model, applied_effort: effort,
       observed_model: model, observed_effort: effort,
     });
-    const observeReview = fileTransport && !focused && !resumeReview && !capacityProbe && (launchOptions.review_progress === true
+    const observeReview = fileTransport && !focused && !codeReview && !resumeReview && !capacityProbe && (launchOptions.review_progress === true
       || (fileInput.manifest.binding?.ticket_set && fileInput.manifest.binding?.merge_base))
       ? createReviewObserver(fileInput, { model, effort, sandbox_mode: sandbox,
         agent_file: agent?.file || launchOptions.agent_file || null,
@@ -2976,7 +2991,7 @@ function createCodexCliLauncher(options = {}) {
         allowTimedOutWait: false, startedAt, task,
       });
       const nativeEvidence = verified.native_session_evidence;
-      if (fileTransport && !focused) {
+      if (fileTransport && !focused && !codeReview) {
         const message = parsed.records.filter(record => record.type === 'item.completed'
           && record.item?.type === 'agent_message').at(-1);
         if (!message || parsed.records.indexOf(message) > parsed.records.findLastIndex(record => record.type === 'turn.completed'))
@@ -3007,6 +3022,12 @@ function createCodexCliLauncher(options = {}) {
         model: args[args.indexOf('--model') + 1],
         effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
       }, nativeEvidence);
+      if (codeReview) {
+        codeContext.authenticateLaunch(launchOptions.code_review_prepared, prompt, {
+          ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree, dispatch_id: launchOptions.dispatch_id });
+        if (fileInput) require('./codex-arch-review-context.cjs').verifyFileInput(fileInput, { association: {
+          run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase, role: 'code-review', dispatch_id: launchOptions.dispatch_id } });
+      }
       if (focused) {
         const collector = require('./codex-arch-review-context.cjs');
         collector.authenticateFocusedLaunch(launchOptions.focused_prepared, prompt, {
@@ -3070,9 +3091,10 @@ function createCodexCliLauncher(options = {}) {
           fresh_turn_id: resumedConsumption.turn_id, semantic_credit: false, new_physical_calls: 0 } } : {}),
         ...(typedEvidence ? { native_child_evidence: typedEvidence } : {}),
         ...(focused ? { focused_review: focused } : {}),
-        ...(fileTransport && focused ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
+        ...(codeReview ? { code_review: codeReview } : {}),
+        ...(fileTransport && (focused || codeReview) ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
           input_accounting: fileInput.manifest.accounting } : {}),
-        ...(fileTransport && !focused ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
+        ...(fileTransport && !focused && !codeReview ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
           input_accounting: fileInput.manifest.accounting,
           input_consumption: { native_session_sha256: nativeEvidence.sha256,
             manifest_sha256: fileInput.input_bundle.manifest_sha256,
@@ -3261,6 +3283,7 @@ function createCodexRuntimeHost(options = {}) {
         input_bundle: input.input_bundle,
         input_prepared: input.input_prepared,
         focused_prepared: input.focused_prepared,
+        code_review_prepared: input.code_review_prepared,
         sandbox_mode: selection.sandbox_mode || input.sandbox_mode,
         gsd_role: input.gsd_role,
         resume_review: input.resume_review,
