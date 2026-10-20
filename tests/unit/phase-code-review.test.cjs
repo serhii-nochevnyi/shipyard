@@ -453,3 +453,135 @@ for (const jira of shapes) test('fatal ancestry preserves refusal across an auth
     assert.equal(flow.status(f.input()).state, 'limit');
   } finally { f.cleanup(); }
 });
+
+
+for (const [selected, foreign, separate] of [
+  [null, 'acme/app', false], ['acme/app', null, false], ['acme/other', 'acme/app', false],
+  [null, 'acme/app', true], ['acme/app', null, true],
+]) {
+  test(`canonical ticket repository scope: ${selected} / ${foreign}, separate=${separate}`, () => {
+    const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-repo-scope-')));
+    const coordinator = path.join(temporary, 'coordinator'), app = path.join(temporary, 'app');
+    const git = (root, args) => execFileSync('git', ['-C', root, ...args],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const init = root => {
+      fs.mkdirSync(root);
+      git(root, ['init', '--quiet', '--initial-branch=main']);
+      git(root, ['config', 'user.name', 'Scope Fixture']);
+      git(root, ['config', 'user.email', 'scope@example.invalid']);
+      git(root, ['config', 'commit.gpgsign', 'false']);
+    };
+    try {
+      init(coordinator);
+      if (separate) init(app);
+      const phase = path.join(coordinator, '.planning/phases/52-scope');
+      fs.mkdirSync(phase, { recursive: true });
+      for (const [n, repo] of [[1, selected], [2, foreign]]) {
+        const file = n === 1 ? 'local.js' : 'foreign.js';
+        fs.writeFileSync(path.join(coordinator, file), 'module.exports = true;\n');
+        fs.writeFileSync(path.join(phase, `52-0${n}-PLAN.md`), [
+          '---', 'phase: 52', `plan: ${n}`, `title: ${n === 1 ? 'Local work' : 'Foreign work'}`,
+          'type: execute', 'wave: 1', 'depends_on: []', `files_modified: [${file}]`,
+          'requirements: [REQ-214]', 'delivery:', `  ticket: T-52-0${n}`, '  risk: low',
+          '  human_checkpoint: false', ...(repo ? [`  repo: ${repo}`] : []),
+          '---', 'Keep contracts.', '',
+        ].join('\n'));
+      }
+      const configPath = path.join(coordinator, '.planning/config.json');
+      const config = { git: { base_branch: 'main' }, delivery_pipeline: {
+        code_review: 'hold', ...(separate ? { repos: { 'acme/app': app } } : {}),
+      } };
+      write(configPath, config);
+      const valid = spawnSync(process.execPath, [path.join(scripts, 'validate-graph.cjs')],
+        { cwd: coordinator, encoding: 'utf8' });
+      assert.equal(valid.status, 0, valid.stderr + valid.stdout);
+      assert.match(valid.stdout, /validate-graph: OK.*2 ticket\(s\)/);
+      const graphDir = path.join(coordinator, '.planning/graph');
+      const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
+      assert.equal(graph.tickets['T-52-01'].repo, selected);
+      assert.equal(graph.tickets['T-52-02'].repo, foreign);
+      assert.equal(new Set(Object.values(graph.tickets).map(row => row.branch)).size, 2);
+      const state = { tickets: {
+        'T-52-01': { repo: foreign, pr_branch: 'feat/local-recorded' },
+        'T-52-02': { repo: selected, pr_branch: 'feat/foreign-recorded' },
+      } };
+      write(path.join(graphDir, 'delivery-state.json'), state);
+      git(coordinator, ['add', '.']);
+      git(coordinator, ['commit', '--quiet', '-m', 'canonical planning']);
+      if (separate) {
+        fs.writeFileSync(path.join(app, 'foreign.js'), 'module.exports = true;\n');
+        git(app, ['add', '.']); git(app, ['commit', '--quiet', '-m', 'application base']);
+        assert.notEqual(target.repositoryIdentity(coordinator), target.repositoryIdentity(app));
+        assert.equal(fs.existsSync(path.join(app, '.planning')), false);
+      }
+      const root = separate && selected ? app : coordinator;
+      const association = require(path.join(scripts, 'context-packet.cjs')).resolvePlanningReference({
+        worktree: root, graphDir, repo: selected,
+      });
+      assert.equal(association.root, coordinator);
+      assert.equal(association.repository, target.repositoryIdentity(root));
+      const base = git(root, ['rev-parse', 'HEAD']);
+      git(root, ['update-ref', 'refs/remotes/origin/main', base]);
+      git(root, ['switch', '--quiet', '-c', graph.tickets['T-52-02'].branch]);
+      git(root, ['commit', '--quiet', '--allow-empty', '-m', 'integration PR']);
+      const live = { number: 52, state: 'OPEN', headRefName: graph.tickets['T-52-02'].branch,
+        headRefOid: git(root, ['rev-parse', 'HEAD']), baseRefName: 'main', baseRefOid: base };
+      const bin = path.join(temporary, 'bin'), response = path.join(temporary, 'response.json');
+      const requests = path.join(temporary, 'requests.jsonl');
+      fs.mkdirSync(bin);
+      const prArgs = ['pr', 'view', '52', ...(selected ? ['--repo', selected] : []), '--json',
+        'number,state,headRefName,headRefOid,baseRefName,baseRefOid'];
+      const repoArgs = ['repo', 'view', ...(selected ? [selected] : []), '--json',
+        'defaultBranchRef', '--jq', '.defaultBranchRef.name'];
+      fs.writeFileSync(path.join(bin, 'gh'), '#!/usr/bin/env node\n' +
+        `const fs = require('node:fs'), assert = require('node:assert/strict');
+const args = process.argv.slice(2), pr = ${JSON.stringify(prArgs)}, repo = ${JSON.stringify(repoArgs)};
+fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(args) + '\\n');
+if (JSON.stringify(args) === JSON.stringify(pr)) process.stdout.write(fs.readFileSync(${JSON.stringify(response)}));
+else { assert.deepEqual(args, repo); process.stdout.write('main\\n'); }
+`, { mode: 0o755 });
+      const check = (head, kind, mode) => {
+        config.delivery_pipeline.code_review = mode; write(configPath, config);
+        const current = { ...live, headRefName: head };
+        assert.equal(flow.matchEpicPullRequest({ graph, state, live: current, repo: selected }).kind, kind);
+        const result = flow.verifyCodeReview({ worktree: root, graphDir, repo: selected, live: current },
+          { defaultBranch: 'main' });
+        if (kind === 'ticket') assert.equal(result, null);
+        else {
+          assert.notEqual(result, null);
+          assert.equal(result.state, kind === 'epic' ? 'owed' : 'unmatched');
+          assert.equal(result.mode, mode); assert.equal(result.ok, mode === 'report');
+        }
+        write(response, current); fs.writeFileSync(requests, '');
+        const cli = spawnSync(process.execPath, [path.join(scripts, 'gate-trailer.cjs'), 'verify', '52',
+          '--graph', graphDir, '--worktree', root, ...(selected ? ['--repo', selected] : [])], {
+          cwd: root, encoding: 'utf8', env: { ...process.env, HOME: home,
+            PATH: bin + path.delimiter + process.env.PATH },
+        });
+        assert.equal(cli.status, 1, cli.stderr + cli.stdout);
+        const body = JSON.parse(cli.stdout);
+        assert.equal(body.required, true); assert.equal(body.ready, false); assert.equal(body.verdict, null);
+        if (kind === 'ticket') assert.equal(body.code_review, null);
+        else {
+          assert.notEqual(body.code_review, null);
+          assert.equal(body.code_review.state, kind === 'epic' ? 'owed' : 'unmatched');
+          assert.equal(body.code_review.mode, mode); assert.equal(body.code_review.ok, mode === 'report');
+        }
+        const calls = fs.readFileSync(requests, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(calls.some(args => JSON.stringify(args) === JSON.stringify(prArgs)));
+        if (selected) assert.ok(calls.some(args => JSON.stringify(args) === JSON.stringify(repoArgs)));
+        for (const args of calls) assert.ok([prArgs, repoArgs].some(expected =>
+          JSON.stringify(args) === JSON.stringify(expected)));
+      };
+      for (const mode of ['hold', 'report']) {
+        check(graph.tickets['T-52-02'].branch, 'unmatched', mode);
+        check(state.tickets['T-52-02'].pr_branch, 'unmatched', mode);
+        check(graph.tickets['T-52-01'].branch, 'ticket', mode);
+        check(state.tickets['T-52-01'].pr_branch, 'ticket', mode);
+      }
+      state.tickets['T-52-02'].pr_branch = graph.epics['52'].branch;
+      write(path.join(graphDir, 'delivery-state.json'), state);
+      check(graph.epics['52'].branch, 'epic', 'hold');
+    } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+  });
+}

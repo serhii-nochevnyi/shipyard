@@ -49,7 +49,8 @@ function matchEpicPullRequest({ graph, state, live, repo = null, phase } = {}) {
   }
   const recorded = state?.tickets || state || {};
   for (const [ticket, row] of Object.entries(graph.tickets)) {
-    if (object(row) && (head === row.branch || head === recorded[ticket]?.pr_branch)) return { kind: 'ticket', ticket };
+    if (object(row) && (row.repo ?? null) === repo
+        && (head === row.branch || head === recorded[ticket]?.pr_branch)) return { kind: 'ticket', ticket };
   }
   return unmatched('no graph epic row names the live head ref for this phase');
 }
