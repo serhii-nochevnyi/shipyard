@@ -848,28 +848,32 @@ test('a Codex request passes the real validateArgs', async () => {
   }
 });
 
-test('the detached child pid is the host process; status/wait report exit and record a dispatch wake', async () => {
-  const fixture = shipyardFixture('T-07-07');
-  const stub = path.join(fixture.root, 'stub-host.cjs');
-  fs.writeFileSync(stub, "process.stdout.write(JSON.stringify({pid: process.pid}) + '\\n');\n");
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-state-'));
-  try {
-    const launched = await deliverDispatch.launch(
-      ['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'],
-      { cwd: fixture.root, stateDir, claudeHostScript: stub },
-    );
-    const waited = await deliverDispatch.waitOnce(launched.dispatch_id, { stateDir, intervalMs: 20, timeoutMs: 5000 });
-    assert.equal(waited.status, 'exited-ok');
-    assert.equal(typeof waited.result.pid, 'number');
-    assert.notEqual(waited.result.pid, process.pid);
-    const status = deliverDispatch.statusOnce(launched.dispatch_id, { stateDir });
-    assert.equal(status.status, 'exited-ok');
-    const events = fs.readFileSync(path.join(fixture.graphDir, 'runs', 'wake-events.jsonl'), 'utf8')
-      .split('\n').filter(Boolean).map((line) => JSON.parse(line));
-    assert.ok(events.some((event) => event.kind === 'dispatch' && event.run_id === launched.dispatch_id));
-  } finally {
-    cleanup(fixture.root, stateDir);
-  }
+let detachedChildRun;
+test('the detached child pid is the host process; status/wait report exit and record a dispatch wake', () => {
+  detachedChildRun = (async () => {
+    const fixture = shipyardFixture('T-07-07');
+    const stub = path.join(fixture.root, 'stub-host.cjs');
+    fs.writeFileSync(stub, "process.stdout.write(JSON.stringify({pid: process.pid}) + '\\n');\n");
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-state-'));
+    try {
+      const launched = await deliverDispatch.launch(
+        ['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'],
+        { cwd: fixture.root, stateDir, claudeHostScript: stub },
+      );
+      const waited = await deliverDispatch.waitOnce(launched.dispatch_id, { stateDir, intervalMs: 20, timeoutMs: 5000 });
+      assert.equal(waited.status, 'exited-ok');
+      assert.equal(typeof waited.result.pid, 'number');
+      assert.notEqual(waited.result.pid, process.pid);
+      const status = deliverDispatch.statusOnce(launched.dispatch_id, { stateDir });
+      assert.equal(status.status, 'exited-ok');
+      const events = fs.readFileSync(path.join(fixture.graphDir, 'runs', 'wake-events.jsonl'), 'utf8')
+        .split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.ok(events.some((event) => event.kind === 'dispatch' && event.run_id === launched.dispatch_id));
+    } finally {
+      cleanup(fixture.root, stateDir);
+    }
+  })();
+  return detachedChildRun;
 });
 
 test('blocking observations are measured once across repeat waits and lost recovery adds no poll', async () => {
@@ -1178,6 +1182,7 @@ test('overlapping authority callbacks wait for the unreadable probe to restore l
 
 for (const jira of [null, 'PRJ-42']) test(`default hold guards phase architecture builders (${jira})`, async () => {
   await unreadableAuthorityRun;
+  await detachedChildRun;
   assert.strictEqual(fs.lstatSync, authorityLstatSync);
   const f = withOriginalPlanning(require('../fixtures/code-review/artifact-fixture.cjs').fixture());
   const artifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
