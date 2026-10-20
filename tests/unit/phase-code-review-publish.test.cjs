@@ -58,7 +58,7 @@ function fixture(jira = null, mode = 'report') {
     return [comments];
   } };
   const input = () => ({ phase: 52, phaseDirectory: f.phase, pr: 52, worktree: f.root, graphDir: f.graphDir });
-  const seal = (result = raw(), round = 1, priorHead = null) => {
+  const seal = (result = raw(), round = 1, priorHead = null, priorFindings = []) => {
     fs.writeFileSync(path.join(f.root, 'round.txt'), String(round));
     f.git(['add', 'round.txt']); f.git(['commit', '--quiet', '-m', 'round ' + round]);
     if (round > 1) {
@@ -71,7 +71,10 @@ function fixture(jira = null, mode = 'report') {
     f.writeGraph();
     const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
       repository: target.repositoryIdentity(f.root), branch, pr: 52, head: live().headRefOid, base: f.base });
-    return artifact.sealJudgment(f.input(binding, round, priorHead, result));
+    const request = f.input(binding, round, priorHead, raw());
+    Object.assign(request.result, core.normalizeResult(result, { round, scope: round === 1 ? 'full' : 'delta',
+      priorFindings, readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') }));
+    return artifact.sealJudgment(request);
   };
   return { ...f, branch, live, input, options, seal, writes, comments,
     setTicketHead: value => { ticketHead = value; }, failStatus: () => { failStatus = true; },
@@ -271,8 +274,8 @@ test('unresolved citations are counted and never given invented source identitie
     assert.equal(result.status.ok, true); assert.equal(result.comment.ok, true);
     const body = f.comments[0].body;
     assert.match(body, /citations_unresolved: 1/);
-    const identity = JSON.parse(body.split('\n').find(value => value.startsWith('    {')).trim());
-    assert.deepEqual(identity, { path: 'source.js', line_text: null, occurrence: null });
+    assert.match(body, /No reusable original locator is available/);
+    assert(!body.split('\n').some(value => value.startsWith('    {')));
   } finally { f.cleanup(); }
 });
 
@@ -399,4 +402,107 @@ test('readGate ignores a newer pending code-review status beside merge-gate succ
     const gate = require(path.join(scripts, 'gate-trailer.cjs')).readGate({ repo: 'owner/repo', sha: 'a'.repeat(40) });
     assert.equal(gate['arch-review'], 'conform'); assert.equal(gate.head, 'a'.repeat(40));
   } finally { process.env.PATH = previousPath; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('published retained locator reloads the original target and leaves a later twin blocking', () => {
+  const f = fixture();
+  try {
+    const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
+    const writeSource = text => {
+      fs.writeFileSync(path.join(f.root, 'source.js'), text);
+      f.git(['add', 'source.js']); f.git(['commit', '--quiet', '-m', 'update source']);
+    };
+    const carrier = path.join(f.root, '.planning/phases', f.phase, 'code-review-disagreements.json');
+    const writeCarrier = entry => {
+      fs.mkdirSync(path.dirname(carrier), { recursive: true });
+      fs.writeFileSync(carrier, JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1',
+        entries: [{ ...entry, reason: 'Caller handles absence', recorded_by: 'operator' }] }));
+    };
+    const load = priorFindings => core.loadDisagreements({ projectRoot: f.root, phaseDirName: f.phase,
+      priorFindings, readFile: file => ({ text: fs.readFileSync(file), stat: fs.lstatSync(file) }) }).entries;
+    writeSource('function a() {\nreturn null;\n}\nreturn null;\n');
+    f.seal(raw(true, [{ ...blocker, line: 4, line_text: 'return null;' }]));
+    const first = f.lookup(), firstHead = f.live().headRefOid;
+    const original = { path: 'source.js', line_text: 'return null;', occurrence: 2 };
+    writeCarrier(original);
+    const entries = load(core.carryPriorFindings({ priorFindings: first, deltaDiff: '', readSource }));
+    writeSource('return null;\nfunction a() {\nreturn null;\n}\nreturn null;\n');
+    const prior = core.carryPriorFindings({ priorFindings: first,
+      deltaDiff: f.git(['diff', '--unified=3', firstHead, 'HEAD', '--', 'source.js']), disagreements: entries, readSource });
+    f.seal(raw(), 2, firstHead, prior);
+    const second = f.lookup(), secondHead = f.live().headRefOid;
+    assert.equal(second.findings[0].line, 5);
+    assert.equal(second.findings[0].occurrence, 3);
+    assert.equal(second.findings[0].disagreement_identity, first.findings[0].identity);
+    const before = JSON.stringify(second);
+    fs.unlinkSync(carrier);
+    assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
+    assert.equal(JSON.stringify(f.lookup()), before);
+    const body = f.comments[0].body;
+    assert.match(body, /source.js:5/);
+    assert.match(body, /Source line \(full text\), occurrence 3/);
+    const tuple = JSON.parse(body.split('\n').find(line => line.startsWith('    {')).trim());
+    assert.deepEqual(tuple, original);
+    const latest = core.carryPriorFindings({ priorFindings: second, deltaDiff: '', readSource });
+    writeCarrier(tuple);
+    const reloaded = load(latest);
+    assert.deepEqual(Object.keys(reloaded), [first.findings[0].identity]);
+    for (const patch of [{ occurrence: 3 }, { path: 'other.js' }, { line_text: 'return true;' }]) {
+      writeCarrier({ ...tuple, ...patch });
+      assert.throws(() => load(latest), { code: 'DISPOSITION_TARGET_UNKNOWN' });
+    }
+    writeCarrier(tuple);
+    const thirdPrior = core.carryPriorFindings({ priorFindings: second, deltaDiff: '', disagreements: load(latest), readSource });
+    f.seal(raw(true, [{ ...blocker, id: 'later-twin', line: 3, line_text: 'return null;' }]), 3, secondHead, thirdPrior);
+    const third = f.lookup();
+    assert.equal(third.blocking_count, 1);
+    assert.equal(third.disagreement_suppressed, 1);
+    assert.equal(third.findings.find(finding => finding.id === 'later-twin').blocking, true);
+    assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
+    assert.deepEqual(Object.keys(load(core.carryPriorFindings({ priorFindings: third, deltaDiff: '', readSource }))),
+      [first.findings[0].identity]);
+  } finally { f.cleanup(); }
+});
+
+
+test('retained locators require authenticated history or a validated original carrier', () => {
+  const f = fixture();
+  try {
+    const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
+    fs.writeFileSync(path.join(f.root, 'source.js'), 'function a() {\nreturn null;\n}\nreturn null;\n');
+    f.git(['add', 'source.js']); f.git(['commit', '--quiet', '-m', 'original twins']);
+    const originalHead = f.live().headRefOid;
+    const first = core.normalizeResult(raw(true, [{ ...blocker, line: 4, line_text: 'return null;' }]),
+      { round: 1, scope: 'full', readSource });
+    const original = { path: 'source.js', line_text: 'return null;', occurrence: 2,
+      reason: 'Caller handles absence', recorded_by: 'operator' };
+    const entries = core.parseDisagreements(JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1',
+      entries: [original] }), { priorFindings: core.carryPriorFindings({ priorFindings: first, deltaDiff: '', readSource }) });
+    fs.writeFileSync(path.join(f.root, 'source.js'), 'return null;\nfunction a() {\nreturn null;\n}\nreturn null;\n');
+    f.git(['add', 'source.js']); f.git(['commit', '--quiet', '-m', 'source twins']);
+    const prior = core.carryPriorFindings({ priorFindings: first,
+      deltaDiff: f.git(['diff', '--unified=3', originalHead, 'HEAD', '--', 'source.js']), disagreements: entries, readSource });
+    assert.equal(prior[0].occurrence, 3);
+    f.seal(raw(), 1, null, prior);
+    const before = JSON.stringify(f.lookup());
+    const carrier = path.join(f.root, '.planning/phases', f.phase, 'code-review-disagreements.json');
+    fs.mkdirSync(path.dirname(carrier), { recursive: true });
+    for (const patch of [null, { occurrence: 3 }, { path: 'other.js' }, { line_text: 'return true;' },
+      { occurrence: 0 }, {}]) {
+      if (patch) fs.writeFileSync(carrier, JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1',
+        entries: [{ ...original, ...patch }] }));
+      assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
+      const body = f.comments[0].body;
+      assert.match(body, /Source line \(full text\), occurrence 3/);
+      if (patch && Object.keys(patch).length === 0) {
+        const tuple = JSON.parse(body.split('\n').find(line => line.startsWith('    {')).trim());
+        assert.deepEqual(tuple, { path: original.path, line_text: original.line_text, occurrence: 2 });
+      } else {
+        assert.match(body, /No reusable original locator is available/);
+        assert(!body.split('\n').some(line => line.startsWith('    {')));
+      }
+      assert.equal(JSON.stringify(f.lookup()), before);
+    }
+  } finally { f.cleanup(); }
 });
