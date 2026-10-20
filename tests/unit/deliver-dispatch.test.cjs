@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -65,6 +66,50 @@ const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-polic
 const prHygiene = require('../../plugins/delivery-pipeline/scripts/pr-hygiene.cjs');
 
 suite('deliver-dispatch — front-to-dispatch entry point');
+
+function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const crypto = require('node:crypto');
+  const refs = input.result.ticket_set.map(item => item.row.plan);
+  for (const plan of refs) {
+    const absolute = path.join(planningRoot, plan);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
+  }
+  const graphDir = path.join(planningRoot, '.planning/graph');
+  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
+    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
+      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
+      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
+      exact_diff: { content: f.git(['diff', f.base, 'HEAD', '--', 'source.js']) },
+      integration_base: { commit: f.base } } });
+  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
+    const session = 'original-' + r.dispatch_id;
+    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
+    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
+      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
+        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
+    fs.writeFileSync(transcript, content);
+    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
+      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
+      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
+      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
+        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
+        transcript: { path: transcript, bytes: Buffer.byteLength(content),
+          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
+  } } } });
+  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
+    { ticket: input.ticket, subject_kind: 'phase' });
+  return { ...input, dispatchId: dispatch.dispatch_id };
+}
+
+function withOriginalPlanning(f) {
+  const input = f.input;
+  f.input = (...args) => retainPlanningInput(f, input(...args));
+  return f;
+}
 
 function git(root, ...args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -1134,7 +1179,7 @@ test('overlapping authority callbacks wait for the unreadable probe to restore l
 for (const jira of [null, 'PRJ-42']) test(`default hold guards phase architecture builders (${jira})`, async () => {
   await unreadableAuthorityRun;
   assert.strictEqual(fs.lstatSync, authorityLstatSync);
-  const f = require('../fixtures/code-review/artifact-fixture.cjs').fixture();
+  const f = withOriginalPlanning(require('../fixtures/code-review/artifact-fixture.cjs').fixture());
   const artifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
   try {
     const branch = jira ? 'feat/PRJ-42-review' : f.branch;

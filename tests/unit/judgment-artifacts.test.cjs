@@ -10,6 +10,50 @@ const { createDurableRecorder, createDispatchBoundary } = require('../../plugins
 const roleArtifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 
+function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const crypto = require('node:crypto');
+  const refs = input.result.ticket_set.map(item => item.row.plan);
+  for (const plan of refs) {
+    const absolute = path.join(planningRoot, plan);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
+  }
+  const graphDir = path.join(planningRoot, '.planning/graph');
+  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
+    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
+      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
+      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
+      exact_diff: { content: f.git(['diff', f.base, 'HEAD', '--', 'source.js']) },
+      integration_base: { commit: f.base } } });
+  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
+    const session = 'original-' + r.dispatch_id;
+    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
+    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
+      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
+        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
+    fs.writeFileSync(transcript, content);
+    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
+      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
+      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
+      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
+        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
+        transcript: { path: transcript, bytes: Buffer.byteLength(content),
+          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
+  } } } });
+  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
+    { ticket: input.ticket, subject_kind: 'phase' });
+  return { ...input, dispatchId: dispatch.dispatch_id };
+}
+
+function withOriginalPlanning(f) {
+  const input = f.input;
+  f.input = (...args) => retainPlanningInput(f, input(...args));
+  return f;
+}
+
 function git(root, args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
 }
@@ -796,7 +840,7 @@ test('integrator resolves a bare reported base with the live origin preference',
 test('code-review tracer validates in plain, spaced and non-ASCII worktrees and refuses tampering', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   for(const suffix of ['plain','with space','українська']) {
-    const f = reviewFixture(suffix);
+    const f = withOriginalPlanning(reviewFixture(suffix));
     try {
       const binding=f.advance(1), input=f.input(binding), sealed=roleArtifact.sealJudgment(input);
       const validated=roleArtifact.validateJudgmentManifest({...input,artifactPath:sealed.artifact_ref,artifactDigest:sealed.artifact_digest});
@@ -810,7 +854,7 @@ test('code-review tracer validates in plain, spaced and non-ASCII worktrees and 
 
 test('code-review artifact rejects false passes, invalid citations and missing repair evidence', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
-  const f=reviewFixture();
+  const f=withOriginalPlanning(reviewFixture());
   try {
     const binding=f.advance(1);
     for(const mutate of [
@@ -831,7 +875,7 @@ test('code-review artifact rejects false passes, invalid citations and missing r
 test('code-review suppressed index survives sealing, while evidence and findings tampering cannot authenticate', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
-  const f=reviewFixture();
+  const f=withOriginalPlanning(reviewFixture());
   try {
     const binding=f.advance(1), first=f.input(binding), current=first.result.findings[0];
     const prior=core.carryPriorFindings({priorFindings:first.result.findings,deltaDiff:'',readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8'),disagreements:{[current.identity]:{reason:'Caller guarantees acknowledgement',recorded_by:'operator'}}});
@@ -859,7 +903,7 @@ test('code-review suppressed index survives sealing, while evidence and findings
 test('code-review seals a recorded WARNING returned with BLOCKER severity without repair fields', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
-  const f = reviewFixture();
+  const f = withOriginalPlanning(reviewFixture());
   try {
     const input = f.input(f.advance(1));
     const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
@@ -882,7 +926,7 @@ test('code-review seals a recorded WARNING returned with BLOCKER severity withou
 test('code-review seals 129 small reviewed references within the shared asset capacity', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const { FILE_LIMITS } = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-  const f = reviewFixture();
+  const f = withOriginalPlanning(reviewFixture());
   try {
     const binding = f.advance(1);
     const coverage = Array.from({ length: 129 }, (_, index) => {
@@ -925,7 +969,7 @@ test('code-review seals 129 small reviewed references within the shared asset ca
 test('code-review seals colliding 128-byte labels after normalization', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
-  const f = reviewFixture();
+  const f = withOriginalPlanning(reviewFixture());
   try {
     const binding = f.advance(1);
     for (const id of ['x'.repeat(128), 'é'.repeat(64), '界'.repeat(42) + 'ab']) {
@@ -949,13 +993,51 @@ test('code-review seals colliding 128-byte labels after normalization', () => {
 
 test('code-review incomplete first round cannot authorize a complete delta pass', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
-  const f=reviewFixture();
+  const f=withOriginalPlanning(reviewFixture());
   try {
     const raw={review_completeness:'incomplete',limitations:['unread diff'],unresolved_sources:[],findings:[],dispositions:[]};
     const first=f.input(f.advance(1),1,null,raw);roleArtifact.sealJudgment(first);
     const second=f.input(f.advance(2),2,first.result.head,{...raw,review_completeness:'complete',limitations:[]});
     assert.throws(()=>roleArtifact.sealJudgment(second),error=>error.code==='JUDGMENT_OUTCOME_MISMATCH');
   } finally {f.cleanup();}
+});
+
+
+test('old-format code-review remains historical and cannot open the default hold', () => {
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const flow = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
+  const f = require('../fixtures/code-review/artifact-fixture.cjs').fixture();
+  try {
+    f.graph.epics = { 52: { branch: f.branch, phaseDir: f.phase, repos: [null] } };
+    Object.assign(f.graph.tickets['T-52-01'], {
+      epic: f.branch, branch: 'feat/old-ticket', repo: null, phaseDir: f.phase,
+    });
+    fs.writeFileSync(path.join(f.root, '.planning/config.json'), JSON.stringify({ git: { base_branch: 'main' } }));
+    const input = f.input(f.advance(1), 1, null, {
+      review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [],
+    });
+    const sealed = roleArtifact.sealJudgment(input);
+    const archives = roleArtifact.authenticatedArchivePins(f.root).map(pin => ({
+      ...pin, bytes: fs.readFileSync(path.join(f.root, pin.path)),
+    }));
+    assert.equal(f.lookup(), null);
+    const prior = roleArtifact.priorCodeReviewVerdicts({
+      worktreePath: f.root, repository: target.repositoryIdentity(f.root), phaseDir: f.phase, graphDir: f.graphDir,
+    });
+    assert.equal(prior[0].artifact_digest, sealed.artifact_digest);
+    const live = {
+      number: 52, state: 'OPEN', headRefName: f.branch, headRefOid: f.git(['rev-parse', 'HEAD']),
+      baseRefName: 'main', baseRefOid: f.base,
+    };
+    const status = flow.status({
+      worktree: f.root, graphDir: f.graphDir, phase: 52, pr: 52, live,
+    }, { defaultBranch: 'main' });
+    assert.equal(status.state, 'owed');
+    assert.equal(flow.evaluateGate(status).ok, false);
+    for (const pin of archives) assert.deepEqual(fs.readFileSync(path.join(f.root, pin.path)), pin.bytes);
+  } finally {
+    f.cleanup();
+  }
 });
 
 done();
