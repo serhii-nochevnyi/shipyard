@@ -237,12 +237,16 @@ function fileSnapshot(scope, options) {
     fail('repository snapshot identity is malformed', 'STALE_CONTEXT');
   const common = fs.realpathSync(repository.join('\n'));
   const output = integrationOutput(scope, options.role);
-  const config = path.join(worktree, '.planning/config.json');
   const graph = path.resolve(options.graphDir || path.join(worktree, '.planning/graph'));
+  const planning = options.graphDir || fs.existsSync(graph)
+    ? require('./context-packet.cjs').resolvePlanningReference({ worktree, graphDir: graph,
+      repo: options.phaseRepo ?? scope.repo ?? null }) : undefined;
+  const config = path.join(planning?.root || worktree, '.planning/config.json');
   const graphPins = ['tickets.json', 'delivery-state.json'].filter(name => fs.existsSync(path.join(graph, name)))
     .map(name => ({ path: path.join(graph, name), sha256: digest(boundedBytes(fs, path.join(graph, name), 8 * 1024 * 1024)) }));
   return { worktree, repository: common, common, head, head_tree: headTree,
     ...(output ? { integration_output: output } : {}),
+    ...(planning ? { planning_reference: planning } : {}),
     graph: graphPins, config_sha256: fs.existsSync(config) ? digest(boundedBytes(fs, config, FILE_LIMITS.manifest)) : null,
     policy_hash: require('./model-policy.cjs').POLICY_HASH,
     live_inputs_sha256: digest(JSON.stringify(statusIgnoringScratch(worktree, { untracked: 'all', forJudge: false }).entries
@@ -904,6 +908,12 @@ function verifyFileInput(value, options = {}) {
     }
   } else if (bundle.chunk_bytes !== INPUT_CHUNK_BYTES || manifest.transport !== undefined)
     fail('larger reader requires measured authority', 'READER_CAPACITY_UNSUPPORTED');
+  let referenceRoot;
+  if (options.historical !== true) {
+    try { referenceRoot = require('./context-packet.cjs').authenticatedPlanningRoot(manifest.snapshot.worktree,
+      manifest.snapshot.planning_reference); }
+    catch { fail('current source or policy changed', 'STALE_CONTEXT'); }
+  }
   outsideWriter(directory, manifest.snapshot.worktree);
   let bytes = 0, reads = 0;
   const material = manifest.assets.map((asset, ordinal) => {
@@ -917,12 +927,25 @@ function verifyFileInput(value, options = {}) {
     const rawAsset = boundedBytes(fs, asset.path, FILE_LIMITS.material, asset.bytes, asset.identity);
     if (digest(rawAsset) !== asset.sha256) fail('immutable asset changed', 'STALE_CONTEXT');
     try { new TextDecoder('utf-8', { fatal: true }).decode(rawAsset); } catch { fail('asset is invalid UTF-8'); }
-    let semantic;
+    let semantic, materialRoot = referenceRoot;
     try { semantic = JSON.parse(rawAsset.toString('utf8')); } catch {}
+    if (typeof semantic?.schema === 'string' && (semantic.schema.startsWith('shipyard.semantic-content.')
+        || semantic.schema.startsWith('shipyard.context-packet.'))) {
+      const packet = semantic.schema.startsWith('shipyard.semantic-content.')
+        ? require('./context-packet.cjs').decodeUniqueContent(semantic) : semantic;
+      if (manifest.binding?.review_contract === CODE_REVIEW_CONTRACT
+          && packet.schema === 'shipyard.context-packet.v1' && packet.role === 'code-review'
+          && packet.role_context?.planning_reference === undefined)
+        materialRoot = manifest.snapshot.worktree;
+      if (packet.role_context?.planning_reference !== undefined
+          && JSON.stringify(canonical(packet.role_context.planning_reference))
+            !== JSON.stringify(canonical(manifest.snapshot.planning_reference)))
+        fail('packet planning authority differs from its original manifest', 'STALE_CONTEXT');
+    }
     if (options.historical === true) {
       if (typeof semantic?.schema === 'string' && semantic.schema.startsWith('shipyard.semantic-content.'))
         require('./context-packet.cjs').decodeUniqueContent(semantic);
-    } else preflightReviewMaterial(semantic, { root: manifest.snapshot.worktree, role: manifest.role,
+    } else preflightReviewMaterial(semantic, { root: materialRoot, role: manifest.role,
       sourceRevision: manifest.snapshot.head, policyHash: manifest.snapshot.policy_hash,
       packetDigest: manifest.binding?.packet_digest, architecturePacket: privateOptions.architecturePacket });
     return rawAsset;
@@ -963,7 +986,7 @@ function verifyFileInput(value, options = {}) {
   if (bytes !== bundle.total_bytes || reads > FILE_LIMITS.reads) fail('full input byte accounting differs');
   const scope = privateOptions.scope || { worktree: manifest.snapshot.worktree, phase: manifest.phase };
   if (options.historical !== true) {
-    const current = fileSnapshot(scope, { ...privateOptions, role: manifest.role, graphDir: manifest.snapshot.graph?.[0] ? path.dirname(manifest.snapshot.graph[0].path) : privateOptions.graphDir });
+    const current = fileSnapshot(scope, { ...privateOptions, role: manifest.role, phaseRepo: manifest.snapshot.planning_reference?.repo ?? privateOptions.phaseRepo, graphDir: manifest.snapshot.graph?.[0] ? path.dirname(manifest.snapshot.graph[0].path) : privateOptions.graphDir });
     if (JSON.stringify(canonical(current)) !== JSON.stringify(canonical(manifest.snapshot))) fail('current source or policy changed', 'STALE_CONTEXT');
   }
   for (const pin of options.historical === true ? [] : manifest.binding?.installed_files || []) {
@@ -1194,7 +1217,10 @@ function collect(scope, options, legacyArchitecture = false) {
     ? { review_contract: FOCUSED_CONTRACT } : {}), adr_selection: focused.inventory,
     change_metadata: { name_status: String(run(options, 'git', ['-C', worktree, 'diff', '--name-status', '-z', '--find-renames', mergeBase + '...' + head], worktree, FILE_LIMITS.material)),
       numstat: String(run(options, 'git', ['-C', worktree, 'diff', '--numstat', '-z', '--find-renames', mergeBase + '...' + head], worktree, FILE_LIMITS.material)) },
-    source_authority: sourceAuthority, schema: SCHEMA, ticket: scope.ticket, phase: Number(scope.phase),
+    source_authority: sourceAuthority,
+    ...(!legacy && project !== worktree ? { planning_reference: require('./context-packet.cjs')
+      .resolvePlanningReference({ worktree, graphDir: directory, repo: options.phaseRepo ?? scope.repo ?? null }) } : {}),
+    schema: SCHEMA, ticket: scope.ticket, phase: Number(scope.phase),
     ...(cycles.length ? { decision_cycles: cycles } : {}),
     graph: { path: graphFile.path, sha256: graphFile.sha256, row, ...(binding ? { binding } : {}) },
     ...(binding ? { ticket_set: binding.ticketSet, ticket_set_digest: binding.membership,
@@ -1364,6 +1390,7 @@ function finish(value, dispatch, recorder) {
       worktree: prepared.canonical.worktree, evidence_sha256: evidence.sha256,
       transcript_sha256: dispatch.receipt.runtime_evidence.transcript.sha256,
       selected_refs: value.evidence.selected_refs,
+      ...(prepared.packet.planning_reference ? { planning_reference: prepared.packet.planning_reference } : {}),
       ...(prepared.binding ? { phase_repo: prepared.binding.repo } : {}),
       ...(prepared.binding ? { phase_evidence_digest: prepared.packet.retained_history_digest,
         phase_archive_selection: preparedOptions.get(value).phaseArchiveSelection } : {}),
@@ -1837,6 +1864,7 @@ function launchDigest(value, installation = installedLaunches.get(value)) {
       || path.join(value.prepared.canonical.worktree, '.planning/graph')),
     ...(isFocusedContext(value) ? { focused: focusedBinding(value.prepared), source_authority: value.prepared.packet.source_authority } : {}), packet_digest: value.prepared.packet.digest, installation, bookkeeping: options.bookkeepingPins || [],
     historical_archives: options.archivePins || [], historical_bookkeeping: options.historicalBookkeepingPins || [],
+    ...(value.prepared.packet.planning_reference ? { planning_reference: value.prepared.packet.planning_reference } : {}),
     ...(value.prepared.binding ? { phase_repo: value.prepared.binding.repo } : {}),
     ...(options.phaseArchiveSelection ? { phase_archive_selection: options.phaseArchiveSelection } : {}),
     ...(options.fileInput ? { input_transport: 'host-files', input_bundle: options.fileInput.input_bundle } : {}),
@@ -1874,6 +1902,7 @@ function validateHistoricalContext(input) {
   }
   const attestation = { ...(context.focused ? { focused: context.focused, source_authority: context.source_authority } : {}), graph_dir: context.graph_dir, packet_digest: context.packet_digest,
     installation: context.installation, bookkeeping: context.bookkeeping };
+  if (context.planning_reference !== undefined) attestation.planning_reference = context.planning_reference;
   if (context.historical_archives !== undefined) attestation.historical_archives = context.historical_archives;
   if (context.phase_repo !== undefined) attestation.phase_repo = context.phase_repo;
   if (context.phase_archive_selection !== undefined) attestation.phase_archive_selection = context.phase_archive_selection;
@@ -1900,6 +1929,11 @@ function validateHistoricalContext(input) {
       || typeof markdown !== 'string' || input.evidence.toString('utf8').trim() !== markdown.trim())
     fail('historical bookkeeping differs from original authenticated launch identity', 'STALE_CONTEXT');
   if (focused) {
+    if (context.planning_reference !== undefined) {
+      const root = require('./context-packet.cjs').authenticatedPlanningRoot(input.worktree || context.worktree, context.planning_reference);
+      if (root !== context.source_authority?.source?.root || context.graph_dir !== context.planning_reference.directory)
+        fail('focused planning root differs from original source authority', 'STALE_CONTEXT');
+    }
     const authority = context.source_authority;
     if (!object(authority) || !object(authority.source) || !Array.isArray(authority.pins))
       fail('focused source authority is missing', 'STALE_CONTEXT');

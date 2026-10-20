@@ -6,6 +6,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const runtimeMarkerNames = ['SHIPYARD_RUNTIME', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED'];
+const originalRuntimeMarkers = new Map(runtimeMarkerNames.map(name => [name, process.env[name]]));
+for (const name of runtimeMarkerNames) delete process.env[name];
+process.on('exit', () => {
+  for (const [name, value] of originalRuntimeMarkers) if (value !== undefined) process.env[name] = value;
+});
+
 const testAuthorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-authority-')));
 const testAuthorityModule = path.join(testAuthorityHome, 'fixture.cjs');
 fs.writeFileSync(testAuthorityModule, "require('node:os').homedir = () => " + JSON.stringify(testAuthorityHome) + ";\n");
@@ -25,6 +32,252 @@ const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conve
 const POLICY_MD = '# ADR-014 test\nExplicit model and effort are required.\n';
 const PHASE = '38-role-host-test';
 const TICKET = 'T-38-01-role-host';
+
+function preparationOnlyHost() {
+  const Module = require('node:module');
+  const file = require.resolve('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  const loaded = new Module(file, module);
+  loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
+  loaded._compile(fs.readFileSync(file, 'utf8')
+    .replace('module.exports = Object.freeze({', 'module.exports = Object.freeze({ prepareInvocation, assertEvidenceOnlyChanges, makeRuntimeScope,'), file);
+  return loaded.exports;
+}
+
+function coordinatorOnlyPlanning(kind, options = {}) {
+  const fixture = kind === 'integrator' ? setupRepository(kind, {
+    corpus: { backlogFiles: [{ name: 'ref.md', content: '# Selected coordinator backlog\n\nComplete selected bytes.\n' }] },
+    planExtra: ['Selects `.planning/backlog/ref.md`.'],
+  }) : setupCodeReview(options);
+  fixture.kind = kind;
+  write(fixture.root, `.planning/phases/${PHASE}/CONTEXT.md`, 'Coordinator phase context.\n');
+  git(fixture.root, ['add', '.planning']);
+  git(fixture.root, ['commit', '-m', 'chore: seed coordinator context']);
+  fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
+  useCoordinatorGraph(fixture);
+  fixture.project = path.resolve(fixture.graphDir, '../..');
+  git(fixture.root, ['rm', '-r', '.planning']);
+  git(fixture.root, ['commit', '-m', 'chore: keep planning only in coordinator']);
+  fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
+  fixture.headTree = git(fixture.root, ['rev-parse', 'HEAD^{tree}']);
+  if (kind === 'integrator') git(fixture.root, ['update-ref', `refs/remotes/origin/${fixture.branch}`, fixture.head]);
+  if (kind !== 'integrator') {
+    write(fixture.project, '.planning/config.json', JSON.stringify({ git: { base_branch: 'integration' } }));
+    git(fixture.root, ['update-ref', 'refs/remotes/origin/integration', fixture.base]);
+  }
+  write(fixture.project, 'src/role.txt', 'coordinator product must never be reviewed\n');
+  git(fixture.project, ['add', 'src', '.planning']);
+  git(fixture.project, ['commit', '-m', 'chore: different coordinator product']);
+  assert.notEqual(git(fixture.project, ['rev-parse', 'HEAD']), fixture.head);
+  assert.equal(fs.existsSync(path.join(fixture.root, '.planning')), false);
+  return fixture;
+}
+
+function phasePreparationRequest(fixture) {
+  return { schema: REQUEST_SCHEMA, role: fixture.kind, worktree: fixture.root, phase: PHASE,
+    ...(fixture.kind === 'integrator' ? {} : { pr: 101 }) };
+}
+
+function registerCoordinatorRoster(fixture) {
+  const graph = JSON.parse(fs.readFileSync(path.join(fixture.graphDir, 'tickets.json')));
+  const state = JSON.parse(fs.readFileSync(path.join(fixture.graphDir, 'delivery-state.json')));
+  const binding = reviewTargets.phaseBinding({ graph, state, phase: 38,
+    repository: reviewTargets.repositoryIdentity(fixture.root), branch: fixture.branch,
+    pr: 101, head: fixture.head, base: fixture.base });
+  const inventoryPath = path.join(fixture.storageRoot, 'empty-roster.json');
+  fs.writeFileSync(inventoryPath, JSON.stringify({ rows: [] }), { mode: 0o600 });
+  reviewArtifacts.registerPhaseArchiveRoster({ worktreePath: fixture.root, binding,
+    graphDir: fixture.graphDir, inventoryPath,
+    expectedInventoryDigest: crypto.createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
+  return binding;
+}
+
+for (const kind of ['code-review', 'arch-review', 'integrator'])
+test(`${kind} completes preparation from coordinator-only planning without moving reviewed identity`, (t) => {
+  const fixture = coordinatorOnlyPlanning(kind);
+  const host = preparationOnlyHost();
+  try {
+    if (kind === 'arch-review') registerCoordinatorRoster(fixture);
+    const options = hostOptions(fixture);
+    if (kind !== 'integrator') options.getPullRequest = () => ({ ...livePr(fixture), baseRefName: 'integration' });
+    const prepared = kind === 'integrator'
+      ? host.prepareIntegratorContext(options, phasePreparationRequest(fixture))
+      : host.prepareInvocation(options, parseRequest(phasePreparationRequest(fixture)));
+    assert.equal(prepared.canonical.projectRoot, fixture.project);
+    assert.equal(prepared.canonical.worktree, fixture.root);
+    assert.equal(prepared.canonical.head, fixture.head);
+    assert.equal(prepared.canonical.headTree, fixture.headTree);
+    assert.equal(prepared.canonical.branch, fixture.branch);
+    assert.equal(host.makeRuntimeScope(prepared, 'planning-root-run', 'planning-root-dispatch', 'planning-root-owner').worktree.path, fixture.root);
+    if (kind !== 'integrator') assert.equal(prepared.baseName, 'integration', 'real config reader consumes coordinator choice');
+    assert.equal(prepared.packet.source_revision, fixture.head);
+    assert.equal(prepared.packet.canonical_root, fixture.project);
+    assert.ok(prepared.packet.required_refs.length);
+    for (const ref of prepared.packet.required_refs) {
+      assert.equal(fs.existsSync(path.join(fixture.root, ref.path)), false, ref.path);
+      assert.equal(ref.content, fs.readFileSync(path.join(fixture.project, ref.path), 'utf8'));
+    }
+    const diff = prepared.packet.role_context.exact_diff || prepared.packet.role_context.combined_diff;
+    assert.ok(diff.content.includes('+reviewed change'));
+    assert.ok(!diff.content.includes('coordinator product'));
+    assert.ok(prepared.evidencePath.startsWith('.'));
+    assert.equal(fs.existsSync(path.join(fixture.project, prepared.evidencePath)), false);
+    if (kind === 'integrator') {
+      assert.ok(prepared.packet.backlog.selected.some(item => item.content.includes('Complete selected bytes.')));
+      assert.ok(prepared.packet.required_refs.some(ref => ref.path === '.planning/architecture/ADR-014-test.md'));
+    }
+    fs.appendFileSync(path.join(fixture.project, prepared.packet.required_refs[0].path), '\nchanged required bytes\n');
+    assert.throws(() => host.assertEvidenceOnlyChanges(options, prepared), /changed|stale/i);
+  } catch (error) { t.diagnostic(error.stack); throw error; }
+  finally { cleanupFixture(fixture); }
+});
+
+for (const kind of ['arch-review', 'integrator', 'code-review'])
+test(`${kind} coordinator packet survives real file transport and serialized consumption`, () => {
+  const f = coordinatorOnlyPlanning(kind);
+  try {
+    if (kind === 'arch-review') registerCoordinatorRoster(f);
+    const options = hostOptions(f);
+    if (kind !== 'integrator') options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
+    const host = preparationOnlyHost();
+    const prepared = kind === 'integrator' ? host.prepareIntegratorContext(options, phasePreparationRequest(f))
+      : host.prepareInvocation(options, parseRequest(phasePreparationRequest(f)));
+    const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+    const relay = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+    const input = relay.prepareFileInput({ worktree: f.root, ticket: prepared.ticket, phase: 38 },
+      JSON.stringify(packets.encodeUniqueContent(prepared.packet)), { role: kind, dispatchId: 'coordinator-relay',
+        storageRoot: f.storageRoot, graphDir: f.graphDir });
+    for (const value of [input, JSON.parse(JSON.stringify(input.input_bundle))]) {
+      const checked = relay.verifyFileInput(value, value === input ? {} : { sealed: true });
+      assert.equal(checked.manifest.snapshot.worktree, f.root);
+      assert.equal(checked.manifest.snapshot.head, f.head);
+      assert.equal(packets.decodeUniqueContent(JSON.parse(checked.material[0])).canonical_root, f.project);
+    }
+    fs.appendFileSync(path.join(f.project, '.planning/config.json'), ' ');
+    assert.throws(() => relay.verifyFileInput(input), /changed|stale/i);
+  } finally { cleanupFixture(f); }
+});
+
+for (const transport of ['inline', 'file'])
+test(`coordinator architecture completes captured native ${transport} sealing and public current readback`, async () => {
+  const f = coordinatorOnlyPlanning('arch-review', transport === 'file'
+    ? { sourceContent: 'Complete coordinator review source.\n'.repeat(38000) } : {});
+  try {
+    const binding = registerCoordinatorRoster(f);
+    let launches = 0;
+    const options = hostOptions(f, { originalStream: true, onLaunch(prompt) {
+      launches++;
+      assert.equal(prompt.includes('<AUTHENTICATED_FOCUSED_INPUT>'), transport === 'file');
+    } });
+    let recorder;
+    const runtimeFactory = options.createRuntimeHost;
+    options.createRuntimeHost = input => { const runtime = runtimeFactory(input); recorder = runtime.recorder; return runtime; };
+    options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
+    const result = await createClaudeRoleHost(options).run(phasePreparationRequest(f));
+    assert.equal(launches, 1);
+    assert.equal(result.artifact.outcome, 'conform');
+    assert.equal(result.result.host_context.source_root, f.project);
+    const input = { worktreePath: f.root, pr: 101, head: f.head, baseName: 'integration',
+      baseCommit: f.base, graphDir: f.graphDir, headBranch: f.branch };
+    assert.equal(reviewArtifacts.currentArchitectureVerdict(input)?.subject, result.subject);
+    for (const host_context of [
+      { ...result.result.host_context, source_root: f.root },
+      { ...result.result.host_context, selected_refs: [] },
+      { ...result.result.host_context, selected_refs: undefined },
+      { ...result.result.host_context, source_root: undefined },
+      { ...result.result.host_context, graph_dir: path.join(f.root, '.planning/graph') },
+    ]) assert.throws(() => reviewArtifacts.sealJudgment({ worktreePath: f.root, role: 'arch-review',
+      ticket: result.subject, pr: 101, base: 'origin/integration', phase: PHASE,
+      ticketSet: binding.ticketSet, ticketSetDigest: binding.membership,
+      recorder, dispatchId: result.dispatch.receipt.dispatch_id,
+      result: { ...result.result, host_context }, evidencePath: '.shipyard-arch-review-evidence.md' }),
+      /selected reference/);
+    fs.appendFileSync(path.join(f.project, '.planning/architecture/ADR-014-test.md'), 'changed');
+    assert.equal(reviewArtifacts.currentArchitectureVerdict(input), null);
+  } catch (error) { console.error(error.stack); throw error; }
+  finally { cleanupFixture(f); }
+});
+
+
+for (const kind of ['code-review', 'integrator'])
+test(`${kind} coordinator input seals captured native bytes and reads its current verdict`, async () => {
+  const f = coordinatorOnlyPlanning(kind);
+  try {
+    const options = hostOptions(f, { originalStream: true });
+    let recorder;
+    const factory = options.createRuntimeHost;
+    options.createRuntimeHost = input => { const runtime = factory(input); recorder = runtime.recorder; return runtime; };
+    const prepared = kind === 'integrator'
+      ? preparationOnlyHost().prepareIntegratorContext(options, phasePreparationRequest(f)) : null;
+    if (kind === 'code-review') options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
+    const result = await createClaudeRoleHost(options).run(phasePreparationRequest(f));
+    assert.equal(result.artifact.outcome, kind === 'code-review' ? 'pass' : 'passed');
+    const input = { worktreePath: f.root, pr: 101, head: f.head,
+      baseName: kind === 'code-review' ? 'integration' : 'main', baseCommit: f.base,
+      graphDir: f.graphDir, headBranch: f.branch };
+    if (kind === 'integrator') {
+      assert.equal(reviewArtifacts.read({ worktreePath: f.root, role: kind, ticket: result.subject,
+        phase: PHASE, base: prepared.base, ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest,
+        recorder, dispatchId: result.dispatch.receipt.dispatch_id, artifactPath: result.artifact.ref,
+        artifactDigest: result.artifact.digest }).envelope.outcome, 'passed');
+      return;
+    }
+    const current = kind === 'code-review' ? reviewArtifacts.currentCodeReviewVerdict(input)
+      : reviewArtifacts.currentIntegrationVerdict(input);
+    assert.equal(current?.dispatch_id, result.dispatch.receipt.dispatch_id);
+  } catch (error) { console.error(error.stack); throw error; }
+  finally { cleanupFixture(f); }
+});
+
+for (const scenario of ['foreign graph', 'wrong placement', 'graph symlink ancestor', 'reference symlink',
+  'reference ancestor symlink', 'escaping plan', 'missing plan', 'local product change'])
+test(`coordinator planning refuses ${scenario}`, (t) => {
+  const fixture = coordinatorOnlyPlanning('integrator');
+  let foreign;
+  try {
+    const options = hostOptions(fixture);
+    if (scenario === 'foreign graph') {
+      foreign = setupRepository('integrator'); options.graphDir = path.join(foreign.root, '.planning/graph');
+    } else if (scenario === 'wrong placement') {
+      const misplaced = path.join(fixture.project, 'graph');
+      fs.cpSync(fixture.graphDir, misplaced, { recursive: true }); options.graphDir = misplaced;
+    } else if (scenario === 'graph symlink ancestor') {
+      const moved = path.join(fixture.project, 'planning');
+      fs.renameSync(path.join(fixture.project, '.planning'), moved);
+      fs.symlinkSync(moved, path.join(fixture.project, '.planning'));
+    } else if (scenario === 'reference symlink') {
+      const plan = path.join(fixture.project, fixture.planPath);
+      fs.renameSync(plan, plan + '.real'); fs.symlinkSync(plan + '.real', plan);
+    } else if (scenario === 'reference ancestor symlink') {
+      const phase = path.dirname(path.join(fixture.project, fixture.planPath));
+      fs.renameSync(phase, phase + '.real'); fs.symlinkSync(phase + '.real', phase);
+    } else if (scenario === 'escaping plan') {
+      const file = path.join(fixture.graphDir, 'tickets.json');
+      const graph = JSON.parse(fs.readFileSync(file)); graph.tickets[TICKET].plan = `../${PHASE}/38-01-PLAN.md`;
+      fs.writeFileSync(file, JSON.stringify(graph));
+    } else if (scenario === 'missing plan') fs.unlinkSync(path.join(fixture.project, fixture.planPath));
+    else write(fixture.root, 'src/role.txt', 'local product change\n');
+    assert.throws(() => preparationOnlyHost().prepareIntegratorContext(options, phasePreparationRequest(fixture)),
+      scenario === 'foreign graph' ? /unrelated repository/
+        : scenario === 'wrong placement' ? /placed at \.planning\/graph/
+        : scenario === 'local product change' ? /local changes/
+        : scenario === 'missing plan' ? /required context file is missing/
+        : scenario === 'escaping plan' ? /unsafe/
+        : /real director|symlink/i);
+  } catch (error) { t.diagnostic(error.stack); throw error; }
+  finally { if (foreign) cleanupFixture(foreign); cleanupFixture(fixture); }
+});
+
+test('coordinator relocation does not authorize dirty architecture sources', () => {
+  const fixture = coordinatorOnlyPlanning('arch-review');
+  try {
+    registerCoordinatorRoster(fixture);
+    fs.appendFileSync(path.join(fixture.project, '.planning/architecture/ADR-014-test.md'), 'Unapproved architecture bytes.\n');
+    const options = hostOptions(fixture);
+    options.getPullRequest = () => ({ ...livePr(fixture), baseRefName: 'integration' });
+    assert.throws(() => preparationOnlyHost().prepareInvocation(options, parseRequest(phasePreparationRequest(fixture))),
+      error => error.code === 'SOURCE_AUTHORITY_REQUIRED');
+  } finally { cleanupFixture(fixture); }
+});
 
 for (const [name, value, unit] of [
   ['DIFF_MAX_BYTES', 6291456, 'diff bytes'],

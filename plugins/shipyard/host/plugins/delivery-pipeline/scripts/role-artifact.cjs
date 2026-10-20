@@ -3256,13 +3256,14 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
     const packetDigest = digest(stable(packet));
     const binding = { ...packet.role_context?.focused, context_digest: packetDigest };
     context.validateFocusedResult(result, binding);
-    require('./context-packet.cjs').validateContextPacket(packet, { root: identity.worktree, role: 'arch-review',
+    require('./context-packet.cjs').validateContextPacket(packet, { root: originalPacketRoot(identity.worktree, packet), role: 'arch-review',
       subject: result.id, sourceRevision: identity.head, policyHash: trusted.receipt.policy_hash });
     if (binding.repository !== identity.repository.identity || binding.id !== trusted.record.ticket
         || binding.head !== identity.head || binding.base_commit !== identity.base_commit
         || binding.merge_base !== identity.merge_base || binding.base_tree !== identity.merge_base_tree
         || result.launch_digest !== digest(stable({ packet_digest: packetDigest, reference_digest: packet.role_context.reference_digest })))
       fail('REVIEW_NATIVE_INVALID', 'original focused inline input differs from current subject');
+    authenticateSelectedReferences(trusted, result, identity.worktree, evidence);
     const reference = require('./claude-reference-content.cjs').loadClaudeReferenceContent('arch-review');
     if (stable({ sha256: digest(reference), bytes: Buffer.byteLength(reference) }) !== stable(packet.role_context.reference_digest))
       fail('REVIEW_NATIVE_INVALID', 'focused role instructions changed');
@@ -3444,6 +3445,9 @@ function originalInlinePacket(trusted) {
       if (checked.manifest.binding?.review_contract !== collector.FOCUSED_CONTRACT)
         fail('REVIEW_NATIVE_INVALID', 'original focused manifest contract differs');
       const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]));
+      if (packet.role_context?.planning_reference !== undefined
+          && stable(packet.role_context.planning_reference) !== stable(checked.manifest.snapshot.planning_reference))
+        fail('REVIEW_NATIVE_INVALID', 'original packet planning authority differs from its manifest');
       if (checked.manifest.binding.packet_digest !== digest(stable(packet))
           || stable(checked.manifest.binding.focused) !== stable({ ...packet.role_context?.focused, context_digest: digest(stable(packet)) }))
         fail('REVIEW_NATIVE_INVALID', 'original focused manifest differs from its packet');
@@ -3452,6 +3456,63 @@ function originalInlinePacket(trusted) {
   }
   if (packets.length !== 1) fail('REVIEW_COVERAGE_INVALID', 'one complete original inline current packet is required');
   return { packet: packets[0], pin };
+}
+
+function originalPacketRoot(worktree, packet) {
+  return require('./context-packet.cjs').authenticatedPlanningRoot(worktree,
+    packet.role_context?.planning_reference);
+}
+
+function authenticateSelectedReferences(trusted, findings, worktree, evidence) {
+  const refs = findings.host_context?.selected_refs;
+  const context = require('./codex-arch-review-context.cjs');
+  if (!refs) {
+    if (findings.host_context?.source_root !== undefined
+        || trusted.receipt.runtime === 'claude' && findings.review_contract === context.FOCUSED_CONTRACT)
+      fail('REVIEW_NATIVE_INVALID', 'selected reference inventory is required');
+    return;
+  }
+  let root, originalPacket;
+  if (trusted.receipt.runtime === 'claude') {
+    const packet = originalInlinePacket(trusted).packet;
+    originalPacket = packet;
+    if (packet.role_context?.planning_reference && findings.host_context.graph_dir !== packet.role_context.planning_reference.directory)
+      fail('REVIEW_NATIVE_INVALID', 'selected reference graph differs from original native input');
+    root = originalPacketRoot(worktree, packet);
+    const orderedReferences = entries => entries.map(entry => stable(entry)).sort();
+    if (stable(orderedReferences(refs)) !== stable(orderedReferences(packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })))))
+      fail('REVIEW_NATIVE_INVALID', 'selected references differ from original native input');
+  } else if (trusted.receipt.runtime === 'codex' && findings.review_contract === context.FOCUSED_CONTRACT
+      && findings.host_context.planning_reference !== undefined) {
+    context.validateHistoricalContext({ result: findings, receipt: trusted.receipt,
+      dispatchId: trusted.dispatchId, evidence, worktree });
+    root = require('./context-packet.cjs').authenticatedPlanningRoot(worktree, findings.host_context.planning_reference);
+  } else if (trusted.receipt.runtime_evidence?.input_transport === 'host-files') {
+    const checked = context.verifyFileInput(trusted.receipt.runtime_evidence.input_bundle,
+      { sealed: true, historical: true, association: { role: trusted.receipt.role,
+        dispatch_id: trusted.receipt.runtime_evidence.review_continuation?.original_dispatch_id || trusted.dispatchId } });
+    root = require('./context-packet.cjs').authenticatedPlanningRoot(worktree, checked.manifest.snapshot.planning_reference);
+  } else {
+    root = fs.realpathSync(worktree);
+  }
+  if ((originalPacket?.role_context?.planning_reference || findings.host_context.source_root !== undefined)
+      && findings.host_context.source_root !== root)
+    fail('REVIEW_NATIVE_INVALID', 'selected reference root differs from original native input');
+  const architectureRefs = [];
+  for (const source of refs) {
+    if (source.path === '.planning/graph/delivery-state.json') continue;
+    const content = readPinnedArchiveFile(root, source, 'current architecture context source').toString('utf8');
+    if (/^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(source.path))
+      architectureRefs.push({ ...source, content });
+  }
+  const authority = originalPacket?.role_context?.source_authority;
+  if (authority) {
+    if (authority.source?.root !== root
+        || stable(authenticateArchitectureSources(worktree, root, authority.pins)) !== stable(authority))
+      fail('SOURCE_AUTHORITY_INVALID', 'original complete architecture source authority changed');
+  } else if (architectureRefs.length) {
+    authenticateArchitectureSources(worktree, root, originalPacket?.role_context?.adr_selection || architectureRefs);
+  }
 }
 
 function authenticateInlineCoverage({ trusted, result, evidence, identity }) {
@@ -3470,7 +3531,7 @@ function authenticateInlineCoverage({ trusted, result, evidence, identity }) {
       || stable(packet.role_context.ticket_set) !== stable(result.ticket_set)
       || result.ticket_set_digest !== coverage.current.ticket_set_digest)
     fail('REVIEW_COVERAGE_INVALID', 'inline full current contract cannot inherit another runtime or role authority');
-  require('./context-packet.cjs').validateContextPacket(packet, { root: identity.worktree, role: 'integrator',
+  require('./context-packet.cjs').validateContextPacket(packet, { root: originalPacketRoot(identity.worktree, packet), role: 'integrator',
     sourceRevision: identity.head, policyHash: trusted.receipt.policy_hash, subject: packet.subject });
   if (stable(coverage.source_inventories.current) !== stable(endpointInventory(identity.worktree, identity.head))
       || stable(coverage.source_inventories.baseline) !== stable(endpointInventory(identity.worktree, identity.merge_base))
@@ -3534,7 +3595,7 @@ function originalArchitectureTicketSet(trusted, manifest, findings, evidence, id
   if (trusted.receipt.runtime === 'claude') {
     originalCurrentResponse(trusted, findings, evidence);
     packet = originalInlinePacket(trusted).packet;
-    semantic.validateContextPacket(packet, { root: identity.worktree, role: 'arch-review',
+    semantic.validateContextPacket(packet, { root: originalPacketRoot(identity.worktree, packet), role: 'arch-review',
       subject: manifest.boundary_subject, sourceRevision: identity.head, policyHash: trusted.receipt.policy_hash });
   } else if (trusted.receipt.runtime === 'codex' && trusted.receipt.runtime_evidence?.input_transport === 'host-files') {
     if (manifest.current_review) originalCurrentResponse(trusted, findings, evidence, retention);
@@ -3597,7 +3658,7 @@ function originalArchitectureTicketSet(trusted, manifest, findings, evidence, id
       const statePath = '.planning/graph/delivery-state.json';
       const stateRef = refs.find(ref => ref.path === statePath);
       originalSource(statePath);
-      const bytes = readImmutableFile(fs, path.join(identity.worktree, statePath), 'current focused membership state', 8 * 1024 * 1024);
+      const bytes = readImmutableFile(fs, path.join(originalPacketRoot(identity.worktree, packet), statePath), 'current focused membership state', 8 * 1024 * 1024);
       if (digest(bytes) !== stateRef.sha256) fail('REVIEW_COVERAGE_INVALID', 'focused original state source changed');
     }
     if (packet.retained_evidence?.length) {
@@ -3652,6 +3713,7 @@ function authenticatedCurrentArchive(worktree, record, manifest, findings, ident
   }, retention?.receipt_store ? trusted : undefined);
   verification.finish();
   const evidence = readPinnedArchiveFile(worktree, manifest.files.evidence, 'complete original current evidence');
+  if (manifest.role === 'arch-review') authenticateSelectedReferences(trusted, findings, identity.worktree, evidence);
   const ticketSet = originalArchitectureTicketSet(trusted, manifest, findings, evidence, identity, retention, currentBinding);
   const metadata = { ...trustedMetadata({ role: manifest.role }, trusted, identity), trusted };
   const data = judgmentResultData(findings, metadata, { phase: manifest.phase || findings.phase,
@@ -3903,16 +3965,6 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
         currentBinding = { ...binding, graph_sha256: digest(graphBytes) };
       }
       try {
-        if (findings.host_context?.selected_refs) {
-          const project = findings.host_context.source_root || path.resolve(findings.host_context.graph_dir || graphDir || path.join(root, '.planning/graph'), '../..');
-          const architectureRefs = [];
-          for (const source of findings.host_context.selected_refs) {
-            if (source.path === '.planning/graph/delivery-state.json') continue;
-            const content = readPinnedArchiveFile(project, source, 'current architecture context source').toString('utf8');
-            if (/^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(source.path)) architectureRefs.push({ ...source, content });
-          }
-          if (architectureRefs.length) authenticateArchitectureSources(worktree, project, architectureRefs);
-        }
         const identity = { worktree, repository: { root: manifest.repository_realpath, identity: common },
           head, head_tree: reviewGit(root, ['rev-parse', head + '^{tree}']), base: manifest.base, base_commit: baseCommit,
           base_tree: reviewGit(root, ['rev-parse', baseCommit + '^{tree}']), merge_base: reviewGit(root, ['merge-base', baseCommit, head]),

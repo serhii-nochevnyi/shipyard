@@ -676,6 +676,32 @@ test('explicit legacy Claude original input retains its native receipt and curre
   });
 });
 
+for (const [name, mutate, valid] of [
+  ['reordered', refs => refs.reverse(), true],
+  ['missing', refs => refs.pop(), false],
+  ['additional', refs => refs.push({ ...refs[0], path: 'extra.md' }), false],
+  ['duplicate', refs => refs.push({ ...refs[0] }), false],
+  ['changed hash', refs => { refs[0].sha256 = '0'.repeat(64); }, false],
+  ['changed bytes', refs => { refs[0].bytes++; }, false],
+  ['changed identity', refs => { refs[0].path += '.changed'; }, false],
+]) test('legacy selected reference inventory ' + name, async () => {
+  await claudeFixture(async f => {
+    const run = () => runClaudeCurrentReview(f, 'arch-review', { legacy: true, selectedRefs: mutate });
+    if (valid) {
+      await run();
+      for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true,
+        admissionDiagnostic(f, consumer));
+    } else {
+      await run();
+      for (const consumer of consumers) {
+        assert.equal(consumer(currentSubject(f)).architecture.ready, false);
+        const { refusals } = JSON.parse(admissionDiagnostic(f, consumer));
+        assert.ok(refusals.some(refusal => refusal.message === 'selected references differ from original native input'));
+      }
+    }
+  });
+});
+
 for (const [name, edit] of [
   ['absent original user packet', rows => rows.shift()],
   ['duplicate original user packet', rows => rows.unshift(structuredClone(rows[0]))],
@@ -966,6 +992,7 @@ async function runClaudeCurrentReview(f, role, edit = {}) {
       phase_repo: prepared.binding.repo, phase_archive_selection: prepared.packet.phase_archive_selection,
       phase_evidence_digest: prepared.packet.retained_history_digest,
       selected_refs: packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) } };
+    edit.selectedRefs?.(result.host_context.selected_refs);
     const artifact = authority.sealJudgment({ worktreePath: f.worktree, role, ticket: prepared.ticket,
       phase: f.phase, pr: f.pr.number, base: prepared.base, recorder: host.recorder, dispatchId,
       ticketSet: prepared.binding.ticketSet, ticketSetDigest: prepared.binding.membership, result,

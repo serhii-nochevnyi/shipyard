@@ -2546,4 +2546,32 @@ test('code-review reuse refuses a moved base or reference contract and ticket-fo
   } finally {f.cleanup();}
 });
 
+
+test('original native architecture authority reads coordinator-only planning on the reviewed epic', async () => {
+  const f = codexJudgmentFixtures.fixture();
+  const reviewed = f.root + '-epic';
+  try {
+    codexJudgmentFixtures.git(f.root, ['switch', 'main']);
+    codexJudgmentFixtures.git(f.root, ['worktree', 'add', reviewed, codexJudgmentFixtures.BRANCH]);
+    f.reviewRoot = fs.realpathSync(reviewed);
+    codexJudgmentFixtures.git(reviewed, ['rm', '-r', '.planning']);
+    codexJudgmentFixtures.git(reviewed, ['commit', '-qm', 'coordinator owns planning']);
+    f.head = codexJudgmentFixtures.git(reviewed, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
+    assert.equal(fs.existsSync(path.join(reviewed, '.planning')), false);
+    const { validationInput, value } = await codexJudgmentFixtures.unitJudgment(f);
+    assert.equal(value.prepared.packet.planning_reference.root, f.root);
+    assert.equal(value.prepared.canonical.worktree, f.reviewRoot);
+    assert.equal(roleArtifact.validateJudgmentManifest(validationInput).envelope.verdict, 'conform');
+    assert.equal(roleArtifact.read(validationInput).envelope.verdict, 'conform');
+    const lookup = { worktreePath: reviewed, pr: f.pr.number, head: f.head, baseName: 'main',
+      baseCommit: f.base, headBranch: f.pr.headRefName, graphDir: path.join(f.root, '.planning/graph') };
+    assert.equal(roleArtifact.currentArchitectureVerdict(lookup)?.dispatch_id, validationInput.dispatchId);
+    fs.appendFileSync(path.join(f.root, '.planning/config.json'), ' ');
+    assert.equal(roleArtifact.currentArchitectureVerdict(lookup), null);
+  } finally {
+    codexJudgmentFixtures.cleanupJudgment(f);
+    fs.rmSync(reviewed, { recursive: true, force: true });
+  }
+});
+
 done();

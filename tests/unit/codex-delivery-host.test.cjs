@@ -1912,6 +1912,8 @@ test('current dictionary integrity retains logical obligations without semantic 
   const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
   const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
   try {
+    const graphDir = path.join(f.root, '.planning/graph');
+    fs.cpSync(f.graphDir, graphDir, { recursive: true });
     const packet = packets.buildContextPacket({ root: f.root, role: 'integrator', subject: f.scope.ticket,
       sourceRevision: f.base, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
       scope: { files_modified: ['src/owned.txt'] }, requiredRefs: ['src/owned.txt'],
@@ -1928,7 +1930,7 @@ test('current dictionary integrity retains logical obligations without semantic 
     incomplete.obligations.pop();
     assert.throws(() => context.preflightReviewMaterial(incomplete, expected), /logical obligations|provenance/);
     const input = context.prepareFileInput(f.scope, JSON.stringify(encoded), {
-      role: 'integrator', dispatchId: 'preflight-fixture', storageRoot: f.storageRoot, graphDir: f.graphDir });
+      role: 'integrator', dispatchId: 'preflight-fixture', storageRoot: f.storageRoot, graphDir });
     assert.equal(context.verifyFileInput(input).semantic_credit, false);
     fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'changed\n');
     assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
@@ -3873,5 +3875,81 @@ test('code review wrapper refuses installed or live changes immediately before l
       fs.writeFileSync(agentManifest, JSON.stringify(manifest));
     } else f.pr[mutation === 'head' ? 'headRefOid' : 'baseRefOid'] = 'a'.repeat(40);
   } })));
+
+test('public integration-review.v2 completes shared preparation with coordinator-only planning', async () => {
+  const Module = require('node:module');
+  const file = require.resolve('./phase49-incremental-integration.test.cjs');
+  const loaded = new Module(file, module);
+  loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
+  const load = Module._load;
+  Module._load = function(name, ...args) {
+    if (name === 'node:test') return { test() {} };
+    return load.call(this, name, ...args);
+  };
+  try {
+    loaded._compile(fs.readFileSync(file, 'utf8')
+      + '\nmodule.exports = { fixture, projectOptions, agent, git, write };\n', file);
+  } finally { Module._load = load; }
+  const helper = loaded.exports;
+  await helper.fixture(async f => {
+    const coordinator = path.join(f.root, 'coordinator');
+    helper.git(f.worktree, 'worktree', 'add', '--detach', coordinator, f.head);
+    for (const row of Object.values(f.rows)) {
+      fs.appendFileSync(path.join(coordinator, row.plan), '\nSelects `.planning/backlog/selected.md`.\n');
+    }
+    helper.write(coordinator, '.planning/backlog/selected.md', '# Coordinator backlog\n\nComplete selected backlog.\n');
+    helper.write(coordinator, '.planning/phases/' + f.phase + '/CONTEXT.md', 'Coordinator context.\n');
+    helper.write(coordinator, 'src/provider.cjs', 'exports.value = 99;\n');
+    helper.git(coordinator, 'add', '.'); helper.git(coordinator, 'commit', '-qm', 'coordinator-only references');
+    helper.git(f.worktree, 'rm', '-r', '.planning');
+    helper.git(f.worktree, 'commit', '-qm', 'planning belongs to coordinator');
+    f.head = helper.git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
+    helper.git(f.worktree, 'update-ref', 'refs/remotes/origin/' + f.pr.headRefName, f.head);
+    f.graphDir = path.join(coordinator, '.planning/graph');
+    assert.equal(fs.existsSync(path.join(f.worktree, '.planning')), false);
+    const options = helper.projectOptions(f);
+    const shared = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+    const prepared = shared.prepareIntegratorContext(options, { worktree: f.worktree, phase: '49' });
+    assert.equal(prepared.canonical.worktree, f.worktree);
+    assert.equal(prepared.canonical.head, f.head);
+    assert.equal(prepared.canonical.projectRoot, coordinator);
+    assert.ok(prepared.packet.required_refs.some(ref => ref.path.endsWith('ADR-014-original.md')));
+    assert.ok(prepared.packet.backlog.selected.some(item => item.content.includes('Complete selected backlog.')));
+    assert.ok(prepared.packet.role_context.combined_diff.content.includes('+exports.value = 1;'));
+    assert.ok(!prepared.packet.role_context.combined_diff.content.includes('exports.value = 99;'));
+    const a = helper.agent(f, 'integrator', prepared.signals);
+    const scope = { worktree: f.worktree, repository: prepared.canonical.commonPath, phase: 49,
+      ticket: prepared.ticket, run_id: 'coordinator-integration' };
+    const publicHost = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+    const request = { role: 'integrator', dispatch_id: scope.run_id, signals: {},
+      context: { review_contract: 'shipyard.integration-review.v2' } };
+    const input = publicHost.prepareIntegratorInput(scope, request, { ...options, scope,
+      agentDir: a.dir, agentManifest: a.manifest, capabilities: a.capabilities,
+      storageRoot: path.join(f.root, 'coordinator-delivery'), env: { CODEX_HOME: process.env.CODEX_HOME } });
+    const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+    const checked = context.verifyFileInput(input);
+    const packet = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs')
+      .decodeUniqueContent(JSON.parse(checked.material[0]));
+    assert.equal(checked.manifest.snapshot.worktree, f.worktree);
+    assert.equal(checked.manifest.snapshot.head, f.head);
+    assert.equal(checked.manifest.snapshot.head_tree, prepared.canonical.headTree);
+    assert.equal(packet.canonical_root, coordinator);
+    assert.equal(packet.source_revision, f.head);
+    for (const ref of packet.required_refs) {
+      assert.equal(fs.existsSync(path.join(f.worktree, ref.path)), false);
+      assert.equal(ref.content, fs.readFileSync(path.join(coordinator, ref.path), 'utf8'));
+    }
+    assert.ok(packet.backlog.selected.some(item => item.content.includes('Complete selected backlog.')));
+    const foreign = path.join(f.root, 'foreign'); fs.mkdirSync(foreign);
+    fs.cpSync(path.join(coordinator, '.planning'), path.join(foreign, '.planning'), { recursive: true });
+    helper.git(foreign, 'init', '-qb', 'main'); helper.git(foreign, 'add', '.');
+    helper.git(foreign, 'commit', '-qm', 'unrelated planning graph');
+    assert.throws(() => publicHost.prepareIntegratorInput(scope, { ...request, context: {
+      review_contract: 'shipyard.integration-review.v2' } }, { ...options,
+      graphDir: path.join(foreign, '.planning/graph') }), /unrelated repository/);
+    fs.appendFileSync(path.join(coordinator, Object.values(f.rows)[0].plan), '\nchanged required planning bytes\n');
+    assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
+  });
+});
 
 done();
