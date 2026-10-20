@@ -2141,8 +2141,11 @@ test('serialized full paged feedback selects global Node IDs across Actor varian
   assert.equal(result.digest, crypto.createHash('sha256').update(canonicalInventory).digest('hex'));
 });
 
-async function originalFixerFixture(outcome, mutation, evolution = null) {
+async function originalFixerFixture(outcome, mutation, evolution = null, historicalRecovery = null) {
   const f = fixture({ physicalPaths: true });
+  if (['pending', 'action'].includes(historicalRecovery)) fs.writeFileSync(path.join(f.graphDir, 'delivery-log.jsonl'),
+    JSON.stringify({ ts: '2026-10-19T07:31:21.739Z', event: 'status_change', ticket: 'T-999-98',
+      from: null, to: 'pending', pr: null }) + '\n');
   const defaultAgents = mutation?.startsWith('normalized-default-') || mutation?.startsWith('normalized-cli-default-');
   const defaultOsHome = mutation?.endsWith('-os-home');
   const home = defaultOsHome ? path.join(fs.realpathSync(temporary), '.codex')
@@ -2212,7 +2215,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
   const gh = (_program, args) => {
     if (_program === 'git' && args[0] === 'push') {
       pushes++; publishedHead = git(f.root, 'rev-parse', 'HEAD');
-      if (mutation === 'publication-response-loss') throw new Error('Original push response was lost after remote confirmation');
+      if (mutation === 'publication-response-loss' || (historicalRecovery === 'pending' && launches > 1)) throw new Error('Original push response was lost after remote confirmation');
       return 'confirmed host push';
     }
     if (args[0] === 'repo') return JSON.stringify({ nameWithOwner: 'fixture/repository' });
@@ -2240,7 +2243,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
         body: '', state: 'COMMENTED', author: actor });
       if ((mutation === 'thread-response-loss' || mutation === 'companion-cli-response-loss' || mutation === 'companion-cli-legacy-absent'
           || mutation?.startsWith('pending-')) && replies.length === 1) throw new Error('Original accepted thread reply response lost');
-      if (mutation === 'companion-cli-reuse-response-loss' && replies.length === 2)
+      if ((mutation === 'companion-cli-reuse-response-loss' && replies.length === 2)
+          || (historicalRecovery === 'action' && launches > 1 && replies.length === 3))
         throw new Error('Original accepted later thread reply response lost');
       return JSON.stringify({ data: { addPullRequestReviewThreadReply: { comment } } });
     }
@@ -2348,7 +2352,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
             : launchRole.agent_file.replace('.toml', effort === 'high' ? '-repeat.toml' : '-deep.toml') };
         if (executing) assert.equal(applied.agent_file, null, 'executor uses the original dynamic native launch');
         const final = JSON.stringify(output);
-        if (outcome === 'source' || executing) fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
+        if (historicalRecovery && !executing && launches > 1) fs.writeFileSync(path.join(f.root, 'outside.txt'), 'Subsequent native source correction.\n');
+        if (outcome === 'source' || executing || (historicalRecovery && launches > 1)) fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
         if (mutation === 'foreign-dirty') fs.writeFileSync(path.join(f.root, 'outside.txt'), 'foreign mutation');
         if (mutation === 'self-commit') { git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'unauthorized producer commit'); }
         if (mutation === 'plan-movement') fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
@@ -2450,6 +2455,9 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
         return child;
       },
       };
+      if (historicalRecovery === 'admitted' && launches > 0 && !executing) {
+        hostOptions.finalizeCommit = () => { throw Object.assign(new Error('Fixture finalizer interruption'), { code: 'SIGNING_FAILED' }); };
+      }
       if (defaultAgents) {
         delete hostOptions.agentDir;
         delete hostOptions.agentManifest;
@@ -2894,7 +2902,161 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
         assert.equal(replies.length + prReplies.length, 3);
         return;
       }
-      const second = await run();
+      let second;
+      if (historicalRecovery) {
+        output.status = 'fixed';
+        if (historicalRecovery === 'direct') {
+          second = await run();
+          const counters = [launches, pushes, replies.length, prReplies.length];
+          const recovery = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport,
+            verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() });
+          for (let retry = 0; retry < 2; retry++) {
+            const resumed = await recovery.resumeFinalization(second.artifact.candidate_id, f.scope);
+            assert.equal(resumed.artifact.commit, second.artifact.commit);
+            assert.equal(resumed.actions.status, 'confirmed');
+            assert.deepEqual([launches, pushes, replies.length, prReplies.length], counters);
+          }
+        } else {
+          await assert.rejects(run);
+          const candidates = fs.readdirSync(path.join(stateRoot(f), 'candidates')).map(file =>
+            JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'candidates', file))).payload);
+          const candidate = candidates.find(item => item.expected_head === currentHead && item.expected_role === 'review-fix');
+          assert.ok(candidate);
+          const historical = candidate.repair_subject.actionable_feedback.coverage.map(item =>
+            repairCoverageTransition(item, candidate.repair_subject.actionable_feedback));
+          assert.equal(historical.length, 3);
+          assert.ok(historical.every(item => item.historical && item.semantic_credit === false
+            && (item.source_transition ? item.source_transition.to === currentHead : firstHead === currentHead)));
+          assert.deepEqual(candidate.files_modified, graph.tickets[f.scope.ticket].files);
+          const counters = [launches, pushes, replies.length, prReplies.length];
+          const originals = [...retainedFiles];
+          for (const directory of ['candidates', 'finalized']) {
+            const root = path.join(stateRoot(f), directory);
+            if (fs.existsSync(root)) for (const file of fs.readdirSync(root)) originals.push({
+              file: path.join(root, file), bytes: fs.readFileSync(path.join(root, file)) });
+          }
+          const recoveryOptions = { ...cliOptions(f), getPullRequest: live, execFileSync: transport,
+            verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() };
+          const recovery = createFinalizationRecoveryHost(recoveryOptions);
+          const resume = () => recovery.resumeFinalization(candidate.candidate_id, f.scope);
+          const unchangedCounters = () => assert.deepEqual([launches, pushes, replies.length, prReplies.length], counters);
+          const rejectFileChange = async (file, mutate) => {
+            const bytes = fs.readFileSync(file);
+            const mode = fs.statSync(file).mode & 0o777;
+            try { mutate(file, bytes); await assert.rejects(resume); unchangedCounters(); }
+            finally { fs.writeFileSync(file, bytes, { mode }); fs.chmodSync(file, mode); }
+          };
+          await rejectFileChange(f.plan, file => fs.appendFileSync(file, '\nChanged current PLAN'));
+          await rejectFileChange(graphFile, file => {
+            const changed = JSON.parse(fs.readFileSync(file)); changed.tickets[f.scope.ticket].files.push('foreign-owner.txt');
+            fs.writeFileSync(file, JSON.stringify(changed));
+          });
+          await rejectFileChange(evidenceFile, file => fs.appendFileSync(file, '\nReplaced evidence'));
+          for (const directory of ['candidates', 'finalized', 'repair-publications', 'repair-actions', 'repair-attempts']) {
+            const root = path.join(stateRoot(f), directory);
+            if (!fs.existsSync(root)) continue;
+            for (const name of fs.readdirSync(root).filter(name => name.endsWith('.json')
+                && (!['candidates', 'finalized', 'repair-publications'].includes(directory) || name === candidate.candidate_id + '.json'))) {
+              const file = path.join(root, name);
+              await rejectFileChange(file, (target, bytes) => {
+                const envelope = JSON.parse(bytes); envelope.payload.ticket = 'T-38-99';
+                fs.writeFileSync(target, JSON.stringify(envelope));
+              });
+              await rejectFileChange(file, target => fs.unlinkSync(target));
+            }
+          }
+          for (const original of retainedFiles.filter(item => !item.file.includes('repair-actions') && !path.basename(item.file).startsWith('reservation-'))) {
+            await rejectFileChange(original.file, file => fs.appendFileSync(file, '\nTampered original native custody'));
+          }
+          await assert.rejects(() => recovery.resumeFinalization(candidate.candidate_id, { ...f.scope, repository: 'foreign-repository' }));
+          unchangedCounters();
+          verificationAllowList.push({ argv: ['node', '--invalid-recovery-policy'], profile: 'host', timeout_s: 600 });
+          try { await assert.rejects(resume); unchangedCounters(); } finally { verificationAllowList.pop(); }
+          const baseBefore = git(f.root, 'rev-parse', 'main');
+          try {
+            git(f.root, 'update-ref', 'refs/heads/main', candidate.expected_head === baseBefore ? 'HEAD' : candidate.expected_head);
+            if (git(f.root, 'rev-parse', 'main') !== baseBefore) { await assert.rejects(resume); unchangedCounters(); }
+          } finally { git(f.root, 'update-ref', 'refs/heads/main', baseBefore); }
+          const branchBefore = git(f.root, 'symbolic-ref', 'HEAD');
+          try {
+            git(f.root, 'update-ref', 'refs/heads/foreign-recovery', 'HEAD');
+            git(f.root, 'symbolic-ref', 'HEAD', 'refs/heads/foreign-recovery');
+            await assert.rejects(resume); unchangedCounters();
+          } finally { git(f.root, 'symbolic-ref', 'HEAD', branchBefore); }
+          const originalSigner = git(f.root, 'config', 'user.signingkey');
+          try {
+            git(f.root, 'config', 'user.signingkey', 'F'.repeat(40));
+            await assert.rejects(resume); unchangedCounters();
+          } finally { git(f.root, 'config', 'user.signingkey', originalSigner); }
+          const originalPublished = publishedHead;
+          try { publishedHead = '1'.repeat(40); await assert.rejects(resume); unchangedCounters(); }
+          finally { publishedHead = originalPublished; }
+          const sourceHead = git(f.root, 'rev-parse', 'HEAD');
+          const unrelated = git(f.root, 'commit-tree', '-S', git(f.root, 'rev-parse', 'HEAD^{tree}'),
+            '-p', sourceHead, '-m', 'Unrelated authentic equal-tree signed commit');
+          try {
+            git(f.root, 'update-ref', 'HEAD', unrelated); publishedHead = unrelated;
+            await assert.rejects(resume); unchangedCounters();
+          } finally { git(f.root, 'update-ref', 'HEAD', sourceHead); publishedHead = originalPublished; }
+          if (['pending', 'action'].includes(historicalRecovery)) {
+            const originalGraph = fs.readFileSync(graphFile);
+            const snapshot = path.join(f.root, '.git', 'original-recovery-graph.json');
+            fs.writeFileSync(snapshot, originalGraph);
+            recoveryOptions.recoveryGraphSnapshot = snapshot;
+            const journal = candidate.repair_subject.journal;
+            assert.ok(journal);
+            const journalBytes = fs.readFileSync(journal.path);
+            const row = { ts: '2026-10-20T07:31:21.739Z', event: 'status_change', ticket: 'T-999-99',
+              from: null, to: 'pending', pr: null };
+            const append = value => fs.writeFileSync(journal.path, Buffer.concat([journalBytes, Buffer.from(value)]));
+            for (const invalid of [JSON.stringify(row), 'false\n', '{bad}\n',
+              JSON.stringify({ ...row, ticket: f.scope.ticket }) + '\n',
+              JSON.stringify({ ...row, pr: candidate.repair_subject.pr }) + '\n',
+              JSON.stringify({ ...row, event: 'repair_attempt' }) + '\n',
+              JSON.stringify({ ...row, to: false }) + '\n', Buffer.from([0xff, 10])]) {
+              append(invalid);
+              await assert.rejects(resume); unchangedCounters();
+            }
+            append(JSON.stringify(row) + '\n');
+            const evolved = JSON.parse(originalGraph);
+            evolved.tickets['T-999-99'] = { ...evolved.tickets[f.scope.ticket], depends_on: [f.scope.ticket] };
+            fs.writeFileSync(graphFile, JSON.stringify(evolved));
+            await rejectFileChange(snapshot, file => fs.appendFileSync(file, ' '));
+            await rejectFileChange(graphFile, file => {
+              const changed = JSON.parse(fs.readFileSync(file)); changed.tickets[f.scope.ticket].risk = 'changed';
+              fs.writeFileSync(file, JSON.stringify(changed));
+            });
+            await rejectFileChange(journal.path, (file, bytes) => {
+              const changed = Buffer.from(bytes); changed[0] ^= 1; fs.writeFileSync(file, changed);
+            });
+            await rejectFileChange(journal.path, file => fs.writeFileSync(file, journalBytes.subarray(0, -1)));
+            await rejectFileChange(graphFile, file => {
+              const changed = JSON.parse(fs.readFileSync(file)); changed.epics = { forged: true };
+              fs.writeFileSync(file, JSON.stringify(changed));
+            });
+            delete recoveryOptions.recoveryGraphSnapshot;
+            await assert.rejects(resume); unchangedCounters();
+            recoveryOptions.recoveryGraphSnapshot = snapshot;
+          }
+          const resumed = await resume();
+          assert.equal(resumed.publication.status, 'confirmed');
+          assert.equal(resumed.actions.status, 'confirmed');
+          assert.notEqual(resumed.artifact.commit, currentHead);
+          const accepted = [launches, pushes, replies.length, prReplies.length];
+          assert.equal(accepted[0], counters[0]);
+          if (historicalRecovery !== 'admitted') assert.equal(accepted[1], counters[1]);
+          const again = await recovery.resumeFinalization(candidate.candidate_id, f.scope);
+          assert.deepEqual(again.artifact, resumed.artifact);
+          assert.deepEqual([launches, pushes, replies.length, prReplies.length], accepted);
+          if (candidate.repair_subject.journal) {
+            const pin = candidate.repair_subject.journal;
+            assert.equal(crypto.createHash('sha256').update(fs.readFileSync(pin.path).subarray(0, pin.bytes)).digest('hex'), pin.sha256);
+          }
+          for (const original of originals) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
+          for (const original of retainedFiles) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
+          return;
+        }
+      } else second = await run();
       const unknown = !!evolution || coveredSource || ['normalized-external', 'normalized-missing-actions'].includes(mutation);
       assert.equal(second.resolution.signals.signatureState, unknown ? 'first' : 'repeat');
       assert.equal(second.receipt.applied_effort, unknown ? 'low' : 'high');
@@ -2970,7 +3132,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
         await assert.rejects(run, { code: 'REPAIR_POLICY_EXHAUSTED' });
         assert.equal(launches, 3);
       }
-      assert.equal(git(f.root, 'rev-parse', 'HEAD'), currentHead);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), historicalRecovery === 'direct' ? second.artifact.commit : currentHead);
       return;
     }
     if (mutation) {
@@ -3950,6 +4112,64 @@ test('public integration-review.v2 completes shared preparation with coordinator
     fs.appendFileSync(path.join(coordinator, Object.values(f.rows)[0].plan), '\nchanged required planning bytes\n');
     assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
   });
+});
+
+for (const historicalRecovery of ['direct', 'admitted', 'pending', 'action']) {
+  for (const mutation of ['normalized-repeat', 'normalized-covered-source']) {
+    test('historical signed source publication preserves original custody through ' + historicalRecovery + ' ' + mutation,
+      () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation, 'all', historicalRecovery)));
+  }
+}
+
+test('recovery source opening refuses real FIFOs and replacement races within a bounded child', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'recovery-opening-')));
+  const host = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const script = `
+    const fs = require('node:fs'), path = require('node:path');
+    const assert = require('node:assert/strict');
+    const { execFileSync } = require('node:child_process');
+    const [host, root, mode] = process.argv.slice(1);
+    const source = fs.readFileSync(host, 'utf8');
+    const body = source.slice(source.indexOf('function recoveryBytes('), source.indexOf('function recoveryGraphMatches('));
+    const fail = code => { const error = new Error(code); error.code = code; throw error; };
+    const read = new Function('fs', 'path', 'MAX_GRAPH_BYTES', 'fail', body + '; return recoveryBytes;')(fs, path, 1024, fail);
+    const file = path.join(root, mode);
+    if (mode === 'fifo') execFileSync('mkfifo', [file]);
+    else if (mode === 'directory') fs.mkdirSync(file);
+    else if (mode === 'symlink') fs.symlinkSync(host, file);
+    else fs.writeFileSync(file, 'original');
+    const descriptors = new Set(), originalOpen = fs.openSync, originalClose = fs.closeSync;
+    fs.openSync = function (...args) {
+      const fd = originalOpen.apply(fs, args); descriptors.add(fd); return fd;
+    };
+    fs.closeSync = function (fd) { originalClose.call(fs, fd); descriptors.delete(fd); };
+    if (mode === 'replacement') {
+      const open = fs.openSync;
+      fs.openSync = function (target, flags) {
+        if (target === file) { fs.unlinkSync(file); execFileSync('mkfifo', [file]); }
+        return open.call(fs, target, flags);
+      };
+    }
+    if (mode === 'changed') {
+      const readFile = fs.readFileSync;
+      fs.readFileSync = function (target, ...args) {
+        const bytes = readFile.call(fs, target, ...args);
+        if (typeof target === 'number') fs.appendFileSync(file, 'changed');
+        return bytes;
+      };
+    }
+    if (mode === 'regular') assert.equal(read(file, root).toString(), 'original');
+    else assert.throws(() => read(file, root), error => error.code === 'REPAIR_SUBJECT_CHANGED');
+    assert.equal(descriptors.size, 0);
+  `;
+  try {
+    for (const mode of ['fifo', 'replacement', 'directory', 'symlink', 'changed', 'regular']) {
+      const result = spawnSync(process.execPath, ['-e', script, host, root, mode], { encoding: 'utf8', timeout: 3000 });
+      assert.equal(result.error, undefined, mode + ': ' + String(result.error));
+      assert.equal(result.signal, null, mode);
+      assert.equal(result.status, 0, mode + ': ' + result.stderr);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 done();
