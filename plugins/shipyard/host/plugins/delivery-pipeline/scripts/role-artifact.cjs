@@ -23,7 +23,7 @@ const prHygiene = require('./pr-hygiene.cjs');
 const {
   MANIFEST_NAME, PR_BODY_NAME, EVIDENCE_NAME, REPAIR_EVIDENCE_NAME,
   DRIFT_EVIDENCE_NAME, ARCH_REVIEW_EVIDENCE_NAME, SENTINEL_EVIDENCE_NAME,
-  ARTIFACT_ARCHIVE_DIR,
+  ARTIFACT_ARCHIVE_DIR, CODE_REVIEW_EVIDENCE_NAME,
 } = require('./conveyor-scratch.cjs');
 
 const ROLE_ARTIFACT_SCHEMA = 'shipyard.role-artifact.v1';
@@ -37,9 +37,10 @@ const REPAIR_ENVELOPE_SCHEMA = 'shipyard.repair-result.v1';
 const DRIFT_ENVELOPE_SCHEMA = 'shipyard.drift-result.v1';
 const JUDGMENT_ENVELOPE_SCHEMA = 'shipyard.judgment-result.v1';
 const REPAIR_ROLES = new Set(['ci-fix', 'review-fix']);
-const JUDGMENT_ROLES = new Set(['arch-review', 'pr-sentinel', 'integrator']);
+const JUDGMENT_ROLES = new Set(['arch-review', 'pr-sentinel', 'integrator', 'code-review']);
 const JUDGMENT_EVIDENCE_NAMES = Object.freeze({
   'arch-review': ARCH_REVIEW_EVIDENCE_NAME,
+  'code-review': CODE_REVIEW_EVIDENCE_NAME,
   'pr-sentinel': SENTINEL_EVIDENCE_NAME,
   integrator: 'INTEGRATION.md',
 });
@@ -4320,6 +4321,10 @@ function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest)
       || require('./architecture-target.cjs').parseSubject('integrator', manifest.boundary_subject || ''))
       ? { ticket: reconciledRecordTicket(trusted), receipt_store: trusted.recorder.storeDir } : {}) };
   const previous = state.payload.records[trusted.dispatchId];
+  if (trusted.receipt.role === 'code-review') {
+    const last = Math.max(0, ...Object.values(state.payload.records).map(item => Date.parse(item.sealed_at) || 0));
+    record.sealed_at = previous?.sealed_at || new Date(Math.max(Date.now(), last + 1)).toISOString();
+  }
   if (manifest.current_review) {
     const retention = previous?.review_current || currentReviewRetention(worktree, trusted);
     if (trusted.receipt.runtime === 'codex' && !retention)
@@ -4815,9 +4820,278 @@ function findingLine(finding, label) {
   return findingText(finding, ['hunk', 'location'], `${label}.line or hunk`);
 }
 
+function validateFixTicket(finding, index, role) {
+  if (!object(finding.fix_ticket)) {
+    fail('INCOMPLETE_FINDING', `${role} finding ${index}.fix_ticket is required; remedy: put the proposed `
+      + 'ticket {title, scope, files, depends_on} in fix_ticket');
+  }
+  const fixTicket = finding.fix_ticket;
+  roleText(fixTicket.title, `${role} finding ${index}.fix_ticket.title`);
+  roleText(fixTicket.scope, `${role} finding ${index}.fix_ticket.scope`);
+  if (!Array.isArray(fixTicket.files) || fixTicket.files.length === 0) {
+    fail('INCOMPLETE_FINDING', `${role} finding ${index}.fix_ticket.files must be a non-empty array`);
+  }
+  for (const [fileIndex, file] of fixTicket.files.entries()) {
+    roleText(file, `${role} finding ${index}.fix_ticket.files[${fileIndex}]`);
+  }
+  if (fixTicket.depends_on !== undefined) {
+    if (!Array.isArray(fixTicket.depends_on)) {
+      fail('INCOMPLETE_FINDING', `${role} finding ${index}.fix_ticket.depends_on must be an array`);
+    }
+    for (const [dependIndex, depend] of fixTicket.depends_on.entries()) {
+      compactIdentity(depend, `${role} finding ${index}.fix_ticket.depends_on[${dependIndex}]`);
+    }
+  }
+}
+
+function completeCodeReviewFinding(finding, index, id) {
+  const core = require('./code-review-core.cjs');
+  const text = (value, label, maximum = 1024) => {
+    if (typeof value !== 'string' || !value.trim() || bytes(value) > maximum)
+      fail('INCOMPLETE_FINDING', `${label} must be non-empty and at most ${maximum} bytes`);
+  };
+  text(id, 'code-review finding id', 128);
+  text(finding.summary, 'code-review finding summary');
+  if (!['BLOCKER', 'WARNING'].includes(finding.severity)) fail('INCOMPLETE_FINDING', 'sealed code-review severity must be BLOCKER or WARNING');
+  if (finding.rule !== undefined && (typeof finding.rule !== 'string' || finding.rule.length > 64
+      || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(finding.rule))) fail('INCOMPLETE_FINDING', 'code-review rule must be a bounded kebab label');
+  if (!Object.hasOwn(finding, 'path') || !Object.hasOwn(finding, 'line')
+      || (finding.path !== null && core.normalizeCitedPath(finding.path) !== finding.path)
+      || (finding.line !== null && (!Number.isSafeInteger(finding.line) || finding.line < 1)))
+    fail('INCOMPLETE_FINDING', 'code-review citation requires path and line, or null when missing');
+  if (!['new', 'prior'].includes(finding.classification) || !['resolved', 'unmatched', 'missing'].includes(finding.citation))
+    fail('INCOMPLETE_FINDING', 'code-review finding classification or citation is invalid');
+  if (finding.classification === 'prior' && (typeof finding.ref !== 'string' || !/^P-\d{2,3}$/.test(finding.ref)))
+    fail('INCOMPLETE_FINDING', 'prior code-review finding needs its carried ref');
+  if (finding.citation === 'resolved') {
+    if (!finding.path || !finding.line || !/^[a-f0-9]{64}$/.test(finding.identity || '')
+        || !Number.isSafeInteger(finding.occurrence) || finding.occurrence < 1)
+      fail('INCOMPLETE_FINDING', 'resolved code-review citation needs identity, path, line and occurrence');
+    text(finding.line_text, 'code-review cited source line');
+  } else if (finding.identity !== null || finding.line_text !== null || finding.occurrence !== null)
+    fail('INCOMPLETE_FINDING', 'unresolved code-review citation cannot carry an identity, text or occurrence');
+  if (finding.suppressed !== undefined && typeof finding.suppressed !== 'boolean') fail('INCOMPLETE_FINDING', 'suppressed must be boolean');
+  const suppressed = finding.suppressed === true;
+  if (suppressed && finding.classification !== 'prior') fail('INCOMPLETE_FINDING', 'only a prior finding can be suppressed');
+  if (finding.disagreement_identity !== undefined && (finding.classification !== 'prior' || typeof finding.disagreement_identity !== 'string'
+      || !/^[a-f0-9]{64}$/.test(finding.disagreement_identity)))
+    fail('INCOMPLETE_FINDING', 'a retained disagreement identity requires a prior finding and a SHA-256 digest');
+  if (finding.severity === 'BLOCKER') {
+    if (!(finding.blocking === true && !suppressed) && !(finding.blocking === false && suppressed))
+      fail('INCOMPLETE_FINDING', 'a BLOCKER blocks unless held by a recorded disagreement');
+    if (!finding.path || !finding.line) fail('INCOMPLETE_FINDING', 'a BLOCKER needs path and positive line');
+    text(finding.failure_scenario, 'code-review failure scenario');
+    const fix = finding.fix_ticket;
+    if (!object(fix) || typeof fix.title !== 'string' || bytes(fix.title) > 1024
+        || typeof fix.scope !== 'string' || bytes(fix.scope) > 1024
+        || !Array.isArray(fix.files) || fix.files.length > 128
+        || fix.files.some(file => typeof file !== 'string' || bytes(file) > 1024)
+        || (fix.depends_on !== undefined && (!Array.isArray(fix.depends_on) || fix.depends_on.length > 128
+          || fix.depends_on.some(depend => typeof depend !== 'string' || bytes(depend) > 1024))))
+      fail('INCOMPLETE_FINDING', 'code-review fix_ticket exceeds its field bounds');
+    validateFixTicket(finding, index, 'code-review');
+  } else {
+    if (finding.blocking !== false) fail('INCOMPLETE_FINDING', 'a WARNING cannot block');
+    if (finding.fix_ticket !== undefined) fail('INCOMPLETE_FINDING', 'only a BLOCKER carries fix_ticket');
+  }
+  if (finding.failure_scenario !== undefined) text(finding.failure_scenario, 'code-review failure scenario');
+  return { ...finding, id, rule: finding.rule || 'unlabelled' };
+}
+
+function codeReviewManifestFields(source) {
+  return Object.fromEntries(['review_round', 'review_scope', 'review_completeness', 'contract_digest', 'reuse_key', 'prior_head',
+    'dispositions_digest', 'disagreement_suppressed', 'citations_unresolved', 'partitions_total', 'partitions_not_reviewed']
+    .map(key => [key, source[key]]));
+}
+
+function assertCodeReviewLineage(data, identity) {
+  if (data.role !== 'code-review' || data.verdict !== 'pass' || data.review_scope === 'full') return;
+  const fields = require('./architecture-target.cjs').parseSubject('architecture-review', data.subject);
+  const prior = priorCodeReviewVerdicts({ worktreePath: identity.worktree, repository: identity.repository.identity, phaseDir: fields.phase });
+  const countable = require('./code-review-core.cjs').countableVerdicts({ priorVerdicts: prior, head: identity.head,
+    isAncestor: (a, b) => {
+      try { reviewGit(identity.worktree, ['merge-base', '--is-ancestor', a, b]); return true; }
+      catch { return false; }
+    } });
+  if (!countable.some(verdict => verdict.head === data.prior_head))
+    fail('JUDGMENT_OUTCOME_MISMATCH', 'a complete delta pass requires a sealed complete full-scope lineage');
+}
+
+function codeReviewResultData(result, metadata, input, identity, ticketSet) {
+  const core = require('./code-review-core.cjs');
+  if (result.id !== metadata.ticket || result.pr !== roleNumber(input.pr ?? input.prNumber, 'code-review PR'))
+    fail('ARTIFACT_IDENTITY_MISMATCH', 'code-review result differs from the authenticated subject or PR');
+  const subject = judgmentSubject('code-review', metadata, identity, input, ticketSet, result.pr);
+  const findings = completeFindingIndex(result, 'code-review');
+  if (!core.VERDICTS.includes(result.verdict) || !['complete', 'incomplete'].includes(result.review_completeness))
+    fail('INVALID_RESULT', 'invalid code-review verdict or completeness');
+  for (const key of ['limitations', 'unresolved_sources']) {
+    if (!Array.isArray(result[key]) || result[key].length > 128
+        || result[key].some(value => typeof value !== 'string' || !value.trim() || bytes(value) > 1024))
+      fail('INVALID_RESULT', `${key} must contain at most 128 bounded strings`);
+  }
+  if ((result.review_completeness === 'complete' && (result.limitations.length || result.unresolved_sources.length))
+      || (result.verdict === 'pass' && (findings.blocking_count !== 0 || result.review_completeness !== 'complete'))
+      || (result.verdict === 'needs-fix' && (findings.blocking_count === 0 || result.review_completeness !== 'complete'))
+      || (result.verdict === 'incomplete' && result.review_completeness !== 'incomplete'))
+    fail('JUDGMENT_OUTCOME_MISMATCH', 'code-review verdict differs from completeness and findings');
+  if (!Number.isSafeInteger(result.review_round) || result.review_round < 1 || result.review_round > core.ROUND_CAP
+      || !['full', 'delta'].includes(result.review_scope)
+      || (result.prior_head !== null && !/^[a-f0-9]{40}$/.test(result.prior_head || ''))
+      || (result.review_scope === 'delta' && result.prior_head === null))
+    fail('INVALID_RESULT', 'invalid code-review round, scope or prior_head');
+  if (!/^[a-f0-9]{64}$/.test(result.contract_digest || '')
+      || result.reuse_key !== core.reuseKey({ head: identity.head, baseCommit: identity.base_commit, contractDigest: result.contract_digest })
+      || (result.dispositions_digest !== null && !/^[a-f0-9]{64}$/.test(result.dispositions_digest || '')))
+    fail('JUDGMENT_IDENTITY_MISMATCH', 'code-review contract, reuse key or dispositions digest is invalid');
+  for (const key of ['disagreement_suppressed', 'citations_unresolved'])
+    if (!Number.isSafeInteger(result[key]) || result[key] < 0 || result[key] > 128) fail('INVALID_RESULT', `invalid ${key}`);
+  if (!Array.isArray(result.dispositions) || result.dispositions.length > 128) fail('INVALID_RESULT', 'code-review dispositions must be a bounded list');
+  const refs = new Set();
+  for (const entry of result.dispositions) {
+    if (!object(entry) || !/^P-\d{2,3}$/.test(entry.ref || '') || refs.has(entry.ref)
+        || !['resolved', 'unresolved', 'disputed'].includes(entry.disposition)
+        || !['reviewer', 'recorded_disagreement'].includes(entry.source)
+        || (entry.source === 'recorded_disagreement' && entry.disposition !== 'disputed')
+        || (entry.disposition !== 'resolved' && (typeof entry.justification !== 'string' || !entry.justification.trim()))
+        || (entry.justification !== undefined && (typeof entry.justification !== 'string' || bytes(entry.justification) > 1024)))
+      fail('JUDGMENT_OUTCOME_MISMATCH', 'invalid sealed code-review disposition');
+    refs.add(entry.ref);
+  }
+  const suppressed = findings.findings.filter(finding => finding.suppressed);
+  const disagreementIdentities = findings.findings.map(finding => finding.disagreement_identity).filter(Boolean);
+  if (new Set(disagreementIdentities).size !== disagreementIdentities.length)
+    fail('JUDGMENT_OUTCOME_MISMATCH', 'retained disagreement identities must name unique findings');
+  if (suppressed.length !== result.disagreement_suppressed || suppressed.some(finding => !result.dispositions.some(entry =>
+    entry.ref === finding.ref && entry.source === 'recorded_disagreement' && entry.disposition === 'disputed')))
+    fail('JUDGMENT_OUTCOME_MISMATCH', 'suppressed findings require their recorded disagreement dispositions');
+  const coverage = result.coverage === undefined ? [] : result.coverage;
+  if (!Array.isArray(coverage) || coverage.length > require('./codex-arch-review-context.cjs').FILE_LIMITS.assets || coverage.some(entry => !object(entry)
+      || !['reviewed', 'not-reviewed'].includes(entry.status))) fail('INVALID_RESULT', 'code-review coverage must be a validated partition list');
+  const notReviewed = coverage.filter(entry => entry.status !== 'reviewed').length;
+  if (notReviewed && result.review_completeness !== 'incomplete') fail('JUDGMENT_OUTCOME_MISMATCH', 'unreviewed partitions require incomplete');
+  const reviewed = { ...reviewedIdentity(result, 'code-review', identity, input), ticket_set_digest: ticketSet.digest };
+  return { role: 'code-review', subject, pr: result.pr, verdict: result.verdict, outcome: result.verdict,
+    summary: roleText(result.summary || result.verdict, 'code-review summary'), ...findings, reviewed,
+    ticket_set_digest: ticketSet.digest, dispositions: result.dispositions, ...codeReviewManifestFields(result),
+    partitions_total: coverage.length, partitions_not_reviewed: notReviewed };
+}
+
+function authenticatedCodeReviewRecord(worktree, record, repository) {
+  const subject = authenticatedRecordSubject(record);
+  const fields = phaseSubjectFields(subject);
+  if (!fields || fields.repository !== repository) return null;
+  const trusted = trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: record.receipt_store });
+  if (stable(trusted.receipt) !== stable(record.receipt) || reconciledRecordTicket(trusted) !== subject)
+    fail('ARCHIVE_AUTHORITY_INVALID', 'original code-review receipt or subject differs');
+  const verification = phaseSelectionVerification();
+  const selected = selectedArchiveRecord({ identity: { repository }, verification }, {
+    worktree, dispatch_id: record.dispatch_id, ticket: subject, receipt: record.receipt, pins: record.pins,
+  }, trusted);
+  verification.finish();
+  const manifestFile = selected.files.find(file => file.path.endsWith('/' + MANIFEST_NAME));
+  const manifest = JSON.parse(manifestFile.content);
+  const findingFile = selected.files.find(file => file.path === manifest.files.findings.path);
+  const evidence = selected.files.find(file => file.path === manifest.files.evidence.path);
+  const findings = JSON.parse(findingFile.content);
+  if (manifest.role !== 'code-review' || manifest.artifact_kind !== 'judgment'
+      || manifest.subject !== subject || manifest.boundary_subject !== subject
+      || manifest.repository_identity !== fields.repository || manifest.ticket_set_digest !== fields.tickets
+      || manifest.pr !== Number(fields.pr) || manifest.head !== fields.head || manifest.base_commit !== fields.base)
+    fail('ARCHIVE_AUTHORITY_INVALID', 'code-review manifest subject differs');
+  const mergeBase = reviewGit(worktree, ['merge-base', manifest.base_commit, manifest.head]);
+  if (manifest.merge_base !== mergeBase || manifest.merge_base_tree !== reviewGit(worktree, ['rev-parse', mergeBase + '^{tree}']))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'code-review merge-base differs');
+  const identity = { worktree, repository: { root: manifest.repository_realpath, identity: repository },
+    head: manifest.head, head_tree: manifest.head_tree, base: manifest.base, base_commit: manifest.base_commit,
+    base_tree: manifest.base_tree, merge_base: mergeBase, merge_base_tree: manifest.merge_base_tree };
+  const metadata = { ...trustedMetadata({ role: 'code-review' }, trusted, identity), trusted };
+  const data = judgmentResultData(findings, metadata, { pr: manifest.pr, ticketSet: findings.ticket_set,
+    ticketSetDigest: manifest.ticket_set_digest }, identity);
+  if (stable(manifest.reviewed) !== stable(data.reviewed)
+      || stable(codeReviewManifestFields(manifest)) !== stable(codeReviewManifestFields(data))
+      || stable(manifest.envelope) !== stable(judgmentEnvelope(data, {
+        evidence: { relative: evidence.path, content: Buffer.from(evidence.content) },
+        findings: { relative: findingFile.path, content: Buffer.from(findingFile.content) } })))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'code-review envelope differs from authenticated findings');
+  if (typeof record.sealed_at !== 'string' || !Number.isFinite(Date.parse(record.sealed_at)))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'code-review seal time is missing');
+  return { ...data, head: manifest.head, base_commit: manifest.base_commit, prior_head: manifest.prior_head,
+    sealed_at: record.sealed_at, artifact_ref: path.join(worktree, manifestFile.path), artifact_digest: manifestFile.sha256,
+    dispatch_id: record.dispatch_id, subject, fields };
+}
+
+function priorCodeReviewVerdicts({ worktreePath, repository, phaseDir, graphDir }) {
+  const root = fs.realpathSync(worktreePath);
+  const candidates = new Set([root, ...registeredPhaseWorktrees(root)]);
+  if (graphDir) candidates.add(fs.realpathSync(path.resolve(graphDir, '../..')));
+  if (candidates.size > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'code-review worktrees exceed their bound');
+  const records = [], seen = new Set();
+  for (const worktree of candidates) {
+    if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
+    for (const record of Object.values(authorityState(worktree).payload.records)) {
+      if (record.receipt?.role !== 'code-review') continue;
+      const fields = phaseSubjectFields(authenticatedRecordSubject(record));
+      if (!fields || fields.phase !== phaseDir || fields.repository !== repository) continue;
+      const reviewed = authenticatedCodeReviewRecord(worktree, record, repository);
+      if (seen.has(record.dispatch_id)) continue;
+      if (records.length >= 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'code-review verdicts exceed their bound');
+      seen.add(record.dispatch_id); records.push(reviewed);
+    }
+  }
+  return records.sort((a,b) => a.sealed_at.localeCompare(b.sealed_at)).map(({ head, base_commit, verdict, review_completeness,
+    review_round, review_scope, prior_head, blocking_count, findings, dispositions, disagreement_suppressed,
+    citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest }) => ({ head, base_commit, verdict,
+    review_completeness, review_round, review_scope, prior_head, blocking_count, findings, dispositions,
+    disagreement_suppressed, citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest }));
+}
+
+function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit, graphDir, headBranch, repo = null }) {
+  const root = fs.realpathSync(worktreePath);
+  const target = require('./architecture-target.cjs');
+  const repository = target.repositoryIdentity(root);
+  const branch = headBranch || reviewGit(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  if (reviewGit(root, ['rev-parse', 'HEAD']) !== head) return null;
+  if (!exactCurrentGitSubject(root, branch, head, baseName, baseCommit)) return null;
+  const directory = graphDir || path.join(root, '.planning/graph');
+  if (!fs.existsSync(directory)) return null;
+  if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning'
+      || fs.realpathSync(directory) !== path.resolve(directory)
+      || target.repositoryIdentity(path.resolve(directory, '../..')) !== repository)
+    fail('ARCHIVE_AUTHORITY_INVALID', 'code-review requires the canonical graph of this repository');
+  const graph = JSON.parse(readImmutableFile(fs, path.join(directory, 'tickets.json'), 'current code-review graph', 8 * 1024 * 1024));
+  const state = JSON.parse(readImmutableFile(fs, path.join(directory, 'delivery-state.json'), 'current code-review state', 8 * 1024 * 1024));
+  const phases = new Set(Object.values(graph.tickets || {}).filter(row => row.epic === branch && (row.repo ?? null) === repo)
+    .map(row => Number(String(row.phase).match(/^0*(\d+)/)?.[1])));
+  if (phases.size !== 1) return null;
+  const binding = target.phaseBinding({ graph, state: state.tickets || state, phase: [...phases][0], repository, repo, branch, pr, head, base: baseCommit });
+  const core = require('./code-review-core.cjs');
+  const contract = core.contractDigest(digest(readImmutableFile(fs, path.join(__dirname, '../references/code-review.md'), 'code-review reference', 1024 * 1024)));
+  let prior;
+  try { prior = priorCodeReviewVerdicts({ worktreePath: root, repository, phaseDir: binding.phase, graphDir: directory }); }
+  catch { return null; }
+  let current = null;
+  for (const verdict of prior) {
+    if (verdict.head !== head || verdict.base_commit !== baseCommit) continue;
+    const manifestBytes = readImmutableFile(fs, verdict.artifact_ref, 'code-review manifest', HISTORICAL_ARCHIVE_MAX_BYTES);
+    if (digest(manifestBytes) !== verdict.artifact_digest) fail('ARCHIVE_AUTHORITY_INVALID', 'code-review manifest changed during lookup');
+    const manifest = JSON.parse(manifestBytes);
+    if (manifest.subject !== binding.subject || manifest.ticket_set_digest !== binding.membership
+        || manifest.contract_digest !== contract || manifest.reuse_key !== core.reuseKey({ head, baseCommit, contractDigest: contract })) continue;
+    current = { authenticated: true, verdict: verdict.verdict, blocking_count: verdict.blocking_count,
+      review_completeness: verdict.review_completeness, round: verdict.review_round, scope: verdict.review_scope,
+      prior_head: verdict.prior_head, head, base_commit: baseCommit, subject: binding.subject, dispatch_id: manifest.producer_dispatch,
+      artifact_ref: verdict.artifact_ref, artifact_digest: verdict.artifact_digest, findings: verdict.findings,
+      disagreement_suppressed: verdict.disagreement_suppressed, citations_unresolved: verdict.citations_unresolved,
+      partitions_not_reviewed: verdict.partitions_not_reviewed };
+  }
+  return reviewGit(root, ['rev-parse', 'HEAD']) === head && exactCurrentGitSubject(root, branch, head, baseName, baseCommit) ? current : null;
+}
+
 function completeFinding(finding, index, role) {
   if (!object(finding)) fail('INCOMPLETE_FINDING', `${role} finding ${index} must be an object`);
-  const id = compactAlias(finding, ['id', 'finding_id', 'decision_id'], `${role} finding ${index} id`);
+  const id = role === 'code-review' ? finding.id : compactAlias(finding, ['id', 'finding_id', 'decision_id'], `${role} finding ${index} id`);
+  if (role === 'code-review') return completeCodeReviewFinding(finding, index, id);
   const rawType = compactAlias(finding, ['type', 'kind'], `${role} finding ${index} type`);
   const type = rawType.toLowerCase().replace(/_/g, '-');
   const blocking = finding.blocking === undefined ? true : finding.blocking;
@@ -4872,27 +5146,7 @@ function completeFinding(finding, index, role) {
     }
   } else if (role === 'integrator') {
     if (type === 'fix-ticket' || type === 'fix') {
-      if (!object(finding.fix_ticket)) {
-        fail('INCOMPLETE_FINDING', `${role} finding ${index}.fix_ticket is required; remedy: put the proposed `
-          + 'ticket {title, scope, files, depends_on} in fix_ticket');
-      }
-      const fixTicket = finding.fix_ticket;
-      roleText(fixTicket.title, `${role} finding ${index}.fix_ticket.title`);
-      roleText(fixTicket.scope, `${role} finding ${index}.fix_ticket.scope`);
-      if (!Array.isArray(fixTicket.files) || fixTicket.files.length === 0) {
-        fail('INCOMPLETE_FINDING', `${role} finding ${index}.fix_ticket.files must be a non-empty array`);
-      }
-      for (const [fileIndex, file] of fixTicket.files.entries()) {
-        roleText(file, `${role} finding ${index}.fix_ticket.files[${fileIndex}]`);
-      }
-      if (fixTicket.depends_on !== undefined) {
-        if (!Array.isArray(fixTicket.depends_on)) {
-          fail('INCOMPLETE_FINDING', `${role} finding ${index}.fix_ticket.depends_on must be an array`);
-        }
-        for (const [dependIndex, depend] of fixTicket.depends_on.entries()) {
-          compactIdentity(depend, `${role} finding ${index}.fix_ticket.depends_on[${dependIndex}]`);
-        }
-      }
+      validateFixTicket(finding, index, role);
       findingText(finding, ['summary', 'reason'], `${role} finding ${index}.summary`);
     } else if (type === 'human-question' || type === 'human-review') {
       findingText(finding, ['question', 'human_decision'], `${role} finding ${index}.question`);
@@ -4912,6 +5166,7 @@ function completeFindingIndex(result, role) {
   if (!Array.isArray(result.findings)) {
     fail('MISSING_ARTIFACT', `${role} judgment must return a complete findings array`);
   }
+  if (role === 'code-review' && result.findings.length > 128) fail('INCOMPLETE_FINDING', 'code-review exceeds 128 findings');
   const seen = new Set();
   const findings = result.findings.map((finding, index) => {
     const normalized = completeFinding(finding, index, role);
@@ -4992,14 +5247,14 @@ function canonicalTicketSet(value, label) {
 
 function ticketSetFor(input, result, role, metadata) {
   if (role !== 'pr-sentinel' && role !== 'integrator'
-      && !(role === 'arch-review' && metadata.ticket.startsWith('phase='))) return { entries: [], digest: null };
+      && role !== 'code-review' && !(role === 'arch-review' && metadata.ticket.startsWith('phase='))) return { entries: [], digest: null };
   const supplied = aliasValue(input, ['ticketSet', 'ticket_set'], `${role} input ticket set`);
   const resultValue = aliasValue(result, ['ticket_set', 'ticketSet'], `${role} result ticket set`);
   if (supplied === undefined) fail('MISSING_JUDGMENT_CONTEXT', `${role} requires the guarded/merged ticket set before dispatch`);
   if (resultValue === undefined) fail('MISSING_ARTIFACT', `${role} result must repeat the complete ticket set`);
   const expected = canonicalTicketSet(supplied, `${role} ticket set`);
   const actual = canonicalTicketSet(resultValue, `${role} result ticket set`);
-  if (role === 'arch-review' && stable(supplied) !== stable(resultValue))
+  if (['arch-review', 'code-review'].includes(role) && stable(supplied) !== stable(resultValue))
     fail('JUDGMENT_IDENTITY_MISMATCH', 'aggregate result must repeat complete membership and evidence');
   if (stable(expected) !== stable(actual)) {
     fail('JUDGMENT_IDENTITY_MISMATCH', `${role} result ticket set does not match the authenticated input ticket set`);
@@ -5082,7 +5337,8 @@ function reviewedIdentity(result, role, identity, input) {
   const headTree = result.head_tree === undefined
     ? identity.head_tree
     : requireSha(shaAlias(result, ['head_tree'], 'reviewed head tree'), 'reviewed head tree', identity.head_tree);
-  if (role === 'arch-review') {
+  if (role === 'arch-review' || role === 'code-review') {
+    if (role === 'code-review' && result.base_commit !== undefined) requireSha(result.base_commit, 'reviewed base commit', identity.base_commit);
     const baseTree = requireSha(
       shaAlias(result, ['base_tree', 'merge_base_tree'], 'reviewed merge-base tree'),
       'reviewed merge-base tree',
@@ -5165,7 +5421,7 @@ function judgmentSubject(role, metadata, identity, input, ticketSet, pr) {
     try { return target.buildSubject('integrator', { phase, repository, tickets: ticketSet.digest }); }
     catch { return fail('INVALID_RESULT', 'integration subject needs a numbered phase directory and a 64-hex ticket digest'); }
   }
-  if (role === 'arch-review' && metadata.ticket.startsWith('phase=')) {
+  if (role === 'code-review' || (role === 'arch-review' && metadata.ticket.startsWith('phase='))) {
     const aggregate = require('./architecture-target.cjs').PHASE_SUBJECT.exec(metadata.ticket);
     if (!aggregate || aggregate[2] !== identity.repository.identity || aggregate[3] !== ticketSet.digest
         || Number(aggregate[4]) !== pr || aggregate[5] !== identity.head || aggregate[6] !== identity.base_commit)
@@ -5180,6 +5436,7 @@ function judgmentResultData(result, metadata, input, identity) {
   if (!object(result)) fail('INVALID_RESULT', 'judgment result must be an object');
   const role = metadata.role;
   const ticketSet = ticketSetFor(input, result, role, metadata);
+  if (role === 'code-review') return codeReviewResultData(result, metadata, input, identity, ticketSet);
   if (role === 'arch-review') {
     if (result.id !== metadata.ticket) {
       fail('ARTIFACT_IDENTITY_MISMATCH', 'architecture judgment id does not match the authenticated ticket', {
@@ -5399,6 +5656,7 @@ function judgmentManifest(data, metadata, files, envelope, dispatchId) {
     merge_base_tree: metadata.identity.merge_base_tree,
     reviewed: data.reviewed,
     ticket_set_digest: data.ticket_set_digest,
+    ...(data.role === 'code-review' ? codeReviewManifestFields(data) : {}),
     policy_hash: metadata.policy_hash,
     dispatch_context: dispatchContextFor(metadata.trusted),
     source_evidence_path: files.evidence.source_relative,
@@ -5430,6 +5688,7 @@ function sealJudgment(value, options) {
   metadata.trusted = trusted;
   const result = input.result;
   const data = judgmentResultData(result, metadata, input, identity);
+  assertCodeReviewLineage(data, identity);
   const sourceEvidenceName = judgmentEvidenceName(role, input.phase);
   const requestedEvidence = input.evidencePath || input.evidence_path || sourceEvidenceName;
   const evidencePath = judgmentEvidencePath(
@@ -5591,6 +5850,7 @@ function validateJudgmentManifest(value, options) {
     fail('INVALID_ARTIFACT', `archived judgment findings are not valid JSON: ${error.message}`);
   }
   const data = judgmentResultData(result, metadata, input, identity);
+  assertCodeReviewLineage(data, identity);
   if (manifest.subject !== data.subject
       || manifest.boundary_subject !== metadata.ticket
       || (data.phase !== undefined && manifest.phase !== data.phase)
@@ -5599,6 +5859,8 @@ function validateJudgmentManifest(value, options) {
       || stable(manifest.reviewed) !== stable(data.reviewed)) {
     fail('JUDGMENT_IDENTITY_MISMATCH', 'judgment artifact manifest does not match the authenticated reviewed subject');
   }
+  if (role === 'code-review' && stable(codeReviewManifestFields(manifest)) !== stable(codeReviewManifestFields(data)))
+    fail('ARTIFACT_DIGEST_MISMATCH', 'code-review manifest differs from complete sealed findings');
   if (!object(manifest.envelope)) fail('MISSING_ARTIFACT', 'judgment artifact is missing its bounded envelope');
   const expectedEnvelope = judgmentEnvelope(data, {
     evidence: { relative: manifest.files.evidence.path, content: evidence.content },
@@ -6422,6 +6684,8 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   selectReviewBaseline,
   isAuthenticatedReviewBaseline,
   currentArchitectureVerdict,
+  currentCodeReviewVerdict,
+  priorCodeReviewVerdicts,
   currentIntegrationVerdict,
   prepareCurrentReviewInput,
   phaseArchitectureEvidence,

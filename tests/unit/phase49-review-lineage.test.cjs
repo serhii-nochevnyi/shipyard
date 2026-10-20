@@ -64,7 +64,7 @@ async function fixture(action) {
     const state = Object.fromEntries(Object.keys(rows).map((id, index) => [id, { status: 'merged', pr: 101 + index, branch: rows[id].branch }]));
     write(worktree, '.planning/graph/tickets.json', JSON.stringify({ tickets: rows }));
     write(worktree, '.planning/graph/delivery-state.json', JSON.stringify(state));
-    write(worktree, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' } }));
+    write(worktree, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'report' } }));
     for (const row of Object.values(rows)) write(worktree, row.plan, '---\nphase: 49\nplan: 01\n---\nADR-014\n');
     write(worktree, '.planning/architecture/ADR-014-original.md', '# ADR-014\nOriginal complete governing material.\n' + 'a'.repeat(250000));
     write(worktree, 'src/provider.cjs', 'exports.value = 0;\n');

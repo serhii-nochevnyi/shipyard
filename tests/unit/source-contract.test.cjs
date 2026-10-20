@@ -2158,4 +2158,14 @@ test('shipped Codex compatibility palette and README advertise the native Sol de
   assert.ok(readRepo('README.md').includes(`\"codex_models\": \"${expected}\"`));
 });
 
+test('phase code review documents hold as the default and report as the exit', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const guide = readRepo('docs/gsd_multilevel_delivery_pipeline.md');
+  assert.ok(deliver.includes('`delivery_pipeline.code_review` defaults to `hold`'));
+  assert.ok(deliver.includes('`report` observes without holding and is the single exit for this PR'));
+  assert.ok(guide.includes('selects `hold` (the shipped default) or `report`'));
+  assert.ok(guide.includes('set `delivery_pipeline.code_review` to `report` for this PR'));
+  assert.ok(!guide.includes('`report` (the shipped default)'));
+});
+
 done();

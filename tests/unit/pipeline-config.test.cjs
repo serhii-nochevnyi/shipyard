@@ -3997,19 +3997,19 @@ if (process.env.SHIPYARD_PHASE47_PREPARATION) {
   }
 }
 
-test('code_review defaults to report, accepts hold and warns on unknown values', () => {
-  assert.strictEqual(withConfig(undefined).config.code_review, 'report');
+test('code_review defaults to hold, accepts report and warns on unknown values', () => {
+  assert.strictEqual(withConfig(undefined).config.code_review, 'hold');
   for (const mode of ['report', 'hold']) {
     const result = withRaw({ delivery_pipeline: { code_review: mode } });
     assert.strictEqual(result.config.code_review, mode);
     assert.deepStrictEqual(result.warnings, []);
   }
   const bad = withRaw({ delivery_pipeline: { code_review: 'waive' } });
-  assert.strictEqual(bad.config.code_review, 'report');
-  assert.ok(bad.warnings.some(warning => /code_review.*report/.test(warning)));
+  assert.strictEqual(bad.config.code_review, 'hold');
+  assert.ok(bad.warnings.some(warning => /code_review.*hold/.test(warning)));
   const capability = require('../../capabilities/delivery-pipeline/capability.json');
   const key = capability.config['delivery_pipeline.code_review'];
-  assert.strictEqual(key.type, 'string'); assert.strictEqual(key.default, 'report');
+  assert.strictEqual(key.type, 'string'); assert.strictEqual(key.default, 'hold');
   assert.ok(/hold/.test(key.description) && /project root/.test(key.description));
 });
 

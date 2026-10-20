@@ -320,7 +320,7 @@ function architectureFixture(name) {
   graph.tickets[helpers.TICKET].epic = 'epic/38-codex-arch-review';
   helpers.write(root, '.planning/graph/tickets.json', JSON.stringify(graph));
   helpers.write(root, '.planning/phases/38-codex-arch-review/38-01-SUMMARY.md', 'Original acceptance.');
-  helpers.write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'develop' } }));
+  helpers.write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'develop' }, delivery_pipeline: { code_review: 'report' } }));
   helpers.git(root, ['branch', 'develop', f.base]);
   helpers.git(root, ['update-ref', 'refs/remotes/origin/develop', f.base]);
   helpers.git(root, ['switch', '-c', graph.tickets[helpers.TICKET].epic]);

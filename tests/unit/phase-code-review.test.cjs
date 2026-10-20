@@ -98,6 +98,49 @@ for (const jira of shapes) {
     } finally { f.cleanup(); }
   });
 
+  test('default hold gates the CLI and verifier on current graph epic evidence: ' + jira, () => {
+    const f = fixture(jira);
+    const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-default-')));
+    try {
+      f.mode();
+      assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(path.join(f.root, '.planning/config.json')))
+        .delivery_pipeline, 'code_review'), false);
+      const prFile = path.join(temporary, 'pr.json');
+      fs.writeFileSync(path.join(temporary, 'gh'),
+        '#!/usr/bin/env node\nprocess.stdout.write(require("node:fs").readFileSync(process.env.REVIEW_PR));\n', { mode: 0o755 });
+      const gate = (patch = {}) => {
+        write(prFile, { ...f.live(), ...patch });
+        return spawnSync(process.execPath, [path.join(scripts, 'phase-code-review.cjs'), 'gate', f.phase,
+          '--phase', '52', '--pr', '52', '--worktree', f.root, '--graph', f.graphDir], {
+          cwd: temporary, encoding: 'utf8', env: { ...process.env, HOME: home,
+            PATH: temporary + path.delimiter + process.env.PATH, REVIEW_PR: prFile } });
+      };
+      const refused = gate();
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.match(refused.stderr, /owed.*delivery_pipeline.code_review.*report/);
+      const owed = flow.verifyCodeReview(f.input());
+      assert.equal(owed.mode, 'hold'); assert.equal(owed.state, 'owed'); assert.equal(owed.ok, false);
+      assert.match(owed.reason, /delivery_pipeline.code_review.*report/);
+      const binding = f.advance(1);
+      artifact.sealJudgment(artifactInput(f, binding, raw()));
+      const passed = gate();
+      assert.equal(passed.status, 0, passed.stderr);
+      assert.equal(flow.verifyCodeReview(f.input()).ok, true);
+      const unknown = { ...f.live(), headRefName: jira ? 'epic/52-unmatched' : 'feat/PRJ-42-unmatched' };
+      const unmatchedGate = gate(unknown);
+      assert.equal(unmatchedGate.status, 1, unmatchedGate.stderr);
+      assert.match(unmatchedGate.stderr, /unmatched.*delivery_pipeline.code_review.*report/);
+      const unmatched = flow.verifyCodeReview({ ...f.input(), live: unknown });
+      assert.notEqual(unmatched, null);
+      assert.equal(unmatched.mode, 'hold'); assert.equal(unmatched.state, 'unmatched'); assert.equal(unmatched.ok, false);
+      assert.match(unmatched.reason, /delivery_pipeline.code_review.*report/);
+      f.advance(2);
+      const moved = gate();
+      assert.equal(moved.status, 1, moved.stderr);
+      assert.match(moved.stderr, /owed.*delivery_pipeline.code_review.*report/);
+    } finally { f.cleanup(); fs.rmSync(temporary, { recursive: true, force: true }); }
+  });
+
   test('owed, exact reuse, moved head/base, incomplete retry and named exits: ' + jira, () => {
     const f = fixture(jira);
     try {
@@ -256,7 +299,7 @@ for (const jira of shapes) test('every mode consumer follows the project graph a
     assert.equal(JSON.parse(resolved.stdout).graph_dir, f.graphDir);
     const missing = spawnSync(process.execPath, [probe, parent], { cwd: parent, env, encoding: 'utf8' });
     assert.equal(missing.status, 0, missing.stderr);
-    assert.deepEqual(JSON.parse(missing.stdout), { mode: 'report', project_root: null,
+    assert.deepEqual(JSON.parse(missing.stdout), { mode: 'hold', project_root: null,
       graph_dir: null, config_path: null, source: 'default' });
   } finally { f.cleanup(); fs.rmSync(parent, { recursive: true, force: true }); }
 });
