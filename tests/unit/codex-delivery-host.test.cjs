@@ -2938,8 +2938,9 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
           const unchangedCounters = () => assert.deepEqual([launches, pushes, replies.length, prReplies.length], counters);
           const rejectFileChange = async (file, mutate) => {
             const bytes = fs.readFileSync(file);
+            const mode = fs.statSync(file).mode & 0o777;
             try { mutate(file, bytes); await assert.rejects(resume); unchangedCounters(); }
-            finally { fs.writeFileSync(file, bytes); }
+            finally { fs.writeFileSync(file, bytes, { mode }); fs.chmodSync(file, mode); }
           };
           await rejectFileChange(f.plan, file => fs.appendFileSync(file, '\nChanged current PLAN'));
           await rejectFileChange(graphFile, file => {
@@ -3083,7 +3084,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         await assert.rejects(run, { code: 'REPAIR_POLICY_EXHAUSTED' });
         assert.equal(launches, 3);
       }
-      assert.equal(git(f.root, 'rev-parse', 'HEAD'), currentHead);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), historicalRecovery === 'direct' ? second.artifact.commit : currentHead);
       return;
     }
     if (mutation) {
@@ -4065,11 +4066,11 @@ test('public integration-review.v2 completes shared preparation with coordinator
   });
 });
 
-done();
-
 for (const historicalRecovery of ['direct', 'admitted', 'pending', 'action']) {
   for (const mutation of ['normalized-repeat', 'normalized-covered-source']) {
     test('historical signed source publication preserves original custody through ' + historicalRecovery + ' ' + mutation,
       () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation, 'all', historicalRecovery)));
   }
 }
+
+done();
