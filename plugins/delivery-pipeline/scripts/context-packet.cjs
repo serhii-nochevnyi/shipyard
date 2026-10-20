@@ -151,8 +151,6 @@ function canonicalRoot(value) {
   catch (error) { fail('INVALID_CONTEXT_SOURCE', `root cannot be canonicalized: ${error.message}`); }
 }
 
-// This association is derived from graph placement, never from packet.canonical_root.
-// Consumers must supply producer options or pins recovered from original native input.
 function resolvePlanningReference({ worktree, graphDir, repo = null }) {
   const reviewed = canonicalRoot(worktree);
   const directory = path.resolve(graphDir || path.join(reviewed, '.planning/graph'));
@@ -168,7 +166,6 @@ function resolvePlanningReference({ worktree, graphDir, repo = null }) {
       fail('SYMLINK_CONTEXT_SOURCE', 'canonical graph path must contain only real directories');
   }
   const exec = require('node:child_process').execFileSync;
-  // -C must select the repository independently of the invoking runtime's scope.
   const env = { ...process.env };
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) delete env[key];
   const git = (cwd, ...args) => exec('git', ['-C', cwd, 'rev-parse', ...args],
@@ -189,8 +186,6 @@ function resolvePlanningReference({ worktree, graphDir, repo = null }) {
 }
 
 function authenticatedPlanningRoot(worktree, original) {
-  // Legacy same-root packets retain their original behavior. A relocated root
-  // requires the independently captured graph/config association in every path.
   if (original === undefined) return canonicalRoot(worktree);
   if (!object(original) || typeof original.directory !== 'string')
     fail('CONTEXT_PACKET_IDENTITY', 'original planning reference association is required');

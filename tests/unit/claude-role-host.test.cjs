@@ -6,7 +6,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-// Claude CLI fixtures must not inherit the enclosing executor's runtime marker.
 const runtimeMarkerNames = ['SHIPYARD_RUNTIME', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED'];
 const originalRuntimeMarkers = new Map(runtimeMarkerNames.map(name => [name, process.env[name]]));
 for (const name of runtimeMarkerNames) delete process.env[name];
@@ -34,7 +33,6 @@ const POLICY_MD = '# ADR-014 test\nExplicit model and effort are required.\n';
 const PHASE = '38-role-host-test';
 const TICKET = 'T-38-01-role-host';
 
-// Expose preparation only; retain the real source readers and authority APIs.
 function preparationOnlyHost() {
   const Module = require('node:module');
   const file = require.resolve('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
@@ -57,7 +55,6 @@ function coordinatorOnlyPlanning(kind, options = {}) {
   fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
   useCoordinatorGraph(fixture);
   fixture.project = path.resolve(fixture.graphDir, '../..');
-  // Do not use codeReviewCommit: its reset helper copies planning back to the epic.
   git(fixture.root, ['rm', '-r', '.planning']);
   git(fixture.root, ['commit', '-m', 'chore: keep planning only in coordinator']);
   fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
@@ -128,7 +125,6 @@ test(`${kind} completes preparation from coordinator-only planning without movin
       assert.ok(prepared.packet.backlog.selected.some(item => item.content.includes('Complete selected bytes.')));
       assert.ok(prepared.packet.required_refs.some(ref => ref.path === '.planning/architecture/ADR-014-test.md'));
     }
-    // Full byte rechecks use the same planning root after preparation.
     fs.appendFileSync(path.join(fixture.project, prepared.packet.required_refs[0].path), '\nchanged required bytes\n');
     assert.throws(() => host.assertEvidenceOnlyChanges(options, prepared), /changed|stale/i);
   } catch (error) { t.diagnostic(error.stack); throw error; }

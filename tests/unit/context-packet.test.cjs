@@ -499,10 +499,8 @@ test('planning reference association derives linked root and pins graph/config w
     fs.mkdirSync(path.join(foreign, '.planning/graph'), { recursive: true });
     fs.writeFileSync(path.join(foreign, '.planning/graph/tickets.json'), '{"tickets":{}}');
     assert.throws(() => api.resolvePlanningReference({ worktree: reviewed, graphDir: path.join(foreign, '.planning/graph') }), /unrelated/);
-    // Explicit repository selection retains the existing multi-repository contract.
     const selected = api.resolvePlanningReference({ worktree: reviewed, graphDir: path.join(foreign, '.planning/graph'), repo: 'acme/app' });
     assert.strictEqual(api.authenticatedPlanningRoot(reviewed, selected), foreign);
-    // Repository probes must ignore ambient scope even during authenticated replay.
     const keys = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE'];
     const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
     const linked = api.resolvePlanningReference({ worktree: reviewed, graphDir: original.directory });

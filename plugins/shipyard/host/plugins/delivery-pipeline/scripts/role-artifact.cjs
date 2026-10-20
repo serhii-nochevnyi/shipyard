@@ -3483,8 +3483,6 @@ function authenticateSelectedReferences(trusted, findings, worktree, evidence) {
       fail('REVIEW_NATIVE_INVALID', 'selected references differ from original native input');
   } else if (trusted.receipt.runtime === 'codex' && findings.review_contract === context.FOCUSED_CONTRACT
       && findings.host_context.planning_reference !== undefined) {
-    // validateHistoricalContext binds this association to the completed native
-    // response and original launch digest before it can authorize another root.
     context.validateHistoricalContext({ result: findings, receipt: trusted.receipt,
       dispatchId: trusted.dispatchId, evidence, worktree });
     root = require('./context-packet.cjs').authenticatedPlanningRoot(worktree, findings.host_context.planning_reference);
@@ -3494,8 +3492,6 @@ function authenticateSelectedReferences(trusted, findings, worktree, evidence) {
         dispatch_id: trusted.receipt.runtime_evidence.review_continuation?.original_dispatch_id || trusted.dispatchId } });
     root = require('./context-packet.cjs').authenticatedPlanningRoot(worktree, checked.manifest.snapshot.planning_reference);
   } else {
-    // Older same-root archives retain their original receipt/index authority;
-    // host_context alone never permits reading another checkout.
     root = fs.realpathSync(worktree);
   }
   if ((originalPacket?.role_context?.planning_reference || findings.host_context.source_root !== undefined)

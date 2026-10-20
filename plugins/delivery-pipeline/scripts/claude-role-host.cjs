@@ -196,7 +196,6 @@ function canonicalWorktree(options, value, aggregate = false, sealedArchives = f
     if (!stat.isFile() || stat.isSymbolicLink()) reject(`scratch file must be a regular file: ${name}`);
     scratchDigests.set(name, sha(fs.readFileSync(file)));
   }
-  // Planning belongs to the canonical graph checkout; reviewed Git identity stays here.
   const planningReference = require('./context-packet.cjs').resolvePlanningReference({
     worktree, graphDir: options.graphDir, repo });
   const projectRoot = planningReference.root;
@@ -1721,8 +1720,6 @@ function createClaudeRoleHost(options = {}) {
           role: prepared.role,
           phase: prepared.phase,
           pr: prepared.pr,
-          // The adapter uses this field only to validate packet reference reads.
-          // Runtime scope, boundary cwd and artifact custody remain epic-bound.
           worktreePath: prepared.canonical.projectRoot,
           sourceRevision: prepared.canonical.head,
           contextPacket: prepared.packet,

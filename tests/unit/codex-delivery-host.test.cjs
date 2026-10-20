@@ -3877,8 +3877,6 @@ test('code review wrapper refuses installed or live changes immediately before l
   } })));
 
 test('public integration-review.v2 completes shared preparation with coordinator-only planning', async () => {
-  // Reuse the original integration fixture and native agent installation helpers.
-  // Suppress its test registrations; no production preparer or authority API is replaced.
   const Module = require('node:module');
   const file = require.resolve('./phase49-incremental-integration.test.cjs');
   const loaded = new Module(file, module);
