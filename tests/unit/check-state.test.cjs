@@ -275,4 +275,11 @@ test('the exit code is the LAST resort, and the note is never empty', () => {
   assert.strictEqual(unavailableNote({ stdout: '   ', stderr: '  \n ', status: 1 }), 'gh pr checks exited 1');
 });
 
+test('pending code-review counts as running and cannot be green even in report mode', () => {
+  const tally = classify([{ name: 'code-review', state: 'PENDING', bucket: 'pending' }]);
+  assert.strictEqual(tally.pending, 1);
+  assert.strictEqual(tally.failing, 0);
+  assert.strictEqual(isGreen(tally), false);
+});
+
 done();
