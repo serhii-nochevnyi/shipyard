@@ -161,7 +161,7 @@ function status(input, options = {}) {
       disagreement_suppressed: current.disagreement_suppressed, partitions_not_reviewed: current.partitions_not_reviewed,
       artifact_ref: current.artifact_ref, reason: current.verdict === 'pass' ? 'the complete verdict is current'
         : `the current verdict is ${current.verdict} with ${current.blocking_count} BLOCKERs` });
-    details.set(result, { mode, current, ctx });
+    details.set(result, { mode, current, ctx, prior: countable });
     return Object.freeze(result);
   }
   const incomplete = current || prior.filter(entry => entry.head === live.headRefOid
@@ -172,7 +172,7 @@ function status(input, options = {}) {
       ? refusal('limit', 'three rounds are spent; no further review can launch', mode)
       : `${incomplete ? (incomplete.review_completeness !== 'complete' ? 'the sealed review is incomplete'
         : 'the sealed delta has no complete full-scope lineage') + '; ' : ''}run deliver-dispatch.cjs build code-review first` });
-  details.set(result, { mode, current, ctx });
+  details.set(result, { mode, current, ctx, prior: countable });
   return Object.freeze(result);
 }
 
@@ -214,7 +214,51 @@ function statusDescription(current) {
   throw new Error('publication requires a sealed verdict for the exact head or the limit state');
 }
 
-function findingsComment(current, sealed) {
+function originalLocator(finding, sealed, prior, ctx, readSource) {
+  const identity = finding.disagreement_identity || finding.identity;
+  if (!identity) return null;
+  const reusable = locator => {
+    try {
+      const priorFindings = core.carryPriorFindings({ priorFindings: sealed, deltaDiff: '', readSource });
+      const disagreements = core.parseDisagreements(JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1',
+        entries: [{ ...locator, reason: 'locator validation', recorded_by: 'publication' }] }), { priorFindings });
+      const carried = core.carryPriorFindings({ priorFindings: sealed, deltaDiff: '', disagreements, readSource });
+      return carried.findIndex(entry => entry.disagreement !== null) === sealed.findings.indexOf(finding) ? locator : null;
+    } catch { return null; }
+  };
+  const proven = candidate => {
+    if (candidate.citation !== 'resolved' || candidate.identity !== identity
+        || (candidate.disagreement_identity && candidate.disagreement_identity !== identity)) return null;
+    try {
+      if (core.lineIdentity({ path: candidate.path, lineText: candidate.line_text,
+        ordinal: candidate.occurrence }) !== identity) return null;
+      return reusable({ path: candidate.path, line_text: candidate.line_text, occurrence: candidate.occurrence });
+    } catch { return null; }
+  };
+  for (const candidate of [finding, ...prior.flatMap(entry => entry.findings)]) {
+    const locator = proven(candidate);
+    if (locator) return locator;
+  }
+  if (!finding.disagreement_identity) return null;
+  try {
+    const priorFindings = core.carryPriorFindings({ priorFindings: sealed, deltaDiff: '',
+      readSource });
+    const loaded = core.loadDisagreements({ projectRoot: ctx.mode.project_root, phaseDirName: ctx.match.phase_dir,
+      priorFindings, readFile: file => {
+        const stat = fs.lstatSync(file);
+        if (stat.size > 65536) throw new Error('disagreements exceed their bound');
+        return { stat, text: JSON.stringify(readJson(file)) };
+      } });
+    const entry = loaded.entries[identity];
+    if (entry && core.lineIdentity({ path: entry.path, lineText: entry.line_text,
+      ordinal: entry.occurrence }) === identity)
+      return reusable({ path: entry.path, line_text: entry.line_text, occurrence: entry.occurrence });
+  } catch {}
+  return null;
+}
+
+function findingsComment(current, sealed, prior, ctx) {
+  const readSource = core.createSourceReader({ git: args => git(ctx.worktree, args), head: sealed.head });
   const header = `<!-- code-review -->\nCode review — round ${sealed.round}, scope ${sealed.scope}\nVerdict: ${sealed.verdict}\n\n`;
   const stop = current.mode === 'hold' && !(current.state === 'current' && current.verdict === 'pass');
   const footer = `\n${sealed.disagreement_suppressed} findings not raised again because of a recorded disagreement.\n`
@@ -225,12 +269,13 @@ function findingsComment(current, sealed) {
       + (finding.suppressed ? ' (recorded disagreement; not blocking)' : '') + '\n'
       + `${finding.summary}\n`;
     if (finding.severity === 'BLOCKER') {
+      const locator = originalLocator(finding, sealed, prior, ctx, readSource);
       text += `Failure scenario: ${finding.failure_scenario}\n`
         + `Proposed fix-ticket title: ${finding.fix_ticket.title}\n`
         + `Source line (full text), occurrence ${finding.occurrence ?? 'unresolved'}:\n`
         + `    ${JSON.stringify(finding.line_text)}\n`
-        + 'Recorded disagreement values (path, line_text, occurrence):\n'
-        + `    ${JSON.stringify({ path: finding.path, line_text: finding.line_text, occurrence: finding.occurrence })}\n`;
+        + (locator ? 'Recorded disagreement values (path, line_text, occurrence):\n'
+          + `    ${JSON.stringify(locator)}\n` : 'No reusable original locator is available.\n');
     }
     return text + '\n';
   });
@@ -254,7 +299,7 @@ function publish(input, options = {}) {
     : request(['pr', 'view', String(pr), ...(repo ? ['--repo', repo] : []),
       '--json', 'number,state,headRefName,headRefOid,baseRefName,baseRefOid']);
   const current = status(input, { ...options, getPullRequest: ({ pr }) => readPR(pr) });
-  const { ctx, current: sealed } = details.get(current);
+  const { ctx, current: sealed, prior } = details.get(current);
   if (ctx.match.kind !== 'epic') throw new Error(`phase code review is unmatched: ${current.reason}`);
   if (current.state !== 'limit' && (!sealed || sealed.head !== current.head || sealed.subject !== current.subject
       || !(current.state === 'current' || (current.state === 'owed' && current.retry && sealed.review_completeness === 'incomplete'))))
@@ -292,7 +337,7 @@ function publish(input, options = {}) {
     return result;
   }
   try {
-    const body = findingsComment(current, sealed);
+    const body = findingsComment(current, sealed, prior, ctx);
     const hygiene = require('./pr-hygiene.cjs');
     const violations = hygiene.applies({ root: ctx.worktree }) ? hygiene.internalLeakViolations('comment', body) : [];
     result.rules = [...new Set(violations.map(violation => violation.rule))];
