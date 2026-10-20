@@ -3439,11 +3439,13 @@ function originalInlinePacket(trusted) {
     for (const match of text.matchAll(/<AUTHENTICATED_CONTEXT_PACKET>\s*([\s\S]*?)\s*<\/AUTHENTICATED_CONTEXT_PACKET>/g))
       packets.push(require('./context-packet.cjs').decodeUniqueContent(JSON.parse(match[1])));
     for (const match of text.matchAll(/<AUTHENTICATED_FOCUSED_INPUT>\s*([\s\S]*?)\s*<\/AUTHENTICATED_FOCUSED_INPUT>/g)) {
-      if (trusted.receipt.role !== 'arch-review') fail('REVIEW_NATIVE_INVALID', 'focused input belongs only to architecture');
+      if (!['arch-review', 'code-review'].includes(trusted.receipt.role))
+        fail('REVIEW_NATIVE_INVALID', 'focused input belongs only to a phase review');
       const collector = require('./codex-arch-review-context.cjs');
       const checked = collector.verifyFileInput(JSON.parse(match[1]), { sealed: true, historical: true,
-        association: { role: 'arch-review', dispatch_id: trusted.dispatchId } });
-      if (checked.manifest.binding?.review_contract !== collector.FOCUSED_CONTRACT)
+        association: { role: trusted.receipt.role, dispatch_id: trusted.dispatchId } });
+      if (checked.manifest.binding?.review_contract !== (trusted.receipt.role === 'code-review'
+          ? collector.CODE_REVIEW_CONTRACT : collector.FOCUSED_CONTRACT))
         fail('REVIEW_NATIVE_INVALID', 'original focused manifest contract differs');
       const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]));
       if (packet.role_context?.planning_reference !== undefined
@@ -5100,31 +5102,94 @@ function priorCodeReviewVerdicts({ worktreePath, repository, phaseDir, graphDir 
     disagreement_suppressed, citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest }));
 }
 
+function codeReviewPlanningReference({ worktree, graphDir, repo = null, phase, branch }) {
+  if (['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(key => process.env[key] !== undefined))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'ambient Git identity overrides are refused');
+  const packets = require('./context-packet.cjs');
+  const target = require('./architecture-target.cjs');
+  const planning = packets.resolvePlanningReference({ worktree, graphDir, repo });
+  if (planning.repository !== planning.planning_repository) {
+    const config = require('./pipeline-config.cjs');
+    const loaded = config.loadConfig(planning.root).config;
+    const checkout = loaded.repos[repo];
+    if (!checkout || !config.validateRepositoryDestination(checkout, {
+      projectRoot: planning.root, subRepos: loaded.sub_repos }).valid)
+      fail('ARCHIVE_AUTHORITY_INVALID', 'selected repository has no valid configured checkout');
+    let ancestor = path.parse(checkout).root;
+    for (const part of path.relative(ancestor, checkout).split(path.sep)) {
+      ancestor = path.join(ancestor, part);
+      const stat = fs.lstatSync(ancestor);
+      if (!stat.isDirectory() || stat.isSymbolicLink())
+        fail('ARCHIVE_AUTHORITY_INVALID', 'configured checkout must contain only real directories');
+    }
+    if (reviewGit(checkout, ['rev-parse', '--show-toplevel']) !== checkout
+        || target.repositoryIdentity(checkout) !== planning.repository)
+      fail('ARCHIVE_AUTHORITY_INVALID', 'selected checkout differs from the reviewed repository');
+    const graph = JSON.parse(readImmutableFile(fs, path.join(planning.directory, 'tickets.json'),
+      'selected code-review graph', 8 * 1024 * 1024));
+    const rows = target.phaseRows(graph, phase, repo);
+    const match = require('./phase-code-review.cjs').matchEpicPullRequest({ graph,
+      live: { headRefName: branch }, repo, phase });
+    if (match.kind !== 'epic' || rows.some(([, row]) => row.epic !== branch
+        || path.posix.basename(path.posix.dirname(row.plan || '')) !== match.phase_dir))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase and epic membership differ');
+  }
+  packets.authenticatedPlanningRoot(worktree, planning);
+  return planning;
+}
+
 function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit, graphDir, headBranch, repo = null }) {
+  if (['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(key => process.env[key] !== undefined))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'ambient Git identity overrides are refused');
   const root = fs.realpathSync(worktreePath);
   const target = require('./architecture-target.cjs');
   const repository = target.repositoryIdentity(root);
   const branch = headBranch || reviewGit(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   if (reviewGit(root, ['rev-parse', 'HEAD']) !== head) return null;
-  if (!exactCurrentGitSubject(root, branch, head, baseName, baseCommit)) return null;
+  const cleanSource = (includeUntracked = false) => {
+    try {
+      reviewGit(root, ['diff', '--quiet', '--no-ext-diff', '--no-textconv', 'HEAD',
+        ...require('./development-artifacts.cjs').productPathspec()]);
+      if (includeUntracked) {
+        const stores = Object.values(authorityState(root).payload.records).map(record => record.receipt_store)
+          .filter(store => typeof store === 'string' && path.isAbsolute(store));
+        const untracked = reviewGit(root, ['ls-files', '--others', '--exclude-standard', '-z',
+          ...require('./development-artifacts.cjs').productPathspec()]).split('\0').filter(Boolean);
+        if (untracked.some(relative => !stores.some(store => path.resolve(root, relative).startsWith(store + path.sep))))
+          return false;
+      }
+      return true;
+    } catch { return false; }
+  };
+  if (!exactCurrentGitSubject(root, branch, head, baseName, baseCommit) || !cleanSource()) return null;
   const directory = graphDir || path.join(root, '.planning/graph');
   if (!fs.existsSync(directory)) return null;
-  if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning'
-      || fs.realpathSync(directory) !== path.resolve(directory)
-      || target.repositoryIdentity(path.resolve(directory, '../..')) !== repository)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'code-review requires the canonical graph of this repository');
+  const packets = require('./context-packet.cjs');
+  const originalPlanning = packets.resolvePlanningReference({ worktree: root, graphDir: directory, repo });
   const graph = JSON.parse(readImmutableFile(fs, path.join(directory, 'tickets.json'), 'current code-review graph', 8 * 1024 * 1024));
   const state = JSON.parse(readImmutableFile(fs, path.join(directory, 'delivery-state.json'), 'current code-review state', 8 * 1024 * 1024));
   const phases = new Set(Object.values(graph.tickets || {}).filter(row => row.epic === branch && (row.repo ?? null) === repo)
     .map(row => Number(String(row.phase).match(/^0*(\d+)/)?.[1])));
   if (phases.size !== 1) return null;
+  const planning = codeReviewPlanningReference({ worktree: root, graphDir: directory, repo,
+    phase: [...phases][0], branch });
+  if (stable(planning) !== stable(originalPlanning))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'current planning association changed during lookup');
   const binding = target.phaseBinding({ graph, state: state.tickets || state, phase: [...phases][0], repository, repo, branch, pr, head, base: baseCommit });
   const core = require('./code-review-core.cjs');
   const contract = core.contractDigest(digest(readImmutableFile(fs, path.join(__dirname, '../references/code-review.md'), 'code-review reference', 1024 * 1024)));
   let prior;
   try { prior = priorCodeReviewVerdicts({ worktreePath: root, repository, phaseDir: binding.phase, graphDir: directory }); }
   catch { return null; }
-  let current = null;
+  let current = null, currentPlanning = null;
+  const checkPlanning = context => {
+    if (!context) return;
+    if (stable(context.planning_reference) !== stable(planning))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'sealed planning association differs from current selection');
+    const sourceRoot = packets.authenticatedPlanningRoot(root, context.planning_reference);
+    for (const pin of context.selected_refs || [])
+      readPinnedArchiveFile(sourceRoot, pin, 'current code-review planning source');
+  };
   for (const verdict of prior) {
     if (verdict.head !== head || verdict.base_commit !== baseCommit) continue;
     const manifestBytes = readImmutableFile(fs, verdict.artifact_ref, 'code-review manifest', HISTORICAL_ARCHIVE_MAX_BYTES);
@@ -5132,6 +5197,41 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
     const manifest = JSON.parse(manifestBytes);
     if (manifest.subject !== binding.subject || manifest.ticket_set_digest !== binding.membership
         || manifest.contract_digest !== contract || manifest.reuse_key !== core.reuseKey({ head, baseCommit, contractDigest: contract })) continue;
+    const findingBytes = readPinnedArchiveFile(manifest.worktree_realpath, manifest.files.findings, 'current code-review findings');
+    let selectedPlanning = JSON.parse(findingBytes).host_context;
+    const record = authorityState(manifest.worktree_realpath).payload.records[manifest.producer_dispatch];
+    const trusted = trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: record.receipt_store });
+    let originalPacket, originalReference;
+    if (trusted.receipt.runtime === 'claude' && trusted.receipt.selection_evidence?.transcript) {
+      originalPacket = originalInlinePacket(trusted).packet;
+    } else if (trusted.receipt.runtime_evidence?.input_transport === 'host-files') {
+      const input = require('./codex-arch-review-context.cjs').verifyFileInput(
+        trusted.receipt.runtime_evidence.input_bundle, { sealed: true, historical: true,
+          association: { role: 'code-review', dispatch_id: trusted.dispatchId } });
+      originalPacket = packets.decodeUniqueContent(JSON.parse(input.material[0]));
+      originalReference = input.manifest.snapshot.planning_reference;
+      if (originalPacket.role_context?.planning_reference !== undefined
+          && stable(originalPacket.role_context.planning_reference) !== stable(originalReference))
+        fail('ARCHIVE_AUTHORITY_INVALID', 'original packet and snapshot planning differ');
+    }
+    if (originalPacket) {
+      if (originalPacket.role !== 'code-review' || originalPacket.subject !== manifest.subject
+          || originalPacket.source_revision !== head || originalPacket.canonical_root !== planning.root
+          || stable(originalPacket.role_context?.ticket_set) !== stable(binding.ticketSet))
+        fail('ARCHIVE_AUTHORITY_INVALID', 'original planning packet differs from selected subject');
+      originalReference = originalPacket.role_context?.planning_reference || originalReference;
+      if (originalReference) {
+        const originalContext = { planning_reference: originalReference,
+          selected_refs: originalPacket.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
+        if (selectedPlanning?.planning_reference && stable(originalContext) !== stable(selectedPlanning))
+          fail('ARCHIVE_AUTHORITY_INVALID', 'sealed planning differs from original native input');
+        selectedPlanning = originalContext;
+      }
+    }
+    if (selectedPlanning?.planning_reference) {
+      try { checkPlanning(selectedPlanning); } catch { current = null; currentPlanning = null; continue; }
+    }
+    currentPlanning = selectedPlanning?.planning_reference ? selectedPlanning : null;
     current = { authenticated: true, verdict: verdict.verdict, blocking_count: verdict.blocking_count,
       review_completeness: verdict.review_completeness, round: verdict.review_round, scope: verdict.review_scope,
       prior_head: verdict.prior_head, head, base_commit: baseCommit, subject: binding.subject, dispatch_id: manifest.producer_dispatch,
@@ -5139,7 +5239,9 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
       disagreement_suppressed: verdict.disagreement_suppressed, citations_unresolved: verdict.citations_unresolved,
       partitions_not_reviewed: verdict.partitions_not_reviewed };
   }
-  return reviewGit(root, ['rev-parse', 'HEAD']) === head && exactCurrentGitSubject(root, branch, head, baseName, baseCommit) ? current : null;
+  packets.authenticatedPlanningRoot(root, planning);
+  checkPlanning(currentPlanning);
+  return cleanSource(true) && reviewGit(root, ['rev-parse', 'HEAD']) === head && exactCurrentGitSubject(root, branch, head, baseName, baseCommit) ? current : null;
 }
 
 function completeFinding(finding, index, role) {
@@ -6740,6 +6842,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   isAuthenticatedReviewBaseline,
   currentArchitectureVerdict,
   currentCodeReviewVerdict,
+  codeReviewPlanningReference,
   priorCodeReviewVerdicts,
   currentIntegrationVerdict,
   prepareCurrentReviewInput,

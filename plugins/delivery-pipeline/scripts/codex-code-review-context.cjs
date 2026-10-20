@@ -43,7 +43,8 @@ function deepFreeze(value) {
 function run(options, executable, args, cwd, maxBuffer = CODE_REVIEW_MATERIAL_MAX_BYTES) {
   try {
     const result = (options.execFileSync || execFileSync)(executable, args, {
-      cwd, encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, maxBuffer });
+      cwd, env: Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+        !['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].includes(key))), encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, maxBuffer });
     const bytes = Buffer.isBuffer(result) ? result : Buffer.from(result);
     if (bytes.length > maxBuffer) fail('complete input exceeds its bound', 'CONTEXT_OVER_BOUND');
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -95,6 +96,8 @@ function assertArchives(worktree, pins) {
 }
 
 function collect(scope, options) {
+  if (['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(key => process.env[key] !== undefined))
+    fail('ambient Git identity overrides are refused', 'STALE_CONTEXT');
   const worktree = fs.realpathSync(scope.worktree);
   if (revision(options, worktree, ['rev-parse', '--show-toplevel']) !== worktree)
     fail('review worktree must be its repository root');
@@ -104,15 +107,20 @@ function collect(scope, options) {
       || fs.realpathSync(directory) !== directory) fail('canonical graph layout is required');
   const project = assertGraph(directory, options);
   const repository = repositoryIdentity(worktree, { execFileSync: options.execFileSync || execFileSync });
-  if (repositoryIdentity(project, { execFileSync: options.execFileSync || execFileSync }) !== repository)
-    fail('graph belongs to another repository');
+  const branch = revision(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const planning = roleArtifact.codeReviewPlanningReference({ worktree, graphDir: directory,
+    repo: options.phaseRepo ?? null, phase: scope.phase, branch });
+  if (options.planningReference !== undefined
+      && stable(planning) !== stable(options.planningReference))
+    fail('original planning association changed', 'STALE_CONTEXT');
+  options.planningReference = planning;
+  packets.authenticatedPlanningRoot(worktree, planning);
   const graphFile = file(project, '.planning/graph/tickets.json');
   const stateFile = file(project, '.planning/graph/delivery-state.json');
   const graph = JSON.parse(graphFile.content), rawState = JSON.parse(stateFile.content);
   const state = rawState.tickets || rawState;
   const rows = phaseRows(graph, scope.phase, options.phaseRepo ?? null);
   const row = rows[0][1];
-  const branch = revision(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   if (branch !== row.epic) fail('canonical epic branch differs from review worktree');
   const subject = PHASE_SUBJECT.exec(scope.ticket || '');
   if (!subject) fail('code-review requires a phase subject');
@@ -183,11 +191,13 @@ function collect(scope, options) {
   roleContext.dispositions_digest = disagreements.dispositions_digest;
   roleContext.reference = reference;
   roleContext.graph = { sha256: graphFile.sha256, state_sha256: stateFile.sha256 };
+  if (project !== worktree) roleContext.planning_reference = planning;
+  roleContext.phase_repo = binding.repo;
   const modelPolicy = require('./model-policy.cjs');
-  const packet = packets.buildContextPacket({ root: worktree, role: 'code-review', subject: binding.subject,
+  const packet = packets.buildContextPacket({ root: project, role: 'code-review', subject: binding.subject,
     sourceRevision: head, policy: modelPolicy.POLICY, policyHash: modelPolicy.POLICY_HASH,
     scope: { files_modified: [...new Set(binding.rows.flatMap(item => item.row.files || []))] },
-    roleContext, tokenCeiling: CODE_REVIEW_PACKET_TOKENS });
+    requiredRefs: plans.map(plan => plan.path), roleContext, tokenCeiling: CODE_REVIEW_PACKET_TOKENS });
   packets.validateContextPacket(packet, { role: 'code-review', subject: binding.subject, sourceRevision: head });
   if (Buffer.byteLength(JSON.stringify(packet)) > CODE_REVIEW_MATERIAL_MAX_BYTES)
     fail('complete packet exceeds its material bytes per launch bound', 'CONTEXT_PACKET_OVER_BOUND');
@@ -199,6 +209,7 @@ function collect(scope, options) {
     if (file(project, pin.path).sha256 !== pin.sha256) fail('context source changed while collecting', 'STALE_CONTEXT');
   if (file(path.resolve(__dirname, '..'), reference.path).sha256 !== reference.sha256)
     fail('review reference changed while collecting', 'STALE_CONTEXT');
+  packets.authenticatedPlanningRoot(worktree, planning);
   assertArchives(worktree, options.archivePins);
   for (const pin of options.bookkeepingPins || [])
     if (!bookkeeping.has(pin.path) || file(project, pin.path).sha256 !== pin.sha256)
@@ -260,7 +271,7 @@ function prepare(scope, launch, options = {}) {
   let prompt = prefix + '<AUTHENTICATED_CONTEXT_PACKET>\n' + packet + '\n</AUTHENTICATED_CONTEXT_PACKET>';
   let fileInput;
   if (Buffer.byteLength(prompt) > INPUT_MAX_BYTES) fileInput = prepareFileInput(scope, packet, {
-    storageRoot: options.storageRoot, execFileSync: options.execFileSync, graphDir: options.graphDir,
+    storageRoot: options.storageRoot, execFileSync: options.execFileSync, graphDir: prepared.graphDir, phaseRepo: options.phaseRepo,
     role: 'code-review', dispatchId: options.inflightDispatchId, relayPrefix: prefix,
     binding: { review_contract: CODE_REVIEW_CONTRACT, focused: launchBinding(prepared), packet_digest: prepared.packet.digest,
       ticket_set: prepared.binding.ticketSet.map(item => item.id), ticket_set_digest: prepared.binding.membership,
@@ -304,7 +315,7 @@ function admitInstalledLaunch(value, options) {
     const previous = privateOptions.fileInput;
     const material = verifyFileInput(previous).material;
     privateOptions.fileInput = prepareFileInput(privateOptions.scope, material, {
-      storageRoot: privateOptions.storageRoot, execFileSync: privateOptions.execFileSync, graphDir: privateOptions.graphDir,
+      storageRoot: privateOptions.storageRoot, execFileSync: privateOptions.execFileSync, graphDir: value.prepared.graphDir, phaseRepo: privateOptions.phaseRepo,
       role: 'code-review', dispatchId: privateOptions.inflightDispatchId, relayPrefix: privateOptions.prefix,
       generatedInstructionBytes: instructionBytes, focusedSources: previous.manifest.sources,
       focusedPartitions: previous.manifest.assets.filter(asset => asset.source_partition).map(asset => asset.source_partition),
@@ -429,6 +440,9 @@ function finish(value, dispatch, recorder) {
   const { evidence_markdown: evidenceMarkdown, host_context: _context, ...judgment } = normalized;
   Object.assign(judgment, { prior_head: prepared.round.priorHead, contract_digest: prepared.contractDigest,
     dispositions_digest: prepared.dispositionsDigest,
+    ...(prepared.packet.role_context.planning_reference ? { host_context: {
+      planning_reference: prepared.packet.role_context.planning_reference,
+      selected_refs: value.evidence.selected_refs } } : {}),
     reuse_key: core.reuseKey({ head: prepared.canonical.head, baseCommit: prepared.baseCommit, contractDigest: prepared.contractDigest }) });
   const live = verifyLivePullRequest(prepared, options);
   if (input) verifyFileInput(input, { association: { role: 'code-review', dispatch_id: dispatch.dispatch_id } });

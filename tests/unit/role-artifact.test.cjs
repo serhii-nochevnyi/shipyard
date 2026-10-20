@@ -2713,4 +2713,174 @@ test('original native architecture authority reads coordinator-only planning on 
   }
 });
 
+function foreignCodeReviewArchive() {
+  const { fixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const f = fixture();
+  const coordinator = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'foreign-review-coordinator-')));
+  const git = args => execFileSync('git', ['-C', coordinator, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+  git(['init', '--quiet', '--initial-branch=main']);
+  git(['config', 'user.name', 'Review Test']); git(['config', 'user.email', 'review@example.test']);
+  git(['config', 'commit.gpgsign', 'false']);
+  f.advance(1);
+  f.graph.tickets['T-52-01'].repo = 'acme/app';
+  f.graph.epics = { '52': { branch: f.branch, phaseDir: f.phase, repos: ['acme/app'] } };
+  f.writeGraph();
+  fs.renameSync(path.join(f.root, '.planning'), path.join(coordinator, '.planning'));
+  fs.writeFileSync(path.join(coordinator, '.planning/config.json'), JSON.stringify({ git: { base_branch: 'main' },
+    delivery_pipeline: { code_review: 'hold', repos: { 'acme/app': f.root } } }));
+  git(['add', '.']); git(['commit', '--quiet', '-m', 'canonical foreign selection']);
+  const graphDir = path.join(coordinator, '.planning/graph');
+  const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52, repo: 'acme/app',
+    repository: target.repositoryIdentity(f.root), pr: 52, head: f.git(['rev-parse', 'HEAD']), base: f.base, branch: f.branch });
+  const input = f.input(binding, 1, null, { review_completeness: 'complete', limitations: [], unresolved_sources: [],
+    summary: 'Complete foreign review', findings: [], dispositions: [] });
+  const live = { number: 52, state: 'OPEN', isDraft: false, headRefName: f.branch,
+    headRefOid: input.result.head, baseRefName: 'main', baseRefOid: f.base };
+  return { ...f, coordinator, graphDir, binding, input, live,
+    lookup: (extra = {}) => roleArtifact.currentCodeReviewVerdict({ worktreePath: f.root, graphDir, repo: 'acme/app',
+      pr: 52, head: live.headRefOid, headBranch: f.branch, baseName: 'main', baseCommit: f.base, ...extra }),
+    cleanup() { f.cleanup(); fs.rmSync(coordinator, { recursive: true, force: true }); } };
+}
+
+test('existing-format sealed foreign pass reads through current lookup and opens phase hold independently of collector', () => {
+  const f = foreignCodeReviewArchive();
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const flow = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
+  try {
+    assert.notEqual(target.repositoryIdentity(f.root), target.repositoryIdentity(f.coordinator));
+    assert.equal(f.input.result.host_context, undefined);
+    const seal = roleArtifact.sealJudgment(f.input);
+    const original = fs.readFileSync(seal.artifact_ref);
+    const prior = () => roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+      repository: target.repositoryIdentity(f.root), phaseDir: f.phase, graphDir: f.graphDir });
+    assert.equal(prior()[0].artifact_digest, seal.artifact_digest);
+    assert.equal(f.lookup().artifact_digest, seal.artifact_digest);
+    const status = () => flow.status({ worktree: f.root, graphDir: f.graphDir, repo: 'acme/app',
+      phase: 52, pr: 52, live: f.live }, { execFileSync(executable, args) {
+        assert.equal(executable, 'gh');
+        assert.deepEqual(args, ['repo', 'view', 'acme/app', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name']);
+        return 'main\n';
+      } });
+    assert.equal(status().state, 'current');
+    assert.equal(flow.evaluateGate(status()).ok, true);
+    assert.throws(() => f.lookup({ repo: null }));
+    assert.equal(f.lookup({ repo: 'acme/wrong' }), null);
+    f.graph.tickets['T-52-01'].title = 'new graph membership';
+    fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), JSON.stringify(f.graph));
+    assert.equal(f.lookup(), null);
+    assert.equal(flow.evaluateGate(status()).ok, false);
+    assert.equal(prior()[0].artifact_digest, seal.artifact_digest);
+    assert.deepEqual(fs.readFileSync(seal.artifact_ref), original);
+  } finally { f.cleanup(); }
+});
+
+for (const changed of ['config mapping', 'epic membership', 'graph symlink', 'source', 'untracked source', 'head', 'base', 'manifest', 'index', 'receipt', 'mac'])
+  test('sealed foreign current authority refuses ' + changed, () => {
+    const f = foreignCodeReviewArchive();
+    try {
+      const seal = roleArtifact.sealJudgment(f.input);
+      assert.equal(f.lookup().verdict, 'pass');
+      if (changed === 'config mapping') fs.writeFileSync(path.join(f.coordinator, '.planning/config.json'),
+        JSON.stringify({ delivery_pipeline: { repos: { 'acme/app': f.coordinator } } }));
+      if (changed === 'epic membership') {
+        f.graph.epics['52'].repos = ['acme/other'];
+        fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), JSON.stringify(f.graph));
+      }
+      if (changed === 'graph symlink') {
+        fs.renameSync(f.graphDir, f.graphDir + '-moved'); fs.symlinkSync(f.graphDir + '-moved', f.graphDir);
+      }
+      if (changed === 'source') fs.appendFileSync(path.join(f.root, 'source.js'), '\nchanged source');
+      if (changed === 'untracked source') fs.writeFileSync(path.join(f.root, 'unexpected.js'), 'new source');
+      if (changed === 'head') f.git(['commit', '--quiet', '--allow-empty', '-m', 'moved head']);
+      if (changed === 'base') f.git(['update-ref', 'refs/remotes/origin/main', f.live.headRefOid]);
+      if (changed === 'manifest') fs.appendFileSync(seal.artifact_ref, ' ');
+      if (changed === 'index') {
+        const manifest = JSON.parse(fs.readFileSync(seal.artifact_ref));
+        manifest.envelope.findings_index.sha256 = '0'.repeat(64);
+        fs.writeFileSync(seal.artifact_ref, JSON.stringify(manifest));
+      }
+      if (changed === 'receipt') {
+        const record = fs.readdirSync(f.recorder.storeDir).find(name => name.startsWith('record-'));
+        assert.ok(record);
+        const file = path.join(f.recorder.storeDir, record), raw = JSON.parse(fs.readFileSync(file));
+        raw.integrity.mac = '0'.repeat(64); fs.writeFileSync(file, JSON.stringify(raw));
+      }
+      if (changed === 'mac') {
+        const catalogue = path.join(roleArtifact.archiveAuthorityDirectory(f.root), 'catalogue.json');
+        const raw = JSON.parse(fs.readFileSync(catalogue));
+        raw.mac = '0'.repeat(64); fs.writeFileSync(catalogue, JSON.stringify(raw));
+      }
+      let verdict;
+      try { verdict = f.lookup(); } catch { verdict = null; }
+      assert.equal(verdict, null);
+    } finally { f.cleanup(); }
+  });
+
+
+for (const partitioned of [false, true]) for (const changed of ['plan', 'config', 'transcript'])
+  test('existing-format foreign native input retains original planning pins: partitions=' + partitioned + ', ' + changed, () => {
+    const f = foreignCodeReviewArchive();
+    try {
+      const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+      const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+      const crypto = require('node:crypto');
+      const plan = f.graph.tickets['T-52-01'].plan;
+      fs.mkdirSync(path.dirname(path.join(f.coordinator, plan)), { recursive: true });
+      fs.writeFileSync(path.join(f.coordinator, plan), '# Complete plan acceptance\n');
+      const planning = packets.resolvePlanningReference({ worktree: f.root, graphDir: f.graphDir, repo: 'acme/app' });
+      const packet = packets.buildContextPacket({ root: f.coordinator, role: 'code-review', subject: f.binding.subject,
+        sourceRevision: f.live.headRefOid, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+        scope: { files_modified: ['source.js'] }, requiredRefs: [plan], roleContext: {
+          planning_reference: planning, ticket_set: f.binding.ticketSet, prior_findings: [],
+          plan_acceptance: [], exact_diff: { content: f.git(['diff', f.base, 'HEAD', '--', 'source.js']) },
+          integration_base: { commit: f.base } } });
+      const recorder = f.recorder;
+      let transcript;
+      const boundary = createDispatchBoundary({ recorder, adapters: { claude: { launch(r) {
+        const session = 'native-' + r.dispatch_id;
+        transcript = path.join(f.coordinator, session + '.jsonl');
+        let prompt = '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
+          + '\n</AUTHENTICATED_CONTEXT_PACKET>';
+        if (partitioned) {
+          const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+          const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
+            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+          const contextDigest = crypto.createHash('sha256').update(JSON.stringify(stable(packet))).digest('hex');
+          const input = collector.prepareFileInput({ worktree: f.root, ticket: f.binding.subject, phase: 52 },
+            JSON.stringify(packets.encodeUniqueContent(packet)), { role: 'code-review', dispatchId: r.dispatch_id,
+              graphDir: f.graphDir, phaseRepo: 'acme/app', storageRoot: path.join(f.coordinator, 'inputs'),
+              binding: { review_contract: collector.CODE_REVIEW_CONTRACT, packet_digest: contextDigest,
+                focused: { context_digest: contextDigest } } });
+          prompt = '<AUTHENTICATED_FOCUSED_INPUT>\n' + JSON.stringify(input.input_bundle)
+            + '\n</AUTHENTICATED_FOCUSED_INPUT>';
+        }
+        const content = JSON.stringify({ type: 'user', sessionId: session, message: { content: prompt } }) + '\n';
+        fs.writeFileSync(transcript, content);
+        return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
+          launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
+          applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
+          policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
+            session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
+            transcript: { path: transcript, bytes: Buffer.byteLength(content),
+              sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
+      } } } });
+      const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
+        { ticket: f.binding.subject, subject_kind: 'phase' });
+      assert.equal(f.input.result.host_context, undefined);
+      const seal = roleArtifact.sealJudgment({ ...f.input, recorder, dispatchId: dispatch.dispatch_id });
+      assert.equal(f.lookup().artifact_digest, seal.artifact_digest);
+      if (changed === 'plan') fs.appendFileSync(path.join(f.coordinator, plan), 'Changed acceptance\n');
+      if (changed === 'config') fs.appendFileSync(path.join(f.coordinator, '.planning/config.json'), ' ');
+      if (changed === 'transcript') fs.appendFileSync(transcript, ' ');
+      let current;
+      try { current = f.lookup(); } catch { current = null; }
+      assert.equal(current, null);
+      const prior = roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+        repository: require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').repositoryIdentity(f.root),
+        phaseDir: f.phase, graphDir: f.graphDir });
+      assert.equal(prior[0].artifact_digest, seal.artifact_digest);
+    } finally { f.cleanup(); }
+  });
+
 done();
