@@ -223,12 +223,70 @@ test('rounds two and three admit their exact sealed archives and fourth refuses 
   const f = fixture();
   try {
     for (let n = 1; n <= 3; n++) {
-      const r = review(f, raw => { raw.findings = [warning()]; });
+      const r = review(f, raw => { raw.findings = [warning()]; raw.ticket_set = reverseReviewKeys(raw.ticket_set); });
       assert.equal(r.result.result.review_round, n); assert.equal(r.result.result.review_scope, n === 1 ? 'full' : 'delta');
       assert.equal(artifact.authenticatedArchivePins(f.root).length, 3 * n);
       if (n < 3) f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), '\n'));
     }
     assert.throws(() => f.prepare(), { code: 'CODE_REVIEW_ROUND_LIMIT' });
+  } finally { f.cleanup(); }
+});
+
+function reverseReviewKeys(value) {
+  if (Array.isArray(value)) return value.map(reverseReviewKeys);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).reverse()
+    .map(([key, item]) => [key, reverseReviewKeys(item)]));
+  return value;
+}
+
+for (const mutation of ['row', 'evidence', 'array-order', 'added', 'deleted'])
+  test('finish rejects changed nested membership before sealing: ' + mutation, () => {
+    const f = fixture();
+    try {
+      assert.throws(() => review(f, raw => {
+        raw.ticket_set = reverseReviewKeys(raw.ticket_set);
+        if (mutation === 'row') raw.ticket_set[0].row.epic = 'epic/forged';
+        if (mutation === 'evidence') raw.ticket_set[0].evidence.status = 'pending';
+        if (mutation === 'array-order') raw.ticket_set[0].row.files.push('forged.js');
+        if (mutation === 'added') raw.ticket_set.push({ id: 'T-38-99', row: {}, evidence: {} });
+        if (mutation === 'deleted') raw.ticket_set.pop();
+      }), { code: 'ARTIFACT_IDENTITY_MISMATCH' });
+      assert.deepEqual(artifact.authenticatedArchivePins(f.root), []);
+    } finally { f.cleanup(); }
+  });
+
+for (const incomplete of [false, true]) test('finish preserves verified host membership across recursive key order: ' + incomplete, () => {
+  const f = fixture();
+  try {
+    f.row.review_metadata = { checks: ['first', 'second'], evidence: { source: 'graph', required: true } };
+    write(f.project, '.planning/graph/tickets.json', JSON.stringify(f.graph));
+    const r = review(f, raw => {
+      raw.ticket_set = reverseReviewKeys(raw.ticket_set);
+      if (incomplete) {
+        raw.review_completeness = 'incomplete'; raw.limitations = ['Unread source'];
+        raw.findings = [blocker()];
+      }
+    });
+    assert.deepEqual(r.raw.ticket_set, r.value.prepared.binding.ticketSet);
+    assert.notEqual(JSON.stringify(r.raw.ticket_set), JSON.stringify(r.value.prepared.binding.ticketSet));
+    const manifest = JSON.parse(fs.readFileSync(r.result.artifact.ref));
+    const findings = JSON.parse(fs.readFileSync(path.join(f.root, manifest.files.findings.path)));
+    assert.equal(JSON.stringify(findings.ticket_set), JSON.stringify(r.value.prepared.binding.ticketSet));
+    const prior = artifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+      repository: target.repositoryIdentity(f.root), phaseDir: r.value.prepared.binding.phase, graphDir: f.graphDir });
+    assert.equal(prior.length, 1);
+    assert.equal(prior[0].review_completeness, incomplete ? 'incomplete' : 'complete');
+    const current = artifact.currentCodeReviewVerdict({ worktreePath: f.root, pr: f.pr.number,
+      head: f.pr.headRefOid, baseName: f.pr.baseRefName, baseCommit: f.pr.baseRefOid,
+      graphDir: f.graphDir, headBranch: f.pr.headRefName });
+    assert.equal(current.verdict, incomplete ? 'incomplete' : 'pass');
+    if (incomplete) {
+      const core = require(path.join(scripts, 'code-review-core.cjs'));
+      assert.equal(prior[0].blocking_count, 1);
+      assert.equal(core.countableVerdicts({ priorVerdicts: prior, head: prior[0].head, isAncestor: () => false }).length, 0);
+      const next = f.prepare().prepared.round;
+      assert.equal(next.rounds_used, 0); assert.equal(next.round, 1); assert.equal(next.scope, 'full');
+    }
   } finally { f.cleanup(); }
 });
 

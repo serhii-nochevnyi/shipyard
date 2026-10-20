@@ -47,6 +47,7 @@ const JUDGMENT_EVIDENCE_NAMES = Object.freeze({
 const SENTINEL_PERFORMED_STATUSES = new Set(['complete', 'handed-back']);
 const SENTINEL_REFUSED_STATUSES = new Set(['refused']);
 const NORMALIZED_UNKNOWN_ARCH_FINDINGS = new WeakSet();
+const AUTHENTICATED_CODE_REVIEW_MEMBERSHIP = new WeakMap();
 
 function fail(code, message, details = {}) {
   throw boundaryError(code, message, details);
@@ -5058,6 +5059,7 @@ function authenticatedCodeReviewRecord(worktree, record, repository) {
     head: manifest.head, head_tree: manifest.head_tree, base: manifest.base, base_commit: manifest.base_commit,
     base_tree: manifest.base_tree, merge_base: mergeBase, merge_base_tree: manifest.merge_base_tree };
   const metadata = { ...trustedMetadata({ role: 'code-review' }, trusted, identity), trusted };
+  AUTHENTICATED_CODE_REVIEW_MEMBERSHIP.set(metadata, fields.tickets);
   const data = judgmentResultData(findings, metadata, { pr: manifest.pr, ticketSet: findings.ticket_set,
     ticketSetDigest: manifest.ticket_set_digest }, identity);
   if (stable(manifest.reviewed) !== stable(data.reviewed)
@@ -5316,7 +5318,8 @@ function ticketSetFor(input, result, role, metadata) {
   // the envelope can preserve the exact round subject the caller dispatched.
   let expectedDigest;
   try {
-    expectedDigest = digest(JSON.stringify(supplied));
+    expectedDigest = role === 'code-review' && AUTHENTICATED_CODE_REVIEW_MEMBERSHIP.has(metadata)
+      ? AUTHENTICATED_CODE_REVIEW_MEMBERSHIP.get(metadata) : digest(JSON.stringify(supplied));
   } catch (error) {
     fail('MISSING_JUDGMENT_CONTEXT', `${role} ticket set is not JSON-serializable: ${error.message}`);
   }
