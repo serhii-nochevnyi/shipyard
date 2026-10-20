@@ -123,7 +123,7 @@ function status(input, options = {}) {
     round_cap: core.ROUND_CAP, rounds_used: 0, scope: null, verdict: null, blocking_count: null,
     warning_count: null, review_completeness: null, reuse: false, retry: false, repair: 'none',
     disagreement_suppressed: 0, partitions_not_reviewed: 0, artifact_ref: null, reason: match.reason || null };
-  details.set(result, { mode, current: null });
+  details.set(result, { mode, current: null, ctx });
   if (match.kind === 'unmatched') return Object.freeze(result);
   const binding = target.phaseBinding({ graph, state: ctx.state?.tickets || ctx.state, phase: match.phase,
     repository, repo, branch: match.branch, pr, head: live.headRefOid, base: live.baseRefOid });
@@ -161,7 +161,7 @@ function status(input, options = {}) {
       disagreement_suppressed: current.disagreement_suppressed, partitions_not_reviewed: current.partitions_not_reviewed,
       artifact_ref: current.artifact_ref, reason: current.verdict === 'pass' ? 'the complete verdict is current'
         : `the current verdict is ${current.verdict} with ${current.blocking_count} BLOCKERs` });
-    details.set(result, { mode, current });
+    details.set(result, { mode, current, ctx });
     return Object.freeze(result);
   }
   const incomplete = current || prior.filter(entry => entry.head === live.headRefOid
@@ -172,6 +172,7 @@ function status(input, options = {}) {
       ? refusal('limit', 'three rounds are spent; no further review can launch', mode)
       : `${incomplete ? (incomplete.review_completeness !== 'complete' ? 'the sealed review is incomplete'
         : 'the sealed delta has no complete full-scope lineage') + '; ' : ''}run deliver-dispatch.cjs build code-review first` });
+  details.set(result, { mode, current, ctx });
   return Object.freeze(result);
 }
 
@@ -196,6 +197,120 @@ function fixTickets(input, options = {}) {
     files: [...finding.fix_ticket.files], depends_on: [...(finding.fix_ticket.depends_on || [])] }));
 }
 
+function statusDescription(current) {
+  const count = value => {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error('status counts must be non-negative safe integers');
+    return String(value);
+  };
+  if (current.state === 'limit') return { state: 'pending',
+    description: 'code review limit reached: no further review will run for this head' };
+  if (current.state === 'owed' && current.retry) return { state: 'pending',
+    description: `code review incomplete: ${count(current.partitions_not_reviewed)} partitions not reviewed` };
+  if (current.state === 'current' && current.verdict === 'pass' && current.review_completeness === 'complete'
+      && current.blocking_count === 0) return { state: 'success',
+    description: `code review: no blocking issues, ${count(current.warning_count)} notes` };
+  if (current.state === 'current' && current.verdict === 'needs-fix') return { state: 'pending',
+    description: `code review: ${count(current.blocking_count)} blocking issues, ${count(current.warning_count)} notes` };
+  throw new Error('publication requires a sealed verdict for the exact head or the limit state');
+}
+
+function findingsComment(current, sealed) {
+  const header = `<!-- code-review -->\nCode review — round ${sealed.round}, scope ${sealed.scope}\nVerdict: ${sealed.verdict}\n\n`;
+  const stop = current.mode === 'hold' && !(current.state === 'current' && current.verdict === 'pass');
+  const footer = `\n${sealed.disagreement_suppressed} findings not raised again because of a recorded disagreement.\n`
+    + `citations_unresolved: ${sealed.citations_unresolved}\n`
+    + (stop ? '\nOperator exit: set delivery_pipeline.code_review to "report" for this PR.\n' : '');
+  const blocks = sealed.findings.map(finding => {
+    let text = `${finding.severity} [${finding.rule}] ${finding.path || '(unresolved path)'}:${finding.line || '?'}`
+      + (finding.suppressed ? ' (recorded disagreement; not blocking)' : '') + '\n'
+      + `${finding.summary}\n`;
+    if (finding.severity === 'BLOCKER') {
+      text += `Failure scenario: ${finding.failure_scenario}\n`
+        + `Proposed fix-ticket title: ${finding.fix_ticket.title}\n`
+        + `Source line (full text), occurrence ${finding.occurrence ?? 'unresolved'}:\n`
+        + `    ${JSON.stringify(finding.line_text)}\n`
+        + 'Recorded disagreement values (path, line_text, occurrence):\n'
+        + `    ${JSON.stringify({ path: finding.path, line_text: finding.line_text, occurrence: finding.occurrence })}\n`;
+    }
+    return text + '\n';
+  });
+  let body = header, included = 0;
+  for (const block of blocks) {
+    if (body.length + block.length + footer.length + 64 > 60000) break;
+    body += block; included++;
+  }
+  if (included < blocks.length) body += `and ${blocks.length - included} more findings.\n`;
+  return body + footer;
+}
+
+function publish(input, options = {}) {
+  const worktree = input.worktree || input.worktreePath || process.cwd(), repo = input.repo ?? null;
+  const request = args => {
+    const output = options.gh ? options.gh(args) : (options.execFileSync || execFileSync)('gh', args,
+      { cwd: worktree, encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024 });
+    return typeof output === 'string' ? (output.trim() ? JSON.parse(output) : null) : output;
+  };
+  const readPR = pr => options.getPullRequest ? options.getPullRequest({ pr, repo, worktree })
+    : request(['pr', 'view', String(pr), ...(repo ? ['--repo', repo] : []),
+      '--json', 'number,state,headRefName,headRefOid,baseRefName,baseRefOid']);
+  const current = status(input, { ...options, getPullRequest: ({ pr }) => readPR(pr) });
+  const { ctx, current: sealed } = details.get(current);
+  if (ctx.match.kind !== 'epic') throw new Error(`phase code review is unmatched: ${current.reason}`);
+  if (current.state !== 'limit' && (!sealed || sealed.head !== current.head || sealed.subject !== current.subject
+      || !(current.state === 'current' || (current.state === 'owed' && current.retry && sealed.review_completeness === 'incomplete'))))
+    throw new Error('publication requires a sealed verdict for the exact head; the review is owed');
+  const recorded = ctx.state?.tickets || ctx.state || {};
+  for (const [ticket, row] of Object.entries(ctx.graph.tickets)) {
+    if ((row.repo ?? null) !== ctx.repo) continue;
+    const pr = recorded[ticket]?.pr;
+    if (pr === undefined || pr === null) continue;
+    if (!Number.isSafeInteger(pr) || pr < 1) throw new Error('graph ticket PR identity is incomplete');
+    if (pr === ctx.pr) rejectTicket(ctx.mode);
+    const live = readPR(pr);
+    if (live?.number !== pr || !/^[a-f0-9]{40}$/.test(live.headRefOid || ''))
+      throw new Error('live graph ticket PR head is unavailable');
+    if (live.headRefOid === current.head) rejectTicket(ctx.mode);
+  }
+  const live = readPR(ctx.pr);
+  const match = matchEpicPullRequest({ graph: ctx.graph, state: ctx.state, live, repo: ctx.repo, phase: current.phase });
+  if (match.kind === 'ticket') rejectTicket(ctx.mode);
+  if (match.kind !== 'epic') throw new Error(`phase code review is unmatched: ${match.reason}`);
+  if (['number', 'state', 'headRefName', 'headRefOid', 'baseRefName', 'baseRefOid'].some(key => live[key] !== ctx.live[key])
+      || live.headRefOid !== current.head || git(ctx.worktree, ['rev-parse', 'HEAD']) !== current.head)
+    throw new Error('live phase PR identity changed before publication');
+  const summary = statusDescription(current);
+  const api = ctx.repo ? `repos/${ctx.repo}` : 'repos/{owner}/{repo}';
+  const result = { schema: 'shipyard.phase-code-review-publish.v1',
+    status: { ok: false, action: 'failed', head: current.head, ...summary }, comment: { ok: false }, rules: [] };
+  try {
+    request(['api', `${api}/statuses/${current.head}`, '-f', `state=${summary.state}`,
+      '-f', 'context=code-review', '-f', `description=${summary.description}`]);
+    result.status.ok = true; result.status.action = 'posted';
+  } catch (error) { result.status.reason = error.message; }
+  if (current.state === 'limit') {
+    result.comment = { ok: true, action: 'skipped', reason: 'limit publishes status only' };
+    return result;
+  }
+  try {
+    const body = findingsComment(current, sealed);
+    const hygiene = require('./pr-hygiene.cjs');
+    const violations = hygiene.applies({ root: ctx.worktree }) ? hygiene.internalLeakViolations('comment', body) : [];
+    result.rules = [...new Set(violations.map(violation => violation.rule))];
+    if (result.rules.length) {
+      result.comment = { ok: false, action: 'refused', reason: 'PR hygiene refused comment' };
+      return result;
+    }
+    const pages = request(['api', `${api}/issues/${ctx.pr}/comments`, '--paginate', '--slurp']);
+    if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page))) throw new Error('comment lookup is unavailable');
+    const existing = pages.flat().find(comment => typeof comment.body === 'string' && comment.body.includes('<!-- code-review -->'));
+    if (existing && (!Number.isSafeInteger(existing.id) || existing.id < 1)) throw new Error('comment identity is unavailable');
+    const posted = request(['api', existing ? `${api}/issues/comments/${existing.id}` : `${api}/issues/${ctx.pr}/comments`,
+      '--method', existing ? 'PATCH' : 'POST', '-f', `body=${body}`]);
+    result.comment = { ok: true, action: existing ? 'edited' : 'created', id: existing?.id ?? posted?.id };
+  } catch (error) { result.comment = { ok: false, action: 'failed', reason: error.message }; }
+  return result;
+}
+
 function verifyCodeReview(input, options = {}) {
   const worktree = input.worktree || input.worktreePath || process.cwd();
   const mode = resolveCodeReviewMode({ graphDir: input.graphDir, worktree });
@@ -212,14 +327,14 @@ function verifyCodeReview(input, options = {}) {
   return { ...current, ok: gate.ok, reason: gate.ok ? current.reason : gate.message };
 }
 
-module.exports = { status, evaluateGate, fixTickets, matchEpicPullRequest, resolveCodeReviewMode, verifyCodeReview };
+module.exports = { publish, statusDescription, status, evaluateGate, fixTickets, matchEpicPullRequest, resolveCodeReviewMode, verifyCodeReview };
 
 if (require.main === module) {
   try {
     const argv = process.argv.slice(2), verb = argv[0];
     const usage = message => { throw Object.assign(new Error(message), { exitCode: 2 }); };
-    if (!['status', 'gate', 'fix-tickets'].includes(verb) || !argv[1] || argv[1].startsWith('--'))
-      usage('usage: phase-code-review.cjs <status|gate|fix-tickets> <phase-directory> --phase N --pr P [--repo owner/name] [--graph dir] [--worktree path]');
+    if (!['status', 'gate', 'fix-tickets', 'publish'].includes(verb) || !argv[1] || argv[1].startsWith('--'))
+      usage('usage: phase-code-review.cjs <status|gate|fix-tickets|publish> <phase-directory> --phase N --pr P [--repo owner/name] [--graph dir] [--worktree path]');
     const input = { phaseDirectory: argv[1] }, seen = new Set();
     const names = { '--phase': 'phase', '--pr': 'pr', '--repo': 'repo', '--graph': 'graphDir', '--worktree': 'worktree' };
     for (let i = 2; i < argv.length; i += 2) {
@@ -238,6 +353,9 @@ if (require.main === module) {
     if (!input.phase || !input.pr) usage('--phase and --pr are required');
     if (verb === 'gate') {
       const gate = evaluateGate(input); process.stderr.write(`${gate.message}\n`); process.exitCode = gate.ok ? 0 : 1;
+    } else if (verb === 'publish') {
+      const result = publish(input); console.log(JSON.stringify(result));
+      process.exitCode = result.status.ok && result.comment.ok ? 0 : 1;
     } else console.log(JSON.stringify(verb === 'status' ? status(input) : fixTickets(input)));
   } catch (error) {
     process.stderr.write(`${error.code ? error.code + ': ' : ''}${error.message}\n`);

@@ -614,6 +614,71 @@ criteria. The verdict `passed | needs-fix | human-review-required` goes into
 `INTEGRATION.md`; `needs-fix` spawns fix tickets that go through the same
 delivery loop (section 6.1) — this is the feedback cycle.
 
+#### Phase code review before the finale
+
+The phase epic PR runs code review, then the integrator, then phase `arch-review`,
+once on the final head, before readiness and human hand-off. The read-only code
+review role reports source BLOCKERs and WARNINGs through sealed evidence. The
+trusted host's `phase-code-review.cjs publish` writes the `code-review` commit
+status and one marker-based PR comment edited in place. A complete pass is
+`success`; needs-fix, incomplete and limit are `pending`, never failure or error.
+The status uses fixed text and integer counts only and is posted independently
+before comment hygiene: a refused comment cannot remove the verdict status.
+Publication accepts only the graph epic row's branch and exact live PR head,
+never a ticket PR or a head shared with a graph ticket PR. This works for both
+plain epic branches and Jira-named epic branches.
+
+`delivery_pipeline.code_review` in the project root's `.planning/config.json`
+selects `report` (the shipped default) or `hold`. Report mode shows proposed fix
+tickets without injecting them; hold feeds them to decompose Step 4 only in
+rounds 1 and 2. Round 3 requires an operator for remaining blockers. Incomplete
+reviews retry after the cause is fixed; the three-round cap permits no further
+review after limit. Hold stops with the printed reason and the single exit:
+set `delivery_pipeline.code_review` to `report` for this PR; there is no override
+flag or waiver record. The prelaunch gate and architecture builder require a
+current complete pass with no blocking finding on the exact head in hold mode.
+Readiness and hand-off wait too. Both modes publish the status, and a human can
+still merge. A push re-owes code review before the later reviews.
+
+An operator records disagreements in the project root's
+`.planning/phases/<phase-directory>/code-review-disagreements.json`, using schema
+`shipyard.code-review-disagreements.v1` with an `entries` array. Copy each
+entry's `path`, whole normalised `line_text` and `occurrence` from the PR comment,
+then add `reason` and `recorded_by`. The host computes those citation values;
+partial source text does not identify a finding. The comment also reports the
+suppressed-finding count and `citations_unresolved`.
+
+Each review builder prints the request to launch. For Codex, save that request
+in a mode-0600 file in a directory made with `mktemp -d` outside every worktree,
+then from the epic worktree run
+`node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs --args-file <request.json>`.
+This entry prepares context after preflight; an in-process Codex run refuses
+both review roles without it. For Claude, use
+`createClaudeRoleHost(options).run(request)` with `options.graphDir` selecting
+the project's graph. Consume only the original receipt and sealed artifact in
+the returned JSON; a refusal parks with its verbatim text. The integrator keeps
+its existing in-process route on both runtimes.
+
+Restore the epic worktree on every integrator outcome: `passed`, `needs-fix`,
+`human-review-required`, a refused or blocked launch, or a seal or validate
+refusal. After validation, the live-file GSD projection and its check, and copying
+needs-fix findings from the validated artifact with `role-artifact.cjs read`, run
+`role-artifact.cjs prepare --worktree <epic-worktree> --role integrator --phase <phase-directory>`.
+Restore a tracked `INTEGRATION.md` with `git checkout --` afterward. An absent file
+is harmless; the restore precedes every outcome branch. List worktree status
+before code review and after restore: only scratch names from
+`conveyor-scratch.cjs list` and `.shipyard-role-artifacts/` paths may remain.
+Any other entry parks the phase. The live file refuses both review hosts, so the
+phase architecture review after passed and the re-owed code review after
+needs-fix both need this restore. The sealed copy stays in its authenticated
+archive; commit nothing, since a commit would move the head and re-owe review.
+
+The check-reader audit found that `state-sync.cjs`, `sentinel.cjs`, `ci-wait.cjs`
+and `front.cjs` read ticket checks only; none reads the epic-to-integration PR's
+rollup. `gate-trailer.cjs` reads only the `merge-gate` context. A pending status
+would count as a running check if read, so publication is inert by its epic-only
+target. Registry and tally tests require a fresh audit if a reader is added.
+
 ### 6.5. Pipeline telemetry (input for improvement)
 
 The pipeline accumulates an append-only log `.planning/graph/delivery-log.jsonl`:

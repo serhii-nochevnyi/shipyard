@@ -8,7 +8,7 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const MOD = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pr-hygiene.cjs');
 const {
-  applies, conventionalType, CONVENTIONAL_TYPES, DEFAULT_TITLE_FORMAT,
+  applies, internalLeakViolations, conventionalType, CONVENTIONAL_TYPES, DEFAULT_TITLE_FORMAT,
   compileTitleFormat, titleFormat, formatTitle, check,
   NEUTRAL_PR_BODY_GUIDE, NEUTRAL_DELIVERY_RULES_HINT,
 } = require(MOD);
@@ -453,6 +453,17 @@ test('CONVENTIONAL_TYPES is the shared nine-member vocabulary', () => {
   assert.deepStrictEqual(CONVENTIONAL_TYPES, [
     'feat', 'fix', 'docs', 'refactor', 'test', 'perf', 'build', 'ci', 'chore', 'revert',
   ]);
+});
+
+test('internalLeakViolations exports every leak rule name for comment checks', () => {
+  for (const [text, rule] of [
+    ['T-12-03', 'ticket-id'], ['Ticket:', 'ticket-marker'], ['Phase 2', 'phase-number'],
+    ['ADR-032', 'adr-number'], ['PLAN.md', 'plan-file'], ['ticket/name', 'ticket-branch-prefix'],
+    ['epic/name', 'epic-branch-prefix'], ['.planning/private', 'planning-path'],
+    ['.shipyard/private', 'shipyard-path'], ['gate_status:', 'gate-status-trailer'],
+    ['shipyard', 'internal-tool-word'], ['gsd', 'internal-tool-word'], ['conveyor', 'internal-tool-word'],
+  ]) assert.ok(internalLeakViolations('comment', text).some(item => item.field === 'comment' && item.rule === rule), text);
+  assert.deepStrictEqual(internalLeakViolations('comment', 'Review complete, 2 notes'), []);
 });
 
 done();
