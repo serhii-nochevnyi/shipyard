@@ -4121,4 +4121,55 @@ for (const historicalRecovery of ['direct', 'admitted', 'pending', 'action']) {
   }
 }
 
+test('recovery source opening refuses real FIFOs and replacement races within a bounded child', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'recovery-opening-')));
+  const host = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const script = `
+    const fs = require('node:fs'), path = require('node:path');
+    const assert = require('node:assert/strict');
+    const { execFileSync } = require('node:child_process');
+    const [host, root, mode] = process.argv.slice(1);
+    const source = fs.readFileSync(host, 'utf8');
+    const body = source.slice(source.indexOf('function recoveryBytes('), source.indexOf('function recoveryGraphMatches('));
+    const fail = code => { const error = new Error(code); error.code = code; throw error; };
+    const read = new Function('fs', 'path', 'MAX_GRAPH_BYTES', 'fail', body + '; return recoveryBytes;')(fs, path, 1024, fail);
+    const file = path.join(root, mode);
+    if (mode === 'fifo') execFileSync('mkfifo', [file]);
+    else if (mode === 'directory') fs.mkdirSync(file);
+    else if (mode === 'symlink') fs.symlinkSync(host, file);
+    else fs.writeFileSync(file, 'original');
+    const descriptors = new Set(), originalOpen = fs.openSync, originalClose = fs.closeSync;
+    fs.openSync = function (...args) {
+      const fd = originalOpen.apply(fs, args); descriptors.add(fd); return fd;
+    };
+    fs.closeSync = function (fd) { originalClose.call(fs, fd); descriptors.delete(fd); };
+    if (mode === 'replacement') {
+      const open = fs.openSync;
+      fs.openSync = function (target, flags) {
+        if (target === file) { fs.unlinkSync(file); execFileSync('mkfifo', [file]); }
+        return open.call(fs, target, flags);
+      };
+    }
+    if (mode === 'changed') {
+      const readFile = fs.readFileSync;
+      fs.readFileSync = function (target, ...args) {
+        const bytes = readFile.call(fs, target, ...args);
+        if (typeof target === 'number') fs.appendFileSync(file, 'changed');
+        return bytes;
+      };
+    }
+    if (mode === 'regular') assert.equal(read(file, root).toString(), 'original');
+    else assert.throws(() => read(file, root), error => error.code === 'REPAIR_SUBJECT_CHANGED');
+    assert.equal(descriptors.size, 0);
+  `;
+  try {
+    for (const mode of ['fifo', 'replacement', 'directory', 'symlink', 'changed', 'regular']) {
+      const result = spawnSync(process.execPath, ['-e', script, host, root, mode], { encoding: 'utf8', timeout: 3000 });
+      assert.equal(result.error, undefined, mode + ': ' + String(result.error));
+      assert.equal(result.signal, null, mode);
+      assert.equal(result.status, 0, mode + ': ' + result.stderr);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 done();

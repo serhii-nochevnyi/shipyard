@@ -2213,14 +2213,20 @@ function recoveryBytes(file, root) {
   const relative = path.relative(root, path.resolve(file));
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)
       || fs.realpathSync(file) !== path.resolve(file)) fail('REPAIR_SUBJECT_CHANGED', 'recovery source escapes its root');
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  const initial = fs.lstatSync(file);
+  if (!initial.isFile() || initial.size > MAX_GRAPH_BYTES)
+    fail('REPAIR_SUBJECT_CHANGED', 'unbounded recovery source');
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     const before = fs.fstatSync(fd);
-    if (!before.isFile() || before.size > MAX_GRAPH_BYTES) fail('REPAIR_SUBJECT_CHANGED', 'unbounded recovery source');
+    if (!before.isFile() || before.size > MAX_GRAPH_BYTES || before.dev !== initial.dev || before.ino !== initial.ino
+        || before.size !== initial.size || before.mtimeMs !== initial.mtimeMs || before.ctimeMs !== initial.ctimeMs)
+      fail('REPAIR_SUBJECT_CHANGED', 'recovery source changed before read');
     const bytes = fs.readFileSync(fd);
     const after = fs.fstatSync(fd), live = fs.lstatSync(file);
     if (bytes.length !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs
-        || before.ctimeMs !== after.ctimeMs || live.dev !== before.dev || live.ino !== before.ino)
+        || before.ctimeMs !== after.ctimeMs || live.dev !== before.dev || live.ino !== before.ino
+        || !live.isFile() || live.size !== before.size || live.mtimeMs !== before.mtimeMs || live.ctimeMs !== before.ctimeMs)
       fail('REPAIR_SUBJECT_CHANGED', 'recovery source changed during read');
     return bytes;
   } finally { fs.closeSync(fd); }
