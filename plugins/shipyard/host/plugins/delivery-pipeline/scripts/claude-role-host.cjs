@@ -607,7 +607,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
   const priorVerdicts = roleArtifact.priorCodeReviewVerdicts({ worktreePath: canonical.worktree,
     repository: canonical.commonPath, phaseDir: binding.phase, graphDir: graph.directory });
   const ancestry = new Map();
-  const history = { priorVerdicts, head: canonical.head, isAncestor(earlier, current) {
+  const history = { priorVerdicts, mergeBase, head: canonical.head, isAncestor(earlier, current) {
     const key = `${earlier}:${current}`;
     if (!ancestry.has(key)) {
       try { ancestry.set(key, git(options, canonical.worktree, ['merge-base', earlier, current]) === earlier); }
@@ -628,9 +628,12 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
   const readSource = core.createSourceReader({ git: (args, maxBuffer) =>
     git(options, canonical.worktree, args, maxBuffer, true), head: canonical.head });
   const prior = countable.at(-1) || { findings: [] };
-  const mapped = core.carryPriorFindings({ priorFindings: prior, deltaDiff: diff, readSource });
+  const mappingDiff = countable.length ? git(options, canonical.worktree,
+    ['diff', '--no-ext-diff', '--no-textconv', '--unified=50', prior.head, canonical.head, ...productPathspec()],
+    CODE_REVIEW_MATERIAL_MAX_BYTES, true) : '';
+  const mapped = core.carryPriorFindings({ priorFindings: prior, deltaDiff: mappingDiff, readSource });
   const disagreements = loadCodeReviewDisagreements(graph, binding.phase, mapped);
-  const priorFindings = core.carryPriorFindings({ priorFindings: prior, deltaDiff: diff, readSource, disagreements });
+  const priorFindings = core.carryPriorFindings({ priorFindings: prior, deltaDiff: mappingDiff, readSource, disagreements });
   const plans = rows.map(({ id, row }) => {
     const content = fileText(canonical.projectRoot, row.plan);
     return { id, path: row.plan, content, ...parsePlan(content) };

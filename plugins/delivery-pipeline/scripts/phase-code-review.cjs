@@ -136,7 +136,7 @@ function status(input, options = {}) {
   const authority = require('./role-artifact.cjs');
   const prior = authority.priorCodeReviewVerdicts({ worktreePath: worktree, repository,
     phaseDir: binding.phase, graphDir: mode.graph_dir });
-  const history = { priorVerdicts: prior, head: live.headRefOid, isAncestor: (a, b) => {
+  const history = { priorVerdicts: prior, mergeBase: git(worktree, ['merge-base', live.baseRefOid, live.headRefOid]), head: live.headRefOid, isAncestor: (a, b) => {
     try { git(worktree, ['merge-base', '--is-ancestor', a, b]); return true; }
     catch (error) {
       if (error.status === 1 && !error.signal && !error.code && !error.killed && !error.error) return false;

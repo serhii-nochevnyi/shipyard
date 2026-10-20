@@ -4959,17 +4959,69 @@ function codeReviewManifestFields(source) {
     .map(key => [key, source[key]]));
 }
 
-function assertCodeReviewLineage(data, identity) {
-  if (data.role !== 'code-review' || data.verdict !== 'pass' || data.review_scope === 'full') return;
+function codeReviewCoverageRange(trusted, findings, identity) {
+  const packets = require('./context-packet.cjs');
+  const runtime = trusted.receipt.runtime_evidence;
+  let packet;
+  try {
+    if (trusted.receipt.runtime === 'claude' && trusted.receipt.selection_evidence?.transcript) {
+      packet = originalInlinePacket(trusted).packet;
+    } else if (runtime?.input_transport === 'host-files') {
+      const checked = require('./codex-arch-review-context.cjs').verifyFileInput(runtime.input_bundle,
+        { sealed: true, historical: true, association: { role: 'code-review', dispatch_id: trusted.dispatchId } });
+      packet = packets.decodeUniqueContent(JSON.parse(checked.material[0]));
+    } else if (findings.host_context?.original_packet) {
+      const encoded = findings.host_context.original_packet;
+      if (digest(JSON.stringify(encoded)) !== runtime?.code_review?.context_digest
+          || findings.context_digest !== runtime.code_review.context_digest)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'original coverage packet differs from authenticated launch');
+      packet = packets.decodeUniqueContent(encoded);
+    }
+  } catch { return null; }
+  if (!packet) return null;
+  if (trusted.receipt.runtime === 'codex') {
+    const expected = runtime?.code_review;
+    if (!expected || expected.context_digest !== digest(JSON.stringify(packets.encodeUniqueContent(packet)))
+        || expected.context_digest !== findings.context_digest || expected.head !== identity.head
+        || expected.base_commit !== identity.base_commit || expected.id !== trusted.record.ticket)
+      return null;
+  }
+  const context = packet.role_context, material = context?.exact_diff;
+  const from = findings.review_scope === 'full' ? identity.merge_base : findings.prior_head;
+  if (packet.role !== 'code-review' || packet.subject !== trusted.record.ticket
+      || packet.source_revision !== identity.head || context?.integration_base?.commit !== identity.base_commit
+      || (context?.focused && (context.focused.merge_base !== identity.merge_base
+        || context.focused.head !== identity.head || context.focused.base_commit !== identity.base_commit))
+      || (context.review_scope !== undefined && context.review_scope !== findings.review_scope)
+      || (context.review_round !== undefined && context.review_round !== findings.review_round)
+      || (context.prior_head !== undefined && context.prior_head !== findings.prior_head)
+      || ((material?.from ?? material?.base) !== undefined && (material.from ?? material.base) !== from)
+      || ((material?.to ?? material?.head) !== undefined && (material.to ?? material.head) !== identity.head)) return null;
+  const actual = reviewGit(identity.worktree, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
+    from, identity.head, ...require('./development-artifacts.cjs').productPathspec()]);
+  if (typeof material.content !== 'string' || material.content.trimEnd() !== actual.trimEnd()) return null;
+  for (const [key, flag] of [['name_status', '--name-status'], ['numstat', '--numstat']]) {
+    const declared = context.change_metadata?.[key];
+    if (declared !== undefined && (typeof declared !== 'string' || declared.trimEnd() !== reviewGit(identity.worktree,
+      ['diff', flag, '-z', '--find-renames', from, identity.head,
+        ...require('./development-artifacts.cjs').productPathspec()]))) return null;
+  }
+  return { from, to: identity.head, merge_base: identity.merge_base };
+}
+
+function assertCodeReviewLineage(data, identity, trusted, findings) {
+  if (data.role !== 'code-review' || data.verdict !== 'pass') return;
   const fields = require('./architecture-target.cjs').parseSubject('architecture-review', data.subject);
-  const prior = priorCodeReviewVerdicts({ worktreePath: identity.worktree, repository: identity.repository.identity, phaseDir: fields.phase });
-  const countable = require('./code-review-core.cjs').countableVerdicts({ priorVerdicts: prior, head: identity.head,
-    isAncestor: (a, b) => {
+  const history = priorCodeReviewVerdicts({ worktreePath: identity.worktree, repository: identity.repository.identity, phaseDir: fields.phase });
+  const original = history.find(entry => entry.dispatch_id === trusted.dispatchId);
+  const prior = history.filter(entry => entry.dispatch_id !== trusted.dispatchId);
+  const verdict = { ...data, head: identity.head, sealed_at: original?.sealed_at,
+    coverage_range: codeReviewCoverageRange(trusted, findings, identity) };
+  if (!require('./code-review-core.cjs').coverageComplete({ verdict, priorVerdicts: prior,
+    mergeBase: identity.merge_base, isAncestor: (a, b) => {
       try { reviewGit(identity.worktree, ['merge-base', '--is-ancestor', a, b]); return true; }
-      catch { return false; }
-    } });
-  if (!countable.some(verdict => verdict.head === data.prior_head))
-    fail('JUDGMENT_OUTCOME_MISMATCH', 'a complete delta pass requires a sealed complete full-scope lineage');
+      catch (error) { if (error.status === 1) return false; throw error; }
+    } })) fail('JUDGMENT_OUTCOME_MISMATCH', 'a pass requires authenticated complete current material coverage');
 }
 
 function codeReviewResultData(result, metadata, input, identity, ticketSet) {
@@ -5072,7 +5124,7 @@ function authenticatedCodeReviewRecord(worktree, record, repository) {
     fail('ARCHIVE_AUTHORITY_INVALID', 'code-review envelope differs from authenticated findings');
   if (typeof record.sealed_at !== 'string' || !Number.isFinite(Date.parse(record.sealed_at)))
     fail('ARCHIVE_AUTHORITY_INVALID', 'code-review seal time is missing');
-  return { ...data, head: manifest.head, base_commit: manifest.base_commit, prior_head: manifest.prior_head,
+  return { ...data, coverage_range: codeReviewCoverageRange(trusted, findings, identity), head: manifest.head, base_commit: manifest.base_commit, prior_head: manifest.prior_head,
     sealed_at: record.sealed_at, artifact_ref: path.join(worktree, manifestFile.path), artifact_digest: manifestFile.sha256,
     dispatch_id: record.dispatch_id, subject, fields };
 }
@@ -5097,9 +5149,9 @@ function priorCodeReviewVerdicts({ worktreePath, repository, phaseDir, graphDir 
   }
   return records.sort((a,b) => a.sealed_at.localeCompare(b.sealed_at)).map(({ head, base_commit, verdict, review_completeness,
     review_round, review_scope, prior_head, blocking_count, findings, dispositions, disagreement_suppressed,
-    citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest }) => ({ head, base_commit, verdict,
+    citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest, coverage_range, dispatch_id }) => ({ head, base_commit, verdict,
     review_completeness, review_round, review_scope, prior_head, blocking_count, findings, dispositions,
-    disagreement_suppressed, citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest }));
+    disagreement_suppressed, citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest, coverage_range, dispatch_id }));
 }
 
 function codeReviewPlanningReference({ worktree, graphDir, repo = null, phase, branch }) {
@@ -5210,7 +5262,7 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
         || manifest.contract_digest !== contract || manifest.reuse_key !== core.reuseKey({ head, baseCommit, contractDigest: contract })) continue;
     const findingBytes = readPinnedArchiveFile(manifest.worktree_realpath, manifest.files.findings, 'current code-review findings');
     const findings = JSON.parse(findingBytes);
-    let selectedPlanning = findings.host_context;
+    let selectedPlanning = findings.host_context && Object.fromEntries(Object.entries(findings.host_context).filter(([key]) => key !== 'original_packet'));
     const record = authorityState(manifest.worktree_realpath).payload.records[manifest.producer_dispatch];
     const trusted = trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: record.receipt_store });
     let originalPacket, originalReference;
@@ -5252,7 +5304,18 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
         selectedPlanning = originalContext;
       }
     }
+    if (findings.host_context?.original_packet) {
+      const retainedPacket = packets.decodeUniqueContent(findings.host_context.original_packet);
+      const retainedPlanning = { planning_reference: retainedPacket.role_context?.planning_reference,
+        selected_refs: retainedPacket.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
+      if (stable(retainedPlanning) !== stable(selectedPlanning)) { current = null; currentPlanning = null; continue; }
+    }
     try { checkPlanning(selectedPlanning); } catch { current = null; currentPlanning = null; continue; }
+    if (verdict.review_completeness === 'complete' && !core.coverageComplete({ verdict, priorVerdicts: prior,
+      mergeBase: manifest.merge_base, isAncestor: (a, b) => {
+        try { reviewGit(root, ['merge-base', '--is-ancestor', a, b]); return true; }
+        catch (error) { if (error.status === 1) return false; throw error; }
+      } })) { current = null; currentPlanning = null; continue; }
     currentPlanning = selectedPlanning;
     current = { authenticated: true, verdict: verdict.verdict, blocking_count: verdict.blocking_count,
       review_completeness: verdict.review_completeness, round: verdict.review_round, scope: verdict.review_scope,
@@ -5869,7 +5932,7 @@ function sealJudgment(value, options) {
   metadata.trusted = trusted;
   const result = input.result;
   const data = judgmentResultData(result, metadata, input, identity);
-  assertCodeReviewLineage(data, identity);
+  assertCodeReviewLineage(data, identity, trusted, result);
   const sourceEvidenceName = judgmentEvidenceName(role, input.phase);
   const requestedEvidence = input.evidencePath || input.evidence_path || sourceEvidenceName;
   const evidencePath = judgmentEvidencePath(
@@ -6031,7 +6094,7 @@ function validateJudgmentManifest(value, options) {
     fail('INVALID_ARTIFACT', `archived judgment findings are not valid JSON: ${error.message}`);
   }
   const data = judgmentResultData(result, metadata, input, identity);
-  assertCodeReviewLineage(data, identity);
+  assertCodeReviewLineage(data, identity, trusted, result);
   if (manifest.subject !== data.subject
       || manifest.boundary_subject !== metadata.ticket
       || (data.phase !== undefined && manifest.phase !== data.phase)

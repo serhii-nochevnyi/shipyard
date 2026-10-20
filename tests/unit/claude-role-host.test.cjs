@@ -726,7 +726,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
                 const userInput = JSON.parse(framedInput.slice(0, -1));
                 const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
                 const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
-                const { output } = await runtime.agent(userInput.message.content, { model, effort, schema: JSON.parse(args[args.indexOf('--json-schema') + 1]) });
+                const { output } = await runtime.agent(userInput.message.content, { model, effort, readOnly: true, schema: JSON.parse(args[args.indexOf('--json-schema') + 1]) });
                 const init = template(row => row.type === 'system' && row.subtype === 'init');
                 Object.assign(init, { session_id: session, model, cwd: fixture.root });
                 const assistant = template(row => row.type === 'assistant');
@@ -819,7 +819,7 @@ function hostOptions(fixture, extra = {}) {
       return { repos, synced: true, committed: null };
     },
     createRuntimeHost: fakeRuntimeFactory(fixture, {
-      ...(fixture.kind === 'arch-review' && !extra.badEvidence && !extra.corruptDigest ? { originalStream: true } : {}), ...extra }),
+      ...(['arch-review', 'code-review'].includes(fixture.kind) && !extra.badEvidence && !extra.corruptDigest ? { originalStream: true } : {}), ...extra }),
   };
 }
 
@@ -3132,4 +3132,31 @@ test(`code-review pins ${name} through the native launch boundary`, async (t) =>
     await assert.rejects(createClaudeRoleHost(options).run(codeReviewRequest(fixture)), { code: 'STALE_CONTEXT' });
     assert.equal(launches, 0);
   } finally { cleanupFixture(fixture); }
+});
+
+test('pure Claude preparation refreshes expanded coverage at round two without launching again', async () => {
+  const f = setupCodeReview({ coordinatorGraph: true });
+  try {
+    const A = f.head;
+    write(f.root, 'src/base-only.txt', 'BASE_ONLY_EXPOSED_CHANGE\n');
+    codeReviewCommit(f, ['src/base-only.txt']);
+    const B = f.head;
+    write(f.root, 'src/role.txt', 'reviewed change\nphase-only change\n');
+    codeReviewCommit(f);
+    f.base = B;
+    git(f.root, ['update-ref', 'refs/heads/main', B]);
+    git(f.root, ['update-ref', 'refs/remotes/origin/main', B]);
+    await runCodeReview(f);
+    assert.equal(reviewHistory(f).length, 1);
+    f.base = A;
+    git(f.root, ['update-ref', 'refs/heads/main', A]);
+    git(f.root, ['update-ref', 'refs/remotes/origin/main', A]);
+    const options = hostOptions(f, { createRuntimeHost() { assert.fail('pure preparation cannot launch'); } });
+    const prepared = preparationOnlyHost().prepareInvocation(options, parseRequest(codeReviewRequest(f)));
+    assert.equal(prepared.round.round, 2);
+    assert.equal(prepared.round.scope, 'full');
+    assert.equal(prepared.round.priorHead, f.head);
+    assert(prepared.packet.role_context.exact_diff.content.includes('BASE_ONLY_EXPOSED_CHANGE'));
+    assert(prepared.packet.role_context.change_metadata.name_status.includes('src/base-only.txt'));
+  } finally { cleanupFixture(f); }
 });

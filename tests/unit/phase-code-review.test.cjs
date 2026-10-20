@@ -614,7 +614,9 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
     scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
       planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
       ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
-      exact_diff: { content: f.git(['diff', f.base, 'HEAD', '--', 'source.js']) },
+      exact_diff: { content: f.git(['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
+        input.result.review_scope === 'delta' ? input.result.prior_head : f.base, 'HEAD',
+        ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()]) },
       integration_base: { commit: f.base } } });
   const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
     const session = 'original-' + r.dispatch_id;
