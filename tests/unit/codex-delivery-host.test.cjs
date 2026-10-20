@@ -2143,6 +2143,9 @@ test('serialized full paged feedback selects global Node IDs across Actor varian
 
 async function originalFixerFixture(outcome, mutation, evolution = null, historicalRecovery = null) {
   const f = fixture({ physicalPaths: true });
+  if (['pending', 'action'].includes(historicalRecovery)) fs.writeFileSync(path.join(f.graphDir, 'delivery-log.jsonl'),
+    JSON.stringify({ ts: '2026-10-19T07:31:21.739Z', event: 'status_change', ticket: 'T-999-98',
+      from: null, to: 'pending', pr: null }) + '\n');
   const defaultAgents = mutation?.startsWith('normalized-default-') || mutation?.startsWith('normalized-cli-default-');
   const defaultOsHome = mutation?.endsWith('-os-home');
   const home = defaultOsHome ? path.join(fs.realpathSync(temporary), '.codex')
@@ -2932,8 +2935,9 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
             if (fs.existsSync(root)) for (const file of fs.readdirSync(root)) originals.push({
               file: path.join(root, file), bytes: fs.readFileSync(path.join(root, file)) });
           }
-          const recovery = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport,
-            verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() });
+          const recoveryOptions = { ...cliOptions(f), getPullRequest: live, execFileSync: transport,
+            verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() };
+          const recovery = createFinalizationRecoveryHost(recoveryOptions);
           const resume = () => recovery.resumeFinalization(candidate.candidate_id, f.scope);
           const unchangedCounters = () => assert.deepEqual([launches, pushes, replies.length, prReplies.length], counters);
           const rejectFileChange = async (file, mutate) => {
@@ -2994,6 +2998,46 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
             git(f.root, 'update-ref', 'HEAD', unrelated); publishedHead = unrelated;
             await assert.rejects(resume); unchangedCounters();
           } finally { git(f.root, 'update-ref', 'HEAD', sourceHead); publishedHead = originalPublished; }
+          if (['pending', 'action'].includes(historicalRecovery)) {
+            const originalGraph = fs.readFileSync(graphFile);
+            const snapshot = path.join(f.root, '.git', 'original-recovery-graph.json');
+            fs.writeFileSync(snapshot, originalGraph);
+            recoveryOptions.recoveryGraphSnapshot = snapshot;
+            const journal = candidate.repair_subject.journal;
+            assert.ok(journal);
+            const journalBytes = fs.readFileSync(journal.path);
+            const row = { ts: '2026-10-20T07:31:21.739Z', event: 'status_change', ticket: 'T-999-99',
+              from: null, to: 'pending', pr: null };
+            const append = value => fs.writeFileSync(journal.path, Buffer.concat([journalBytes, Buffer.from(value)]));
+            for (const invalid of [JSON.stringify(row), 'false\n', '{bad}\n',
+              JSON.stringify({ ...row, ticket: f.scope.ticket }) + '\n',
+              JSON.stringify({ ...row, pr: candidate.repair_subject.pr }) + '\n',
+              JSON.stringify({ ...row, event: 'repair_attempt' }) + '\n',
+              JSON.stringify({ ...row, to: false }) + '\n', Buffer.from([0xff, 10])]) {
+              append(invalid);
+              await assert.rejects(resume); unchangedCounters();
+            }
+            append(JSON.stringify(row) + '\n');
+            const evolved = JSON.parse(originalGraph);
+            evolved.tickets['T-999-99'] = { ...evolved.tickets[f.scope.ticket], depends_on: [f.scope.ticket] };
+            fs.writeFileSync(graphFile, JSON.stringify(evolved));
+            await rejectFileChange(snapshot, file => fs.appendFileSync(file, ' '));
+            await rejectFileChange(graphFile, file => {
+              const changed = JSON.parse(fs.readFileSync(file)); changed.tickets[f.scope.ticket].risk = 'changed';
+              fs.writeFileSync(file, JSON.stringify(changed));
+            });
+            await rejectFileChange(journal.path, (file, bytes) => {
+              const changed = Buffer.from(bytes); changed[0] ^= 1; fs.writeFileSync(file, changed);
+            });
+            await rejectFileChange(journal.path, file => fs.writeFileSync(file, journalBytes.subarray(0, -1)));
+            await rejectFileChange(graphFile, file => {
+              const changed = JSON.parse(fs.readFileSync(file)); changed.epics = { forged: true };
+              fs.writeFileSync(file, JSON.stringify(changed));
+            });
+            delete recoveryOptions.recoveryGraphSnapshot;
+            await assert.rejects(resume); unchangedCounters();
+            recoveryOptions.recoveryGraphSnapshot = snapshot;
+          }
           const resumed = await resume();
           assert.equal(resumed.publication.status, 'confirmed');
           assert.equal(resumed.actions.status, 'confirmed');
@@ -3004,6 +3048,10 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
           const again = await recovery.resumeFinalization(candidate.candidate_id, f.scope);
           assert.deepEqual(again.artifact, resumed.artifact);
           assert.deepEqual([launches, pushes, replies.length, prReplies.length], accepted);
+          if (candidate.repair_subject.journal) {
+            const pin = candidate.repair_subject.journal;
+            assert.equal(crypto.createHash('sha256').update(fs.readFileSync(pin.path).subarray(0, pin.bytes)).digest('hex'), pin.sha256);
+          }
           for (const original of originals) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
           for (const original of retainedFiles) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
           return;
