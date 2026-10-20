@@ -648,6 +648,16 @@ then add `reason` and `recorded_by`. The host computes those citation values;
 partial source text does not identify a finding. The comment also reports the
 suppressed-finding count and `citations_unresolved`.
 
+Run each review builder from the epic worktree with the same explicit canonical
+project graph used by status, gate, publish and verify; a tracked graph in the
+epic checkout can carry a different mode. Add `--repo owner/name` consistently
+for a foreign repository:
+
+```sh
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build code-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
+```
+
 Each review builder prints the request to launch. For Codex, save that request
 in a mode-0600 file in a directory made with `mktemp -d` outside every worktree,
 then from the epic worktree run

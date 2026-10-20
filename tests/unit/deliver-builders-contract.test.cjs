@@ -42,6 +42,22 @@ test('these role instructions no longer hand-build boundary requests', () => {
 });
 
 const step5 = deliver.slice(deliver.indexOf('## Step 5'), deliver.indexOf('## Rules'));
+const pipelineDocs = fs.readFileSync(path.join(repositoryRoot, 'docs/gsd_multilevel_delivery_pipeline.md'), 'utf8');
+const phaseBuilderArgv = source => [...source.replace(/\\\n\s*/g, ' ').matchAll(
+  /^\s*node \$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/deliver-dispatch\.cjs build ((?:code-review|arch-review) <phase-directory>[^\n]*)/gm
+)].map(([, argv]) => argv.replace(/\s+\[--repo owner\/name\]$/, '').trim().split(/\s+/));
+
+test('every documented phase review builder explicitly selects the canonical project graph', () => {
+  for (const [source, roles] of [[deliver, ['arch-review', 'code-review', 'arch-review']],
+    [pipelineDocs, ['code-review', 'arch-review']]]) {
+    const commands = phaseBuilderArgv(source);
+    assert.deepStrictEqual(commands.map(argv => argv[0]), roles);
+    for (const argv of commands) assert.deepStrictEqual(argv, [argv[0], '<phase-directory>', '--phase', '<N>',
+      '--pr', '<integration-pr>', '--runtime', '<codex|claude>', '--graph', '<project-root>/.planning/graph']);
+  }
+  assert.match(deliver.replace(/\\\n\s*/g, ' '),
+    /deliver-dispatch\.cjs build arch-review <T>\s+--runtime <r> --pr <N> --graph <project-root>\/\.planning\/graph/);
+});
 
 test('phase finale orders publication, prelaunch gate, integrator, architecture review and ready', () => {
   let previous = -1;
@@ -105,6 +121,60 @@ function integrationRepo(run) {
       clear: () => prepareRoleArtifact({ worktreePath: root, role: 'integrator', phase }) });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
+
+test('documented review argv selects project hold policy over a linked epic report checkout', () => {
+  integrationRepo(({ root, git, write }) => {
+    const previousGraph = process.env.SHIPYARD_GRAPH_DIR, previousHomedir = os.homedir;
+    const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase-builder-linked-')));
+    const linked = path.join(directory, 'epic'), graphDir = path.join(root, '.planning/graph');
+    const branch = `epic/${phase}`, base = git(['rev-parse', 'HEAD']);
+    const flow = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
+    const config = mode => JSON.stringify({ git: { base_branch: 'main' }, delivery_pipeline: { code_review: mode } });
+    try {
+      delete process.env.SHIPYARD_GRAPH_DIR;
+      os.homedir = () => directory;
+      write('.planning/config.json', config('report'));
+      write('.planning/graph/tickets.json', JSON.stringify({
+        epics: { '052': { branch, phaseDir: phase, repos: [null], jira: null } },
+        tickets: { 'T-52-01': { phase: 52, phaseDir: phase, epic: branch, repo: null,
+          branch: 'ticket/T-52-01-demo', plan: `.planning/phases/${phase}/52-01-PLAN.md` } },
+      }));
+      write('.planning/graph/delivery-state.json', JSON.stringify({ tickets: {
+        'T-52-01': { status: 'merged', pr: 1, head_sha: base, merge_sha: base },
+      } }));
+      git(['add', '.planning']); git(['commit', '--quiet', '-m', 'tracked report graph']);
+      git(['worktree', 'add', '--quiet', '-b', branch, linked]);
+      write('.planning/config.json', config('hold'));
+      const options = { cwd: linked, defaultBranch: 'main', getPullRequest: () => ({ number: 52, state: 'OPEN',
+        headRefName: branch, headRefOid: git(['rev-parse', 'HEAD']), baseRefName: 'main', baseRefOid: base }) };
+      const input = { phase: 52, phaseDirectory: phase, pr: 52, worktree: linked, graphDir };
+      const status = flow.status(input, options);
+      assert.strictEqual(status.mode, 'hold'); assert.strictEqual(status.state, 'owed');
+      assert.strictEqual(flow.evaluateGate(status).ok, false);
+      assert.strictEqual(flow.verifyCodeReview({ ...input, live: options.getPullRequest() }, options).ok, false);
+      assert.strictEqual(flow.resolveCodeReviewMode({ graphDir: path.join(linked, '.planning/graph') }).mode, 'report');
+      for (const source of [deliver, pipelineDocs]) {
+        const commands = phaseBuilderArgv(source);
+        assert.ok(commands.length >= 2);
+        for (const documented of commands) {
+          const substitutions = { '<phase-directory>': phase, '<N>': '52', '<integration-pr>': '52',
+            '<codex|claude>': 'codex', '<project-root>/.planning/graph': graphDir };
+          const argv = documented.map(arg => substitutions[arg] || arg);
+          const implicit = argv.slice(0, argv.indexOf('--graph'));
+          assert.strictEqual(dispatcher.build(implicit, options).graph_dir, path.join(linked, '.planning/graph'));
+          if (argv[0] === 'code-review') assert.strictEqual(dispatcher.build(argv, options).graph_dir, graphDir);
+          else assert.throws(() => dispatcher.build(argv, options), /phase code review is owed.*delivery_pipeline.code_review.*report/);
+        }
+      }
+    } finally {
+      os.homedir = previousHomedir;
+      if (previousGraph === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+      else process.env.SHIPYARD_GRAPH_DIR = previousGraph;
+      if (fs.existsSync(linked)) git(['worktree', 'remove', '--force', linked]);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 test('live integration evidence refuses both hosts; prepare clears exactly the role file', () => {
   integrationRepo(({ write, status, clear }) => {

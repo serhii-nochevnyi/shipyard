@@ -137,7 +137,10 @@ for (const jira of [null, 'PRJ-42']) {
       f.seal(result);
       const published = flow.publish(f.input(), f.options);
       assert.equal(published.status.state, 'pending'); assert.equal(published.status.description, description);
+      assert.equal(hygiene.applies({ root: f.root }), true);
       assert.equal(published.comment.ok, true);
+      assert.deepEqual(published.rules, []);
+      if (name === 'needs-fix') assert.match(f.comments[0].body, /Proposed fix-ticket title: Repair source/);
       assert.match(f.comments[0].body, /delivery_pipeline.code_review.*report/);
       assert(!f.writes.some(write => ['failure', 'error'].includes(write.fields.state)));
     } finally { f.cleanup(); }
@@ -359,14 +362,32 @@ test('the reader registry recognizes direct imports and path-built requires', ()
   assert.equal(importsCheckState("require(path.join(__dirname, 'other.cjs'))"), false);
 });
 
-test('check rollup reader registry requires a new audit for any added reader', () => {
-  const sources = fs.readdirSync(scripts, { recursive: true }).filter(file => /\.[cm]?js$/.test(file))
-    .map(file => [file, fs.readFileSync(path.join(scripts, file), 'utf8')]);
+const readerSources = () => fs.readdirSync(scripts, { recursive: true }).filter(file => /\.[cm]?js$/.test(file))
+  .map(file => [file, fs.readFileSync(path.join(scripts, file), 'utf8')]);
+function assertReaderRegistry(sources) {
   const message = 're-audit the check-rollup readers (plan 52-11)';
   assert.deepEqual(sources.filter(([, source]) => importsCheckState(source))
     .map(([file]) => file).sort(), ['ci-wait.cjs', 'front.cjs', 'sentinel.cjs', 'state-sync.cjs'], message);
   assert.deepEqual(sources.filter(([, source]) => /['"]pr['"]\s*,\s*['"]checks['"]\s*,\s*String\(/.test(source))
     .map(([file]) => file).sort(), ['ci-wait.cjs', 'sentinel.cjs', 'state-sync.cjs'], message);
+}
+
+test('check rollup reader registry requires a new audit for any added reader', () => {
+  assertReaderRegistry(readerSources());
+});
+
+test('reader registry rejects an added importer or direct checks caller', () => {
+  const sources = readerSources();
+  assertReaderRegistry(sources);
+  for (const source of [
+    "require('./check-state.cjs')",
+    "require(path.join(__dirname, 'check-state.cjs'))",
+    "require(path.resolve(__dirname, 'check-state.cjs'))",
+    "import { classify } from './check-state.cjs'",
+    "import('./check-state.cjs')",
+    "gh(['pr', 'checks', String(pr)])",
+  ]) assert.throws(() => assertReaderRegistry([...sources, ['new-reader.cjs', source]]),
+    /re-audit the check-rollup readers \(plan 52-11\)/, source);
 });
 
 test('readGate ignores a newer pending code-review status beside merge-gate success', () => {

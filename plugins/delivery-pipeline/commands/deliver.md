@@ -31,7 +31,7 @@ review. For the phase epic PR, explicitly select the canonical phase directory a
 actual integration PR from the epic worktree:
 
 ```sh
-node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> [--repo owner/name]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph [--repo owner/name]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph [--repo owner/name]
 ```
 
@@ -2416,7 +2416,7 @@ loop:
 
      ```text
      node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <T> \
-       --runtime <r> --pr <N>
+       --runtime <r> --pr <N> --graph <project-root>/.planning/graph
      ```
 
      The Codex builder returns a request validated by the Codex host, which
@@ -2909,7 +2909,7 @@ driving PRs hands the user a half-truth.
 
      ```sh
      node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-code-review.cjs status <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build code-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude>
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build code-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
      ```
 
      When status prints `unmatched`, stop in both modes and print its reason:
@@ -3187,7 +3187,7 @@ driving PRs hands the user a half-truth.
      above, then run the live verifier, in that order:
 
      ```sh
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude>
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
      node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph
      ```
 
