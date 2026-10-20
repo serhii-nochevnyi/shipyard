@@ -2421,6 +2421,144 @@ test('the Claude semantic transcript falls back through the shared Claude home',
   } finally { restore('CLAUDE_CONFIG_DIR', saved.config); restore('HOME', saved.home); }
 });
 
+function reverseReviewKeys(value) {
+  if (Array.isArray(value)) return value.map(reverseReviewKeys);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).reverse()
+    .map(([key, item]) => [key, reverseReviewKeys(item)]));
+  return value;
+}
+
+for (const incomplete of [false, true]) test('legacy reordered code-review membership reads publicly: incomplete=' + incomplete, () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const f = reviewFixture();
+  try {
+    f.graph.tickets['T-52-01'].files = ['source.js', 'round.txt'];
+    const binding = f.advance(1);
+    const input = f.input(binding);
+    input.result.ticket_set = reverseReviewKeys(binding.ticketSet);
+    assert.deepEqual(input.result.ticket_set, binding.ticketSet);
+    assert.notEqual(JSON.stringify(input.result.ticket_set), JSON.stringify(binding.ticketSet));
+    if (incomplete) {
+      input.result.review_completeness = 'incomplete';
+      input.result.verdict = 'incomplete';
+      input.result.limitations = ['Unread source remains'];
+    }
+    const sealed = roleArtifact.sealJudgment(input);
+    const original = fs.readFileSync(sealed.artifact_ref);
+    const retainedFiles = [sealed.artifact_ref,
+      ...roleArtifact.authenticatedArchivePins(f.root).map(pin => path.join(f.root, pin.path)),
+      path.join(roleArtifact.archiveAuthorityDirectory(f.root), 'catalogue.json'),
+      ...fs.readdirSync(f.recorder.storeDir).filter(name => name.startsWith('record-'))
+        .map(name => path.join(f.recorder.storeDir, name))];
+    const retainedBytes = retainedFiles.map(file => fs.readFileSync(file));
+    const history = () => roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+      repository: target.repositoryIdentity(f.root), phaseDir: f.phase, graphDir: f.graphDir });
+    const prior = history();
+    assert.equal(prior.length, 1);
+    assert.equal(prior[0].blocking_count, 1);
+    assert.equal(prior[0].review_completeness, incomplete ? 'incomplete' : 'complete');
+    assert.equal(f.lookup().artifact_digest, sealed.artifact_digest);
+    if (incomplete) {
+      assert.equal(core.countableVerdicts({ priorVerdicts: prior, head: prior[0].head, isAncestor: () => false }).length, 0);
+      const next = core.nextRound({ priorVerdicts: prior, head: input.result.head });
+      assert.equal(next.rounds_used, 0);
+      assert.equal(next.round, 1);
+      assert.equal(next.scope, 'full');
+      assert.equal(f.lookup().verdict, 'incomplete');
+    }
+    for (const [index, file] of retainedFiles.entries()) assert.deepEqual(fs.readFileSync(file), retainedBytes[index]);
+    const manifest = JSON.parse(original);
+    const findingsPath = path.join(f.root, manifest.files.findings.path);
+    const findings = JSON.parse(fs.readFileSync(findingsPath));
+    findings.ticket_set[0].row.files.reverse();
+    fs.writeFileSync(findingsPath, JSON.stringify(findings));
+    assert.throws(history);
+    assert.equal(f.lookup(), null);
+  } finally { f.cleanup(); }
+});
+
+for (const digestForm of ['omitted', 'alias'])
+  test('legacy reordered membership preserves supported result digest form: ' + digestForm, () => {
+    const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+    const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+    const f = reviewFixture();
+    try {
+      const binding = f.advance(1), input = f.input(binding);
+      input.result.ticket_set = reverseReviewKeys(binding.ticketSet);
+      delete input.result.ticket_set_digest;
+      if (digestForm === 'alias') input.result.ticketSetDigest = '0'.repeat(64);
+      else input.ticketSetDigest = '0'.repeat(64);
+      assert.throws(() => roleArtifact.sealJudgment(input), { code: 'JUDGMENT_DIGEST_MISMATCH' });
+      input.ticketSetDigest = binding.membership;
+      if (digestForm === 'alias') input.result.ticketSetDigest = binding.membership;
+      const sealed = roleArtifact.sealJudgment(input);
+      const prior = roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+        repository: target.repositoryIdentity(f.root), phaseDir: f.phase, graphDir: f.graphDir });
+      assert.equal(prior.length, 1);
+      assert.equal(prior[0].artifact_digest, sealed.artifact_digest);
+      assert.equal(f.lookup().artifact_digest, sealed.artifact_digest);
+    } finally { f.cleanup(); }
+  });
+
+for (const mutation of ['manifest', 'file-index', 'mac', 'receipt', 'digest', 'subject', 'nested-evidence'])
+  test('public legacy code-review consumers reject authentic archive tampering: ' + mutation, () => {
+    const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+    const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+    const f = reviewFixture();
+    try {
+      const binding = f.advance(1), input = f.input(binding);
+      input.result.ticket_set = reverseReviewKeys(binding.ticketSet);
+      const sealed = roleArtifact.sealJudgment(input);
+      const manifest = JSON.parse(fs.readFileSync(sealed.artifact_ref));
+      if (mutation === 'manifest') {
+        manifest.head = f.base;
+        fs.writeFileSync(sealed.artifact_ref, JSON.stringify(manifest));
+      } else if (['file-index', 'mac'].includes(mutation)) {
+        const file = path.join(roleArtifact.archiveAuthorityDirectory(f.root), 'catalogue.json');
+        const envelope = JSON.parse(fs.readFileSync(file));
+        if (mutation === 'mac') envelope.mac = '0'.repeat(64);
+        else envelope.payload.records[input.dispatchId].pins[0].sha256 = '0'.repeat(64);
+        fs.writeFileSync(file, JSON.stringify(envelope));
+      } else if (mutation === 'receipt') {
+        const file = fs.readdirSync(f.recorder.storeDir).find(name => name.startsWith('record-'));
+        fs.appendFileSync(path.join(f.recorder.storeDir, file), 'x');
+      } else {
+        const file = path.join(f.root, manifest.files.findings.path);
+        const result = JSON.parse(fs.readFileSync(file));
+        if (mutation === 'digest') result.ticket_set_digest = '0'.repeat(64);
+        if (mutation === 'subject') result.id = binding.subject.replace('pr=52;', 'pr=53;');
+        if (mutation === 'nested-evidence') result.ticket_set[0].evidence.status = 'pending';
+        fs.writeFileSync(file, JSON.stringify(result));
+      }
+      assert.throws(() => roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+        repository: target.repositoryIdentity(f.root), phaseDir: f.phase, graphDir: f.graphDir }));
+      assert.equal(f.lookup(), null);
+    } finally { f.cleanup(); }
+  });
+
+for (const mutation of ['added', 'deleted', 'member-order', 'row', 'evidence', 'array-order', 'digest', 'subject'])
+  test('fresh code-review sealing rejects changed membership: ' + mutation, () => {
+    const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+    const f = reviewFixture();
+    try {
+      f.graph.tickets['T-52-01'].files = ['source.js', 'round.txt'];
+      const binding = f.advance(2);
+      const input = f.input(binding);
+      input.result.ticket_set = reverseReviewKeys(binding.ticketSet);
+      if (mutation === 'added') input.result.ticket_set.push({ id: 'T-52-99', row: {}, evidence: {} });
+      if (mutation === 'deleted') input.result.ticket_set.pop();
+      if (mutation === 'member-order') input.result.ticket_set.reverse();
+      if (mutation === 'row') input.result.ticket_set[0].row.epic = 'epic/forged';
+      if (mutation === 'evidence') input.result.ticket_set[0].evidence.status = 'pending';
+      if (mutation === 'array-order') input.result.ticket_set[0].row.files.reverse();
+      if (mutation === 'digest') input.result.ticket_set_digest = input.ticketSetDigest = '0'.repeat(64);
+      if (mutation === 'subject') input.result.id = binding.subject.replace('pr=52;', 'pr=53;');
+      assert.throws(() => roleArtifact.sealJudgment(input));
+    } finally { f.cleanup(); }
+  });
+
 test('code-review lineage survives real fix-ticket membership changes and keeps reuse exact', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
@@ -2432,6 +2570,7 @@ test('code-review lineage survives real fix-ticket membership changes and keeps 
       const binding = f.advance(round); digests.push(binding.membership);
       snapshots.push(structuredClone({graph:f.graph,state:f.state}));
       const input = f.input(binding,round,verdicts.at(-1)?.head || null);
+      input.result.ticket_set = reverseReviewKeys(binding.ticketSet);
       const sealed = roleArtifact.sealJudgment(input);
       const validated = roleArtifact.validateJudgmentManifest({...input,artifactPath:sealed.artifact_ref,artifactDigest:sealed.artifact_digest});
       assert.equal(validated.manifest.repository_identity,target.repositoryIdentity(f.root));

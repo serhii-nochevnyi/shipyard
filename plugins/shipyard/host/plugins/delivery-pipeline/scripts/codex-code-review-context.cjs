@@ -423,6 +423,8 @@ function finish(value, dispatch, recorder) {
     fail('result differs from complete ticket set', 'ARTIFACT_IDENTITY_MISMATCH');
   const normalized = core.normalizeResult(result, { round: prepared.round.round, scope: prepared.round.scope,
     priorFindings: prepared.priorFindings, readSource: options.readSource });
+  normalized.ticket_set = structuredClone(prepared.binding.ticketSet);
+  normalized.ticket_set_digest = prepared.binding.membership;
   if (input) Object.assign(normalized, validateCodeReviewCoverage(normalized, input.manifest));
   const { evidence_markdown: evidenceMarkdown, host_context: _context, ...judgment } = normalized;
   Object.assign(judgment, { prior_head: prepared.round.priorHead, contract_digest: prepared.contractDigest,
