@@ -23,7 +23,7 @@ const CANONICAL_MODEL_MAPPINGS = Object.freeze({
   claude: CLAUDE_MODEL_ALIASES,
 });
 
-const POLICY_VERSION = 'adr-014.v7';
+const POLICY_VERSION = 'adr-014.v8';
 const SUPPORTED_RUNTIMES = Object.freeze(['codex', 'claude']);
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const SIGNATURE_STATES = Object.freeze([
@@ -47,6 +47,7 @@ const ROLES = Object.freeze([
   'integrator',
   'drift-check',
   'arch-review',
+  'code-review',
   'ci-fix',
   'review-fix',
 ]);
@@ -54,7 +55,7 @@ const ROLES = Object.freeze([
 const ROLE_CLASSES = Object.freeze({
   dynamic: Object.freeze(['executor', 'decomposition']),
   repair: Object.freeze(['ci-fix', 'review-fix']),
-  judgement: Object.freeze(['integrator', 'arch-review']),
+  judgement: Object.freeze(['integrator', 'arch-review', 'code-review']),
   fixed: Object.freeze(['pr-sentinel', 'drift-check']),
 });
 
@@ -89,6 +90,10 @@ const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
     Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'low' }),
   ]),
   'arch-review': Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
+    Object.freeze({ name: 'critical', model_key: 'sol', logical_model: 'sol', effort: 'xhigh' }),
+  ]),
+  'code-review': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'critical', model_key: 'sol', logical_model: 'sol', effort: 'xhigh' }),
   ]),
@@ -135,6 +140,10 @@ const CLAUDE_ROLE_RUNG_DEFINITIONS = Object.freeze({
     Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
     Object.freeze({ name: 'ceiling', model_key: 'fable', effort: 'medium' }),
   ]),
+  'code-review': Object.freeze([
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'xhigh' }),
+    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
+  ]),
   'ci-fix': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'high' }),
     Object.freeze({ name: 'repeat', model_key: 'sonnet', effort: 'xhigh' }),
@@ -165,6 +174,9 @@ const CODEX_ROLE_SIGNAL_RULES = Object.freeze({
   'arch-review': Object.freeze({
     critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ critical: true }, { checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
   }),
+  'code-review': Object.freeze({
+    critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ critical: true }, { checkpoint: true }]) }),
+  }),
   'ci-fix': Object.freeze({
     repeat: Object.freeze({ rung: 'repeat', any: Object.freeze([{ signatureState: 'repeat' }]) }),
     repeat_exhausted: Object.freeze({ rung: 'repeat_exhausted', any: Object.freeze([{ signatureState: 'repeat_exhausted' }]) }),
@@ -193,6 +205,7 @@ const CLAUDE_ROLE_SIGNAL_RULES = Object.freeze({
     critical: Object.freeze({ rung: 'critical', any: Object.freeze([{ critical: true }, { checkpoint: true }, { contested: true }]) }),
     ceiling: Object.freeze({ rung: 'ceiling', any: Object.freeze([{ inputTokens: { gt_policy: 'window_threshold_tokens' } }]) }),
   }),
+  'code-review': CODEX_ROLE_SIGNAL_RULES['code-review'],
   'ci-fix': CODEX_ROLE_SIGNAL_RULES['ci-fix'],
   'review-fix': CODEX_ROLE_SIGNAL_RULES['review-fix'],
 });

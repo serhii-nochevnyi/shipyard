@@ -2890,7 +2890,9 @@ driving PRs hands the user a half-truth.
    - make sure the integration PR exists: `epic-branch.sh pr <epic>` (in each repo's
      checkout; state-sync's `⚠ epic … has N commit(s) but no PR` line is the trigger
      and it is actionable work, not a note);
-   - **Phase code review.** Before any review launch, list the epic worktree
+   - **Phase code review.** `delivery_pipeline.code_review` defaults to `hold`;
+     `report` observes without holding and is the single exit for this PR.
+     Before any review launch, list the epic worktree
      (list only; clear nothing at this point):
 
      ```sh

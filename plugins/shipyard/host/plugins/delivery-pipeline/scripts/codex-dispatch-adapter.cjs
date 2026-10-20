@@ -104,6 +104,8 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
     'shipyard-drift-check.toml': '.shipyard-drift-evidence.md',
     'shipyard-arch-review.toml': '.shipyard-arch-review-evidence.md',
     'shipyard-arch-review-critical.toml': '.shipyard-arch-review-evidence.md',
+    'shipyard-code-review.toml': '.shipyard-code-review-evidence.md',
+    'shipyard-code-review-critical.toml': '.shipyard-code-review-evidence.md',
   };
   const expectedEvidencePath = expectedSandbox === 'read-only' && evidenceNames[resolution.agent_file]
     && typeof evidence.worktree === 'string' && path.isAbsolute(evidence.worktree)

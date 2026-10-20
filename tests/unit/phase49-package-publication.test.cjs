@@ -74,7 +74,7 @@ function canonicalInputs(repository) {
   assert(rows.length > 0 && rows.length <= 1000, 'canonical input inventory exceeds bound');
   return rows.sort((a, b) => a.path.localeCompare(b.path));
 }
-function currentSourceInventories(outputCount) {
+function currentSourceInventories() {
   const added = ['plugins/delivery-pipeline/references/code-review.md',
     'plugins/delivery-pipeline/scripts/code-review-core.cjs',
     'plugins/delivery-pipeline/scripts/codex-code-review-context.cjs',
@@ -82,20 +82,17 @@ function currentSourceInventories(outputCount) {
   const inputs = canonicalInputs(ROOT).map(row => row.path);
   const outputs = inventory(path.join(ROOT, 'plugins/shipyard')).map(row => row.path);
   assert.equal(inputs.length, 166);
-  assert.equal(outputs.length, 161);
+  assert.equal(outputs.length, 165);
   assert.equal(sha([...inputs].sort().join('\n')), '3d6069e459166e6e816ab5d43bcd89da1986455485844bf9d8f7b8ac2217fc81',
     'current-source canonical membership changed');
-  assert.equal(sha([...outputs].sort().join('\n')), 'f2a52fd78119372aed3e48fe6e1e35122d7fb4f377d46e518a28c499e95f7c30',
+  assert.equal(sha([...outputs].sort().join('\n')), '854d3858e1a2d87e57c4009250f37fe720704b14f15687fb917b801e6fc514b7',
     'committed package membership changed');
   for (const relative of added) {
     assert(inputs.includes(relative), 'missing canonical code-review member');
-    assert(!outputs.includes('host/' + relative), 'committed package unexpectedly regenerated');
+    assert(outputs.includes('host/' + relative), 'missing packaged code-review member');
   }
-  assert([161, 165].includes(outputCount));
-  if (outputCount === 165) outputs.push(...added.map(relative => 'host/' + relative));
-  assert.equal(outputs.length, outputCount);
   for (const rows of [inputs, outputs]) assert.equal(new Set(rows).size, rows.length);
-  return { inputs: 166, outputs: outputCount, inputPaths: inputs.sort(), outputPaths: outputs.sort() };
+  return { inputs: 166, outputs: 165, inputPaths: inputs.sort(), outputPaths: outputs.sort() };
 }
 function assertInventoryExpectations(selection, expected) {
   for (const [field, paths] of [['inputs', expected.inputPaths], ['outputs', expected.outputPaths]]) {
@@ -372,7 +369,7 @@ const BATCH_OUTPUTS = BATCH_INPUTS.map(relative => 'host/' + relative)
   .concat('.codex-plugin/plugin.json', 'package-build.json');
 
 test('combined batch successor admits only the six-source/eight-output union and preserves modes', () => {
-  const inventories = currentSourceInventories(161);
+  const inventories = currentSourceInventories();
   const historical = { source: { head: 'original15', tree: 'original15-tree' }, stage: '/original15',
     build_calls: 1, builder_sha256: 'builder', package: { digest: 'original15' },
     inputs: canonicalInputs(ROOT), outputs: inventory(path.join(ROOT, 'plugins/shipyard'))
@@ -385,7 +382,7 @@ test('combined batch successor admits only the six-source/eight-output union and
   const observed = inspectBatchDelta(selected, historical, inventories);
   assert.deepEqual(observed.changed_inputs, [...BATCH_INPUTS].sort());
   assert.deepEqual(observed.changed_outputs, [...BATCH_OUTPUTS].sort());
-  assert.equal(observed.unchanged_inputs, 160); assert.equal(observed.unchanged_outputs, 153);
+  assert.equal(observed.unchanged_inputs, 160); assert.equal(observed.unchanged_outputs, 157);
   for (const mutate of [
     value => { value.inputs.pop(); },
     value => { value.outputs.pop(); },
@@ -407,7 +404,7 @@ test('combined batch successor admits only the six-source/eight-output union and
     row.sha256 = historical[field].find(item => item.path === row.path).sha256;
   }
   assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_inputs, 161);
-  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_outputs, 154);
+  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_outputs, 158);
 });
 
 function inspectBatchDelta(selected, historical, inventories = { inputs: 162, outputs: 161 }) {
@@ -950,7 +947,7 @@ test('mode-only successor rejects same-version old identity and complete invento
   const repository = path.join(temporary, 'repository');
   try {
     build(stage);
-    const inventories = currentSourceInventories(165);
+    const inventories = currentSourceInventories();
     const inputs = canonicalInputs(ROOT);
     for (const input of inputs) {
       const target = path.join(repository, input.path);
@@ -1076,7 +1073,7 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     const selection = { schema: 'shipyard.phase49.selected-package.v1', source: { head: 'fixture-head', tree: 'fixture-tree' },
       stage, build_calls: 1, builder_sha256: sha(read(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))), inputs, outputs,
       package: JSON.parse(read(path.join(stage, 'package-build.json'))) };
-    const inventories = currentSourceInventories(165);
+    const inventories = currentSourceInventories();
     assertInventoryExpectations(selection, inventories);
     const bytes = Buffer.from(JSON.stringify(selection));
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');

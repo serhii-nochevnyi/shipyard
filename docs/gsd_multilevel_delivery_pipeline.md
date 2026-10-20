@@ -629,10 +629,10 @@ never a ticket PR or a head shared with a graph ticket PR. This works for both
 plain epic branches and Jira-named epic branches.
 
 `delivery_pipeline.code_review` in the project root's `.planning/config.json`
-selects `report` (the shipped default) or `hold`. Report mode shows proposed fix
-tickets without injecting them; hold feeds them to decompose Step 4 only in
-rounds 1 and 2. Round 3 requires an operator for remaining blockers. Incomplete
-reviews retry after the cause is fixed; the three-round cap permits no further
+selects `hold` (the shipped default) or `report`. Report mode observes without
+holding and shows proposed fix tickets without injecting them; hold feeds them
+to decompose Step 4 only in rounds 1 and 2. Round 3 requires an operator for
+remaining blockers. Incomplete reviews retry after the cause is fixed; the three-round cap permits no further
 review after limit. Hold stops with the printed reason and the single exit:
 set `delivery_pipeline.code_review` to `report` for this PR; there is no override
 flag or waiver record. The prelaunch gate and architecture builder require a

@@ -37,7 +37,7 @@ function fixture() {
   git(root, ['config', 'user.email', 'shipyard-test@example.invalid']);
   git(root, ['config', 'commit.gpgsign', 'false']);
   write(root, '.planning/architecture/ADR-014-host-bound-review.md', ADR);
-  write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' } }));
+  write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'report' } }));
   write(root, plan, [
     '---', 'phase: 38', 'plan: 01', 'title: "Codex host-built architecture review"', '---', '',
     '## Context', '- Follows ADR-014.', '',

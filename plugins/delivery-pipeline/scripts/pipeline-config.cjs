@@ -661,7 +661,7 @@ const DEFAULTS = {
   //               its base (phase epic or parent ticket branch). The epic →
   //               integration-branch PR is NEVER auto-merged; that stays human.
   //               off — every merge is a human's, the pre-sentinel behaviour.
-  code_review: 'report',              // @contract: report | hold
+  code_review: 'hold',                // @contract: report | hold
   sentinel: 'auto',                   // auto | off
   auto_merge: 'epic',                 // epic | off
   // A PR with NO reported checks is not a green PR — nothing ran. Both the board
@@ -1312,8 +1312,8 @@ function loadConfig(root, options = {}) {
     cfg.auto_merge = 'off';
   }
   if (!['report', 'hold'].includes(cfg.code_review)) {
-    warnings.push(`delivery_pipeline.code_review "${cfg.code_review}" is unknown — falling back to report (values: report | hold)`);
-    cfg.code_review = 'report';
+    warnings.push(`delivery_pipeline.code_review "${cfg.code_review}" is unknown — falling back to ${DEFAULTS.code_review} (values: report | hold)`);
+    cfg.code_review = DEFAULTS.code_review;
   }
   if (cfg.sentinel === true) cfg.sentinel = 'auto';
   if (cfg.sentinel === false) cfg.sentinel = 'off';

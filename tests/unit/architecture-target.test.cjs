@@ -129,7 +129,7 @@ test('public phase builder and native context use the explicit aggregate PR and 
     graph.tickets[TICKET].epic = 'epic/38-codex-arch-review';
     write(f.root,'.planning/graph/tickets.json',JSON.stringify(graph));
     write(f.root,'.planning/phases/38-codex-arch-review/38-01-SUMMARY.md','Original acceptance: installed obligations remain HOLD.');
-    write(f.root,'.planning/config.json',JSON.stringify({git:{base_branch:'develop'}}));
+    write(f.root,'.planning/config.json',JSON.stringify({git:{base_branch:'develop'},delivery_pipeline:{code_review:'report'}}));
     git(f.root,['branch','develop',f.base]);git(f.root,['update-ref','refs/remotes/origin/develop',f.base]);
     git(f.root,['switch','-c',graph.tickets[TICKET].epic]);git(f.root,['add','.']);git(f.root,['commit','-m','phase evidence']);
     f.pr = {...f.pr,number:801,headRefName:graph.tickets[TICKET].epic,headRefOid:git(f.root,['rev-parse','HEAD']),baseRefName:'develop'};
@@ -189,7 +189,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     graph.tickets[TICKET].epic = 'epic/38-codex-arch-review';
     write(f.root,'.planning/graph/tickets.json',JSON.stringify(graph));
     write(f.root,'.planning/phases/38-codex-arch-review/38-01-SUMMARY.md','Original acceptance: installed obligations remain HOLD.');
-    write(f.root,'.planning/config.json',JSON.stringify({git:{base_branch:'develop'}}));
+    write(f.root,'.planning/config.json',JSON.stringify({git:{base_branch:'develop'},delivery_pipeline:{code_review:'report'}}));
     git(f.root,['branch','develop',f.base]);git(f.root,['update-ref','refs/remotes/origin/develop',f.base]);
     git(f.root,['switch','-c',graph.tickets[TICKET].epic]);git(f.root,['add','.']);git(f.root,['commit','-m','phase evidence']);
     f.pr = {...f.pr,number:801,headRefName:graph.tickets[TICKET].epic,headRefOid:git(f.root,['rev-parse','HEAD']),baseRefName:'develop'};
