@@ -431,15 +431,33 @@ function finish(value, dispatch, recorder) {
   const live = verifyLivePullRequest(prepared, options);
   if (input) verifyFileInput(input, { association: { role: 'code-review', dispatch_id: dispatch.dispatch_id } });
   const evidence = writeEvidence(prepared, evidenceMarkdown);
+  const evidenceReads = new Map();
   const checkedFs = new Proxy(fs, { get(target, property) {
-    if (property !== 'readFileSync') return target[property];
-    return (filePath, ...args) => {
-      if (path.resolve(String(filePath)) !== evidence.path) return target.readFileSync(filePath, ...args);
-      const bytes = boundedBytes(target, evidence.path, EVIDENCE_MAX_BYTES);
-      if (digest(bytes) !== evidence.sha256) fail('complete evidence changed before archival', 'STALE_CONTEXT');
-      const encoding = typeof args[0] === 'string' ? args[0] : args[0]?.encoding;
-      return encoding ? bytes.toString(encoding) : bytes;
+    if (property === 'openSync') return (filePath, ...args) => {
+      const fd = target.openSync(filePath, ...args);
+      if (path.resolve(String(filePath)) === evidence.path)
+        evidenceReads.set(fd, { chunks: [], bytes: 0 });
+      return fd;
     };
+    if (property === 'readSync') return (fd, buffer, offset, length, position) => {
+      const count = target.readSync(fd, buffer, offset, length, position);
+      const read = evidenceReads.get(fd);
+      if (read) {
+        if (position !== read.bytes || read.bytes + count > EVIDENCE_MAX_BYTES)
+          fail('complete evidence read differs from bounded sequence', 'STALE_CONTEXT');
+        read.chunks.push(Buffer.from(buffer.subarray(offset, offset + count)));
+        read.bytes += count;
+      }
+      return count;
+    };
+    if (property === 'closeSync') return fd => {
+      const read = evidenceReads.get(fd);
+      evidenceReads.delete(fd);
+      target.closeSync(fd);
+      if (read && digest(Buffer.concat(read.chunks, read.bytes)) !== evidence.sha256)
+        fail('complete evidence changed before archival', 'STALE_CONTEXT');
+    };
+    return target[property];
   } });
   const artifactInput = { worktreePath: prepared.canonical.worktree, role: 'code-review', ticket: prepared.ticket,
     pr: prepared.pr, base: prepared.base, recorder, dispatchId: dispatch.dispatch_id, phase: prepared.binding.phase,

@@ -85,9 +85,14 @@ function dispatchFixture(f, value, mutate = () => {}, evidence = true, mutateEvi
   mutate(raw);
   if (evidence) write(f.root, '.shipyard-code-review-evidence.md', raw.evidence_markdown);
   const session = crypto.randomUUID();
-  const stream = [ { type: 'thread.started', thread_id: session }, { type: 'turn.started' },
-    { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(raw) } },
-    { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } } ].map(JSON.stringify).join('\n') + '\n';
+  const captured = fs.readFileSync(path.resolve(__dirname,
+    '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const records = captured.filter(record => !record.shipyard_fixture);
+  for (const record of records) {
+    if (record.thread_id) record.thread_id = session;
+    if (record.item?.type === 'agent_message') record.item.text = JSON.stringify(raw);
+  }
+  const stream = records.map(record => JSON.stringify(record)).join('\n') + '\n';
   const transcript = path.join(f.storage, session + '.jsonl'); fs.writeFileSync(transcript, stream);
   const runtimeEvidence = { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai',
     session_id: session, worktree: f.root, ticket: value.prepared.ticket, phase: 38,
@@ -323,6 +328,36 @@ for (const label of ['missing', 'divergent', 'symlink', 'oversized']) test('fini
     if (label === 'oversized') fs.writeFileSync(p, 'x'.repeat(partitions.EVIDENCE_MAX_BYTES + 1));
     assert.throws(() => context.finish(v, d.dispatch, d.recorder));
   } finally { f.cleanup(); }
+});
+
+for (const mutation of ['replacement', 'in-place']) test('finish refuses evidence ' + mutation + ' after pinning', () => {
+  const f = fixture();
+  const originalOpen = fs.openSync, originalClose = fs.closeSync;
+  try {
+    const id = crypto.randomUUID(), v = f.prepare({ inflightDispatchId: id }, { dispatch_id: id }); admit(f, v);
+    const d = dispatchFixture(f, v);
+    const evidencePath = path.join(f.root, '.shipyard-code-review-evidence.md');
+    let evidenceFd, mutated = false;
+    fs.openSync = (file, ...args) => {
+      const fd = originalOpen(file, ...args);
+      if (file === evidencePath && !mutated) evidenceFd = fd;
+      return fd;
+    };
+    fs.closeSync = fd => {
+      originalClose(fd);
+      if (fd === evidenceFd && !mutated) {
+        mutated = true;
+        const replacement = 'X'.repeat(Buffer.byteLength(d.raw.evidence_markdown));
+        if (mutation === 'replacement') {
+          const temporary = path.join(f.storage, 'replacement.md');
+          fs.writeFileSync(temporary, replacement); fs.renameSync(temporary, evidencePath);
+        } else fs.writeFileSync(evidencePath, replacement);
+      }
+    };
+    assert.throws(() => context.finish(v, d.dispatch, d.recorder), { code: 'STALE_CONTEXT' });
+    assert.equal(mutated, true);
+    assert.deepEqual(artifact.authenticatedArchivePins(f.root), []);
+  } finally { fs.openSync = originalOpen; fs.closeSync = originalClose; f.cleanup(); }
 });
 
 for (const changed of ['head', 'base', 'packet']) test('live recheck and finish refuse moved ' + changed, () => {
