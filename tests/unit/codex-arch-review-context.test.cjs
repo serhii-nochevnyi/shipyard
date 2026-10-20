@@ -3140,4 +3140,36 @@ test('inline code-review coverage must be an empty array', () => {
   assert.throws(() => contextBuilder.validateCodeReviewCoverage({ ...inline, coverage: undefined }, null), { code: 'INVALID_RESULT' });
 });
 
+
+test('file snapshot pins coordinator graph/config while source HEAD and tree remain epic-bound', () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'coordinator-relay-')));
+  try {
+    const coordinator = path.join(storage, 'coordinator');
+    git(f.root, ['worktree', 'add', '--detach', coordinator, 'HEAD']);
+    git(f.root, ['rm', '-r', '.planning']); git(f.root, ['commit', '-qm', 'coordinator owns references']);
+    const head = git(f.root, ['rev-parse', 'HEAD']);
+    const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const packet = packets.buildContextPacket({ root: coordinator, role: 'integrator', subject: 'phase=38',
+      sourceRevision: head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+      scope: { files_modified: ['src/reviewed.txt'] }, acceptance: [], verification: [],
+      requiredRefs: [planPath()], roleContext: { phase_contracts: [], combined_diff: { content: 'source diff' } } });
+    const input = contextBuilder.prepareFileInput({ worktree: f.root, ticket: 'phase=38', phase: 38 },
+      JSON.stringify(packets.encodeUniqueContent(packet)), { role: 'integrator', dispatchId: 'coordinator-test',
+        graphDir: path.join(coordinator, '.planning/graph'), storageRoot: storage });
+    for (const value of [input, JSON.parse(JSON.stringify(input.input_bundle))]) {
+      const checked = contextBuilder.verifyFileInput(value, value === input ? {} : { sealed: true });
+      assert.equal(checked.manifest.snapshot.planning_reference.root, coordinator);
+      assert.equal(checked.manifest.snapshot.worktree, f.root);
+      assert.equal(checked.manifest.snapshot.head, head);
+      assert.equal(checked.manifest.snapshot.head_tree, git(f.root, ['rev-parse', 'HEAD^{tree}']));
+    }
+    assert.throws(() => contextBuilder.verifyFileInput({ ...input.input_bundle, trustedRoot: coordinator }),
+      /private producer authority/);
+    write(coordinator, '.planning/config.json', '{"changed":true}');
+    assert.throws(() => contextBuilder.verifyFileInput(input), /changed|stale/i);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
 if (require.main === module) registerTests(require('node:test'));

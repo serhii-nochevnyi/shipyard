@@ -151,6 +151,95 @@ function canonicalRoot(value) {
   catch (error) { fail('INVALID_CONTEXT_SOURCE', `root cannot be canonicalized: ${error.message}`); }
 }
 
+// This association is derived from graph placement, never from packet.canonical_root.
+// Consumers must supply producer options or pins recovered from original native input.
+function resolvePlanningReference({ worktree, graphDir, repo = null }) {
+  const reviewed = canonicalRoot(worktree);
+  const directory = path.resolve(graphDir || path.join(reviewed, '.planning/graph'));
+  const root = path.resolve(directory, '../..');
+  if (directory !== path.join(root, '.planning/graph'))
+    fail('INVALID_CONTEXT_SOURCE', 'canonical graph must be placed at .planning/graph');
+  let ancestor = path.parse(directory).root;
+  for (const part of path.relative(ancestor, directory).split(path.sep)) {
+    ancestor = path.join(ancestor, part);
+    let stat;
+    try { stat = fs.lstatSync(ancestor); } catch { fail('MISSING_CONTEXT_SOURCE', 'canonical graph directory is unavailable'); }
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      fail('SYMLINK_CONTEXT_SOURCE', 'canonical graph path must contain only real directories');
+  }
+  const exec = require('node:child_process').execFileSync;
+  // -C must select the repository independently of the invoking runtime's scope.
+  const env = { ...process.env };
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) delete env[key];
+  const git = (cwd, ...args) => exec('git', ['-C', cwd, 'rev-parse', ...args],
+    { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 65536 }).trim();
+  if (git(root, '--show-toplevel') !== root || git(reviewed, '--show-toplevel') !== reviewed)
+    fail('INVALID_CONTEXT_SOURCE', 'canonical graph must belong to a repository root');
+  const repository = fs.realpathSync(git(reviewed, '--path-format=absolute', '--git-common-dir'));
+  const planningRepository = fs.realpathSync(git(root, '--path-format=absolute', '--git-common-dir'));
+  if (repository !== planningRepository && !repo)
+    fail('CONTEXT_PACKET_IDENTITY', 'canonical graph belongs to an unrelated repository');
+  if (root !== reviewed && !fs.existsSync(path.join(directory, 'tickets.json')))
+    fail('MISSING_CONTEXT_SOURCE', 'relocated planning requires the canonical ticket graph');
+  const pin = relative => planningReferencePin(root, relative);
+  return deepFreeze({ root, directory, repository, planning_repository: planningRepository, repo,
+    graph: ['tickets.json', 'delivery-state.json'].filter(name => fs.existsSync(path.join(directory, name)))
+      .map(name => pin('.planning/graph/' + name)),
+    config: fs.existsSync(path.join(root, '.planning/config.json')) ? pin('.planning/config.json') : null });
+}
+
+function authenticatedPlanningRoot(worktree, original) {
+  // Legacy same-root packets retain their original behavior. A relocated root
+  // requires the independently captured graph/config association in every path.
+  if (original === undefined) return canonicalRoot(worktree);
+  if (!object(original) || typeof original.directory !== 'string')
+    fail('CONTEXT_PACKET_IDENTITY', 'original planning reference association is required');
+  const current = resolvePlanningReference({ worktree, graphDir: original.directory, repo: original.repo });
+  if (stableJson(current) !== stableJson(original))
+    fail('STALE_CONTEXT_PACKET', 'original planning root, graph or config changed');
+  return current.root;
+}
+
+function planningReferencePath(root, relative) {
+  if (typeof relative !== 'string' || !relative.startsWith('.planning/') || relative.includes('\\')
+      || relative.split('/').some(part => !part || part === '.' || part === '..'))
+    fail('CONTEXT_PATH_ESCAPE', 'unsafe planning reference path');
+  let current = root;
+  for (const part of relative.split('/')) {
+    current = path.join(current, part);
+    let stat;
+    try { stat = fs.lstatSync(current); } catch (error) {
+      if (error.code === 'ENOENT') break;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) fail('SYMLINK_CONTEXT_SOURCE', 'planning reference contains a symlink');
+  }
+  return safeRelative(root, relative, 'planning reference', false);
+}
+
+function planningReferencePin(root, relative) {
+  const file = planningReferencePath(root, relative);
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 * 1024)
+    fail('INVALID_CONTEXT_SOURCE', 'planning reference must be a bounded regular file');
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const same = value => ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'mode', 'uid'].every(key => value[key] === stat[key]);
+    if (!same(fs.fstatSync(fd))) fail('STALE_CONTEXT_PACKET', 'planning reference changed before reading');
+    const bytes = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (!count) fail('STALE_CONTEXT_PACKET', 'planning reference ended before its complete bytes');
+      offset += count;
+    }
+    if (fs.readSync(fd, Buffer.alloc(1), 0, 1, offset) || !same(fs.fstatSync(fd))
+        || !same(fs.lstatSync(file)) || fs.realpathSync(file) !== file)
+      fail('STALE_CONTEXT_PACKET', 'planning reference changed during complete reading');
+    return { path: relative, sha256: hash(bytes), bytes: bytes.length };
+  } finally { fs.closeSync(fd); }
+}
+
 function relativePath(root, file) {
   return path.relative(root, file).split(path.sep).join('/');
 }
@@ -756,6 +845,10 @@ module.exports = Object.freeze({
   DEFAULT_TOKEN_CEILING,
   ROLE_REQUIRED_INPUTS,
   ContextPacketError,
+  resolvePlanningReference,
+  authenticatedPlanningRoot,
+  planningReferencePath,
+  planningReferencePin,
   estimateTokens,
   buildContextPacket,
   encodeUniqueContent,

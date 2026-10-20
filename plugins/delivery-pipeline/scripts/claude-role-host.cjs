@@ -167,7 +167,7 @@ function git(options, root, args, maxBuffer, preserveWhitespace = false) {
   return command(options, 'git', ['-C', root, ...args], root, maxBuffer, preserveWhitespace);
 }
 
-function canonicalWorktree(options, value, aggregate = false, sealedArchives = false) {
+function canonicalWorktree(options, value, aggregate = false, sealedArchives = false, repo = null) {
   let worktree;
   try { worktree = fs.realpathSync(value); } catch { reject('worktree does not exist'); }
   if (git(options, worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
@@ -196,19 +196,19 @@ function canonicalWorktree(options, value, aggregate = false, sealedArchives = f
     if (!stat.isFile() || stat.isSymbolicLink()) reject(`scratch file must be a regular file: ${name}`);
     scratchDigests.set(name, sha(fs.readFileSync(file)));
   }
-  const projectRoot = worktree;
+  // Planning belongs to the canonical graph checkout; reviewed Git identity stays here.
+  const planningReference = require('./context-packet.cjs').resolvePlanningReference({
+    worktree, graphDir: options.graphDir, repo });
+  const projectRoot = planningReference.root;
   const head = git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']);
   const headTree = git(options, worktree, ['rev-parse', '--verify', 'HEAD^{tree}']);
   const branch = git(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
-  return Object.freeze({ worktree, projectRoot, commonPath, head, headTree, branch, scratchDigests, archivePins });
+  return Object.freeze({ worktree, projectRoot, commonPath, head, headTree, branch, scratchDigests, archivePins, planningReference });
 }
 
 function graphDirectory(options, projectRoot) {
-  const directory = path.resolve(options.graphDir || path.join(projectRoot, '.planning', 'graph'));
-  let stat;
-  try { stat = fs.lstatSync(directory); } catch { reject('canonical graph directory is unavailable'); }
-  if (!stat.isDirectory() || stat.isSymbolicLink()) reject('canonical graph directory must be a real directory');
-  return fs.realpathSync(directory);
+  return require('./context-packet.cjs').resolvePlanningReference({ worktree: projectRoot,
+    graphDir: options.graphDir, repo: options.phaseRepo || null }).directory;
 }
 
 function graphData(options, root) {
@@ -532,7 +532,7 @@ function prepareArch(options, request, canonical, graph, rows) {
       refs: focused.inventory.filter(ref => ref.selected), excluded: focused.inventory.filter(ref => !ref.selected && ref.reasons.includes('superseded')).map(ref => ({
         id: /ADR-\d{3}/.exec(path.basename(ref.path))?.[0], path: ref.path, reason: 'superseded' })), unresolved: [] } };
   if (binding) selectedArchives = roleArtifact.selectPhaseArchives(canonical.worktree, binding, { graphDir: graph.directory });
-  roleArtifact.authenticateArchitectureSources(canonical.worktree, canonical.projectRoot, focused.authorityRefs);
+  const sourceAuthority = roleArtifact.authenticateArchitectureSources(canonical.worktree, canonical.projectRoot, focused.authorityRefs);
   const reference = loadClaudeReferenceContent('arch-review');
   const plan = sources.plans[0];
   const roleContext = {
@@ -547,6 +547,7 @@ function prepareArch(options, request, canonical, graph, rows) {
     graph_source: binding ? { path: '.planning/graph/tickets.json',
       sha256: sha(fs.readFileSync(path.join(graph.directory, 'tickets.json'))) } : null,
     adr_selection: focused.inventory,
+    source_authority: sourceAuthority,
     change_metadata: { name_status: git(options, canonical.worktree, ['diff', '--name-status', '-z', '--find-renames', mergeBase + '...' + canonical.head], DIFF_MAX_BYTES),
       numstat: git(options, canonical.worktree, ['diff', '--numstat', '-z', '--find-renames', mergeBase + '...' + canonical.head], DIFF_MAX_BYTES) },
     pr: { number: live.number, state: live.state, head: live.headRefOid, head_tree: canonical.headTree,
@@ -727,7 +728,7 @@ function prepareIntegrator(options, request, canonical, graph) {
   const mergeBase = git(options, canonical.worktree, ['merge-base', defaultBase, canonical.head]);
   const mergeBaseTree = git(options, canonical.worktree, ['rev-parse', '--verify', `${mergeBase}^{tree}`]);
   const combinedDiff = diffText(options, canonical.worktree, mergeBase, canonical.head, productPathspec());
-  const sources = sourceReferences(canonical.worktree, graph, selection.rows);
+  const sources = sourceReferences(canonical.projectRoot, graph, selection.rows);
   const reference = loadClaudeReferenceContent('integrator');
   const phaseContracts = sources.plans.map((plan) => ({ ticket: plan.id, path: plan.path,
     acceptance: plan.acceptance, verification: plan.verification, sha256: sha(plan.content) }));
@@ -859,7 +860,7 @@ function prepareSentinel(options, request, canonical, graph) {
   const ticketSetDigest = sha(JSON.stringify(ticketSet));
   const subject = `round:${ticketSetDigest}`;
   const rows = snapshots.map(({ id, row }) => ({ id, row }));
-  const sources = sourceReferences(canonical.worktree, graph, rows);
+  const sources = sourceReferences(canonical.projectRoot, graph, rows);
   const reference = loadClaudeReferenceContent('pr-sentinel');
   const phaseContracts = sources.plans.map((plan) => ({ ticket: plan.id, path: plan.path,
     acceptance: plan.acceptance, verification: plan.verification, sha256: sha(plan.content) }));
@@ -941,7 +942,7 @@ function packetRemedy(role) {
 
 function buildPacket(canonical, role, subject, sources, plan, roleContext) {
   const packet = buildContextPacket({
-    root: canonical.worktree,
+    root: canonical.projectRoot,
     role,
     subject,
     sourceRevision: canonical.head,
@@ -951,12 +952,12 @@ function buildPacket(canonical, role, subject, sources, plan, roleContext) {
     acceptance: plan.acceptance,
     verification: plan.verification,
     requiredRefs: [...new Set([...sources.requiredRefs, ...(role === 'arch-review' ? [] : sources.plans.map((item) => item.path))])],
-    roleContext,
-    selectedBacklogIds: role === 'arch-review' ? [] : selectedBacklogIds(canonical.worktree, sources.plans),
+    roleContext: { ...roleContext, planning_reference: canonical.planningReference },
+    selectedBacklogIds: role === 'arch-review' ? [] : selectedBacklogIds(canonical.projectRoot, sources.plans),
     backlogInventory: 'selected',
     tokenCeiling: packetBound(role, roleContext),
   });
-  validateContextPacket(packet, { root: canonical.worktree, role, subject,
+  validateContextPacket(packet, { root: canonical.projectRoot, role, subject,
     sourceRevision: canonical.head, policyHash: policy.POLICY_HASH });
   const codeReview = role === 'code-review'
     && packet.role_context?.focused?.review_contract === require('./codex-arch-review-context.cjs').CODE_REVIEW_CONTRACT;
@@ -1028,7 +1029,7 @@ function estimatePromptTokens(role, packet, plan, pr, reference, readOnlySmoke =
 
 function prepareInvocation(options, request) {
   const canonical = canonicalWorktree(options, request.worktree, (request.role === 'arch-review' && !!request.phase)
-    || (request.role === 'integrator' && request.review_contract === 'shipyard.integration-review.v2'), request.role === 'code-review');
+    || (request.role === 'integrator' && request.review_contract === 'shipyard.integration-review.v2'), request.role === 'code-review', request.repo);
   const graph = graphData(options, canonical.projectRoot);
   const rows = requestRows(request, graph, canonical);
   const prepared = request.role === 'arch-review'
@@ -1316,6 +1317,7 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
         if (launchCount !== 1 || context.ticket !== prepared.ticket || context.role !== prepared.role
             || (prepared.role === 'pr-sentinel' && context.subject_kind !== 'round')
             || (prepared.binding && context.subject_kind !== 'phase')
+            || context.worktreePath !== prepared.canonical.projectRoot
             || context.contextPacket !== prepared.packet || context.sourceRevision !== prepared.canonical.head) {
           reject('boundary launch context differs from the authenticated role request', 'CONFLICTING_OVERRIDE');
         }
@@ -1327,7 +1329,7 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
           revalidateLiveInputs(options, prepared, dispatchId);
           if (git(options, prepared.canonical.worktree, ['rev-parse', 'HEAD']) !== prepared.canonical.head)
             reject('review HEAD changed before native launch', 'STALE_CONTEXT');
-          preflightReviewMaterial(encodeUniqueContent(prepared.packet), { root: prepared.canonical.worktree,
+          preflightReviewMaterial(encodeUniqueContent(prepared.packet), { root: prepared.canonical.projectRoot,
             role: prepared.role, subject: prepared.packet.subject, sourceRevision: prepared.canonical.head,
             policyHash: policy.POLICY_HASH });
           if (canonicalJson(referenceDigest(loadClaudeReferenceContent(prepared.role)))
@@ -1418,12 +1420,16 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
       || git(options, prepared.canonical.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== prepared.canonical.branch) {
     reject('role worktree revision changed during dispatch', 'STALE_CONTEXT');
   }
-  validateContextPacket(prepared.packet, { root: prepared.canonical.worktree, role: prepared.role,
+  require('./context-packet.cjs').authenticatedPlanningRoot(prepared.canonical.worktree,
+    prepared.canonical.planningReference);
+  validateContextPacket(prepared.packet, { root: prepared.canonical.projectRoot, role: prepared.role,
     subject: prepared.packet.subject, sourceRevision: prepared.canonical.head, policyHash: policy.POLICY_HASH });
   if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
 }
 
 function revalidateLiveInputs(options, prepared, currentDispatchId) {
+  require('./context-packet.cjs').authenticatedPlanningRoot(prepared.canonical.worktree,
+    prepared.canonical.planningReference);
   const worktree = prepared.canonical.worktree;
   if (prepared.integrationReview)
     require('./codex-delivery-host.cjs').recheckIntegrationReview(prepared.integrationReview);
@@ -1660,6 +1666,7 @@ function prepareReviewInput(prepared, options) {
   const input = collector.prepareFileInput({ worktree: prepared.canonical.worktree, ticket: prepared.ticket,
     phase: prepared.phaseNumber, run_id: options.runId }, JSON.stringify(encodeUniqueContent(prepared.packet)), {
     role: prepared.role, dispatchId: options.dispatchId, storageRoot: options.storageRoot, graphDir: prepared.graph.directory,
+    phaseRepo: prepared.canonical.planningReference?.repo ?? null,
     generatedInstructionBytes: prepared.packet.role_context.reference_digest.bytes, relayPrefix: prefix,
     binding: { review_contract: prepared.role === 'code-review' ? collector.CODE_REVIEW_CONTRACT : collector.FOCUSED_CONTRACT,
       focused: { ...prepared.packet.role_context.focused, context_digest: sha(canonicalJson(prepared.packet)) },
@@ -1714,7 +1721,9 @@ function createClaudeRoleHost(options = {}) {
           role: prepared.role,
           phase: prepared.phase,
           pr: prepared.pr,
-          worktreePath: prepared.canonical.worktree,
+          // The adapter uses this field only to validate packet reference reads.
+          // Runtime scope, boundary cwd and artifact custody remain epic-bound.
+          worktreePath: prepared.canonical.projectRoot,
           sourceRevision: prepared.canonical.head,
           contextPacket: prepared.packet,
         });
@@ -1733,7 +1742,7 @@ function createClaudeRoleHost(options = {}) {
           reject('focused original evidence differs from the role-owned file', 'INVALID_RESULT');
         const result = prepared.role === 'arch-review' ? { ...validatedResult, host_context: {
           focused: { ...prepared.packet.role_context.focused, context_digest: sha(canonicalJson(prepared.packet)) },
-          graph_dir: prepared.graph.directory, source_root: prepared.canonical.worktree,
+          graph_dir: prepared.graph.directory, source_root: prepared.canonical.projectRoot,
           ...(prepared.binding ? { phase_repo: prepared.binding.repo, phase_archive_selection: prepared.phaseArchiveSelection, phase_evidence_digest: prepared.packet.role_context.retained_history_digest } : {}),
           selected_refs: prepared.packet.required_refs.map(ref => ({ path: ref.path, sha256: ref.sha256, bytes: ref.bytes })),
         } } : validatedResult;
