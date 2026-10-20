@@ -11,6 +11,7 @@ const homedir = os.homedir;
 os.homedir = () => home;
 process.on('exit', () => { os.homedir = homedir; fs.rmSync(home, { recursive: true, force: true }); });
 const scripts = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts');
+const { createDispatchBoundary } = require(path.join(scripts, 'dispatch-boundary.cjs'));
 const flow = require(path.join(scripts, 'phase-code-review.cjs'));
 const target = require(path.join(scripts, 'architecture-target.cjs'));
 const artifact = require(path.join(scripts, 'role-artifact.cjs'));
@@ -176,9 +177,10 @@ for (const jira of shapes) {
     } finally { f.cleanup(); }
   });
 
-  test('fix tickets change the ticket-set digest between rounds and the cap still holds: ' + jira, () => {
+  for (const mode of ['hold', 'report']) test('fix tickets change the ticket-set digest between rounds and the cap still holds: ' + jira + ' ' + mode, () => {
     const f = fixture(jira);
     try {
+      f.mode(mode);
       const digests = [], heads = [];
       for (let round = 1; round <= 3; round++) {
         const binding = f.advance(round); digests.push(binding.membership);
@@ -190,28 +192,38 @@ for (const jira of shapes) {
         const current = flow.status(f.input());
         assert.equal(current.state, 'current'); assert.equal(current.repair, round < 3 ? 'tickets' : 'human');
         const refused = flow.evaluateGate(f.input());
-        assert.equal(refused.ok, false); assert.match(refused.message, /needs-fix/);
-        for (const mode of ['hold', 'report']) {
-          f.mode(mode);
-          let diagnostic = '';
-          const fixes = flow.fixTickets(f.input(), { stderr: { write: text => { diagnostic += text; } } });
-          assert.equal(fixes.length, round < 3 ? 1 : 0);
-          if (fixes.length) {
-            assert.deepEqual(Object.keys(fixes[0]).sort(), ['depends_on', 'files', 'finding_id', 'scope', 'title']);
-            assert.deepEqual(fixes[0].files, ['source.js']);
-            if (round === 1 && mode === 'hold') assertFixGraph(fixes[0]);
-          } else {
-            assert.match(diagnostic, /no longer re-check.*BLOCKERs stay visible.*delivery_pipeline.code_review.*report/);
-          }
+        assert.equal(refused.ok, mode === 'report'); assert.match(refused.message, /needs-fix/);
+        let diagnostic = '';
+        const fixes = flow.fixTickets(f.input(), { stderr: { write: text => { diagnostic += text; } } });
+        assert.equal(fixes.length, round < 3 ? 1 : 0);
+        if (fixes.length) {
+          assert.deepEqual(Object.keys(fixes[0]).sort(), ['depends_on', 'files', 'finding_id', 'scope', 'title']);
+          assert.deepEqual(fixes[0].files, ['source.js']);
+          if (round === 1 && mode === 'hold') assertFixGraph(fixes[0]);
+        } else {
+          assert.match(diagnostic, /no longer re-check.*BLOCKERs stay visible.*delivery_pipeline.code_review.*report/);
         }
-        f.mode('hold');
+        const configPath = path.join(f.root, '.planning/config.json');
+        const originalConfig = fs.readFileSync(configPath);
+        f.mode(mode === 'hold' ? 'report' : 'hold');
+        const stale = flow.status(f.input());
+        assert.equal(stale.state, round === 3 ? 'limit' : 'owed'); assert.equal(stale.rounds_used, round);
+        assert.equal(flow.fixTickets(f.input(), { stderr: { write() {} } }).length, 0);
+        fs.writeFileSync(configPath, originalConfig);
+        const restored = flow.status(f.input());
+        assert.equal(restored.state, 'current'); assert.equal(restored.verdict, current.verdict);
+        assert.equal(restored.artifact_ref, current.artifact_ref);
+        assert.equal(restored.rounds_used, current.rounds_used);
       }
       digests.push(f.advance(4).membership); assert.equal(new Set(digests).size, 4);
       const status = flow.status(f.input());
       assert.equal(status.state, 'limit'); assert.equal(status.rounds_used, 3); assert.equal(status.round, null);
       const gate = flow.evaluateGate(f.input());
-      assert.equal(gate.ok, false); assert.match(gate.message, /three rounds.*delivery_pipeline.code_review.*report/);
-      assert.throws(() => builder.build(f.args('arch-review'), f.options), error => error.message.includes(gate.message));
+      assert.equal(gate.ok, mode === 'report'); assert.match(gate.message, /three rounds.*delivery_pipeline.code_review.*report/);
+      f.mode('hold');
+      const held = flow.evaluateGate(f.input());
+      assert.equal(held.ok, false);
+      assert.throws(() => builder.build(f.args('arch-review'), f.options), error => error.message.includes(held.message));
       f.mode('report'); assert.equal(builder.build(f.args('arch-review'), f.options).role, 'arch-review');
     } finally { f.cleanup(); }
   });
@@ -237,7 +249,7 @@ function currentBinding(f) {
     branch: f.branch, pr: 52, head: f.live().headRefOid, base: f.base });
 }
 function artifactInput(f, binding, result, round = 1, priorHead = null) {
-  return f.inputArtifact(binding, round, priorHead, result);
+  return retainPlanningInput(f, f.inputArtifact(binding, round, priorHead, result));
 }
 
 function assertFixGraph(fix) {
@@ -584,4 +596,42 @@ else { assert.deepEqual(args, repo); process.stdout.write('main\\n'); }
       check(graph.epics['52'].branch, 'epic', 'hold');
     } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
   });
+}
+
+function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const crypto = require('node:crypto');
+  const refs = input.result.ticket_set.map(item => item.row.plan);
+  for (const plan of refs) {
+    const absolute = path.join(planningRoot, plan);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
+  }
+  const graphDir = path.join(planningRoot, '.planning/graph');
+  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
+    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
+      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
+      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
+      exact_diff: { content: f.git(['diff', f.base, 'HEAD', '--', 'source.js']) },
+      integration_base: { commit: f.base } } });
+  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
+    const session = 'original-' + r.dispatch_id;
+    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
+    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
+      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
+        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
+    fs.writeFileSync(transcript, content);
+    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
+      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
+      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
+      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
+        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
+        transcript: { path: transcript, bytes: Buffer.byteLength(content),
+          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
+  } } } });
+  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
+    { ticket: input.ticket, subject_kind: 'phase' });
+  return { ...input, dispatchId: dispatch.dispatch_id };
 }

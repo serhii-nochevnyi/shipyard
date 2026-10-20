@@ -76,16 +76,16 @@ function admit(f, value, builder = context, extra = {}) {
   return { installation, agentDir, manifest, agentFile: selected.agent_file };
 }
 
-function dispatchFixture(f, value, mutate = () => {}, evidence = true, mutateEvidence = () => {}) {
+function dispatchFixture(f, value, mutate = () => {}, evidence = true, mutateEvidence = () => {}, builder = context) {
   const boundaryModule = require(path.join(scripts, 'dispatch-boundary.cjs'));
   const recorder = boundaryModule.createDurableRecorder(path.join(f.storage, 'receipts-' + crypto.randomUUID()));
   const association = { ticket: value.prepared.ticket, phase: 38, worktree: f.root,
     dispatch_id: value.launch.dispatch_id };
-  const binding = context.authenticateLaunch(value, context.admittedPrompt(value), association);
+  const binding = builder.authenticateLaunch(value, builder.admittedPrompt(value), association);
   const raw = { ...binding, ticket_set: value.prepared.binding.ticketSet, findings: [], dispositions: [],
     summary: 'Reviewed the complete phase change.', review_completeness: 'complete', limitations: [], unresolved_sources: [],
     evidence_markdown: 'Exact role-owned evidence.\n' };
-  const input = context.admittedFileInput(value);
+  const input = builder.admittedFileInput(value);
   if (input) raw.coverage = input.manifest.assets.filter(asset => asset.source_partition)
     .map(asset => ({ partition: asset.ordinal, status: 'reviewed' }));
   mutate(raw);
@@ -824,3 +824,129 @@ test('foreign full and delta lineage retain original membership across coordinat
     assert.equal(require(path.join(scripts, 'phase-code-review.cjs')).evaluateGate(f.status()).ok, false);
   } finally { f.cleanup(); }
 });
+
+for (const [sameRoot, partitioned] of [[true, false], [false, false], [true, true]])
+  test('original complete planning controls current reuse: same=' + sameRoot + ', partitions=' + partitioned, () => {
+    const f = fixture('original-planning', sameRoot);
+    try {
+      f.graph.epics = { '38': { branch: f.row.epic, phaseDir: '38-codex-arch-review', repos: [null] } };
+      write(f.project, '.planning/graph/tickets.json', JSON.stringify(f.graph));
+      write(f.project, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' },
+        delivery_pipeline: { code_review: 'hold' } }));
+      if (sameRoot) {
+        git(f.root, ['add', '.planning']); git(f.root, ['commit', '--quiet', '-m', 'canonical review graph and hold mode']);
+        f.pr.headRefOid = git(f.root, ['rev-parse', 'HEAD']);
+      }
+      if (partitioned) f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'),
+        ('large line ' + 'x'.repeat(240) + '\n').repeat(5000)));
+      const builder = require(path.join(scripts, 'deliver-dispatch.cjs'));
+      f.prepare = (extra = {}, launch = {}) => {
+        const request = builder.build(['code-review', '38-codex-arch-review', '--phase', '38', '--pr', String(f.pr.number),
+          '--runtime', 'codex', '--graph', f.graphDir], { ...f.options, cwd: f.root, defaultBranch: 'main' });
+        return context.prepare(request.scope, { role: request.role, context: request.context, signals: request.signals, ...launch },
+          { ...f.options, inflightDispatchId: crypto.randomUUID(), ...extra });
+      };
+      const r = review(f, raw => { raw.host_context = { planning_reference: { root: '/model-selected' }, selected_refs: [] }; });
+      const flow = require(path.join(scripts, 'phase-code-review.cjs'));
+      const lookup = () => artifact.currentCodeReviewVerdict({ worktreePath: f.root, graphDir: f.graphDir,
+        pr: f.pr.number, head: f.pr.headRefOid, headBranch: f.pr.headRefName,
+        baseName: f.pr.baseRefName, baseCommit: f.pr.baseRefOid });
+      const status = () => flow.status({ worktree: f.root, graphDir: f.graphDir, phase: 38, pr: f.pr.number, live: f.pr },
+        { defaultBranch: 'main' });
+      assert.equal(!!context.admittedFileInput(r.value), partitioned);
+      assert.equal(lookup().artifact_digest, r.result.artifact.digest);
+      assert.equal(flow.evaluateGate(status()).ok, true);
+      const manifest = JSON.parse(fs.readFileSync(r.result.artifact.ref));
+      const sealed = JSON.parse(fs.readFileSync(path.join(f.root, manifest.files.findings.path)));
+      assert.deepEqual(sealed.host_context, { planning_reference: r.value.prepared.packet.role_context.planning_reference,
+        selected_refs: r.value.evidence.selected_refs });
+      assert.deepEqual(sealed.host_context.selected_refs.map(pin => pin.path), [f.row.plan]);
+      const head = git(f.root, ['rev-parse', 'HEAD']), base = f.pr.baseRefOid;
+      const membership = r.value.prepared.binding.membership;
+      const archives = artifact.authenticatedArchivePins(f.root).map(pin => ({ ...pin,
+        content: fs.readFileSync(path.join(f.root, pin.path)) }));
+      for (const relative of [f.row.plan, '.planning/config.json']) {
+        const absolute = path.join(f.project, relative), original = fs.readFileSync(absolute);
+        const changed = relative === f.row.plan
+          ? original.toString().replace('- Review the authenticated PR diff against ADR-014.',
+            '- Reject all requests that lack a new authorization token.') : original.toString() + ' ';
+        fs.writeFileSync(absolute, changed);
+        assert.notDeepEqual(fs.readFileSync(absolute), original);
+        assert.equal(git(f.root, ['rev-parse', 'HEAD']), head);
+        assert.equal(git(f.root, ['rev-parse', 'refs/remotes/origin/main']), base);
+        assert.equal(target.phaseBinding({ graph: f.graph, state: f.state, phase: 38,
+          repository: target.repositoryIdentity(f.root), pr: f.pr.number, head, base, branch: f.row.epic }).membership, membership);
+        assert.throws(() => context.recheckInstalledLaunch(r.value));
+        assert.equal(lookup(), null); assert.equal(status().state, 'owed'); assert.equal(flow.evaluateGate(status()).ok, false);
+        const prior = artifact.priorCodeReviewVerdicts({ worktreePath: f.root, repository: target.repositoryIdentity(f.root),
+          phaseDir: r.value.prepared.binding.phase, graphDir: f.graphDir });
+        assert.equal(prior[0].artifact_digest, r.result.artifact.digest);
+        for (const pin of archives) assert.deepEqual(fs.readFileSync(path.join(f.root, pin.path)), pin.content);
+        fs.writeFileSync(absolute, original);
+        assert.equal(lookup().artifact_digest, r.result.artifact.digest);
+        assert.equal(flow.evaluateGate(status()).ok, true);
+      }
+      fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), 'dirty source');
+      assert.equal(lookup(), null); assert.equal(flow.evaluateGate(status()).ok, false);
+    } finally { f.cleanup(); }
+  });
+
+for (const format of ['old-inline', 'missing', 'truncated', 'duplicate', 'substituted', 'mismatched'])
+  test('authenticated inline archive without complete original pins stays historical: ' + format, () => {
+    const f = fixture('retained-inline', true);
+    try {
+      f.graph.epics = { '38': { branch: f.row.epic, phaseDir: '38-codex-arch-review', repos: [null] } };
+      write(f.project, '.planning/graph/tickets.json', JSON.stringify(f.graph));
+      write(f.project, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' },
+        delivery_pipeline: { code_review: 'hold' } }));
+      git(f.root, ['add', '.planning']); git(f.root, ['commit', '--quiet', '-m', 'canonical retained review inputs']);
+      f.pr.headRefOid = git(f.root, ['rev-parse', 'HEAD']);
+      const Module = require('node:module');
+      const filename = path.join(scripts, 'codex-code-review-context.cjs');
+      let source = fs.readFileSync(filename, 'utf8');
+      if (format === 'old-inline') source = source.replace('roleContext.planning_reference = planning;',
+        'if (project !== worktree) roleContext.planning_reference = planning;');
+      else {
+        const expressions = { missing: 'undefined', truncated: '[]', duplicate: '[...value.evidence.selected_refs, ...value.evidence.selected_refs]',
+          substituted: "value.evidence.selected_refs.map(pin => ({ ...pin, path: '.planning/config.json' }))",
+          mismatched: "value.evidence.selected_refs.map(pin => ({ ...pin, sha256: '0'.repeat(64) }))" };
+        source = source.replace('selected_refs: value.evidence.selected_refs', 'selected_refs: ' + expressions[format]);
+      }
+      const retained = new Module(filename, module);
+      retained.filename = filename; retained.paths = Module._nodeModulePaths(scripts);
+      retained._compile(source, filename);
+      const builder = retained.exports;
+      const id = crypto.randomUUID();
+      const value = builder.prepare(f.scope(), { role: 'code-review', context: {}, signals: {}, dispatch_id: id },
+        { ...f.options, inflightDispatchId: id });
+      assert.equal(builder.admittedFileInput(value), null);
+      admit(f, value, builder);
+      const d = dispatchFixture(f, value, () => {}, true, () => {}, builder);
+      const result = builder.finish(value, d.dispatch, d.recorder);
+      const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
+      const findings = JSON.parse(fs.readFileSync(path.join(f.root, manifest.files.findings.path)));
+      if (format === 'old-inline') {
+        assert.equal(value.prepared.packet.role_context.planning_reference, undefined);
+        assert.equal(findings.host_context, undefined);
+      }
+      assert.equal(findings.context_digest, value.prepared.packet.digest);
+      const lookup = () => artifact.currentCodeReviewVerdict({ worktreePath: f.root, graphDir: f.graphDir,
+        pr: f.pr.number, head: f.pr.headRefOid, headBranch: f.pr.headRefName,
+        baseName: f.pr.baseRefName, baseCommit: f.pr.baseRefOid });
+      const flow = require(path.join(scripts, 'phase-code-review.cjs'));
+      const status = () => flow.status({ worktree: f.root, graphDir: f.graphDir, phase: 38, pr: f.pr.number, live: f.pr },
+        { defaultBranch: 'main' });
+      const pins = artifact.authenticatedArchivePins(f.root).map(pin => ({ ...pin,
+        content: fs.readFileSync(path.join(f.root, pin.path)) }));
+      const plan = path.join(f.project, f.row.plan), original = fs.readFileSync(plan);
+      for (const content of [original, Buffer.concat([original, Buffer.from('\nNew authorization requirement.\n')]), original]) {
+        fs.writeFileSync(plan, content);
+        assert.equal(lookup(), null);
+        assert.equal(status().state, 'owed'); assert.equal(flow.evaluateGate(status()).ok, false);
+        const prior = artifact.priorCodeReviewVerdicts({ worktreePath: f.root, graphDir: f.graphDir,
+          repository: target.repositoryIdentity(f.root), phaseDir: value.prepared.binding.phase });
+        assert.equal(prior[0].artifact_digest, result.artifact.digest);
+        for (const pin of pins) assert.deepEqual(fs.readFileSync(path.join(f.root, pin.path)), pin.content);
+      }
+    } finally { f.cleanup(); }
+  });

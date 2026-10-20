@@ -191,7 +191,7 @@ function collect(scope, options) {
   roleContext.dispositions_digest = disagreements.dispositions_digest;
   roleContext.reference = reference;
   roleContext.graph = { sha256: graphFile.sha256, state_sha256: stateFile.sha256 };
-  if (project !== worktree) roleContext.planning_reference = planning;
+  roleContext.planning_reference = planning;
   roleContext.phase_repo = binding.repo;
   const modelPolicy = require('./model-policy.cjs');
   const packet = packets.buildContextPacket({ root: project, role: 'code-review', subject: binding.subject,
