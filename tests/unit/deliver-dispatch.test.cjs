@@ -1071,4 +1071,53 @@ test('preflight reads the launch graph directory project, not the worktree proje
   }
 });
 
+for (const jira of [null, 'PRJ-42']) test(`phase code-review builders use graph epic identity (${jira})`, () => {
+  const f = shipyardFixture();
+  try {
+    const branch = jira ? 'feat/PRJ-42-demo' : 'epic/01-demo';
+    git(f.root, 'checkout', '-q', '-b', branch);
+    const graph = { epics: { 1: { branch, phaseDir: '01-demo', repos: [null], jira } },
+      tickets: { [f.id]: { ...ticketRow(), epic: branch, phaseDir: '01-demo', repo: null } } };
+    writeJson(path.join(f.graphDir, 'tickets.json'), graph);
+    writeJson(path.join(f.root, '.planning/config.json'), { git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'hold' } });
+    const live = { number: 801, state: 'OPEN', headRefName: branch, headRefOid: git(f.root, 'rev-parse', 'HEAD'),
+      baseRefName: 'main', baseRefOid: git(f.root, 'rev-parse', 'HEAD') };
+    const options = { cwd: f.root, graphDir: f.graphDir, getPullRequest: () => live };
+    const args = ['code-review', '01-demo', '--phase', '1', '--pr', '801'];
+    for (const runtime of ['claude', 'codex']) {
+      const request = deliverDispatch.build([...args, '--runtime', runtime], options);
+      assert.strictEqual(request.role, 'code-review');
+      if (runtime === 'claude') assert.strictEqual(parseRequest(request).role, 'code-review');
+      else {
+        const { scope, graph_dir, ...launch } = request;
+        assert.strictEqual(validateArgs(launch).request.role, 'code-review');
+        assert.strictEqual(require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs')
+          .parseSubject('architecture-review', scope.ticket).repository,
+        require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').repositoryIdentity(f.root));
+      }
+    }
+    for (const argv of [args.slice(0, 2), args.slice(0, 4), [args[0], args[1], '--pr', '801'],
+      [...args, '--unknown', 'x'], [args[0], args[1], '--repo', 'owner/repo']])
+      assert.throws(() => deliverDispatch.build(argv, options), /requires|unsupported/);
+    for (const patch of [{ baseRefName: 'other' }, { headRefOid: 'a'.repeat(40) }]) {
+      assert.throws(() => deliverDispatch.build(args, { ...options, getPullRequest: () => ({ ...live, ...patch }) }));
+    }
+    for (const unknown of ['unknown', jira ? 'epic/01-demo' : 'feat/PRJ-42-demo', graph.tickets[f.id].branch]) {
+      graph.epics[1].branch = unknown;
+      writeJson(path.join(f.graphDir, 'tickets.json'), graph);
+      assert.throws(() => deliverDispatch.build(args, options), /unmatched|ticket PR/);
+    }
+    graph.epics[1].branch = branch;
+    writeJson(path.join(f.graphDir, 'tickets.json'), graph);
+    const arch = ['arch-review', ...args.slice(1)];
+    assert.throws(() => deliverDispatch.build(arch, options), /phase code review is owed.*delivery_pipeline.code_review.*report/);
+    writeJson(path.join(f.root, '.planning/config.json'), { git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'report' } });
+    assert.strictEqual(deliverDispatch.build(arch, options).role, 'arch-review');
+    graph.tickets[f.id].branch = branch; delete graph.epics[1];
+    writeJson(path.join(f.graphDir, 'tickets.json'), graph);
+    assert.throws(() => deliverDispatch.build(args, options), /ticket PR/);
+    assert.throws(() => deliverDispatch.build(arch, options), /ticket PR/);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 done();

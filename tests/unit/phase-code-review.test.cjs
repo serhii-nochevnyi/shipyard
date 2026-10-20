@@ -1,0 +1,412 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync, execFileSync } = require('node:child_process');
+const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase-review-authority-')));
+const homedir = os.homedir;
+os.homedir = () => home;
+process.on('exit', () => { os.homedir = homedir; fs.rmSync(home, { recursive: true, force: true }); });
+const scripts = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts');
+const flow = require(path.join(scripts, 'phase-code-review.cjs'));
+const target = require(path.join(scripts, 'architecture-target.cjs'));
+const artifact = require(path.join(scripts, 'role-artifact.cjs'));
+const builder = require(path.join(scripts, 'deliver-dispatch.cjs'));
+const { fixture: artifactFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+const shapes = [null, 'PRJ-42'];
+const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value));
+const raw = (complete = true, findings = []) => ({ review_completeness: complete ? 'complete' : 'incomplete',
+  limitations: complete ? [] : ['unread diff'], unresolved_sources: [], findings, dispositions: [] });
+const blocker = { id: 'fix-source', rule: 'source-error', severity: 'BLOCKER', path: 'source.js', line: 1,
+  line_text: fs.readFileSync(path.join(__dirname, '../fixtures/code-review/source.js'), 'utf8').split('\n')[0],
+  summary: 'Repair the failing source', failure_scenario: 'A caller receives the wrong result.',
+  fix_ticket: { title: 'Repair source', scope: 'Correct the cited failure', files: ['source.js'], depends_on: [] } };
+
+function withFlowDependencies(overrides, run) {
+  const Module = require('node:module');
+  const filename = require.resolve(path.join(scripts, 'phase-code-review.cjs'));
+  const originalLoad = Module._load, originalModule = require.cache[filename];
+  delete require.cache[filename];
+  Module._load = function (request, parent, isMain) {
+    if (parent?.filename === filename && Object.hasOwn(overrides, request)) return overrides[request];
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  try { return run(require(filename)); }
+  finally {
+    Module._load = originalLoad;
+    delete require.cache[filename];
+    if (originalModule) require.cache[filename] = originalModule;
+  }
+}
+
+function fixture(jira) {
+  const f = artifactFixture();
+  const branch = jira ? 'feat/PRJ-42-review' : f.branch;
+  if (jira) f.git(['branch', '-m', branch]);
+  f.graph.epics = { '052': { branch, phaseDir: f.phase, repos: [null], jira } };
+  Object.assign(f.graph.tickets['T-52-01'], { epic: branch, branch: 'feat/review-ticket', repo: null, phaseDir: f.phase });
+  const mode = value => write(path.join(f.root, '.planning/config.json'),
+    { git: { base_branch: 'main' }, delivery_pipeline: { code_review: value } });
+  mode('hold'); f.writeGraph();
+  const live = () => ({ number: 52, state: 'OPEN', headRefName: branch, headRefOid: f.git(['rev-parse', 'HEAD']),
+    baseRefName: 'main', baseRefOid: f.base });
+  const input = () => ({ phase: 52, phaseDirectory: f.phase, pr: 52, worktree: f.root, graphDir: f.graphDir, live: live() });
+  const options = { cwd: f.root, graphDir: f.graphDir, defaultBranch: 'main', getPullRequest: live };
+  const args = role => [role, f.phase, '--phase', '52', '--pr', '52'];
+  const advance = n => {
+    fs.writeFileSync(path.join(f.root, 'round.txt'), String(n));
+    f.git(['add', 'round.txt']); f.git(['commit', '--quiet', '-m', 'round ' + n]);
+    if (n > 1) {
+      const id = 'T-52-0' + n;
+      f.graph.tickets[id] = { ...f.graph.tickets['T-52-01'], branch: 'fix/' + id,
+        plan: '.planning/phases/' + f.phase + '/52-0' + n + '-PLAN.md' };
+      f.state[id] = { status: 'merged', pr: n + 10, head_sha: live().headRefOid, merge_sha: live().headRefOid };
+    }
+    f.writeGraph();
+    return target.phaseBinding({ graph: f.graph, state: f.state, phase: 52, repository: target.repositoryIdentity(f.root),
+      branch, pr: 52, head: live().headRefOid, base: f.base });
+  };
+  return { ...f, inputArtifact: f.input, branch, mode, live, input, options, args, advance };
+}
+
+for (const jira of shapes) {
+  test('exact graph matching, including unknown and ambiguous heads: ' + jira, () => {
+    const f = fixture(jira);
+    try {
+      const match = (head, graph = f.graph, phase) => flow.matchEpicPullRequest({ graph, state: f.state,
+        live: { headRefName: head }, repo: null, phase });
+      assert.deepEqual(match(f.branch), { kind: 'epic', phase: 52, phase_dir: f.phase, branch: f.branch });
+      assert.equal(match('feat/review-ticket').kind, 'ticket');
+      f.state['T-52-01'].pr_branch = 'recorded-ticket';
+      assert.equal(match('recorded-ticket').kind, 'ticket');
+      for (const head of ['unknown', jira ? 'epic/52-review' : 'feat/PRJ-42-review'])
+        assert.equal(match(head).kind, 'unmatched');
+      for (const mutate of [
+        graph => { graph.epics['53'] = { ...graph.epics['052'] }; },
+        graph => { graph.epics['052'].repos = ['other/repo']; },
+        graph => { graph.tickets['T-52-01'].epic = 'different'; },
+        graph => { delete graph.epics; },
+      ]) {
+        const graph = structuredClone(f.graph); mutate(graph);
+        assert.equal(match(f.branch, graph).kind, 'unmatched');
+      }
+      assert.equal(match(f.branch, f.graph, 53).kind, 'unmatched');
+      assert.equal(flow.matchEpicPullRequest({ graph: null, live: f.live() }).kind, 'unmatched');
+    } finally { f.cleanup(); }
+  });
+
+  test('owed, exact reuse, moved head/base, incomplete retry and named exits: ' + jira, () => {
+    const f = fixture(jira);
+    try {
+      let state = flow.status(f.input());
+      assert.equal(state.state, 'owed'); assert.equal(state.round, 1); assert.equal(state.scope, 'full');
+      assert.match(flow.evaluateGate(f.input()).message, /build code-review/);
+      const binding = f.advance(1);
+      artifact.sealJudgment(artifactInput(f, binding, raw()));
+      state = flow.status(f.input());
+      assert.equal(state.state, 'current'); assert.equal(state.reuse, true);
+      assert.equal(flow.evaluateGate(f.input()).ok, true);
+      assert.equal(flow.status({ ...f.input(), live: { ...f.live(), baseRefOid: f.live().headRefOid } }).state, 'owed');
+      f.advance(2);
+      assert.equal(flow.status(f.input()).state, 'owed');
+      artifact.sealJudgment(artifactInput(f, currentBinding(f), raw(false), 2, binding.subject.match(/;head=([^;]+)/)[1]));
+      state = flow.status(f.input());
+      assert.equal(state.state, 'owed'); assert.equal(state.retry, true); assert.equal(state.reuse, false);
+      assert.equal(state.review_completeness, 'incomplete');
+      assert.match(state.reason, /incomplete/);
+      const refusal = flow.evaluateGate(f.input());
+      for (const word of ['owed', 'incomplete', 'delivery_pipeline.code_review', 'report', path.join(f.root, '.planning/config.json')])
+        assert.ok(refusal.message.includes(word), word);
+      assert.throws(() => builder.build(f.args('arch-review'), f.options), /phase code review is owed/);
+      for (const mode of ['hold', 'report']) {
+        f.mode(mode);
+        const unknown = { ...f.input(), live: { ...f.live(), headRefName: 'unknown' } };
+        assert.equal(flow.status(unknown).state, 'unmatched'); assert.equal(flow.status(unknown).verdict, null);
+        assert.equal(flow.evaluateGate(unknown).ok, mode === 'report');
+        assert.equal(flow.verifyCodeReview(unknown).ok, mode === 'report');
+        assert.throws(() => flow.status({ ...f.input(), live: { ...f.live(), headRefName: 'feat/review-ticket' } }), /ticket PR/);
+      }
+      assert.equal(builder.build(f.args('arch-review'), f.options).role, 'arch-review');
+    } finally { f.cleanup(); }
+  });
+
+  test('fix tickets change the ticket-set digest between rounds and the cap still holds: ' + jira, () => {
+    const f = fixture(jira);
+    try {
+      const digests = [], heads = [];
+      for (let round = 1; round <= 3; round++) {
+        const binding = f.advance(round); digests.push(binding.membership);
+        const owed = flow.status(f.input());
+        assert.equal(owed.state, 'owed'); assert.equal(owed.round, round);
+        assert.equal(owed.scope, round === 1 ? 'full' : 'delta'); assert.equal(owed.rounds_used, round - 1);
+        artifact.sealJudgment(artifactInput(f, binding, raw(true, [blocker]), round, heads.at(-1) || null));
+        heads.push(f.live().headRefOid);
+        const current = flow.status(f.input());
+        assert.equal(current.state, 'current'); assert.equal(current.repair, round < 3 ? 'tickets' : 'human');
+        const refused = flow.evaluateGate(f.input());
+        assert.equal(refused.ok, false); assert.match(refused.message, /needs-fix/);
+        for (const mode of ['hold', 'report']) {
+          f.mode(mode);
+          let diagnostic = '';
+          const fixes = flow.fixTickets(f.input(), { stderr: { write: text => { diagnostic += text; } } });
+          assert.equal(fixes.length, round < 3 ? 1 : 0);
+          if (fixes.length) {
+            assert.deepEqual(Object.keys(fixes[0]).sort(), ['depends_on', 'files', 'finding_id', 'scope', 'title']);
+            assert.deepEqual(fixes[0].files, ['source.js']);
+            if (round === 1 && mode === 'hold') assertFixGraph(fixes[0]);
+          } else {
+            assert.match(diagnostic, /no longer re-check.*BLOCKERs stay visible.*delivery_pipeline.code_review.*report/);
+          }
+        }
+        f.mode('hold');
+      }
+      digests.push(f.advance(4).membership); assert.equal(new Set(digests).size, 4);
+      const status = flow.status(f.input());
+      assert.equal(status.state, 'limit'); assert.equal(status.rounds_used, 3); assert.equal(status.round, null);
+      const gate = flow.evaluateGate(f.input());
+      assert.equal(gate.ok, false); assert.match(gate.message, /three rounds.*delivery_pipeline.code_review.*report/);
+      assert.throws(() => builder.build(f.args('arch-review'), f.options), error => error.message.includes(gate.message));
+      f.mode('report'); assert.equal(builder.build(f.args('arch-review'), f.options).role, 'arch-review');
+    } finally { f.cleanup(); }
+  });
+
+  test('incomplete full review and complete delta never open the gate: ' + jira, () => {
+    const f = fixture(jira);
+    try {
+      const first = f.advance(1), head = f.live().headRefOid;
+      artifact.sealJudgment(artifactInput(f, first, raw(false)));
+      assert.equal(flow.status(f.input()).retry, true);
+      const second = f.advance(2);
+      assert.equal(flow.status(f.input()).round, 1);
+      artifact.sealJudgment(artifactInput(f, second, raw(true, [blocker]), 2, head));
+      const status = flow.status(f.input());
+      assert.equal(status.state, 'owed'); assert.equal(status.retry, true); assert.equal(status.rounds_used, 0);
+      assert.equal(flow.evaluateGate(f.input()).ok, false);
+    } finally { f.cleanup(); }
+  });
+}
+
+function currentBinding(f) {
+  return target.phaseBinding({ graph: f.graph, state: f.state, phase: 52, repository: target.repositoryIdentity(f.root),
+    branch: f.branch, pr: 52, head: f.live().headRefOid, base: f.base });
+}
+function artifactInput(f, binding, result, round = 1, priorHead = null) {
+  return f.inputArtifact(binding, round, priorHead, result);
+}
+
+function assertFixGraph(fix) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-fix-plan-')));
+  try {
+    execFileSync('git', ['-C', root, 'init', '--quiet', '-b', 'main']);
+    fs.writeFileSync(path.join(root, 'source.js'), 'source');
+    const directory = path.join(root, '.planning/phases/52-review'); fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, '52-01-PLAN.md'), ['---', 'phase: 52', 'plan: 1',
+      'title: ' + JSON.stringify(fix.title), 'type: implementation', 'wave: 1', 'depends_on: []',
+      'requirements: [REQ-211]', 'files_modified: ' + JSON.stringify(fix.files),
+      'delivery:', '  ticket: T-52-01', '  risk: low', '---', '', '## Scope', fix.scope, ''].join('\n'));
+    const validated = spawnSync(process.execPath, [path.join(scripts, 'validate-graph.cjs')], { cwd: root, encoding: 'utf8' });
+    assert.equal(validated.status, 0, validated.stdout + validated.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.planning/graph/tickets.json'))).tickets['T-52-01'].files, fix.files);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+for (const jira of shapes) test('every mode consumer follows the project graph across checkouts: ' + jira, () => {
+  const f = fixture(jira);
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-checkouts-')));
+  try {
+    f.mode('report');
+    f.git(['add', '.planning/config.json', '.planning/graph']); f.git(['commit', '--quiet', '-m', 'tracked worktree config']);
+    const head = f.git(['rev-parse', 'HEAD']);
+    f.git(['switch', '--quiet', 'main']);
+    const linked = path.join(parent, 'linked');
+    f.git(['worktree', 'add', '--quiet', linked, f.branch]);
+    const unrelated = path.join(parent, 'unrelated');
+    execFileSync('git', ['clone', '--quiet', '--no-hardlinks', f.root, unrelated]);
+    execFileSync('git', ['-C', unrelated, 'checkout', '--quiet', f.branch]);
+    fs.rmSync(path.join(unrelated, '.planning'), { recursive: true, force: true });
+    fs.mkdirSync(f.graphDir, { recursive: true }); f.writeGraph();
+    const live = { ...f.live(), headRefOid: head };
+    for (const mode of ['hold', 'report']) {
+      f.mode(mode);
+      write(path.join(linked, '.planning/config.json'), { git: { base_branch: 'main' },
+        delivery_pipeline: { code_review: mode === 'hold' ? 'report' : 'hold' } });
+      for (const worktree of [linked, unrelated]) {
+        const input = { ...f.input(), worktree, live };
+        const options = { ...f.options, cwd: worktree, getPullRequest: () => live };
+        const resolved = flow.resolveCodeReviewMode({ graphDir: f.graphDir, worktree });
+        assert.equal(resolved.mode, mode); assert.equal(resolved.project_root, f.root);
+        assert.equal(resolved.config_path, path.join(f.root, '.planning/config.json'));
+        assert.equal(flow.status(input).mode, mode);
+        const gate = flow.evaluateGate(input);
+        assert.equal(gate.ok, mode === 'report');
+        assert.equal(flow.verifyCodeReview(input).ok, mode === 'report');
+        if (mode === 'hold') assert.throws(() => builder.build(f.args('arch-review'), options),
+          error => error.message.includes(resolved.config_path));
+        else assert.equal(builder.build(f.args('arch-review'), options).role, 'arch-review');
+      }
+    }
+    const probe = path.join(parent, 'resolve.cjs');
+    fs.writeFileSync(probe, `process.stdout.write(JSON.stringify(require(${JSON.stringify(path.join(scripts, 'phase-code-review.cjs'))}).resolveCodeReviewMode({worktree:process.argv[2]})));`);
+    const env = { ...process.env }; delete env.SHIPYARD_GRAPH_DIR;
+    const resolved = spawnSync(process.execPath, [probe, linked], { cwd: parent, env, encoding: 'utf8' });
+    assert.equal(resolved.status, 0, resolved.stderr);
+    assert.equal(JSON.parse(resolved.stdout).graph_dir, f.graphDir);
+    const missing = spawnSync(process.execPath, [probe, parent], { cwd: parent, env, encoding: 'utf8' });
+    assert.equal(missing.status, 0, missing.stderr);
+    assert.deepEqual(JSON.parse(missing.stdout), { mode: 'report', project_root: null,
+      graph_dir: null, config_path: null, source: 'default' });
+  } finally { f.cleanup(); fs.rmSync(parent, { recursive: true, force: true }); }
+});
+
+for (const jira of shapes) test('the mode property has one reader and unknown PRs read no sealed verdict: ' + jira, () => {
+  for (const name of ['deliver-dispatch.cjs', 'gate-trailer.cjs'])
+    assert.doesNotMatch(fs.readFileSync(path.join(scripts, name), 'utf8'), /(?:config|cfg)\.code_review|\[['"]code_review['"]\]/);
+  const source = fs.readFileSync(path.join(scripts, 'phase-code-review.cjs'), 'utf8');
+  const before = source.indexOf('function resolveCodeReviewMode('), after = source.indexOf('\nfunction git(');
+  const outside = source.slice(0, before) + source.slice(after);
+  assert.doesNotMatch(outside, /(?:config|DEFAULTS)\.code_review/);
+  const f = fixture(jira);
+  const originalLoad = require('node:module')._load;
+  const originalModule = require.cache[require.resolve(path.join(scripts, 'phase-code-review.cjs'))];
+  try {
+    assert.equal(Object.isFrozen(artifact), true);
+    let reads = 0;
+    const unread = () => { reads++; assert.fail('unmatched must not read seals'); };
+    withFlowDependencies({ './role-artifact.cjs': { ...artifact,
+      currentCodeReviewVerdict: unread, priorCodeReviewVerdicts: unread } }, isolated => {
+      for (const mode of ['hold', 'report']) {
+        f.mode(mode);
+        const input = { ...f.input(), live: { ...f.live(), headRefName: 'unmatched' } };
+        assert.equal(isolated.status(input).state, 'unmatched');
+        assert.equal(isolated.evaluateGate(input).ok, mode === 'report');
+        assert.equal(isolated.verifyCodeReview(input).state, 'unmatched');
+        assert.equal(isolated.verifyCodeReview({ ...input, live: { ...input.live, baseRefName: 'ticket-base' } }), null);
+        assert.equal(isolated.verifyCodeReview({ ...input, live: { ...input.live, headRefName: 'feat/review-ticket' } }), null);
+      }
+      assert.throws(() => isolated.status(f.input()), /unmatched must not read seals/);
+      assert.equal(reads, 1, 'the scoped fixture intercepts a real matched verdict lookup');
+    });
+    assert.equal(require('node:module')._load, originalLoad);
+    assert.equal(require.cache[require.resolve(path.join(scripts, 'phase-code-review.cjs'))], originalModule);
+    assert.equal(Object.isFrozen(artifact), true);
+    assert.equal(flow.status(f.input()).state, 'owed');
+  } finally { f.cleanup(); }
+});
+
+for (const jira of shapes) test('CLI status, gate, repair and usage exits are stable: ' + jira, () => {
+  const f = fixture(jira);
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-cli-')));
+  try {
+    const prFile = path.join(temporary, 'pr.json');
+    const gh = path.join(temporary, 'gh');
+    fs.writeFileSync(gh, '#!/usr/bin/env node\nprocess.stdout.write(require("node:fs").readFileSync(process.env.REVIEW_PR));\n', { mode: 0o755 });
+    const run = (verb, patch = {}, extra = []) => {
+      write(prFile, { ...f.live(), ...patch });
+      return spawnSync(process.execPath, [path.join(scripts, 'phase-code-review.cjs'), verb, f.phase,
+        '--phase', '52', '--pr', '52', '--worktree', f.root, '--graph', f.graphDir, ...extra], {
+        cwd: temporary, encoding: 'utf8', env: { ...process.env, HOME: home,
+          PATH: temporary + path.delimiter + process.env.PATH, REVIEW_PR: prFile } });
+    };
+    for (const mode of ['hold', 'report']) {
+      f.mode(mode);
+      const status = run('status');
+      assert.equal(status.status, 0, status.stderr); assert.equal(JSON.parse(status.stdout).state, 'owed');
+      const gate = run('gate');
+      assert.equal(gate.status, mode === 'hold' ? 1 : 0, gate.stderr);
+      assert.equal(gate.stderr.trim().split('\n').length, 1);
+      assert.match(gate.stderr, mode === 'hold' ? /build code-review.*delivery_pipeline.code_review.*report/ : /nothing is held/);
+      const unknown = run('status', { headRefName: 'unknown' });
+      assert.equal(unknown.status, 0, unknown.stderr); assert.equal(JSON.parse(unknown.stdout).state, 'unmatched');
+      const unknownGate = run('gate', { headRefName: 'unknown' });
+      assert.equal(unknownGate.status, mode === 'hold' ? 1 : 0, unknownGate.stderr);
+      assert.match(unknownGate.stderr, /unmatched/);
+      const fixes = run('fix-tickets'); assert.equal(fixes.status, 0, fixes.stderr); assert.deepEqual(JSON.parse(fixes.stdout), []);
+      assert.equal(run('status', { headRefName: 'feat/review-ticket' }).status, 1);
+    }
+    assert.equal(run('status', {}, ['--unknown', 'value']).status, 2);
+    assert.equal(run('status', { headRefOid: 'a'.repeat(40) }).status, 1);
+    assert.equal(run('status', { baseRefName: 'ticket-base' }).status, 1);
+    const usage = spawnSync(process.execPath, [path.join(scripts, 'phase-code-review.cjs'), 'gate', f.phase], { encoding: 'utf8' });
+    assert.equal(usage.status, 2);
+  } finally { f.cleanup(); fs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+for (const jira of shapes) test('a complete delta pass opens the hold and unrelated heads spend no rounds: ' + jira, () => {
+  const f = fixture(jira);
+  try {
+    const first = f.advance(1), head = f.live().headRefOid;
+    artifact.sealJudgment(artifactInput(f, first, raw()));
+    artifact.sealJudgment(artifactInput(f, f.advance(2), raw(), 2, head));
+    assert.equal(flow.status(f.input()).state, 'current');
+    assert.equal(flow.evaluateGate(f.input()).ok, true);
+    assert.deepEqual(flow.fixTickets(f.input()), []);
+    f.git(['reset', '--hard', f.base]);
+    f.advance(3);
+    const next = flow.status(f.input());
+    assert.equal(next.rounds_used, 0); assert.equal(next.round, 1); assert.equal(next.scope, 'full');
+    assert.equal(flow.evaluateGate(f.input()).ok, false);
+  } finally { f.cleanup(); }
+});
+
+for (const jira of shapes) test('fatal ancestry preserves refusal across an authenticated three-round lineage: ' + jira, () => {
+  const f = fixture(jira);
+  try {
+    let priorHead = null;
+    for (let round = 1; round <= 3; round++) {
+      artifact.sealJudgment(artifactInput(f, f.advance(round), raw(), round, priorHead));
+      priorHead = f.live().headRefOid;
+    }
+    f.advance(4);
+    assert.equal(flow.status(f.input()).state, 'limit');
+    assert.equal(flow.status(f.input()).rounds_used, 3);
+    const failures = [
+      Object.assign(new Error('fatal: failed to read commit object'), { status: 128, signal: null }),
+      Object.assign(new Error('spawnSync git ENOENT'), { code: 'ENOENT', status: null }),
+      Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT', status: null, signal: 'SIGTERM' }),
+      Object.assign(new Error('git terminated'), { status: 1, signal: 'SIGTERM' }),
+      Object.assign(new Error('spawnSync git ENOBUFS'), { status: 1, code: 'ENOBUFS' }),
+      Object.assign(new Error('git was killed'), { status: 1, killed: true }),
+    ];
+    for (const failure of failures) {
+      let probes = 0;
+      withFlowDependencies({ 'node:child_process': { ...require('node:child_process'),
+        execFileSync(file, args, options) {
+          if (file === 'git' && args[2] === 'merge-base' && args[3] === '--is-ancestor') {
+            probes++; throw failure;
+          }
+          return execFileSync(file, args, options);
+        } } }, isolated => {
+        for (const mode of ['hold', 'report']) {
+          f.mode(mode);
+          for (const run of [
+            () => isolated.status(f.input()),
+            () => isolated.evaluateGate(f.input()),
+            () => isolated.fixTickets(f.input()),
+            () => isolated.verifyCodeReview(f.input()),
+            () => builder.build(f.args('arch-review'), f.options),
+          ]) assert.throws(run, error => error === failure, failure.message);
+        }
+      });
+      assert.equal(probes, 10, 'each consumer must refuse at the failed ancestry probe');
+      assert.equal(flow.status(f.input()).rounds_used, 3, 'fatal probes must not alter authenticated history');
+    }
+    let negativeProbes = 0;
+    withFlowDependencies({ 'node:child_process': { ...require('node:child_process'),
+      execFileSync(file, args, options) {
+        if (file === 'git' && args[2] === 'merge-base' && args[3] === '--is-ancestor') {
+          negativeProbes++;
+          throw Object.assign(new Error('not an ancestor'), { status: 1, signal: null });
+        }
+        return execFileSync(file, args, options);
+      } } }, isolated => {
+      const next = isolated.status(f.input());
+      assert.equal(next.state, 'owed'); assert.equal(next.rounds_used, 0);
+      assert.equal(next.round, 1); assert.equal(next.scope, 'full');
+    });
+    assert(negativeProbes > 0, 'genuine exit 1 is a negative ancestry result');
+    assert.equal(flow.status(f.input()).state, 'limit');
+  } finally { f.cleanup(); }
+});
