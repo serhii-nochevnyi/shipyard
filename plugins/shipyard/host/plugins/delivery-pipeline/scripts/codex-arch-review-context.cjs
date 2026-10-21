@@ -2073,9 +2073,13 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
   const graph = new Map(), boundaries = [], uncertainty = [], bodies = new Map();
   let total = 0;
   const read = entry => {
-    if (bodies.has(entry.object)) return bodies.get(entry.object);
     if (entry.type !== 'blob' || !['100644', '100755'].includes(entry.mode)) {
       uncertainty.push({ path: entry.path, reason: 'non-regular-source-boundary' }); return null;
+    }
+    if (bodies.has(entry.object)) {
+      const content = bodies.get(entry.object);
+      if (content === null) uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' });
+      return content;
     }
     const size = Number(git({}, root, ['cat-file', '-s', entry.object]));
     if (!Number.isSafeInteger(size) || size < 0 || size > FILE_LIMITS.material || total + size > FILE_LIMITS.material)
@@ -2084,9 +2088,13 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
     total += raw.length;
     let content;
     try { content = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch {
+      bodies.set(entry.object, null);
       uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' }); return null;
     }
-    if (raw.includes(0)) { uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' }); return null; }
+    if (raw.includes(0)) {
+      bodies.set(entry.object, null);
+      uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' }); return null;
+    }
     bodies.set(entry.object, content); return content;
   };
   const resolve = (source, specifier, sources) => {
@@ -2117,6 +2125,8 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
       boundaries.push({ path: entry.path, dependency, reason: 'static-import-boundary' });
     }
   }
+  bodies.clear();
+  total = 0;
   const affected = new Set(changed), queue = [...changed];
   for (let index = 0; index < queue.length; index++) {
     if (queue.length > 20000) fail('dependency closure exceeds its bound', 'CONTEXT_OVER_BOUND');
