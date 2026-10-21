@@ -289,6 +289,95 @@ function findingsComment(current, sealed, prior, ctx) {
   return body + footer;
 }
 
+const crypto = require('node:crypto');
+const { withLock, writeAtomic } = require('./lock.cjs');
+const publicationHash = value => crypto.createHash('sha256').update(value).digest('hex');
+const positiveId = value => Number.isSafeInteger(value) && value > 0;
+const PUBLICATION_BOUND = 8192;
+
+function publicationNamespace(ctx) {
+  const home = fs.realpathSync(require('node:os').homedir());
+  const selector = ctx.repo === null ? null : ctx.repo.trim().toLowerCase();
+  const identity = { schema: 'shipyard.code-review-publication.v1', repository: ctx.repository,
+    selector, pr: ctx.pr };
+  const directory = path.join(home, '.local/state/shipyard/code-review-publications',
+    publicationHash(JSON.stringify([identity.repository, selector])));
+  for (const root of [ctx.worktree, ctx.mode.project_root].filter(Boolean)) {
+    const relative = path.relative(fs.realpathSync(root), directory);
+    if (!relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)))
+      throw new Error('publication state cannot be inside a source or planning checkout');
+  }
+  const validate = () => {
+    let current = home;
+    const homeStat = fs.lstatSync(home);
+    if (!homeStat.isDirectory() || homeStat.uid !== process.getuid()) throw new Error('unsafe publication home');
+    for (const part of path.relative(home, directory).split(path.sep)) {
+      current = path.join(current, part);
+      try { fs.mkdirSync(current, { mode: 0o700 }); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+      const stat = fs.lstatSync(current);
+      const privateDirectory = current === directory || part === 'code-review-publications';
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()
+          || (stat.mode & (privateDirectory ? 0o777 : 0o022)) !== (privateDirectory ? 0o700 : 0))
+        throw new Error('unsafe publication namespace');
+    }
+  };
+  validate();
+  return { directory, file: path.join(directory, `${ctx.pr}.json`), identity, validate };
+}
+
+function readPublication(state) {
+  let stat;
+  try { stat = fs.lstatSync(state.file); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()
+      || (stat.mode & 0o777) !== 0o600 || stat.size > PUBLICATION_BOUND)
+    throw new Error('unsafe publication record');
+  const same = value => ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode']
+    .every(key => value[key] === stat[key]);
+  const fd = fs.openSync(state.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  let record;
+  try {
+    if (!same(fs.fstatSync(fd))) throw new Error('publication record changed');
+    const bytes = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (!count) throw new Error('publication record is unreadable');
+      offset += count;
+    }
+    if (fs.readSync(fd, Buffer.alloc(1), 0, 1, offset) || !same(fs.fstatSync(fd))
+        || !same(fs.lstatSync(state.file))) throw new Error('publication record changed');
+    record = JSON.parse(bytes.toString('utf8'));
+  } finally { fs.closeSync(fd); }
+  if (!object(record) || Object.keys(record).sort().join(',') !== 'body_hash,comment_id,pr,repository,schema,selector'
+      || Object.entries(state.identity).some(([key, value]) => record[key] !== value)
+      || !positiveId(record.comment_id) || typeof record.body_hash !== 'string'
+      || !/^[a-f0-9]{64}$/.test(record.body_hash))
+    throw new Error('publication record identity or schema mismatch');
+  return record;
+}
+
+function persistPublication(state, record) {
+  state.validate();
+  readPublication(state);
+  const temporary = path.join(state.directory, `.${path.basename(state.file)}.tmp-${process.pid}`);
+  const fd = fs.openSync(temporary, 'wx', 0o600);
+  fs.closeSync(fd);
+  try {
+    const bytes = JSON.stringify(record) + '\n';
+    if (Buffer.byteLength(bytes) > PUBLICATION_BOUND) throw new Error('publication record exceeds bound');
+    writeAtomic(state.file, bytes);
+    const persisted = fs.openSync(state.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try { fs.fsyncSync(persisted); } finally { fs.closeSync(persisted); }
+    const directory = fs.openSync(state.directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    state.validate();
+    if (JSON.stringify(readPublication(state)) !== JSON.stringify(record))
+      throw new Error('publication record persistence failed');
+  } finally { try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+}
+
 function publish(input, options = {}) {
   const worktree = input.worktree || input.worktreePath || process.cwd(), repo = input.repo ?? null;
   const request = args => {
@@ -346,13 +435,31 @@ function publish(input, options = {}) {
       result.comment = { ok: false, action: 'refused', reason: 'PR hygiene refused comment' };
       return result;
     }
-    const pages = request(['api', `${api}/issues/${ctx.pr}/comments`, '--paginate', '--slurp']);
-    if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page))) throw new Error('comment lookup is unavailable');
-    const existing = pages.flat().find(comment => typeof comment.body === 'string' && comment.body.includes('<!-- code-review -->'));
-    if (existing && (!Number.isSafeInteger(existing.id) || existing.id < 1)) throw new Error('comment identity is unavailable');
-    const posted = request(['api', existing ? `${api}/issues/comments/${existing.id}` : `${api}/issues/${ctx.pr}/comments`,
-      '--method', existing ? 'PATCH' : 'POST', '-f', `body=${body}`]);
-    result.comment = { ok: true, action: existing ? 'edited' : 'created', id: existing?.id ?? posted?.id };
+    const state = publicationNamespace(ctx);
+    withLock(state.directory, `pr-${ctx.pr}`, () => {
+      state.validate();
+      const binding = readPublication(state);
+      const pages = request(['api', `${api}/issues/${ctx.pr}/comments`, '--paginate', '--slurp']);
+      if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page)
+          || page.some(comment => !object(comment) || !positiveId(comment.id) || typeof comment.body !== 'string')))
+        throw new Error('comment lookup is unavailable');
+      const comments = pages.flat();
+      if (new Set(comments.map(comment => comment.id)).size !== comments.length)
+        throw new Error('comment lookup contains duplicate identities');
+      const candidate = binding && comments.find(comment => comment.id === binding.comment_id);
+      const existing = candidate && publicationHash(candidate.body) === binding.body_hash ? candidate : null;
+      const latest = readPR(ctx.pr);
+      if (['number', 'state', 'headRefName', 'headRefOid', 'baseRefName', 'baseRefOid']
+        .some(key => latest[key] !== ctx.live[key]) || git(ctx.worktree, ['rev-parse', 'HEAD']) !== current.head)
+        throw new Error('live phase PR identity changed before comment publication');
+      state.validate();
+      const posted = request(['api', existing ? `${api}/issues/comments/${existing.id}` : `${api}/issues/${ctx.pr}/comments`,
+        '--method', existing ? 'PATCH' : 'POST', '-f', `body=${body}`]);
+      if (!object(posted) || !positiveId(posted.id) || posted.body !== body
+          || (existing && posted.id !== existing.id)) throw new Error('comment publication response is invalid');
+      persistPublication(state, { ...state.identity, comment_id: posted.id, body_hash: publicationHash(body) });
+      result.comment = { ok: true, action: existing ? 'edited' : 'created', id: posted.id };
+    }, { label: 'code review publication', waitMs: 10000 });
   } catch (error) { result.comment = { ok: false, action: 'failed', reason: error.message }; }
   return result;
 }
