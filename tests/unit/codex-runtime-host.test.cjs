@@ -1713,6 +1713,16 @@ async function recordedBatchApplication(verified, input, root, cliRaw, separateP
 }
 
 async function fixture(action, options = {}) {
+  const readsWithTelemetry = (reads, turn, offset = 0) => {
+    const records = nativeReads(reads, turn, offset);
+    if (options.telemetry !== undefined) for (const record of records) {
+      if (record.payload?.type !== 'custom_tool_call_output') continue;
+      const value = JSON.parse(record.payload.output[1].text);
+      value.original_token_count = options.telemetry;
+      record.payload.output[1].text = JSON.stringify(value);
+    }
+    return records;
+  };
   const typedRole = options.role === 'integrator' ? 'shipyard-integrator' : 'shipyard-arch-review';
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-continuation-')));
   const oldHome = os.homedir;
@@ -1764,7 +1774,7 @@ async function fixture(action, options = {}) {
       const probe = path.join(probeDirectory, session + '.jsonl');
       fs.writeFileSync(probe, serialize([nativeMetadata(session, worktree), nativeContext('capacity-turn', worktree),
         message('developer', 'capacity-turn', instructions), message('user', 'capacity-turn', input.prompt),
-        event('task_started', 'capacity-turn'), ...nativeReads(reads, 'capacity-turn'), ...finish('capacity-turn', result)]));
+        event('task_started', 'capacity-turn'), ...readsWithTelemetry(reads, 'capacity-turn'), ...finish('capacity-turn', result)]));
       fs.chmodSync(probe, 0o600);
       const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
         env: { CODEX_HOME: probeHome }, resultText: result });
@@ -1819,10 +1829,10 @@ async function fixture(action, options = {}) {
                 taskOutput);
             }
             const prefix = [metadata, context, ...typedRecords, event('task_started', 'original-turn'),
-              ...nativeReads(reads.slice(0, originalCount), 'original-turn'),
-              ...(options.pendingBatch ? nativeReads(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount).slice(0, 1) : []),
+              ...readsWithTelemetry(reads.slice(0, originalCount), 'original-turn'),
+              ...(options.pendingBatch ? readsWithTelemetry(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount).slice(0, 1) : []),
               ...((options.groupedBatch || options.groupedPendingBatch) ? (() => {
-                const nested = nativeReads(reads.slice(originalCount, originalCount + 2), 'original-turn', originalCount);
+                const nested = readsWithTelemetry(reads.slice(originalCount, originalCount + 2), 'original-turn', originalCount);
                 const call = nested[0], output = nested[1];
                 call.payload.call_id = 'original-turn-grouped'; output.payload.call_id = call.payload.call_id;
                 call.payload.input += '\n' + nested[2].payload.input;
@@ -1835,7 +1845,7 @@ async function fixture(action, options = {}) {
                 return [call, output];
               })() : []),
               ...(options.incompleteBatch ? (() => {
-                const interrupted = nativeReads(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount);
+                const interrupted = readsWithTelemetry(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount);
                 const envelope = JSON.parse(interrupted[1].payload.output[1].text);
                 envelope.output = envelope.output.split('\n').slice(0, -2).join('\n') + '\n';
                 interrupted[1].payload.output[1].text = JSON.stringify(envelope);
@@ -1856,7 +1866,7 @@ async function fixture(action, options = {}) {
             } else { closed = true; child.emit('close', options.premature ? 0 : 1); }
           } else {
             resumedCommands = reads.slice(originalCount).map(read => read.command);
-            let remaining = nativeReads(reads.slice(originalCount), 'resumed-turn', 1);
+            let remaining = readsWithTelemetry(reads.slice(originalCount), 'resumed-turn', 1);
             if (options.directBatch) remaining = directBatchReads(remaining);
             if (options.tamperResume) remaining = options.tamperResume(remaining, reads);
             fs.appendFileSync(native, serialize([nativeContext('resumed-turn', worktree), event('task_started', 'resumed-turn'), ...remaining,
@@ -2116,7 +2126,7 @@ test('v3 completed protected accounting counts shared native pins once and retai
 });
 
 
-for (const layer of ['outer', 'outer-second-block', 'nested']) test('v3 three-range ' + layer + ' truncation preserves atomic credit and failed costs', async () => {
+for (const layer of ['outer', 'outer-second-block', 'nested']) test('reader output telemetry three-range ' + layer + ' truncation preserves atomic credit and failed costs', async () => {
   await fixture(async f => {
     const original = fs.readFileSync(f.native);
     const { selectors } = await completedFixture(f);
@@ -2209,13 +2219,13 @@ test('v3 direct function outputs retain successful physical accounting and exact
 for (const [name, mutate, pending] of [
   ['malformed JSON', () => '{"exit_code":0', 0],
   ['truncated nested', value => { value.truncated = true; }, 0],
-  ['original token count', value => { value.original_token_count = 10001; }, 0],
+  ['invalid original token count', value => { value.original_token_count = -1; }, 0],
   ['wrong bytes', value => { value.output += 'surplus\n'; }, 0],
   ['missing terminal', value => { value.output = value.output.split('\n').slice(0, -2).join('\n') + '\n'; }, 0],
   ['missing output', value => { delete value.output; }, 0],
   ['nonzero exit', value => { value.exit_code = 1; }, 0],
   ['pending session', value => { delete value.exit_code; value.session_id = 123; }, 1],
-]) test('v3 direct ' + name + ' retains an uncredited actual attempt', async () => {
+]) test('reader output telemetry direct ' + name + ' retains an uncredited actual attempt', async () => {
   await fixture(async f => {
     const { selectors } = await completedFixture(f);
     const result = accountingChild(f, selectors);
@@ -2238,7 +2248,7 @@ for (const [name, mutate] of [
   ['changed budget', records => { const args = JSON.parse(records[0].payload.arguments); args.max_output_tokens = 9999; records[0].payload.arguments = JSON.stringify(args); }],
   ['extra command option', records => { const args = JSON.parse(records[0].payload.arguments); args.yield_time_ms = 1; records[0].payload.arguments = JSON.stringify(args); }],
   ['surplus stdout representation', records => { const value = JSON.parse(records[1].payload.output); value.stdout = value.output; delete value.output; records[1].payload.output = JSON.stringify(value); }],
-]) test('v3 direct final refuses ' + name + ' before completed accounting authority', async () => {
+]) test('reader output telemetry direct final refuses ' + name + ' before completed accounting authority', async () => {
   await fixture(async f => {
     await assert.rejects(completedFixture(f));
   }, { batch: true, directBatch: true, tamperResume(records) { mutate(records); return records; } });
@@ -2481,6 +2491,41 @@ for (const role of ['arch-review', 'integrator']) {
       () => require('./phase49-review-continuation.test.cjs').completedSourceReceiptRecoveryFixture(role, true, 'outcome-write', mutation));
 }
 
+for (const directBatch of [false, true]) for (const telemetry of [undefined, 5638])
+  test('reader output telemetry complete measurement and accounting direct=' + directBatch + ' count=' + telemetry, async () => {
+    await fixture(async f => {
+      const original = fs.readFileSync(f.native);
+      const { selectors } = await completedFixture(f);
+      const result = accountingChild(f, selectors);
+      assert.equal(result.attempts[0].successful_calls, 1);
+      assert.equal(result.coverage.total.successful_physical_calls, f.reads.length);
+      assert.equal(result.coverage.total.logical_ranges, collector.verifyFileInput(f.input).chunk_reads);
+      for (const attempt of result.attempts) {
+        assert.equal(attempt.failed_calls, 0); assert.equal(attempt.pending_calls, 0);
+        assert.ok(attempt.observed_nested_bytes > 0); assert.ok(attempt.observed_outer_bytes > 0);
+      }
+      assert.deepEqual(fs.readFileSync(f.native).subarray(0, original.length), original);
+      if (telemetry !== undefined) assert.ok(original.includes(Buffer.from('original_token_count')));
+    }, { batch: true, directBatch, telemetry });
+  });
+
+for (const directBatch of [false, true]) for (const kind of ['truncated', 'warning', 'invalid count', 'terminal'])
+  test('reader output telemetry complete final refuses ' + kind + ' direct=' + directBatch, async () => {
+    await fixture(async f => {
+      await assert.rejects(completedFixture(f));
+    }, { batch: true, directBatch, tamperResume(records) {
+      const item = records.find(record => ['custom_tool_call_output', 'function_call_output'].includes(record.payload?.type)).payload;
+      const value = JSON.parse(directBatch ? item.output : item.output[1].text);
+      value.original_token_count = 5638;
+      if (kind === 'truncated') value.truncated = true;
+      if (kind === 'warning') value.output = 'Warning: truncated output (original token count: 12000)\n' + value.output;
+      if (kind === 'invalid count') value.original_token_count = '5638';
+      if (kind === 'terminal') value.output = value.output.split('\n').slice(0, -2).join('\n') + '\n';
+      if (directBatch) item.output = JSON.stringify(value); else item.output[1].text = JSON.stringify(value);
+      return records;
+    } });
+  });
+
 originalRuntimeCases.push(completedCases);
 }
 
@@ -2657,5 +2702,7 @@ test('code review runtime records private custody and evidence-only permissions:
     && /role evidence path must be a regular file/.test(error.message));
   assert.equal(calls.length, 1);
 }, partitioned, critical));
+
+
 
 done();
