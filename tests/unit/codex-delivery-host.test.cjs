@@ -3872,6 +3872,7 @@ async function codeReviewEntryFixture(action, config = {}) {
       const transcript = path.join(storage, session + '.jsonl'); fs.writeFileSync(transcript, stream);
       const runtime_evidence = { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai',
         session_id: session, worktree: scope.worktree, ticket: scope.ticket, phase: scope.phase, code_review: binding,
+        ...(context.input_prepared ? { input_transport: 'host-files', input_bundle: context.input_prepared.input_bundle } : {}),
         transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: crypto.createHash('sha256').update(stream).digest('hex') } };
       config.afterLaunch?.({ f, value, selection, context, runtime_evidence, agentDir });
       return { launch_id: 'code-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
