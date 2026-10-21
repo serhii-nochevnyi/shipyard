@@ -1011,7 +1011,7 @@ function prepareIntegratorInput(scope, request, options) {
     return prepared;
   }
   if (request.context.review_contract === 'shipyard.integration-review.v2') {
-    const prepared = require('./claude-role-host.cjs').prepareIntegratorContext(options, {
+    const prepared = require('./claude-role-host.cjs').prepareNativeIntegratorContext(options, {
       worktree: scope.worktree, phase: String(scope.phase), signals: undefined });
     let signals = { ...prepared.signals };
     for (let attempt = 0; attempt < 4; attempt++) {
