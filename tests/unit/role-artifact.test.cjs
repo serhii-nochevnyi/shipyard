@@ -2435,6 +2435,7 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
   const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
     sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
     scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
+      dispositions_digest: null,
       planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
       ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
       exact_diff: { content: f.git(['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
@@ -2898,7 +2899,7 @@ for (const partitioned of [false, true]) for (const changed of ['plan', 'config'
       const packet = packets.buildContextPacket({ root: f.coordinator, role: 'code-review', subject: f.binding.subject,
         sourceRevision: f.live.headRefOid, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
         scope: { files_modified: ['source.js'] }, requiredRefs: [plan], roleContext: {
-          planning_reference: planning, ticket_set: f.binding.ticketSet, prior_findings: [],
+          dispositions_digest: null, planning_reference: planning, ticket_set: f.binding.ticketSet, prior_findings: [],
           plan_acceptance: [], exact_diff: { content: f.git(['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
         f.base, 'HEAD',
         ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()]) },
@@ -3027,6 +3028,130 @@ test('compact authentic integration proves native authority and scoped codec/reb
     assert.ok(calls.some(call => call.maximumBytes === 33554432), consumer + ' must select the approved bound');
   }
   assert.ok(observed.some(call => call.maximumBytes === 16777216), 'legacy authority keeps its default bound');
+});
+
+
+test('code-review carrier freshness authentic canonical lifecycle on both runtimes and transports', async () => {
+  if (process.env.SHIPYARD_CARRIER_FRESHNESS_CHILD !== '1') {
+    const selection = `(function(h,run,n){h.test=function(name,fn){if(name.startsWith("code-review carrier freshness")){n.count++;return run(name,fn)}};process.on("beforeExit",function(){if(n.count===0)throw Error("No selected tests")});require(${JSON.stringify(__filename)})})(require(${JSON.stringify(path.join(__dirname, 'assert-harness.cjs'))}),require(${JSON.stringify(path.join(__dirname, 'assert-harness.cjs'))}).test,{count:0})`;
+    const child = spawnSync(process.execPath, ['-e', selection], {
+      env: { ...process.env, SHIPYARD_CARRIER_FRESHNESS_CHILD: '1' }, encoding: 'utf8',
+    });
+    assert.equal(child.status, 0, child.stdout + child.stderr);
+    return;
+  }
+
+  const Module = require('node:module');
+  const savedHome = os.homedir, savedPath = process.env.PATH;
+  const markers = new Map(['SHIPYARD_RUNTIME', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED']
+    .map(key => [key, process.env[key]]));
+  const loadFixture = (name, exports) => {
+    const file = path.join(__dirname, name);
+    const loaded = new Module(file, module);
+    loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
+    const load = Module._load;
+    Module._load = function(name, ...args) {
+      if (name === 'node:test') return () => {};
+      return load.call(this, name, ...args);
+    };
+    try { loaded._compile(fs.readFileSync(file, 'utf8') + '\nmodule.exports = {' + exports + '};\n', file); }
+    finally { Module._load = load; }
+    return loaded.exports;
+  };
+  try {
+    const codex = loadFixture('codex-code-review-context.test.cjs', 'fixture, review');
+    const claude = loadFixture('claude-role-host.test.cjs',
+      'coordinatorOnlyPlanning, hostOptions, livePr, phasePreparationRequest, cleanupFixture, PHASE');
+    const context = require('../../plugins/delivery-pipeline/scripts/codex-code-review-context.cjs');
+    const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+    const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+    const flow = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
+    const originalCarrier = Buffer.from(JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [] }) + '\n');
+    for (const runtime of ['codex', 'claude']) for (const partitioned of [false, true]) for (const present of [false, true]) {
+      const source = ('const captured = "' + 'x'.repeat(1024) + '";\n').repeat(1020);
+      const f = runtime === 'codex' ? codex.fixture() : claude.coordinatorOnlyPlanning('code-review',
+        partitioned ? { sourceContent: source } : {});
+      try {
+        if (runtime === 'codex' && partitioned) f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), source));
+        const phase = runtime === 'codex' ? path.basename(path.dirname(f.row.plan)) : claude.PHASE;
+        const configFile = path.join(f.project, '.planning/config.json');
+        const config = JSON.parse(fs.readFileSync(configFile));
+        config.delivery_pipeline = { ...config.delivery_pipeline, code_review: 'hold' };
+        fs.writeFileSync(configFile, JSON.stringify(config));
+        const carrier = path.join(f.project, '.planning/phases', phase, 'code-review-disagreements.json');
+        if (present) fs.writeFileSync(carrier, originalCarrier);
+        const graphFile = path.join(f.graphDir, 'tickets.json');
+        const graph = JSON.parse(fs.readFileSync(graphFile));
+        graph.epics = { ...graph.epics, [Number(phase.match(/^\d+/)[0])]: {
+          branch: Object.values(graph.tickets)[0].epic, phaseDir: phase, repos: [null],
+        } };
+        fs.writeFileSync(graphFile, JSON.stringify(graph));
+        let result, recorder, packet, dispatchId;
+        if (runtime === 'codex') {
+          const review = codex.review(f);
+          result = review.result; recorder = review.recorder; dispatchId = review.dispatch.dispatch_id;
+          packet = review.value.prepared.packet;
+          assert.equal(!!context.admittedFileInput(review.value), partitioned);
+        } else {
+          const options = claude.hostOptions(f, { originalStream: true, onLaunch(prompt) {
+            assert.equal(prompt.includes('<AUTHENTICATED_FOCUSED_INPUT>'), partitioned);
+          } });
+          const factory = options.createRuntimeHost;
+          options.createRuntimeHost = input => { const runtimeHost = factory(input); recorder = runtimeHost.recorder; return runtimeHost; };
+          options.getPullRequest = () => ({ ...claude.livePr(f), baseRefName: 'integration' });
+          result = await host.createClaudeRoleHost(options).run(claude.phasePreparationRequest(f));
+          dispatchId = result.dispatch.receipt.dispatch_id;
+        }
+        const pr = runtime === 'codex' ? f.pr : { ...claude.livePr(f), baseRefName: 'integration' };
+        const lookup = { worktreePath: f.root, graphDir: f.graphDir, headBranch: pr.headRefName,
+          pr: pr.number, head: pr.headRefOid, baseName: pr.baseRefName, baseCommit: pr.baseRefOid };
+        const current = () => roleArtifact.currentCodeReviewVerdict(lookup);
+        const prior = () => roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root, graphDir: f.graphDir,
+          repository: target.repositoryIdentity(f.root), phaseDir: phase });
+        const before = prior();
+        const seal = before.at(-1), original = fs.readFileSync(seal.artifact_ref);
+        assert.equal(current()?.dispatch_id, dispatchId);
+        assert.ok(recorder.getVerifiedRecord(dispatchId));
+        const validation = { worktreePath: f.root, role: 'code-review', ticket: result.subject || result.ticket,
+          pr: pr.number, phase, base: JSON.parse(original).base, recorder, dispatchId,
+          ticketSet: result.result.ticket_set, ticketSetDigest: result.result.ticket_set_digest,
+          artifactPath: seal.artifact_ref, artifactDigest: seal.artifact_digest };
+        assert.equal(roleArtifact.validateJudgmentManifest(validation).envelope.outcome, 'pass');
+        assert.equal(roleArtifact.read(validation).envelope.outcome, 'pass');
+        if (packet) assert.equal(packet.role_context.dispositions_digest, present
+          ? require('node:crypto').createHash('sha256').update(originalCarrier).digest('hex') : null);
+        const restore = () => { fs.rmSync(carrier, { recursive: true, force: true }); if (present) fs.writeFileSync(carrier, originalCarrier); };
+        const stale = () => {
+          assert.equal(current(), null);
+          const status = flow.status({ worktree: f.root, graphDir: f.graphDir, phase: Number(phase.match(/^\d+/)[0]),
+            pr: pr.number, live: pr, defaultBranch: runtime === 'codex' ? 'main' : 'integration' });
+          assert.equal(status.reuse, false);
+          assert.equal(status.rounds_used, 1); assert.equal(status.round_cap, 3);
+          assert.equal(flow.evaluateGate(status).ok, false);
+          assert.deepEqual(prior(), before);
+          assert.deepEqual(fs.readFileSync(seal.artifact_ref), original);
+        };
+        for (const mutate of [
+          () => fs.writeFileSync(carrier, Buffer.concat([originalCarrier, Buffer.from(' ')])),
+          () => { fs.rmSync(carrier, { force: true }); if (!present) fs.writeFileSync(carrier, originalCarrier); },
+          () => fs.writeFileSync(carrier, '{'),
+          () => fs.writeFileSync(carrier, Buffer.from([0xff])),
+          () => fs.writeFileSync(carrier, 'x'.repeat(65537)),
+          () => { fs.rmSync(carrier, { force: true }); fs.mkdirSync(carrier); },
+          () => { fs.rmSync(carrier, { force: true }); fs.symlinkSync(path.join(f.project, '.planning/config.json'), carrier); },
+        ]) {
+          mutate(); stale(); restore(); assert.equal(current()?.artifact_digest, seal.artifact_digest);
+        }
+        const shadow = path.join(f.root, '.planning/phases', phase, 'code-review-disagreements.json');
+        fs.mkdirSync(path.dirname(shadow), { recursive: true }); fs.writeFileSync(shadow, originalCarrier);
+        fs.writeFileSync(carrier, Buffer.concat([originalCarrier, Buffer.from(' ')]));
+        stale(); restore(); assert.equal(current()?.artifact_digest, seal.artifact_digest);
+      } finally { if (runtime === 'codex') f.cleanup(); else claude.cleanupFixture(f); }
+    }
+  } finally {
+    os.homedir = savedHome; process.env.PATH = savedPath;
+    for (const [key, value] of markers) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
 });
 
 done();

@@ -5253,7 +5253,24 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
   let prior;
   try { prior = priorCodeReviewVerdicts({ worktreePath: root, repository, phaseDir: binding.phase, graphDir: directory }); }
   catch { return null; }
-  let current = null, currentPlanning = null;
+  let current = null, currentPlanning = null, currentDispositions;
+  const checkDispositions = expected => {
+    if (expected !== null && (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected)))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'original dispositions digest is required');
+    const sourceRoot = packets.authenticatedPlanningRoot(root, planning);
+    const file = path.join(sourceRoot, '.planning/phases', binding.phase, 'code-review-disagreements.json');
+    if (fs.realpathSync(path.dirname(file)) !== path.dirname(file))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'current dispositions directory contains a symlink');
+    try { fs.lstatSync(file); } catch (error) {
+      if (error.code === 'ENOENT' && expected === null) return;
+      throw error;
+    }
+    const bytes = readImmutableFile(fs, file, 'current code-review dispositions', 65536);
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    JSON.parse(text);
+    if (digest(bytes) !== expected)
+      fail('ARCHIVE_AUTHORITY_INVALID', 'current dispositions differ from original input');
+  };
   const checkPlanning = context => {
     if (!object(context) || stable(Object.keys(context).sort()) !== stable(['planning_reference', 'selected_refs']))
       fail('ARCHIVE_AUTHORITY_INVALID', 'original planning evidence is required');
@@ -5298,6 +5315,13 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
           && stable(originalPacket.role_context.planning_reference) !== stable(originalReference))
         fail('ARCHIVE_AUTHORITY_INVALID', 'original packet and snapshot planning differ');
     }
+    if (!originalPacket && findings.host_context?.original_packet) {
+      const encoded = findings.host_context.original_packet;
+      if (digest(JSON.stringify(encoded)) !== trusted.receipt.runtime_evidence?.code_review?.context_digest
+          || findings.context_digest !== trusted.receipt.runtime_evidence?.code_review?.context_digest)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'retained original packet differs from authenticated launch');
+      originalPacket = packets.decodeUniqueContent(encoded);
+    }
     if (originalPacket) {
       if (trusted.receipt.runtime === 'codex') {
         const originalDigest = digest(JSON.stringify(packets.encodeUniqueContent(originalPacket)));
@@ -5328,15 +5352,24 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
       const retainedPacket = packets.decodeUniqueContent(findings.host_context.original_packet);
       const retainedPlanning = { planning_reference: retainedPacket.role_context?.planning_reference,
         selected_refs: retainedPacket.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
+      if (originalPacket && stable(retainedPacket) !== stable(originalPacket)) {
+        current = null; currentPlanning = null; continue;
+      }
       if (stable(retainedPlanning) !== stable(selectedPlanning)) { current = null; currentPlanning = null; continue; }
     }
-    try { checkPlanning(selectedPlanning); } catch { current = null; currentPlanning = null; continue; }
+    const expectedDispositions = manifest.dispositions_digest;
+    if (originalPacket?.role_context && Object.hasOwn(originalPacket.role_context, 'dispositions_digest')
+        && originalPacket.role_context.dispositions_digest !== expectedDispositions) {
+      current = null; currentPlanning = null; continue;
+    }
+    try { checkPlanning(selectedPlanning); checkDispositions(expectedDispositions); } catch { current = null; currentPlanning = null; continue; }
     if (verdict.review_completeness === 'complete' && !core.coverageComplete({ verdict, priorVerdicts: prior,
       mergeBase: manifest.merge_base, isAncestor: (a, b) => {
         try { reviewGit(root, ['merge-base', '--is-ancestor', a, b]); return true; }
         catch (error) { if (error.status === 1) return false; throw error; }
       } })) { current = null; currentPlanning = null; continue; }
     currentPlanning = selectedPlanning;
+    currentDispositions = expectedDispositions;
     current = { authenticated: true, verdict: verdict.verdict, blocking_count: verdict.blocking_count,
       review_completeness: verdict.review_completeness, round: verdict.review_round, scope: verdict.review_scope,
       prior_head: verdict.prior_head, head, base_commit: baseCommit, subject: binding.subject, dispatch_id: manifest.producer_dispatch,
@@ -5346,7 +5379,7 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
   }
   packets.authenticatedPlanningRoot(root, planning);
   if (current) {
-    try { checkPlanning(currentPlanning); } catch { return null; }
+    try { checkPlanning(currentPlanning); checkDispositions(currentDispositions); } catch { return null; }
   }
   return cleanSource(true) && reviewGit(root, ['rev-parse', 'HEAD']) === head && exactCurrentGitSubject(root, branch, head, baseName, baseCommit) ? current : null;
 }

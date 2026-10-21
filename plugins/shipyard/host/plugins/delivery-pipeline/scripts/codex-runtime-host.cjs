@@ -1385,8 +1385,7 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
             try { const result = JSON.parse(block.text); return object(result) && typeof result.output === 'string' ? [result] : []; }
             catch { return []; }
           });
-          if (v3 && results.length === 1 && (results[0].original_token_count !== undefined
-              || results[0].truncated === true || /(?:truncated|original token count|original_token_count)/i.test(results[0].output)))
+          if (v3 && results.length === 1 && (results[0].truncated === true || /(?:truncated|original token count|original_token_count)/i.test(results[0].output)))
             truncation('nested', results[0], results[0].output);
           if (results.length !== 1 || results[0].exit_code !== 0 || results[0].session_id !== undefined)
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
@@ -1394,13 +1393,16 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
           largestNested = Math.max(largestNested, Buffer.byteLength(output[1].text));
           if (v3 && (Buffer.byteLength(output[1].text) > 252 * 1024
               || /(?:truncated|original token count|original_token_count)/i.test(output[0].text)
-              || results[0].original_token_count !== undefined || results[0].truncated === true))
+              || results[0].truncated === true))
             fail('RUNTIME_EVIDENCE_MISMATCH', 'batch nested envelope is incomplete');
+          if (v3 && results[0].original_token_count !== undefined
+              && (!Number.isSafeInteger(results[0].original_token_count) || results[0].original_token_count < 0))
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'native token count is invalid');
           output = results[0].output;
         } else {
           let parsed; try { parsed = JSON.parse(output); } catch {}
           if (!object(parsed)) fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read lacks a successful output envelope');
-          if (v3 && (parsed.original_token_count !== undefined || parsed.truncated === true
+          if (v3 && (parsed.truncated === true
               || /(?:truncated|original token count|original_token_count)/i.test(parsed.output || '')))
             truncation('nested', parsed, parsed.output);
           if (object(parsed)) {
@@ -1409,8 +1411,11 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
             nestedBytes += Buffer.byteLength(output);
             largestNested = Math.max(largestNested, Buffer.byteLength(output));
             if (v3 && (typeof output !== 'string' || typeof parsed.output !== 'string' || Buffer.byteLength(output) > 252 * 1024
-                || parsed.original_token_count !== undefined || parsed.truncated === true))
+                || parsed.truncated === true))
               fail('RUNTIME_EVIDENCE_MISMATCH', 'batch direct envelope is incomplete');
+            if (v3 && parsed.original_token_count !== undefined
+                && (!Number.isSafeInteger(parsed.original_token_count) || parsed.original_token_count < 0))
+              fail('RUNTIME_EVIDENCE_MISMATCH', 'native token count is invalid');
             output = parsed.output ?? parsed.stdout;
           }
         }
@@ -2300,7 +2305,7 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
         const nested = nestedResults[0];
         const expected = batchReads.find(read => read.command === call.operations[0].cmd);
         if (call.exact && completeOuter && nested?.exit_code === 0 && nested.session_id === undefined
-            && nested.original_token_count === undefined && nested.truncated !== true
+            && (nested.original_token_count === undefined || (Number.isSafeInteger(nested.original_token_count) && nested.original_token_count >= 0)) && nested.truncated !== true
             && outerBytes <= (bundle.reader_capacity?.largest_envelope_bytes || (status !== 'completed' || originalMeasurementCosts ? 252 * 1024 : 0))
             && Buffer.byteLength(associated[0]) <= Math.min(252 * 1024,
               bundle.reader_capacity?.largest_nested_bytes || (status !== 'completed' || originalMeasurementCosts ? 252 * 1024 : 0))
@@ -2315,7 +2320,7 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
             if (nestedResults.length !== call.operations.length) sourceCostUnavailable = true;
             call.operations.forEach((operation, index) => {
               const output = nestedResults[index], observed = batchReads.find(read => read.command === operation.cmd);
-              if (observed && output?.exit_code === 0 && output.session_id === undefined && output.original_token_count === undefined
+              if (observed && output?.exit_code === 0 && output.session_id === undefined && (output.original_token_count === undefined || (Number.isSafeInteger(output.original_token_count) && output.original_token_count >= 0))
                   && output.truncated !== true && output.output === observed?.output) {
                 attemptRawBytes += observed.frames.reduce((sum, frame) => sum + frame.bytes, 0);
                 attemptEncodedBytes += observed.frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.base64), 0);
