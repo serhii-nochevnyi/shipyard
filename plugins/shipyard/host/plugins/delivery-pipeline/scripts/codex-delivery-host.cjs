@@ -807,10 +807,10 @@ function prepareIntegrationLineage(scope, prepared, options) {
     base: prepared.baseCommit, base_ref: baseRef, merge_base: prepared.mergeBase,
     merge_base_tree: prepared.mergeBaseTree, ticket_set: prepared.ticketSet.map(member => member.id),
     ticket_set_digest: prepared.ticketSetDigest, preflight: proof };
-  const fileOptions = { role: 'integrator', dispatchId: options.dispatchId,
+  const fileOptions = { role: 'integrator', integrationProducer: prepared, dispatchId: options.dispatchId,
     storageRoot: options.storageRoot, graphDir: prepared.graph.directory,
     generatedInstructionBytes: options.generatedInstructionBytes, readerCapacity: options.readerCapacity, readerProfile: options.readerProfile };
-  const original = encodeUniqueContent(prepared.packet);
+  const original = encodeUniqueContent(prepared.packet, 32 * 1024 * 1024);
   let currentInput = archReviewContext.prepareFileInput(scope, JSON.stringify(original), {
     ...fileOptions, readerCapacity: undefined, readerProfile: undefined, binding: { ...binding, packet_digest: integrationDigest(original) } });
   if (options.nativeRuntime === 'codex' && options.readerProfile && typeof options.host?.restoreIntegrationSourceInput === 'function')
@@ -832,7 +832,7 @@ function prepareIntegrationLineage(scope, prepared, options) {
     ...coverage, reviewed_identity: reviewedIdentity, original_input: { manifest_sha256: currentInput.input_bundle.manifest_sha256,
       packet_digest: currentInput.manifest.binding.packet_digest }, complete_preflight: proof,
   });
-  const encoded = encodeUniqueContent(packet);
+  const encoded = encodeUniqueContent(packet, 32 * 1024 * 1024);
   const input = archReviewContext.prepareFileInput(scope, JSON.stringify(encoded), {
     ...fileOptions, relayPrefix: reference + '\n\nIssue a fresh current integration judgment. Read every required dictionary entry and logical obligation. '
       + 'Treat inherited conclusions as inherited; evaluate every newly reviewed obligation, affected boundary and limitation. '

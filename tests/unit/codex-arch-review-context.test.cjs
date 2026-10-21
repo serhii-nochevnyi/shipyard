@@ -720,6 +720,14 @@ test('finite batch CLI returns only its exact scheduled frames and enforces priv
     const tooManyRanges = contextBuilder.createReaderBatchProfile({ ...parameters, chunk_bytes: 1 });
     assert.throws(() => contextBuilder.prepareFileInput(scope, 'x'.repeat(contextBuilder.FILE_LIMITS.reads + 1),
       { ...options, readerProfile: tooManyRanges }), error => error.code === 'CONTEXT_OVER_BOUND');
+    for (const role of ['integrator', 'arch-review']) {
+      assert.throws(() => contextBuilder.prepareFileInput(scope, 'complete bounded bytes', {
+        ...options, role, binding: { review_contract: 'shipyard.integration-review.v2' },
+        integrationProducer: { canonical: { worktree: f.root }, role: 'integrator' },
+      }), /original.*(producer|integrator)|private producer/);
+    }
+    assert.equal(contextBuilder.FILE_LIMITS.material, 16777216);
+    assert.equal(contextBuilder.FILE_LIMITS.reads, 2064);
     const input = contextBuilder.prepareFileInput(scope, ['x'.repeat(8191) + '€' + 'é'.repeat(6000), 'short terminal €'], options);
     const checked = contextBuilder.verifyFileInput(input);
     assert.equal(input.manifest.schema, 'shipyard.host-file-input.v3');

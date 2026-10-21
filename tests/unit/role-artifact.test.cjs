@@ -2951,4 +2951,80 @@ for (const partitioned of [false, true]) for (const changed of ['plan', 'config'
     } finally { f.cleanup(); }
   });
 
+test('compact authentic integration proves native authority and scoped codec/rebuild policy separately from large capacity', async () => {
+  const Module = require('node:module');
+  const file = path.join(__dirname, 'phase49-incremental-integration.test.cjs');
+  const loaded = new Module(file, module);
+  loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
+  const load = Module._load;
+  Module._load = function(name, ...args) {
+    if (name === 'node:test') return { test() {} };
+    return load.call(this, name, ...args);
+  };
+  try {
+    loaded._compile(fs.readFileSync(file, 'utf8')
+      + '\nmodule.exports = { fixture, runIntegration, prepareCurrentIntegration, successfulReview };\n', file);
+  } finally { Module._load = load; }
+  const helper = loaded.exports;
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const decode = packets.decodeUniqueContent;
+  const observed = [];
+  const observedPackets = { ...packets, decodeUniqueContent: function(value, maximumBytes) {
+    const stack = new Error().stack;
+    const result = decode.apply(this, arguments);
+    if (stack.includes('/role-artifact.cjs:')) observed.push({ maximumBytes, caller: stack.split('\n')[2] });
+    return result;
+  } };
+  Module._load = function(name, ...args) {
+    const result = load.call(this, name, ...args);
+    return result === packets ? observedPackets : result;
+  };
+  try {
+    await helper.fixture(async f => {
+      const completed = await helper.runIntegration(f);
+      const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+      const checked = collector.verifyFileInput(completed.input);
+      assert.ok(checked.material[0].length < 16 * 1024 * 1024);
+      const packet = packets.decodeUniqueContent(JSON.parse(checked.material[0]));
+      const source = collector.verifyFileInput(checked.manifest.binding.original_input_bundle, { sealed: true });
+      const original = packets.decodeUniqueContent(JSON.parse(source.material[0]));
+      assert.deepEqual(packet.required_refs, original.required_refs);
+      assert.equal(packet.role_context.review_coverage.digest, completed.coverage.digest);
+      const sealed = completed.result.artifact;
+      const validation = { worktreePath: f.worktree, role: 'integrator', phase: f.phase,
+        ticket: completed.scope.ticket, base: 'origin/main', recorder: completed.recorder,
+        ticketSet: completed.result.result.ticket_set, ticketSetDigest: completed.result.result.ticket_set_digest,
+        dispatchId: completed.request.dispatch_id, artifactPath: sealed.artifact_path,
+        artifactDigest: sealed.artifact_digest };
+      const validated = roleArtifact.validateJudgmentManifest(validation);
+      const read = roleArtifact.read(validation);
+      assert.equal(validated.manifest.current_review.lineage_digest, completed.coverage.digest);
+      assert.deepEqual(read.manifest.current_review, validated.manifest.current_review);
+      assert.equal(read.findings.coverage.lineage_digest, completed.coverage.digest);
+      assert.equal(validated.manifest.current_review.original_manifest_sha256,
+        checked.manifest.binding.original_input_bundle.manifest_sha256);
+      assert.equal(validated.manifest.current_review.current_manifest_sha256, completed.input.input_bundle.manifest_sha256);
+      assert.ok(roleArtifact.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head,
+        baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName })?.authenticated);
+      const unsupported = helper.prepareCurrentIntegration(f);
+      assert.equal(unsupported.coverage.mode, 'full');
+      const baseline = await helper.successfulReview(f, 'integrator');
+      const fresh = helper.prepareCurrentIntegration(f);
+      assert.equal(fresh.coverage.mode, 'incremental', JSON.stringify(fresh.coverage.limitations));
+      assert.equal(fresh.coverage.baseline.dispatch_id, baseline.dispatched.dispatch_id);
+      assert.equal(fresh.coverage.baseline.packet_digest, baseline.input.manifest.binding.packet_digest);
+      assert.equal(fresh.coverage.baseline.head, f.head);
+      assert.throws(() => collector.verifyFileInput(JSON.parse(JSON.stringify(completed.input))), /private producer/);
+      assert.throws(() => roleArtifact.validateJudgmentManifest({ ...validation,
+        artifactDigest: '0'.repeat(64) }), /digest|SHA/i);
+    });
+  } finally { Module._load = load; }
+  for (const consumer of ['authenticateCurrentCoverage', 'rebuildReviewImpactPacket', 'selectReviewBaseline']) {
+    const calls = observed.filter(call => call.caller.includes('at ' + consumer + ' '));
+    assert.ok(calls.length > 0, consumer + ' must execute its original bounded decoder');
+    assert.ok(calls.some(call => call.maximumBytes === 33554432), consumer + ' must select the approved bound');
+  }
+  assert.ok(observed.some(call => call.maximumBytes === 16777216), 'legacy authority keeps its default bound');
+});
+
 done();
