@@ -50,7 +50,8 @@ const DECISIONS_PATH_RE = /\.planning\/investigations\/[A-Za-z0-9._/-]+\/DECISIO
 const HEX64_RE = /^[a-f0-9]{64}$/i;
 const TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 const USAGE_FIELDS = Object.freeze(['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens']);
-const integratorContexts = new WeakSet();
+const integratorContexts = new WeakMap();
+const nativeIntegratorCollection = Symbol('native integrator collection');
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -668,7 +669,8 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
     livePullRequests: [live], canonical, graph, rows, sources, packet, prompt, signals, evidencePath: CODE_REVIEW_EVIDENCE });
 }
 
-function prepareIntegrator(options, request, canonical, graph) {
+function prepareIntegrator(options, request, canonical, graph, collection) {
+  const native = collection === nativeIntegratorCollection;
   const selection = phaseSelection(graph, request.phase);
   const { phase, phaseNumber } = selection;
   const epicBranches = new Set(selection.rows.map(({ row }) => row.epic).filter(Boolean));
@@ -753,15 +755,16 @@ function prepareIntegrator(options, request, canonical, graph) {
     content: sources.plans.map((item) => item.content).join('\n'),
     acceptance: [],
     verification: [] };
-  const packet = buildPacket(canonical, 'integrator', subject, synthetic, plan, roleContext);
+  const packet = buildPacket(canonical, 'integrator', subject, synthetic, plan, roleContext, collection);
   const signals = observedSignals(request, selection.rows, livePullRequests,
-    estimatePromptTokens('integrator', packet, plan, null, reference));
-  const prompt = makePrompt('integrator', subject, packet, reference);
+    native ? packet.accounting.estimated_tokens : estimatePromptTokens('integrator', packet, plan, null, reference));
+  const prompt = native ? undefined : makePrompt('integrator', subject, packet, reference);
   const prepared = Object.freeze({ role: 'integrator', ticket: subject, phase, phaseNumber,
     base: defaultBase, baseCommit: defaultOid, defaultBaseTree, mergeBase, mergeBaseTree, ticketSet,
     ticketSetDigest, livePullRequests, canonical, graph, rows: selection.rows, sources, packet, prompt, signals,
     evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
-  integratorContexts.add(prepared);
+  integratorContexts.set(prepared, collection);
+  if (native) return prepared;
   if (request.review_contract !== 'shipyard.integration-review.v2') return prepared;
   const scope = { worktree: canonical.worktree, phase: phaseNumber, ticket: subject, run_id: newDispatchId() };
   const review = require('./codex-delivery-host.cjs').prepareIntegrationLineage(scope, prepared, {
@@ -782,11 +785,18 @@ function prepareIntegratorContext(options, request) {
   return prepareIntegrator(options, request, canonical, graph);
 }
 
+function prepareNativeIntegratorContext(options, request) {
+  const canonical = canonicalWorktree(options, request.worktree, true);
+  const graph = graphData(options, canonical.projectRoot);
+  return prepareIntegrator(options, request, canonical, graph, nativeIntegratorCollection);
+}
+
 function isPreparedIntegratorContext(value) { return integratorContexts.has(value); }
 
 function integrationPacketWithCoverage(prepared, coverage) {
   return buildPacket(prepared.canonical, 'integrator', prepared.ticket, prepared.sources,
-    { acceptance: [], verification: [] }, { ...prepared.packet.role_context, review_coverage: coverage });
+    { acceptance: [], verification: [] }, { ...prepared.packet.role_context, review_coverage: coverage },
+    integratorContexts.get(prepared) === nativeIntegratorCollection ? nativeIntegratorCollection : undefined);
 }
 
 function sentinelPreflightRound(options, canonical, graph, selection) {
@@ -942,7 +952,7 @@ function packetRemedy(role) {
   return 'drop ADR and backlog references the phase plans do not rely on';
 }
 
-function buildPacket(canonical, role, subject, sources, plan, roleContext) {
+function buildPacket(canonical, role, subject, sources, plan, roleContext, collection) {
   const packet = buildContextPacket({
     root: canonical.projectRoot,
     role,
@@ -963,7 +973,8 @@ function buildPacket(canonical, role, subject, sources, plan, roleContext) {
     sourceRevision: canonical.head, policyHash: policy.POLICY_HASH });
   const codeReview = role === 'code-review'
     && packet.role_context?.focused?.review_contract === require('./codex-arch-review-context.cjs').CODE_REVIEW_CONTRACT;
-  if (packet.accounting.overflow === true && role !== 'arch-review' && !codeReview) {
+  if (packet.accounting.overflow === true && role !== 'arch-review' && !codeReview
+      && !(role === 'integrator' && collection === nativeIntegratorCollection)) {
     reject(`${role} context packet is ${packet.accounting.estimated_tokens} tokens, over its bound of `
       + `${packet.accounting.soft_ceiling}; remedy: ${packetRemedy(role)}`, 'CONTEXT_PACKET_OVER_BOUND');
   }
@@ -1888,6 +1899,7 @@ module.exports = Object.freeze({
   firstResponseUsage,
   prepareInlineReview: makePrompt,
   prepareIntegratorContext,
+  prepareNativeIntegratorContext,
   isPreparedIntegratorContext,
   integrationPacketWithCoverage,
   createClaudeRoleHost,

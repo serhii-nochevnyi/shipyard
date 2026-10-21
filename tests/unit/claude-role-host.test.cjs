@@ -1448,6 +1448,35 @@ test('an integrator packet above its diff-scaled token bound is refused as over 
   }
 });
 
+test('native integrator collection retains overflowing accounting without admitting an inline launch', () => {
+  const fixture = setupRepository('integrator', { sourceContent: bulkSource(50000) });
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const options = hostOptions(fixture);
+    const original = request(fixture);
+    for (const extra of [{}, { deferInline: true }, { nativeRuntime: 'codex' },
+      { review_contract: 'shipyard.integration-review.v2', input_transport: 'host-files' }]) {
+      assert.throws(() => host.prepareIntegratorContext(options, { ...original, ...extra }),
+        error => error.code === 'CONTEXT_PACKET_OVER_BOUND' && error.message.includes('over its bound of 750000'));
+    }
+    const prepared = host.prepareNativeIntegratorContext(options, original);
+    assert.equal(host.isPreparedIntegratorContext(prepared), true);
+    assert.equal(prepared.prompt, undefined);
+    assert.equal(prepared.packet.accounting.overflow, true);
+    assert.ok(prepared.packet.accounting.estimated_tokens > 750000);
+    assert.ok(prepared.packet.role_context.combined_diff.content.includes('+00049999 ' + 'x'.repeat(70)));
+    const enriched = host.integrationPacketWithCoverage(prepared, { complete: false });
+    assert.equal(enriched.accounting.overflow, true);
+    assert.equal(enriched.role_context.combined_diff.content, prepared.packet.role_context.combined_diff.content);
+    for (const copy of [{ ...prepared }, JSON.parse(JSON.stringify(prepared))]) {
+      assert.equal(host.isPreparedIntegratorContext(copy), false);
+      assert.throws(() => host.integrationPacketWithCoverage(copy, {}), /over its bound of 750000/);
+    }
+    assert.throws(() => host.prepareInlineReview('integrator', prepared.ticket, prepared.packet, 'reference'),
+      /bound|too large|exceed/i);
+  } finally { cleanupFixture(fixture); }
+});
+
 test('integrator refuses a role diff above the 6291456 diff byte bound as too large, not as a failed preflight', async () => {
   const fixture = setupRepository('integrator', { sourceContent: bulkSource(80000) });
   try {
