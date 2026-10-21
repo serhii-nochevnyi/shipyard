@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawnSync, spawn } = require('node:child_process');
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'publish-authority-')));
 const homedir = os.homedir;
 os.homedir = () => home;
@@ -26,7 +26,7 @@ const raw = (complete = true, findings = []) => ({ review_completeness: complete
   limitations: complete ? [] : ['unread partition'], unresolved_sources: [], findings, dispositions: [],
   coverage: complete ? [] : [{ status: 'not-reviewed' }] });
 
-function fixture(jira = null, mode = 'report') {
+function fixture(jira = null, mode = 'report', pr = 52) {
   const f = artifactFixture('publish');
   let planningRoot = f.root;
   const branch = jira ? 'feat/PRJ-42-review' : f.branch;
@@ -36,11 +36,12 @@ function fixture(jira = null, mode = 'report') {
   fs.writeFileSync(path.join(f.root, '.planning/config.json'), JSON.stringify({ git: { base_branch: 'main' },
     delivery_pipeline: { code_review: mode } }));
   f.writeGraph();
-  const live = () => ({ number: 52, state: 'OPEN', headRefName: branch, headRefOid: f.git(['rev-parse', 'HEAD']),
+  const live = () => ({ number: pr, state: 'OPEN', headRefName: branch, headRefOid: f.git(['rev-parse', 'HEAD']),
     baseRefName: 'main', baseRefOid: f.base });
   const writes = [], comments = [];
+  let nextCommentId = 77;
   let ticketHead = f.base, failStatus = false, failComment = false, failLookup = false;
-  const getPullRequest = ({ pr }) => pr === 52 ? live() : { number: pr, headRefOid: ticketHead };
+  const getPullRequest = ({ pr: requested }) => requested === pr ? live() : { number: requested, headRefOid: ticketHead };
   const options = { defaultBranch: 'main', getPullRequest, gh(args) {
     const endpoint = args[1], method = args[args.indexOf('--method') + 1];
     const fields = Object.fromEntries(args.filter((_, i) => args[i - 1] === '-f').map(value => {
@@ -53,13 +54,14 @@ function fixture(jira = null, mode = 'report') {
         return {};
       }
       if (failComment) throw new Error('comment unavailable');
-      if (method === 'PATCH') { comments.find(comment => endpoint.endsWith('/' + comment.id)).body = fields.body; return {}; }
-      const comment = { id: 77, body: fields.body }; comments.push(comment); return comment;
+      if (method === 'PATCH') { const comment = comments.find(comment => endpoint.endsWith('/' + comment.id)); comment.body = fields.body; return { ...comment }; }
+      nextCommentId = Math.max(nextCommentId, ...comments.map(comment => comment.id + 1));
+      const comment = { id: nextCommentId++, body: fields.body }; comments.push(comment); return { ...comment };
     }
     if (failLookup) throw new Error('comment lookup unavailable');
     return [comments];
   } };
-  const input = () => ({ phase: 52, phaseDirectory: f.phase, pr: 52, worktree: f.root, graphDir: f.graphDir });
+  const input = () => ({ phase: 52, phaseDirectory: f.phase, pr, worktree: f.root, graphDir: f.graphDir });
   const seal = (result = raw(), round = 1, priorHead = null, priorFindings = []) => {
     fs.writeFileSync(path.join(f.root, 'round.txt'), String(round));
     f.git(['add', 'round.txt']); f.git(['commit', '--quiet', '-m', 'round ' + round]);
@@ -72,15 +74,33 @@ function fixture(jira = null, mode = 'report') {
     }
     f.writeGraph();
     const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
-      repository: target.repositoryIdentity(f.root), branch, pr: 52, head: live().headRefOid, base: f.base });
+      repository: target.repositoryIdentity(f.root), branch, pr, head: live().headRefOid, base: f.base });
     const request = f.input(binding, round, priorHead, raw());
     Object.assign(request.result, core.normalizeResult(result, { round, scope: round === 1 ? 'full' : 'delta',
       priorFindings, readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') }));
     return artifact.sealJudgment(retainPlanningInput(f, request, planningRoot));
   };
   return { ...f, branch, live, input, options, seal, writes, comments,
+    sealLinked: linked => {
+      const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
+        repository: target.repositoryIdentity(linked), branch, pr, head: live().headRefOid, base: f.base });
+      const request = f.input(binding, 1, null, raw());
+      request.worktreePath = linked;
+      fs.copyFileSync(path.join(f.root, '.shipyard-code-review-evidence.md'),
+        path.join(linked, '.shipyard-code-review-evidence.md'));
+      return artifact.sealJudgment(retainPlanningInput({ ...f, root: linked }, request, planningRoot));
+    },
+    sealPr: number => {
+      const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
+        repository: target.repositoryIdentity(f.root), branch, pr: number, head: live().headRefOid, base: f.base });
+      const request = f.input(binding, 1, null, raw());
+      request.pr = number; request.result.pr = number;
+      Object.assign(request.result, core.normalizeResult(raw(), { round: 1, scope: 'full',
+        priorFindings: [], readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') }));
+      return artifact.sealJudgment(retainPlanningInput(f, request, planningRoot));
+    },
     setPlanningRoot: value => { planningRoot = value; },
-    lookup: () => artifact.currentCodeReviewVerdict({ worktreePath: f.root, pr: 52, head: live().headRefOid,
+    lookup: () => artifact.currentCodeReviewVerdict({ worktreePath: f.root, pr, head: live().headRefOid,
       baseName: 'main', baseCommit: f.base, graphDir: path.join(planningRoot, '.planning/graph'), headBranch: branch }),
     setTicketHead: value => { ticketHead = value; }, failStatus: () => { failStatus = true; },
     failComment: () => { failComment = true; }, failLookup: () => { failLookup = true; } };
@@ -205,21 +225,12 @@ for (const leak of [false, true]) test('publish CLI reports independent results 
     fs.writeFileSync(preload, `require('node:os').homedir = () => ${JSON.stringify(home)};\n`);
     const data = path.join(directory, 'data.json'), log = path.join(directory, 'writes.jsonl');
     fs.writeFileSync(data, JSON.stringify({ epic: f.live(), ticket: { number: 1, headRefOid: f.base }, log }));
-    fs.writeFileSync(path.join(directory, 'gh'), [
-      '#!/usr/bin/env node',
-      "const fs = require('node:fs');",
-      "const data = JSON.parse(fs.readFileSync(process.env.PUBLISH_TEST_DATA, 'utf8'));",
-      'const args = process.argv.slice(2);',
-      "if (args[0] === 'pr') console.log(JSON.stringify(Number(args[2]) === 52 ? data.epic : data.ticket));",
-      "else if (!args.includes('-f')) console.log('[[]]');",
-      'else {',
-      "  fs.appendFileSync(data.log, JSON.stringify(args) + '\\n');",
-      "  console.log('{\"id\":77}');",
-      '}',
-    ].join('\n') + '\n', { mode: 0o700 });
-    const run = spawnSync(process.execPath, ['--require', preload, path.join(scripts, 'phase-code-review.cjs'),
-      'publish', f.phase, '--phase', '52', '--pr', '52', '--graph', f.graphDir, '--worktree', f.root],
-    { encoding: 'utf8', env: { ...process.env, PATH: directory + path.delimiter + process.env.PATH, PUBLISH_TEST_DATA: data } });
+    installPublicationGh(directory);
+    const argv = ['--require', preload, path.join(scripts, 'phase-code-review.cjs'),
+      'publish', f.phase, '--phase', '52', '--pr', '52', '--graph', f.graphDir, '--worktree', f.root];
+    const options = { encoding: 'utf8', env: { ...process.env, PATH: directory + path.delimiter + process.env.PATH,
+      PUBLISH_TEST_DATA: data } };
+    const run = spawnSync(process.execPath, argv, options);
     assert.equal(run.status, leak ? 1 : 0, run.stdout + run.stderr);
     const result = JSON.parse(run.stdout);
     assert.equal(result.status.action, 'posted'); assert.equal(result.status.ok, true);
@@ -228,6 +239,14 @@ for (const leak of [false, true]) test('publish CLI reports independent results 
     const writes = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     assert.equal(writes.length, leak ? 1 : 2);
     assert(writes[0][1].endsWith('/statuses/' + f.live().headRefOid));
+    if (!leak) {
+      const again = spawnSync(process.execPath, argv, options);
+      assert.equal(again.status, 0, again.stdout + again.stderr);
+      const second = JSON.parse(again.stdout);
+      assert.equal(second.comment.action, 'edited'); assert.equal(second.comment.id, result.comment.id);
+      const saved = JSON.parse(fs.readFileSync(data + '.comments', 'utf8'));
+      assert.equal(saved.length, 1); assert.equal(saved[0].id, result.comment.id);
+    }
   } finally { f.cleanup(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -595,3 +614,297 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
     { ticket: input.ticket, subject_kind: 'phase' });
   return { ...input, dispatchId: dispatch.dispatch_id };
 }
+
+function publicationState(f, pr = 52) {
+  const crypto = require('node:crypto');
+  const namespace = crypto.createHash('sha256').update(JSON.stringify([target.repositoryIdentity(f.root), null])).digest('hex');
+  const directory = path.join(home, '.local/state/shipyard/code-review-publications', namespace);
+  return { directory, file: path.join(directory, `${pr}.json`) };
+}
+
+function coldPublisher() {
+  const file = path.join(scripts, 'phase-code-review.cjs');
+  delete require.cache[require.resolve(file)];
+  return require(file);
+}
+
+test('unbound human marker quotations, legacy summaries and copied genuine reports remain byte exact', () => {
+  const f = fixture(), donor = fixture();
+  try {
+    donor.seal(); assert.equal(flow.publish(donor.input(), donor.options).comment.ok, true);
+    const bodies = ['Human quotes <!-- code-review --> inline.\nDo not edit.\r\n',
+      '<!-- code-review -->\nCode review — round 1, scope full\nHuman discussion.',
+      '<!-- code-review -->\nprevious host summary without a binding', donor.comments[0].body];
+    f.comments.push(...bodies.map((body, index) => ({ id: 91 + index, body })));
+    f.seal();
+    const first = flow.publish(f.input(), f.options);
+    assert.equal(first.status.ok, true); assert.equal(first.comment.action, 'created');
+    assert(first.comment.id > 94);
+    const second = coldPublisher().publish(f.input(), f.options);
+    assert.equal(second.comment.action, 'edited'); assert.equal(second.comment.id, first.comment.id);
+    assert.deepEqual(f.comments.slice(0, 4).map(comment => comment.body), bodies);
+    assert.deepEqual(f.writes.filter(write => write.method === 'PATCH').map(write => write.endpoint),
+      [`repos/{owner}/{repo}/issues/comments/${first.comment.id}`]);
+  } finally { f.cleanup(); donor.cleanup(); }
+});
+
+test('manual edits and deletion replace the binding; later sealed heads reuse the eligible ID', () => {
+  const f = fixture();
+  try {
+    f.seal(); const head = f.live().headRefOid;
+    const first = flow.publish(f.input(), f.options);
+    f.comments[0].body += '\nHuman clarification.\r\n'; const edited = f.comments[0].body;
+    const replacement = flow.publish(f.input(), f.options);
+    assert.equal(replacement.comment.action, 'created'); assert.notEqual(replacement.comment.id, first.comment.id);
+    assert.equal(f.comments[0].body, edited);
+    f.seal(raw(), 2, head);
+    const next = coldPublisher().publish(f.input(), f.options);
+    assert.equal(next.comment.action, 'edited'); assert.equal(next.comment.id, replacement.comment.id);
+    assert.match(f.comments[1].body, /round 2/); assert.equal(f.comments[0].body, edited);
+    f.comments.splice(1, 1);
+    const deleted = flow.publish(f.input(), f.options);
+    assert.equal(deleted.comment.action, 'created'); assert.equal(f.comments[0].body, edited);
+    assert(!f.writes.some(write => write.method === 'PATCH' && write.endpoint.endsWith('/' + first.comment.id)));
+  } finally { f.cleanup(); }
+});
+
+for (const mutation of ['json', 'oversize', 'directory', 'symlink', 'mode', 'namespace-mode', 'ancestor-symlink',
+  'schema', 'repository', 'selector', 'pr', 'comment_id', 'body_hash', 'unreadable', 'wrong-owner']) {
+  test('unsafe existing private publication state refuses independently: ' + mutation, () => {
+    const f = fixture(); let restore = () => {};
+    try {
+      f.seal(); assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
+      const { file, directory } = publicationState(f);
+      const original = f.comments[0].body;
+      const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (mutation === 'json') fs.writeFileSync(file, '{');
+      else if (mutation === 'oversize') fs.writeFileSync(file, ' '.repeat(8193));
+      else if (mutation === 'directory') { fs.unlinkSync(file); fs.mkdirSync(file); }
+      else if (mutation === 'symlink') { fs.renameSync(file, file + '.saved'); fs.symlinkSync(file + '.saved', file); }
+      else if (mutation === 'ancestor-symlink') {
+        fs.renameSync(directory, directory + '.saved'); fs.symlinkSync(directory + '.saved', directory);
+      } else if (mutation === 'mode') fs.chmodSync(file, 0o644);
+      else if (mutation === 'namespace-mode') fs.chmodSync(directory, 0o755);
+      else if (mutation === 'unreadable' || mutation === 'wrong-owner') {
+        const originalOpen = fs.openSync, originalLstat = fs.lstatSync;
+        fs.openSync = function (name, ...args) {
+          if (name === file && mutation === 'unreadable') throw Object.assign(new Error('unreadable state'), { code: 'EACCES' });
+          return originalOpen.call(this, name, ...args);
+        };
+        fs.lstatSync = function (name, ...args) {
+          const stat = originalLstat.call(this, name, ...args);
+          if (name === file && mutation === 'wrong-owner') stat.uid += 1;
+          return stat;
+        };
+        restore = () => { fs.openSync = originalOpen; fs.lstatSync = originalLstat; };
+      } else {
+        record[mutation] = ({ schema: 'unknown', repository: '/wrong/repository', selector: 'other/repo',
+          pr: 53, comment_id: '77', body_hash: 'bad' })[mutation];
+        fs.writeFileSync(file, JSON.stringify(record));
+      }
+      const before = f.writes.length;
+      const result = flow.publish(f.input(), f.options);
+      assert.equal(result.status.ok, true); assert.equal(result.comment.ok, false);
+      assert.equal(f.writes.length, before + 1); assert.equal(f.comments[0].body, original);
+    } finally { restore(); f.cleanup(); }
+  });
+}
+
+for (const invalid of [null, {}, { id: '77' }, { id: 0 }, { id: -1 }, { id: 1.5 },
+  { id: Number.MAX_SAFE_INTEGER + 1 }, { id: 77, body: 'different bytes' }]) {
+  test('invalid POST response never binds copied public text: ' + JSON.stringify(invalid), () => {
+    const f = fixture();
+    try {
+      f.seal();
+      const options = { ...f.options, gh(args) {
+        const response = f.options.gh(args);
+        return args.includes('--method') ? invalid : response;
+      } };
+      const failed = flow.publish(f.input(), options);
+      assert.equal(failed.comment.ok, false); assert.equal(failed.status.ok, true);
+      assert.equal(fs.existsSync(publicationState(f).file), false);
+      const old = f.comments[0].body;
+      const retry = coldPublisher().publish(f.input(), f.options);
+      assert.equal(retry.comment.action, 'created'); assert.equal(f.comments[0].body, old);
+      assert(!f.writes.some(write => write.method === 'PATCH'));
+    } finally { f.cleanup(); }
+  });
+}
+
+for (const failure of ['wrong-id', 'body', 'lookup', 'write', 'temporary-symlink', 'head-race']) {
+  test('bound publication fails closed after ' + failure, () => {
+    const f = fixture(); let restore = () => {};
+    try {
+      f.seal(); const first = flow.publish(f.input(), f.options);
+      const state = publicationState(f), bytes = fs.readFileSync(state.file, 'utf8');
+      const human = { id: 91, body: '<!-- code-review --> human bytes\r\n' }; f.comments.push(human);
+      if (failure === 'write') {
+        const original = fs.renameSync;
+        fs.renameSync = function (from, to) { if (to === state.file) throw new Error('state write failed'); return original.call(this, from, to); };
+        restore = () => { fs.renameSync = original; };
+      }
+      if (failure === 'temporary-symlink') fs.symlinkSync(state.file,
+        path.join(state.directory, `.52.json.tmp-${process.pid}`));
+      let reads = 0;
+      const options = { ...f.options,
+        getPullRequest(args) {
+          const live = f.options.getPullRequest(args);
+          if (args.pr === 52 && ++reads === 3 && failure === 'head-race') return { ...live, headRefOid: f.base };
+          return live;
+        },
+        gh(args) {
+          if (failure === 'lookup' && args.includes('--slurp')) return [{}];
+          const response = f.options.gh(args);
+          if (args.includes('PATCH') && failure === 'wrong-id') return { ...response, id: 91 };
+          if (args.includes('PATCH') && failure === 'body') return { ...response, body: response.body + 'changed' };
+          return response;
+        } };
+      const result = flow.publish(f.input(), options);
+      assert.equal(result.status.ok, true); assert.equal(result.comment.ok, false);
+      assert.equal(fs.readFileSync(state.file, 'utf8'), bytes);
+      assert.equal(human.body, '<!-- code-review --> human bytes\r\n');
+      assert(!f.writes.some(write => write.method === 'PATCH' && write.endpoint.endsWith('/91')));
+      assert.equal(first.comment.ok, true);
+    } finally { restore(); f.cleanup(); }
+  });
+}
+
+test('canonical repositories and PRs cannot borrow a valid binding', () => {
+  const f = fixture(), other = fixture();
+  try {
+    f.seal(); other.seal(); const first = flow.publish(f.input(), f.options);
+    other.comments.push({ ...f.comments[0] });
+    const second = flow.publish(other.input(), other.options);
+    assert.equal(second.comment.action, 'created'); assert.notEqual(second.comment.id, first.comment.id);
+    const origin = publicationState(f), destination = publicationState(other);
+    fs.copyFileSync(origin.file, destination.file);
+    const failed = flow.publish(other.input(), other.options);
+    assert.equal(failed.comment.ok, false); assert.equal(failed.status.ok, true);
+    const record = JSON.parse(fs.readFileSync(origin.file, 'utf8'));
+    record.pr = 53; fs.writeFileSync(origin.file, JSON.stringify(record));
+    const wrongPr = flow.publish(f.input(), f.options);
+    assert.equal(wrongPr.comment.ok, false); assert.equal(wrongPr.status.ok, true);
+  } finally { f.cleanup(); other.cleanup(); }
+});
+
+function installPublicationGh(directory) {
+  fs.writeFileSync(path.join(directory, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const file = process.env.PUBLISH_TEST_DATA;
+const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+const args = process.argv.slice(2);
+if (args[0] === 'pr') {
+  console.log(JSON.stringify(Number(args[2]) === 52 ? data.epic : data.ticket));
+} else if (!args.includes('-f')) {
+  const comments = fs.existsSync(file + '.comments') ? JSON.parse(fs.readFileSync(file + '.comments', 'utf8')) : [];
+  console.log(JSON.stringify([comments]));
+} else {
+  fs.appendFileSync(data.log, JSON.stringify(args) + '\\n');
+  if (args[1].includes('/statuses/')) console.log('{}');
+  else {
+    const comments = fs.existsSync(file + '.comments') ? JSON.parse(fs.readFileSync(file + '.comments', 'utf8')) : [];
+    const body = args.find((v, i) => args[i - 1] === '-f' && v.startsWith('body=')).slice(5);
+    let comment;
+    if (args.includes('PATCH')) comment = comments.find(c => args[1].endsWith('/' + c.id));
+    else { comment = { id: Math.max(76, ...comments.map(c => c.id)) + 1 }; comments.push(comment); }
+    comment.body = body;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+    fs.writeFileSync(file + '.comments', JSON.stringify(comments));
+    console.log(JSON.stringify(comment));
+  }
+}
+`, { mode: 0o700 });
+}
+
+function childPublication(argv, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, argv, { env });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', bytes => { stdout += bytes; });
+    child.stderr.on('data', bytes => { stderr += bytes; });
+    child.on('error', reject);
+    child.on('close', code => {
+      try { assert.equal(code, 0, stdout + stderr); resolve(JSON.parse(stdout)); }
+      catch (error) { reject(error); }
+    });
+  });
+}
+
+test('concurrent cold processes and both runtimes reuse one canonical repository binding', async () => {
+  const f = fixture(), directory = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-producers-'));
+  try {
+    f.seal();
+    const preload = path.join(directory, 'preload.cjs');
+    fs.writeFileSync(preload, `require('node:os').homedir = () => ${JSON.stringify(home)};\n`);
+    const data = path.join(directory, 'data.json');
+    fs.writeFileSync(data, JSON.stringify({ epic: f.live(), ticket: { number: 1, headRefOid: f.base },
+      log: path.join(directory, 'writes.jsonl') }));
+    installPublicationGh(directory);
+    const argv = owner => ['--require', preload, owner, 'publish', f.phase, '--phase', '52', '--pr', '52',
+      '--graph', f.graphDir, '--worktree', f.root];
+    const env = { ...process.env, PATH: directory + path.delimiter + process.env.PATH, PUBLISH_TEST_DATA: data };
+    const results = await Promise.all([
+      childPublication(argv(path.join(scripts, 'phase-code-review.cjs')), env),
+      childPublication(argv(path.resolve(__dirname,
+        '../../plugins/shipyard/host/plugins/delivery-pipeline/scripts/phase-code-review.cjs')), env),
+    ]);
+    assert.deepEqual(results.map(result => result.comment.action).sort(), ['created', 'edited']);
+    assert.equal(results[0].comment.id, results[1].comment.id);
+    const comments = JSON.parse(fs.readFileSync(data + '.comments', 'utf8'));
+    assert.equal(comments.length, 1);
+    const record = JSON.parse(fs.readFileSync(publicationState(f).file, 'utf8'));
+    assert.equal(record.comment_id, comments[0].id);
+  } finally { f.cleanup(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test('a linked source worktree shares the canonical binding and authenticated review', () => {
+  const f = fixture(), directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'publish-linked-')));
+  try {
+    f.seal();
+    const first = flow.publish(f.input(), f.options);
+    assert.equal(first.comment.ok, true);
+    const linked = path.join(directory, 'checkout');
+    f.git(['worktree', 'add', '--detach', linked, 'HEAD']);
+    assert.equal(target.repositoryIdentity(linked), target.repositoryIdentity(f.root));
+    f.sealLinked(linked);
+    const next = coldPublisher().publish({ ...f.input(), worktree: linked }, f.options);
+    assert.equal(next.comment.ok, true, next.comment.reason);
+    assert.equal(next.comment.action, 'edited'); assert.equal(next.comment.id, first.comment.id);
+    assert.equal(f.comments.length, 1);
+  } finally { f.cleanup(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('distinct admitted PRs in the same real repository never share a binding', () => {
+  const f = fixture();
+  try {
+    f.seal(); const first = flow.publish(f.input(), f.options);
+    const request = f.input;
+    const other = f.sealPr(53);
+    assert(other);
+    const input = { ...request(), pr: 53 };
+    const options = { ...f.options, getPullRequest: ({ pr }) => pr === 53
+      ? { ...f.live(), number: 53 } : f.options.getPullRequest({ pr }) };
+    const second = flow.publish(input, options);
+    assert.equal(second.comment.ok, true, second.comment.reason);
+    assert.equal(second.comment.action, 'created'); assert.notEqual(second.comment.id, first.comment.id);
+    assert.equal(JSON.parse(fs.readFileSync(publicationState(f, 52).file, 'utf8')).pr, 52);
+    assert.equal(JSON.parse(fs.readFileSync(publicationState(f, 53).file, 'utf8')).pr, 53);
+    fs.copyFileSync(publicationState(f, 52).file, publicationState(f, 53).file);
+    assert.equal(flow.publish(input, options).comment.ok, false);
+  } finally { f.cleanup(); }
+});
+
+test('a contended publication lock fails the comment independently without a write', () => {
+  const f = fixture(); let handle;
+  try {
+    f.seal(); assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
+    handle = require(path.join(scripts, 'lock.cjs')).acquire(publicationState(f).directory, 'pr-52');
+    assert(handle);
+    const count = f.writes.length, before = f.comments[0].body;
+    const result = flow.publish(f.input(), f.options);
+    assert.equal(result.status.ok, true); assert.equal(result.comment.ok, false);
+    assert.match(result.comment.reason, /lock/);
+    assert.equal(f.writes.length, count + 1); assert.equal(f.comments[0].body, before);
+  } finally { if (handle) handle.release(); f.cleanup(); }
+});
