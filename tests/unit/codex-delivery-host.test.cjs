@@ -4204,7 +4204,9 @@ test('public integration-review.v2 completes shared preparation with coordinator
       fs.appendFileSync(path.join(coordinator, Object.values(f.rows)[0].plan), '\nchanged required planning bytes\n');
       assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
       if (large) {
-        fs.appendFileSync(path.join(coordinator, '.planning/backlog/selected.md'), 'Complete selected obligation.\n'.repeat(650000));
+        const oversized = 'Complete selected obligation.\n'.repeat(1200000);
+        assert.ok(Buffer.byteLength(oversized) > 32 * 1024 * 1024);
+        fs.appendFileSync(path.join(coordinator, '.planning/backlog/selected.md'), oversized);
         helper.git(coordinator, 'add', '.planning'); helper.git(coordinator, 'commit', '-qm', 'complete oversized planning input');
         assert.throws(() => publicHost.prepareIntegratorInput(scope, { role: 'integrator', dispatch_id: scope.run_id,
           context: { review_contract: 'shipyard.integration-review.v2' } }, nativeOptions),

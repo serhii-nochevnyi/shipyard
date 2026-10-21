@@ -2993,7 +2993,8 @@ test('compact authentic integration proves native authority and scoped codec/reb
       const sealed = completed.result.artifact;
       const validation = { worktreePath: f.worktree, role: 'integrator', phase: f.phase,
         ticket: completed.scope.ticket, base: 'origin/main', recorder: completed.recorder,
-        ticketSet: completed.result.result.ticket_set, ticketSetDigest: completed.result.result.ticket_set_digest,
+        ticketSet: completed.input.manifest.binding.preflight.ticket_set,
+        ticketSetDigest: completed.input.manifest.binding.preflight.ticket_set_digest,
         dispatchId: completed.request.dispatch_id, artifactPath: sealed.artifact_path,
         artifactDigest: sealed.artifact_digest };
       const validated = roleArtifact.validateJudgmentManifest(validation);
@@ -3006,6 +3007,10 @@ test('compact authentic integration proves native authority and scoped codec/reb
       assert.equal(validated.manifest.current_review.current_manifest_sha256, completed.input.input_bundle.manifest_sha256);
       assert.ok(roleArtifact.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head,
         baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName })?.authenticated);
+      assert.throws(() => collector.verifyFileInput(JSON.parse(JSON.stringify(completed.input))), /private producer/);
+      assert.throws(() => roleArtifact.validateJudgmentManifest({ ...validation,
+        artifactDigest: '0'.repeat(64) }), /digest|SHA/i);
+      fs.unlinkSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md'));
       const unsupported = helper.prepareCurrentIntegration(f);
       assert.equal(unsupported.coverage.mode, 'full');
       const baseline = await helper.successfulReview(f, 'integrator');
@@ -3014,9 +3019,6 @@ test('compact authentic integration proves native authority and scoped codec/reb
       assert.equal(fresh.coverage.baseline.dispatch_id, baseline.dispatched.dispatch_id);
       assert.equal(fresh.coverage.baseline.packet_digest, baseline.input.manifest.binding.packet_digest);
       assert.equal(fresh.coverage.baseline.head, f.head);
-      assert.throws(() => collector.verifyFileInput(JSON.parse(JSON.stringify(completed.input))), /private producer/);
-      assert.throws(() => roleArtifact.validateJudgmentManifest({ ...validation,
-        artifactDigest: '0'.repeat(64) }), /digest|SHA/i);
     });
   } finally { Module._load = load; }
   for (const consumer of ['authenticateCurrentCoverage', 'rebuildReviewImpactPacket', 'selectReviewBaseline']) {
