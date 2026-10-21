@@ -461,7 +461,15 @@ test('published retained locator reloads the original target and leaves a later 
     assert.equal(second.findings[0].occurrence, 3);
     assert.equal(second.findings[0].disagreement_identity, first.findings[0].identity);
     const before = JSON.stringify(second);
+    const originalArtifact = fs.readFileSync(second.artifact_ref);
+    const originalCarrier = fs.readFileSync(carrier);
     fs.unlinkSync(carrier);
+    assert.equal(f.lookup(), null);
+    assert.deepEqual(fs.readFileSync(second.artifact_ref), originalArtifact);
+    assert.equal(second.round, 2);
+    assert.throws(() => flow.publish(f.input(), f.options));
+    assert.equal(f.writes.length, 0);
+    fs.writeFileSync(carrier, originalCarrier);
     assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
     assert.equal(JSON.stringify(f.lookup()), before);
     const body = f.comments[0].body;
@@ -533,10 +541,14 @@ for (const linked of [false, true]) test('retained locators require authenticate
       fs.cpSync(path.join(f.root, '.planning'), path.join(coordinator, '.planning'), { recursive: true });
     }
     f.setPlanningRoot(coordinator);
+    const carrier = path.join(coordinator, '.planning/phases', f.phase, 'code-review-disagreements.json');
+    fs.mkdirSync(path.dirname(carrier), { recursive: true });
+    fs.writeFileSync(carrier, JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [original] }));
+    const originalCarrier = fs.readFileSync(carrier);
     f.seal(raw(), 1, null, prior);
     const before = JSON.stringify(f.lookup());
+    const originalArtifact = fs.readFileSync(JSON.parse(before).artifact_ref);
     const publicationInput = () => linked ? { ...f.input(), graphDir: path.join(coordinator, path.relative(f.root, f.graphDir)) } : f.input();
-    const carrier = path.join(coordinator, '.planning/phases', f.phase, 'code-review-disagreements.json');
     if (linked) {
       const stale = path.join(f.root, '.planning/phases', f.phase, 'code-review-disagreements.json');
       fs.mkdirSync(path.dirname(stale), { recursive: true });
@@ -550,21 +562,31 @@ for (const linked of [false, true]) test('retained locators require authenticate
       else if (patch === 'symlink') fs.symlinkSync(path.join(coordinator, '.planning/config.json'), carrier);
       else if (patch) fs.writeFileSync(carrier, JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1',
         entries: [{ ...original, ...patch }] }));
+      if (patch && typeof patch === 'object' && Object.keys(patch).length === 0) {
+        assert.deepEqual(fs.readFileSync(carrier), originalCarrier);
+      } else {
+        assert.equal(f.lookup(), null);
+        assert.throws(() => flow.publish(publicationInput(), f.options));
+        const history = artifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+          graphDir: path.join(coordinator, '.planning/graph'), repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
+        assert.equal(history.length, 1);
+        assert.equal(history[0].review_round, 1);
+        assert.deepEqual(fs.readFileSync(history[0].artifact_ref), originalArtifact);
+        assert.equal(history[0].artifact_digest, JSON.parse(before).artifact_digest);
+        assert.deepEqual(history[0].findings, JSON.parse(before).findings);
+      }
+      fs.rmSync(carrier, { force: true });
+      fs.writeFileSync(carrier, originalCarrier);
       assert.equal(flow.publish(publicationInput(), f.options).comment.ok, true);
       const body = f.comments[0].body;
       assert.match(body, /Source line \(full text\), occurrence 3/);
-      if (patch && Object.keys(patch).length === 0) {
-        const tuple = JSON.parse(body.split('\n').find(line => line.startsWith('    {')).trim());
-        assert.deepEqual(tuple, { path: original.path, line_text: original.line_text, occurrence: 2 });
-        const sealed = f.lookup();
-        const latest = core.carryPriorFindings({ priorFindings: sealed, deltaDiff: '', readSource });
-        const loaded = core.loadDisagreements({ projectRoot: coordinator, phaseDirName: f.phase,
-          priorFindings: latest, readFile: file => ({ text: fs.readFileSync(file), stat: fs.lstatSync(file) }) });
-        assert.deepEqual(Object.keys(loaded.entries), [sealed.findings[0].disagreement_identity]);
-      } else {
-        assert.match(body, /No reusable original locator is available/);
-        assert(!body.split('\n').some(line => line.startsWith('    {')));
-      }
+      const tuple = JSON.parse(body.split('\n').find(line => line.startsWith('    {')).trim());
+      assert.deepEqual(tuple, { path: original.path, line_text: original.line_text, occurrence: 2 });
+      const sealed = f.lookup();
+      const latest = core.carryPriorFindings({ priorFindings: sealed, deltaDiff: '', readSource });
+      const loaded = core.loadDisagreements({ projectRoot: coordinator, phaseDirName: f.phase,
+        priorFindings: latest, readFile: file => ({ text: fs.readFileSync(file), stat: fs.lstatSync(file) }) });
+      assert.deepEqual(Object.keys(loaded.entries), [sealed.findings[0].disagreement_identity]);
       assert.equal(JSON.stringify(f.lookup()), before);
     }
   } finally {
@@ -584,6 +606,11 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
     if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
   }
   const graphDir = path.join(planningRoot, '.planning/graph');
+  const carrier = path.join(planningRoot, '.planning/phases', f.phase, 'code-review-disagreements.json');
+  let dispositionsDigest = null;
+  try { dispositionsDigest = crypto.createHash('sha256').update(fs.readFileSync(carrier)).digest('hex'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  input.result.dispositions_digest = dispositionsDigest;
   const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
     sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
     scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
@@ -594,7 +621,9 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
         input.result.review_scope === 'delta' ? input.result.prior_head : f.base,
         'HEAD', ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()
       ]) },
-      integration_base: { commit: f.base } } });
+      dispositions_digest: dispositionsDigest, integration_base: { commit: f.base } } });
+  input.result.host_context = { planning_reference: packet.role_context.planning_reference,
+    selected_refs: packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
   const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
     const session = 'original-' + r.dispatch_id;
     const transcript = path.join(planningRoot, '.planning', session + '.jsonl');

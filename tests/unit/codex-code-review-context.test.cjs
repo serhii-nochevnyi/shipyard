@@ -1155,10 +1155,17 @@ test('expanded material preserves own-head disagreement and twin identities in b
     assert.equal(second.result.result.review_round, 2); assert.equal(second.result.result.review_scope, 'full');
     const pins = r5archive(f);
     move(B);
+    assert.equal(f.current(), null);
+    assert.equal(f.status().rounds_used, 2); assert.equal(f.gate().ok, false);
+    r5archiveUnchanged(f, pins);
+    const currentCarrier = fs.readFileSync(path.join(f.project, relative));
+    fs.unlinkSync(path.join(f.project, relative));
     const returnedB = f.current();
     assert.equal(returnedB.artifact_digest, first.result.artifact.digest);
     assert.equal(returnedB.round, 1); assert.equal(returnedB.verdict, 'needs-fix');
     assert.equal(returnedB.blocking_count, 1); assert.equal(f.gate().ok, false);
+    fs.writeFileSync(path.join(f.project, relative), currentCarrier);
+    assert.equal(f.current(), null);
     for (const prepared of [f.prepare().prepared, f.pureClaude()]) {
       assert.equal(prepared.round.round, 3); assert.equal(prepared.round.scope, 'delta');
       assert.equal(prepared.packet.role_context.exact_diff.content, '');

@@ -5343,8 +5343,10 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
       if (originalReference) {
         const originalContext = { planning_reference: originalReference,
           selected_refs: originalPacket.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
-        if (selectedPlanning !== undefined && stable(originalContext) !== stable(selectedPlanning))
-          fail('ARCHIVE_AUTHORITY_INVALID', 'sealed planning differs from original native input');
+        if ((selectedPlanning !== undefined || trusted.receipt.runtime === 'codex')
+            && stable(originalContext) !== stable(selectedPlanning)) {
+          current = null; currentPlanning = null; continue;
+        }
         selectedPlanning = originalContext;
       }
     }
