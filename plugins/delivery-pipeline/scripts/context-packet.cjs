@@ -741,8 +741,10 @@ function semanticCanonical(value, field = '', depth = 0) {
   return Object.fromEntries(Object.keys(value).sort().map(key => [key, semanticCanonical(value[key], key, depth + 1)]));
 }
 
-function encodeUniqueContent(packet) {
-  if (!object(packet) || Buffer.byteLength(JSON.stringify(packet)) > 16 * 1024 * 1024)
+function encodeUniqueContent(packet, maximumBytes = 16 * 1024 * 1024) {
+  if (![16 * 1024 * 1024, 32 * 1024 * 1024].includes(maximumBytes))
+    fail('INVALID_CONTEXT_PACKET', 'unsupported semantic byte bound');
+  if (!object(packet) || Buffer.byteLength(JSON.stringify(packet)) > maximumBytes)
     fail('INVALID_CONTEXT_PACKET', 'semantic packet exceeds its bound');
   if (Array.isArray(packet.refs) && Array.isArray(packet.required_refs)) {
     for (const required of packet.required_refs) {
@@ -790,7 +792,9 @@ function encodeUniqueContent(packet) {
       logical_content_bytes: logicalBytes, logical_obligations: obligations.length } };
 }
 
-function decodeUniqueContent(value) {
+function decodeUniqueContent(value, maximumBytes = 16 * 1024 * 1024) {
+  if (![16 * 1024 * 1024, 32 * 1024 * 1024].includes(maximumBytes))
+    fail('INVALID_CONTEXT_PACKET', 'unsupported semantic byte bound');
   if (!object(value) || value.schema !== UNIQUE_CONTENT_SCHEMA || !Array.isArray(value.dictionary)
       || !Array.isArray(value.obligations)) fail('INVALID_CONTEXT_PACKET', 'unsupported semantic content contract');
   if (Buffer.byteLength(JSON.stringify(value)) > 32 * 1024 * 1024)
@@ -816,7 +820,7 @@ function decodeUniqueContent(value) {
     return Object.fromEntries(Object.keys(item).map(key => [key, restore(item[key], depth + 1)]));
   }
   const packet = restore(value.body);
-  if (JSON.stringify(semanticCanonical(encodeUniqueContent(packet))) !== JSON.stringify(semanticCanonical(value)))
+  if (JSON.stringify(semanticCanonical(encodeUniqueContent(packet, maximumBytes))) !== JSON.stringify(semanticCanonical(value)))
     fail('INVALID_CONTEXT_PACKET', 'incomplete logical obligations or provenance');
   return packet;
 }

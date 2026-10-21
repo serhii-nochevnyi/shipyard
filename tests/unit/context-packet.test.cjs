@@ -530,4 +530,44 @@ test('planning reference association derives linked root and pins graph/config w
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('explicit bounded semantic reconstruction preserves UTF-8 obligations and legacy defaults', () => {
+  const api = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const legacy = 16 * 1024 * 1024, approved = 32 * 1024 * 1024;
+  const content = '€'.repeat(3 * 1024 * 1024);
+  const ref = { path: 'complete.md', content, bytes: Buffer.byteLength(content), sha256: sha256(content) };
+  const packet = { source_revision: 'a'.repeat(40), refs: [ref, { ...ref, path: 'copy.md' }] };
+  const rawBytes = Buffer.byteLength(JSON.stringify(packet));
+  assert.ok(rawBytes > legacy && rawBytes <= approved);
+  assert.throws(() => api.encodeUniqueContent(packet), /exceeds its bound/);
+  const encoded = api.encodeUniqueContent(packet, approved);
+  assert.equal(encoded.dictionary.length, 1);
+  assert.equal(encoded.accounting.logical_content_bytes, ref.bytes * 2);
+  assert.equal(encoded.obligations.length, 2);
+  assert.deepEqual(api.decodeUniqueContent(encoded, approved), packet);
+  assert.throws(() => api.decodeUniqueContent(encoded), /exceeds its bound/);
+  for (const maximum of [0, Infinity, approved + 1, '33554432', null]) {
+    assert.throws(() => api.encodeUniqueContent(packet, maximum), /unsupported semantic byte bound/);
+    assert.throws(() => api.decodeUniqueContent(encoded, maximum), /unsupported semantic byte bound/);
+  }
+  const expanded = structuredClone(encoded);
+  expanded.body.refs.push(...structuredClone(expanded.body.refs));
+  assert.throws(() => api.decodeUniqueContent(expanded, approved), /exceeds its bound/);
+  const incomplete = structuredClone(encoded); incomplete.obligations.pop();
+  assert.throws(() => api.decodeUniqueContent(incomplete, approved), /logical obligations/);
+  const oversizedEncoding = { ...encoded, padding: 'x'.repeat(approved) };
+  assert.throws(() => api.decodeUniqueContent(oversizedEncoding, approved), /contract exceeds its bound/);
+  for (const maximum of [legacy, approved]) {
+    const boundary = { source_revision: 'a'.repeat(40), refs: [{ content: '' }, { content: '' }], padding: '' };
+    const overhead = Buffer.byteLength(JSON.stringify(boundary));
+    const each = Math.floor((maximum - overhead) / 2);
+    for (const ref of boundary.refs) ref.content = 'é'.repeat(Math.floor(each / 2)) + 'x'.repeat(each % 2);
+    boundary.padding = 'x'.repeat((maximum - overhead) % 2);
+    assert.equal(Buffer.byteLength(JSON.stringify(boundary)), maximum);
+    const accepted = api.encodeUniqueContent(boundary, maximum);
+    assert.deepEqual(api.decodeUniqueContent(accepted, maximum), boundary);
+    boundary.padding += 'x';
+    assert.throws(() => api.encodeUniqueContent(boundary, maximum), /exceeds its bound/);
+  }
+});
+
 done();

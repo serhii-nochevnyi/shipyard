@@ -112,6 +112,15 @@ const INPUT_MAX_BYTES = 1024 * 1024;
 const FILE_LIMITS = Object.freeze({ material: 16 * 1024 * 1024, manifest: 512 * 1024,
   relay: 64 * 1024, chunk: 256 * 1024, assets: 2000, decisions: 1000, reads: 2064 });
 const INPUT_CHUNK_BYTES = 8 * 1024;
+const INTEGRATION_MATERIAL_BYTES = 32 * 1024 * 1024;
+const INTEGRATION_READS = Math.ceil(INTEGRATION_MATERIAL_BYTES / INPUT_CHUNK_BYTES)
+  + Math.ceil(FILE_LIMITS.manifest / INPUT_CHUNK_BYTES);
+
+function integrationLimits(role, binding) {
+  return role === 'integrator' && binding?.review_contract === 'shipyard.integration-review.v2'
+    ? { material: INTEGRATION_MATERIAL_BYTES, reads: INTEGRATION_READS } : FILE_LIMITS;
+}
+
 const preparedFileInputs = new WeakSet();
 const historicalReviewInputs = new WeakSet();
 const fileInputOptions = new WeakMap();
@@ -375,10 +384,11 @@ function readBatchCli(args) {
 
 function validateBatchManifest(manifest, manifestBytes) {
   const t = manifest?.transport;
+  const limits = integrationLimits(manifest?.role, manifest?.binding);
   if (manifest?.schema !== 'shipyard.host-file-input.v3' || t?.schema !== 'shipyard.native-reader-transport.v3'
       || !Number.isSafeInteger(t.chunk_bytes) || t.chunk_bytes < 1 || t.chunk_bytes > FILE_LIMITS.chunk
-      || manifest.chunk_bytes !== t.chunk_bytes || manifest.max_chunk_reads !== FILE_LIMITS.reads
-      || !Number.isSafeInteger(t.ranges_per_batch) || t.ranges_per_batch < 2 || t.ranges_per_batch > FILE_LIMITS.reads
+      || manifest.chunk_bytes !== t.chunk_bytes || manifest.max_chunk_reads !== limits.reads
+      || !Number.isSafeInteger(t.ranges_per_batch) || t.ranges_per_batch < 2 || t.ranges_per_batch > limits.reads
       || t.output_tokens !== 10000 || t.encoding !== 'base64' || t.range_schedule !== 'manifest-first/ordinal-offset/batch/v3'
       || t.nested_envelope !== 'exec-command.v1' || t.outer_envelope !== 'functions-exec.v1'
       || !/^[a-f0-9]{64}$/.test(t.relay_prefix_sha256 || '')
@@ -390,12 +400,12 @@ function validateBatchManifest(manifest, manifestBytes) {
       || t.candidate.provider !== 'openai' || typeof t.candidate.model !== 'string' || typeof t.candidate.effort !== 'string'
       || !Array.isArray(manifest.assets) || !manifest.assets.length || manifest.assets.length > FILE_LIMITS.assets
       || manifest.assets.some((asset, ordinal) => asset.ordinal !== ordinal || !Number.isSafeInteger(asset.bytes)
-        || asset.bytes < 0 || asset.bytes > FILE_LIMITS.material || asset.chunk_count !== Math.ceil(asset.bytes / t.chunk_bytes)
+        || asset.bytes < 0 || asset.bytes > limits.material || asset.chunk_count !== Math.ceil(asset.bytes / t.chunk_bytes)
         || !/^[a-f0-9]{64}$/.test(asset.sha256 || '') || !object(asset.identity))
-      || manifest.assets.reduce((sum, asset) => sum + asset.bytes, 0) > FILE_LIMITS.material
-      || Math.ceil(manifestBytes / t.chunk_bytes) + manifest.assets.reduce((sum, asset) => sum + asset.chunk_count, 0) > FILE_LIMITS.reads
+      || manifest.assets.reduce((sum, asset) => sum + asset.bytes, 0) > limits.material
+      || Math.ceil(manifestBytes / t.chunk_bytes) + manifest.assets.reduce((sum, asset) => sum + asset.chunk_count, 0) > limits.reads
       || manifest.accounting?.manifest_bytes !== manifestBytes || manifestBytes > FILE_LIMITS.manifest
-      || !Array.isArray(manifest.ranges) || manifest.ranges.length > FILE_LIMITS.reads
+      || !Array.isArray(manifest.ranges) || manifest.ranges.length > limits.reads
       || JSON.stringify(canonical(manifest.ranges)) !== JSON.stringify(canonical(readerRanges(manifestBytes, manifest.assets, t.chunk_bytes)))
       || JSON.stringify(canonical(manifest.batches)) !== JSON.stringify(canonical(readerBatches(manifest.ranges, t.ranges_per_batch)))
       || manifest.accounting.logical_range_count !== manifest.ranges.length || manifest.accounting.physical_batch_count !== manifest.batches.length
@@ -469,6 +479,40 @@ function prepareFileInput(scope, material, options = {}) {
   if (!object(scope) || typeof options.role !== 'string' || typeof options.dispatchId !== 'string'
       || !options.dispatchId.trim() || options.dispatchId.length > 256 || /[\\/]/.test(options.dispatchId)) fail('file input requires original scope, role and dispatch');
   const snapshot = fileSnapshot(scope, options);
+  const limits = integrationLimits(options.role, options.binding);
+  if (options.binding?.review_contract === 'shipyard.integration-review.v2' && options.role !== 'integrator')
+    fail('integration contract requires the original integrator role');
+  if (limits !== FILE_LIMITS) {
+    const producer = options.integrationProducer;
+    if (!require('./claude-role-host.cjs').isPreparedIntegratorContext(producer)
+        || producer.canonical.worktree !== snapshot.worktree || producer.canonical.head !== snapshot.head
+        || producer.ticket !== scope.ticket || producer.phaseNumber !== Number(scope.phase))
+      fail('integration capacity requires original matching private producer authority');
+    const codec = require('./context-packet.cjs');
+    const originalPacket = codec.decodeUniqueContent(codec.encodeUniqueContent(producer.packet, limits.material), limits.material);
+    const semantic = JSON.parse(material);
+    const packet = require('./context-packet.cjs').decodeUniqueContent(semantic, limits.material);
+    const { review_coverage: coverage, ...context } = packet.role_context || {};
+    if (packet.role !== 'integrator' || packet.source_revision !== producer.canonical.head
+        || options.binding.packet_digest !== digest(JSON.stringify(canonical(semantic)))
+        || options.binding.base !== producer.baseCommit || options.binding.merge_base !== producer.mergeBase
+        || options.binding.ticket_set_digest !== producer.ticketSetDigest
+        || JSON.stringify(options.binding.ticket_set) !== JSON.stringify(producer.ticketSet.map(member => member.id))
+        || JSON.stringify(canonical(context)) !== JSON.stringify(canonical(originalPacket.role_context))
+        || JSON.stringify(canonical(packet.required_refs)) !== JSON.stringify(canonical(originalPacket.required_refs)))
+      fail('integration material differs from its original private producer', 'STALE_CONTEXT');
+    if (coverage) {
+      const original = verifyFileInput(options.binding.original_input_bundle, { sealed: true });
+      if (original.manifest.role !== 'integrator' || original.manifest.binding?.review_contract !== options.binding.review_contract
+          || coverage.original_input?.manifest_sha256 !== options.binding.original_input_bundle.manifest_sha256
+          || coverage.original_input?.packet_digest !== original.manifest.binding.packet_digest
+          || original.material.length !== 1
+          || !original.material[0].equals(Buffer.from(JSON.stringify(require('./context-packet.cjs')
+            .encodeUniqueContent(producer.packet, limits.material)))))
+        fail('integration original source differs from its private producer', 'STALE_CONTEXT');
+    } else if (options.binding.original_input_bundle || options.binding.coverage_digest)
+      fail('integration coverage binding has no complete coverage', 'STALE_CONTEXT');
+  }
   if (Object.hasOwn(PARTITION_ROLES, options.binding?.review_contract) && typeof material === 'string') {
     const value = JSON.parse(material);
     const packet = options.binding.review_contract === CODE_REVIEW_CONTRACT && value.schema === 'shipyard.context-packet.v1'
@@ -523,7 +567,7 @@ function prepareFileInput(scope, material, options = {}) {
     if (typeof value !== 'string' && !Buffer.isBuffer(value)) fail('material must contain exact UTF-8 bytes');
     const length = Buffer.byteLength(value);
     total += length; reads += Math.ceil(length / chunkBytes);
-    if (total > FILE_LIMITS.material || reads > FILE_LIMITS.reads) fail('complete material exceeds its bound', 'CONTEXT_OVER_BOUND');
+    if (total > limits.material || reads > limits.reads) fail('complete material exceeds its bound', 'CONTEXT_OVER_BOUND');
     const bytes = Buffer.from(value);
     try { const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
       if (typeof value === 'string' && decoded !== value) fail('material does not round-trip through UTF-8'); } catch { fail('material is invalid UTF-8'); }
@@ -548,9 +592,9 @@ function prepareFileInput(scope, material, options = {}) {
         chunk_count: Math.ceil(bytes.length / chunkBytes),
         identity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode'].map(key => [key, stat[key]])) };
     });
-    const bundle = { ...(Object.hasOwn(PARTITION_ROLES, options.binding?.review_contract)
+    const bundle = { ...((Object.hasOwn(PARTITION_ROLES, options.binding?.review_contract) || limits !== FILE_LIMITS)
       ? { review_contract: options.binding.review_contract } : {}), manifest_path: path.join(directory, 'manifest.json'), manifest_sha256: '0'.repeat(64),
-      total_bytes: total, asset_count: assets.length, chunk_bytes: chunkBytes, max_chunk_reads: FILE_LIMITS.reads };
+      total_bytes: total, asset_count: assets.length, chunk_bytes: chunkBytes, max_chunk_reads: limits.reads };
     const subject = { snapshot, run_id: scope.run_id || null, ticket: scope.ticket, phase: Number(scope.phase),
       role: options.role, dispatch_id: options.dispatchId, binding: options.binding || null, assets,
       accounting: { generated_instruction_bytes: options.generatedInstructionBytes || 0 } };
@@ -571,7 +615,7 @@ function prepareFileInput(scope, material, options = {}) {
     const manifest = { schema: 'shipyard.host-file-input.v1', snapshot, run_id: scope.run_id || null,
       ticket: scope.ticket, phase: Number(scope.phase), role: options.role, dispatch_id: options.dispatchId,
       binding: options.binding || null,
-      ...(options.focusedSources ? { sources: options.focusedSources } : {}), relay_sha256: digest(relay), chunk_bytes: chunkBytes, max_chunk_reads: FILE_LIMITS.reads,
+      ...(options.focusedSources ? { sources: options.focusedSources } : {}), relay_sha256: digest(relay), chunk_bytes: chunkBytes, max_chunk_reads: limits.reads,
       assets, accounting: { material_bytes: total, manifest_bytes: 0, relay_bytes: relayBytes,
         generated_instruction_bytes: instructionBytes } };
     if (options.readerCapacity) {
@@ -583,7 +627,7 @@ function prepareFileInput(scope, material, options = {}) {
     if (profile) { manifest.schema = 'shipyard.host-file-input.v3'; manifest.transport = bundle.transport; }
     let serialized;
     for (let i = 0; i < (profile ? 20 : 10); i++) {
-      if (profile && reads + Math.ceil(manifest.accounting.manifest_bytes / chunkBytes) > FILE_LIMITS.reads)
+      if (profile && reads + Math.ceil(manifest.accounting.manifest_bytes / chunkBytes) > limits.reads)
         fail('finite logical schedule exceeds its read bound', 'READER_CAPACITY_UNSUPPORTED');
       if (bundle.transport) manifest.ranges = readerRanges(manifest.accounting.manifest_bytes, assets, chunkBytes);
       if (profile) {
@@ -600,7 +644,7 @@ function prepareFileInput(scope, material, options = {}) {
     }
     if (bundle.transport && manifest.accounting.manifest_bytes !== Buffer.byteLength(serialized))
       fail('reader manifest accounting did not converge', 'READER_CAPACITY_UNSUPPORTED');
-    if (Buffer.byteLength(serialized) > FILE_LIMITS.manifest || reads + Math.ceil(Buffer.byteLength(serialized) / chunkBytes) > FILE_LIMITS.reads) fail('manifest exceeds its bound', 'CONTEXT_OVER_BOUND');
+    if (Buffer.byteLength(serialized) > FILE_LIMITS.manifest || reads + Math.ceil(Buffer.byteLength(serialized) / chunkBytes) > limits.reads) fail('manifest exceeds its bound', 'CONTEXT_OVER_BOUND');
     if (profile) {
       bundle.logical_range_count = manifest.ranges.length;
       bundle.physical_batch_count = manifest.batches.length;
@@ -770,7 +814,7 @@ function preflightReviewMaterial(material, expected = {}) {
   if (!value.schema.startsWith('shipyard.semantic-content.')
       && !value.schema.startsWith('shipyard.context-packet.')) return null;
   const packets = require('./context-packet.cjs');
-  const packet = value.schema.startsWith('shipyard.semantic-content.') ? packets.decodeUniqueContent(value) : value;
+  const packet = value.schema.startsWith('shipyard.semantic-content.') ? packets.decodeUniqueContent(value, expected.semanticMaximumBytes) : value;
   if (packet.schema === SCHEMA) {
     const { digest: recorded, required_refs: required } = packet;
     if (!Array.isArray(required) || !Array.isArray(packet.refs)
@@ -856,10 +900,10 @@ function verifyFileInput(value, options = {}) {
   if (!privateValue && options.sealed !== true) fail('serialized bundle has no private producer authority');
   const bundle = value?.input_bundle || value;
   if (!object(bundle) || !path.isAbsolute(bundle.manifest_path || '') || !/^[a-f0-9]{64}$/.test(bundle.manifest_sha256 || '')
-      || !Number.isSafeInteger(bundle.total_bytes) || bundle.total_bytes < 0 || bundle.total_bytes > FILE_LIMITS.material
+      || !Number.isSafeInteger(bundle.total_bytes) || bundle.total_bytes < 0 || bundle.total_bytes > INTEGRATION_MATERIAL_BYTES
       || !Number.isSafeInteger(bundle.asset_count) || bundle.asset_count < 1 || bundle.asset_count > FILE_LIMITS.assets
       || !object(bundle.manifest_identity)
-      || !(bundle.transport?.schema === 'shipyard.native-reader-transport.v3' ? Number.isSafeInteger(bundle.chunk_bytes) && bundle.chunk_bytes > 0 : [INPUT_CHUNK_BYTES, 128 * 1024].includes(bundle.chunk_bytes)) || bundle.chunk_bytes > FILE_LIMITS.chunk || bundle.max_chunk_reads !== FILE_LIMITS.reads) fail('malformed bounded file descriptor');
+      || !(bundle.transport?.schema === 'shipyard.native-reader-transport.v3' ? Number.isSafeInteger(bundle.chunk_bytes) && bundle.chunk_bytes > 0 : [INPUT_CHUNK_BYTES, 128 * 1024].includes(bundle.chunk_bytes)) || bundle.chunk_bytes > FILE_LIMITS.chunk || ![FILE_LIMITS.reads, INTEGRATION_READS].includes(bundle.max_chunk_reads)) fail('malformed bounded file descriptor');
   const directory = path.dirname(bundle.manifest_path);
   physicalPath(directory, true); physicalPath(bundle.manifest_path, true, true);
   const privateOptions = privateValue ? fileInputOptions.get(value) || {} : {};
@@ -868,6 +912,19 @@ function verifyFileInput(value, options = {}) {
   let manifest;
   try { manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)); }
   catch { fail('manifest is malformed or invalid UTF-8'); }
+  const limits = integrationLimits(manifest.role, manifest.binding);
+  if (limits !== FILE_LIMITS && privateValue && !restoredFileInputs.has(value) && !historicalReviewInputs.has(value)) {
+    const producer = privateOptions.integrationProducer;
+    if (!require('./claude-role-host.cjs').isPreparedIntegratorContext(producer)
+        || privateOptions.role !== manifest.role
+        || JSON.stringify(canonical(privateOptions.binding)) !== JSON.stringify(canonical(manifest.binding)))
+      fail('integration capacity lost original private producer association', 'STALE_CONTEXT');
+  }
+  if ((manifest.binding?.review_contract === 'shipyard.integration-review.v2'
+        && (manifest.role !== 'integrator' || bundle.review_contract !== manifest.binding.review_contract))
+      || (bundle.review_contract === 'shipyard.integration-review.v2' && limits === FILE_LIMITS)
+      || bundle.total_bytes > limits.material || bundle.max_chunk_reads !== limits.reads)
+    fail('file capacity differs from its admitted role and contract');
   const partitioned = Object.hasOwn(PARTITION_ROLES, manifest.binding?.review_contract)
     || Object.hasOwn(PARTITION_ROLES, bundle.review_contract);
   if (partitioned && (manifest.role !== PARTITION_ROLES[manifest.binding?.review_contract]
@@ -918,13 +975,13 @@ function verifyFileInput(value, options = {}) {
   let bytes = 0, reads = 0;
   const material = manifest.assets.map((asset, ordinal) => {
     if (!object(asset) || asset.ordinal !== ordinal || asset.path !== path.join(directory, String(ordinal).padStart(4, '0') + '.txt')
-        || !Number.isSafeInteger(asset.bytes) || asset.bytes < 0 || asset.bytes > FILE_LIMITS.material
+        || !Number.isSafeInteger(asset.bytes) || asset.bytes < 0 || asset.bytes > limits.material
         || asset.chunk_count !== Math.ceil(asset.bytes / bundle.chunk_bytes) || !/^[a-f0-9]{64}$/.test(asset.sha256 || '')
         || !object(asset.identity)) fail('missing, duplicated or reordered asset', partitioned ? 'STALE_CONTEXT' : 'INVALID_ARCH_REVIEW_CONTEXT');
     bytes += asset.bytes; reads += asset.chunk_count;
-    if (bytes > FILE_LIMITS.material || reads > FILE_LIMITS.reads) fail('asset budget exhausted');
+    if (bytes > limits.material || reads > limits.reads) fail('asset budget exhausted');
     physicalPath(asset.path, true, true);
-    const rawAsset = boundedBytes(fs, asset.path, FILE_LIMITS.material, asset.bytes, asset.identity);
+    const rawAsset = boundedBytes(fs, asset.path, limits.material, asset.bytes, asset.identity);
     if (digest(rawAsset) !== asset.sha256) fail('immutable asset changed', 'STALE_CONTEXT');
     try { new TextDecoder('utf-8', { fatal: true }).decode(rawAsset); } catch { fail('asset is invalid UTF-8'); }
     let semantic, materialRoot = referenceRoot;
@@ -932,7 +989,7 @@ function verifyFileInput(value, options = {}) {
     if (typeof semantic?.schema === 'string' && (semantic.schema.startsWith('shipyard.semantic-content.')
         || semantic.schema.startsWith('shipyard.context-packet.'))) {
       const packet = semantic.schema.startsWith('shipyard.semantic-content.')
-        ? require('./context-packet.cjs').decodeUniqueContent(semantic) : semantic;
+        ? require('./context-packet.cjs').decodeUniqueContent(semantic, limits.material) : semantic;
       if (manifest.binding?.review_contract === CODE_REVIEW_CONTRACT
           && packet.schema === 'shipyard.context-packet.v1' && packet.role === 'code-review'
           && packet.role_context?.planning_reference === undefined)
@@ -944,16 +1001,16 @@ function verifyFileInput(value, options = {}) {
     }
     if (options.historical === true) {
       if (typeof semantic?.schema === 'string' && semantic.schema.startsWith('shipyard.semantic-content.'))
-        require('./context-packet.cjs').decodeUniqueContent(semantic);
+        require('./context-packet.cjs').decodeUniqueContent(semantic, limits.material);
     } else preflightReviewMaterial(semantic, { root: materialRoot, role: manifest.role,
       sourceRevision: manifest.snapshot.head, policyHash: manifest.snapshot.policy_hash,
-      packetDigest: manifest.binding?.packet_digest, architecturePacket: privateOptions.architecturePacket });
+      packetDigest: manifest.binding?.packet_digest, semanticMaximumBytes: limits.material, architecturePacket: privateOptions.architecturePacket });
     return rawAsset;
   });
   if (partitioned) {
     const value = JSON.parse(material[0]);
     const packet = manifest.binding.review_contract === CODE_REVIEW_CONTRACT && value.schema === 'shipyard.context-packet.v1'
-      ? value : require('./context-packet.cjs').decodeUniqueContent(value);
+      ? value : require('./context-packet.cjs').decodeUniqueContent(value, limits.material);
     const sources = [{ path: 'current-pr.diff', content: packet.diff?.content ?? packet.role_context?.exact_diff?.content },
       ...(packet.refs || packet.required_refs)];
     let ordinal = 1;
@@ -983,7 +1040,7 @@ function verifyFileInput(value, options = {}) {
     fail('reader ranges are missing, overlapping or reordered', 'READER_CAPACITY_UNSUPPORTED');
   const schedule = preflightReaderSchedule(manifest, raw.length);
   reads += Math.ceil(raw.length / bundle.chunk_bytes);
-  if (bytes !== bundle.total_bytes || reads > FILE_LIMITS.reads) fail('full input byte accounting differs');
+  if (bytes !== bundle.total_bytes || reads > limits.reads) fail('full input byte accounting differs');
   const scope = privateOptions.scope || { worktree: manifest.snapshot.worktree, phase: manifest.phase };
   if (options.historical !== true) {
     const current = fileSnapshot(scope, { ...privateOptions, role: manifest.role, phaseRepo: manifest.snapshot.planning_reference?.repo ?? privateOptions.phaseRepo, graphDir: manifest.snapshot.graph?.[0] ? path.dirname(manifest.snapshot.graph[0].path) : privateOptions.graphDir });
@@ -1994,7 +2051,7 @@ function validateOriginalReviewContext(input) {
   let encoded;
   try { encoded = JSON.parse(checked.material[0]); } catch { fail('original semantic packet is missing', 'REVIEW_BASELINE_UNSUPPORTED'); }
   if (encoded.schema !== 'shipyard.semantic-content.v1') fail('unsupported original semantic packet', 'REVIEW_BASELINE_UNSUPPORTED');
-  const packet = require('./context-packet.cjs').decodeUniqueContent(encoded);
+  const packet = require('./context-packet.cjs').decodeUniqueContent(encoded, integrationLimits(checked.manifest.role, checked.manifest.binding).material);
   const membership = packet.ticket_set || packet.role_context?.ticket_set;
   const packetRole = packet.schema === SCHEMA ? 'arch-review' : packet.role;
   const source = packet.schema === SCHEMA ? packet.pr?.head : packet.source_revision;
@@ -2152,7 +2209,7 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
   if (uncertainty.length) { mode = 'full'; limitations.push({ reason: 'uncertain-dependency-closure', boundaries: uncertainty }); }
   const encoded = checked.material.length === 1 ? JSON.parse(checked.material[0]) : null;
   if (encoded?.schema !== 'shipyard.semantic-content.v1') fail('complete current semantic packet is required', 'REVIEW_BASELINE_UNSUPPORTED');
-  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded);
+  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded, integrationLimits(checked.manifest.role, checked.manifest.binding).material);
   const members = originalPacket.ticket_set || originalPacket.role_context?.ticket_set;
   if (!Array.isArray(members) || JSON.stringify(members.map(item => typeof item === 'string' ? item : item.id).sort()) !== JSON.stringify([...current.ticket_set].sort())
       || (originalPacket.ticket_set_digest || originalPacket.role_context?.ticket_set_digest) !== current.ticket_set_digest)
@@ -2219,7 +2276,9 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
       mechanical_preflight: 'complete-current-phase-required' }, current_logical_obligations: logical,
     original_packet: encoded, semantic_credit: false };
   const raw = JSON.stringify(canonical(lineage));
-  if (Buffer.byteLength(raw) > FILE_LIMITS.material) fail('complete impact packet exceeds its bound', 'CONTEXT_OVER_BOUND');
+  const rawBytes = Buffer.byteLength(raw), maximumBytes = integrationLimits(checked.manifest.role, checked.manifest.binding).material;
+  if (rawBytes > maximumBytes) fail('complete impact packet exceeds its bound: raw_lineage_bytes observed ' + rawBytes
+    + ', required at most ' + maximumBytes, 'CONTEXT_OVER_BOUND');
   verifyFileInput(currentInput);
   if (baseline) {
     const rechecked = roleArtifact.selectReviewBaseline({ currentInput });

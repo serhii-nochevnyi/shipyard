@@ -4116,6 +4116,38 @@ test('public integration-review.v2 completes shared preparation with coordinator
       const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
       const packet = packets.decodeUniqueContent(JSON.parse(checked.material[0]));
       const original = context.verifyFileInput(checked.manifest.binding.original_input_bundle, { sealed: true });
+      for (const verified of [original, checked]) {
+        assert.equal(verified.manifest.role, 'integrator');
+        assert.equal(verified.manifest.binding.review_contract, 'shipyard.integration-review.v2');
+        assert.equal(verified.manifest.max_chunk_reads, 4160);
+        assert.equal(verified.chunk_reads, Math.ceil(verified.manifest_bytes.length / 8192)
+          + verified.manifest.assets.reduce((sum, asset) => sum + Math.ceil(asset.bytes / 8192), 0));
+      }
+      assert.equal(input.input_bundle.review_contract, 'shipyard.integration-review.v2');
+      assert.equal(checked.manifest.binding.original_input_bundle.review_contract, 'shipyard.integration-review.v2');
+      assert.throws(() => context.prepareFileInput(scope, original.material[0], {
+        role: 'integrator', dispatchId: scope.run_id, graphDir: f.graphDir,
+        binding: original.manifest.binding, integrationProducer: { ...prepared },
+        storageRoot: path.join(f.root, 'copied-producer') }), /private producer/);
+
+      for (const change of ['content', 'hash']) {
+        const changed = packets.decodeUniqueContent(JSON.parse(original.material[0]), 32 * 1024 * 1024);
+        const ref = changed.required_refs[0];
+        if (change === 'content') {
+          ref.content += '\nAltered complete reference.\n';
+          ref.bytes = Buffer.byteLength(ref.content);
+          ref.sha256 = crypto.createHash('sha256').update(ref.content).digest('hex');
+        } else ref.sha256 = '0'.repeat(64);
+        assert.throws(() => {
+          const encoded = packets.encodeUniqueContent(changed, 32 * 1024 * 1024);
+          return context.prepareFileInput(scope, JSON.stringify(encoded), {
+            role: 'integrator', dispatchId: scope.run_id, graphDir: f.graphDir,
+            integrationProducer: prepared, storageRoot: path.join(f.root, 'changed-reference-' + change),
+            binding: { ...original.manifest.binding, packet_digest: crypto.createHash('sha256')
+              .update(require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify(encoded)).digest('hex') } });
+        }, /original private producer|immutable identity/);
+      }
+
       const canonicalPacket = value => {
         const copy = structuredClone(value);
         for (const key of ['logical_source_obligations', 'required_refs']) {
@@ -4172,7 +4204,9 @@ test('public integration-review.v2 completes shared preparation with coordinator
       fs.appendFileSync(path.join(coordinator, Object.values(f.rows)[0].plan), '\nchanged required planning bytes\n');
       assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
       if (large) {
-        fs.appendFileSync(path.join(coordinator, '.planning/backlog/selected.md'), 'Complete selected obligation.\n'.repeat(650000));
+        const oversized = 'Complete selected obligation.\n'.repeat(1200000);
+        assert.ok(Buffer.byteLength(oversized) > 32 * 1024 * 1024);
+        fs.appendFileSync(path.join(coordinator, '.planning/backlog/selected.md'), oversized);
         helper.git(coordinator, 'add', '.planning'); helper.git(coordinator, 'commit', '-qm', 'complete oversized planning input');
         assert.throws(() => publicHost.prepareIntegratorInput(scope, { role: 'integrator', dispatch_id: scope.run_id,
           context: { review_contract: 'shipyard.integration-review.v2' } }, nativeOptions),

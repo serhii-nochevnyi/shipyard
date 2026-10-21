@@ -2670,6 +2670,12 @@ function originalReviewRetention(worktree, trusted) {
 
 const admissionReviewInputs = new WeakMap();
 
+function verifiedReviewMaterialLimit(checked) {
+  return checked.manifest.role === 'integrator'
+    && checked.manifest.binding?.review_contract === 'shipyard.integration-review.v2'
+    ? 32 * 1024 * 1024 : 16 * 1024 * 1024;
+}
+
 function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
   const context = require('./codex-arch-review-context.cjs');
   const admission = admissionReviewInputs.get(currentInput);
@@ -2686,7 +2692,7 @@ function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
   let currentPacket;
   try {
     if (checked.material.length !== 1) return fallback('unsupported-current-semantic-packet');
-    currentPacket = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]));
+    currentPacket = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]), verifiedReviewMaterialLimit(checked));
   } catch { return fallback('unsupported-current-semantic-packet'); }
   const graphRoot = path.resolve(path.dirname(graphPin.path), '../..');
   const graphCommon = fs.realpathSync(execFileSync('git', ['-C', graphRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim());
@@ -2888,9 +2894,13 @@ function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId) {
   const graph = new Map(), boundaries = [], uncertainty = [], bodies = new Map();
   let total = 0;
   const read = entry => {
-    if (bodies.has(entry.object)) return bodies.get(entry.object);
     if (entry.type !== 'blob' || !['100644', '100755'].includes(entry.mode)) {
       uncertainty.push({ path: entry.path, reason: 'non-regular-source-boundary' }); return null;
+    }
+    if (bodies.has(entry.object)) {
+      const content = bodies.get(entry.object);
+      if (content === null) uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' });
+      return content;
     }
     const size = Number(reviewGit(root, ['cat-file', '-s', entry.object]));
     if (!Number.isSafeInteger(size) || size < 0 || size > 16 * 1024 * 1024 || total + size > 16 * 1024 * 1024)
@@ -2899,9 +2909,13 @@ function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId) {
     total += raw.length;
     let content;
     try { content = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch {
+      bodies.set(entry.object, null);
       uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' }); return null;
     }
-    if (raw.includes(0)) { uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' }); return null; }
+    if (raw.includes(0)) {
+      bodies.set(entry.object, null);
+      uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' }); return null;
+    }
     bodies.set(entry.object, content); return content;
   };
   const resolve = (source, specifier, sources) => {
@@ -2932,6 +2946,8 @@ function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId) {
       boundaries.push({ path: entry.path, dependency, reason: 'static-import-boundary' });
     }
   }
+  bodies.clear();
+  total = 0;
   const affected = new Set(changed), queue = [...changed];
   for (let index = 0; index < queue.length; index++) {
     if (queue.length > 20000) fail('CONTEXT_OVER_BOUND', 'dependency closure exceeds its bound');
@@ -2957,7 +2973,7 @@ function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId) {
   if (uncertainty.length) { mode = 'full'; limitations.push({ reason: 'uncertain-dependency-closure', boundaries: uncertainty }); }
   const encoded = checked.material.length === 1 ? JSON.parse(checked.material[0]) : null;
   if (encoded?.schema !== 'shipyard.semantic-content.v1') fail('REVIEW_BASELINE_UNSUPPORTED', 'complete current semantic packet is required');
-  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded);
+  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded, verifiedReviewMaterialLimit(checked));
   const members = originalPacket.ticket_set || originalPacket.role_context?.ticket_set;
   if (!Array.isArray(members) || JSON.stringify(members.map(item => typeof item === 'string' ? item : item.id).sort()) !== JSON.stringify([...current.ticket_set].sort())
       || (originalPacket.ticket_set_digest || originalPacket.role_context?.ticket_set_digest) !== current.ticket_set_digest)
@@ -3024,7 +3040,9 @@ function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId) {
       mechanical_preflight: 'complete-current-phase-required' }, current_logical_obligations: logical,
     original_packet: encoded, semantic_credit: false };
   const raw = JSON.stringify(canonical(lineage));
-  if (Buffer.byteLength(raw) > 16 * 1024 * 1024) fail('CONTEXT_OVER_BOUND', 'complete impact packet exceeds its bound');
+  const rawBytes = Buffer.byteLength(raw), maximumBytes = verifiedReviewMaterialLimit(checked);
+  if (rawBytes > maximumBytes) fail('CONTEXT_OVER_BOUND', 'complete impact packet exceeds its bound: raw_lineage_bytes observed ' + rawBytes
+    + ', required at most ' + maximumBytes);
   verifyFileInput(currentInput);
   if (baseline) {
     const rechecked = roleArtifact.selectReviewBaseline({ currentInput, excludeDispatchId });
@@ -3328,7 +3346,7 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
     if (result.coverage !== undefined) fail('REVIEW_COVERAGE_INVALID', 'unsupported coverage material inventory');
     return null;
   }
-  const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]));
+  const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]), verifiedReviewMaterialLimit(checked));
   const coverage = packet.review_coverage || packet.role_context?.review_coverage;
   const contract = checked.manifest.binding?.review_contract;
   const expectedContract = trusted.receipt.role === 'arch-review' ? 'shipyard.architecture-review.v2' : 'shipyard.integration-review.v2';
@@ -3354,10 +3372,12 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
   const sourceBundle = checked.manifest.binding.original_input_bundle;
   const source = context.verifyFileInput(sourceBundle, { sealed: true,
     association: { role: trusted.receipt.role, dispatch_id: checked.manifest.dispatch_id } });
-  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(source.material[0]));
+  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(source.material[0]), verifiedReviewMaterialLimit(source));
   const input = { input_bundle: sourceBundle };
   const subject = reviewIdentityFromChecked(sourceBundle, source);
-  if (stable(subject) !== stable(coverage.current) || subject.repository !== identity.repository.identity
+  if (source.manifest.role !== checked.manifest.role
+      || contract === 'shipyard.integration-review.v2' && source.manifest.binding?.review_contract !== contract
+      || stable(subject) !== stable(coverage.current) || subject.repository !== identity.repository.identity
       || subject.worktree !== identity.worktree || subject.head !== identity.head || subject.head_tree !== identity.head_tree
       || subject.base !== identity.base_commit || subject.merge_base !== identity.merge_base
       || subject.role !== trusted.receipt.role || subject.policy_hash !== trusted.receipt.policy_hash
@@ -3847,7 +3867,7 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
             if (digest(readImmutableFile(fs, live, 'current whole-phase membership', 8 * 1024 * 1024)) !== graphPin.sha256)
               fail('REVIEW_COVERAGE_INVALID', 'complete current membership differs from original review');
           }
-          const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]));
+          const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]), verifiedReviewMaterialLimit(checked));
           const proof = packet.role_context?.review_coverage?.complete_preflight || checked.manifest.binding?.preflight;
           if (proof) {
             if (require('./phase-integrator-preflight.cjs').proofDigest(proof) !== proof.proof_digest
