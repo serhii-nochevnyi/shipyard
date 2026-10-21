@@ -163,20 +163,21 @@ function collect(scope, options) {
     try { git(options, worktree, ['merge-base', '--is-ancestor', ancestor, current]); return true; }
     catch (error) { if (error.status === 1) return false; throw error; }
   };
-  const roundOptions = { priorVerdicts, head, isAncestor };
+  const roundOptions = { priorVerdicts, head, isAncestor, mergeBase };
   const verdicts = core.countableVerdicts(roundOptions), round = core.nextRound(roundOptions);
   if (round.state === 'limit') fail('three countable reviews have already run', 'CODE_REVIEW_ROUND_LIMIT');
   const range = round.deltaBase ? round.deltaBase + '..' + head : mergeBase + '...' + head;
   const diff = git(options, worktree, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50', range, ...productPathspec()]);
   const readSource = core.createSourceReader({ head, git: (args, maximum) => git(options, worktree, args, maximum) });
   const latest = verdicts.at(-1);
-  const carried = core.carryPriorFindings({ priorFindings: latest || [], deltaDiff: diff, readSource });
+  const mappingDiff = latest ? git(options, worktree, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50', latest.head, head, ...productPathspec()]) : '';
+  const carried = core.carryPriorFindings({ priorFindings: latest || [], deltaDiff: mappingDiff, readSource });
   const disagreements = core.loadDisagreements({ projectRoot: project, phaseDirName: binding.phase,
     priorFindings: carried, readFile(absolute, maximum) {
       const stat = fs.lstatSync(absolute);
       return { stat, text: boundedBytes(fs, absolute, maximum, undefined, stat) };
     } });
-  const priorFindings = core.carryPriorFindings({ priorFindings: latest || [], deltaDiff: diff, readSource, disagreements });
+  const priorFindings = core.carryPriorFindings({ priorFindings: latest || [], deltaDiff: mappingDiff, readSource, disagreements });
   const plans = binding.rows.map(item => file(project, item.row.plan));
   const reference = file(path.resolve(__dirname, '..'), 'references/code-review.md');
   const identity = { repository, id: binding.subject, pr: number, head, base_commit: live.baseRefOid,
@@ -360,6 +361,11 @@ function admitBookkeeping(value) {
   preparedOptions.set(value, { ...options, bookkeepingPins: pins });
 }
 
+function packetForCoverage(value) {
+  const { digest: _digest, ...packet } = value;
+  return JSON.stringify(packets.encodeUniqueContent(packet));
+}
+
 function launchDigest(value) {
   requirePrepared(value);
   const installation = installedLaunches.get(value);
@@ -440,9 +446,9 @@ function finish(value, dispatch, recorder) {
   const { evidence_markdown: evidenceMarkdown, host_context: _context, ...judgment } = normalized;
   Object.assign(judgment, { prior_head: prepared.round.priorHead, contract_digest: prepared.contractDigest,
     dispositions_digest: prepared.dispositionsDigest,
-    ...(prepared.packet.role_context.planning_reference ? { host_context: {
-      planning_reference: prepared.packet.role_context.planning_reference,
-      selected_refs: value.evidence.selected_refs } } : {}),
+    host_context: { ...(!input ? { original_packet: JSON.parse(packetForCoverage(prepared.packet)) } : {}),
+      ...(prepared.packet.role_context.planning_reference ? { planning_reference: prepared.packet.role_context.planning_reference,
+        selected_refs: value.evidence.selected_refs } : {}) },
     reuse_key: core.reuseKey({ head: prepared.canonical.head, baseCommit: prepared.baseCommit, contractDigest: prepared.contractDigest }) });
   const live = verifyLivePullRequest(prepared, options);
   if (input) verifyFileInput(input, { association: { role: 'code-review', dispatch_id: dispatch.dispatch_id } });

@@ -348,3 +348,29 @@ test('a recorded WARNING keeps its original severity and sealable shape when ret
   assert.equal(second.disagreement_suppressed, 1);
   assert(!Object.hasOwn(second.findings[0], 'fix_ticket'));
 });
+
+test('coverage and permanent round costs stay independent across expanding and non-expanding bases', () => {
+  const isAncestor = (a, b) => ['A', 'B', 'H', 'I'].indexOf(a) <= ['A', 'B', 'H', 'I'].indexOf(b);
+  const full = { head: 'H', review_scope: 'full', review_completeness: 'complete', sealed_at: '1',
+    coverage_range: { from: 'B', to: 'H', merge_base: 'B' } };
+  const options = { priorVerdicts: [full], head: 'H', isAncestor, mergeBase: 'A' };
+  assert.deepEqual(core.nextRound(options), { round: 2, state: 'ready', scope: 'full', rounds_used: 1,
+    priorHead: 'H', deltaBase: null });
+  assert.equal(core.nextRound({ ...options, mergeBase: 'B' }).scope, 'delta');
+  assert.equal(core.nextRound({ ...options, mergeBase: 'H' }).scope, 'delta');
+  const unsafe = { head: 'H', prior_head: 'H', review_scope: 'delta', review_completeness: 'complete', sealed_at: '2',
+    coverage_range: { from: 'H', to: 'H', merge_base: 'A' } };
+  const later = { ...unsafe, head: 'I', sealed_at: '3', coverage_range: { from: 'H', to: 'I', merge_base: 'B' } };
+  const history = [full, unsafe, later];
+  assert.equal(core.countableVerdicts({ priorVerdicts: history, head: 'I', isAncestor }).length, 3);
+  assert.equal(core.coverageComplete({ verdict: unsafe, priorVerdicts: history, mergeBase: 'A', isAncestor }), false);
+  assert.equal(core.coverageComplete({ verdict: later, priorVerdicts: history, mergeBase: 'B', isAncestor }), false);
+  assert.equal(core.nextRound({ ...options, priorVerdicts: history, head: 'I' }).state, 'limit');
+  const refresh = { ...full, sealed_at: '2', coverage_range: { from: 'A', to: 'H', merge_base: 'A' } };
+  assert.equal(core.nextRound({ ...options, priorVerdicts: [full, refresh] }).round, 3);
+  assert.equal(core.nextRound({ ...options, priorVerdicts: [full, refresh] }).scope, 'delta');
+  assert.equal(core.nextRound({ ...options, priorVerdicts: [{ ...full, review_completeness: 'incomplete' }] }).round, 1);
+  assert.equal(core.coverageComplete({ verdict: { ...full, coverage_range: null }, priorVerdicts: [], mergeBase: 'B', isAncestor }), false);
+  assert.throws(() => core.coverageComplete({ verdict: full, priorVerdicts: [], mergeBase: 'B',
+    isAncestor() { throw Error('Git unavailable'); } }), /Git unavailable/);
+});

@@ -213,11 +213,32 @@ function lineageComplete({ verdict, priorVerdicts }) {
   return verdict.review_scope === 'delta' && previous.some(entry => entry.head === verdict.prior_head
     && (!verdict.sealed_at || !entry.sealed_at || entry.sealed_at <= verdict.sealed_at));
 }
+function coverageComplete({ verdict, priorVerdicts, mergeBase, isAncestor }) {
+  const ordered = priorVerdicts.filter(entry => entry !== verdict
+    && (!verdict.sealed_at || entry.sealed_at < verdict.sealed_at));
+  const prove = (entry, earlier) => {
+    const material = entry.coverage_range;
+    if (entry.review_completeness !== 'complete' || !material || material.to !== entry.head
+        || !material.merge_base || !isAncestor(material.merge_base, entry.head)) return null;
+    if (entry.review_scope === 'full') return material.from === material.merge_base ? material.from : null;
+    if (entry.review_scope !== 'delta' || material.from !== entry.prior_head
+        || !isAncestor(entry.prior_head, entry.head)) return null;
+    const previous = countableVerdicts({ priorVerdicts: earlier, head: entry.head, isAncestor }).at(-1);
+    if (!previous || previous.head !== entry.prior_head) return null;
+    const root = prove(previous, earlier.filter(value => value !== previous
+      && value.sealed_at < previous.sealed_at));
+    return root && isAncestor(root, material.merge_base) ? root : null;
+  };
+  const root = prove(verdict, ordered);
+  return !!root && isAncestor(root, mergeBase) && isAncestor(mergeBase, verdict.head);
+}
 function nextRound(options) {
   const verdicts = countableVerdicts(options), used = verdicts.length;
   if (used >= ROUND_CAP) return { round: null, state: 'limit', rounds_used: used };
-  return { round: used + 1, state: 'ready', scope: used ? 'delta' : 'full', rounds_used: used,
-    priorHead: used ? verdicts.at(-1).head : null, deltaBase: used ? verdicts.at(-1).head : null };
+  const inherit = used && (options.mergeBase === undefined || coverageComplete({ verdict: verdicts.at(-1),
+    priorVerdicts: verdicts, mergeBase: options.mergeBase, isAncestor: options.isAncestor }));
+  return { round: used + 1, state: 'ready', scope: inherit ? 'delta' : 'full', rounds_used: used,
+    priorHead: used ? verdicts.at(-1).head : null, deltaBase: inherit ? verdicts.at(-1).head : null };
 }
 function repairAllowed(round) { return round === 1 || round === 2; }
 
@@ -399,5 +420,5 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
 module.exports = { CONTRACT_ID, ROUND_CAP, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
-  lineageComplete, nextRound, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
+  lineageComplete, coverageComplete, nextRound, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };
