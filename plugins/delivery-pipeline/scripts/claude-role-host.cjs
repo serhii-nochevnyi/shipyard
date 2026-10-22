@@ -52,6 +52,7 @@ const TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 const USAGE_FIELDS = Object.freeze(['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens']);
 const integratorContexts = new WeakMap();
 const nativeIntegratorCollection = Symbol('native integrator collection');
+const nativeIntegrationStages = new WeakMap();
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -99,8 +100,10 @@ function parseRequest(value) {
       ? new Set(['schema', 'role', 'worktree', 'phase', 'pr', 'repo', 'signals'])
     : new Set(['schema', 'role', 'worktree', 'phase', 'signals', ...(role === 'integrator' ? ['review_contract'] : [])]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) reject(`request field ${key} is not permitted`);
-  if (value.review_contract !== undefined && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2'].includes(value.review_contract))
+  if (value.review_contract !== undefined && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3].includes(value.review_contract))
     reject('unsupported integration review contract', 'INVALID_INPUT');
+  if (value.review_contract === roleArtifact.INTEGRATION_REVIEW_V3 && Object.keys(value.signals || {}).length)
+    reject('v3 model selection and stage authority are host-owned', 'INVALID_INPUT');
   if (role === 'arch-review' && value.phase !== undefined && (value.ticket !== undefined || value.pr === undefined))
     reject('phase architecture review requires an explicit PR and no ticket selector');
   if (role === 'code-review' && (value.phase === undefined || value.pr === undefined))
@@ -780,8 +783,10 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
 function prepareIntegratorContext(options, request) {
   const canonical = canonicalWorktree(options, request.worktree, true);
   const graph = graphData(options, canonical.projectRoot);
-  if (request.review_contract !== undefined && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2'].includes(request.review_contract))
+  if (request.review_contract !== undefined && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3].includes(request.review_contract))
     reject('unsupported integration review contract', 'INVALID_INPUT');
+  if (request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3)
+    return prepareIntegrator(options, request, canonical, graph, nativeIntegratorCollection);
   return prepareIntegrator(options, request, canonical, graph);
 }
 
@@ -1042,7 +1047,7 @@ function estimatePromptTokens(role, packet, plan, pr, reference, readOnlySmoke =
 
 function prepareInvocation(options, request) {
   const canonical = canonicalWorktree(options, request.worktree, (request.role === 'arch-review' && !!request.phase)
-    || (request.role === 'integrator' && request.review_contract === 'shipyard.integration-review.v2'), request.role === 'code-review', request.repo);
+    || (request.role === 'integrator' && ['shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3].includes(request.review_contract)), request.role === 'code-review', request.repo);
   const graph = graphData(options, canonical.projectRoot);
   const rows = requestRows(request, graph, canonical);
   const prepared = request.role === 'arch-review'
@@ -1050,14 +1055,18 @@ function prepareInvocation(options, request) {
     : request.role === 'code-review'
       ? prepareCodeReview(options, request, canonical, graph, rows)
     : request.role === 'integrator'
-      ? prepareIntegrator(options, request, canonical, graph)
+      ? prepareIntegrator(options, request, canonical, graph,
+        request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3 ? nativeIntegratorCollection : undefined)
     : prepareSentinel(options, request, canonical, graph);
   if (request.role === 'pr-sentinel') return prepared;
   const preflightPins = ['claude-role-host.cjs', 'claude-runtime-host.cjs', 'context-packet.cjs',
     'codex-arch-review-context.cjs', 'role-artifact.cjs', 'model-policy.cjs', 'model-policy-internal.cjs',
     'code-review-core.cjs', 'conveyor-scratch.cjs']
     .map(name => ({ path: path.join(__dirname, name), sha256: sha(fs.readFileSync(path.join(__dirname, name))) }));
-  return Object.freeze({ ...prepared, preflightPins });
+  const result = Object.freeze({ ...prepared, preflightPins });
+  if (request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3)
+    integratorContexts.set(result, nativeIntegratorCollection);
+  return result;
 }
 
 function resultFrom(output) {
@@ -1286,6 +1295,7 @@ function storageDirectory(options, runId, worktree) {
 
 function runtimeFor(options, scope, controller, storage, prepared) {
   const runtimeOptions = { scope, controller, readOnlySmoke: options.readOnlySmoke === true,
+    ...(nativeIntegrationStages.has(prepared) ? { recorder: nativeIntegrationStages.get(prepared).recorder } : {}),
     recorderDir: path.join(storage, 'receipts'), transcriptDir: path.join(storage, 'transcripts'),
     ...(prepared.role === 'code-review' ? { spawn(executable, args, spawnOptions) {
       const settingsIndex = args.indexOf('--settings') + 1;
@@ -1342,7 +1352,7 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
           revalidateLiveInputs(options, prepared, dispatchId);
           if (git(options, prepared.canonical.worktree, ['rev-parse', 'HEAD']) !== prepared.canonical.head)
             reject('review HEAD changed before native launch', 'STALE_CONTEXT');
-          preflightReviewMaterial(encodeUniqueContent(prepared.packet), { root: prepared.canonical.projectRoot,
+          if (!nativeIntegrationStages.has(prepared)) preflightReviewMaterial(encodeUniqueContent(prepared.packet), { root: prepared.canonical.projectRoot,
             role: prepared.role, subject: prepared.packet.subject, sourceRevision: prepared.canonical.head,
             policyHash: policy.POLICY_HASH });
           if (canonicalJson(referenceDigest(loadClaudeReferenceContent(prepared.role)))
@@ -1367,8 +1377,8 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
         const child = await runtime.agent(prepared.prompt, {
           model: selection.model,
           effort: selection.effort,
-          schema: roleOutputSchema(prepared.role),
-          ...(prepared.readOnlySmoke || prepared.role === 'code-review' ? { readOnly: true } : {}),
+          schema: nativeIntegrationStages.has(prepared) ? integrationStageSchema(nativeIntegrationStages.get(prepared).stage) : roleOutputSchema(prepared.role),
+          ...(nativeIntegrationStages.has(prepared) || prepared.readOnlySmoke || prepared.role === 'code-review' ? { readOnly: true } : {}),
         });
         launched = child;
         return runtime.applicationEvidence({ result: child });
@@ -1394,12 +1404,20 @@ function roundOwnedFileDigests(prepared, dispatchId) {
 }
 
 function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()) {
+  let integrationPins;
+  if (prepared.integrationPartitions) {
+    roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.integrationReview.archivePins,
+      { partitions: prepared.integrationPartitions });
+    integrationPins = roleArtifact.authenticatedArchivePins(prepared.canonical.worktree);
+  }
   const changed = git(options, prepared.canonical.worktree, ['diff', '--name-only', '-z', 'HEAD'], 256 * 1024, true)
     .split('\0').filter(Boolean);
   const untracked = git(options, prepared.canonical.worktree, ['ls-files', '--others', '--exclude-standard', '-z'], 256 * 1024, true)
     .split('\0').filter(Boolean);
   const unexpected = [...new Set([...changed, ...untracked])].filter((file) => {
     if (file === prepared.evidencePath) return false;
+    if (integrationPins && untracked.includes(file) && !changed.includes(file)
+        && integrationPins.some(pin => pin.path === file)) return false;
     if (prepared.role !== 'code-review' && prepared.binding && untracked.includes(file) && !changed.includes(file)
         && file.startsWith(roleArtifact.ARTIFACT_ARCHIVE_DIR + '/')) return false;
     if (prepared.role === 'code-review' && untracked.includes(file) && !changed.includes(file)) {
@@ -1435,7 +1453,7 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
   }
   require('./context-packet.cjs').authenticatedPlanningRoot(prepared.canonical.worktree,
     prepared.canonical.planningReference);
-  validateContextPacket(prepared.packet, { root: prepared.canonical.projectRoot, role: prepared.role,
+  if (!prepared.integrationPartitions) validateContextPacket(prepared.packet, { root: prepared.canonical.projectRoot, role: prepared.role,
     subject: prepared.packet.subject, sourceRevision: prepared.canonical.head, policyHash: policy.POLICY_HASH });
   if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
 }
@@ -1445,7 +1463,7 @@ function revalidateLiveInputs(options, prepared, currentDispatchId) {
     prepared.canonical.planningReference);
   const worktree = prepared.canonical.worktree;
   if (prepared.integrationReview)
-    require('./codex-delivery-host.cjs').recheckIntegrationReview(prepared.integrationReview);
+    require('./codex-delivery-host.cjs').recheckIntegrationReview(prepared.integrationReview, prepared.integrationPartitions);
   if (prepared.role === 'arch-review' || prepared.role === 'code-review') {
     if (prepared.role === 'code-review') {
       const current = loadCodeReviewDisagreements(prepared.graph, prepared.phase, prepared.priorFindings);
@@ -1643,6 +1661,7 @@ function codeReviewEvidenceFs(evidencePath, markdown) {
 
 function sealResult(prepared, result, recorder, dispatchId, evidenceMarkdown) {
   const common = { worktreePath: prepared.canonical.worktree, role: prepared.role,
+    ...(prepared.integrationPartitions ? { integrationReview: prepared.integrationReview } : {}),
     ticket: prepared.ticket, base: prepared.base, recorder, dispatchId, result,
     ...(prepared.binding ? { phase: prepared.binding.phase, ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest } : {}),
     ...(prepared.role === 'code-review' ? { io: { fs: codeReviewEvidenceFs(
@@ -1691,14 +1710,179 @@ function prepareReviewInput(prepared, options) {
   return Object.freeze({ ...prepared, focusedInput: input, prompt });
 }
 
+function integrationStageSchema(stage) {
+  const schema = stage.kind === 'phase' ? roleOutputSchema('integrator') : { type: 'object', properties: {}, required: [] };
+  Object.assign(schema.properties, {
+    schema: { type: 'string' }, review_contract: { const: roleArtifact.INTEGRATION_REVIEW_V3 },
+    kind: { const: stage.kind }, runtime: { const: 'claude' }, subject: { const: stage.subject },
+    plan_sha256: { const: stage.plan_sha256 }, input_sha256: { const: stage.input_sha256 },
+    reviewed_identity: { type: 'object' }, completeness: { enum: ['complete', 'incomplete'] },
+    outcome: { enum: ['passed', 'needs-fix', 'human-review-required'] }, unit_id: { type: 'string' },
+    coverage: { type: 'object' }, blocking_count: { type: 'integer', minimum: 0 },
+    conclusions: { type: 'array' }, findings: { type: 'array' }, limitations: { type: 'array' },
+    seams: { type: 'array' }, required_context: { type: 'array' }, evidence_markdown: { type: 'string' },
+  });
+  schema.required = [...new Set([...schema.required, 'review_contract', 'kind', 'runtime', 'subject', 'plan_sha256',
+    'input_sha256', 'reviewed_identity', 'completeness', 'outcome', 'coverage', 'evidence_markdown',
+    ...(stage.kind === 'unit' ? ['schema', 'unit_id', 'conclusions', 'findings', 'limitations', 'seams', 'required_context'] : [])])];
+  return schema;
+}
+
+function prepareClaudeIntegrationPartitions(options, request) {
+  const prepared = prepareInvocation(options, request);
+  const scope = { worktree: prepared.canonical.worktree, phase: prepared.phaseNumber,
+    ticket: prepared.ticket, run_id: newDispatchId() };
+  const storage = storageDirectory(options, scope.run_id, scope.worktree);
+  const referencePath = require('./claude-reference-content.cjs').REFERENCE_PATHS.integrator;
+  const reference = fs.readFileSync(referencePath);
+  const review = require('./codex-delivery-host.cjs').prepareIntegrationLineage(scope, prepared, {
+    ...options, nativeRuntime: 'claude', dispatchId: scope.run_id, storageRoot: storage,
+    generatedInstructionBytes: reference.length,
+    instructionBinding: { agent_file: path.basename(referencePath), agent_path: referencePath,
+      agent_sha256: sha(reference), installed_files: [], policy_hash: policy.POLICY_HASH } });
+  const previous = options.integrationCapacity?.plan_sha256;
+  const partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity: options.integrationCapacity?.capacity,
+    ...(previous ? { plan_sha256: previous } : {}) });
+  require('./codex-delivery-host.cjs').recheckIntegrationReview(review, partitions);
+  const recorder = options.integrationCapacity?.recorder || createDurableRecorder(path.join(storage, 'partition-receipts'));
+  const resources = options.integrationCapacity || {};
+  const capacityHost = roleArtifact.createIntegrationCapacityHost({ ...resources,
+    ...(typeof resources.renderLaunch === 'function' ? { renderLaunch: launch => resources.renderLaunch(launch, {
+      model: launch.model, effort: launch.effort, schema: integrationStageSchema(launch), readOnly: true }) } : {}),
+    partitions, runtime: 'claude', recorder });
+  const stages = [];
+  for (const unit of partitions.plan.units) {
+    try { roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); continue; }
+    catch (error) {
+      if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
+    }
+    stages.push(roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
+      dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id }));
+  }
+  return { request: canonicalJson(request), prepared, review, partitions, recorder, capacityHost, stages,
+    admissions: new Set(), recovered: !!previous, final: null, finalAdmitted: false };
+}
+
+async function runClaudeIntegrationPartitions(options, execution) {
+  const delivery = require('./codex-delivery-host.cjs');
+  const { prepared: original, review, recorder, capacityHost } = execution;
+  execution.partitions = roleArtifact.prepareIntegrationPartitions({ review, plan_sha256: execution.partitions.plan.plan_sha256 });
+  const { partitions } = execution;
+  delivery.recheckIntegrationReview(review, partitions);
+  for (const stage of [partitions.reserved_template, ...execution.stages]) {
+    if (execution.recovered) break;
+    if (execution.admissions.has(stage.launch_sha256)) continue;
+    await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: capacityHost });
+    execution.admissions.add(stage.launch_sha256);
+  }
+  const launch = async stage => {
+    delivery.recheckIntegrationReview(review, partitions);
+    const prepared = Object.freeze({ ...original, prompt: stage.input,
+      integrationReview: review, integrationPartitions: partitions });
+    nativeIntegrationStages.set(prepared, { stage, recorder });
+    assertEvidenceOnlyChanges(options, prepared);
+    const runId = 'claude-integration-' + crypto.randomUUID(), ownerId = 'claude-integration-owner-' + crypto.randomUUID();
+    const scope = makeRuntimeScope(prepared, runId, stage.dispatch_id, ownerId);
+    const storage = storageDirectory(options, runId, prepared.canonical.worktree);
+    const controller = options.controller === false ? null : createRunController({ storeDir: path.join(storage, 'controller'), ownerId });
+    if (controller) controller.begin(scope);
+    let heartbeatError;
+    const heartbeat = controller ? setInterval(() => {
+      try { controller.heartbeat(runId); } catch (error) { heartbeatError = error; }
+    }, 60000) : null;
+    heartbeat?.unref();
+    try {
+      const runtime = runtimeFor(options, scope, controller, storage, prepared);
+      if (runtime.recorder !== recorder || controller && runtime.controller !== controller)
+        reject('partition runtime differs from its original recorder/controller', 'MISSING_RECEIPT');
+      const { boundary, getLaunched, getLaunchCount, getHostOwnedFiles } = buildBoundary(prepared, runtime, stage.dispatch_id, ownerId, options);
+      roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: stage, host: capacityHost });
+      const record = await boundary.dispatch({ runtime: 'claude', role: 'integrator',
+        signals: original.signals, dispatch_id: stage.dispatch_id }, {
+        ticket: prepared.ticket, role: 'integrator', phase: prepared.phase,
+        worktreePath: prepared.canonical.projectRoot, sourceRevision: prepared.canonical.head, contextPacket: prepared.packet });
+      if (getLaunchCount() !== 1 || !getLaunched()) reject('partition requires one original native launch', 'MISSING_RECEIPT');
+      if (heartbeatError) throw heartbeatError;
+      delivery.recheckIntegrationReview(review, partitions);
+      assertEvidenceOnlyChanges(options, prepared, getHostOwnedFiles());
+      const result = resultFrom(getLaunched().output);
+      if (stage.kind === 'unit') {
+        const artifact = roleArtifact.sealIntegrationUnit({ prepared: stage, recorder, dispatchId: stage.dispatch_id, result });
+        if (controller) controller.complete(runId);
+        return { artifact, result };
+      }
+      const { evidence_markdown, ...judgment } = result;
+      if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
+        reject('final requires the complete original evidence handoff', 'INVALID_RESULT');
+      roleArtifact.prepareRoleArtifact({ worktreePath: prepared.canonical.worktree,
+        role: 'integrator', phase: prepared.phase, evidencePath: prepared.evidencePath });
+      fs.writeFileSync(path.join(prepared.canonical.worktree, prepared.evidencePath), evidence_markdown);
+      const { validated } = sealResult(prepared, judgment, recorder, stage.dispatch_id, evidence_markdown);
+      if (controller) controller.complete(runId);
+      return Object.freeze({ schema: 'shipyard.claude-role-result.v1', role: 'integrator', subject: prepared.ticket,
+        phase: prepared.phase, ticket_set_digest: prepared.ticketSetDigest, result: judgment, dispatch: record,
+        artifact: { ref: validated.artifact_ref, digest: validated.artifact_digest, outcome: validated.envelope.outcome },
+        context: { run_id: runId, source_revision: prepared.canonical.head, policy_hash: record.policy_hash,
+          host_identity: HOST_IDENTITY, plan_sha256: partitions.plan.plan_sha256, prompt_bytes: Buffer.byteLength(stage.input),
+          model: record.applied_model, effort: record.applied_effort } });
+    } catch (error) {
+      if (controller) controller.fail(runId, { reason: String(error.message).slice(0, 500) });
+      throw error;
+    } finally { if (heartbeat) clearInterval(heartbeat); }
+  };
+  for (const unit of partitions.plan.units) {
+    let completed;
+    try { completed = roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); }
+    catch (error) {
+      if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
+    }
+    if (!completed) {
+      completed = await launch(execution.stages.find(stage => stage.unit_id === unit.unit_id));
+    }
+    if (completed.result.completeness !== 'complete' || completed.result.outcome !== 'passed' || completed.result.required_context.length)
+      reject('incomplete, failing or context-blocked unit requires repair', 'INTEGRATION_PARTITION_INVALID');
+  }
+  delivery.recheckIntegrationReview(review, partitions);
+  if (!execution.final) execution.final = roleArtifact.prepareIntegrationAggregate({ partitions,
+    dispatch_id: 'integration-final-' + partitions.plan.plan_sha256 });
+  if (execution.recovered && !execution.finalAdmitted) {
+    try {
+      roleArtifact.assertIntegrationAdmission({ prepared: execution.final, launch: execution.final, host: capacityHost });
+      execution.finalAdmitted = true;
+    } catch (error) {
+      if (error.code !== 'INTEGRATION_CAPACITY_UNPROVEN' || !error.message.endsWith('exact launch has no protected capacity admission')) throw error;
+    }
+  }
+  if (!execution.finalAdmitted) {
+    await roleArtifact.admitIntegrationCapacity({ prepared: execution.final, host: capacityHost });
+    execution.finalAdmitted = true;
+  }
+  return launch(execution.final);
+}
+
 function createClaudeRoleHost(options = {}) {
   if (!object(options)) reject('host options must be an object');
   let used = false;
+  let partitionExecution;
+  let partitionRunning = false;
   return Object.freeze({
     async run(rawRequest) {
+      const parsed = parseRequest(rawRequest);
+      if (parsed.review_contract === roleArtifact.INTEGRATION_REVIEW_V3) {
+        if (partitionRunning || used && !partitionExecution)
+          reject('role host already has an active or different request');
+        if (partitionExecution && partitionExecution.request !== canonicalJson(parsed))
+          reject('restart requires the exact original request', 'INVALID_INPUT');
+        used = true;
+        partitionRunning = true;
+        try {
+          partitionExecution ||= prepareClaudeIntegrationPartitions(options, parsed);
+          return await runClaudeIntegrationPartitions(options, partitionExecution);
+        } finally { partitionRunning = false; }
+      }
       if (used) reject('one role host instance accepts only one request');
       used = true;
-      const request = parseRequest(rawRequest);
+      const request = parsed;
       let prepared = prepareInvocation(options, request);
       const runId = `claude-role-${crypto.randomUUID()}`;
       const dispatchId = newDispatchId();
@@ -1902,6 +2086,7 @@ module.exports = Object.freeze({
   prepareNativeIntegratorContext,
   isPreparedIntegratorContext,
   integrationPacketWithCoverage,
+  assertEvidenceOnlyChanges,
   createClaudeRoleHost,
   runClaudeRoleCli,
 });

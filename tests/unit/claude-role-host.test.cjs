@@ -615,8 +615,8 @@ function fakeEvidenceLines(model, effort, lines) {
 
 function fakeRuntimeFactory(fixture, options = {}) {
   const live = fixture.kind === 'pr-sentinel' ? null : livePr(fixture);
-  return ({ scope, controller, recorderDir, transcriptDir }) => {
-    const recorder = createDurableRecorder(recorderDir);
+  return ({ scope, controller, recorderDir, transcriptDir, recorder: partitionRecorder }) => {
+    const recorder = partitionRecorder || createDurableRecorder(recorderDir);
     const runtime = {
       scope: { worktree: scope.worktree.path },
       controller,
@@ -629,6 +629,29 @@ function fakeRuntimeFactory(fixture, options = {}) {
       },
       async agent(prompt, selection) {
         options.onLaunch?.(prompt, selection);
+        if (prompt.includes('<AUTHENTICATED_INTEGRATION_PARTITION>')) {
+          const payload = JSON.parse(prompt.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
+          assert.equal(payload.runtime, 'claude');
+          const identity = payload.reviewed_identity, assignment = payload.assignment;
+          const result = { review_contract: 'shipyard.integration-review.v3', kind: payload.kind, runtime: 'claude',
+            subject: payload.subject, plan_sha256: payload.plan_sha256,
+            input_sha256: crypto.createHash('sha256').update(prompt).digest('hex'), reviewed_identity: identity,
+            completeness: 'complete', outcome: 'passed', blocking_count: 0, findings: [],
+            evidence_markdown: 'Original Claude fixture evidence; behavior only.' };
+          if (payload.kind === 'unit') Object.assign(result, {
+            schema: 'shipyard.integration-unit-result.v1', unit_id: assignment.unit_id,
+            coverage: { primary_segments: assignment.primary_segments, primary_obligation_ids: assignment.primary_obligation_ids,
+              support_segments: assignment.support_segments, support_obligation_ids: assignment.support_obligation_ids },
+            conclusions: ['Fixture evaluated all primary bytes and obligations.'], limitations: [], required_context: [],
+            seams: assignment.seam_ids.map(id => ({ id, disposition: 'unresolved', rationale: 'Independent final must judge this seam.' })) });
+          else Object.assign(result, { phase: identity.phase, head: identity.head, head_tree: identity.head_tree,
+            base: payload.reviewed_identity.base_ref.replace(new RegExp('^refs/remotes/'), ''), base_tree: identity.base_tree,
+            ticket_set: identity.ticket_set, ticket_set_digest: identity.ticket_set_digest, summary: 'Independent Claude fixture final.',
+            coverage: { ...payload.coverage, limitations: [], seam_dispositions: payload.seams.map(seam => ({
+              id: seam.id, disposition: 'resolved', rationale: 'Fixture final judged the complete seam and acceptance.' })) } });
+          options.mutateResult?.(result, payload);
+          return { output: result };
+        }
         const packet = packetFromPrompt(prompt);
         const context = packet.role_context;
         let result;
@@ -709,7 +732,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
       const template = predicate => structuredClone(records.find(predicate));
       const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
       const session = crypto.randomUUID();
-      return claudeRuntime.createClaudeRuntimeHost({ scope, controller, recorderDir, transcriptDir,
+      return claudeRuntime.createClaudeRuntimeHost({ scope, controller, recorder, recorderDir, transcriptDir,
         startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
         uuid: () => session, sessionTranscriptRoot: path.join(fixture.storageRoot, 'native'),
         probe: { status: 'available', executable: 'claude-fixture', runtime_version: registry.cli_version,
@@ -760,6 +783,212 @@ function fakeRuntimeFactory(fixture, options = {}) {
     return runtime;
   };
 }
+
+function claudePartitionCapacity(fixture, controls = {}) {
+  const directory = path.join(fixture.storageRoot, 'claude-behavior-only-capacity');
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+  const retain = payload => {
+    const raw = stable({ ...payload, behavior_only: true }), file = path.join(directory, digest(raw) + '.json');
+    if (!fs.existsSync(file)) fs.writeFileSync(file, raw, { mode: 0o600 });
+    return { path: file, bytes: Buffer.byteLength(raw), sha256: digest(raw) };
+  };
+  return {
+    capacity: { max_input_bytes: 8 * 1024 * 1024, unit_input_bytes: 256 * 1024, segment_bytes: 16 * 1024,
+      output_reserve_tokens: 32000, tool_reserve_tokens: 10000,
+      output_limits: { conclusions: 1024, findings: 2048, limitations: 1024, required_context: 1024, seams: 16384 },
+      recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'native-exact' } },
+    counterSource: 'claude-behavior-only-counter', windowSource: 'claude-behavior-only-window',
+    renderLaunch(launch, selection) {
+      assert.equal(launch.runtime, 'claude');
+      assert.equal(selection.schema.properties.kind.const, launch.kind);
+      assert.equal(selection.readOnly, true);
+      controls.render?.(launch);
+      const request = { schema: 'shipyard.integration-native-request.v1', runtime: 'claude', model: launch.model,
+        effort: launch.effort, input: launch.input, instruction_sha256: launch.instruction_sha256,
+        recipe_sha256: digest(stable(this.capacity.recipe)),
+        frame: { developers: [], other_users: [], base_instructions: null, contexts: [] }, tools: [],
+        native_payload: JSON.stringify({ user: { type: 'user', message: { role: 'user', content: launch.input } }, selection }) };
+      controls.mutate?.(request, 'request', launch);
+      return request;
+    },
+    readWindow(identity) {
+      if (controls.noWindow) throw new Error('fixture window unavailable');
+      const proof = { schema: 'shipyard.integration-runtime-window.v1', ...identity,
+        source: 'claude-behavior-only-window', evidence_id: 'claude-behavior-only-window', window_tokens: 100000000 };
+      controls.mutate?.(proof, 'window');
+      return retain(proof);
+    },
+    measureInput(request, identity) {
+      const payload = JSON.parse(request.input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
+      (controls.measured ||= []).push(payload);
+      const proof = { schema: 'shipyard.integration-input-measurement.v1', ...identity,
+        runtime: 'claude', model: request.model, source: 'claude-behavior-only-counter',
+        evidence_id: 'claude-behavior-only-count-' + identity.launch_sha256,
+        input_tokens_upper_bound: 1000 };
+      controls.mutate?.(proof, 'measurement', payload);
+      return retain(proof);
+    },
+  };
+}
+
+function setupClaudePartitionRepository(options) {
+  const f = setupRepository('integrator', options);
+  f.partitionHomedir = os.homedir;
+  os.homedir = () => f.storageRoot;
+  for (const name of ['tickets.json', 'delivery-state.json']) {
+    const file = path.join(f.root, '.planning/graph', name), value = JSON.parse(fs.readFileSync(file));
+    const rows = value.tickets || value;
+    rows['T-38-01'] = rows[TICKET]; delete rows[TICKET];
+    fs.writeFileSync(file, JSON.stringify(value));
+  }
+  git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'fixture canonical integration member']);
+  f.head = git(f.root, ['rev-parse', 'HEAD']); f.headTree = git(f.root, ['rev-parse', 'HEAD^{tree}']);
+  git(f.root, ['branch', '-f', f.ticketBranch, f.head]);
+  for (const branch of [f.ticketBranch, f.branch]) git(f.root, ['update-ref', 'refs/remotes/origin/' + branch, f.head]);
+  return f;
+}
+
+function claudePartitionOptions(fixture, extra) {
+  return { ...hostOptions(fixture, extra),
+    listPullRequests: () => [livePr(fixture)], getPullRequest: () => livePr(fixture),
+    execFileSync(file, args, options) {
+      if (file === 'git' && args.includes('fetch')) return '';
+      return execFileSync(file, args, options);
+    } };
+}
+
+test('public Claude v3 runs original independent units, recovers exact custody and seals one fresh actual final', async () => {
+  const fixture = setupClaudePartitionRepository();
+  const controls = {}, launches = [], capacities = [];
+  try {
+    useCoordinatorGraph(fixture);
+    const prior = await createClaudeRoleHost(claudePartitionOptions(fixture, { originalStream: true })).run(request(fixture));
+    const historical = reviewArtifacts.authenticatedArchivePins(fixture.root);
+    const originalPins = structuredClone(historical), originalReceipt = structuredClone(prior.dispatch.receipt);
+    fs.unlinkSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`));
+    write(fixture.root, 'src/role.txt', 'exact Claude primary line Ω\n'.repeat(3000));
+    git(fixture.root, ['add', 'src']); git(fixture.root, ['commit', '-m', 'fixture complete current integration material']);
+    fixture.head = git(fixture.root, ['rev-parse', 'HEAD']); fixture.headTree = git(fixture.root, ['rev-parse', 'HEAD^{tree}']);
+    git(fixture.root, ['branch', '-f', fixture.ticketBranch, fixture.head]);
+    for (const branch of [fixture.ticketBranch, fixture.branch]) git(fixture.root, ['update-ref', 'refs/remotes/origin/' + branch, fixture.head]);
+    const options = claudePartitionOptions(fixture, { originalStream: true, onLaunch(prompt) {
+      const payload = JSON.parse(prompt.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
+      assert.equal(controls.measured.filter(item => item.kind === 'phase' && item.reserved_template).length, 1);
+      if (!launches.length) assert.ok(controls.measured.filter(item => item.kind === 'unit').length > 1);
+      assert.equal(prompt.includes('<AUTHENTICATED_CONTEXT_PACKET>'), false);
+      launches.push({ prompt, payload });
+      capacities.push(controls.measured.length);
+      assert.equal(fs.existsSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`)), false);
+    } });
+    options.integrationCapacity = claudePartitionCapacity(fixture, controls);
+    options.integrationCapacity.capacity.unit_input_bytes = 128 * 1024;
+    const factory = options.createRuntimeHost;
+    let interrupted = false;
+    options.createRuntimeHost = input => {
+      options.integrationCapacity.recorder ||= input.recorder;
+      if (launches.length === 2 && !interrupted) { interrupted = true; throw new Error('fixture restart before next reservation'); }
+      return factory(input);
+    };
+    const host = createClaudeRoleHost(options), selected = { ...request(fixture), review_contract: 'shipyard.integration-review.v3' };
+    await assert.rejects(host.run(selected), /fixture restart before next reservation/);
+    assert.equal(launches.length, 2);
+    for (const pin of historical) assert.deepEqual(reviewArtifacts.authenticatedArchivePins(fixture.root).find(item => item.path === pin.path), pin);
+    const unitFiles = reviewArtifacts.authenticatedArchivePins(fixture.root).filter(pin => !historical.some(old => old.path === pin.path));
+    assert.equal(unitFiles.length, 6);
+    const saved = fs.readFileSync(path.join(fixture.root, historical[0].path));
+    fs.appendFileSync(path.join(fixture.root, historical[0].path), 'tamper');
+    await assert.rejects(host.run(selected), /pin|changed|digest|archive/i);
+    fs.writeFileSync(path.join(fixture.root, historical[0].path), saved);
+    write(fixture.root, '.shipyard-role-artifacts/unlisted/unrelated.json', '{}');
+    await assert.rejects(host.run(selected), /archive|membership/i);
+    fs.rmSync(path.join(fixture.root, '.shipyard-role-artifacts/unlisted'), { recursive: true });
+    options.integrationCapacity.plan_sha256 = controls.measured[0].plan_sha256;
+    const restarted = createClaudeRoleHost(options);
+    const result = await restarted.run(selected);
+    assert.equal(result.result.kind, 'phase');
+    assert.equal(result.result.review_contract, 'shipyard.integration-review.v3');
+    assert.equal(result.result.outcome, 'passed');
+    assert.equal(result.dispatch.receipt.runtime, 'claude');
+    assert.equal(result.dispatch.receipt.compliance, 'verified');
+    assert.equal(launches.filter(item => item.payload.kind === 'phase').length, 1);
+    assert.equal(new Set(launches.filter(item => item.payload.kind === 'unit').map(item => item.payload.assignment.unit_id)).size, launches.length - 1);
+    assert.equal(controls.measured.length, launches.length + 1);
+    assert.equal(capacities.at(-1), controls.measured.length, 'actual final is freshly measured after authentic results exist');
+    const actual = controls.measured.at(-1);
+    assert.equal(actual.reserved_template, undefined);
+    assert.notEqual(actual.verified_index_sha256, '0'.repeat(64));
+    assert.equal(actual.unit_artifacts.length, launches.length - 1);
+    assert.deepEqual(historical, originalPins);
+    assert.deepEqual(prior.dispatch.receipt, originalReceipt);
+    for (const pin of historical) reviewArtifacts.assertArchivePin(fixture.root, pin);
+    const manifests = reviewArtifacts.authenticatedArchivePins(fixture.root).filter(pin => pin.path.endsWith('/.shipyard-role-artifact.json'))
+      .map(pin => JSON.parse(fs.readFileSync(path.join(fixture.root, pin.path))));
+    assert.equal(manifests.filter(item => item.artifact_kind === 'integration-unit').length, launches.length - 1);
+    assert.equal(new Set(manifests.map(item => item.producer_launch)).size, manifests.length);
+    await assert.rejects(restarted.run(selected), /reserved|membership|archive|baseline/i);
+    assert.equal(launches.filter(item => item.payload.kind === 'phase').length, 1);
+  } catch (error) {
+    process.stderr.write('Claude v3 lifecycle diagnostic: ' + error.stack + '\n');
+    throw error;
+  } finally { cleanupFixture(fixture); }
+});
+
+for (const scenario of ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+  'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'over-bound-actual-final', 'changed-exact-input',
+  'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'native-input-substitution'])
+test('public Claude v3 refuses ' + scenario + ' with behavior-only capacity', async () => {
+  const fixture = setupClaudePartitionRepository();
+  const controls = {}, launches = [];
+  try {
+    const options = claudePartitionOptions(fixture, { originalStream: true, onLaunch(prompt) {
+      launches.push(prompt);
+      if (scenario === 'source-substitution') fs.appendFileSync(path.join(fixture.root, 'src/role.txt'), 'changed');
+    }, mutateResult(result) {
+      if (scenario === 'wrong-output') result.runtime = 'codex';
+      if (scenario === 'incomplete-unit') result.completeness = 'incomplete';
+      if (scenario === 'failed-unit') { result.outcome = 'human-review-required'; result.required_context = ['Unresolved interaction.']; }
+    } });
+    if (scenario !== 'missing-bootstrap') options.integrationCapacity = claudePartitionCapacity(fixture, controls);
+    if (scenario === 'missing-renderer') delete options.integrationCapacity.renderLaunch;
+    if (scenario === 'unknown-window') controls.noWindow = true;
+    controls.mutate = (proof, kind, payload) => {
+      if (scenario === 'foreign-window' && kind === 'window') proof.runtime = 'codex';
+      if (scenario === 'foreign-counter' && kind === 'measurement') proof.runtime = 'codex';
+      if (scenario === 'unknown-instructions' && kind === 'request') delete proof.frame.base_instructions;
+      if (scenario === 'over-bound-unit' && kind === 'measurement' && payload.kind === 'unit'
+          || scenario === 'over-bound-template' && kind === 'measurement' && payload.reserved_template
+          || scenario === 'over-bound-actual-final' && kind === 'measurement' && payload.kind === 'phase' && !payload.reserved_template)
+        proof.input_tokens_upper_bound = 100000000;
+      if (scenario === 'changed-exact-input' && kind === 'request' && controls.measured?.length >= 2) proof.input += 'changed';
+    };
+    if (scenario === 'native-input-substitution') {
+      const factory = options.createRuntimeHost;
+      options.createRuntimeHost = input => {
+        const runtime = factory(input);
+        return { ...runtime, agent(prompt, selection) { return runtime.agent(prompt + '\nforeign native bytes', selection); } };
+      };
+    }
+    await assert.rejects(createClaudeRoleHost(options).run({ ...request(fixture), review_contract: 'shipyard.integration-review.v3' }),
+      error => /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_/.test(error.code || ''));
+    const prelaunch = ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+      'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'changed-exact-input'].includes(scenario);
+    assert.equal(launches.length, prelaunch ? 0 : 1);
+    assert.equal(fs.existsSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`)), false);
+  } finally { cleanupFixture(fixture); }
+});
+
+test('public Claude v3 rejects serialized stage, receipt and capacity authority', () => {
+  const fixture = setupRepository('integrator');
+  try {
+    const selected = { ...request(fixture), review_contract: 'shipyard.integration-review.v3' };
+    assert.equal(parseRequest(selected).review_contract, selected.review_contract);
+    for (const field of ['prompt', 'kind', 'unit_id', 'plan_sha256', 'partitions', 'verified_index_sha256', 'receipt',
+      'integrationCapacity', 'renderLaunch', 'measureInput', 'readWindow', 'capacity_certificate'])
+      assert.throws(() => parseRequest({ ...selected, [field]: {} }), /not permitted/);
+    assert.throws(() => parseRequest({ ...selected, signals: { critical: true } }), /host-owned/);
+  } finally { cleanupFixture(fixture); }
+});
 
 test('changed role instruction bytes refuse before native launch without modifying shared references', async (t) => {
   const fixture = setupRepository('arch-review');
@@ -866,6 +1095,7 @@ function setupSentinelRepository(options = {}) {
 }
 
 function cleanupFixture(fixture) {
+  if (fixture.partitionHomedir) os.homedir = fixture.partitionHomedir;
   fs.rmSync(fixture.root, { recursive: true, force: true });
   fs.rmSync(fixture.storageRoot, { recursive: true, force: true });
 }

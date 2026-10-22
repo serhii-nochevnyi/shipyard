@@ -4039,7 +4039,7 @@ test('code review wrapper refuses installed or live changes immediately before l
     } else f.pr[mutation === 'head' ? 'headRefOid' : 'baseRefOid'] = 'a'.repeat(40);
   } })));
 
-test('public integration-review.v2 completes shared preparation with coordinator-only planning', async () => {
+test('public integration-review.v2 completes shared preparation with coordinator-only planning', () => withGraphDirEnv(undefined, async () => {
   const Module = require('node:module');
   const file = require.resolve('./phase49-incremental-integration.test.cjs');
   const loaded = new Module(file, module);
@@ -4218,7 +4218,7 @@ test('public integration-review.v2 completes shared preparation with coordinator
     assert.equal(Object.prototype.hasOwnProperty.call(process.env, 'CODEX_HOME'), hadCodexHome);
     assert.equal(process.env.CODEX_HOME, originalCodexHome);
   }
-});
+}));
 
 for (const historicalRecovery of ['direct', 'admitted', 'pending', 'action']) {
   for (const mutation of ['normalized-repeat', 'normalized-covered-source']) {
@@ -4276,6 +4276,248 @@ test('recovery source opening refuses real FIFOs and replacement races within a 
       assert.equal(result.status, 0, mode + ': ' + result.stderr);
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+function codexPartitionHelpers() {
+  const Module = require('node:module'), file = require.resolve('./phase49-incremental-integration.test.cjs');
+  const loaded = new Module(file, module);
+  loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
+  const original = Module._load;
+  Module._load = function(name, ...args) { return name === 'node:test' ? { test() {} } : original.call(this, name, ...args); };
+  try {
+    loaded._compile(fs.readFileSync(file, 'utf8')
+      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, cli, serialize };\n', file);
+  } finally { Module._load = original; }
+  return loaded.exports;
+}
+
+function codexPartitionFixture(f, helper, controls = {}) {
+  const roleArtifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const native = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const stable = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify;
+  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+  const complete = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
+    .prepareNativeIntegratorContext(helper.projectOptions(f), { worktree: f.worktree, phase: '49' });
+  const a = helper.agent(f, 'integrator', complete.signals);
+  const frameRows = () => {
+    const meta = helper.template(helper.parent, row => row.type === 'session_meta');
+    const context = helper.template(helper.parent, row => row.type === 'turn_context');
+    Object.assign(context.payload, { model: a.selection.model, effort: a.selection.effort, cwd: f.worktree, workspace_roots: [f.worktree] });
+    context.payload.sandbox_policy.type = 'read-only';
+    Object.assign(context.payload.collaboration_mode.settings, { model: a.selection.model, reasoning_effort: a.selection.effort });
+    const developer = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.role === 'developer');
+    developer.payload.content = [{ type: 'input_text', text: native.generatedInstructions(a.text) }];
+    return { meta, context, developer };
+  };
+  const directory = path.join(f.root, 'codex-behavior-only-capacity'); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const retain = proof => {
+    const raw = stable({ ...proof, behavior_only: true }), file = path.join(directory, digest(raw) + '.json');
+    if (!fs.existsSync(file)) fs.writeFileSync(file, raw, { mode: 0o600 });
+    return { path: file, bytes: Buffer.byteLength(raw), sha256: digest(raw) };
+  };
+  const capacity = { max_input_bytes: 8 * 1024 * 1024, unit_input_bytes: 256 * 1024, segment_bytes: 16 * 1024,
+    output_reserve_tokens: 32000, tool_reserve_tokens: 10000,
+    output_limits: { conclusions: 1024, findings: 2048, limitations: 1024, required_context: 1024, seams: 16384 },
+    recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'native-exact' } };
+  const resources = { capacity, counterSource: 'codex-behavior-only-counter', windowSource: 'codex-behavior-only-window',
+    renderLaunch(launch) {
+      controls.render?.(launch);
+      const { meta, context, developer } = frameRows(), { turn_id, ...framing } = context.payload;
+      const frame = { developers: [{ role: developer.payload.role, content: developer.payload.content }], other_users: [],
+        base_instructions: meta.payload.base_instructions || null, contexts: [framing] };
+      const request = { schema: 'shipyard.integration-native-request.v1', runtime: 'codex', model: launch.model,
+        effort: launch.effort, input: launch.input, instruction_sha256: launch.instruction_sha256,
+        recipe_sha256: digest(stable(capacity.recipe)), frame, tools: [],
+        native_payload: stable({ frame, tools: [], input: launch.input, model: launch.model, effort: launch.effort }) };
+      controls.mutate?.(request, 'request', launch);
+      return request;
+    },
+    readWindow(identity) {
+      if (controls.noWindow) throw new Error('fixture window unavailable');
+      const proof = { schema: 'shipyard.integration-runtime-window.v1', ...identity,
+        source: 'codex-behavior-only-window', evidence_id: 'codex-behavior-only-window', window_tokens: 100000000 };
+      controls.mutate?.(proof, 'window');
+      return retain(proof);
+    },
+    measureInput(request, identity) {
+      const payload = JSON.parse(request.input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
+      (controls.measured ||= []).push(payload);
+      const proof = { schema: 'shipyard.integration-input-measurement.v1', ...identity, runtime: 'codex', model: request.model,
+        source: 'codex-behavior-only-counter', evidence_id: 'codex-behavior-only-count-' + identity.launch_sha256,
+        input_tokens_upper_bound: 1000 };
+      controls.mutate?.(proof, 'measurement', payload);
+      return retain(proof);
+    } };
+  const options = { ...helper.projectOptions(f), scope: { worktree: f.worktree, phase: 49,
+    repository: complete.canonical.commonPath, ticket: complete.ticket, run_id: 'public-codex-v3-' + ++f.count },
+    storageRoot: path.join(f.root, 'public-codex-v3-' + f.count), agentDir: a.dir, agentManifest: a.manifest,
+    capabilities: a.capabilities, env: { ...process.env, CODEX_HOME: process.env.CODEX_HOME },
+    probe: { status: 'available', executable: 'codex-fixture', runtime_version: 'fixture', capabilities: a.capabilities },
+    integrationCapacity: resources,
+    spawn(_file, _args) {
+      const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = process.pid;
+      let input = '';
+      child.stdin = { write(raw) { input += raw; }, end() { process.nextTick(() => {
+        try {
+          input = input.replace(/\n$/, '');
+          const payload = JSON.parse(input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
+          (controls.launches ||= []).push({ input, payload });
+          controls.onLaunch?.(input, payload);
+          const identity = payload.reviewed_identity, assignment = payload.assignment;
+          const result = { review_contract: roleArtifacts.INTEGRATION_REVIEW_V3, kind: payload.kind, runtime: 'codex',
+            subject: payload.subject, plan_sha256: payload.plan_sha256, input_sha256: digest(input), reviewed_identity: identity,
+            completeness: 'complete', outcome: 'passed', blocking_count: 0, findings: [], evidence_markdown: 'Original Codex fixture evidence; behavior only.' };
+          if (payload.kind === 'unit') Object.assign(result, { schema: 'shipyard.integration-unit-result.v1', unit_id: assignment.unit_id,
+            coverage: { primary_segments: assignment.primary_segments, primary_obligation_ids: assignment.primary_obligation_ids,
+              support_segments: assignment.support_segments, support_obligation_ids: assignment.support_obligation_ids },
+            conclusions: ['All exact primary fixture bytes and obligations evaluated.'], limitations: [], required_context: [],
+            seams: assignment.seam_ids.map(id => ({ id, disposition: 'unresolved', rationale: 'Final must independently judge the interaction.' })) });
+          else Object.assign(result, { phase: identity.phase, head: identity.head, head_tree: identity.head_tree,
+            base: identity.base_ref.replace(new RegExp('^refs/remotes/'), ''), base_tree: identity.base_tree,
+            ticket_set: identity.ticket_set, ticket_set_digest: identity.ticket_set_digest, summary: 'Separate Codex fixture final.',
+            coverage: { ...payload.coverage, limitations: [], seam_dispositions: payload.seams.map(seam => ({
+              id: seam.id, disposition: 'resolved', rationale: 'Independent fixture final judged complete acceptance and this seam.' })) } });
+          controls.result?.(result, payload);
+          const session = crypto.randomUUID(), text = JSON.stringify(result), { meta, context, developer } = frameRows();
+          Object.assign(meta.payload, { id: session, session_id: session, cwd: f.worktree, runtime_workspace_roots: [f.worktree] });
+          const start = helper.template(helper.parent, row => row.payload?.type === 'task_started'), turn = start.payload.turn_id;
+          context.payload.turn_id = turn;
+          const user = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.role === 'user');
+          user.payload.content = [{ type: 'input_text', text: input }];
+          const final = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.phase === 'final_answer');
+          final.payload.content.forEach(block => { block.text = text; }); final.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+          const completion = helper.template(helper.parent, row => row.payload?.type === 'task_complete');
+          Object.assign(completion.payload, { turn_id: turn, last_agent_message: text });
+          const rows = [meta, context, start, developer, user,
+            helper.template(helper.parent, row => row.payload?.type === 'token_count'), final, completion];
+          controls.native?.(rows);
+          const now = new Date(), root = path.join(process.env.CODEX_HOME, 'sessions', String(now.getFullYear()),
+            String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+          fs.mkdirSync(root, { recursive: true }); fs.writeFileSync(path.join(root, session + '.jsonl'), helper.serialize(rows));
+          const cli = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
+            .map(type => helper.template(helper.cli, row => row.type === type));
+          cli[0].thread_id = session; cli[2].item.text = text;
+          child.stdout.emit('data', Buffer.from(helper.serialize(cli))); child.emit('close', 0);
+        } catch (error) { child.emit('error', error); }
+      }); } };
+      return child;
+    } };
+  return { options, resources, controls };
+}
+
+test('public Codex v3 preserves historical pins through independent units, exact-plan restart and one actual final', () => withGraphDirEnv(undefined, async () => {
+  const helper = codexPartitionHelpers();
+  await helper.fixture(async f => {
+    const roleArtifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    const prior = await helper.successfulReview(f, 'integrator', { legacy: true });
+    const historical = roleArtifacts.authenticatedArchivePins(f.worktree);
+    const receipt = structuredClone(prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt);
+    const evidencePath = path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md');
+    helper.write(f.worktree, 'src/consumer.cjs', 'exact Codex primary line Ω\n'.repeat(3000)); helper.commit(f, 'complete partitioned source');
+    const { options, controls } = codexPartitionFixture(f, helper);
+    options.integrationCapacity.capacity.unit_input_bytes = 128 * 1024;
+    let interrupted = false;
+    controls.render = launch => {
+      if (controls.launches?.length === 2 && launch.kind !== 'reserved-template' && !interrupted) {
+        interrupted = true; throw new Error('fixture interruption before next native reservation');
+      }
+    };
+    controls.onLaunch = (input, payload) => {
+      assert.equal(input.includes('<AUTHENTICATED_CONTEXT_PACKET>'), false);
+      assert.equal(controls.measured.filter(item => item.reserved_template).length, 1);
+      assert.ok(controls.measured.filter(item => item.kind === 'unit').length > 1);
+      assert.equal(fs.existsSync(evidencePath), false);
+      if (payload.kind === 'phase') assert.ok(payload.unit_artifacts.length > 1);
+    };
+    const host = createCodexDeliveryHost(options), selected = { role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } };
+    await assert.rejects(host.run(selected), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    assert.equal(controls.launches.length, 2);
+    for (const pin of historical) roleArtifacts.assertArchivePin(f.worktree, pin);
+    const old = fs.readFileSync(path.join(f.worktree, historical[0].path));
+    fs.appendFileSync(path.join(f.worktree, historical[0].path), 'tamper');
+    await assert.rejects(host.run(selected), /archive|pin|changed|digest/i);
+    fs.writeFileSync(path.join(f.worktree, historical[0].path), old);
+    helper.write(f.worktree, roleArtifacts.ARTIFACT_ARCHIVE_DIR + '/unlisted/unrelated.json', '{}');
+    await assert.rejects(host.run(selected), /archive|membership/i);
+    fs.rmSync(path.join(f.worktree, roleArtifacts.ARTIFACT_ARCHIVE_DIR, 'unlisted'), { recursive: true });
+    options.integrationCapacity.plan_sha256 = controls.measured[0].plan_sha256;
+    const restarted = createCodexDeliveryHost(options);
+    const result = await restarted.run(selected);
+    assert.equal(result.result.kind, 'phase');
+    assert.equal(result.result.outcome, 'passed');
+    assert.equal(result.receipt.runtime, 'codex');
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
+    const units = controls.launches.filter(item => item.payload.kind === 'unit');
+    assert.equal(new Set(units.map(item => item.payload.assignment.unit_id)).size, units.length);
+    assert.equal(controls.measured.length, controls.launches.length + 1);
+    const final = controls.measured.at(-1);
+    assert.equal(final.kind, 'phase'); assert.equal(final.reserved_template, undefined);
+    assert.notEqual(final.verified_index_sha256, '0'.repeat(64));
+    assert.equal(final.unit_artifacts.length, units.length);
+    assert.deepEqual(prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt, receipt);
+    for (const pin of historical) roleArtifacts.assertArchivePin(f.worktree, pin);
+    const manifests = roleArtifacts.authenticatedArchivePins(f.worktree).filter(pin => pin.path.endsWith('/.shipyard-role-artifact.json'))
+      .map(pin => JSON.parse(fs.readFileSync(path.join(f.worktree, pin.path))));
+    assert.equal(new Set(manifests.map(item => item.producer_launch)).size, manifests.length);
+    assert.equal(manifests.filter(item => item.artifact_kind === 'integration-unit').length, units.length);
+    await assert.rejects(restarted.run(selected), /reserved|archive|membership|baseline/i);
+    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
+  });
+}));
+
+for (const scenario of ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+  'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'over-bound-actual-final', 'changed-exact-input',
+  'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'native-input-substitution', 'native-result-substitution'])
+test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () => withGraphDirEnv(undefined, async () => {
+  const helper = codexPartitionHelpers();
+  await helper.fixture(async f => {
+    const { options, resources, controls } = codexPartitionFixture(f, helper);
+    if (scenario === 'missing-bootstrap') delete options.integrationCapacity;
+    if (scenario === 'missing-renderer') delete resources.renderLaunch;
+    if (scenario === 'unknown-window') controls.noWindow = true;
+    controls.mutate = (proof, kind, payload) => {
+      if (scenario === 'foreign-window' && kind === 'window') proof.runtime = 'claude';
+      if (scenario === 'foreign-counter' && kind === 'measurement') proof.runtime = 'claude';
+      if (scenario === 'unknown-instructions' && kind === 'request') delete proof.frame.base_instructions;
+      if (scenario === 'over-bound-unit' && kind === 'measurement' && payload.kind === 'unit'
+          || scenario === 'over-bound-template' && kind === 'measurement' && payload.reserved_template
+          || scenario === 'over-bound-actual-final' && kind === 'measurement' && payload.kind === 'phase' && !payload.reserved_template)
+        proof.input_tokens_upper_bound = 100000000;
+      if (scenario === 'changed-exact-input' && kind === 'request' && controls.measured?.length >= 2) proof.input += 'changed';
+    };
+    controls.onLaunch = () => { if (scenario === 'source-substitution') fs.appendFileSync(path.join(f.worktree, 'src/provider.cjs'), 'changed'); };
+    controls.result = result => {
+      if (scenario === 'wrong-output') result.runtime = 'claude';
+      if (scenario === 'incomplete-unit') result.completeness = 'incomplete';
+      if (scenario === 'failed-unit') { result.outcome = 'human-review-required'; result.required_context = ['Unresolved interaction.']; }
+    };
+    controls.native = rows => {
+      if (scenario === 'native-input-substitution') rows.find(row => row.payload?.role === 'user').payload.content[0].text += 'changed';
+      if (scenario === 'native-result-substitution') {
+        const final = rows.find(row => row.payload?.phase === 'final_answer');
+        const result = JSON.parse(final.payload.content[0].text); result.conclusions = ['Substituted original native result.'];
+        final.payload.content[0].text = JSON.stringify(result);
+        rows.find(row => row.payload?.type === 'task_complete').payload.last_agent_message = JSON.stringify(result);
+      }
+    };
+    await assert.rejects(createCodexDeliveryHost(options).run({ role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } }),
+      error => /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_|RUNTIME_/.test(error.code || ''));
+    const prelaunch = ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+      'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'changed-exact-input'].includes(scenario);
+    assert.equal(controls.launches?.length || 0, prelaunch ? 0 : 1);
+    assert.equal(fs.existsSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md')), false);
+  });
+}));
+
+test('public Codex v3 rejects caller prompt, stage, receipt, capacity and producer authority', () => {
+  const selected = { role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } };
+  assert.equal(requestValue(selected).context.review_contract, selected.context.review_contract);
+  for (const field of ['prompt', 'kind', 'unit_id', 'plan_sha256', 'partitions', 'verified_index_sha256', 'receipt',
+    'integrationCapacity', 'renderLaunch', 'measureInput', 'readWindow', 'capacity_certificate', 'input_prepared'])
+    assert.throws(() => requestValue({ ...selected, context: { ...selected.context, [field]: {} } }), /host-owned/);
+  for (const extra of [{ dispatch_id: 'caller-stage' }, { signals: { critical: true } }, { gsd_role: 'integrator' }])
+    assert.throws(() => requestValue({ ...selected, ...extra }), /host-owned/);
 });
 
 done();

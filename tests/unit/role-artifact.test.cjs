@@ -2392,9 +2392,9 @@ test('role-artifact holds no private subject grammar or home expression', () => 
   assert.ok(!/'\.codex'/.test(source) && !/'\.claude'/.test(source), 'no private home fallback');
   assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 5, 'definition plus the architecture and code-review phase-record sites');
   assert.equal((source.match(/parseSubject\('integrator'/g) || []).length >= 3, true);
-  assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 2);
-  assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 2,
-    'both Codex session sites follow the executing bundle like every converted site');
+  assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 3);
+  assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 3,
+    'all three Codex session sites follow the executing bundle like every converted site');
   assert.equal((source.match(/resolveClaudeHome\(/g) || []).length, 1);
   assert.ok(!/^(?:const|let|var) [^\n]*require\(['"]\.\/runtime-context\.cjs['"]\)/m.test(source),
     'runtime-context is required lazily at each site');
@@ -3152,6 +3152,653 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
     os.homedir = savedHome; process.env.PATH = savedPath;
     for (const [key, value] of markers) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   }
+});
+
+function partitionFixtureHelpers() {
+  const Module = require('node:module');
+  const filename = path.join(__dirname, 'phase49-incremental-integration.test.cjs');
+  const fixtureModule = new Module(filename, module);
+  fixtureModule.filename = filename; fixtureModule.paths = Module._nodeModulePaths(path.dirname(filename));
+  const load = Module._load;
+  Module._load = function(name, ...args) {
+    if (name === 'node:test') return { test() {} };
+    return load.call(this, name, ...args);
+  };
+  try {
+    fixtureModule._compile(fs.readFileSync(filename, 'utf8')
+      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, child, cli, serialize };\n', filename);
+  } finally { Module._load = load; }
+  return fixtureModule.exports;
+}
+function partitionTestCapacity(changes = {}) {
+  return { max_input_bytes: 8 * 1024 * 1024, unit_input_bytes: 256 * 1024, segment_bytes: 16 * 1024,
+    output_reserve_tokens: 32000, tool_reserve_tokens: 10000,
+    output_limits: { conclusions: 1024, findings: 2048, limitations: 1024, required_context: 1024, seams: 16384 },
+    recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'native-exact' }, ...changes };
+}
+function partitionTestReview(f, helper, runtimeName = 'codex') {
+  const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const complete = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
+    .prepareNativeIntegratorContext(helper.projectOptions(f), { worktree: f.worktree, phase: '49' });
+  const a = helper.agent(f, 'integrator', complete.signals);
+  const instructions = collector.instructionEvidence(a.dir, a.selection.agent_file, a.manifest);
+  const scope = { worktree: f.worktree, repository: complete.canonical.commonPath, phase: 49,
+    ticket: complete.ticket, run_id: 'partition-original-' + ++f.count };
+  const review = delivery.prepareIntegrationLineage(scope, complete, { ...helper.projectOptions(f), nativeRuntime: runtimeName,
+    dispatchId: scope.run_id, storageRoot: path.join(f.root, 'partition-inputs'),
+    generatedInstructionBytes: instructions.generated_instruction_bytes,
+    instructionBinding: { agent_file: a.selection.agent_file, agent_path: path.join(a.dir, a.selection.agent_file),
+      agent_sha256: instructions.sha256, installed_files: instructions.installed_files,
+      policy_hash: a.selection.policy_hash } });
+  return { review, a, scope };
+}
+async function partitionNativeFixture(f, helper, original, stage, result, dispatchId, mutateNative) {
+  partitionAssertFixture(original, stage);
+  if (stage.runtime === 'claude') return partitionClaudeNativeFixture(f, original, stage, result, dispatchId);
+  const crypto = require('node:crypto');
+  const { EventEmitter } = require('node:events');
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+  const { a } = original;
+  const prefix = runtime.generatedInstructions(a.text) + '\n\n';
+  assert.ok(stage.input.startsWith(prefix), 'frozen input includes the actual static native instruction prefix');
+  const scope = { ...original.scope, run_id: dispatchId };
+  const session = crypto.randomUUID(), text = JSON.stringify(result);
+  const pick = predicate => helper.template(helper.parent, predicate);
+  const meta = pick(row => row.type === 'session_meta');
+  Object.assign(meta.payload, { id: session, session_id: session, cwd: scope.worktree, runtime_workspace_roots: [scope.worktree] });
+  const context = pick(row => row.type === 'turn_context');
+  Object.assign(context.payload, { model: a.selection.model, effort: a.selection.effort, cwd: scope.worktree, workspace_roots: [scope.worktree] });
+  context.payload.sandbox_policy.type = 'read-only';
+  Object.assign(context.payload.collaboration_mode.settings, { model: a.selection.model, reasoning_effort: a.selection.effort });
+  const start = pick(row => row.payload?.type === 'task_started'), turn = start.payload.turn_id;
+  context.payload.turn_id = turn;
+  const developer = pick(row => row.type === 'response_item' && row.payload?.role === 'developer');
+  developer.payload.content = [{ type: 'input_text', text: runtime.generatedInstructions(a.text) }];
+  const user = pick(row => row.type === 'response_item' && row.payload?.role === 'user');
+  user.payload.content = [{ type: 'input_text', text: stage.input }];
+  const count = pick(row => row.payload?.type === 'token_count');
+  const final = pick(row => row.type === 'response_item' && row.payload?.phase === 'final_answer');
+  final.payload.content.forEach(block => { block.text = text; });
+  final.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+  const completion = pick(row => row.payload?.type === 'task_complete');
+  Object.assign(completion.payload, { turn_id: turn, last_agent_message: text });
+  const native = [meta, context, start, developer, user, count, final, completion];
+  mutateNative?.(native);
+  const now = new Date(), directory = path.join(process.env.CODEX_HOME, 'sessions', String(now.getFullYear()),
+    String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+  fs.mkdirSync(directory, { recursive: true });
+  const nativeFile = path.join(directory, session + '.jsonl');
+  fs.writeFileSync(nativeFile, helper.serialize(native));
+  const records = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
+    .map(type => helper.template(helper.cli, row => row.type === type));
+  records[0].thread_id = session; records[2].item.text = text;
+  f.partitionRecorder ||= createDurableRecorder(path.join(f.root, 'partition-receipts'));
+  const recorder = f.partitionRecorder;
+  const host = runtime.createCodexRuntimeHost({ scope, recorder, capabilities: a.capabilities,
+    env: { CODEX_HOME: process.env.CODEX_HOME }, transcriptDir: path.join(f.root, 'partition-transcripts'),
+    probe: { status: 'available', executable: 'codex', runtime_version: 'fixture', capabilities: a.capabilities },
+    spawn() {
+      const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = process.pid;
+      let nativeInput = '';
+      child.stdin = { write(value) { nativeInput += value; }, end() {
+        assert.equal(nativeInput, stage.input, 'captured user input is the exact standard runtime stdin');
+        process.nextTick(() => {
+          child.stdout.emit('data', Buffer.from(helper.serialize(records))); child.emit('close', 0);
+        });
+      } };
+      return child;
+    } });
+  f.partitionModelLaunches = (f.partitionModelLaunches || 0) + 1;
+  const launched = await host.launchStatic({ model: a.selection.model, effort: a.selection.effort,
+    sandbox_mode: 'read-only', agent_file: a.selection.agent_file, agent_file_content: a.text, agent_file_digest: hash(a.text) },
+  { dispatch_id: dispatchId, prompt: stage.input.slice(prefix.length) });
+  const adapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
+    agentsDir: a.dir, agentManifest: a.manifest,
+    host: { requireRuntimeEvidence: true, launchStatic: () => launched }, capabilities: a.capabilities });
+  const dispatched = createDispatchBoundary({ adapters: { codex: adapter }, recorder }).dispatch({ runtime: 'codex', role: 'integrator',
+    dispatch_id: dispatchId, signals: original.review.prepared.signals }, { ticket: scope.ticket });
+  return { recorder, dispatched, nativeFile, result };
+}
+async function partitionClaudeNativeFixture(f, original, stage, result, dispatchId) {
+  const crypto = require('node:crypto');
+  const { EventEmitter } = require('node:events');
+  const { createClaudeRuntimeHost } = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+  const { createClaudeDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
+  const { capture } = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs');
+  const registry = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/captured/boundaries/claude-stream.json')));
+  const streamPath = registry.fixtures.find(file => file.endsWith('/claude-stream-research.jsonl'));
+  assert.ok(streamPath, 'registered original Claude stream is required');
+  const templates = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
+    .map(JSON.parse).filter(row => !row.shipyard_fixture);
+  const template = predicate => structuredClone(templates.find(predicate));
+  const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
+  const session = crypto.randomUUID(), transcriptDir = path.join(f.root, 'partition-claude', dispatchId);
+  const recorder = f.partitionRecorder;
+  const runtime = createClaudeRuntimeHost({ scope: { ...original.scope, run_id: dispatchId }, recorder,
+    transcriptDir, uuid: () => session, startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
+    sessionTranscriptRoot: path.join(f.root, 'partition-claude-native'),
+    probe: { status: 'available', executable: 'claude-fixture', runtime_version: registry.cli_version,
+      capabilities: { assistantTranscriptEvidence: true, restrictedTools: true, sandboxedBash: true } },
+    spawn(_file, args) {
+      f.partitionModelLaunches = (f.partitionModelLaunches || 0) + 1;
+      const child = new EventEmitter(); child.pid = process.pid;
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+      let framed = '';
+      child.stdin = { write(raw) { framed += raw; }, end() { process.nextTick(() => {
+        try {
+          const user = JSON.parse(framed.trim());
+          assert.equal(user.message.content, stage.input);
+          const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
+          const init = template(row => row.type === 'system' && row.subtype === 'init');
+          Object.assign(init, { session_id: session, model, cwd: f.worktree });
+          const assistant = template(row => row.type === 'assistant'); assistant.session_id = session;
+          assistant.message.model = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
+          assistant.message.content[0].input = result;
+          const final = template(row => row.type === 'result');
+          Object.assign(final, { session_id: session, is_error: false, structured_output: result, result: JSON.stringify(result) });
+          const file = path.join(f.root, 'partition-claude-native/project', session + '.jsonl');
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.writeFileSync(file, serialize([{ ...user, sessionId: session }, { ...structuredClone(assistant), sessionId: session, effort }]));
+          const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+          const hook = settings.hooks.SessionStart[0].hooks[0].args;
+          const value = name => hook[hook.indexOf(name) + 1];
+          capture({ hook_event_name: 'SessionStart', source: 'startup', session_id: session, transcript_path: file, cwd: f.worktree },
+            { evidenceFile: value('--evidence-file'), expectedSession: value('--expected-session') });
+          child.stdout.emit('data', Buffer.from(serialize([init, assistant, final]))); child.emit('close', 0, null);
+        } catch (error) { child.emit('error', error); }
+      }); } };
+      return child;
+    } });
+  const adapter = createClaudeDispatchAdapter({ capabilities: runtime.capabilities, host: {
+    async launch(selection) { return runtime.applicationEvidence({ result: await runtime.agent(stage.input, selection) }); },
+  } });
+  const dispatched = await createDispatchBoundary({ adapters: { claude: adapter }, recorder }).dispatch({
+    runtime: 'claude', role: 'integrator', dispatch_id: dispatchId, signals: original.review.prepared.signals }, { ticket: stage.subject });
+  assert.equal(dispatched.receipt.compliance, 'verified');
+  return { recorder, dispatched, result };
+}
+function partitionFixtureRequest(helper, original, launch) {
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const stable = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify;
+  const hash = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  const { a } = original;
+  const meta = helper.template(helper.parent, row => row.type === 'session_meta');
+  const context = helper.template(helper.parent, row => row.type === 'turn_context');
+  Object.assign(context.payload, { model: a.selection.model, effort: a.selection.effort,
+    cwd: launch.worktree, workspace_roots: [launch.worktree] });
+  context.payload.sandbox_policy.type = 'read-only';
+  Object.assign(context.payload.collaboration_mode.settings, { model: a.selection.model, reasoning_effort: a.selection.effort });
+  const { turn_id, ...framing } = context.payload;
+  const frame = launch.runtime === 'codex' ? {
+    developers: [{ role: 'developer', content: [{ type: 'input_text', text: runtime.generatedInstructions(a.text) }] }],
+    other_users: [], base_instructions: meta.payload.base_instructions || null, contexts: [framing],
+  } : { developers: [], other_users: [], base_instructions: null, contexts: [] };
+  return { schema: 'shipyard.integration-native-request.v1', runtime: launch.runtime, model: launch.model,
+    effort: launch.effort, input: launch.input, instruction_sha256: launch.instruction_sha256,
+    recipe_sha256: hash(stable(original.partitionRecipes.get(launch.plan_sha256))), frame, tools: [],
+    native_payload: stable({ frame, tools: [], input: launch.input }) };
+}
+function partitionFixtureHost(f, helper, original, partitions, mutateEvidence) {
+  const stable = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify;
+  const hash = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  original.partitionRecipes ||= new Map();
+  original.partitionRecipes.set(partitions.plan.plan_sha256, partitions.plan.capacity.recipe);
+  f.partitionRecorder ||= createDurableRecorder(path.join(f.root, 'partition-receipts'));
+  const source = 'behavior-only-fixture-' + partitions.plan.runtime;
+  const directory = path.join(f.root, 'behavior-only-counter'); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const retain = payload => {
+    const raw = stable(payload), file = path.join(directory, hash(raw) + '.json');
+    if (!fs.existsSync(file)) fs.writeFileSync(file, raw, { mode: 0o600 });
+    const pin = { path: file, bytes: Buffer.byteLength(raw), sha256: hash(raw) };
+    (f.partitionCounterPins ||= []).push(pin);
+    return pin;
+  };
+  const host = roleArtifact.createIntegrationCapacityHost({ partitions, runtime: partitions.plan.runtime, recorder: f.partitionRecorder,
+    counterSource: source + '-counter', windowSource: source + '-window',
+    renderLaunch: launch => {
+      const request = partitionFixtureRequest(helper, original, launch);
+      mutateEvidence?.(request, 'request');
+      return request;
+    },
+    readWindow: identity => {
+      const captured = helper.template(helper.parent, row => row.payload?.type === 'token_count').payload.info;
+      const evidence = { schema: 'shipyard.integration-runtime-window.v1', ...identity, source: source + '-window',
+        evidence_id: source + '-window', window_tokens: captured.model_context_window, behavior_only: true };
+      mutateEvidence?.(evidence, 'window');
+      return retain(evidence);
+    },
+    measureInput: (request, identity) => {
+      f.partitionCounterCalls = (f.partitionCounterCalls || 0) + 1;
+      const captured = helper.template(helper.parent, row => row.payload?.type === 'token_count').payload.info;
+      const evidence = { schema: 'shipyard.integration-input-measurement.v1', ...identity,
+        runtime: request.runtime, model: request.model, source: source + '-counter',
+        evidence_id: source + '-counter-' + identity.launch_sha256,
+        input_tokens_upper_bound: captured.last_token_usage.input_tokens, behavior_only: true };
+      mutateEvidence?.(evidence, 'measurement');
+      return retain(evidence);
+    } });
+  if (!mutateEvidence) {
+    original.partitionHosts ||= new Map();
+    original.partitionHosts.set(partitions.plan.plan_sha256, host);
+  }
+  return host;
+}
+async function partitionAdmitFixture(f, helper, original, stage, mutateEvidence, partitions = original.partitions) {
+  const host = !mutateEvidence && original.partitionHosts?.get(stage.plan_sha256)
+    || partitionFixtureHost(f, helper, original, partitions, mutateEvidence);
+  return roleArtifact.admitIntegrationCapacity({ prepared: stage, host });
+}
+function partitionAssertFixture(original, prepared, launch = prepared) {
+  return roleArtifact.assertIntegrationAdmission({ prepared, launch, host: original.partitionHosts.get(prepared.plan_sha256) });
+}
+function partitionUnitFixtureResult(stage) {
+  const { payload } = stage, unit = payload.assignment;
+  return { schema: 'shipyard.integration-unit-result.v1', review_contract: roleArtifact.INTEGRATION_REVIEW_V3,
+    kind: 'unit', runtime: payload.runtime, subject: payload.subject, plan_sha256: payload.plan_sha256,
+    unit_id: unit.unit_id, input_sha256: stage.input_sha256, reviewed_identity: payload.reviewed_identity,
+    completeness: 'complete', outcome: 'passed', blocking_count: 0,
+    coverage: { primary_segments: unit.primary_segments, primary_obligation_ids: unit.primary_obligation_ids,
+      support_segments: unit.support_segments, support_obligation_ids: unit.support_obligation_ids },
+    conclusions: ['Every assigned primary range and logical obligation reviewed in this fixture.'], findings: [], limitations: [],
+    seams: unit.seam_ids.map(id => ({ id, disposition: 'unresolved', rationale: 'Independent final must judge this cross-unit interaction.' })),
+    required_context: [], evidence_markdown: 'Original fixture unit evidence; no phase authority.' };
+}
+
+function partitionPhaseFixtureResult(f, original, partitions, aggregate) {
+  const { plan } = partitions, { review } = original;
+  return { review_contract: roleArtifact.INTEGRATION_REVIEW_V3, kind: 'phase', runtime: plan.runtime,
+    subject: plan.subject, plan_sha256: plan.plan_sha256, input_sha256: aggregate.input_sha256,
+    reviewed_identity: plan.identity, completeness: 'complete', outcome: 'passed', summary: 'Independent final fixture seam and acceptance judgment.',
+    phase: f.phase, head: f.head, head_tree: plan.identity.head_tree, base: 'origin/main', base_tree: plan.identity.base_tree,
+    ticket_set: review.prepared.ticketSet, ticket_set_digest: plan.identity.ticket_set_digest, findings: [], blocking_count: 0,
+    coverage: { ...aggregate.payload.coverage, seam_dispositions: plan.seams.map(seam => ({ id: seam.id,
+      disposition: 'resolved', rationale: 'Independent final fixture evaluates complete acceptance and both sides of this seam.' })), limitations: [] },
+    evidence_markdown: 'Separate original fixture final judgment over complete acceptance, verification and seams.' };
+}
+
+test('D-32 frozen full inventory, protected unit custody, restart and independent phase authority', async () => {
+  const helper = partitionFixtureHelpers();
+  await helper.fixture(async f => {
+    const crypto = require('node:crypto');
+    const stable = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify;
+    const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+    const prior = await helper.successfulReview(f, 'integrator', { legacy: true });
+    const oldReceipt = prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt;
+    const longSource = '// ' + 'é😀'.repeat(52000) + '\n// final exact tail Ω\n';
+    helper.write(f.worktree, 'src/consumer.cjs', longSource);
+    helper.commit(f, 'oversized UTF8 line and exact diff tail');
+    const original = partitionTestReview(f, helper), { review } = original;
+    const capacity = partitionTestCapacity();
+    assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review: { ...review }, capacity }), /private/);
+    assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    const partitions = original.partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity });
+    const { plan } = partitions;
+    assert.ok(plan.units.length > 1, 'complete rendered input budgets determine the unit count');
+    assert.deepEqual(plan.units.map(unit => unit.unit_id), plan.units.map((_, index) => 'u' + String(index + 1).padStart(6, '0')));
+    const authorityRoot = roleArtifact.archiveAuthorityDirectory(f.worktree);
+    const planFile = path.join(authorityRoot, 'integration-plan-' + plan.plan_sha256 + '.json');
+    const indexFile = path.join(authorityRoot, 'integration-units-' + plan.plan_sha256 + '.json');
+    const originalPlanBytes = fs.readFileSync(planFile);
+    assert.equal(fs.statSync(planFile).mode & 0o777, 0o600);
+    const fields = ['schema', 'version', 'review_contract', 'runtime', 'subject', 'identity', 'original_packet_sha256',
+      'material', 'obligations', 'units', 'seams', 'governing', 'producer_pins', 'instruction_pins', 'capacity'];
+    const domain = Object.fromEntries(fields.map(field => [field, plan[field]]));
+    assert.equal(hash(stable(domain)), plan.plan_sha256);
+    const arrival = structuredClone(plan);
+    arrival.capacity.admissions = [{ input_sha256: '1'.repeat(64) }];
+    arrival.identity.receipts = [{ outcome: 'passed' }];
+    arrival.units[0].unit_index_entries = [{ result: 'future' }];
+    arrival.final_result = { outcome: 'passed' };
+    assert.equal(roleArtifact.integrationPartitionPlanHash(arrival), plan.plan_sha256);
+    const staticSource = structuredClone(plan); staticSource.producer_pins[0].sha256 = '0'.repeat(64);
+    assert.notEqual(roleArtifact.integrationPartitionPlanHash(staticSource), plan.plan_sha256);
+    const sources = plan.material.filter(source => source.content === longSource);
+    assert.equal(sources.length, 1, 'equal complete source content is deduplicated');
+    assert.ok(plan.material.some(source => source.content.includes('diff --git') && source.content.includes('final exact tail')));
+    for (const source of plan.material) {
+      const assigned = plan.units.flatMap(unit => unit.primary_segments).filter(segment => segment.source_id === source.source_id)
+        .sort((a, b) => a.start_byte - b.start_byte);
+      let cursor = 0;
+      for (const segment of assigned) {
+        assert.equal(segment.start_byte, cursor);
+        const raw = Buffer.from(source.content).subarray(segment.start_byte, segment.end_byte);
+        assert.equal(hash(raw), segment.sha256);
+        assert.equal(Buffer.from(raw.toString('utf8')).compare(raw), 0);
+        cursor = segment.end_byte;
+      }
+      assert.equal(cursor, source.bytes);
+    }
+    const ids = plan.units.flatMap(unit => unit.primary_obligation_ids);
+    assert.equal(new Set(ids).size, plan.obligations.length);
+    assert.deepEqual([...ids].sort(), plan.obligations.map(item => item.id).sort());
+    const acceptance = plan.obligations.filter(item => /\/phase_contracts\/\d+\/acceptance\/\d+$/.test(item.pointer));
+    const verification = plan.obligations.filter(item => /\/phase_contracts\/\d+\/verification\/\d+$/.test(item.pointer));
+    assert.ok(acceptance.length >= 2 && verification.length >= 2);
+    assert.equal(new Set(acceptance.map(item => item.id)).size, acceptance.length);
+    assert.ok(acceptance.some((item, index) => acceptance.some((other, otherIndex) => index !== otherIndex && item.value === other.value)),
+      'identical acceptance text at separate logical pointers stays separate');
+    assert.ok(plan.units.every(unit => unit.governing_ids.length && unit.support_segments.length));
+    assert.ok(plan.seams.some(seam => seam.uncertain && seam.rationale.includes('continuation')));
+    assert.throws(() => roleArtifact.prepareIntegrationUnit({ partitions: JSON.parse(JSON.stringify(partitions)), unit_id: plan.units[0].unit_id, dispatch_id: 'copied' }), /private/);
+    assert.throws(() => roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'premature-final' }), /all exact frozen units/);
+    assert.throws(() => roleArtifact.assertIntegrationAdmission({ prepared: partitions.reserved_template }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    await partitionAdmitFixture(f, helper, original, partitions.reserved_template);
+    const admittedPlanHash = plan.plan_sha256;
+    const unitSessions = [];
+    const stages = plan.units.map(unit => roleArtifact.prepareIntegrationUnit({ partitions,
+      unit_id: unit.unit_id, dispatch_id: 'partition-unit-' + ++f.count }));
+    const host = original.partitionHosts.get(plan.plan_sha256);
+    assert.throws(() => roleArtifact.assertIntegrationAdmission({ prepared: stages[0], launch: stages[0], host }),
+      error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    await partitionAdmitFixture(f, helper, original, stages[0]);
+    assert.throws(() => partitionAssertFixture(original, stages[0]), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    for (const stage of stages.slice(1)) await partitionAdmitFixture(f, helper, original, stage);
+    for (const [field, value] of [['dispatch_id', 'foreign-dispatch'], ['unit_id', 'u999999'], ['kind', 'phase'],
+      ['plan_sha256', '0'.repeat(64)], ['verified_index_sha256', '0'.repeat(64)]]) {
+      assert.throws(() => partitionAssertFixture(original, stages[0], { ...stages[0], [field]: value }),
+        error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    }
+    assert.equal(f.partitionModelLaunches || 0, 0, 'all exact units and reserved final are admitted without any model launch');
+    for (const [index, unit] of plan.units.entries()) {
+      const stage = stages[index];
+      partitionAssertFixture(original, stage);
+      assert.throws(() => roleArtifact.assertIntegrationAdmission({ prepared: { ...stage, input: stage.input + 'altered' } }), /private/);
+      const result = partitionUnitFixtureResult(stage);
+      const native = await partitionNativeFixture(f, helper, original, stage, result, stage.dispatch_id);
+      const sealArgs = { prepared: stage, recorder: native.recorder, dispatchId: stage.dispatch_id, result };
+      if (index === 0) {
+        const sourcePlan = path.join(f.worktree, f.rows['T-49-01'].plan), savedPlan = fs.readFileSync(sourcePlan);
+        fs.appendFileSync(sourcePlan, '\n- Changed acceptance after the original unit launch.\n');
+        assert.throws(() => roleArtifact.sealIntegrationUnit(sealArgs), /pin|changed|digest|stale/i);
+        fs.writeFileSync(sourcePlan, savedPlan);
+      }
+      const altered = structuredClone(result);
+      if (altered.coverage.primary_segments.length) altered.coverage.primary_segments.at(-1).end_byte--;
+      else altered.coverage.primary_obligation_ids.pop();
+      assert.throws(() => roleArtifact.sealIntegrationUnit({ ...sealArgs, result: altered }), /coverage|identity/);
+      assert.throws(() => roleArtifact.sealIntegrationUnit({ ...sealArgs, result: { ...result,
+        conclusions: ['x'.repeat(capacity.output_limits.conclusions + 1)] } }), error => error.code === 'INTEGRATION_INPUT_OVER_BOUND');
+      for (const change of [
+        value => { value.unit_id = 'u999999'; },
+        value => { value.plan_sha256 = '0'.repeat(64); },
+        value => { value.runtime = 'claude'; },
+        value => { value.coverage.primary_obligation_ids.push(value.coverage.primary_obligation_ids[0] || 'foreign'); },
+        value => { value.coverage.support_segments = []; },
+        value => { value.required_context = ['Missing governing support']; },
+      ]) {
+        const swapped = structuredClone(result); change(swapped);
+        assert.throws(() => roleArtifact.sealIntegrationUnit({ ...sealArgs, result: swapped }), /identity|coverage|context/);
+      }
+      assert.throws(() => roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: { ...stage, input: stage.input + 'stale' } }),
+        error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+      const sealed = roleArtifact.sealIntegrationUnit(sealArgs);
+      unitSessions.push({ stage, native, sealed });
+      assert.equal(sealed.artifact_kind, 'integration-unit');
+      assert.ok(!fs.existsSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md')));
+      assert.equal(roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }).reference.artifact_sha256, sealed.artifact_digest);
+      assert.throws(() => roleArtifact.sealIntegrationUnit(sealArgs), /cannot be overwritten/);
+      assert.throws(() => roleArtifact.sealJudgment({ worktreePath: f.worktree, role: 'integrator', phase: f.phase,
+        ticket: review.prepared.ticket, base: 'origin/main', recorder: native.recorder, dispatchId: stage.dispatch_id,
+        result, ticketSet: review.prepared.ticketSet }), /unit results/);
+      roleArtifact.assertArchiveInventory(f.worktree, review.archivePins, { partitions });
+      assert.throws(() => roleArtifact.assertArchiveInventory(f.worktree, review.archivePins), /membership/);
+      const recovered = roleArtifact.prepareIntegrationPartitions({ review, plan_sha256: plan.plan_sha256, capacity });
+      assert.equal(recovered.plan.plan_sha256, admittedPlanHash);
+      assert.equal(roleArtifact.validateIntegrationUnit({ partitions: recovered, unit_id: unit.unit_id }).reference.artifact_sha256, sealed.artifact_digest);
+      if (unit.unit_id === plan.units[0].unit_id) {
+        const restarted = partitionTestReview(f, helper);
+        const recoveredFromFreshProducer = roleArtifact.prepareIntegrationPartitions({ review: restarted.review, plan_sha256: plan.plan_sha256, capacity });
+        assert.equal(roleArtifact.validateIntegrationUnit({ partitions: recoveredFromFreshProducer, unit_id: unit.unit_id }).reference.artifact_sha256,
+          sealed.artifact_digest, 'new private preparation reuses only the protected original same-plan unit');
+      }
+      assert.deepEqual(fs.readFileSync(planFile), originalPlanBytes, 'admissions/index/results never move frozen hash/bytes');
+    }
+    const first = unitSessions[0];
+    assert.deepEqual(prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt, oldReceipt);
+    assert.deepEqual(fs.readFileSync(prior.artifact), prior.original);
+    for (const file of [indexFile, planFile]) {
+      const saved = fs.readFileSync(file), envelope = JSON.parse(saved);
+      if (file === indexFile) envelope.payload.entries.reverse(); else envelope.payload.plan.units[0].primary_obligation_ids.pop();
+      envelope.mac = '0'.repeat(64); fs.writeFileSync(file, JSON.stringify(envelope), { mode: 0o600 });
+      assert.throws(() => roleArtifact.validateIntegrationUnit({ partitions, unit_id: first.stage.unit_id }), /HMAC|coverage|primary/);
+      fs.writeFileSync(file, saved);
+    }
+    const firstBytes = fs.readFileSync(first.sealed.artifact_ref);
+    fs.appendFileSync(first.sealed.artifact_ref, ' ');
+    assert.throws(() => roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'tampered-parts' }), /archive|bytes|digest|pin/i);
+    fs.writeFileSync(first.sealed.artifact_ref, firstBytes);
+    const outputPin = first.native.dispatched.receipt.runtime_evidence.transcript;
+    const savedOutput = fs.readFileSync(outputPin.path);
+    fs.appendFileSync(outputPin.path, ' ');
+    assert.throws(() => roleArtifact.validateIntegrationUnit({ partitions, unit_id: first.stage.unit_id }), /stream|native|changed|bound/i);
+    fs.writeFileSync(outputPin.path, savedOutput);
+    const extra = path.join(path.dirname(first.sealed.artifact_ref), 'uncatalogued.md');
+    fs.writeFileSync(extra, 'unrelated archive addition');
+    assert.throws(() => roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'unindexed-addition' }), /membership/);
+    fs.unlinkSync(extra);
+    const priorBytes = fs.readFileSync(prior.artifact); fs.appendFileSync(prior.artifact, ' ');
+    assert.throws(() => roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'changed-history' }), /archive|bytes|digest|pin/i);
+    fs.writeFileSync(prior.artifact, priorBytes);
+    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
+      graphDir: f.graphDir, headBranch: f.pr.headRefName, integrationReview: review }), null, 'indexed units cannot become a current phase verdict');
+    const aggregate = roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'partition-final-' + ++f.count });
+    assert.throws(() => roleArtifact.assertIntegrationAdmission({ prepared: aggregate }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    assert.ok(!aggregate.input.includes(longSource), 'final carries bounded conclusions and governing/acceptance, not whole raw product sources');
+    assert.deepEqual(aggregate.payload.governing.filter(item => acceptance.some(accepted => accepted.id === item.id)), acceptance);
+    await partitionAdmitFixture(f, helper, original, aggregate);
+    partitionAssertFixture(original, aggregate);
+    const phaseResult = partitionPhaseFixtureResult(f, original, partitions, aggregate);
+    const unresolvedStage = roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'unresolved-final-' + ++f.count });
+    await partitionAdmitFixture(f, helper, original, unresolvedStage);
+    const unresolvedResult = structuredClone(phaseResult); unresolvedResult.input_sha256 = unresolvedStage.input_sha256;
+    unresolvedResult.coverage.seam_dispositions[0].disposition = 'unresolved';
+    const unresolvedNative = await partitionNativeFixture(f, helper, original, unresolvedStage, unresolvedResult, unresolvedStage.dispatch_id);
+    const failedEvidence = path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md');
+    fs.writeFileSync(failedEvidence, unresolvedResult.evidence_markdown);
+    const { evidence_markdown: failedMarkdown, ...unresolvedSealedResult } = unresolvedResult;
+    assert.throws(() => roleArtifact.sealJudgment({ worktreePath: f.worktree, role: 'integrator', phase: f.phase, ticket: plan.subject,
+      base: 'origin/main', recorder: unresolvedNative.recorder, dispatchId: unresolvedStage.dispatch_id, result: unresolvedSealedResult,
+      ticketSet: review.prepared.ticketSet, ticketSetDigest: plan.identity.ticket_set_digest, evidencePath: failedEvidence, integrationReview: review }), /unresolved seams/);
+    const finalSession = await partitionNativeFixture(f, helper, original, aggregate, phaseResult, aggregate.dispatch_id);
+    assert.ok(unitSessions.every(unit => unit.native.dispatched.receipt.runtime_evidence.session_id !== finalSession.dispatched.receipt.runtime_evidence.session_id));
+    const evidencePath = path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md');
+    fs.writeFileSync(evidencePath, phaseResult.evidence_markdown);
+    const { evidence_markdown: markdown, ...finalResult } = phaseResult;
+    const finalArgs = { worktreePath: f.worktree, role: 'integrator', phase: f.phase, ticket: plan.subject,
+      base: 'origin/main', recorder: finalSession.recorder, dispatchId: aggregate.dispatch_id, result: finalResult,
+      ticketSet: review.prepared.ticketSet, ticketSetDigest: plan.identity.ticket_set_digest, evidencePath, integrationReview: review };
+    assert.throws(() => roleArtifact.sealJudgment({ ...finalArgs, recorder: first.native.recorder, dispatchId: first.stage.dispatch_id }),
+      /unrelated final|fresh actual final|independent final/);
+    const sealedFinal = roleArtifact.sealJudgment(finalArgs);
+    const validated = roleArtifact.validateJudgmentManifest({ ...finalArgs, artifactPath: sealedFinal.artifact_ref, artifactDigest: sealedFinal.artifact_digest });
+    assert.equal(validated.manifest.integration_partition.kind, 'phase');
+    const currentArgs = { worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
+      graphDir: f.graphDir, headBranch: f.pr.headRefName, integrationReview: review };
+    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs)?.authenticated, true);
+    const installed = path.join(original.a.dir, original.a.selection.agent_file), installedBytes = fs.readFileSync(installed);
+    fs.appendFileSync(installed, '\n# changed after final\n');
+    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs), null);
+    fs.writeFileSync(installed, installedBytes);
+    const planPath = path.join(f.worktree, f.rows['T-49-01'].plan), acceptedBytes = fs.readFileSync(planPath);
+    fs.appendFileSync(planPath, '\n- Changed acceptance without moving source HEAD.\n');
+    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs), null);
+    fs.writeFileSync(planPath, acceptedBytes);
+    const graphFile = path.join(f.graphDir, 'tickets.json'), graphBytes = fs.readFileSync(graphFile);
+    const movedGraph = JSON.parse(graphBytes); delete movedGraph.tickets['T-49-02'];
+    fs.writeFileSync(graphFile, JSON.stringify(movedGraph));
+    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs), null);
+    fs.writeFileSync(graphFile, graphBytes);
+    git(f.worktree, ['update-ref', 'refs/remotes/origin/main', f.head]);
+    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs), null);
+    git(f.worktree, ['update-ref', 'refs/remotes/origin/main', f.base]);
+    assert.deepEqual(fs.readFileSync(planFile), originalPlanBytes);
+  });
+});
+
+test('D-32 capacity refuses unknown and over-bound evidence before granting stage admission', async () => {
+  const helper = partitionFixtureHelpers();
+  await helper.fixture(async f => {
+    const original = partitionTestReview(f, helper);
+    const capacity = partitionTestCapacity();
+    const partitions = original.partitions = roleArtifact.prepareIntegrationPartitions({ review: original.review, capacity });
+    const stage = roleArtifact.prepareIntegrationUnit({ partitions, unit_id: partitions.plan.units[0].unit_id, dispatch_id: 'capacity-unit' });
+    await assert.rejects(partitionAdmitFixture(f, helper, original, stage, (evidence, kind) => {
+      if (kind === 'window') delete evidence.window_tokens;
+    }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    assert.throws(() => roleArtifact.assertIntegrationAdmission({ prepared: stage }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    assert.throws(() => roleArtifact.createIntegrationCapacityHost({ partitions, runtime: 'codex', recorder: f.partitionRecorder }),
+      error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    await assert.rejects(roleArtifact.admitIntegrationCapacity({ prepared: stage, host: {},
+      measurement: { method: 'native-exact', input_tokens_upper_bound: 1 }, window_tokens: 999999999 }),
+      error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    const negatives = [
+      ['window', evidence => { evidence.runtime = 'claude'; }],
+      ['window', evidence => { evidence.model = 'foreign'; }],
+      ['window', evidence => { evidence.source = 'model-echo'; }],
+      ['window', evidence => { evidence.window_tokens = 0; }],
+      ['measurement', evidence => { evidence.runtime = 'claude'; }],
+      ['measurement', evidence => { evidence.model = 'foreign'; }],
+      ['measurement', evidence => { evidence.source = 'public-certificate'; }],
+      ['measurement', evidence => { evidence.request_sha256 = '0'.repeat(64); }],
+      ['measurement', evidence => { evidence.recipe_sha256 = '0'.repeat(64); }],
+      ['measurement', evidence => { evidence.launch_sha256 = '0'.repeat(64); }],
+      ['measurement', evidence => { evidence.plan_sha256 = '0'.repeat(64); }],
+      ['measurement', evidence => { evidence.method = 'certified-upper-bound'; }],
+      ['measurement', evidence => { evidence.input_tokens_upper_bound = 0; }],
+      ['request', evidence => { evidence.input += 'not the original input'; }],
+      ['request', evidence => { delete evidence.native_payload; }],
+      ['request', evidence => { delete evidence.tools; }],
+    ];
+    for (const [target, mutate] of negatives) {
+      await assert.rejects(partitionAdmitFixture(f, helper, original, stage, (evidence, kind) => {
+        if (kind === target) mutate(evidence);
+      }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN', target);
+    }
+    let changed = null;
+    const owned = partitionFixtureHost(f, helper, original, partitions, (evidence, kind) => {
+      if (kind === 'request') {
+        if (changed === 'tools') evidence.tools.push({ name: 'unmeasured-tool' });
+        if (changed === 'frame') evidence.frame.base_instructions = 'changed installed framing';
+        if (changed === 'payload') evidence.native_payload += 'changed full payload';
+      }
+    });
+    const admission = await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: owned });
+    for (const field of ['tools', 'frame', 'payload']) {
+      changed = field;
+      assert.throws(() => roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: stage, host: owned }),
+        error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    }
+    await assert.rejects(roleArtifact.admitIntegrationCapacity({ prepared: stage, host: structuredClone(owned) }),
+      error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    const windowFile = admission.window_evidence_pin.path, windowBytes = fs.readFileSync(windowFile);
+    fs.appendFileSync(windowFile, ' ');
+    changed = null;
+    assert.throws(() => roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: stage, host: owned }),
+      error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    fs.writeFileSync(windowFile, windowBytes);
+    assert.equal(f.partitionModelLaunches || 0, 0, 'unknown, foreign, stale and public evidence launches zero models');
+    const over = roleArtifact.prepareIntegrationPartitions({ review: original.review,
+      capacity: partitionTestCapacity({ output_reserve_tokens: 300000 }) });
+    assert.notEqual(over.plan.plan_sha256, partitions.plan.plan_sha256, 'static reserve changes freeze a different plan');
+    await assert.rejects(partitionAdmitFixture(f, helper, original, over.reserved_template, undefined, over), error => error.code === 'INTEGRATION_INPUT_OVER_BOUND');
+    const stale = structuredClone(stage); stale.input_sha256 = '0'.repeat(64);
+    await assert.rejects(roleArtifact.admitIntegrationCapacity({ prepared: stale }), /private/);
+    const changedRecipe = roleArtifact.prepareIntegrationPartitions({ review: original.review,
+      capacity: partitionTestCapacity({ recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'certified-upper-bound' } }) });
+    assert.notEqual(changedRecipe.plan.plan_sha256, partitions.plan.plan_sha256);
+    const bounded = await partitionAdmitFixture(f, helper, original, changedRecipe.reserved_template, undefined, changedRecipe);
+    assert.equal(bounded.measurement.method, 'certified-upper-bound');
+    assert.match(bounded.sources.counter, /behavior-only-fixture-codex-counter/);
+    assert.equal(f.partitionModelLaunches || 0, 0, 'behavior-only counter transport never launches a measurement model');
+    assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review: original.review,
+      capacity: partitionTestCapacity({ unit_input_bytes: 1, segment_bytes: 1 }) }), error => error.code === 'INTEGRATION_INPUT_OVER_BOUND');
+  });
+});
+
+test('D-32 Claude admits independent behavior-only non-model evidence and retains native unit/final custody', async () => {
+  const helper = partitionFixtureHelpers();
+  await helper.fixture(async f => {
+    const original = partitionTestReview(f, helper, 'claude');
+    const partitions = original.partitions = roleArtifact.prepareIntegrationPartitions({ review: original.review, capacity: partitionTestCapacity() });
+    const codex = partitionTestReview(f, helper, 'codex');
+    const codexPartitions = codex.partitions = roleArtifact.prepareIntegrationPartitions({ review: codex.review, capacity: partitionTestCapacity() });
+    const codexHost = partitionFixtureHost(f, helper, codex, codexPartitions);
+    const stages = partitions.plan.units.map(unit => roleArtifact.prepareIntegrationUnit({ partitions,
+      unit_id: unit.unit_id, dispatch_id: 'claude-partition-' + ++f.count }));
+    await assert.rejects(roleArtifact.admitIntegrationCapacity({ prepared: stages[0], host: codexHost }),
+      error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    for (const target of ['window', 'measurement']) await assert.rejects(partitionAdmitFixture(f, helper, original, stages[0], (evidence, kind) => {
+      if (kind === target) evidence.runtime = 'codex';
+    }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    const bounded = roleArtifact.prepareIntegrationPartitions({ review: original.review,
+      capacity: partitionTestCapacity({ recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'certified-upper-bound' } }) });
+    const boundAdmission = await partitionAdmitFixture(f, helper, original, bounded.reserved_template, undefined, bounded);
+    assert.equal(boundAdmission.runtime, 'claude'); assert.equal(boundAdmission.measurement.method, 'certified-upper-bound');
+    const template = await partitionAdmitFixture(f, helper, original, partitions.reserved_template);
+    assert.equal(template.runtime, 'claude'); assert.match(template.sources.window, /behavior-only-fixture-claude-window/);
+    for (const stage of stages) await partitionAdmitFixture(f, helper, original, stage);
+    assert.equal(f.partitionModelLaunches || 0, 0, 'Claude prelaunch measurement launches no native model session');
+    const sessions = [];
+    for (const stage of stages) {
+      const result = partitionUnitFixtureResult(stage);
+      const native = await partitionNativeFixture(f, helper, original, stage, result, stage.dispatch_id);
+      roleArtifact.sealIntegrationUnit({ prepared: stage, recorder: native.recorder, dispatchId: stage.dispatch_id, result });
+      sessions.push(native.dispatched.receipt.session_id);
+      assert.equal(roleArtifact.validateIntegrationUnit({ partitions, unit_id: stage.unit_id }).result.runtime, 'claude');
+      const recovered = roleArtifact.prepareIntegrationPartitions({ review: original.review, plan_sha256: partitions.plan.plan_sha256 });
+      assert.equal(roleArtifact.validateIntegrationUnit({ partitions: recovered, unit_id: stage.unit_id }).result.runtime, 'claude');
+      roleArtifact.assertArchiveInventory(f.worktree, original.review.archivePins, { partitions });
+    }
+    const aggregate = roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'claude-partition-final' });
+    assert.throws(() => partitionAssertFixture(original, aggregate), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    const actual = await partitionAdmitFixture(f, helper, original, aggregate);
+    assert.equal(actual.verified_index_sha256, aggregate.payload.verified_index_sha256);
+    assert.notEqual(actual.request_sha256, template.request_sha256, 'actual verified results require fresh final evidence');
+    const result = partitionPhaseFixtureResult(f, original, partitions, aggregate);
+    const native = await partitionNativeFixture(f, helper, original, aggregate, result, aggregate.dispatch_id);
+    assert.ok(!sessions.includes(native.dispatched.receipt.session_id));
+    assert.equal(f.partitionModelLaunches, stages.length + 1, 'exactly one native session per unit and one independent final');
+    const evidencePath = path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md');
+    fs.writeFileSync(evidencePath, result.evidence_markdown);
+    const { evidence_markdown, ...sealedResult } = result;
+    const args = { worktreePath: f.worktree, role: 'integrator', phase: f.phase, ticket: partitions.plan.subject,
+      base: 'origin/main', recorder: native.recorder, dispatchId: aggregate.dispatch_id, result: sealedResult,
+      ticketSet: original.review.prepared.ticketSet, ticketSetDigest: partitions.plan.identity.ticket_set_digest,
+      evidencePath, integrationReview: original.review };
+    const sealed = roleArtifact.sealJudgment(args);
+    assert.equal(roleArtifact.validateJudgmentManifest({ ...args, artifactPath: sealed.artifact_ref,
+      artifactDigest: sealed.artifact_digest }).manifest.integration_partition.kind, 'phase');
+    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
+      graphDir: f.graphDir, headBranch: f.pr.headRefName, integrationReview: original.review })?.authenticated, true);
+  });
+});
+
+for (const mode of ['incomplete', 'needs-fix']) test('D-32 authentic ' + mode + ' unit cannot supply aggregate authority', async () => {
+  const helper = partitionFixtureHelpers();
+  await helper.fixture(async f => {
+    const original = partitionTestReview(f, helper);
+    const partitions = original.partitions = roleArtifact.prepareIntegrationPartitions({ review: original.review, capacity: partitionTestCapacity() });
+    await partitionAdmitFixture(f, helper, original, partitions.reserved_template);
+    const stages = partitions.plan.units.map(unit => roleArtifact.prepareIntegrationUnit({ partitions,
+      unit_id: unit.unit_id, dispatch_id: 'nonpassing-' + ++f.count }));
+    for (const stage of stages) await partitionAdmitFixture(f, helper, original, stage);
+    for (const stage of stages) {
+      const result = partitionUnitFixtureResult(stage);
+      if (mode === 'incomplete') {
+        result.completeness = 'incomplete'; result.outcome = 'human-review-required'; result.required_context = ['Required context unavailable.'];
+      } else {
+        result.outcome = 'needs-fix'; result.blocking_count = 1;
+        result.findings = [{ id: 'original-blocker', type: 'violation', blocking: true,
+          summary: 'Fixture behavior violates acceptance.', evidence: 'Original assigned fixture source.' }];
+      }
+      const native = await partitionNativeFixture(f, helper, original, stage, result, stage.dispatch_id);
+      roleArtifact.sealIntegrationUnit({ prepared: stage, recorder: native.recorder, dispatchId: stage.dispatch_id, result });
+      assert.equal(roleArtifact.validateIntegrationUnit({ partitions, unit_id: stage.unit_id }).result.outcome, result.outcome);
+    }
+    assert.throws(() => roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'invalid-pass' }), /incomplete, failing or context-blocked/);
+  });
 });
 
 done();
