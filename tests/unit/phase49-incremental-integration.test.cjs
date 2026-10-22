@@ -518,11 +518,315 @@ test('second runtime adapter fixture seals a fresh full current judgment without
   });
 });
 
+function partitionFixtureFunctions(file, names, bindings = {}) {
+  const source = fs.readFileSync(path.join(__dirname, file), 'utf8');
+  const declarations = names.map(name => {
+    const start = source.indexOf('\nfunction ' + name + '(');
+    assert.ok(start >= 0, 'existing runtime fixture declaration: ' + name);
+    const ends = ['\nfunction ', '\ntest(', '\nfor ('].map(marker => source.indexOf(marker, start + 1))
+      .filter(index => index > start);
+    return source.slice(start, Math.min(...ends));
+  }).join('\n');
+  return new Function('require', '__dirname', 'fs', 'path', 'crypto', 'assert', 'EventEmitter', ...Object.keys(bindings),
+    declarations + '\nreturn { ' + names.join(', ') + ' };')(
+    require, __dirname, fs, path, crypto, assert, EventEmitter, ...Object.values(bindings));
+}
+
+function publicPartitionFixture(f, nativeRuntime, controls = {}) {
+  const remote = path.join(f.root, 'origin.git');
+  git(f.worktree, 'clone', '--bare', '--quiet', f.worktree, remote);
+  git(f.worktree, 'remote', 'add', 'origin', remote);
+  const bin = path.join(f.root, 'bin'); fs.mkdirSync(bin);
+  const live = projectOptions(f);
+  const prs = Object.values(f.rows).flatMap(row => live.listPullRequests({ branch: row.branch }));
+  fs.writeFileSync(path.join(bin, 'gh'), '#!' + process.execPath + '\n' + `
+const prs = ${JSON.stringify(prs)};
+const args = process.argv.slice(2);
+if (args[0] !== 'pr') process.exit(2);
+if (args[1] === 'list' && args.includes('--head')) {
+  process.stdout.write(JSON.stringify(prs.filter(pr => pr.headRefName === args[args.indexOf('--head') + 1])));
+} else if (args[1] === 'view') {
+  const pr = prs.find(pr => pr.number === Number(args[2]));
+  if (!pr) process.exit(2);
+  process.stdout.write(JSON.stringify(pr));
+} else process.exit(2);
+`, { mode: 0o755 });
+  process.env.PATH = bin + path.delimiter + process.env.PATH;
+  const recorder = boundary.createDurableRecorder(path.join(f.root, nativeRuntime + '-public-receipts'));
+  let options;
+  if (nativeRuntime === 'codex') {
+    const { codexPartitionFixture } = partitionFixtureFunctions('codex-delivery-host.test.cjs', ['codexPartitionFixture']);
+    ({ options } = codexPartitionFixture(f,
+      { projectOptions, agent, template, parent, cli, serialize }, controls));
+    options.recorder = recorder;
+  } else {
+    const { fakeRuntimeFactory, claudePartitionCapacity } = partitionFixtureFunctions('claude-role-host.test.cjs',
+      ['fakeRuntimeFactory', 'claudePartitionCapacity'], {
+        stable: require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify,
+        livePr: () => f.pr, createDurableRecorder: boundary.createDurableRecorder,
+      });
+    const original = { root: f.worktree, kind: 'integrator', storageRoot: path.join(f.root, 'claude-public') };
+    options = { ...projectOptions(f), storageRoot: original.storageRoot,
+      integrationCapacity: claudePartitionCapacity(original, controls),
+      createRuntimeHost: fakeRuntimeFactory(original, { originalStream: true,
+        onLaunch(input) {
+          const payload = JSON.parse(input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
+          (controls.launches ||= []).push({ input, payload });
+          controls.onLaunch?.(input, payload);
+        }, mutateResult: (result, payload) => controls.result?.(result, payload) }) };
+    options.integrationCapacity.recorder = recorder;
+  }
+  options.integrationCapacity.capacity.unit_input_bytes = 128 * 1024;
+  return { options, recorder, controls };
+}
+
+async function publicIntegrationFixture(action) {
+  const previousPath = process.env.PATH, previousGraph = process.env.SHIPYARD_GRAPH_DIR;
+  try {
+    delete process.env.SHIPYARD_GRAPH_DIR;
+    await fixture(action);
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousGraph === undefined) delete process.env.SHIPYARD_GRAPH_DIR; else process.env.SHIPYARD_GRAPH_DIR = previousGraph;
+  }
+}
+
+async function supportedPartitionCaller(f, nativeRuntime, options) {
+  const command = fs.readFileSync(path.resolve(__dirname, '../../plugins/delivery-pipeline/commands/deliver.md'), 'utf8');
+  const section = command.slice(command.indexOf('**Fresh final integration contract.**'));
+  const snippet = section.match(/```javascript\n([\s\S]*?)\n\s*```/)[1];
+  let preliminary = 0;
+  const supportedRequire = file => file.endsWith('/claude-role-host.cjs') ? { ...secondRuntime,
+    prepareIntegratorContext() { assert.fail('preliminary legacy full-inline formatting is forbidden'); },
+    prepareNativeIntegratorContext(...args) {
+      preliminary++;
+      const prepared = secondRuntime.prepareNativeIntegratorContext(...args);
+      assert.equal(prepared.prompt, undefined, 'native preliminary collection must not format a full inline prompt');
+      return prepared;
+    } } : require(file);
+  const run = new (Object.getPrototypeOf(async function () {}).constructor)(
+    'require', 'CLAUDE_PLUGIN_ROOT', 'options', 'worktree', 'phase', 'run_id', 'dispatch_id', 'runtime',
+    snippet + '\nreturn result;');
+  const result = await run(supportedRequire, path.resolve(__dirname, '../../plugins/delivery-pipeline'),
+    options, f.worktree, 49, 'supported-v3-' + ++f.count, 'supported-v3-' + f.count, nativeRuntime);
+  assert.equal(preliminary, 1, 'execute the actual documented caller on each supported branch');
+  return result;
+}
+
+function currentPartitionConsumer(f) {
+  const input = { worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
+    graphDir: f.graphDir, headBranch: f.pr.headRefName };
+  const current = authority.currentIntegrationVerdict(input);
+  const gate = require('../../plugins/delivery-pipeline/scripts/gate-trailer.cjs').verifyCurrentReviews({
+    ...input, pr: f.pr.number, getPullRequest: () => ({ ...f.pr }) });
+  assert.deepEqual(gate.integration, current, 'normal gate must consume the same authenticated current final');
+  assert.equal(gate.architecture.ready, false, 'integration fixtures cannot satisfy fresh architecture');
+  return current;
+}
+
+function partitionManifests(f) {
+  return authority.authenticatedArchivePins(f.worktree).filter(pin => pin.path.endsWith('/.shipyard-role-artifact.json'))
+    .map(pin => JSON.parse(fs.readFileSync(path.join(f.worktree, pin.path))));
+}
+
+function originalPartitionSessions(f, nativeRuntime, recorder, controls) {
+  const manifests = partitionManifests(f), sessions = [];
+  assert.equal(manifests.length, controls.launches.length);
+  for (const manifest of manifests) {
+    const receipt = recorder.getVerifiedRecord(manifest.dispatch_id).receipt;
+    assert.equal(receipt.runtime, nativeRuntime);
+    assert.equal(receipt.compliance, 'verified');
+    assert.equal(receipt.launch_id, manifest.producer_launch);
+    let pin, session;
+    if (nativeRuntime === 'codex') {
+      const native = receipt.runtime_evidence.native_session_evidence;
+      session = native.session_id;
+      const files = runtime.nativeSessionCandidates(path.join(process.env.CODEX_HOME, 'sessions'), session);
+      assert.equal(files.length, 1);
+      pin = { ...native, path: files[0] };
+    } else {
+      session = receipt.session_id;
+      pin = { ...receipt.selection_evidence.transcript,
+        path: path.join(path.dirname(receipt.transcript.path), 'projects', receipt.selection_evidence.transcript.path) };
+    }
+    const raw = fs.readFileSync(pin.path);
+    assert.equal(raw.length, pin.bytes); assert.equal(hash(raw), pin.sha256);
+    const rows = raw.toString('utf8').trim().split('\n').map(JSON.parse);
+    const users = nativeRuntime === 'codex'
+      ? rows.filter(row => row.type === 'response_item' && row.payload?.role === 'user')
+        .map(row => row.payload.content.map(block => block.text || '').join(''))
+      : rows.filter(row => row.type === 'user' && row.sessionId === session).map(row => row.message.content);
+    const inputs = users.filter(input => input.includes('<AUTHENTICATED_INTEGRATION_PARTITION>'));
+    assert.equal(inputs.length, 1);
+    const launch = controls.launches.find(item => hash(item.input) === manifest.input_sha256
+      || item.payload.kind === 'phase' && manifest.integration_partition?.kind === 'phase');
+    assert.ok(launch, 'original native input must be one actual host stage');
+    assert.equal(inputs[0], launch.input, 'preserve actual stdin/native capture; never replace its generated prefix');
+    if (nativeRuntime === 'codex') {
+      const a = f.agents.integrator;
+      const prefix = runtime.generatedInstructions(a.text) + '\n\n';
+      assert.ok(inputs[0].startsWith(prefix));
+      assert.equal(inputs[0].indexOf(prefix, prefix.length), -1, 'static runtime restores exactly one prefix');
+    }
+    const nativeResult = nativeRuntime === 'codex'
+      ? JSON.parse(rows.find(row => row.payload?.phase === 'final_answer').payload.content[0].text)
+      : rows.find(row => row.type === 'assistant').message.content[0].input;
+    assert.equal(nativeResult.input_sha256, hash(inputs[0]));
+    assert.equal(nativeResult.kind, launch.payload.kind);
+    assert.equal(nativeResult.plan_sha256, launch.payload.plan_sha256);
+    sessions.push({ session, receipt, pin, result: nativeResult, manifest, launch });
+  }
+  assert.equal(new Set(sessions.map(item => item.session)).size, sessions.length, 'one original session per unit plus distinct final');
+  return sessions;
+}
+
+for (const nativeRuntime of ['codex', 'claude']) {
+  test('supported ' + nativeRuntime + ' v3 caller reaches normal final consumer with linked canonical planning', async () => {
+    await publicIntegrationFixture(async f => {
+      write(f.worktree, 'src/unchanged.cjs', '// complete current context Ω\n'.repeat(3000));
+      commit(f, 'current bounded caller fixture');
+      const planning = path.join(f.root, 'coordinator');
+      git(f.worktree, 'worktree', 'add', '-qb', 'coordinator', planning, 'HEAD');
+      f.graphDir = path.join(planning, '.planning/graph');
+      const prepared = publicPartitionFixture(f, nativeRuntime);
+      prepared.controls.onLaunch = (_input, payload) => {
+        assert.equal(currentPartitionConsumer(f), null, 'even all passing units cannot open the current gate before final');
+        assert.equal(fs.existsSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md')), false);
+        assert.equal(payload.reviewed_identity.planning_root, planning);
+      };
+      const result = await supportedPartitionCaller(f, nativeRuntime, prepared.options);
+      assert.equal(result.result.kind, 'phase'); assert.equal(result.result.outcome, 'passed');
+      const current = currentPartitionConsumer(f);
+      assert.equal(current?.authenticated, true);
+      assert.equal(current.contract, authority.INTEGRATION_REVIEW_V3);
+      const sessions = originalPartitionSessions(f, nativeRuntime, prepared.recorder, prepared.controls);
+      const units = sessions.filter(item => item.result.kind === 'unit');
+      const finals = sessions.filter(item => item.result.kind === 'phase');
+      assert.ok(units.length > 1); assert.equal(finals.length, 1);
+      assert.equal(current.dispatch_id, finals[0].receipt.dispatch_id);
+      assert.equal(finals[0].launch.payload.primary_segments, undefined);
+      assert.equal(finals[0].launch.input.includes(fs.readFileSync(path.join(f.worktree, 'src/unchanged.cjs'), 'utf8')), false,
+        'actual final receives bounded conclusions and acceptance rather than the full raw unit sources');
+      assert.deepEqual(finals[0].launch.payload.unit_artifacts.map(item => item.dispatch_id).sort(),
+        units.map(item => item.receipt.dispatch_id).sort());
+      assert.ok(finals[0].launch.payload.unit_results.every(item => item.seams.every(seam => seam.disposition === 'unresolved')));
+      assert.ok(finals[0].result.coverage.seam_dispositions.every(seam => seam.disposition === 'resolved'));
+      assert.equal(prepared.controls.measured.at(-1).kind, 'phase');
+      assert.notEqual(prepared.controls.measured.at(-1).verified_index_sha256, '0'.repeat(64));
+
+      const canonicalPlan = path.join(planning, f.rows['T-49-01'].plan);
+      const unit = units[0], memberFile = path.join(f.graphDir, 'tickets.json');
+      const mutations = [
+        [canonicalPlan, bytes => bytes.replace('## Verification commands',
+          '- New canonical acceptance at unchanged source HEAD.\n## Verification commands')],
+        [path.join(planning, '.planning/architecture/ADR-014-original.md'), bytes => bytes + '\nChanged governing obligation.\n'],
+        [memberFile, bytes => { const graph = JSON.parse(bytes); delete graph.tickets['T-49-02']; return JSON.stringify(graph); }],
+        [path.join(f.worktree, 'src/provider.cjs'), bytes => bytes + '\nexports.changedAfterFinal = true;\n'],
+        [path.join(f.worktree, unit.manifest.files.findings.path), bytes => bytes + ' '],
+        [path.join(f.worktree, unit.manifest.files.findings.path), bytes => {
+          const foreign = JSON.parse(bytes); foreign.runtime = nativeRuntime === 'codex' ? 'claude' : 'codex'; return JSON.stringify(foreign);
+        }],
+        [path.join(f.worktree, unit.manifest.files.findings.path), () =>
+          fs.readFileSync(path.join(f.worktree, units[1].manifest.files.findings.path))],
+        [unit.pin.path, bytes => bytes + ' '],
+      ];
+      if (nativeRuntime === 'codex') mutations.push([path.join(f.agents.integrator.dir, f.agents.integrator.selection.agent_file),
+        bytes => bytes + '\n# installed producer instructions changed after final\n']);
+      for (const [file, mutate] of mutations) {
+        const saved = fs.readFileSync(file);
+        try {
+          fs.writeFileSync(file, mutate(saved.toString('utf8')));
+          assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), f.head);
+          assert.equal(currentPartitionConsumer(f), null, 'changed current canonical/producer/member/source/original evidence refuses: ' + file);
+        } finally { fs.writeFileSync(file, saved); }
+        assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
+      }
+      const artifact = path.join(f.worktree, unit.manifest.files.findings.path), saved = fs.readFileSync(artifact);
+      try {
+        fs.unlinkSync(artifact);
+        assert.equal(currentPartitionConsumer(f), null, 'missing original unit cannot authorize final');
+      } finally { fs.writeFileSync(artifact, saved); }
+      git(f.worktree, 'update-ref', 'refs/remotes/origin/main', f.head);
+      assert.equal(currentPartitionConsumer(f), null, 'live default base moved');
+      git(f.worktree, 'update-ref', 'refs/remotes/origin/main', f.base);
+      assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
+      git(f.worktree, 'update-ref', 'refs/heads/' + f.pr.headRefName, f.base);
+      assert.equal(currentPartitionConsumer(f), null, 'current source HEAD moved');
+      git(f.worktree, 'update-ref', 'refs/heads/' + f.pr.headRefName, f.head);
+      assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
+      assert.equal(fs.readFileSync(path.join(f.worktree, f.rows['T-49-01'].plan), 'utf8').includes('New canonical acceptance'), false);
+    });
+  });
+
+  for (const disposition of ['needs-fix', 'contradictory-pass', 'incomplete'])
+    test('supported ' + nativeRuntime + ' final preserves planted cross-unit mismatch: ' + disposition, async () => {
+      await publicIntegrationFixture(async f => {
+        write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n' + '// producer context Ω\n'.repeat(3000));
+        write(f.worktree, 'src/consumer.cjs', 'const { value } = require("./provider.cjs");\nif (value !== 1) throw new Error("planted fixture mismatch");\n');
+        for (const row of Object.values(f.rows)) {
+          const file = path.join(f.worktree, row.plan);
+          fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('## Verification commands',
+            '- Consumer must accept the provider value without throwing.\n## Verification commands'));
+        }
+        commit(f, 'plant independent producer consumer acceptance mismatch');
+        const producerConclusion = 'Producer exports value 2.', consumerConclusion = 'Consumer requires value 1 and throws otherwise.';
+        const controls = { result(result, payload) {
+          if (payload.kind === 'unit') {
+            const primary = payload.primary_segments.map(segment => segment.content).join('\n');
+            result.conclusions = [];
+            if (primary.includes('exports.value = 2;')) result.conclusions.push(producerConclusion);
+            if (primary.includes('planted fixture mismatch')) result.conclusions.push(consumerConclusion);
+            if (!result.conclusions.length) result.conclusions.push('Other exact assigned fixture material evaluated.');
+            return;
+          }
+          const producer = payload.unit_results.filter(unit => unit.conclusions.includes(producerConclusion));
+          const consumer = payload.unit_results.filter(unit => unit.conclusions.includes(consumerConclusion));
+          assert.ok(producer.some(left => consumer.some(right => right.unit_id !== left.unit_id)), 'planted producer and consumer evidence spans distinct primary units');
+          const seam = payload.seams.find(item => producer.some(left => consumer.some(right =>
+            item.from === left.unit_id && item.to === right.unit_id || item.to === left.unit_id && item.from === right.unit_id)));
+          assert.ok(seam, 'final receives the unresolved cross-unit acceptance interaction');
+          assert.ok(payload.governing.some(item => item.pointer.includes('/acceptance/')
+            && typeof item.value === 'string' && item.value.includes('Consumer must accept')));
+          result.coverage.seam_dispositions.find(item => item.id === seam.id).disposition = 'unresolved';
+          result.coverage.seam_dispositions.find(item => item.id === seam.id).rationale = 'Provider emits 2; consumer accepts only 1. Current acceptance fails.';
+          result.summary = 'Planted producer/consumer mismatch remains unresolved.';
+          result.evidence_markdown = 'Behavior-only fixture: provider emits 2; consumer requires 1. Acceptance unresolved.';
+          if (disposition === 'incomplete') result.completeness = 'incomplete';
+          else if (disposition === 'needs-fix') {
+            result.outcome = 'needs-fix'; result.blocking_count = 1;
+            result.findings = [{ id: 'F1', type: 'fix-ticket', blocking: true, ticket: null,
+              summary: 'Provider emits 2 but consumer accepts only 1.',
+              fix_ticket: { title: 'Align producer and consumer', scope: 'Repair the planted acceptance mismatch.',
+                files: ['src/provider.cjs', 'src/consumer.cjs'], depends_on: [] } }];
+          }
+        } };
+        const prepared = publicPartitionFixture(f, nativeRuntime, controls);
+        if (disposition === 'needs-fix') {
+          const result = await supportedPartitionCaller(f, nativeRuntime, prepared.options);
+          assert.equal(result.result.outcome, 'needs-fix');
+          assert.equal(nativeRuntime === 'codex' ? result.artifact.envelope.outcome : result.artifact.outcome, 'needs-fix');
+          const sessions = originalPartitionSessions(f, nativeRuntime, prepared.recorder, controls);
+          const final = sessions.find(item => item.result.kind === 'phase');
+          assert.equal(final.result.outcome, 'needs-fix');
+          assert.equal(final.result.blocking_count, 1);
+          assert.ok(final.result.coverage.seam_dispositions.some(seam => seam.disposition === 'unresolved'));
+        } else {
+          await assert.rejects(supportedPartitionCaller(f, nativeRuntime, prepared.options),
+            error => error.code === 'INTEGRATION_PARTITION_INVALID');
+          assert.equal(partitionManifests(f).filter(item => item.artifact_kind === 'judgment').length, 0,
+            'contradictory or incomplete original final cannot be projected as passing authority');
+        }
+        assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
+        assert.equal(currentPartitionConsumer(f), null);
+      });
+    });
+}
+
 test('actual final caller and reviewer reference require trusted preparation and fresh complete coverage', () => {
   const command = fs.readFileSync(path.resolve(__dirname, '../../plugins/delivery-pipeline/commands/deliver.md'), 'utf8');
   const reference = fs.readFileSync(path.resolve(__dirname, '../../plugins/delivery-pipeline/references/integrator.md'), 'utf8');
   for (const text of [command, reference]) {
-    assert.match(text, /shipyard\.integration-review\.v2/);
+    assert.match(text, /shipyard\.integration-review\.v[23]/);
     assert.match(text, /shipyard\.integration-coverage-result\.v1/);
     assert.match(text, /reviewed_identity/);
     assert.match(text, /fresh native/);
@@ -530,7 +834,7 @@ test('actual final caller and reviewer reference require trusted preparation and
   }
   assert.match(command, /selectReviewBaseline\(\{currentInput\}\)/);
   assert.match(command, /buildReviewImpactPacket\(currentInput, selection\)/);
-  assert.match(command, /createCodexDeliveryHost[\s\S]*review_contract: 'shipyard\.integration-review\.v2'/);
+  assert.match(command, /createCodexDeliveryHost[\s\S]*review_contract: 'shipyard\.integration-review\.v3'/);
   assert.match(command, /createClaudeRoleHost\(options\)\.run/);
   assert.match(reference, /inherited_obligations/);
   assert.match(reference, /newly_reviewed_obligations/);
