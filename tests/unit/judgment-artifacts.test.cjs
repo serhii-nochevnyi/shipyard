@@ -1061,4 +1061,45 @@ test('old-format code-review remains historical and cannot open the default hold
   }
 });
 
+test('D-32 unit labels cannot obtain ordinary integrator phase sealing', () => {
+  const tickets = [{ id: 'T-33-01', pr: 81, head: 'a'.repeat(40), base: 'main', branch: 'ticket/T-33-01' }];
+  const value = fixture('integrator', root => phaseSubject(root, tickets));
+  try {
+    const integrationPath = evidence(value.root, path.relative(value.root, integrationEvidencePath(value.root)), 'Original phase fixture evidence.');
+    const input = sealInput(value, { phase: INTEGRATION_PHASE, head: git(value.root, ['rev-parse', 'HEAD']),
+      base: 'main', base_tree: git(value.root, ['rev-parse', 'main^{tree}']), ticket_set: tickets,
+      outcome: 'passed', summary: 'Unit cannot act as a phase.', blocking_count: 0, findings: [],
+      review_contract: 'shipyard.integration-review.v3', kind: 'unit', schema: 'shipyard.integration-unit-result.v1' }, {
+      role: 'integrator', phase: INTEGRATION_PHASE, ticketSet: tickets, evidencePath: integrationPath });
+    assert.throws(() => roleArtifact.sealJudgment(input), /unit results cannot/);
+    assert.throws(() => roleArtifact.sealIntegrationUnit({ ...input, prepared: {
+      plan_sha256: 'a'.repeat(64), unit_id: 'u000001', kind: 'unit' } }), /original private unit/);
+  } finally { fs.rmSync(value.root, { recursive: true, force: true }); }
+});
+
+test('D-32 legacy v2 native current authority remains independent of partition v3', async () => {
+  const Module = require('node:module');
+  const filename = path.join(__dirname, 'phase49-incremental-integration.test.cjs');
+  const loaded = new Module(filename, module);
+  loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+  const originalLoad = Module._load;
+  Module._load = function(name, ...args) {
+    if (name === 'node:test') return { test() {} };
+    return originalLoad.call(this, name, ...args);
+  };
+  try { loaded._compile(fs.readFileSync(filename, 'utf8') + '\nmodule.exports = { fixture, runIntegration };\n', filename); }
+  finally { Module._load = originalLoad; }
+  await loaded.exports.fixture(async f => {
+    const current = await loaded.exports.runIntegration(f);
+    const artifact = JSON.parse(fs.readFileSync(current.result.artifact.artifact_path, 'utf8'));
+    assert.equal(artifact.artifact_kind, 'judgment');
+    assert.equal(artifact.current_review.contract, 'shipyard.integration-review.v2');
+    assert.equal(artifact.integration_partition, undefined);
+    assert.equal(artifact.current_review.integration_partition, undefined);
+    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head,
+      baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName })?.authenticated, true);
+    assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review: current, capacity: {} }), /private/);
+  });
+});
+
 done();
