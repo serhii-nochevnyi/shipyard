@@ -58,7 +58,7 @@ function matchEpicPullRequest({ graph, state, live, repo = null, phase } = {}) {
 function resolveCodeReviewMode({ graphDir, worktree } = {}) {
   const resolved = graphDir ? { dir: path.resolve(graphDir), how: 'flag' } : resolveGraphDir([], worktree);
   if (resolved.how === 'none') return { mode: DEFAULTS.code_review, project_root: null,
-    graph_dir: null, config_path: null, source: 'default', valid: true, error: null };
+    graph_dir: null, config_path: null, source: 'default' };
   const graph_dir = resolved.dir;
   const project_root = fs.realpathSync(path.resolve(graph_dir, '..', '..'));
   const config_path = path.join(project_root, '.planning/config.json');
