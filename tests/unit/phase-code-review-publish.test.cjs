@@ -38,10 +38,14 @@ function fixture(jira = null, mode = 'report', pr = 52) {
   f.writeGraph();
   const live = () => ({ number: pr, state: 'OPEN', headRefName: branch, headRefOid: f.git(['rev-parse', 'HEAD']),
     baseRefName: 'main', baseRefOid: f.base });
-  const writes = [], comments = [];
+  const writes = [], comments = [], hooks = {};
   let nextCommentId = 77;
   let ticketHead = f.base, failStatus = false, failComment = false, failLookup = false;
-  const getPullRequest = ({ pr: requested }) => requested === pr ? live() : { number: requested, headRefOid: ticketHead };
+  const getPullRequest = ({ pr: requested }) => {
+    const result = requested === pr ? live() : { number: requested, headRefOid: ticketHead };
+    hooks.readPR?.(requested);
+    return result;
+  };
   const options = { defaultBranch: 'main', getPullRequest, gh(args) {
     const endpoint = args[1], method = args[args.indexOf('--method') + 1];
     const fields = Object.fromEntries(args.filter((_, i) => args[i - 1] === '-f').map(value => {
@@ -50,15 +54,21 @@ function fixture(jira = null, mode = 'report', pr = 52) {
     if (args.includes('--method') || args.includes('-f')) {
       writes.push({ endpoint, method, fields });
       if (endpoint.includes('/statuses/')) {
+        hooks.status?.();
         if (failStatus) throw new Error('status unavailable');
         return {};
       }
       if (failComment) throw new Error('comment unavailable');
-      if (method === 'PATCH') { const comment = comments.find(comment => endpoint.endsWith('/' + comment.id)); comment.body = fields.body; return { ...comment }; }
+      if (method === 'PATCH') {
+        const comment = comments.find(comment => endpoint.endsWith('/' + comment.id));
+        comment.body = fields.body; hooks.comment?.(); return { ...comment };
+      }
       nextCommentId = Math.max(nextCommentId, ...comments.map(comment => comment.id + 1));
-      const comment = { id: nextCommentId++, body: fields.body }; comments.push(comment); return { ...comment };
+      const comment = { id: nextCommentId++, body: fields.body };
+      comments.push(comment); hooks.comment?.(); return { ...comment };
     }
     if (failLookup) throw new Error('comment lookup unavailable');
+    hooks.lookup?.();
     return [comments];
   } };
   const input = () => ({ phase: 52, phaseDirectory: f.phase, pr, worktree: f.root, graphDir: f.graphDir });
@@ -80,7 +90,7 @@ function fixture(jira = null, mode = 'report', pr = 52) {
       priorFindings, readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') }));
     return artifact.sealJudgment(retainPlanningInput(f, request, planningRoot));
   };
-  return { ...f, branch, live, input, options, seal, writes, comments,
+  return { ...f, branch, live, input, options, seal, writes, comments, hooks,
     sealLinked: linked => {
       const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
         repository: target.repositoryIdentity(linked), branch, pr, head: live().headRefOid, base: f.base });
@@ -185,10 +195,29 @@ for (const jira of [null, 'PRJ-42']) {
       }
       fs.writeFileSync(path.join(f.root, 'after.txt'), 'new head');
       f.git(['add', 'after.txt']); f.git(['commit', '--quiet', '-m', 'after cap']);
+      const capped = flow.status(f.input(), f.options);
+      assert.equal(capped.state, 'limit'); assert.equal(capped.rounds_used, 3);
+      const config = path.join(f.root, '.planning/config.json');
+      const originalConfig = fs.readFileSync(config);
+      const before = publicationSnapshot(f);
+      fs.writeFileSync(config, '[]');
+      const mode = flow.resolveCodeReviewMode(f.input());
+      assert.equal(mode.valid, false); assert.equal(mode.error.file, config);
+      assertConfigRefusal(() => flow.publish(f.input(), f.options), config);
+      assert.equal(f.writes.length, 0); assert.deepEqual(publicationSnapshot(f), before);
+      assert.equal(fs.existsSync(publicationState(f).directory), false);
+      fs.writeFileSync(config, originalConfig);
       const published = flow.publish(f.input(), f.options);
       assert.equal(published.status.state, 'pending');
       assert.equal(published.status.description, 'code review limit reached: no further review will run for this head');
       assert.equal(published.comment.action, 'skipped'); assert.equal(f.comments.length, 0); assert.equal(f.writes.length, 1);
+      fs.unlinkSync(config);
+      const absent = flow.resolveCodeReviewMode(f.input());
+      assert.equal(absent.valid, true); assert.equal(absent.error, null); assert.equal(absent.source, 'default');
+      const defaults = flow.publish(f.input(), f.options);
+      assert.equal(defaults.status.ok, true); assert.equal(defaults.status.state, 'pending');
+      assert.equal(defaults.comment.action, 'skipped'); assert.equal(f.writes.length, 2);
+      assert.deepEqual(publicationSnapshot(f), before);
     } finally { f.cleanup(); }
   });
 }
@@ -651,6 +680,183 @@ function publicationState(f, pr = 52) {
   return { directory, file: path.join(directory, `${pr}.json`) };
 }
 
+function publicationSnapshot(f) {
+  const { directory } = publicationState(f);
+  if (!fs.existsSync(directory)) return null;
+  const snapshot = [];
+  const walk = (file, relative) => {
+    const stat = fs.lstatSync(file);
+    snapshot.push({ path: relative, mode: stat.mode & 0o777, uid: stat.uid,
+      bytes: stat.isFile() ? fs.readFileSync(file, 'hex') : null });
+    if (stat.isDirectory()) for (const name of fs.readdirSync(file).sort()) walk(path.join(file, name), path.join(relative, name));
+  };
+  walk(directory, '.');
+  return snapshot;
+}
+
+function assertConfigRefusal(action, file) {
+  assert.throws(action, error => {
+    assert.equal(error.code, 'CONFIG_INVALID');
+    assert.equal(error.file, file);
+    assert(error.message.includes(file), error.message);
+    return true;
+  });
+}
+
+test('existing malformed, array, scalar, null and unreadable configs refuse', () => {
+  const f = fixture();
+  const originalRead = fs.readFileSync;
+  try {
+    f.seal();
+    const file = path.join(f.root, '.planning/config.json');
+    const before = publicationSnapshot(f);
+    let reads = 0;
+    f.hooks.readPR = () => { reads++; };
+    for (const bytes of ['{', '[]', '"report"', '42', 'true', 'null']) {
+      fs.writeFileSync(file, bytes);
+      assertConfigRefusal(() => flow.publish(f.input(), f.options), file);
+      assert.equal(reads, 0);
+      assert.equal(f.writes.length, 0); assert.deepEqual(publicationSnapshot(f), before);
+    }
+    fs.writeFileSync(file, '{}');
+    fs.readFileSync = function (name, ...args) {
+      if (name === file) throw Object.assign(new Error('config unreadable'), { code: 'EACCES' });
+      return originalRead.call(this, name, ...args);
+    };
+    assertConfigRefusal(() => flow.publish(f.input(), f.options), file);
+    assert.equal(reads, 0);
+    assert.equal(f.writes.length, 0); assert.deepEqual(publicationSnapshot(f), before);
+  } finally { fs.readFileSync = originalRead; f.cleanup(); }
+});
+
+test('absent config preserves defaults with a verdict sealed under those defaults', () => {
+  const f = fixture();
+  try {
+    fs.unlinkSync(path.join(f.root, '.planning/config.json'));
+    f.seal();
+    const published = flow.publish(f.input(), f.options);
+    assert.equal(published.status.ok, true); assert.equal(published.comment.action, 'created');
+  } finally { f.cleanup(); }
+});
+
+test('config invalidation during the final live-head read refuses the status POST', () => {
+  const f = fixture();
+  try {
+    f.seal();
+    const file = path.join(f.root, '.planning/config.json'), before = publicationSnapshot(f);
+    let reads = 0;
+    f.hooks.readPR = pr => { if (pr === 52 && ++reads === 2) fs.writeFileSync(file, '[]'); };
+    assertConfigRefusal(() => flow.publish(f.input(), f.options), file);
+    assert.equal(reads, 2); assert.equal(f.writes.length, 0);
+    assert.deepEqual(publicationSnapshot(f), before);
+  } finally { f.cleanup(); }
+});
+
+for (const statusFails of [false, true]) test('invalidation after status stops namespace initialization: statusFails=' + statusFails, () => {
+  const f = fixture();
+  try {
+    f.seal();
+    const file = path.join(f.root, '.planning/config.json'), before = publicationSnapshot(f);
+    f.hooks.status = () => fs.writeFileSync(file, 'null');
+    if (statusFails) f.failStatus();
+    assertConfigRefusal(() => flow.publish(f.input(), f.options), file);
+    assert.equal(f.writes.length, 1); assert(f.writes[0].endpoint.includes('/statuses/'));
+    assert.equal(f.comments.length, 0); assert.deepEqual(publicationSnapshot(f), before);
+  } finally { f.cleanup(); }
+});
+
+test('invalidation after namespace validation prevents lock initialization', () => {
+  const f = fixture();
+  const originalLstat = fs.lstatSync, originalMkdir = fs.mkdirSync;
+  try {
+    f.seal();
+    const file = path.join(f.root, '.planning/config.json'), { directory } = publicationState(f);
+    let invalidated = false, laterMkdirs = 0, before;
+    fs.lstatSync = function (name, ...args) {
+      const stat = originalLstat.call(this, name, ...args);
+      if (name === directory && !invalidated) {
+        invalidated = true;
+        before = publicationSnapshot(f);
+        fs.writeFileSync(file, '[]');
+      }
+      return stat;
+    };
+    fs.mkdirSync = function (name, ...args) {
+      if (invalidated && (name === directory || String(name).startsWith(directory + path.sep))) laterMkdirs++;
+      return originalMkdir.call(this, name, ...args);
+    };
+    assertConfigRefusal(() => flow.publish(f.input(), f.options), file);
+    assert.equal(invalidated, true); assert.equal(laterMkdirs, 0);
+    assert.equal(f.writes.length, 1); assert.equal(f.comments.length, 0);
+    assert.deepEqual(publicationSnapshot(f), before);
+  } finally { fs.lstatSync = originalLstat; fs.mkdirSync = originalMkdir; f.cleanup(); }
+});
+
+for (const bound of [false, true]) {
+  for (const boundary of ['lookup', 'live-head', 'comment-write', 'comment', 'temporary-file', 'atomic-write']) {
+    test('invalidation before ' + boundary + ' stops later mutations: bound=' + bound, () => {
+      const f = fixture();
+      const originalOpen = fs.openSync, originalClose = fs.closeSync, originalLstat = fs.lstatSync;
+      try {
+        f.seal();
+        const state = publicationState(f), config = path.join(f.root, '.planning/config.json');
+        if (bound) {
+          assert.equal(flow.publish(f.input(), f.options).comment.action, 'created');
+          const head = f.live().headRefOid;
+          f.seal(raw(), 2, head);
+        } else fs.mkdirSync(state.directory, { recursive: true, mode: 0o700 });
+        const human = { id: 91, body: '<!-- code-review --> Human discussion.\r\n' };
+        f.comments.push(human);
+        const before = publicationSnapshot(f), comments = structuredClone(f.comments);
+        f.writes.length = 0;
+        let invalidated = false, temporaryFd, temporaryOpens = 0;
+        const invalidate = () => { invalidated = true; fs.writeFileSync(config, '{'); };
+        fs.openSync = function (name, ...args) {
+          const fd = originalOpen.call(this, name, ...args);
+          if (name === path.join(state.directory, `.52.json.tmp-${process.pid}`) && args[0] === 'wx') {
+            temporaryOpens++;
+            if (boundary === 'atomic-write') temporaryFd = fd;
+          }
+          return fd;
+        };
+        if (boundary === 'lookup') f.hooks.lookup = invalidate;
+        else if (boundary === 'live-head') {
+          let reads = 0;
+          f.hooks.readPR = pr => { if (pr === 52 && ++reads === 3) invalidate(); };
+        } else if (boundary === 'comment') f.hooks.comment = invalidate;
+        else if (boundary === 'comment-write' || boundary === 'temporary-file') {
+          let reads = 0;
+          const watched = boundary === 'comment-write' ? state.directory : state.file;
+          const finalRead = boundary === 'comment-write' ? 3 : bound ? 4 : 2;
+          fs.lstatSync = function (name, ...args) {
+            try { return originalLstat.call(this, name, ...args); }
+            finally { if (name === watched && ++reads === finalRead) invalidate(); }
+          };
+        } else {
+          fs.closeSync = function (fd) {
+            const result = originalClose.call(this, fd);
+            if (fd === temporaryFd) { temporaryFd = undefined; invalidate(); }
+            return result;
+          };
+        }
+        assertConfigRefusal(() => flow.publish(f.input(), f.options), config);
+        assert.equal(invalidated, true);
+        const commentCompleted = ['comment', 'temporary-file', 'atomic-write'].includes(boundary);
+        assert.equal(f.writes.length, commentCompleted ? 2 : 1);
+        assert(f.writes[0].endpoint.includes('/statuses/'));
+        if (commentCompleted) {
+          assert.equal(f.writes[1].method, bound ? 'PATCH' : 'POST');
+          assert.match(f.comments.find(comment => comment.id !== 91).body, /Code review/);
+          if (bound) assert.notEqual(f.comments[0].body, comments[0].body);
+        } else assert.deepEqual(f.comments, comments);
+        assert.equal(temporaryOpens, boundary === 'atomic-write' ? 1 : 0);
+        assert.equal(human.body, '<!-- code-review --> Human discussion.\r\n');
+        assert.deepEqual(publicationSnapshot(f), before);
+      } finally { fs.openSync = originalOpen; fs.closeSync = originalClose; fs.lstatSync = originalLstat; f.cleanup(); }
+    });
+  }
+}
+
 function coldPublisher() {
   const file = path.join(scripts, 'phase-code-review.cjs');
   delete require.cache[require.resolve(file)];
@@ -901,6 +1107,26 @@ test('a linked source worktree shares the canonical binding and authenticated re
     assert.equal(next.comment.ok, true, next.comment.reason);
     assert.equal(next.comment.action, 'edited'); assert.equal(next.comment.id, first.comment.id);
     assert.equal(f.comments.length, 1);
+  } finally { f.cleanup(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('linked publication checks the graph project config rather than a worktree config', () => {
+  const f = fixture(), directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'publish-config-linked-')));
+  try {
+    f.seal();
+    const linked = path.join(directory, 'checkout');
+    f.git(['worktree', 'add', '--detach', linked, 'HEAD']);
+    f.sealLinked(linked);
+    fs.mkdirSync(path.join(linked, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(linked, '.planning/config.json'), '{}');
+    const config = path.join(f.root, '.planning/config.json'), original = fs.readFileSync(config);
+    const before = publicationSnapshot(f), input = { ...f.input(), worktree: linked };
+    fs.writeFileSync(config, '[]');
+    assertConfigRefusal(() => flow.publish(input, f.options), config);
+    assert.equal(f.writes.length, 0); assert.deepEqual(publicationSnapshot(f), before);
+    fs.writeFileSync(config, original);
+    fs.writeFileSync(path.join(linked, '.planning/config.json'), '[]');
+    assert.equal(flow.publish(input, f.options).comment.action, 'created');
   } finally { f.cleanup(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 

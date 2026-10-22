@@ -66,7 +66,15 @@ function resolveCodeReviewMode({ graphDir, worktree } = {}) {
   for (const warning of loaded.warnings) process.stderr.write(`${warning}\n`);
   let declared = false;
   try { declared = Object.hasOwn(readJson(config_path)?.delivery_pipeline || {}, 'code_review'); } catch {}
-  return { mode: loaded.config.code_review, project_root, graph_dir, config_path, source: declared ? 'config' : 'default' };
+  return { mode: loaded.config.code_review, project_root, graph_dir, config_path,
+    source: declared ? 'config' : 'default', valid: loaded.valid, error: loaded.error };
+}
+
+function assertPublicationConfig(mode) {
+  const loaded = loadConfig(mode.project_root);
+  if (!loaded.valid) throw Object.assign(new Error(
+    `Refusing code review publication: invalid configuration ${loaded.error.file}: ${loaded.error.message}`),
+  { code: 'CONFIG_INVALID', file: loaded.error.file });
 }
 
 function git(worktree, args) {
@@ -313,6 +321,7 @@ function publicationNamespace(ctx) {
     if (!homeStat.isDirectory() || homeStat.uid !== process.getuid()) throw new Error('unsafe publication home');
     for (const part of path.relative(home, directory).split(path.sep)) {
       current = path.join(current, part);
+      assertPublicationConfig(ctx.mode);
       try { fs.mkdirSync(current, { mode: 0o700 }); }
       catch (error) { if (error.code !== 'EEXIST') throw error; }
       const stat = fs.lstatSync(current);
@@ -358,15 +367,18 @@ function readPublication(state) {
   return record;
 }
 
-function persistPublication(state, record) {
+function persistPublication(ctx, state, record) {
+  assertPublicationConfig(ctx.mode);
   state.validate();
   readPublication(state);
   const temporary = path.join(state.directory, `.${path.basename(state.file)}.tmp-${process.pid}`);
+  assertPublicationConfig(ctx.mode);
   const fd = fs.openSync(temporary, 'wx', 0o600);
   fs.closeSync(fd);
   try {
     const bytes = JSON.stringify(record) + '\n';
     if (Buffer.byteLength(bytes) > PUBLICATION_BOUND) throw new Error('publication record exceeds bound');
+    assertPublicationConfig(ctx.mode);
     writeAtomic(state.file, bytes);
     const persisted = fs.openSync(state.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try { fs.fsyncSync(persisted); } finally { fs.closeSync(persisted); }
@@ -380,6 +392,7 @@ function persistPublication(state, record) {
 
 function publish(input, options = {}) {
   const worktree = input.worktree || input.worktreePath || process.cwd(), repo = input.repo ?? null;
+  assertPublicationConfig(resolveCodeReviewMode({ graphDir: input.graphDir, worktree }));
   const request = args => {
     const output = options.gh ? options.gh(args) : (options.execFileSync || execFileSync)('gh', args,
       { cwd: worktree, encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024 });
@@ -391,6 +404,7 @@ function publish(input, options = {}) {
   const current = status(input, { ...options, getPullRequest: ({ pr }) => readPR(pr) });
   const { ctx, current: sealed, prior } = details.get(current);
   if (ctx.match.kind !== 'epic') throw new Error(`phase code review is unmatched: ${current.reason}`);
+  assertPublicationConfig(ctx.mode);
   if (current.state !== 'limit' && (!sealed || sealed.head !== current.head || sealed.subject !== current.subject
       || !(current.state === 'current' || (current.state === 'owed' && current.retry && sealed.review_completeness === 'incomplete'))))
     throw new Error('publication requires a sealed verdict for the exact head; the review is owed');
@@ -417,11 +431,15 @@ function publish(input, options = {}) {
   const api = ctx.repo ? `repos/${ctx.repo}` : 'repos/{owner}/{repo}';
   const result = { schema: 'shipyard.phase-code-review-publish.v1',
     status: { ok: false, action: 'failed', head: current.head, ...summary }, comment: { ok: false }, rules: [] };
+  assertPublicationConfig(ctx.mode);
   try {
     request(['api', `${api}/statuses/${current.head}`, '-f', `state=${summary.state}`,
       '-f', 'context=code-review', '-f', `description=${summary.description}`]);
     result.status.ok = true; result.status.action = 'posted';
-  } catch (error) { result.status.reason = error.message; }
+  } catch (error) {
+    if (error.code === 'CONFIG_INVALID') throw error;
+    result.status.reason = error.message;
+  }
   if (current.state === 'limit') {
     result.comment = { ok: true, action: 'skipped', reason: 'limit publishes status only' };
     return result;
@@ -436,6 +454,7 @@ function publish(input, options = {}) {
       return result;
     }
     const state = publicationNamespace(ctx);
+    assertPublicationConfig(ctx.mode);
     withLock(state.directory, `pr-${ctx.pr}`, () => {
       state.validate();
       const binding = readPublication(state);
@@ -453,14 +472,18 @@ function publish(input, options = {}) {
         .some(key => latest[key] !== ctx.live[key]) || git(ctx.worktree, ['rev-parse', 'HEAD']) !== current.head)
         throw new Error('live phase PR identity changed before comment publication');
       state.validate();
+      assertPublicationConfig(ctx.mode);
       const posted = request(['api', existing ? `${api}/issues/comments/${existing.id}` : `${api}/issues/${ctx.pr}/comments`,
         '--method', existing ? 'PATCH' : 'POST', '-f', `body=${body}`]);
       if (!object(posted) || !positiveId(posted.id) || posted.body !== body
           || (existing && posted.id !== existing.id)) throw new Error('comment publication response is invalid');
-      persistPublication(state, { ...state.identity, comment_id: posted.id, body_hash: publicationHash(body) });
+      persistPublication(ctx, state, { ...state.identity, comment_id: posted.id, body_hash: publicationHash(body) });
       result.comment = { ok: true, action: existing ? 'edited' : 'created', id: posted.id };
     }, { label: 'code review publication', waitMs: 10000 });
-  } catch (error) { result.comment = { ok: false, action: 'failed', reason: error.message }; }
+  } catch (error) {
+    if (error.code === 'CONFIG_INVALID') throw error;
+    result.comment = { ok: false, action: 'failed', reason: error.message };
+  }
   return result;
 }
 

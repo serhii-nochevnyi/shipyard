@@ -85,6 +85,27 @@ test('review roles use the prepared-context CLI and preserve the integrator in-p
   assert.match(step5, /createCodexDeliveryHost\(\{[\s\S]*?role: 'integrator'/);
 });
 
+test('both supported integrator callers select v3 before legacy full-inline formatting', () => {
+  const start = step5.indexOf('**Fresh final integration contract.**');
+  const end = step5.indexOf('**Phase 41 prelaunch gate', start);
+  assert.ok(start >= 0 && end > start);
+  const integration = step5.slice(start, end);
+  const caller = integration.match(/```javascript\n([\s\S]*?)\n\s*```/)[1];
+  assert.match(caller, /const current = prepareNativeIntegratorContext\(options, \{ worktree, phase: String\(phase\) \}\)/);
+  assert.ok(!caller.includes('prepareIntegratorContext'));
+  assert.strictEqual((caller.match(/review_contract: 'shipyard\.integration-review\.v3'/g) || []).length, 2);
+  assert.match(caller, /scope: \{[\s\S]*run_id, worktree, repository: current.canonical.commonPath,[\s\S]*phase: current.phaseNumber, ticket: phaseSubject/);
+  assert.match(caller, /schema: 'shipyard.claude-role-request.v1',[\s\S]*role: 'integrator', worktree, phase: String\(phase\)/);
+  for (const field of ['dispatch_id', 'stage', 'unit_id', 'index', 'receipt', 'model', 'capacity', 'input_budget'])
+    assert.ok(!new RegExp('\\b' + field + '\\s*:').test(caller), `caller must not serialize ${field} authority`);
+  assert.match(integration, /INTEGRATION_CAPACITY_UNPROVEN/);
+  assert.match(integration, /before any native reservation/);
+  assert.match(integration, /same-plan restart/);
+  assert.match(integration, /separate.*Codex.*Claude/s);
+  assert.match(integration, /R8 INCOMPLETE/);
+  assert.match(integration, /human.*merge/s);
+});
+
 test('restore runs after live evidence reads and before every integrator outcome branch', () => {
   const restore = step5.indexOf('Restore the epic worktree (every integrator outcome)');
   assert.ok(restore > step5.indexOf("role: 'integrator'"));
