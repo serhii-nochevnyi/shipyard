@@ -2981,12 +2981,16 @@ driving PRs hands the user a half-truth.
      through to the integrator boundary, as with the phase 41 prelaunch gate.
    - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md` — the
      epic diff against the default branch, not the individual ticket-PRs →
-     `.planning/phases/<phase>/INTEGRATION.md`. Measure the epic input (`bytes ÷ 4`), record any journal-
+     `.planning/phases/<phase>/INTEGRATION.md`. Record descriptive epic size
+     separately from host-owned all-in capacity admission, retain any journal-
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
 
      **Fresh final integration contract.** For supported epic final review, use
-     `shipyard.integration-review.v2`. The host derives the complete current
+     `shipyard.integration-review.v3` on BOTH native hosts. Preliminary subject
+     preparation uses the exported `prepareNativeIntegratorContext`; it collects
+     full native facts without first formatting the legacy full-inline prompt.
+     The host derives the complete current
      graph, plans, phase contracts, HEAD/tree, default base and merge-base,
      merged ticket records and live ancestry. It prepares the complete
      dictionary, calls `selectReviewBaseline({currentInput})` independently for
@@ -3001,42 +3005,97 @@ driving PRs hands the user a half-truth.
      original evidence handoff to `sealJudgment` and `validateJudgmentManifest`:
 
      ```javascript
-     const { prepareIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
+     const { prepareNativeIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
      const { createCodexDeliveryHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs`);
-     const current = prepareIntegratorContext(options, { worktree, phase: String(phase) });
+     const current = prepareNativeIntegratorContext(options, { worktree, phase: String(phase) });
      const phaseSubject = current.ticket;
      const result = runtime === 'codex'
        ? await createCodexDeliveryHost({ ...options, scope: {
            run_id, worktree, repository: current.canonical.commonPath,
            phase: current.phaseNumber, ticket: phaseSubject,
-         } }).run({ role: 'integrator', dispatch_id,
-           context: { review_contract: 'shipyard.integration-review.v2' } })
+         } }).run({ role: 'integrator',
+           context: { review_contract: 'shipyard.integration-review.v3' } })
        : await createClaudeRoleHost(options).run({ schema: 'shipyard.claude-role-request.v1',
            role: 'integrator', worktree, phase: String(phase),
-           review_contract: 'shipyard.integration-review.v2' });
+           review_contract: 'shipyard.integration-review.v3' });
      ```
 
      `options` selects the canonical graph and supported installed runtime; it
      supplies no model-authored authority. Consume only the returned original
-     receipt and sealed current artifact. Both producers retain complete live
-     preflight at launch and finish. The Codex path uses private prepared file
-     input with pinned installed instructions and the protected native progress
-     observer. Continuation uses only the existing authenticated exact-packet
-     host contract; a bare UUID or cursor supplies no coverage. Unsupported
-     baseline transport, including native-child/continuation authority, remains
-     role-specific full fallback. The second runtime preserves its complete
-     inline dictionary and native policy; it currently selects full review.
-     Unknown integration contract versions refuse before launch.
+     receipt and sealed current artifact. No unit, stage, index, receipt, model
+     or capacity authority is serialized in the request. Both public `run`
+     entrypoints own frozen full factual preparation, private partition/admission
+     and protected archive custody. They retain complete current preflight at
+     every launch and finish. Each unit uses an independent original native
+     session; the phase final uses a separate fresh session after all units.
+     Codex's frozen `stage.input` includes the exact pinned `generatedInstructions`
+     prefix: the host removes that exact prefix before the unchanged static
+     runtime restores it. Preserve original stdin, transcript and receipt input
+     identity. Claude uses its own original native boundary and receipts.
 
-     Read all newly required material and affected boundaries, evaluate inherited
-     assumptions and limitations, and retain every current membership/ancestry
-     check. Return a fresh `reviewed_identity` and explicit
-     `shipyard.integration-coverage-result.v1` inherited/new/impact/limitations
-     coverage. The complete current packet remains available; integrity checks
-     supply no semantic credit. Repaired finals always owe a fresh native verdict
-     and original application receipt. Premature or incomplete output stays
-     rejected and failed originals remain failed history. Current-consumer
-     lineage admission and generated publication are separate downstream gates.
+     Trusted bootstrap resources must supply each runtime's original renderer,
+     non-model counter and independent current window evidence. Both production
+     counters/windows remain unproven: the documented default is
+     `INTEGRATION_CAPACITY_UNPROVEN` before any native reservation or model
+     launch. Fixture capacity supplies behavior credit only. Context overflow
+     (`INTEGRATION_INPUT_OVER_BOUND`/`CONTEXT_OVER_BOUND`), missing context,
+     unresolved seams, incomplete/failing units and stale facts/pins block.
+     Protected same-plan restart can reuse authenticated complete original units
+     only; changed plans, source, producer, membership, head or base require a new
+     current freeze and fresh proof. Never retry the same oversized full packet,
+     increase caps, filter obligations or add a general reduction tree.
+
+     V3 results bind a fresh `reviewed_identity`, exact primary byte/obligation
+     coverage, explicit support/context, complete findings/limitations and seam
+     dispositions. The final reports `shipyard.integration-partition-coverage.v1`
+     with authenticated unit references and a fresh index-bound actual-final
+     admission. Unit-only success cannot authorize phase evidence. Only the
+     authenticated complete phase final reaches `currentIntegrationVerdict` and
+     the normal gate caller, with exact current canonical plans, producer pins,
+     membership, source/head/base and live PR checks. A planted mismatch must be
+     reported as needs-fix/unresolved or remain incomplete; integrity/read counts
+     never supply semantic credit. Legacy v1/v2 remain independently eligible
+     under their original contracts, including v2's
+     `shipyard.integration-coverage-result.v1`. Unknown versions refuse.
+     Repaired finals always owe a fresh native verdict and original application
+     receipt. Premature or incomplete output stays rejected and failed originals
+     remain failed history. Generated publication is a separate downstream gate.
+
+     **Current full-packet native acceptance handoff.** After ALL four repairs
+     T-52-28…31 land, the coordinator re-freezes the then-current full packet:
+     complete graph/plans/merge ancestry and every material, acceptance,
+     verification, governing and impact obligation. Use the existing production
+     `prepareNativeIntegratorContext`, `prepareIntegrationLineage`,
+     `prepareIntegrationPartitions` and `createIntegrationCapacityHost`/
+     `admitIntegrationCapacity` APIs with actual installed instructions and
+     separate runtime evidence. Retain in the protected preparation/plan record
+     the complete real unit inventory; exact original material/obligation
+     membership, ranges and digests; each full rendered input and all-in token
+     bound with instruction/framing/tool/output reserves; maximum bounded final
+     template and fresh actual-final bound/index; measured unit count and final
+     headroom. Derive counts from current preparation and actual launches.
+     Historical 27-ticket measurements (4,227,821 dictionary tokens; largest diff
+     1,075,740; 495 obligations/96,491 metadata tokens; 27 contracts/21,223 tokens
+     including 208 acceptance/145 verification; 14,774 governing tokens; 136,879
+     minimum aggregate reference tokens) are diagnostics, never new authority.
+     Do not launch on the stale old packet or send its 563,798-token body/all raw
+     unit sources to the final. Unknown capacity, missing support or an impossible
+     single final is a named capacity/context blocker before readiness.
+
+     The separate genuine Codex and Claude acceptance obligations belong to each
+     runtime's native coordinator: fresh bounded units and a fresh final with its
+     own original receipts and actual capacity reports. Recheck exact repository,
+     head/base, complete membership/plans and producer/policy/instruction pins
+     immediately before each run and at current final consumption. A later
+     producer/policy/instruction edit invalidates affected frozen authority and
+     re-owes current proof, plus supported package/install checks after the last
+     producer edit. This Codex implementation chain launches no Anthropic model
+     and performs no native phase acceptance. Until BOTH genuine results exist,
+     phase acceptance remains incomplete: fixtures, another provider and ticket
+     delivery cannot substitute or establish release readiness. Then obtain
+     fresh architecture on the final current subject, preserving code-review →
+     integration → architecture order, report mode, all original failures and
+     receipts, R8 INCOMPLETE/zero semantic credit and human epic-to-main merge.
 
      **Phase 41 prelaunch gate (both runtimes).** For phase 41, immediately
      before the integrator boundary on either runtime (`runtime: "claude"` or
