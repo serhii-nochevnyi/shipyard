@@ -3201,6 +3201,8 @@ async function partitionNativeFixture(f, helper, original, stage, result, dispat
   const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
   const hash = value => crypto.createHash('sha256').update(value).digest('hex');
   const { a } = original;
+  const prefix = runtime.generatedInstructions(a.text) + '\n\n';
+  assert.ok(stage.input.startsWith(prefix), 'frozen input includes the actual static native instruction prefix');
   const scope = { ...original.scope, run_id: dispatchId };
   const session = crypto.randomUUID(), text = JSON.stringify(result);
   const pick = predicate => helper.template(helper.parent, predicate);
@@ -3239,15 +3241,19 @@ async function partitionNativeFixture(f, helper, original, stage, result, dispat
     probe: { status: 'available', executable: 'codex', runtime_version: 'fixture', capabilities: a.capabilities },
     spawn() {
       const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = process.pid;
-      child.stdin = { write() {}, end() { process.nextTick(() => {
-        child.stdout.emit('data', Buffer.from(helper.serialize(records))); child.emit('close', 0);
-      }); } };
+      let nativeInput = '';
+      child.stdin = { write(value) { nativeInput += value; }, end() {
+        assert.equal(nativeInput, stage.input, 'captured user input is the exact standard runtime stdin');
+        process.nextTick(() => {
+          child.stdout.emit('data', Buffer.from(helper.serialize(records))); child.emit('close', 0);
+        });
+      } };
       return child;
     } });
   f.partitionModelLaunches = (f.partitionModelLaunches || 0) + 1;
   const launched = await host.launchStatic({ model: a.selection.model, effort: a.selection.effort,
     sandbox_mode: 'read-only', agent_file: a.selection.agent_file, agent_file_content: a.text, agent_file_digest: hash(a.text) },
-  { dispatch_id: dispatchId, prompt: stage.input });
+  { dispatch_id: dispatchId, prompt: stage.input.slice(prefix.length) });
   const adapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
     agentsDir: a.dir, agentManifest: a.manifest,
     host: { requireRuntimeEvidence: true, launchStatic: () => launched }, capabilities: a.capabilities });
