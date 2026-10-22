@@ -8,7 +8,6 @@ const { execFileSync } = require('node:child_process');
 const { createCodexRuntimeHost, normalizeScope, parseCodexStream, probeCodexRuntime } = require('./codex-runtime-host.cjs');
 const { encodeUniqueContent } = require('./context-packet.cjs');
 const { stableStringify } = require('./model-policy-internal.cjs');
-const integrationPreflight = require('./phase-integrator-preflight.cjs');
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
@@ -775,12 +774,7 @@ function integrationDigest(value) {
 }
 
 function completeIntegrationPreflight(prepared, options) {
-  const proof = integrationPreflight.preflight({ phase: prepared.phaseNumber,
-    graphDir: prepared.graph.directory, worktree: prepared.canonical.worktree }, {
-    listPullRequests: options.listPullRequests, getPullRequest: options.getPullRequest,
-    git: (worktree, args) => (options.execFileSync || execFileSync)('git', ['-C', worktree, ...args], {
-      encoding: 'utf8', maxBuffer: MAX_GRAPH_BYTES, stdio: ['ignore', 'pipe', 'pipe'] }).trim(),
-  });
+  const proof = require('./claude-role-host.cjs').createNativeIntegrationMergeProof(prepared, options);
   if (proof.epic.commit !== prepared.canonical.head || proof.epic.tree !== prepared.canonical.headTree
       || JSON.stringify(proof.ticket_set) !== JSON.stringify(prepared.ticketSet)
       || proof.ticket_set_digest !== prepared.ticketSetDigest)

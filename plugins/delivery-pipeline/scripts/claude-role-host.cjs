@@ -672,22 +672,11 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
     livePullRequests: [live], canonical, graph, rows, sources, packet, prompt, signals, evidencePath: CODE_REVIEW_EVIDENCE });
 }
 
-function prepareIntegrator(options, request, canonical, graph, collection) {
-  const native = collection === nativeIntegratorCollection;
-  const selection = phaseSelection(graph, request.phase);
-  const { phase, phaseNumber } = selection;
-  const epicBranches = new Set(selection.rows.map(({ row }) => row.epic).filter(Boolean));
-  if (epicBranches.size > 1) reject('phase tickets span multiple epic branches');
-  const expectedBranch = epicBranches.size ? safeBranch([...epicBranches][0], 'epic branch') : null;
-  if (expectedBranch && canonical.branch !== expectedBranch) reject('integrator worktree is not on the canonical epic branch');
-  const defaultBranch = baseDefaultBranch(options, canonical.worktree, canonical.projectRoot);
-  const defaultBase = branchOid(options, canonical.worktree, defaultBranch).ref;
-  const defaultOid = git(options, canonical.worktree, ['rev-parse', '--verify', `${defaultBase}^{commit}`]);
-  const defaultBaseTree = git(options, canonical.worktree, ['rev-parse', '--verify', `${defaultOid}^{tree}`]);
-  const unprefixedDefault = defaultBranch.startsWith('origin/') ? defaultBranch.slice('origin/'.length) : defaultBranch;
-  if (!expectedBranch && canonical.branch !== defaultBranch && canonical.branch !== unprefixedDefault) {
-    reject('integrator worktree is not on the canonical default branch');
-  }
+const NATIVE_MERGE_PROOF_SCHEMA = 'shipyard.native-integration-merge-proof.v1';
+const NATIVE_MERGE_PROOF_MAX_BYTES = 64 * 1024;
+
+// Keep ticket-set serialization unchanged; merge facts have their own hash domain.
+function collectIntegrationMembers(options, canonical, graph, selection) {
   const ticketSet = [];
   const livePullRequests = [];
   for (const item of selection.rows) {
@@ -710,7 +699,8 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
     if (merged.length !== 1) reject(`${item.id} must have exactly one authenticated merged PR`);
     const live = getPullRequest(options, canonical.worktree, merged[0].number, row.repo || null);
     const mergeCommit = live && live.mergeCommit && live.mergeCommit.oid;
-    if (!object(live) || live.number !== merged[0].number || live.state !== 'MERGED' || !live.mergedAt
+    if (!object(live) || !Number.isSafeInteger(live.number) || live.number < 1
+        || live.number !== merged[0].number || live.state !== 'MERGED' || !live.mergedAt
         || live.headRefName !== prBranch
         || !/^[a-f0-9]{40}$/i.test(live.headRefOid || '') || !/^[a-f0-9]{40}$/i.test(mergeCommit || '')) {
       reject(`live merged PR identity is incomplete for ${item.id}`);
@@ -723,19 +713,218 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
       const shortMatch = marker && new RegExp(`(^|[^0-9])${marker[1]}-${marker[2]}($|[^0-9])`).test(text);
       if (!exactMatch && !shortMatch) reject(`merged PR ${live.number} does not identify ${item.id}`);
     }
-    try { git(options, canonical.worktree, ['merge-base', '--is-ancestor', mergeCommit, canonical.head]); }
-    catch { reject(`merged PR ${live.number} is not included in the integrator worktree`); }
     const baseName = safeBranch(live.baseRefName, `${item.id} PR base`);
     ticketSet.push({ id: item.id, pr: live.number, head: live.headRefOid, base: baseName, branch: prBranch });
-    livePullRequests.push(live);
+    livePullRequests.push(JSON.parse(JSON.stringify(live)));
   }
   ticketSet.sort((a, b) => a.id.localeCompare(b.id));
+  return { ticketSet, livePullRequests };
+}
+
+function nativeProofDigest(proof) {
+  const { proof_digest: _ignored, ...body } = proof;
+  return sha(canonicalJson(body));
+}
+
+function nativeProofPlans(canonical, selection) {
+  const planning = require('./context-packet.cjs');
+  const directories = new Set(selection.rows.map(({ row }) => path.dirname(row.plan)));
+  if (directories.size !== 1) reject('native phase tickets resolve to multiple plan directories');
+  const planDir = [...directories][0];
+  const directory = planning.planningReferencePath(canonical.projectRoot, planDir);
+  const plans = fs.readdirSync(directory).filter(name => /^\d+-\d+-PLAN\.md$/.test(name))
+    .map(name => path.join(planDir, name)).sort();
+  if (canonicalJson(plans) !== canonicalJson(selection.rows.map(({ row }) => path.normalize(row.plan)).sort()))
+    reject('canonical graph does not match the complete phase plan set');
+  return { planDir, plans: plans.map(relative => planning.planningReferencePin(canonical.projectRoot, relative)) };
+}
+
+function nativeMergedFact(id, repo, live) {
+  return { id, pr: live.number, repository: repo || null, state: live.state,
+    head_branch: live.headRefName, head: live.headRefOid, base_branch: live.baseRefName,
+    base: live.baseRefOid ?? null, merged_at: live.mergedAt, merge_commit: live.mergeCommit?.oid,
+    review_decision: live.reviewDecision ?? null };
+}
+
+function buildNativeMergeProof(options, canonical, graph, selection, members, base) {
+  const { planDir, plans } = nativeProofPlans(canonical, selection);
+  const repos = new Set(selection.rows.map(({ row }) => row.repo || null));
+  if (repos.size !== 1) reject('native phase tickets span foreign repositories');
+  if (canonical.planningReference.repo && !repos.has(canonical.planningReference.repo))
+    reject('native phase repository differs from its authenticated planning association');
+  const repo = [...repos][0];
+  if (repo && (typeof repo !== 'string' || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)
+      || !require('./architecture-target.cjs').legacyRepositoryForms(canonical.worktree).includes(repo.toLowerCase())))
+    reject('native phase PR repository differs from the reviewed Git repository');
+  const epics = new Set(selection.rows.map(({ row }) => row.epic));
+  if (epics.size !== 1 || !epics.has(canonical.branch)) reject('native phase epic identity differs');
+  for (const { id, row } of selection.rows) {
+    const match = /^T-(\d+)-(\d+)(?:-|$)/.exec(id);
+    if (!match || Number(match[1]) !== selection.phaseNumber || phaseNumberOf(row.phase) !== selection.phaseNumber)
+      reject(`${id} has a foreign phase identity`);
+  }
+  const byPr = new Map(members.livePullRequests.map(live => [live.number, live]));
+  const branches = new Map();
+  const merges = members.ticketSet.map(member => {
+    if (branches.has(member.branch)) reject('duplicate head branch makes the native path ambiguous');
+    branches.set(member.branch, member.id);
+    return nativeMergedFact(member.id, [...repos][0], byPr.get(member.pr));
+  });
+  if (byPr.size !== members.ticketSet.length) reject('duplicate PR identity in native membership');
+  const byId = new Map(merges.map(member => [member.id, member]));
+  const ancestor = (child, parent) => {
+    try { git(options, canonical.worktree, ['merge-base', '--is-ancestor', child, parent]); return true; }
+    catch { return false; }
+  };
+  for (const member of merges) {
+    for (const oid of [member.head, member.merge_commit]) {
+      try {
+        if (git(options, canonical.worktree, ['rev-parse', '--verify', `${oid}^{commit}`]) !== oid)
+          reject('merged PR object identity differs');
+      } catch { reject(`merged PR ${member.pr} object is missing or not included in the integrator worktree`); }
+    }
+    if (member.base !== null && !/^[a-f0-9]{40}$/i.test(member.base)) reject('merged PR base identity is incomplete');
+  }
+  const edges = merges.map(member => {
+    if (ancestor(member.merge_commit, canonical.head))
+      return { id: member.id, merge_commit: member.merge_commit, epic: canonical.head };
+    const parentId = branches.get(member.base_branch);
+    const parent = byId.get(parentId);
+    if (!parent || parent.id === member.id || !ancestor(member.merge_commit, parent.head))
+      reject(`merged PR ${member.pr} is not included in the integrator worktree through an authenticated parent`);
+    return { id: member.id, merge_commit: member.merge_commit, parent: parent.id, parent_head: parent.head };
+  });
+  const byEdge = new Map(edges.map(edge => [edge.id, edge]));
+  const paths = merges.map(member => {
+    const tickets = [], seen = new Set();
+    let id = member.id;
+    while (id) {
+      if (seen.has(id) || tickets.length >= merges.length) reject('native merge path contains a cycle');
+      seen.add(id); tickets.push(id);
+      id = byEdge.get(id).parent;
+    }
+    return { id: member.id, tickets };
+  });
+  const proof = { schema: NATIVE_MERGE_PROOF_SCHEMA, phase: String(selection.phaseNumber), plan_dir: planDir,
+    repository: canonical.commonPath, planning_reference: canonical.planningReference, plans,
+    graph: { directory: graph.directory, path: 'tickets.json',
+      digest: canonical.planningReference.graph.find(pin => pin.path.endsWith('/tickets.json')).sha256,
+      phase_rows_digest: sha(canonicalJson(selection.rows)) },
+    epic: { branch: canonical.branch, commit: canonical.head, tree: canonical.headTree },
+    integration_base: base, ticket_set: members.ticketSet, ticket_set_json: JSON.stringify(members.ticketSet),
+    ticket_set_digest: sha(JSON.stringify(members.ticketSet)), merges, edges, paths };
+  proof.proof_digest = nativeProofDigest(proof);
+  if (Buffer.byteLength(JSON.stringify(proof)) > NATIVE_MERGE_PROOF_MAX_BYTES) reject('native merge proof exceeds its bounded size');
+  return proof;
+}
+
+function collectNativeMergeProof(input, options) {
+  const worktree = fs.realpathSync(input.worktree);
+  const planning = require('./context-packet.cjs');
+  const reference = planning.resolvePlanningReference({ worktree, graphDir: input.graphDir });
+  const canonical = { worktree, projectRoot: reference.root, planningReference: reference,
+    commonPath: repositoryIdentity(worktree),
+    head: git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
+    headTree: git(options, worktree, ['rev-parse', '--verify', 'HEAD^{tree}']),
+    branch: git(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) };
+  const graph = graphData({ ...options, graphDir: reference.directory }, reference.root);
+  const selection = phaseSelection(graph, String(input.phase));
+  const directorySelection = phaseSelection(graph, selection.phase);
+  if (canonicalJson(directorySelection.rows) !== canonicalJson(selection.rows))
+    reject('canonical phase membership contains a foreign phase');
+  const epic = branchOid(options, worktree, canonical.branch);
+  if (epic.oid !== canonical.head) reject('integrator worktree is not at the pinned epic head', 'STALE_CONTEXT');
+  const defaultBranch = input.baseRef || baseDefaultBranch(options, worktree, reference.root);
+  const base = branchOid(options, worktree, defaultBranch);
+  const baseIdentity = { ref: base.ref, commit: base.oid,
+    tree: git(options, worktree, ['rev-parse', '--verify', `${base.oid}^{tree}`]) };
+  const members = collectIntegrationMembers(options, canonical, graph, selection);
+  const proof = buildNativeMergeProof(options, canonical, graph, selection, members, baseIdentity);
+  let again;
+  try { again = collectIntegrationMembers(options, canonical, graph, selection); }
+  catch (error) { reject('merged PR selection changed during collection', 'STALE_CONTEXT', error); }
+  const facts = inventory => inventory.ticketSet.map(member => nativeMergedFact(member.id,
+    selection.rows.find(row => row.id === member.id).row.repo,
+    inventory.livePullRequests.find(live => live.number === member.pr)));
+  if (canonicalJson(facts(again)) !== canonicalJson(proof.merges)
+      || canonicalJson(again.ticketSet) !== canonicalJson(members.ticketSet))
+    reject('merged PR identity changed during collection', 'STALE_CONTEXT');
+  try { planning.authenticatedPlanningRoot(worktree, reference); }
+  catch (error) { reject('canonical planning membership changed during collection', 'STALE_CONTEXT', error); }
+  const currentGraph = graphData({ ...options, graphDir: reference.directory }, reference.root);
+  if (canonicalJson(currentGraph) !== canonicalJson(graph))
+    reject('canonical graph/state selection changed during collection', 'STALE_CONTEXT');
+  let currentPlans;
+  try { currentPlans = nativeProofPlans(canonical, selection).plans; }
+  catch (error) { reject('complete phase plans changed during collection', 'STALE_CONTEXT', error); }
+  if (canonicalJson(currentPlans) !== canonicalJson(proof.plans)
+      || git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']) !== canonical.head
+      || git(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== canonical.branch
+      || branchOid(options, worktree, canonical.branch).oid !== canonical.head
+      || canonicalJson(branchOid(options, worktree, defaultBranch)) !== canonicalJson(base))
+    reject('native phase head, base or complete plans changed during collection', 'STALE_CONTEXT');
+  return proof;
+}
+
+function createNativeIntegrationMergeProof(prepared, options = {}) {
+  if (!integratorContexts.has(prepared) || !prepared.nativeMergeProof)
+    reject('native merge proof requires original private integrator preparation');
+  return assertNativeIntegrationMergeProof(prepared.nativeMergeProof, {
+    worktree: prepared.canonical.worktree, graphDir: prepared.graph.directory,
+  }, options);
+}
+
+function assertNativeIntegrationMergeProof(proof, input, options = {}) {
+  if (!object(proof) || proof.schema !== NATIVE_MERGE_PROOF_SCHEMA
+      || Buffer.byteLength(JSON.stringify(proof)) > NATIVE_MERGE_PROOF_MAX_BYTES
+      || nativeProofDigest(proof) !== proof.proof_digest
+      || !Array.isArray(proof.ticket_set)
+      || proof.ticket_set_json !== JSON.stringify(proof.ticket_set.map(({ id, pr, head, base, branch }) => ({ id, pr, head, base, branch })))
+      || sha(proof.ticket_set_json) !== proof.ticket_set_digest)
+    reject('original native merge proof schema, size or digest differs', 'STALE_CONTEXT');
+  if (path.resolve(input.graphDir) !== proof.graph.directory) reject('native merge proof graph association differs', 'STALE_CONTEXT');
+  let current;
+  try { current = collectNativeMergeProof({ worktree: input.worktree, graphDir: input.graphDir, phase: proof.phase, baseRef: proof.integration_base.ref }, options); }
+  catch (error) { reject('native merge proof is no longer current: ' + error.message, 'STALE_CONTEXT', error); }
+  if (canonicalJson(current) !== canonicalJson(proof)) reject('native merge facts, membership or path changed', 'STALE_CONTEXT');
+  return current;
+}
+
+function prepareIntegrator(options, request, canonical, graph, collection) {
+  const native = collection === nativeIntegratorCollection;
+  const selection = phaseSelection(graph, request.phase);
+  const { phase, phaseNumber } = selection;
+  const epicBranches = new Set(selection.rows.map(({ row }) => row.epic).filter(Boolean));
+  if (epicBranches.size > 1) reject('phase tickets span multiple epic branches');
+  const expectedBranch = epicBranches.size ? safeBranch([...epicBranches][0], 'epic branch') : null;
+  if (expectedBranch && canonical.branch !== expectedBranch) reject('integrator worktree is not on the canonical epic branch');
+  const defaultBranch = baseDefaultBranch(options, canonical.worktree, canonical.projectRoot);
+  const defaultBase = branchOid(options, canonical.worktree, defaultBranch).ref;
+  const defaultOid = git(options, canonical.worktree, ['rev-parse', '--verify', `${defaultBase}^{commit}`]);
+  const defaultBaseTree = git(options, canonical.worktree, ['rev-parse', '--verify', `${defaultOid}^{tree}`]);
+  const unprefixedDefault = defaultBranch.startsWith('origin/') ? defaultBranch.slice('origin/'.length) : defaultBranch;
+  if (!expectedBranch && canonical.branch !== defaultBranch && canonical.branch !== unprefixedDefault) {
+    reject('integrator worktree is not on the canonical default branch');
+  }
+  const sources = sourceReferences(canonical.projectRoot, graph, selection.rows);
+  const useNativeProof = native || request.review_contract === 'shipyard.integration-review.v2';
+  const nativeMergeProof = useNativeProof ? collectNativeMergeProof({ worktree: canonical.worktree,
+    graphDir: graph.directory, phase: String(phaseNumber) }, options) : null;
+  const { ticketSet, livePullRequests } = nativeMergeProof
+    ? { ticketSet: nativeMergeProof.ticket_set, livePullRequests: nativeMergeProof.merges.map(member => ({
+      number: member.pr, state: member.state, headRefName: member.head_branch, headRefOid: member.head,
+      baseRefName: member.base_branch, baseRefOid: member.base, mergedAt: member.merged_at,
+      mergeCommit: { oid: member.merge_commit }, reviewDecision: member.review_decision })) }
+    : collectIntegrationMembers(options, canonical, graph, selection);
+  if (!nativeMergeProof) for (const live of livePullRequests) {
+    try { git(options, canonical.worktree, ['merge-base', '--is-ancestor', live.mergeCommit.oid, canonical.head]); }
+    catch { reject(`merged PR ${live.number} is not included in the integrator worktree`); }
+  }
   const ticketSetDigest = sha(JSON.stringify(ticketSet));
   const subject = buildSubject('integrator', { phase, repository: canonical.commonPath, tickets: ticketSetDigest });
   const mergeBase = git(options, canonical.worktree, ['merge-base', defaultBase, canonical.head]);
   const mergeBaseTree = git(options, canonical.worktree, ['rev-parse', '--verify', `${mergeBase}^{tree}`]);
   const combinedDiff = diffText(options, canonical.worktree, mergeBase, canonical.head, productPathspec());
-  const sources = sourceReferences(canonical.projectRoot, graph, selection.rows);
   const reference = loadClaudeReferenceContent('integrator');
   const phaseContracts = sources.plans.map((plan) => ({ ticket: plan.id, path: plan.path,
     acceptance: plan.acceptance, verification: plan.verification, sha256: sha(plan.content) }));
@@ -743,6 +932,7 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
     phase,
     phase_number: phaseNumber,
     phase_contracts: phaseContracts,
+    ...(nativeMergeProof ? { native_merge_proof: nativeMergeProof } : {}),
     combined_diff: { base: defaultBase, base_commit: defaultOid, merge_base: mergeBase,
       merge_base_tree: mergeBaseTree, head: canonical.head, head_tree: canonical.headTree, content: combinedDiff },
     integration_base: { ref: defaultBase, commit: defaultOid, tree: defaultBaseTree },
@@ -764,8 +954,16 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
   const prompt = native ? undefined : makePrompt('integrator', subject, packet, reference);
   const prepared = Object.freeze({ role: 'integrator', ticket: subject, phase, phaseNumber,
     base: defaultBase, baseCommit: defaultOid, defaultBaseTree, mergeBase, mergeBaseTree, ticketSet,
-    ticketSetDigest, livePullRequests, canonical, graph, rows: selection.rows, sources, packet, prompt, signals,
+    ticketSetDigest, livePullRequests, canonical, graph, rows: selection.rows, sources, packet, prompt, signals, nativeMergeProof,
     evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
+  if (nativeMergeProof && (nativeMergeProof.epic.commit !== canonical.head
+      || nativeMergeProof.epic.tree !== canonical.headTree
+      || canonicalJson(nativeMergeProof.planning_reference) !== canonicalJson(canonical.planningReference)
+      || canonicalJson(nativeMergeProof.integration_base) !== canonicalJson(roleContext.integration_base)))
+    reject('native merge subject changed during preparation', 'STALE_CONTEXT');
+  if (nativeMergeProof && sources.plans.some(plan =>
+      nativeMergeProof.plans.find(pin => pin.path === plan.path)?.sha256 !== sha(plan.content)))
+    reject('complete phase plan bytes changed during preparation', 'STALE_CONTEXT');
   integratorContexts.set(prepared, collection);
   if (native) return prepared;
   if (request.review_contract !== 'shipyard.integration-review.v2') return prepared;
@@ -1550,16 +1748,22 @@ function revalidateLiveInputs(options, prepared, currentDispatchId) {
     }
     return expiredTickets;
   }
+  if (prepared.nativeMergeProof) {
+    createNativeIntegrationMergeProof(prepared.integrationReview?.prepared || prepared, options);
+    return;
+  }
   const defaultBranch = baseDefaultBranch(options, worktree, prepared.canonical.projectRoot);
   const currentBase = branchOid(options, worktree, defaultBranch);
   if (currentBase.ref !== prepared.base || currentBase.oid !== prepared.baseCommit) {
     reject('default branch changed while integration review was running', 'STALE_CONTEXT');
   }
-  for (let index = 0; index < prepared.livePullRequests.length; index++) {
-    const before = prepared.livePullRequests[index];
-    const row = prepared.rows.find((item) => item.id === prepared.ticketSet[index].id).row;
+  for (const before of prepared.livePullRequests) {
+    const member = prepared.ticketSet.find(item => item.pr === before.number);
+    const row = prepared.rows.find(item => item.id === member.id).row;
     const current = getPullRequest(options, worktree, before.number, row.repo || null);
-    if (!object(current) || current.state !== 'MERGED' || current.headRefOid !== before.headRefOid
+    if (!object(current) || current.number !== before.number || current.state !== 'MERGED'
+        || current.baseRefName !== before.baseRefName || (current.baseRefOid ?? null) !== (before.baseRefOid ?? null)
+        || current.mergedAt !== before.mergedAt || current.headRefOid !== before.headRefOid
         || current.headRefName !== before.headRefName || !current.mergeCommit || !before.mergeCommit
         || current.mergeCommit.oid !== before.mergeCommit.oid) {
       reject(`merged PR ${before.number} changed while integration review was running`, 'STALE_CONTEXT');
@@ -2084,6 +2288,8 @@ module.exports = Object.freeze({
   prepareInlineReview: makePrompt,
   prepareIntegratorContext,
   prepareNativeIntegratorContext,
+  createNativeIntegrationMergeProof,
+  assertNativeIntegrationMergeProof,
   isPreparedIntegratorContext,
   integrationPacketWithCoverage,
   assertEvidenceOnlyChanges,
