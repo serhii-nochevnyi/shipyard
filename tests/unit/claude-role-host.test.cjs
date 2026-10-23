@@ -1792,6 +1792,9 @@ test('D-34 legacy v2 retains strict proof on both native preparations', () => {
     assert.equal(prepared.integrationReview.proof.schema, 'shipyard.phase-integrator-preflight.v1');
     assert.equal(prepared.packet.role_context.native_merge_proof, undefined);
     const codex = host.prepareNativeIntegratorContext(options, input);
+    const legacyDefault = host.prepareNativeIntegratorContext(options, request(f));
+    assert.equal(legacyDefault.nativeMergeProof, null);
+    assert.deepEqual(legacyDefault.packet, codex.packet);
     const scope = { worktree: f.root, ticket: codex.ticket, phase: 38, run_id: 'd34-legacy-v2' };
     const review = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').prepareIntegrationLineage(scope, codex,
       { ...options, nativeRuntime: 'codex', dispatchId: scope.run_id, storageRoot: f.storageRoot, instructionBinding: {} });
@@ -1815,7 +1818,7 @@ test('D-34 real reverse squash reaches Claude and the Codex shared lineage entry
   const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
   try {
     const prepared = host.prepareIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' });
-    const codex = host.prepareNativeIntegratorContext(f.options, request(f));
+    const codex = host.prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' });
     const proof = host.createNativeIntegrationMergeProof(prepared, f.options);
     assert.equal(proof.schema, 'shipyard.native-integration-merge-proof.v1');
     assert.deepEqual(proof.paths.map(item => item.tickets), [
@@ -1873,7 +1876,7 @@ test('D-34 reverse squash refuses ' + scenario, () => {
       git(f.root, ['update-ref', 'refs/remotes/origin/' + f.branch, git(f.root, ['rev-parse', 'HEAD'])]);
     }
     assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(f.options, request(f)), /included|inclusion|parent|merged|identity|phase|repository|ambiguous|duplicate|cycle|object|plan set|delivery state/i);
+      .prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' }), /included|inclusion|parent|merged|identity|phase|repository|ambiguous|duplicate|cycle|object|plan set|delivery state/i);
   } finally { cleanupFixture(f); }
 });
 
@@ -1889,7 +1892,7 @@ test('D-34 collection refuses concurrent PR drift in ' + field, () => {
       return pr;
     };
     assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(f.options, request(f)), error => error.code === 'STALE_CONTEXT');
+      .prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' }), error => error.code === 'STALE_CONTEXT');
   } finally { cleanupFixture(f); }
 });
 
@@ -1912,7 +1915,7 @@ test('D-34 collection refuses concurrent ' + scenario + ' drift', () => {
       return pr;
     };
     assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(f.options, request(f)), error => error.code === 'STALE_CONTEXT');
+      .prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' }), error => error.code === 'STALE_CONTEXT');
   } finally { cleanupFixture(f); }
 });
 

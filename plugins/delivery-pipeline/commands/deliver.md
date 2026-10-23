@@ -3007,7 +3007,8 @@ driving PRs hands the user a half-truth.
      ```javascript
      const { prepareNativeIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
      const { createCodexDeliveryHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs`);
-     const current = prepareNativeIntegratorContext(options, { worktree, phase: String(phase) });
+     const current = prepareNativeIntegratorContext(options, {
+       worktree, phase: String(phase), review_contract: 'shipyard.integration-review.v3' });
      const phaseSubject = current.ticket;
      const result = runtime === 'codex'
        ? await createCodexDeliveryHost({ ...options, scope: {

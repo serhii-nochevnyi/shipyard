@@ -1162,7 +1162,7 @@ function prepareIntegratorInput(scope, request, options) {
       return review.input;
     }
     const prepared = require('./claude-role-host.cjs').prepareNativeIntegratorContext(options, {
-      worktree: scope.worktree, phase: String(scope.phase) });
+      worktree: scope.worktree, phase: String(scope.phase), review_contract: roleArtifact.INTEGRATION_REVIEW_V3 });
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: prepared.signals });
     const installed = installedAgentOptions(options, selected, options.host?.capabilities || options.capabilities);
     const instructions = archReviewContext.instructionEvidence(installed.agentDir, installed.agentFile, installed.agentManifest);
