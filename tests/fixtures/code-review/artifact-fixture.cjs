@@ -70,7 +70,7 @@ function setOriginalReview(input, raw, priorFindings = []) {
   return input;
 }
 
-function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
+function retainPlanningInput(f, input, planningRoot = f.root, repo = null, options = {}) {
   const packets = require('../../../plugins/delivery-pipeline/scripts/context-packet.cjs');
   const policy = require('../../../plugins/delivery-pipeline/scripts/model-policy.cjs');
   const collector = require('../../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
@@ -79,7 +79,8 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
   const raw = structuredClone(snapshot.raw), priorFindings = snapshot.priorFindings;
   const refs = input.result.ticket_set.map(item => item.row.plan);
   const requestedPartitions = raw.coverage?.length || 0;
-  const useCodex = requestedPartitions === collector.FILE_LIMITS.assets;
+  const useCodex = options.runtime ? options.runtime === 'codex' : requestedPartitions === collector.FILE_LIMITS.assets;
+  const hostFiles = options.transport === 'host-files' || requestedPartitions && !useCodex;
   for (const plan of refs) {
     const absolute = path.join(planningRoot, plan);
     fs.mkdirSync(path.dirname(absolute), { recursive: true });
@@ -92,7 +93,7 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
   const carrier = path.join(planningRoot, '.planning/phases', phase, 'code-review-disagreements.json');
   let dispositionsDigest = null;
   try { dispositionsDigest = hash(fs.readFileSync(carrier)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const reference = require('../../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs').loadClaudeReferenceContent('code-review');
+  const reference = options.reference || require('../../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs').loadClaudeReferenceContent('code-review');
   const referenceDigest = { sha256: hash(reference), bytes: Buffer.byteLength(reference) };
   const head = input.result.head, base = input.result.base_commit || f.base;
   const mergeBase = git(f.root, ['merge-base', base, head]);
@@ -110,9 +111,9 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
   Object.assign(roleContext, { planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
     dispositions_digest: dispositionsDigest, reference_digest: referenceDigest });
   if (useCodex) roleContext.reference = { path: 'references/code-review.md', content: reference, ...referenceDigest };
-  const packet = packets.decodeUniqueContent(packets.encodeUniqueContent(packets.buildContextPacket({ root: planningRoot,
+  const packet = structuredClone(packets.decodeUniqueContent(packets.encodeUniqueContent(packets.buildContextPacket({ root: planningRoot,
     role: 'code-review', subject: input.ticket, sourceRevision: head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext })));
+    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext }))));
   const contextDigest = hash(useCodex ? JSON.stringify(packets.encodeUniqueContent(packet)) : stable(packet));
   const binding = { ...packet.role_context.focused, context_digest: contextDigest,
     launch_digest: hash(stable({ packet_digest: contextDigest, reference_digest: referenceDigest })) };
@@ -121,16 +122,16 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
   const dispatchId = crypto.randomUUID();
   let fileInput;
   if (useCodex) raw.coverage = raw.coverage.map((entry, index) => ({ partition: index + 1, status: entry.status }));
-  if (requestedPartitions && !useCodex) {
-    const sources = [{ path: 'current-pr.diff', content: packet.role_context.exact_diff.content }, ...packet.required_refs]
-      .filter(source => source.content.length);
-    const count = Math.max(requestedPartitions, sources.length);
+  if (hostFiles) {
+    const sources = [{ path: 'current-pr.diff', content: packet.role_context.exact_diff.content }, ...packet.required_refs];
+    const count = Math.max(requestedPartitions, sources.filter(source => source.content.length).length);
+    const lastPartitionedSource = sources.findLastIndex(source => source.content.length);
     const material = [JSON.stringify(packets.encodeUniqueContent(packet))], spans = [], inventory = [];
     for (const [index, source] of sources.entries()) {
       const bytes = Buffer.from(source.content), partitions = [];
-      const n = index === sources.length - 1 ? count - spans.length : 1;
+      const n = index === lastPartitionedSource ? count - spans.length : 1;
       let offset = 0;
-      for (let part = 0; part < n; part++) {
+      for (let part = 0; bytes.length && part < n; part++) {
         const end = part === n - 1 ? bytes.length : offset + 1;
         const ordinal = material.length;
         material.push(bytes.subarray(offset, end).toString('utf8')); partitions.push(ordinal);
@@ -145,11 +146,12 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
         focusedPartitions: spans, focusedSources: inventory,
         binding: { review_contract: core.CONTRACT_ID, packet_digest: contextDigest,
           focused: { ...packet.role_context.focused, context_digest: contextDigest } } });
-    raw.coverage = spans.map((span, index) => ({ partition: span.partition, status: snapshot.raw.coverage[index]?.status || 'reviewed' }));
+    raw.coverage = spans.map((span, index) => ({ partition: span.partition, status: snapshot.raw.coverage?.[index]?.status || 'reviewed' }));
   }
   const semantic = core.normalizeResult(useCodex ? raw : { ...raw, ...collector.validateCodeReviewCoverage(raw, fileInput?.manifest || null) },
     { round: round.round, scope: round.scope, priorFindings,
       readSource: core.createSourceReader({ head, git: (args, maximum) => execFileSync('git', ['-C', f.root, ...args], { encoding: 'utf8', maxBuffer: maximum }) }) });
+  if (useCodex && fileInput) Object.assign(semantic, collector.validateCodeReviewCoverage(semantic, fileInput.manifest));
   const { evidence_markdown: _markdown, host_context: _context, ...result } = semantic;
   Object.assign(result, { prior_head: round.priorHead, contract_digest: roleContext.contract_digest,
     dispositions_digest: dispositionsDigest,
@@ -166,6 +168,7 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
         content: [{ type: 'tool_use', name: 'StructuredOutput', input: raw }] } }];
     const streamRows = [{ type: 'system', subtype: 'init', session_id: session, model: r.model },
       { type: 'result', subtype: 'success', session_id: session, is_error: false, structured_output: raw, result: JSON.stringify(raw) }];
+    options.mutateNative?.(rows, streamRows, { packet, fileInput });
     const nativeText = rows.map(row => JSON.stringify(row)).join('\n') + '\n';
     const streamText = streamRows.map(row => JSON.stringify(row)).join('\n') + '\n';
     fs.writeFileSync(native, nativeText); fs.writeFileSync(stream, streamText);
@@ -179,8 +182,8 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
         transcript: { path: native, bytes: Buffer.byteLength(nativeText), sha256: hash(nativeText) } } };
   } } } });
   if (useCodex) {
-    const dispatch = retainCodexReview(f, dispatchId, raw, packet, binding);
-    result.host_context = { original_packet: packets.encodeUniqueContent(packet), planning_reference: roleContext.planning_reference,
+    const dispatch = retainCodexReview(f, dispatchId, raw, packet, binding, fileInput, options);
+    result.host_context = { ...(!fileInput ? { original_packet: packets.encodeUniqueContent(packet) } : {}), planning_reference: roleContext.planning_reference,
       selected_refs: packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
     input.result = result; input.dispatchId = dispatch.dispatch_id;
     originals.set(input, { raw: structuredClone(raw), priorFindings: structuredClone(priorFindings) });
@@ -194,7 +197,7 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
   return input;
 }
 
-function retainCodexReview(f, dispatchId, raw, packet, binding) {
+function retainCodexReview(f, dispatchId, raw, packet, binding, fileInput, options) {
   const packets = require('../../../plugins/delivery-pipeline/scripts/context-packet.cjs');
   const codexHome = path.join(f.root, '.planning/codex-fixture');
   process.env.CODEX_HOME = codexHome;
@@ -204,29 +207,25 @@ function retainCodexReview(f, dispatchId, raw, packet, binding) {
       agent_file: r.agent_file, agent_file_content: agent, agent_file_digest: hash(agent) }; },
     launchStatic(r) {
       const session = crypto.randomUUID(), text = JSON.stringify(raw);
-      const prompt = 'launch_digest=' + binding.launch_digest + '\n<AUTHENTICATED_CONTEXT_PACKET>\n'
-        + JSON.stringify(packets.encodeUniqueContent(packet)) + '\n</AUTHENTICATED_CONTEXT_PACKET>';
-      const now = new Date(), directory = path.join(codexHome, 'sessions', String(now.getFullYear()),
-        String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
-      fs.mkdirSync(directory, { recursive: true });
-      const native = path.join(directory, session + '.jsonl'), stream = path.join(codexHome, session + '.stream.jsonl');
-      const rows = [{ type: 'session_meta', payload: { id: session, model_provider: 'openai' } },
-        { type: 'turn_context', payload: { model: r.model, effort: r.effort } },
-        { type: 'event_msg', payload: { type: 'task_started', turn_id: 'original' } },
-        { type: 'response_item', payload: { role: 'user', content: [{ text: prompt }] } },
-        { type: 'response_item', payload: { role: 'assistant', phase: 'final_answer', content: [{ text }] } },
-        { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'original', last_agent_message: text } }];
+      const prompt = 'launch_digest=' + binding.launch_digest + (fileInput
+        ? '\n<AUTHENTICATED_FOCUSED_INPUT>\n' + JSON.stringify(fileInput.input_bundle) + '\n</AUTHENTICATED_FOCUSED_INPUT>'
+        : '\n<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet)) + '\n</AUTHENTICATED_CONTEXT_PACKET>');
+      const { native, nativeText } = writeCodexSession({ home: codexHome, session, worktree: f.root,
+        model: r.model, effort: r.effort, prompt, raw, mutate: rows => options.mutateNative?.(rows, null, { packet, fileInput }) });
+      const stream = path.join(codexHome, session + '.stream.jsonl');
       const cli = [{ type: 'thread.started', thread_id: session }, { type: 'turn.started' },
         { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text } },
         { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }];
-      const nativeText = rows.map(row => JSON.stringify(row)).join('\n') + '\n', streamText = cli.map(row => JSON.stringify(row)).join('\n') + '\n';
-      fs.writeFileSync(native, nativeText); fs.writeFileSync(stream, streamText);
+      const streamText = cli.map(row => JSON.stringify(row)).join('\n') + '\n';
+      fs.writeFileSync(stream, streamText);
       return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
         launch_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
         applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
         policy_hash: r.policy_hash, agent_file: r.agent_file, agent_file_digest: r.agent_file_digest,
         runtime_evidence: { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai', session_id: session, ticket: packet.subject,
           worktree: f.root, code_review: binding,
+          ...(fileInput ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
+            input_consumption: { native_session_sha256: hash(nativeText) } } : {}),
           native_session_evidence: { session_id: session, bytes: Buffer.byteLength(nativeText), sha256: hash(nativeText) },
           transcript: { path: stream, bytes: Buffer.byteLength(streamText), sha256: hash(streamText) } } };
     },
@@ -235,7 +234,25 @@ function retainCodexReview(f, dispatchId, raw, packet, binding) {
     { ticket: packet.subject, subject_kind: 'phase' });
 }
 
-function sealInputOnlyHistory(input) {
+function writeCodexSession({ home, session, worktree, model, effort, prompt, raw, mutate }) {
+  const text = JSON.stringify(raw), now = new Date();
+  const directory = path.join(home, 'sessions', String(now.getFullYear()),
+    String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+  fs.mkdirSync(directory, { recursive: true });
+  const native = path.join(directory, session + '.jsonl');
+  const rows = [{ type: 'session_meta', payload: { id: session, model_provider: 'openai', cwd: worktree } },
+    { type: 'turn_context', payload: { model, effort } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: 'original' } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] } },
+    { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text }] } },
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'original', last_agent_message: text } }];
+  mutate?.(rows);
+  const nativeText = rows.map(row => JSON.stringify(row)).join('\n') + '\n';
+  fs.writeFileSync(native, nativeText);
+  return { native, nativeText };
+}
+
+function originalHistoricalProducer() {
   const source = fs.readFileSync(path.join(__dirname, '../../unit/judgment-artifacts.test.cjs'), 'utf8');
   const gzip = /const preCoverageRepairProducer = \{[\s\S]*?gzip: '([^']+)'/.exec(source)?.[1];
   const bytes = require('node:zlib').gunzipSync(Buffer.from(gzip, 'base64'));
@@ -246,7 +263,11 @@ function sealInputOnlyHistory(input) {
   const producer = new Module(filename, module);
   producer.filename = filename; producer.paths = Module._nodeModulePaths(path.dirname(filename));
   producer._compile(bytes.toString('utf8'), filename);
-  return producer.exports.sealJudgment(input);
+  return producer.exports;
 }
 
-module.exports = { fixture, retainPlanningInput, setOriginalReview, sealInputOnlyHistory };
+function sealInputOnlyHistory(input) {
+  return originalHistoricalProducer().sealJudgment(input);
+}
+
+module.exports = { originalHistoricalProducer, fixture, retainPlanningInput, setOriginalReview, sealInputOnlyHistory, writeCodexSession };

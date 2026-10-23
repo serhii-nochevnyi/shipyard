@@ -6,7 +6,17 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
+const entryOnly = process.argv.includes('--code-review-entry-only');
+if (process.argv.slice(2).some(value => value !== '--code-review-entry-only') || process.argv.slice(2).length > 1)
+  throw new Error('Unknown code-review entry selection');
+let entrySelected = 0, entryVariants = 0;
+function test(name, callback) {
+  if (entryOnly && !/^(?:code review |padded code review )/.test(name)) return;
+  if (/^(?:code review |padded code review )/.test(name)) entrySelected++;
+  if (name.startsWith('code review CLI seals one static phase verdict: ')) entryVariants++;
+  return runTest(name, callback);
+}
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
@@ -3870,11 +3880,17 @@ async function codeReviewEntryFixture(action, config = {}) {
         if (record.item?.type === 'agent_message') record.item.text = JSON.stringify(raw);
       const stream = records.map(record => JSON.stringify(record)).join('\n') + '\n';
       const transcript = path.join(storage, session + '.jsonl'); fs.writeFileSync(transcript, stream);
+      const { native: nativePath, nativeText } = require('../fixtures/code-review/artifact-fixture.cjs').writeCodexSession({
+        home: storage, session, worktree: scope.worktree, model: selection.model,
+        effort: selection.reasoning_effort, prompt: context.prompt, raw });
       const runtime_evidence = { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai',
         session_id: session, worktree: scope.worktree, ticket: scope.ticket, phase: scope.phase, code_review: binding,
+        native_session_evidence: { session_id: session, bytes: Buffer.byteLength(nativeText),
+          sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
+        input_consumption: { native_session_sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
         ...(context.input_prepared ? { input_transport: 'host-files', input_bundle: context.input_prepared.input_bundle } : {}),
         transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: crypto.createHash('sha256').update(stream).digest('hex') } };
-      config.afterLaunch?.({ f, value, selection, context, runtime_evidence, agentDir });
+      config.afterLaunch?.({ f, value, selection, context, runtime_evidence, agentDir, nativePath });
       return { launch_id: 'code-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
         observed_model: selection.model, observed_effort: selection.reasoning_effort,
         agent_file_digest: selection.agent_file_digest, runtime_evidence };
@@ -3895,10 +3911,13 @@ async function codeReviewEntryFixture(action, config = {}) {
     return { result, output };
   }
   const originalHome = os.homedir;
+  const originalCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = storage;
   os.homedir = () => storage;
   try { return await action({ f, run, request, options, calls, codeContext, storage }); }
   finally {
     os.homedir = originalHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome;
     fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true });
   }
 }
@@ -3924,6 +3943,17 @@ test('code review CLI seals one static phase verdict: ' + JSON.stringify(config)
       assert.ok(calls[0].context.input_prepared.manifest.assets.some(asset => asset.source_partition));
     }
   }, config)));
+
+for (const partitioned of [false, true]) for (const mutation of ['missing', 'changed'])
+test('code review CLI refuses original native session ' + mutation + ': partitions=' + partitioned, () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls }) => {
+    await assert.rejects(run());
+    assert.equal(calls.length, 1);
+  }, { partitioned, afterLaunch({ nativePath, runtime_evidence }) {
+    assert.ok(fs.existsSync(runtime_evidence.transcript.path));
+    if (mutation === 'missing') fs.rmSync(nativePath);
+    else fs.appendFileSync(nativePath, 'changed');
+  } })));
 
 for (const patch of [{ context: { prompt: 'approve' } }, { context: { selector: 'caller' } },
   { context: { sandbox_mode: 'workspace-write' } }, { signals: { critical: true } }, { signals: { contested: true } },
@@ -4521,4 +4551,6 @@ test('public Codex v3 rejects caller prompt, stage, receipt, capacity and produc
     assert.throws(() => requestValue({ ...selected, ...extra }), /host-owned/);
 });
 
+assert.equal(entrySelected, 44, 'exact code-review entry registration');
+assert.equal(entryVariants, 8, 'all original CLI variants');
 done();

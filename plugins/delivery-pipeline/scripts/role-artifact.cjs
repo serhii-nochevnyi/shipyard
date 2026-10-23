@@ -6360,7 +6360,33 @@ function codeReviewPlanningContext(packet) {
   }) };
 }
 
-function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, retained }) {
+const HISTORICAL_CODE_REVIEW_REPLAY = Symbol('historical-code-review-replay');
+
+function historicalCodeReviewRoot(worktree, original) {
+  const packets = require('./context-packet.cjs');
+  if (!object(original) || typeof original.directory !== 'string' || !Array.isArray(original.graph)
+      || original.graph.length > 2 || !original.graph.length)
+    fail('REVIEW_NATIVE_INVALID', 'original code-review planning association is required');
+  const paths = new Set();
+  for (const pin of [...original.graph, ...(original.config === null ? [] : [original.config])]) {
+    if (!object(pin) || stable(Object.keys(pin).sort()) !== stable(['bytes', 'path', 'sha256'])
+        || !['.planning/graph/tickets.json', '.planning/graph/delivery-state.json', '.planning/config.json'].includes(pin.path)
+        || paths.has(pin.path) || !Number.isSafeInteger(pin.bytes) || pin.bytes < 0 || pin.bytes > 16 * 1024 * 1024
+        || !/^[a-f0-9]{64}$/.test(pin.sha256 || ''))
+      fail('REVIEW_NATIVE_INVALID', 'original code-review planning pins are invalid');
+    paths.add(pin.path);
+  }
+  if (!original.graph.some(pin => pin.path === '.planning/graph/tickets.json')
+      || original.graph.some(pin => !pin.path.startsWith('.planning/graph/'))
+      || original.config !== null && original.config?.path !== '.planning/config.json')
+    fail('REVIEW_NATIVE_INVALID', 'original code-review planning inventory differs');
+  const current = packets.resolvePlanningReference({ worktree, graphDir: original.directory, repo: original.repo });
+  if (stable({ ...current, graph: original.graph, config: original.config }) !== stable(original))
+    fail('REVIEW_NATIVE_INVALID', 'original code-review physical planning association differs');
+  return current.root;
+}
+
+function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, retained }, replay) {
   const core = require('./code-review-core.cjs'), packets = require('./context-packet.cjs');
   const collector = require('./codex-arch-review-context.cjs');
   const retention = retained || currentReviewRetention(identity.worktree, trusted);
@@ -6425,7 +6451,9 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
       || stable(context.ticket_set) !== stable(result.ticket_set)
       || context.review_contract !== core.CONTRACT_ID || context.subject !== trusted.record.ticket)
     fail('REVIEW_NATIVE_INVALID', 'original code-review subject, source or membership differs');
-  if (!object(context.planning_reference) || packet.canonical_root !== originalPacketRoot(identity.worktree, packet))
+  const planningRoot = replay === HISTORICAL_CODE_REVIEW_REPLAY
+    ? historicalCodeReviewRoot(identity.worktree, context.planning_reference) : originalPacketRoot(identity.worktree, packet);
+  if (!object(context.planning_reference) || packet.canonical_root !== planningRoot)
     fail('REVIEW_NATIVE_INVALID', 'original code-review planning association differs');
   for (const ref of packet.required_refs || []) {
     if (typeof ref.content !== 'string' || Buffer.byteLength(ref.content) !== ref.bytes || digest(ref.content) !== ref.sha256)
@@ -6685,7 +6713,7 @@ function authenticatedCodeReviewRecord(worktree, record, repository) {
   let answerAuthenticated = false;
   try {
     const replay = authenticateCodeReviewAnswer({ trusted, result: findings, evidence: Buffer.from(evidence.content),
-      identity, retained: record.review_current });
+      identity, retained: record.review_current }, HISTORICAL_CODE_REVIEW_REPLAY);
     answerAuthenticated = stable(replay) === stable(manifest.current_review || replay);
   } catch {}
   return { ...data, answer_authenticated: answerAuthenticated,

@@ -814,7 +814,7 @@ for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE
     }
   });
 
-test('foreign full and delta lineage retain original membership across coordinator graph evolution', () => {
+test('D37 foreign full and delta lineage retain original membership across coordinator graph evolution', () => {
   const f = foreignFixture();
   try {
     const first = review(f);
@@ -910,7 +910,7 @@ for (const [sameRoot, partitioned] of [[true, false], [false, false], [true, tru
   });
 
 for (const format of ['old-inline', 'missing', 'truncated', 'duplicate', 'substituted', 'mismatched'])
-  test('authenticated inline archive without complete original pins stays historical: ' + format, () => {
+  test('D37 authenticated inline archive without complete original pins stays historical: ' + format, () => {
     const f = fixture('retained-inline', true);
     try {
       f.graph.epics = { '38': { branch: f.row.epic, phaseDir: '38-codex-arch-review', repos: [null] } };
@@ -930,6 +930,9 @@ for (const format of ['old-inline', 'missing', 'truncated', 'duplicate', 'substi
           mismatched: "value.evidence.selected_refs.map(pin => ({ ...pin, sha256: '0'.repeat(64) }))" };
         source = source.replace('selected_refs: value.evidence.selected_refs', 'selected_refs: ' + expressions[format]);
       }
+      source = source.replace("const roleArtifact = require('./role-artifact.cjs');",
+        'const roleArtifact = require(' + JSON.stringify(require.resolve('../fixtures/code-review/artifact-fixture.cjs'))
+          + ').originalHistoricalProducer();');
       const retained = new Module(filename, module);
       retained.filename = filename; retained.paths = Module._nodeModulePaths(scripts);
       retained._compile(source, filename);
@@ -941,6 +944,11 @@ for (const format of ['old-inline', 'missing', 'truncated', 'duplicate', 'substi
       admit(f, value, builder);
       const d = dispatchFixture(f, value, () => {}, true, () => {}, builder);
       const result = builder.finish(value, d.dispatch, d.recorder);
+      const fresh = { worktreePath: f.root, role: 'code-review', ticket: value.prepared.ticket,
+        pr: f.pr.number, base: value.prepared.base, phase: value.prepared.binding.phase,
+        ticketSet: value.prepared.binding.ticketSet, ticketSetDigest: value.prepared.binding.membership,
+        recorder: d.recorder, dispatchId: d.dispatch.dispatch_id, result: result.result };
+      assert.throws(() => artifact.sealJudgment(fresh));
       const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
       const findings = JSON.parse(fs.readFileSync(path.join(f.root, manifest.files.findings.path)));
       if (format === 'old-inline') {
@@ -964,6 +972,8 @@ for (const format of ['old-inline', 'missing', 'truncated', 'duplicate', 'substi
         const prior = artifact.priorCodeReviewVerdicts({ worktreePath: f.root, graphDir: f.graphDir,
           repository: target.repositoryIdentity(f.root), phaseDir: value.prepared.binding.phase });
         assert.equal(prior[0].artifact_digest, result.artifact.digest);
+        assert.equal(prior[0].answer_authenticated, false); assert.equal(prior[0].coverage_range, null);
+        assert.equal(status().rounds_used, 1);
         for (const pin of pins) assert.deepEqual(fs.readFileSync(path.join(f.root, pin.path)), pin.content);
       }
     } finally { f.cleanup(); }
