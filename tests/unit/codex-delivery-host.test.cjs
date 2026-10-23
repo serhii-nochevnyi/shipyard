@@ -7,8 +7,9 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
-const entryOnly = process.argv.includes('--code-review-entry-only');
-if (process.argv.slice(2).some(value => value !== '--code-review-entry-only') || process.argv.slice(2).length > 1)
+const selectionArgs = require.main === module ? process.argv.slice(2) : [];
+const entryOnly = selectionArgs.includes('--code-review-entry-only');
+if (selectionArgs.some(value => value !== '--code-review-entry-only') || selectionArgs.length > 1)
   throw new Error('Unknown code-review entry selection');
 let entrySelected = 0, entryVariants = 0;
 function test(name, callback) {

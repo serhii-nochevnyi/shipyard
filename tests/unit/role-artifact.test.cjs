@@ -33,9 +33,10 @@ const targetOldPath = process.env.PATH;
 process.env.PATH = targetBin + path.delimiter + targetOldPath;
 process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
 const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
-const d37Only = process.argv.includes('--code-review-d37-only');
-const reuseOnly = process.argv.includes('--code-review-reuse-only');
-if (process.argv.slice(2).some(value => !['--code-review-d37-only', '--code-review-reuse-only'].includes(value)) || process.argv.slice(2).length > 1)
+const selectionArgs = require.main === module ? process.argv.slice(2) : [];
+const d37Only = selectionArgs.includes('--code-review-d37-only');
+const reuseOnly = selectionArgs.includes('--code-review-reuse-only');
+if (selectionArgs.some(value => !['--code-review-d37-only', '--code-review-reuse-only'].includes(value)) || selectionArgs.length > 1)
   throw new Error('Unknown code-review D37 selection');
 let d37Selected = 0, reuseSelected = 0;
 const d37Case = name => [
