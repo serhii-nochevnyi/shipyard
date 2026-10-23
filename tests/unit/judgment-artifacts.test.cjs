@@ -1091,8 +1091,7 @@ test('D-32 legacy v2 and D-34 authenticated chain finals preserve separate curre
     'const live = branch => { if (f.mergePrs) return f.mergePrs.find(pr => pr.headRefName === branch);');
   try { loaded._compile(source + '\nmodule.exports = { fixture, runIntegration, publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, originalPartitionSessions };\n', filename); }
   finally { Module._load = originalLoad; }
-  await loaded.exports.publicIntegrationFixture(async f => {
-    loaded.exports.publicPartitionFixture(f, 'codex');
+  await loaded.exports.fixture(async f => {
     const current = await loaded.exports.runIntegration(f);
     const artifact = JSON.parse(fs.readFileSync(current.result.artifact.artifact_path, 'utf8'));
     assert.equal(artifact.artifact_kind, 'judgment');

@@ -1781,6 +1781,35 @@ function reverseSquashRepository() {
   return f;
 }
 
+test('D-34 legacy v2 retains strict proof on both native preparations', () => {
+  const f = setupClaudePartitionRepository();
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const options = claudePartitionOptions(f);
+    const input = { ...request(f), review_contract: 'shipyard.integration-review.v2' };
+    const prepared = host.prepareIntegratorContext(options, input);
+    assert.equal(prepared.nativeMergeProof, null);
+    assert.equal(prepared.integrationReview.proof.schema, 'shipyard.phase-integrator-preflight.v1');
+    assert.equal(prepared.packet.role_context.native_merge_proof, undefined);
+    const codex = host.prepareNativeIntegratorContext(options, input);
+    const scope = { worktree: f.root, ticket: codex.ticket, phase: 38, run_id: 'd34-legacy-v2' };
+    const review = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').prepareIntegrationLineage(scope, codex,
+      { ...options, nativeRuntime: 'codex', dispatchId: scope.run_id, storageRoot: f.storageRoot, instructionBinding: {} });
+    assert.equal(codex.nativeMergeProof, null);
+    assert.equal(review.proof.schema, 'shipyard.phase-integrator-preflight.v1');
+  } finally { cleanupFixture(f); }
+});
+
+test('D-34 legacy v2 refuses reverse squash on both native preparations', () => {
+  const f = reverseSquashRepository();
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const input = { ...request(f), review_contract: 'shipyard.integration-review.v2' };
+    assert.throws(() => host.prepareIntegratorContext(f.options, input), /not included/);
+    assert.throws(() => host.prepareNativeIntegratorContext(f.options, input), /not included/);
+  } finally { cleanupFixture(f); }
+});
+
 test('D-34 real reverse squash reaches Claude and the Codex shared lineage entry without a provider', () => {
   const f = reverseSquashRepository();
   const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
