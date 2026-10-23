@@ -4085,7 +4085,7 @@ function partitionHash(plan) {
   return digest(stable(preExecution(Object.fromEntries(PARTITION_PLAN_FIELDS.map(key => [key, plan[key]])))));
 }
 function partitionFileName(kind, hash) {
-  if (!['plan', 'units', 'launch', 'capacity', 'host-evidence'].includes(kind) || !/^[a-f0-9]{64}$/.test(hash || ''))
+  if (!['plan', 'units', 'launch', 'capacity', 'host-evidence', 'observation'].includes(kind) || !/^[a-f0-9]{64}$/.test(hash || ''))
     partitionError('invalid protected partition reference');
   return 'integration-' + kind + '-' + hash + '.json';
 }
@@ -4230,6 +4230,9 @@ function assertPartitionCoverage(plan) {
   if (new Set(ids).size !== ids.length || stable([...ids].sort()) !== stable(plan.obligations.map(item => item.id).sort()))
     partitionError('primary logical obligation coverage is incomplete or duplicated');
   for (const unit of plan.units) {
+    if (observedPartition(plan) && (unit.primary_segments.length > plan.capacity.primary_segments_per_unit
+        || unit.primary_segments.some(segment => segment.end_byte - segment.start_byte > plan.capacity.segment_bytes)))
+      partitionError('observed primary material exceeds its frozen three-segment bound');
     if (stable(unit.governing_ids) !== stable(plan.governing)) partitionError('governing context is incomplete');
     const required = plan.obligations.filter(item => item.governing || item.source_id
       && unit.primary_obligation_ids.includes(item.id)).map(item => item.id);
@@ -4280,6 +4283,24 @@ function renderPartitionInput(plan, payload) {
     + stable({ instructions, recipe: plan.capacity.recipe }) + '\n<AUTHENTICATED_INTEGRATION_PARTITION>\n'
     + stable(payload) + '\n</AUTHENTICATED_INTEGRATION_PARTITION>';
 }
+function observedPartition(plan) { return plan.schema === 'shipyard.integration-partition-plan.v2'; }
+function observedPartitionProfile() {
+  return { schema: 'shipyard.integration-native-observed-profile.v1', mode: 'native-observed',
+    max_input_bytes: 4194304, unit_input_bytes: 2097152, segment_bytes: 65536, primary_segments_per_unit: 3,
+    output_limits: { conclusions: 16384, findings: 32768, limitations: 8192, required_context: 8192, seams: 32768 },
+    recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'original-native-observation' } };
+}
+function partitionProfile(plan) {
+  if (!observedPartition(plan)) return partitionCapacityOptions(plan.capacity);
+  if (stable(plan.capacity) !== stable(observedPartitionProfile())) partitionError('observed mode or operational budget changed');
+  return plan.capacity;
+}
+function partitionInputBytes(plan, input, kind) {
+  if (!observedPartition(plan) || plan.runtime !== 'claude') return bytes(input);
+  const schema = require('./claude-role-host.cjs').integrationStageSchema({ kind, subject: plan.subject,
+    plan_sha256: plan.plan_sha256, input_sha256: digest(input) });
+  return bytes(JSON.stringify({ type: 'user', message: { role: 'user', content: input } }) + '\n') + bytes(JSON.stringify(schema));
+}
 function partitionCapacityOptions(options) {
   if (!object(options)) partitionError('static all-in capacity is required', 'INTEGRATION_CAPACITY_UNPROVEN');
   const capacity = partitionCopy(options);
@@ -4312,6 +4333,7 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0) {
   const governingSources = new Set(plan.obligations.filter(item => plan.governing.includes(item.id) && item.source_id).map(item => item.source_id));
   const support = plan.material.filter(item => governingSources.has(item.source_id)).flatMap(item => partitionSegments(item, plan.capacity.segment_bytes));
   const fit = unit => {
+    if (observedPartition(plan) && unit.primary_segments.length > plan.capacity.primary_segments_per_unit) return false;
     unit.support_obligation_ids = plan.governing.filter(id => !unit.primary_obligation_ids.includes(id));
     const context = [...support];
     for (const source of plan.material) {
@@ -4324,7 +4346,8 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0) {
     }
     unit.support_segments = [...new Map(context.filter(item => !unit.primary_segments.some(own => stable(own) === stable(item)))
       .map(item => [partitionSegmentId(item), item])).values()];
-    return bytes(renderPartitionInput(plan, partitionUnitPayload(plan, unit))) <= plan.capacity.unit_input_bytes - reservedContextBytes;
+    return (!observedPartition(plan) || unit.primary_segments.length <= plan.capacity.primary_segments_per_unit)
+      && partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, unit)), 'unit') <= plan.capacity.unit_input_bytes - reservedContextBytes;
   };
   let unit = create();
   for (const source of plan.material) for (const segment of partitionSegments(source, plan.capacity.segment_bytes)) {
@@ -4375,13 +4398,14 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0) {
       ...plan.governing.filter(id => !candidate.primary_obligation_ids.includes(id)),
       ...plan.seams.filter(seam => candidate.seam_ids.includes(seam.id)).flatMap(seam => seam.required_context)])]
       .filter(id => !candidate.primary_obligation_ids.includes(id));
-    overflow = Math.max(overflow, bytes(renderPartitionInput(plan, partitionUnitPayload(plan, candidate))) - plan.capacity.unit_input_bytes);
+    overflow = Math.max(overflow, partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, candidate)), 'unit') - plan.capacity.unit_input_bytes);
     const minimumResult = { schema: 'shipyard.integration-unit-result.v1', review_contract: INTEGRATION_REVIEW_V3, kind: 'unit',
       runtime: plan.runtime, subject: plan.subject, plan_sha256: plan.plan_sha256, unit_id: candidate.unit_id,
       input_sha256: '0'.repeat(64), reviewed_identity: plan.identity, completeness: 'incomplete', outcome: 'human-review-required',
       coverage: { primary_segments: candidate.primary_segments, primary_obligation_ids: candidate.primary_obligation_ids,
         support_segments: candidate.support_segments, support_obligation_ids: candidate.support_obligation_ids } };
-    if (bytes(stable(minimumResult)) + Object.values(plan.capacity.output_limits).reduce((a, b) => a + b, 0) + 8192 > PARTITION_RESULT_LIMIT)
+    if (bytes(stable(minimumResult)) + (observedPartition(plan) ? 0 : Object.values(plan.capacity.output_limits).reduce((a, b) => a + b, 0))
+        + 8192 > PARTITION_RESULT_LIMIT)
       partitionError('complete bounded unit result cannot represent its assignment/detail ceilings', 'INTEGRATION_INPUT_OVER_BOUND');
   }
   if (overflow > 0) return buildPartitionUnits(plan, reservedContextBytes + overflow, attempt + 1);
@@ -4389,11 +4413,12 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0) {
 }
 function partitionPlanRecord(worktree, hash) {
   const record = readPartitionEnvelope(worktree, 'plan', hash), plan = record.plan;
-  if (plan?.schema !== 'shipyard.integration-partition-plan.v1' || plan.version !== 1
+  if (!(plan?.schema === 'shipyard.integration-partition-plan.v1' && plan.version === 1
+      || plan?.schema === 'shipyard.integration-partition-plan.v2' && plan.version === 2)
       || plan.review_contract !== INTEGRATION_REVIEW_V3 || plan.plan_sha256 !== hash || partitionHash(plan) !== hash
       || plan.identity.worktree !== worktree) partitionError('frozen plan identity or pre-execution hash differs');
   if (stable(Object.keys(plan).sort()) !== stable([...PARTITION_PLAN_FIELDS, 'plan_sha256'].sort())
-      || stable(partitionCapacityOptions(plan.capacity)) !== stable(plan.capacity)) partitionError('unsupported immutable plan fields');
+      || stable(partitionProfile(plan)) !== stable(plan.capacity)) partitionError('unsupported immutable plan fields');
   assertPartitionCoverage(plan);
   return record;
 }
@@ -4423,7 +4448,7 @@ function partitionOriginalInput(trusted, launch, nativePin) {
   if (stable(pin) !== stable(originalPin)) partitionError('native input pin differs from original runtime receipt');
   const raw = readImmutableFile(fs, pin.path, 'original partition native input', PARTITION_LIMIT, pin.bytes);
   if (digest(raw) !== pin.sha256 || !raw.toString('utf8').endsWith('\n')) partitionError('original native input pin changed');
-  const rows = raw.toString('utf8').split('\n').filter(Boolean).map(JSON.parse), inputs = [];
+  const rows = partitionNativeRows(raw), inputs = [];
   const runtime = currentRuntimeEvidence(trusted);
   if (trusted.receipt.runtime === 'codex') {
     const parsed = require('./codex-runtime-host.cjs').parseNativeCodexTranscript(raw.toString('utf8'), runtime.session_id);
@@ -4589,13 +4614,23 @@ function prepareIntegrationPartitions({ review, capacity, plan_sha256: previous 
   const inventory = partitionInventory(partitionFullPacket(packet, review.currentInput.input_bundle, checked));
   const governing = inventory.obligations.filter(item => item.governing || (item.pointer.includes('/required_refs/') || item.pointer.includes('/refs/'))
     && /(?:\.planning\/|AGENTS\.md|CLAUDE\.md)/.test(item.path)).map(item => item.id);
-  const plan = { schema: 'shipyard.integration-partition-plan.v1', version: 1, review_contract: INTEGRATION_REVIEW_V3,
+  const observed = capacity === undefined;
+  const plan = { schema: 'shipyard.integration-partition-plan.v' + (observed ? 2 : 1), version: observed ? 2 : 1, review_contract: INTEGRATION_REVIEW_V3,
     runtime: review.options.nativeRuntime, subject: review.prepared.ticket, identity,
     original_packet_sha256: digest(stable(packet)), ...inventory, units: [], seams: [], governing,
-    producer_pins: producerPins, instruction_pins: partitionCopy(instructionPins), capacity: partitionCapacityOptions(capacity), plan_sha256: '0'.repeat(64) };
+    producer_pins: producerPins, instruction_pins: partitionCopy(instructionPins), capacity: observed ? observedPartitionProfile() : partitionCapacityOptions(capacity), plan_sha256: '0'.repeat(64) };
   buildPartitionUnits(plan);
   plan.plan_sha256 = partitionHash(plan);
-  const record = { plan, archive_pins: partitionCopy(review.archivePins), original_input_bundle: review.currentInput.input_bundle };
+  const record = { plan, archive_pins: partitionCopy(review.archivePins), original_input_bundle: review.currentInput.input_bundle,
+    ...(observed ? { operational_diagnostic: { authoritative: false, unit_count: plan.units.length,
+      governing_source_bytes: plan.material.filter(source => plan.obligations.some(item => plan.governing.includes(item.id)
+        && item.source_id === source.source_id)).reduce((sum, source) => sum + source.bytes, 0),
+      obligation_metadata_bytes: bytes(stable(plan.obligations)), identity_bytes: bytes(stable(plan.identity)),
+      units: plan.units.map(unit => ({ unit_id: unit.unit_id,
+        complete_input_bytes: partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, unit)), 'unit'),
+        primary_bytes: unit.primary_segments.reduce((sum, part) => sum + part.end_byte - part.start_byte, 0),
+        support_bytes: unit.support_segments.reduce((sum, part) => sum + part.end_byte - part.start_byte, 0) })),
+      actual_final_input_bytes: null } } : {}) };
   withArchiveAuthorityLock(identity.worktree, () => {
     writePartitionEnvelope(identity.worktree, 'plan', plan.plan_sha256, record);
     const file = path.join(archiveAuthorityDirectory(identity.worktree), partitionFileName('units', plan.plan_sha256));
@@ -4607,9 +4642,11 @@ function prepareIntegrationPartitions({ review, capacity, plan_sha256: previous 
   return partitionPrepared(record, review);
 }
 function partitionPrepared(record, review) {
-  const result = { plan: partitionFreeze(partitionCopy(record.plan)) };
+  const result = { plan: partitionFreeze(partitionCopy(record.plan)),
+    ...(record.operational_diagnostic ? { operational_diagnostic: partitionFreeze(partitionCopy(record.operational_diagnostic)) } : {}) };
   partitionPreparations.set(result, { record, review });
-  result.reserved_template = preparePartitionStage(result, 'reserved-template', null, 'reserved-template-' + record.plan.plan_sha256);
+  if (!observedPartition(record.plan))
+    result.reserved_template = preparePartitionStage(result, 'reserved-template', null, 'reserved-template-' + record.plan.plan_sha256);
   return Object.freeze(result);
 }
 function privatePartitions(value) {
@@ -4627,6 +4664,21 @@ function aggregatePayload(record, verified, reserved = false) {
     required_interactions: plan.obligations.filter(item => /\/(?:impact|limitations)(?:\/|$)/.test(item.pointer)),
     seams: plan.seams, coverage: partitionCoverage(plan), output_limits: plan.capacity.output_limits,
     unit_artifacts: [], unit_results: [], verified_index_sha256: reserved ? '0'.repeat(64) : digest(stable(verified.index)) };
+  if (observedPartition(plan)) {
+    const obligationSets = new Map(), segments = new Map();
+    const assignments = plan.units.map(unit => {
+      const support = digest(stable(unit.support_obligation_ids));
+      obligationSets.set(support, unit.support_obligation_ids);
+      for (const segment of [...unit.primary_segments, ...unit.support_segments]) segments.set(partitionSegmentId(segment), segment);
+      return { unit_id: unit.unit_id, primary_segment_ids: unit.primary_segments.map(partitionSegmentId),
+        primary_obligation_ids: unit.primary_obligation_ids, support_segment_ids: unit.support_segments.map(partitionSegmentId),
+        support_obligation_set: support };
+    });
+    Object.assign(payload, { assignments, obligations: plan.obligations,
+      assignment_context: { governing_scope: 'all-units', seam_membership: 'all-incident-edges',
+        support_obligation_sets: Object.fromEntries(obligationSets), segments: Object.fromEntries(segments) },
+      sources: plan.material.map(({ content, ...source }) => source) });
+  }
   if (reserved) {
     payload.reserved_template = true;
     const perUnitBytes = 6 * (8192 + 4096 + Object.values(plan.capacity.output_limits).reduce((a, b) => a + b, 0));
@@ -4658,15 +4710,16 @@ function preparePartitionStage(partitions, kind, unitId, dispatchId, verified) {
   nonEmpty(dispatchId, 'partition dispatch id');
   const payload = kind === 'unit' ? partitionUnitPayload(plan, unit) : aggregatePayload(record, verified, kind === 'reserved-template');
   const input = renderPartitionInput(plan, payload);
-  if (kind === 'phase' && bytes(input) > bytes(renderPartitionInput(plan, aggregatePayload(record, null, true))))
+  if (!observedPartition(plan) && kind === 'phase' && bytes(input) > bytes(renderPartitionInput(plan, aggregatePayload(record, null, true))))
     partitionError('actual complete final exceeds its frozen reserved-template representation', 'INTEGRATION_INPUT_OVER_BOUND');
-  if (bytes(input) > (kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes)) partitionError('complete rendered partition input exceeds static bound', 'INTEGRATION_INPUT_OVER_BOUND');
-  const launch = { schema: 'shipyard.integration-partition-launch.v1', plan_sha256: plan.plan_sha256,
+  if (partitionInputBytes(plan, input, kind) > (kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes)) partitionError('actual complete ' + kind + ' rendered input exceeds static bound; HOLD', 'INTEGRATION_INPUT_OVER_BOUND');
+  const launch = { schema: 'shipyard.integration-partition-launch.v' + (observedPartition(plan) ? 2 : 1), plan_sha256: plan.plan_sha256,
+    ...(observedPartition(plan) ? { mode: 'native-observed', profile_sha256: digest(stable(plan.capacity)) } : {}),
     kind, unit_id: unitId, dispatch_id: dispatchId, runtime: plan.runtime, subject: plan.subject,
     worktree: plan.identity.worktree, model: plan.identity.model, effort: plan.identity.effort,
     agent_sha256: plan.identity.agent_sha256, policy_hash: plan.identity.policy_hash,
     instruction_sha256: digest(stable(plan.instruction_pins)),
-    output_reserve_tokens: plan.capacity.output_reserve_tokens, tool_reserve_tokens: plan.capacity.tool_reserve_tokens,
+    ...(!observedPartition(plan) ? { output_reserve_tokens: plan.capacity.output_reserve_tokens, tool_reserve_tokens: plan.capacity.tool_reserve_tokens } : {}),
     input, input_sha256: digest(input),
     verified_index_sha256: kind === 'phase' ? digest(stable(verified.index)) : null };
   const launchHash = digest(stable(launch));
@@ -4687,6 +4740,14 @@ function prepareIntegrationUnit({ partitions, unit_id, dispatch_id } = {}) {
 function createIntegrationCapacityHost({ partitions, runtime, recorder, counterSource, windowSource,
   renderLaunch, measureInput, readWindow } = {}) {
   const original = privatePartitions(partitions);
+  if (observedPartition(original.record.plan)) {
+    if (runtime !== original.record.plan.runtime || !isDurableRecorder(recorder)
+        || [counterSource, windowSource, renderLaunch, measureInput, readWindow].some(value => value !== undefined))
+      partitionError('observed launch requires its original runtime/recorder and no supplied capacity authority');
+    const host = Object.freeze(Object.create(null));
+    partitionCapacityHosts.set(host, { ...original, runtime, recorder });
+    return host;
+  }
   if (runtime !== original.record.plan.runtime || !isDurableRecorder(recorder)
       || [counterSource, windowSource].some(value => typeof value !== 'string' || !value.trim())
       || counterSource === windowSource || [renderLaunch, measureInput, readWindow].some(value => typeof value !== 'function'))
@@ -4701,6 +4762,43 @@ function privateCapacityHost(host, stage) {
   if (!owned || owned.runtime !== stage.launch.runtime || stable(owned.record) !== stable(stage.record))
     partitionError('original private same-plan runtime capacity host is required', 'INTEGRATION_CAPACITY_UNPROVEN');
   return owned;
+}
+function createCodexIntegrationIngress({ prepared, host, scope } = {}) {
+  const stage = partitionStages.get(prepared);
+  if (!stage) partitionError('original private observed Codex stage is required', 'INTEGRATION_CAPACITY_UNPROVEN');
+  const owned = privateCapacityHost(host, stage), { launch, record, launchHash } = stage;
+  const { plan } = record;
+  if (!observedPartition(plan) || launch.runtime !== 'codex' || plan.identity.role !== 'integrator'
+      || !['unit', 'phase'].includes(launch.kind))
+    partitionError('private observed static Codex integrator stage is required', 'INTEGRATION_CAPACITY_UNPROVEN');
+  const runtime = require('./codex-runtime-host.cjs'), originalScope = runtime.normalizeScope(scope);
+  const pin = plan.instruction_pins.find(pin => pin.sha256 === launch.agent_sha256);
+  if (!pin || plan.identity.agent_file !== path.basename(pin.path)
+      || originalScope.worktree !== launch.worktree || originalScope.ticket !== launch.subject
+      || originalScope.phase !== Number(plan.identity.phase.split('-')[0]))
+    partitionError('observed ingress scope or static integrator pin differs', 'INTEGRATION_CAPACITY_UNPROVEN');
+  const content = readImmutableFile(fs, path.resolve(pin.root, pin.path), 'observed integrator instructions', PARTITION_LIMIT, pin.bytes).toString('utf8');
+  const instructions = runtime.generatedInstructions(content), ceiling = launch.kind === 'unit' ? 2097152 : 4194304;
+  if (digest(content) !== launch.agent_sha256 || !launch.input.startsWith(instructions + '\n\n'))
+    partitionError('observed ingress pinned instructions differ', 'INTEGRATION_CAPACITY_UNPROVEN');
+  return request => {
+    if (partitionStages.get(prepared) !== stage || partitionCapacityHosts.get(host) !== owned
+        || !object(request) || stable(request.scope) !== stable(originalScope)
+        || request.dispatch_id !== launch.dispatch_id || request.model !== launch.model || request.effort !== launch.effort
+        || request.agent_file !== plan.identity.agent_file || request.agent_file_digest !== launch.agent_sha256
+        || request.agent_file_content !== content || request.instructions !== instructions || request.sandbox_mode !== 'read-only'
+        || request.input !== launch.input || digest(request.input) !== launch.input_sha256
+        || launch.plan_sha256 !== plan.plan_sha256 || launch.profile_sha256 !== digest(stable(partitionProfile(plan)))
+        || (launch.kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes) !== ceiling
+        || bytes(request.input) > ceiling)
+      partitionError('original observed Codex ingress association differs', 'INTEGRATION_CAPACITY_UNPROVEN');
+    const admission = verifyPartitionAdmission(record, launch, launchHash);
+    const reservation = owned.recorder.getReservation(launch.dispatch_id);
+    if (admission.receipt_store !== owned.recorder.storeDir || admission.input_byte_ceiling !== ceiling
+        || !reservation || reservation.dispatch_id !== launch.dispatch_id || reservation.recorded)
+      partitionError('original observed Codex ingress local admission differs', 'INTEGRATION_CAPACITY_UNPROVEN');
+    return ceiling;
+  };
 }
 function partitionNativeRequest(stage, host) {
   let request;
@@ -4775,6 +4873,7 @@ async function admitIntegrationCapacity({ prepared, host } = {}) {
   if (!stage) partitionError('capacity requires private prepared exact launch', 'INTEGRATION_CAPACITY_UNPROVEN');
   const owned = privateCapacityHost(host, stage);
   recheckPartitionRecord(stage.record, stage.review);
+  if (observedPartition(stage.record.plan)) return admitObservedPartition(stage, owned);
   const ensurePrelaunch = () => {
     if (owned.recorder.getReservation(stage.launch.dispatch_id))
       partitionError('capacity must be proven before any semantic native launch or reservation', 'INTEGRATION_CAPACITY_UNPROVEN');
@@ -4823,6 +4922,7 @@ async function admitIntegrationCapacity({ prepared, host } = {}) {
   return partitionFreeze(partitionCopy(admission));
 }
 function verifyPartitionPrelaunch(record) {
+  if (observedPartition(record.plan)) return;
   const template = preparedTemplate(record);
   verifyPartitionAdmission(record, template.launch, template.hash);
   for (const unit of record.plan.units) {
@@ -4844,7 +4944,9 @@ function assertIntegrationAdmission({ prepared, launch: currentLaunch, host } = 
   const owned = privateCapacityHost(host, stage), admission = verifyPartitionAdmission(stage.record, stage.launch, stage.launchHash);
   if (stage.launch.kind === 'reserved-template' || owned.recorder.getReservation(stage.launch.dispatch_id))
     partitionError('reserved templates and previously reserved native sessions cannot launch', 'INTEGRATION_CAPACITY_UNPROVEN');
-  if (stable(partitionNativeRequest(stage, owned)) !== stable(admission.request) || owned.recorder.storeDir !== admission.receipt_store)
+  if (observedPartition(stage.record.plan)) {
+    if (owned.recorder.storeDir !== admission.receipt_store) partitionError('observed original receipt store changed');
+  } else if (stable(partitionNativeRequest(stage, owned)) !== stable(admission.request) || owned.recorder.storeDir !== admission.receipt_store)
     partitionError('complete current native request differs from its original admission', 'INTEGRATION_CAPACITY_UNPROVEN');
   verifyPartitionPrelaunch(stage.record);
   if (stage.launch.kind === 'phase' && (stage.launch.verified_index_sha256 !== digest(stable(verifiedPartitionUnits(stage.record).index))
@@ -4859,7 +4961,7 @@ function preparedTemplate(record) {
     runtime: plan.runtime, subject: plan.subject, worktree: plan.identity.worktree,
     model: plan.identity.model, effort: plan.identity.effort, agent_sha256: plan.identity.agent_sha256,
     policy_hash: plan.identity.policy_hash, instruction_sha256: digest(stable(plan.instruction_pins)),
-    output_reserve_tokens: plan.capacity.output_reserve_tokens, tool_reserve_tokens: plan.capacity.tool_reserve_tokens,
+    ...(!observedPartition(plan) ? { output_reserve_tokens: plan.capacity.output_reserve_tokens, tool_reserve_tokens: plan.capacity.tool_reserve_tokens } : {}),
     input, input_sha256: digest(input), verified_index_sha256: null };
   return { launch, hash: digest(stable(launch)) };
 }
@@ -4875,6 +4977,12 @@ function verifyPartitionAdmission(record, launch, hash) {
   let admission;
   try { admission = readPartitionEnvelope(launch.worktree, 'capacity', hash); }
   catch (error) { if (error.code === 'ENOENT') partitionError('exact launch has no protected capacity admission', 'INTEGRATION_CAPACITY_UNPROVEN'); throw error; }
+  if (observedPartition(record.plan)) {
+    if (stable(admission) !== stable(observedPartitionAdmission(record, launch, hash, admission.receipt_store)))
+      partitionError('original operational launch binding changed');
+    return admission;
+  }
+  if (launch.schema !== 'shipyard.integration-partition-launch.v1') partitionError('strict launch schema differs');
   const proof = kind => {
     const retained = readPartitionEnvelope(launch.worktree, 'host-evidence', admission.original_evidence?.[kind]);
     if (digest(stable(retained)) !== admission.original_evidence[kind]
@@ -4888,6 +4996,189 @@ function verifyPartitionAdmission(record, launch, hash) {
       || !Number.isFinite(Date.parse(admission.admitted_at)))
     partitionError('original capacity certificate no longer matches exact launch', 'INTEGRATION_CAPACITY_UNPROVEN');
   return admission;
+}
+function observedPartitionAdmission(record, launch, hash, receiptStore) {
+  const { plan } = record;
+  partitionProfile(plan);
+  if (launch.schema !== 'shipyard.integration-partition-launch.v2' || launch.mode !== 'native-observed'
+      || launch.profile_sha256 !== digest(stable(plan.capacity)) || launch.plan_sha256 !== plan.plan_sha256
+      || launch.worktree !== plan.identity.worktree || launch.runtime !== plan.runtime || launch.subject !== plan.subject
+      || launch.model !== plan.identity.model || launch.effort !== plan.identity.effort
+      || launch.agent_sha256 !== plan.identity.agent_sha256 || launch.policy_hash !== plan.identity.policy_hash
+      || launch.instruction_sha256 !== digest(stable(plan.instruction_pins)) || digest(stable(launch)) !== hash
+      || !['unit', 'phase'].includes(launch.kind) || digest(launch.input) !== launch.input_sha256
+      || typeof receiptStore !== 'string' || !path.isAbsolute(receiptStore)) partitionError('observed operational launch identity differs');
+  if (launch.kind === 'unit') {
+    const unit = plan.units.find(unit => unit.unit_id === launch.unit_id);
+    if (!unit || launch.input !== renderPartitionInput(plan, partitionUnitPayload(plan, unit)))
+      partitionError('observed assigned complete unit input differs');
+  }
+  const ceiling = launch.kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes;
+  if (partitionInputBytes(plan, launch.input, launch.kind) > ceiling) partitionError('actual complete ' + launch.kind + ' input exceeds operational byte bound; HOLD', 'INTEGRATION_INPUT_OVER_BOUND');
+  return { schema: 'shipyard.integration-operational-launch.v1', mode: 'native-observed',
+    plan_sha256: plan.plan_sha256, launch_sha256: hash, input_sha256: launch.input_sha256,
+    profile_sha256: launch.profile_sha256, runtime: launch.runtime, model: launch.model, effort: launch.effort,
+    input_bytes: partitionInputBytes(plan, launch.input, launch.kind), input_byte_ceiling: ceiling, verified_index_sha256: launch.verified_index_sha256,
+    receipt_store: receiptStore };
+}
+function admitObservedPartition(stage, owned) {
+  if (owned.recorder.getReservation(stage.launch.dispatch_id)) partitionError('operational binding must precede the original native attempt');
+  const admission = observedPartitionAdmission(stage.record, stage.launch, stage.launchHash, owned.recorder.storeDir);
+  withArchiveAuthorityLock(stage.launch.worktree, () => {
+    writePartitionEnvelope(stage.launch.worktree, 'capacity', stage.launchHash, admission);
+    if (stage.launch.kind === 'unit') writePartitionEnvelope(stage.launch.worktree, 'capacity',
+      digest(stable([stage.launch.plan_sha256, 'unit', stage.launch.unit_id])), { launch_sha256: stage.launchHash });
+  });
+  return partitionFreeze(partitionCopy(admission));
+}
+function partitionNativeRows(raw) {
+  if (!raw.toString('utf8').endsWith('\n')) partitionError('original observation records are incomplete');
+  const lines = raw.toString('utf8').split('\n').filter(Boolean);
+  if (lines.length > 20000) partitionError('original observation exceeds its native record bound');
+  return lines.map(line => {
+    let row;
+    try { row = JSON.parse(line); } catch { partitionError('original observation JSON is malformed'); }
+    if (!object(row)) partitionError('original observation record is not an object');
+    return row;
+  });
+}
+function nativeCounter(value, name, positive = false) {
+  if (!Number.isSafeInteger(value) || value < (positive ? 1 : 0)) partitionError('original native ' + name + ' is missing, unsafe or malformed');
+  return value;
+}
+function nativeOccupancy(counters, window) {
+  nativeCounter(window, 'context window', true);
+  if (counters.reduce((sum, value) => sum + BigInt(value), 0n) > BigInt(window))
+    partitionError('original native request exceeds its selected-model context window', 'INTEGRATION_INPUT_OVER_BOUND');
+}
+function nativeObservationSamples(trusted, launch, native, streamRows) {
+  const session = currentRuntimeEvidence(trusted).session_id, samples = [];
+  const bad = new Set(['context_compacted', 'compacted', 'thread_rolled_back', 'rollback', 'turn_aborted', 'task_failed',
+    'error', 'turn.failed', 'model_rerouted', 'context_length_exceeded', 'context_window_exceeded', 'max_output_tokens', 'input_truncated', 'output_truncated']);
+  for (const row of [...native.rows, ...streamRows]) {
+    const type = row.type === 'event_msg' ? row.payload?.type : row.type;
+    if (bad.has(type) || row.type === 'system' && ['compact_boundary', 'microcompact_boundary'].includes(row.subtype)
+        || row.type === 'response_item' && ['compaction', 'compacted'].includes(row.payload?.type)
+        || row.truncated === true || row.payload?.truncated === true)
+      partitionError('original native observation contains compaction, rollback, overflow, truncation or failure');
+  }
+  if (launch.runtime === 'codex') {
+    const rows = native.rows, start = rows.findIndex(row => row.type === 'event_msg' && row.payload?.type === 'task_started');
+    const end = rows.findIndex(row => row.type === 'event_msg' && row.payload?.type === 'task_complete');
+    const user = rows.findIndex(row => row.type === 'response_item' && row.payload?.role === 'user'
+      && row.payload.content?.some(block => block.text === launch.input));
+    const turn = rows[start]?.payload.turn_id, groups = new Map();
+    if (!turn || start >= user || user >= end) partitionError('original native usage has no ordered assigned turn');
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      if (row.type !== 'event_msg' || row.payload?.type !== 'token_count' || row.payload.info === null) continue;
+      const info = row.payload.info;
+      if (!object(info)) partitionError('original Codex usage envelope is malformed');
+      if (index <= user || index >= end || row.payload.turn_id !== undefined && row.payload.turn_id !== turn
+          || row.payload.session_id !== undefined && row.payload.session_id !== session
+          || row.payload.thread_id !== undefined && row.payload.thread_id !== session)
+        partitionError('original native usage belongs to an ambiguous turn');
+      const usage = info.last_token_usage, window = nativeCounter(info.model_context_window, 'context window', true);
+      if (!object(usage)) partitionError('original per-request Codex usage is absent');
+      const counters = Object.fromEntries(['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens']
+        .map(key => [key, nativeCounter(usage[key], key)]));
+      if (counters.cached_input_tokens > counters.input_tokens || counters.reasoning_output_tokens > counters.output_tokens
+          || BigInt(counters.total_tokens) !== BigInt(counters.input_tokens) + BigInt(counters.output_tokens))
+        partitionError('original Codex inclusive cache/reasoning counters are inconsistent');
+      if (usage.cache_write_input_tokens !== undefined && nativeCounter(usage.cache_write_input_tokens, 'cache write') > counters.input_tokens)
+        partitionError('original Codex cache write exceeds inclusive input');
+      nativeOccupancy([counters.total_tokens], window);
+      const cumulative = info.total_token_usage;
+      if (!object(cumulative)) partitionError('original Codex request update identity is absent');
+      for (const key of Object.keys(counters)) nativeCounter(cumulative[key], 'cumulative ' + key);
+      const key = String(cumulative.total_tokens), sample = { request: key, turn_id: turn, counters, window };
+      if (groups.has(key) && stable(groups.get(key)) !== stable(sample)) partitionError('contradictory original Codex request updates');
+      groups.set(key, sample);
+    }
+    samples.push(...groups.values());
+  } else {
+    const terminal = streamRows.at(-1), selected = terminal?.modelUsage;
+    if (streamRows.filter(row => row.type === 'result').length !== 1
+        || terminal?.type !== 'result' || terminal.subtype !== 'success' || terminal.is_error !== false
+        || terminal.stop_reason && !['end_turn', 'tool_use', 'stop_sequence'].includes(terminal.stop_reason)
+        || terminal.session_id !== session || !object(selected)) partitionError('original Claude successful completion/modelUsage is absent');
+    const keys = Object.keys(selected);
+    if (keys.length !== 1 || !require('./runtime-adapters.cjs').matchesModelObservation('claude', keys[0], launch.model)
+        || !require('./runtime-adapters.cjs').matchesModelObservation('claude', keys[0], trusted.receipt.observed_model))
+      partitionError('original Claude selected-model window is foreign or ambiguous');
+    if (!object(selected[keys[0]])) partitionError('original Claude model metadata is malformed');
+    if (selected[keys[0]].canonicalModel !== undefined && selected[keys[0]].canonicalModel !== trusted.receipt.observed_model)
+      partitionError('original Claude canonical model metadata differs');
+    const window = nativeCounter(selected[keys[0]].contextWindow, 'context window', true);
+    const group = rows => {
+      const groups = new Map(), identities = new Map();
+      for (const row of rows) {
+        if (row.type !== 'assistant') continue;
+        const message = row.message;
+        if ((row.sessionId || row.session_id) !== session || row.sessionId && row.sessionId !== session
+            || row.session_id && row.session_id !== session || !object(message) || typeof message.id !== 'string' || !message.id
+            || !require('./runtime-adapters.cjs').matchesModelObservation('claude', message.model, launch.model)
+            || message.model !== trusted.receipt.observed_model)
+          partitionError('original Claude request model/session/message identity differs');
+        if (identities.has(message.id) && identities.get(message.id) !== (row.request_id || null))
+          partitionError('original Claude message belongs to conflicting native requests');
+        identities.set(message.id, row.request_id || null);
+        if (message.stop_reason && !['end_turn', 'tool_use', 'stop_sequence'].includes(message.stop_reason))
+          partitionError('original Claude request was truncated or incomplete');
+        if (message.context_management?.applied_edits?.length || message.context_management?.edits?.length)
+          partitionError('original Claude request removed context');
+        const usages = message.usage?.iterations ?? undefined;
+        if (usages !== undefined && (!Array.isArray(usages) || !usages.length)) partitionError('unsupported Claude per-iteration usage');
+        const records = usages || [message.usage];
+        for (let iteration = 0; iteration < records.length; iteration++) {
+          const usage = records[iteration];
+          if (!object(usage)) partitionError('original Claude per-request usage is absent');
+          if (usages && usage.type !== 'message') partitionError('unsupported or context-removing Claude usage iteration');
+          const counters = Object.fromEntries(['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens']
+            .map(key => [key, nativeCounter(usage[key], key)]));
+          const thinking = usage.output_tokens_details?.thinking_tokens;
+          if (thinking !== undefined && nativeCounter(thinking, 'included thinking output') > counters.output_tokens)
+            partitionError('original Claude thinking exceeds inclusive output');
+          const key = message.id + (usages ? ':' + iteration : ''), old = groups.get(key);
+          if (old && old.stop_reason && stable(old.counters) !== stable(counters))
+            partitionError('contradictory completed Claude message usage');
+          if (old) for (const field of Object.keys(counters)) counters[field] = Math.max(old.counters[field], counters[field]);
+          nativeOccupancy(Object.values(counters), window);
+          groups.set(key, { request: key, model: message.model, counters, window,
+            stop_reason: message.stop_reason || old?.stop_reason || null, variant: usages ? 'assistant-iterations' : 'assistant-message' });
+        }
+      }
+      return [...groups.values()];
+    };
+    const user = native.rows.findIndex(row => row.type === 'user' && row.sessionId === session
+      && (typeof row.message?.content === 'string' ? row.message.content === launch.input
+        : row.message?.content?.map(block => block.text || '').join('') === launch.input));
+    if (user < 0 || native.rows.some((row, index) => row.type === 'assistant' && index <= user))
+      partitionError('original Claude request usage precedes its assigned input');
+    const original = group(native.rows), streamed = group(streamRows);
+    if (stable(original) !== stable(streamed)) partitionError('original Claude native/stream per-request usage differs');
+    samples.push(...original);
+  }
+  if (!samples.length) partitionError('original native per-request usage/window observation is absent');
+  return samples;
+}
+function authenticateNativeObservation(trusted, record, launch, native, create) {
+  const pin = currentRuntimeEvidence(trusted).transcript;
+  const raw = readImmutableFile(fs, pin.path, 'original native observation stream', PARTITION_LIMIT, pin.bytes);
+  if (digest(raw) !== pin.sha256) partitionError('original native observation stream changed');
+  const streamRows = partitionNativeRows(raw), hash = digest(stable(launch));
+  const samples = nativeObservationSamples(trusted, launch, native, streamRows);
+  const observation = { schema: 'shipyard.integration-native-observation.v1', mode: 'native-observed',
+    plan_sha256: record.plan.plan_sha256, launch_sha256: hash, input_sha256: launch.input_sha256,
+    profile_sha256: launch.profile_sha256, verified_index_sha256: launch.verified_index_sha256,
+    dispatch_id: trusted.dispatchId, receipt_store: trusted.recorder.storeDir, receipt_sha256: digest(stable(trusted.receipt)),
+    runtime: launch.runtime, session: currentRuntimeEvidence(trusted).session_id, model: launch.model, effort: launch.effort,
+    native_pin: native.pin, stream_pin: pin, frame_sha256: native.frame_sha256,
+    samples, completed: true, compacted: false, truncated: false };
+  if (create) withArchiveAuthorityLock(launch.worktree, () => writePartitionEnvelope(launch.worktree, 'observation', hash, observation));
+  if (stable(readPartitionEnvelope(launch.worktree, 'observation', hash)) !== stable(observation))
+    partitionError('protected original native observation differs');
+  return observation;
 }
 function partitionResult(result, record, launch) {
   const { plan } = record, unit = plan.units.find(unit => unit.unit_id === launch.unit_id);
@@ -4913,13 +5204,14 @@ function partitionResult(result, record, launch) {
   if (typeof result.evidence_markdown !== 'string' || !result.evidence_markdown.trim()) partitionError('unit complete original evidence is required');
   return result;
 }
-function authenticatePartitionResult(trusted, result, record, launch, pin) {
+function authenticatePartitionResult(trusted, result, record, launch, pin, createObservation = false) {
   const native = partitionOriginalInput(trusted, launch, pin);
   const admitted = readPartitionEnvelope(launch.worktree, 'capacity', digest(stable(launch)));
   if (admitted.receipt_store !== trusted.recorder.storeDir) partitionError('semantic launch changed its admitted original receipt store');
-  if (native.frame_sha256 !== admitted.frame_sha256) partitionError('complete native instructions/framing changed after admission');
+  if (!observedPartition(record.plan) && native.frame_sha256 !== admitted.frame_sha256) partitionError('complete native instructions/framing changed after admission');
   const { evidence_markdown, ...sealed } = result;
   originalCurrentResponse(trusted, sealed, Buffer.from(evidence_markdown), { native: native.pin });
+  if (observedPartition(record.plan)) authenticateNativeObservation(trusted, record, launch, native, createObservation);
   return native;
 }
 function sealIntegrationUnit({ prepared, recorder, dispatchId, result } = {}) {
@@ -4934,7 +5226,9 @@ function sealIntegrationUnit({ prepared, recorder, dispatchId, result } = {}) {
   partitionResult(result, record, launch);
   if (bytes(stable({ unit_id: launch.unit_id, dispatch_id: trusted.dispatchId, artifact_ref: archiveRelative(trusted.dispatchId, MANIFEST_NAME),
     artifact_sha256: '0'.repeat(64) })) > 8192) partitionError('unit reference exceeds frozen final-template ceiling', 'INTEGRATION_INPUT_OVER_BOUND');
-  const native = authenticatePartitionResult(trusted, result, record, launch);
+  const native = authenticatePartitionResult(trusted, result, record, launch, undefined, true);
+  if (observedPartition(record.plan) && (result.completeness !== 'complete' || result.outcome !== 'passed' || result.required_context.length))
+    partitionError('incomplete, failing or context-blocked original unit cannot seal');
   return withArchivePublication(worktree, () => {
     const index = readPartitionIndex(record);
     if (index.entries.some(entry => entry.unit_id === launch.unit_id || entry.dispatch_id === launch.dispatch_id)) partitionError('original unit index record cannot be overwritten');
@@ -4974,7 +5268,9 @@ function validateIndexedIntegrationUnit(record, entry) {
       || launch.plan_sha256 !== plan.plan_sha256 || launch.runtime !== plan.runtime || launch.dispatch_id !== entry.dispatch_id
       || digest(stable(trusted.receipt)) !== entry.receipt_sha256 || trusted.receipt.role !== 'integrator') partitionError('indexed original unit/runtime/receipt differs');
   verifyPartitionAdmission(record, launch, entry.launch_sha256);
-  const template = preparedTemplate(record); verifyPartitionAdmission(record, template.launch, template.hash);
+  if (!observedPartition(plan)) {
+    const template = preparedTemplate(record); verifyPartitionAdmission(record, template.launch, template.hash);
+  }
   const state = authorityState(worktree), retained = state.payload.records[entry.dispatch_id];
   if (!retained || stable(retained.receipt) !== stable(trusted.receipt) || retained.pins.length !== 3
       || stable(retained.integration_partition) !== stable({ kind: 'unit', plan_sha256: plan.plan_sha256, unit_id: entry.unit_id })) partitionError('unit original protected archive custody is missing');
@@ -5043,8 +5339,10 @@ function authenticatePartitionFinal({ trusted, result, evidence, identity, integ
   const native = partitionOriginalInput(trusted, launchReference);
   const admission = readPartitionEnvelope(identity.worktree, 'capacity', launchHash);
   if (admission.receipt_store !== trusted.recorder.storeDir) partitionError('actual final changed its admitted original receipt store');
-  if (native.frame_sha256 !== admission.frame_sha256) partitionError('actual final instructions/framing differs from admitted input');
+  if (!observedPartition(plan) && native.frame_sha256 !== admission.frame_sha256) partitionError('actual final instructions/framing differs from admitted input');
   originalCurrentResponse(trusted, result, evidence, { native: native.pin });
+  if (observedPartition(plan)) authenticateNativeObservation(trusted, record, launchReference, native,
+    !authorityState(identity.worktree, false, false).payload.records[trusted.dispatchId]);
   if (result.runtime !== plan.runtime || result.subject !== plan.subject || result.input_sha256 !== launchReference.input_sha256
       || stable(result.reviewed_identity) !== stable(plan.identity) || result.completeness !== 'complete'
       || result.coverage?.schema !== 'shipyard.integration-partition-coverage.v1' || result.coverage.plan_sha256 !== plan.plan_sha256
@@ -8192,6 +8490,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   prepareIntegrationUnit,
   prepareIntegrationAggregate,
   createIntegrationCapacityHost,
+  createCodexIntegrationIngress,
   admitIntegrationCapacity,
   assertIntegrationAdmission,
   sealIntegrationUnit,

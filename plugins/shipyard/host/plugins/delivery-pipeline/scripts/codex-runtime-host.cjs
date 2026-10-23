@@ -2502,15 +2502,23 @@ function createReviewObserver(prepared, launch, env, onProgress, processId) {
   return observer;
 }
 
-function launchPrompt(prompt, content) {
+function launchPrompt(prompt, content, integrationIngress) {
   if (typeof prompt !== 'string' || !prompt.trim()
       || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(prompt)) {
     fail('INVALID_INPUT', 'prompt must be non-empty text without unsupported control characters');
   }
   const base = prompt.trim();
-  if (base.length > 1024 * 1024) fail('INVALID_INPUT', 'prompt exceeds 1048576 characters');
-  if (!content) return base;
-  return generatedInstructions(content) + '\n\n' + base;
+  const instructions = content ? generatedInstructions(content) : '';
+  const input = content ? instructions + '\n\n' + base : base;
+  const inputBytes = Buffer.byteLength(input, 'utf8');
+  if (inputBytes > 4194304) fail('INVALID_INPUT', 'complete prompt exceeds 4194304 UTF-8 bytes');
+  if (base.length > 1024 * 1024) {
+    if (!content || typeof integrationIngress !== 'function') fail('INVALID_INPUT', 'prompt exceeds 1048576 characters');
+    const ceiling = integrationIngress(input, instructions);
+    if (![2097152, 4194304].includes(ceiling) || inputBytes > ceiling)
+      fail('INVALID_INPUT', 'prompt exceeds its private observed stage UTF-8 bound');
+  }
+  return input;
 }
 
 function resolveProtectedPath(entry) {
@@ -2683,6 +2691,18 @@ function createCodexCliLauncher(options = {}) {
     const sandbox = launchOptions.sandbox_mode || launchOptions.sandbox;
     if (!['read-only', 'workspace-write'].includes(sandbox)) {
       fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write sandbox');
+    }
+    let staticInput;
+    try {
+      staticInput = agent ? null : launchPrompt(prompt, resumeReview?.completedSource ? undefined : content,
+        !typedRole && !fileTransport && !resumeReview && !launchOptions.review_progress && !capacityProbe
+          && typeof options.integrationIngress === 'function' ? (input, instructions) => options.integrationIngress({
+            input, instructions, scope, dispatch_id: launchOptions.dispatch_id, model, effort,
+            agent_file: launchOptions.agent_file, agent_file_digest: launchOptions.agent_file_digest,
+            agent_file_content: content, sandbox_mode: sandbox }) : undefined);
+    } catch (error) {
+      if (error.code === 'INVALID_INPUT') fail('RUNTIME_UNAVAILABLE', 'Codex process input failed: ' + error.message);
+      throw error;
     }
     const env = launchEnvironment(installedHost, { ...process.env, ...environment });
     const task = agent ? writeTaskFile(taskDir, scope, launchOptions.dispatch_id, launchPrompt(prompt)) : null;
@@ -2890,8 +2910,7 @@ function createCodexCliLauncher(options = {}) {
       stderr.push(bytes);
     });
     try {
-      const input = agent ? taskRelayInput(agent.role, model, effort, task)
-        : launchPrompt(prompt, resumeReview?.completedSource ? undefined : content);
+      const input = agent ? taskRelayInput(agent.role, model, effort, task) : staticInput;
       child.stdin.write(input);
       child.stdin.end();
     } catch (error) {
@@ -3255,6 +3274,7 @@ function createCodexRuntimeHost(options = {}) {
     approveForMe: options.approveForMe,
     additionalProtectedPaths: options.additionalProtectedPaths,
     taskDir: options.taskDir,
+    integrationIngress: options.integrationIngress,
   });
   const assertOwner = () => {
     if (controller && typeof controller.assertOwner === 'function') controller.assertOwner(runId);
