@@ -8,7 +8,6 @@ const { execFileSync } = require('node:child_process');
 const { createCodexRuntimeHost, normalizeScope, parseCodexStream, probeCodexRuntime } = require('./codex-runtime-host.cjs');
 const { encodeUniqueContent } = require('./context-packet.cjs');
 const { stableStringify } = require('./model-policy-internal.cjs');
-const integrationPreflight = require('./phase-integrator-preflight.cjs');
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
@@ -775,12 +774,14 @@ function integrationDigest(value) {
 }
 
 function completeIntegrationPreflight(prepared, options) {
-  const proof = integrationPreflight.preflight({ phase: prepared.phaseNumber,
-    graphDir: prepared.graph.directory, worktree: prepared.canonical.worktree }, {
-    listPullRequests: options.listPullRequests, getPullRequest: options.getPullRequest,
-    git: (worktree, args) => (options.execFileSync || execFileSync)('git', ['-C', worktree, ...args], {
-      encoding: 'utf8', maxBuffer: MAX_GRAPH_BYTES, stdio: ['ignore', 'pipe', 'pipe'] }).trim(),
-  });
+  const proof = prepared.nativeMergeProof
+    ? require('./claude-role-host.cjs').createNativeIntegrationMergeProof(prepared, options)
+    : require('./phase-integrator-preflight.cjs').preflight({ phase: prepared.phaseNumber,
+      graphDir: prepared.graph.directory, worktree: prepared.canonical.worktree }, {
+      listPullRequests: options.listPullRequests, getPullRequest: options.getPullRequest,
+      git: (worktree, args) => (options.execFileSync || execFileSync)('git', ['-C', worktree, ...args], {
+        encoding: 'utf8', maxBuffer: MAX_GRAPH_BYTES, stdio: ['ignore', 'pipe', 'pipe'] }).trim(),
+    });
   if (proof.epic.commit !== prepared.canonical.head || proof.epic.tree !== prepared.canonical.headTree
       || JSON.stringify(proof.ticket_set) !== JSON.stringify(prepared.ticketSet)
       || proof.ticket_set_digest !== prepared.ticketSetDigest)
@@ -1161,7 +1162,7 @@ function prepareIntegratorInput(scope, request, options) {
       return review.input;
     }
     const prepared = require('./claude-role-host.cjs').prepareNativeIntegratorContext(options, {
-      worktree: scope.worktree, phase: String(scope.phase) });
+      worktree: scope.worktree, phase: String(scope.phase), review_contract: roleArtifact.INTEGRATION_REVIEW_V3 });
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: prepared.signals });
     const installed = installedAgentOptions(options, selected, options.host?.capabilities || options.capabilities);
     const instructions = archReviewContext.instructionEvidence(installed.agentDir, installed.agentFile, installed.agentManifest);
@@ -1196,7 +1197,8 @@ function prepareIntegratorInput(scope, request, options) {
   }
   if (request.context.review_contract === 'shipyard.integration-review.v2') {
     const prepared = require('./claude-role-host.cjs').prepareNativeIntegratorContext(options, {
-      worktree: scope.worktree, phase: String(scope.phase), signals: undefined });
+      worktree: scope.worktree, phase: String(scope.phase), signals: undefined,
+      review_contract: 'shipyard.integration-review.v2' });
     let signals = { ...prepared.signals };
     for (let attempt = 0; attempt < 4; attempt++) {
       const selected = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals });

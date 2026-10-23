@@ -3868,7 +3868,14 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
           merge_base: reviewGit(root, ['merge-base', baseCommit, head]), merge_base_tree: manifest.merge_base_tree };
         if (reviewGit(root, ['rev-parse', identity.merge_base + '^{tree}']) !== identity.merge_base_tree) continue;
         const contract = authenticatedCurrentArchive(worktree, record, manifest, findings, identity, undefined, [...candidates], integrationReview);
-        if (runtime?.input_bundle) {
+        if (contract?.contract === INTEGRATION_REVIEW_V3) {
+          const frozen = partitionPlanRecord(worktree, contract.integration_partition.plan_sha256).plan;
+          if (stable(frozen.identity.ticket_set) !== stable(findings.ticket_set)
+              || frozen.identity.head !== head || frozen.identity.base !== baseCommit)
+            partitionError('current final differs from its original frozen subject');
+          if (frozen.identity.preflight.schema !== 'shipyard.native-integration-merge-proof.v1')
+            for (const member of findings.ticket_set) reviewGit(root, ['merge-base', '--is-ancestor', member.head, head]);
+        } else if (runtime?.input_bundle) {
           const checked = checkedInput;
           for (const graphPin of checked.manifest.snapshot.graph) {
             const live = path.join(directory, path.basename(graphPin.path));
@@ -3877,14 +3884,28 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
           }
           const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]), verifiedReviewMaterialLimit(checked));
           const proof = packet.role_context?.review_coverage?.complete_preflight || checked.manifest.binding?.preflight;
-          if (proof) {
+          if (proof?.schema === 'shipyard.native-integration-merge-proof.v1') {
+            if (stable(checked.manifest.binding?.preflight) !== stable(proof)
+                || proof.epic.commit !== head || proof.epic.branch !== headBranch
+                || proof.repository !== common || proof.integration_base.commit !== baseCommit
+                || proof.ticket_set_digest !== subject.tickets
+                || stable(proof.ticket_set) !== stable(findings.ticket_set))
+              fail('REVIEW_COVERAGE_INVALID', 'original native merge proof association differs');
+            require('./claude-role-host.cjs').assertNativeIntegrationMergeProof(proof,
+              { worktree, graphDir: directory });
+          } else if (proof) {
+            if (proof.schema !== 'shipyard.phase-integrator-preflight.v1')
+              fail('REVIEW_COVERAGE_INVALID', 'unknown integration merge proof schema');
             if (require('./phase-integrator-preflight.cjs').proofDigest(proof) !== proof.proof_digest
                 || proof.epic.commit !== head || proof.epic.branch !== headBranch
                 || proof.graph.digest !== digest(readImmutableFile(fs, path.join(directory, 'tickets.json'), 'current graph', 8 * 1024 * 1024))
                 || stable(proof.merges.map(member => member.id).sort()) !== stable(ids))
               fail('REVIEW_COVERAGE_INVALID', 'complete original merge ancestry differs');
             for (const member of proof.merges) reviewGit(root, ['merge-base', '--is-ancestor', member.merge_commit, head]);
-          } else for (const member of findings.ticket_set) reviewGit(root, ['merge-base', '--is-ancestor', member.head, head]);
+          } else {
+            if (packet.role_context?.native_merge_proof) fail('REVIEW_COVERAGE_INVALID', 'native merge proof authority is missing');
+            for (const member of findings.ticket_set) reviewGit(root, ['merge-base', '--is-ancestor', member.head, head]);
+          }
         } else for (const member of findings.ticket_set) reviewGit(root, ['merge-base', '--is-ancestor', member.head, head]);
         if (reviewGit(root, ['rev-parse', 'refs/remotes/origin/' + baseName + '^{commit}']) !== baseCommit) continue;
         current = Object.freeze({ authenticated: true, role: 'integrator', outcome: 'passed', head, base: baseName,
@@ -4481,15 +4502,29 @@ function recheckPartitionRecord(record, review, finalTrusted) {
   if (digest(stable(original)) !== plan.original_packet_sha256
       || stable(partitionInventory(partitionFullPacket(original, record.original_input_bundle, checked))) !== stable({ material: plan.material, obligations: plan.obligations }))
     partitionError('complete frozen byte/obligation inventory differs from original packet');
+  const proof = plan.identity.preflight;
+  if (proof?.schema === 'shipyard.native-integration-merge-proof.v1') {
+    if (proof.proof_digest !== plan.identity.preflight_digest
+        || stable(checked.manifest.binding?.preflight) !== stable(proof)
+        || stable(original.role_context?.native_merge_proof) !== stable(proof)
+        || proof.repository !== plan.identity.repository || proof.epic.commit !== identity.head
+        || proof.integration_base.commit !== identity.base_commit)
+      partitionError('original native merge proof producer association differs');
+    require('./claude-role-host.cjs').assertNativeIntegrationMergeProof(proof,
+      { worktree, graphDir: plan.identity.graph_directory }, review?.options || {});
+  } else if (!proof || proof.schema !== 'shipyard.phase-integrator-preflight.v1') {
+    partitionError('unknown original complete preflight proof schema');
+  }
   if (review) withPartitionArchiveScope(record, () => require('./codex-delivery-host.cjs').recheckIntegrationReview(review), finalTrusted);
   else {
-    const proof = plan.identity.preflight;
-    if (require('./phase-integrator-preflight.cjs').proofDigest(proof) !== plan.identity.preflight_digest)
-      partitionError('original complete preflight proof differs');
-    for (const member of proof.merges) reviewGit(worktree, ['merge-base', '--is-ancestor', member.merge_commit, identity.head]);
-    const proofNow = require('./phase-integrator-preflight.cjs').preflight({ phase: Number(plan.identity.phase.split('-')[0]),
-      graphDir: plan.identity.graph_directory, worktree });
-    if (stable(proofNow) !== stable(proof)) partitionError('complete current integration preflight changed', 'STALE_CONTEXT');
+    if (proof.schema === 'shipyard.phase-integrator-preflight.v1') {
+      if (require('./phase-integrator-preflight.cjs').proofDigest(proof) !== plan.identity.preflight_digest)
+        partitionError('original complete preflight proof differs');
+      for (const member of proof.merges) reviewGit(worktree, ['merge-base', '--is-ancestor', member.merge_commit, identity.head]);
+      const proofNow = require('./phase-integrator-preflight.cjs').preflight({ phase: Number(plan.identity.phase.split('-')[0]),
+        graphDir: plan.identity.graph_directory, worktree });
+      if (stable(proofNow) !== stable(proof)) partitionError('complete current integration preflight changed', 'STALE_CONTEXT');
+    }
     assertArchiveInventory(worktree, partitionCurrentArchivePins(record, finalTrusted));
   }
 }

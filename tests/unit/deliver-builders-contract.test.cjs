@@ -91,9 +91,9 @@ test('both supported integrator callers select v3 before legacy full-inline form
   assert.ok(start >= 0 && end > start);
   const integration = step5.slice(start, end);
   const caller = integration.match(/```javascript\n([\s\S]*?)\n\s*```/)[1];
-  assert.match(caller, /const current = prepareNativeIntegratorContext\(options, \{ worktree, phase: String\(phase\) \}\)/);
+  assert.match(caller, /const current = prepareNativeIntegratorContext\(options, \{\s*worktree, phase: String\(phase\), review_contract: 'shipyard\.integration-review\.v3' \}\)/);
   assert.ok(!caller.includes('prepareIntegratorContext'));
-  assert.strictEqual((caller.match(/review_contract: 'shipyard\.integration-review\.v3'/g) || []).length, 2);
+  assert.strictEqual((caller.match(/review_contract: 'shipyard\.integration-review\.v3'/g) || []).length, 3);
   assert.match(caller, /scope: \{[\s\S]*run_id, worktree, repository: current.canonical.commonPath,[\s\S]*phase: current.phaseNumber, ticket: phaseSubject/);
   assert.match(caller, /schema: 'shipyard.claude-role-request.v1',[\s\S]*role: 'integrator', worktree, phase: String\(phase\)/);
   for (const field of ['dispatch_id', 'stage', 'unit_id', 'index', 'receipt', 'model', 'capacity', 'input_budget'])

@@ -1739,6 +1739,186 @@ test('an overflowing change-metadata listing is refused as too large with the bo
   }
 });
 
+function reverseSquashRepository() {
+  const f = setupClaudePartitionRepository();
+  const graphPath = path.join(f.root, '.planning/graph/tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphPath));
+  const row = graph.tickets['T-38-01'];
+  for (const number of ['02', '03']) {
+    const id = 'T-38-' + number;
+    graph.tickets[id] = { ...row, branch: 'ticket/' + id,
+      plan: `.planning/phases/${PHASE}/38-${number}-PLAN.md` };
+    write(f.root, graph.tickets[id].plan, planText());
+  }
+  write(f.root, '.planning/graph/tickets.json', JSON.stringify(graph));
+  const state = Object.fromEntries(Object.entries(graph.tickets).map(([id, row], index) =>
+    [id, { status: 'merged', pr: 101 + index, branch: row.branch }]));
+  write(f.root, '.planning/graph/delivery-state.json', JSON.stringify(state));
+  git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'complete reverse squash membership']);
+  const start = git(f.root, ['rev-parse', 'HEAD']);
+  const tree = git(f.root, ['rev-parse', 'HEAD^{tree}']);
+  const commit = (parent, message) => git(f.root, ['commit-tree', tree, '-p', parent, '-m', message]);
+  const childHead = commit(start, 'child source');
+  const childMerge = commit(start, 'child squash into parent');
+  const parentHead = commit(childMerge, 'actual parent head includes child squash');
+  const parentMerge = commit(start, 'parent squash into terminal');
+  const terminalHead = commit(parentMerge, 'actual terminal head includes parent squash');
+  const terminalMerge = commit(start, 'terminal squash into epic');
+  git(f.root, ['reset', '--hard', terminalMerge]);
+  f.head = terminalMerge; f.headTree = tree;
+  git(f.root, ['update-ref', 'refs/remotes/origin/' + f.branch, f.head]);
+  const branches = Object.values(graph.tickets).map(row => row.branch);
+  f.prs = [childHead, parentHead, terminalHead].map((head, index) => ({
+    number: 101 + index, state: 'MERGED', headRefName: branches[index], headRefOid: head,
+    baseRefName: branches[index + 1] || f.branch, baseRefOid: null,
+    mergedAt: '2026-10-09T12:00:00Z', mergeCommit: { oid: [childMerge, parentMerge, terminalMerge][index] },
+    title: 'T-38-0' + (index + 1), body: '',
+  }));
+  f.options = { ...claudePartitionOptions(f),
+    listPullRequests: ({ branch }) => f.prs.filter(pr => pr.headRefName === branch),
+    getPullRequest: ({ pr }) => structuredClone(f.prs.find(item => item.number === pr)) };
+  f.start = start; f.graphPath = graphPath;
+  return f;
+}
+
+test('D-34 legacy v2 retains strict proof on both native preparations', () => {
+  const f = setupClaudePartitionRepository();
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const options = claudePartitionOptions(f);
+    const input = { ...request(f), review_contract: 'shipyard.integration-review.v2' };
+    const prepared = host.prepareIntegratorContext(options, input);
+    assert.equal(prepared.nativeMergeProof, null);
+    assert.equal(prepared.integrationReview.proof.schema, 'shipyard.phase-integrator-preflight.v1');
+    assert.equal(prepared.packet.role_context.native_merge_proof, undefined);
+    const codex = host.prepareNativeIntegratorContext(options, input);
+    const legacyDefault = host.prepareNativeIntegratorContext(options, request(f));
+    assert.equal(legacyDefault.nativeMergeProof, null);
+    assert.deepEqual(legacyDefault.packet, codex.packet);
+    const scope = { worktree: f.root, ticket: codex.ticket, phase: 38, run_id: 'd34-legacy-v2' };
+    const review = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').prepareIntegrationLineage(scope, codex,
+      { ...options, nativeRuntime: 'codex', dispatchId: scope.run_id, storageRoot: f.storageRoot, instructionBinding: {} });
+    assert.equal(codex.nativeMergeProof, null);
+    assert.equal(review.proof.schema, 'shipyard.phase-integrator-preflight.v1');
+  } finally { cleanupFixture(f); }
+});
+
+test('D-34 legacy v2 refuses reverse squash on both native preparations', () => {
+  const f = reverseSquashRepository();
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const input = { ...request(f), review_contract: 'shipyard.integration-review.v2' };
+    assert.throws(() => host.prepareIntegratorContext(f.options, input), /not included/);
+    assert.throws(() => host.prepareNativeIntegratorContext(f.options, input), /not included/);
+  } finally { cleanupFixture(f); }
+});
+
+test('D-34 real reverse squash reaches Claude and the Codex shared lineage entry without a provider', () => {
+  const f = reverseSquashRepository();
+  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const prepared = host.prepareIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' });
+    const codex = host.prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' });
+    const proof = host.createNativeIntegrationMergeProof(prepared, f.options);
+    assert.equal(proof.schema, 'shipyard.native-integration-merge-proof.v1');
+    assert.deepEqual(proof.paths.map(item => item.tickets), [
+      ['T-38-01', 'T-38-02', 'T-38-03'], ['T-38-02', 'T-38-03'], ['T-38-03']]);
+    assert.equal(proof.ticket_set_digest, crypto.createHash('sha256').update(JSON.stringify(prepared.ticketSet)).digest('hex'));
+    assert.deepEqual(host.createNativeIntegrationMergeProof(codex, f.options), proof);
+    const scope = { worktree: f.root, ticket: codex.ticket, phase: 38, run_id: 'd34-codex' };
+    const review = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').prepareIntegrationLineage(scope, codex,
+      { ...f.options, nativeRuntime: 'codex', dispatchId: scope.run_id, storageRoot: f.storageRoot, instructionBinding: {} });
+    assert.deepEqual(review.proof, proof);
+    assert.deepEqual(review.currentInput.manifest.binding.preflight, proof);
+    const strict = require('../../plugins/delivery-pipeline/scripts/phase-integrator-preflight.cjs');
+    assert.throws(() => strict.preflight({ worktree: f.root, graphDir: path.dirname(f.graphPath), phase: 38 }, {
+      listPullRequests: f.options.listPullRequests, getPullRequest: f.options.getPullRequest,
+      git: (cwd, args) => args.includes('fetch') ? '' : git(cwd, args),
+    }), /targets .*not/);
+    f.prs[0].mergedAt = '2026-10-10T12:00:00Z';
+    assert.throws(() => require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').recheckIntegrationReview(review),
+      error => error.code === 'STALE_CONTEXT');
+    assert.throws(() => host.createNativeIntegrationMergeProof({ ...codex }, f.options), /private|original/);
+  } finally { cleanupFixture(f); }
+});
+
+for (const scenario of ['equal tree without inclusion', 'wrong base', 'open parent', 'missing parent', 'duplicate PR',
+  'duplicate head branch', 'foreign repository', 'foreign phase', 'cycle', 'missing head', 'missing merge', 'terminal noninclusion'])
+test('D-34 reverse squash refuses ' + scenario, () => {
+  const f = reverseSquashRepository();
+  try {
+    const graph = JSON.parse(fs.readFileSync(f.graphPath));
+    if (scenario === 'equal tree without inclusion') f.prs[1].headRefOid = f.start;
+    if (scenario === 'wrong base') f.prs[0].baseRefName = 'ticket/unrelated';
+    if (scenario === 'open parent') f.prs[1].state = 'OPEN';
+    if (scenario === 'missing parent') f.prs.splice(1, 1);
+    if (scenario === 'duplicate PR') f.prs[1].number = 101;
+    if (scenario === 'duplicate head branch') {
+      graph.tickets['T-38-02'].branch = graph.tickets['T-38-01'].branch;
+      const statePath = path.join(f.root, '.planning/graph/delivery-state.json');
+      const state = JSON.parse(fs.readFileSync(statePath));
+      state['T-38-02'].branch = graph.tickets['T-38-02'].branch;
+      fs.writeFileSync(statePath, JSON.stringify(state));
+    }
+    if (scenario === 'foreign repository') graph.tickets['T-38-02'].repo = 'foreign/repository';
+    if (scenario === 'foreign phase') graph.tickets['T-38-02'].phase = '39';
+    if (scenario === 'cycle') {
+      f.prs[1].baseRefName = f.prs[0].headRefName;
+      f.prs[0].headRefOid = f.prs[1].headRefOid;
+      f.prs[1].mergeCommit.oid = f.prs[0].mergeCommit.oid;
+    }
+    if (scenario === 'missing head') f.prs[1].headRefOid = 'e'.repeat(40);
+    if (scenario === 'missing merge') f.prs[0].mergeCommit.oid = 'e'.repeat(40);
+    if (scenario === 'terminal noninclusion') f.prs[2].mergeCommit.oid = f.prs[2].headRefOid;
+    if (scenario.startsWith('foreign') || scenario === 'duplicate head branch') {
+      fs.writeFileSync(f.graphPath, JSON.stringify(graph));
+      git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'adversarial graph']);
+      git(f.root, ['update-ref', 'refs/remotes/origin/' + f.branch, git(f.root, ['rev-parse', 'HEAD'])]);
+    }
+    assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
+      .prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' }), /included|inclusion|parent|merged|identity|phase|repository|ambiguous|duplicate|cycle|object|plan set|delivery state/i);
+  } finally { cleanupFixture(f); }
+});
+
+for (const field of ['headRefOid', 'baseRefName', 'baseRefOid', 'mergedAt', 'mergeCommit'])
+test('D-34 collection refuses concurrent PR drift in ' + field, () => {
+  const f = reverseSquashRepository();
+  try {
+    const get = f.options.getPullRequest; let calls = 0;
+    f.options.getPullRequest = input => {
+      const pr = get(input);
+      if (++calls > 3 && input.pr === 101) pr[field] = field === 'mergeCommit' ? { oid: f.start }
+        : field.endsWith('Oid') ? f.start : field === 'mergedAt' ? 'changed-time' : 'changed/base';
+      return pr;
+    };
+    assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
+      .prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' }), error => error.code === 'STALE_CONTEXT');
+  } finally { cleanupFixture(f); }
+});
+
+for (const scenario of ['epic head', 'integration base', 'graph membership', 'complete plan set'])
+test('D-34 collection refuses concurrent ' + scenario + ' drift', () => {
+  const f = reverseSquashRepository();
+  try {
+    const get = f.options.getPullRequest; let calls = 0;
+    f.options.getPullRequest = input => {
+      const pr = get(input);
+      if (++calls === 4) {
+        if (scenario === 'epic head') git(f.root, ['update-ref', 'refs/heads/' + f.branch, f.start]);
+        if (scenario === 'integration base') git(f.root, ['update-ref', 'refs/remotes/origin/main', f.head]);
+        if (scenario === 'graph membership') {
+          const graph = JSON.parse(fs.readFileSync(f.graphPath)); delete graph.tickets['T-38-02'];
+          fs.writeFileSync(f.graphPath, JSON.stringify(graph));
+        }
+        if (scenario === 'complete plan set') write(f.root, `.planning/phases/${PHASE}/38-04-PLAN.md`, planText());
+      }
+      return pr;
+    };
+    assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
+      .prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' }), error => error.code === 'STALE_CONTEXT');
+  } finally { cleanupFixture(f); }
+});
+
 test('integrator resolves a marker-matched merged PR on its recorded head branch', async () => {
   const fixture = setupRepository('integrator');
   let launched;

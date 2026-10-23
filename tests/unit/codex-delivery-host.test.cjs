@@ -4297,7 +4297,8 @@ function codexPartitionFixture(f, helper, controls = {}) {
   const stable = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify;
   const digest = value => crypto.createHash('sha256').update(value).digest('hex');
   const complete = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-    .prepareNativeIntegratorContext(helper.projectOptions(f), { worktree: f.worktree, phase: '49' });
+    .prepareNativeIntegratorContext(helper.projectOptions(f), { worktree: f.worktree, phase: '49',
+      review_contract: roleArtifacts.INTEGRATION_REVIEW_V3 });
   const a = helper.agent(f, 'integrator', complete.signals);
   const frameRows = () => {
     const meta = helper.template(helper.parent, row => row.type === 'session_meta');
