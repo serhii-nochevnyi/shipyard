@@ -599,41 +599,72 @@ else { assert.deepEqual(args, repo); process.stdout.write('main\\n'); }
 }
 
 function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
-  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-  const crypto = require('node:crypto');
-  const refs = input.result.ticket_set.map(item => item.row.plan);
-  for (const plan of refs) {
-    const absolute = path.join(planningRoot, plan);
-    fs.mkdirSync(path.dirname(absolute), { recursive: true });
-    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
-  }
-  const graphDir = path.join(planningRoot, '.planning/graph');
-  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
-    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
-      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
-      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
-      exact_diff: { content: f.git(['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-        input.result.review_scope === 'delta' ? input.result.prior_head : f.base, 'HEAD',
-        ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()]) },
-      integration_base: { commit: f.base } } });
-  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
-    const session = 'original-' + r.dispatch_id;
-    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
-    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
-      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
-        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
-    fs.writeFileSync(transcript, content);
-    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
-      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
-      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
-      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
-        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
-        transcript: { path: transcript, bytes: Buffer.byteLength(content),
-          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
-  } } } });
-  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
-    { ticket: input.ticket, subject_kind: 'phase' });
-  return { ...input, dispatchId: dispatch.dispatch_id };
+  return require('../fixtures/code-review/artifact-fixture.cjs').retainPlanningInput(f, input, planningRoot, repo);
 }
+
+for (const mode of ['hold', 'report']) test('D35 completed normalization controls public current status and hold: ' + mode, () => {
+  const f = fixture(null);
+  try {
+    f.mode(mode);
+    const binding = f.advance(1);
+    const input = artifactInput(f, binding, raw(true, [{ ...blocker, fix_ticket: undefined }]));
+    const sealed = artifact.sealJudgment(input);
+    assert.equal(input.result.demoted_for_evidence, 1); assert.equal(input.result.verdict, 'pass');
+    assert.equal(flow.status(f.input()).state, 'current'); assert.equal(flow.status(f.input()).reuse, true);
+    assert.equal(flow.verifyCodeReview(f.input()).ok, true);
+    assert.equal(flow.evaluateGate(f.input()).ok, true);
+    const receipt = f.recorder.getVerifiedRecord(input.dispatchId).receipt;
+    const original = fs.readFileSync(receipt.selection_evidence.transcript.path);
+    fs.writeFileSync(receipt.selection_evidence.transcript.path, original.subarray(0, original.length - 1));
+    assert.equal(artifact.currentCodeReviewVerdict({ worktreePath: f.root, pr: 52, head: f.live().headRefOid,
+      baseName: 'main', baseCommit: f.base, graphDir: f.graphDir }), null);
+    const owed = flow.status(f.input());
+    assert.equal(owed.state, 'owed'); assert.equal(owed.reuse, false); assert.equal(owed.rounds_used, 1);
+    assert.equal(flow.verifyCodeReview(f.input()).ok, mode === 'report');
+    assert.equal(flow.evaluateGate(f.input()).ok, mode === 'report');
+    assert.throws(() => artifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref,
+      artifactDigest: sealed.artifact_digest }), /authenticated complete current material coverage/);
+    fs.writeFileSync(receipt.selection_evidence.transcript.path, original);
+    assert.equal(flow.status(f.input()).state, 'current'); assert.equal(flow.verifyCodeReview(f.input()).ok, true);
+  } finally { f.cleanup(); }
+});
+
+test('D35 immutable input-only history retains rounds and cannot authorize public hold or delta coverage', () => {
+  const f = fixture(null);
+  const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+  try {
+    const binding = f.advance(1), input = f.inputArtifact(binding, 1, null, raw());
+    const old = fixtures.sealInputOnlyHistory(input), bytes = fs.readFileSync(old.artifact_ref);
+    const prior = artifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+      repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
+    assert.equal(prior.length, 1); assert.equal(prior[0].answer_authenticated, false);
+    assert.equal(flow.status(f.input()).state, 'owed'); assert.equal(flow.status(f.input()).rounds_used, 1);
+    assert.equal(flow.verifyCodeReview(f.input()).ok, false); assert.equal(flow.evaluateGate(f.input()).ok, false);
+    const delta = artifactInput(f, binding, raw(), 2, input.result.head);
+    assert.throws(() => artifact.sealJudgment(delta), { code: 'JUDGMENT_OUTCOME_MISMATCH' });
+    const fresh = f.inputArtifact(binding, 2, input.result.head, raw());
+    fresh.result.review_scope = 'full'; retainPlanningInput(f, fresh);
+    artifact.sealJudgment(fresh);
+    assert.equal(flow.status(f.input()).state, 'current'); assert.equal(flow.status(f.input()).rounds_used, 2);
+    assert.equal(flow.verifyCodeReview(f.input()).ok, true);
+    assert.deepEqual(fs.readFileSync(old.artifact_ref), bytes);
+  } finally { f.cleanup(); }
+});
+
+test('D35 cold public CLI refuses changed native evidence and accepts restored original bytes', () => {
+  const f = fixture(null), directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'd35-gate-')));
+  try {
+    const input = artifactInput(f, f.advance(1), raw()); artifact.sealJudgment(input);
+    fs.writeFileSync(path.join(directory, 'gh'), '#!/usr/bin/env node\nprocess.stdout.write(process.env.D35_PR);\n', { mode: 0o755 });
+    const gate = () => spawnSync(process.execPath, [path.join(scripts, 'phase-code-review.cjs'), 'gate', f.phase,
+      '--phase', '52', '--pr', '52', '--worktree', f.root, '--graph', f.graphDir], {
+      cwd: directory, encoding: 'utf8', env: { ...process.env, HOME: home,
+        PATH: directory + path.delimiter + process.env.PATH, D35_PR: JSON.stringify(f.live()) } });
+    const passed = gate(); assert.equal(passed.status, 0, passed.stderr);
+    const pin = f.recorder.getVerifiedRecord(input.dispatchId).receipt.transcript;
+    const bytes = fs.readFileSync(pin.path); fs.writeFileSync(pin.path, 'Foreign native stream\n');
+    const refused = gate(); assert.equal(refused.status, 1, refused.stderr); assert.match(refused.stderr, /owed/);
+    fs.writeFileSync(pin.path, bytes);
+    const restored = gate(); assert.equal(restored.status, 0, restored.stderr);
+  } finally { f.cleanup(); fs.rmSync(directory, { recursive: true, force: true }); }
+});

@@ -761,7 +761,13 @@ function fakeRuntimeFactory(fixture, options = {}) {
                 const nativeFile = path.join(fixture.storageRoot, 'native/project', session + '.jsonl');
                 fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
                 const nativeAssistant = { ...structuredClone(assistant), sessionId: session, effort };
-                fs.writeFileSync(nativeFile, serialize([{ ...userInput, sessionId: session }, nativeAssistant]));
+                if (options.nativeAnswerCarrier === 'text') nativeAssistant.message.content = [{ type: 'text', text: JSON.stringify(output) }];
+                const nativeRows = [{ ...userInput, sessionId: session }, nativeAssistant];
+                options.mutateNativeTranscript?.(nativeRows);
+                options.mutateTerminal?.(final);
+                if (options.terminalCarrier === 'json') delete final.structured_output;
+                if (options.terminalCarrier === 'structured') delete final.result;
+                fs.writeFileSync(nativeFile, serialize(nativeRows));
                 const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
                 const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
                 const hookValue = name => hookArgs[hookArgs.indexOf(name) + 1];
@@ -3598,4 +3604,136 @@ test('pure Claude preparation refreshes expanded coverage at round two without l
     assert(prepared.packet.role_context.exact_diff.content.includes('BASE_ONLY_EXPOSED_CHANGE'));
     assert(prepared.packet.role_context.change_metadata.name_status.includes('src/base-only.txt'));
   } finally { cleanupFixture(f); }
+});
+
+function d35ClaudeInput(fixture, result) {
+  return { worktreePath: fixture.root, role: 'code-review', ticket: result.subject, pr: 101, base: 'main',
+    phase: PHASE, ticketSet: result.result.ticket_set, ticketSetDigest: result.result.ticket_set_digest,
+    recorder: fixture.lastRecorder, dispatchId: result.dispatch.dispatch_id, result: result.result,
+    io: { execFileSync(executable, args, options) {
+      if (executable === 'gh') return JSON.stringify(livePr(fixture));
+      return execFileSync(executable, args, options);
+    } } };
+}
+
+for (const terminalCarrier of ['structured', 'json']) for (const nativeAnswerCarrier of ['input', 'text'])
+  test(`D35 Claude completed ${terminalCarrier}/${nativeAnswerCarrier} normalization reaches seal validate and current`, async () => {
+    const fixture = setupCodeReview({ coordinatorGraph: true });
+    try {
+      let original;
+      const result = await runCodeReview(fixture, { terminalCarrier, nativeAnswerCarrier, mutateResult(raw) {
+        raw.findings = [codeFinding({ failure_scenario: undefined, fix_ticket: undefined }),
+          { id: 'info', severity: 'INFO', summary: 'Observation' }];
+        original = structuredClone(raw);
+      } });
+      assert.equal(result.result.verdict, 'pass'); assert.equal(result.result.demoted_for_evidence, 1);
+      assert.equal(result.result.info_dropped, 1); assert.notDeepEqual(original.findings, result.result.findings);
+      const input = d35ClaudeInput(fixture, result);
+      assert.equal(reviewArtifacts.validateJudgmentManifest({ ...input, artifactPath: result.artifact.ref,
+        artifactDigest: result.artifact.digest }).envelope.outcome, 'pass');
+      const current = () => reviewArtifacts.currentCodeReviewVerdict({ worktreePath: fixture.root, pr: 101,
+        head: fixture.head, baseName: 'main', baseCommit: fixture.base, graphDir: fixture.graphDir });
+      assert.equal(current().verdict, 'pass');
+      const pin = result.dispatch.receipt.transcript, bytes = fs.readFileSync(pin.path);
+      fs.writeFileSync(pin.path, bytes.subarray(0, bytes.length - 1));
+      assert.throws(() => reviewArtifacts.validateJudgmentManifest({ ...input, artifactPath: result.artifact.ref,
+        artifactDigest: result.artifact.digest }), /native|original/);
+      assert.equal(current(), null);
+      fs.writeFileSync(pin.path, bytes); assert.equal(current().verdict, 'pass');
+    } finally { cleanupFixture(fixture); }
+  });
+
+for (const outcome of ['needs-fix', 'incomplete']) test('D35 Claude public sealer refuses substituted normalized pass: ' + outcome, async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  try {
+    const result = await runCodeReview(fixture, { mutateResult(raw) {
+      if (outcome === 'needs-fix') raw.findings = [codeFinding()];
+      else { raw.review_completeness = 'incomplete'; raw.limitations = ['Unread source']; }
+    } });
+    assert.equal(result.result.verdict, outcome);
+    const input = d35ClaudeInput(fixture, result);
+    input.result = { ...result.result, findings: [], dispositions: [], blocking_count: 0, finding_count: 0,
+      verdict: 'pass', review_completeness: 'complete', limitations: [], unresolved_sources: [] };
+    assert.throws(() => reviewArtifacts.sealJudgment(input), { code: 'REVIEW_NATIVE_INVALID' });
+  } finally { cleanupFixture(fixture); }
+});
+
+for (const mutation of ['answer', 'missing-answer', 'session', 'packet', 'terminal-carriers', 'incomplete-turn'])
+  test('D35 Claude refuses native completion disagreement: ' + mutation, async () => {
+    const fixture = setupCodeReview({ coordinatorGraph: true });
+    try {
+      await assert.rejects(runCodeReview(fixture, { mutateNativeTranscript(rows) {
+        if (mutation === 'answer') rows[1].message.content[0].input.summary = 'Foreign native answer';
+        if (mutation === 'missing-answer') rows[1].message.content = [{ type: 'text', text: 'No completed answer' }];
+        if (mutation === 'session') rows[1].sessionId = crypto.randomUUID();
+        if (mutation === 'packet') rows[0].message.content = 'Foreign original packet';
+      }, mutateTerminal(final) {
+        if (mutation === 'terminal-carriers') final.result = JSON.stringify({ ...final.structured_output, summary: 'Foreign terminal answer' });
+        if (mutation === 'incomplete-turn') final.subtype = 'error_max_turns';
+      } }));
+    } finally { cleanupFixture(fixture); }
+  });
+
+test('D35 Claude original carried snapshot survives newer same-head history', async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  try {
+    const first = await runCodeReview(fixture, { mutateResult(raw) { raw.findings = [codeFinding()]; } });
+    write(fixture.root, 'src/role.txt', 'reviewed change\nunrelated source addition\n'); codeReviewCommit(fixture);
+    const second = await runCodeReview(fixture, { mutateResult(raw) {
+      raw.dispositions = [{ ref: 'P-01', disposition: 'unresolved', justification: 'Still fails' }];
+    } });
+    const recorder = fixture.lastRecorder;
+    assert.equal(second.result.review_scope, 'delta'); assert.equal(second.result.findings[0].identity, first.result.findings[0].identity);
+    const third = await runCodeReview(fixture, { mutateResult(raw) { raw.dispositions = [{ ref: 'P-01', disposition: 'resolved' }]; } });
+    assert.equal(third.result.verdict, 'pass');
+    const input = { ...d35ClaudeInput(fixture, second), recorder };
+    assert.equal(reviewArtifacts.validateJudgmentManifest({ ...input, artifactPath: second.artifact.ref,
+      artifactDigest: second.artifact.digest }).findings.verdict, 'needs-fix');
+  } finally { cleanupFixture(fixture); }
+});
+
+test('D35 Claude completed partitioned review validates the original file packet and coverage', async () => {
+  const fixture = setupCodeReview({ sourceContent: 'large source line\n'.repeat(130000) });
+  try {
+    let bundle;
+    const result = await runCodeReview(fixture, { nativeAnswerCarrier: 'text', terminalCarrier: 'json', onLaunch(prompt) {
+      bundle = JSON.parse(/<AUTHENTICATED_FOCUSED_INPUT>\s*([\s\S]*?)\s*<\/AUTHENTICATED_FOCUSED_INPUT>/.exec(prompt)[1]);
+    } });
+    assert.equal(result.result.verdict, 'pass'); assert.ok(result.result.coverage.length > 1);
+    const input = d35ClaudeInput(fixture, result);
+    assert.equal(reviewArtifacts.validateJudgmentManifest({ ...input, artifactPath: result.artifact.ref,
+      artifactDigest: result.artifact.digest }).findings.review_completeness, 'complete');
+    assert.equal(reviewArtifacts.currentCodeReviewVerdict({ worktreePath: fixture.root, pr: 101, head: fixture.head,
+      baseName: 'main', baseCommit: fixture.base, graphDir: path.join(fixture.root, '.planning/graph') }).verdict, 'pass');
+    const manifest = JSON.parse(fs.readFileSync(bundle.manifest_path));
+    const material = manifest.assets.find(asset => asset.source_partition === undefined);
+    assert.ok(material);
+    const file = material.path;
+    const bytes = fs.readFileSync(file); fs.chmodSync(file, 0o600); fs.writeFileSync(file, Buffer.concat([bytes, Buffer.from('altered')]));
+    assert.throws(() => reviewArtifacts.validateJudgmentManifest({ ...input, artifactPath: result.artifact.ref,
+      artifactDigest: result.artifact.digest }));
+  } finally { cleanupFixture(fixture); }
+});
+
+test('D35 Claude authenticates original recorded disagreement without newest-history recomputation', async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  try {
+    await runCodeReview(fixture, { mutateResult(raw) { raw.findings = [codeFinding()]; } });
+    const relative = `.planning/phases/${PHASE}/code-review-disagreements.json`;
+    const bytes = JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [{ path: 'src/role.txt',
+      line_text: 'reviewed change', occurrence: 1, reason: 'The caller serializes access.', recorded_by: 'maintainer' }] });
+    write(fixture.root, relative, bytes); codeReviewCommit(fixture, [relative]);
+    let snapshot;
+    const result = await runCodeReview(fixture, { onLaunch(prompt) { snapshot = packetFromPrompt(prompt).role_context; } });
+    assert.equal(result.result.dispositions_digest, crypto.createHash('sha256').update(bytes).digest('hex'));
+    assert.equal(snapshot.dispositions_digest, result.result.dispositions_digest);
+    assert.equal(result.result.disagreement_suppressed, 1); assert.equal(result.result.verdict, 'pass');
+    assert.ok(snapshot.normalization_inputs.prior_findings[0].stored_identity);
+    const input = d35ClaudeInput(fixture, result);
+    write(path.resolve(fixture.graphDir, '../..'), relative, JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [] }));
+    assert.equal(reviewArtifacts.validateJudgmentManifest({ ...input, artifactPath: result.artifact.ref,
+      artifactDigest: result.artifact.digest }).findings.disagreement_suppressed, 1);
+    assert.equal(reviewArtifacts.currentCodeReviewVerdict({ worktreePath: fixture.root, pr: 101, head: fixture.head,
+      baseName: 'main', baseCommit: fixture.base, graphDir: fixture.graphDir }), null);
+  } finally { cleanupFixture(fixture); }
 });

@@ -659,6 +659,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
       tree: git(options, canonical.worktree, ['rev-parse', '--verify', `${live.baseRefOid}^{tree}`]) },
     ticketSet: binding.ticketSet, planAcceptance: plans.map(({ id, path, acceptance, verification }) => ({ id, path, acceptance, verification })),
     priorFindings, round, changeMetadata, referenceDigest: referenceDigest(reference).sha256 });
+  roleContext.dispositions_digest = disagreements.dispositions_digest;
   roleContext.reference_digest = referenceDigest(reference);
   roleContext.ticket_set_digest = binding.membership;
   roleContext.phase_repo = binding.repo;

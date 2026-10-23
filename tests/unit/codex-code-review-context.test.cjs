@@ -14,6 +14,9 @@ fs.writeFileSync(path.join(transportBin, 'gh'), '#!/usr/bin/env node\nthrow new 
 const originalPath = process.env.PATH;
 process.env.PATH = transportBin + path.delimiter + originalPath;
 process.on('exit', () => { process.env.PATH = originalPath; });
+const originalCodexHome = process.env.CODEX_HOME;
+process.env.CODEX_HOME = home;
+process.on('exit', () => { if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome; });
 const originalHomedir = os.homedir;
 os.homedir = () => home;
 process.on('exit', () => { os.homedir = originalHomedir; fs.rmSync(home, { recursive: true, force: true }); });
@@ -99,11 +102,27 @@ function dispatchFixture(f, value, mutate = () => {}, evidence = true, mutateEvi
   }
   const stream = records.map(record => JSON.stringify(record)).join('\n') + '\n';
   const transcript = path.join(f.storage, session + '.jsonl'); fs.writeFileSync(transcript, stream);
+  const selected = policy.resolveDispatch({ runtime: 'codex', role: 'code-review', signals: value.launch.signals });
+  const nativeRows = [
+    { type: 'session_meta', payload: { id: session, model_provider: 'openai', cwd: f.root } },
+    { type: 'turn_context', payload: { model: selected.model, effort: selected.effort } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: 'original-turn' } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: builder.admittedPrompt(value) }] } },
+    { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: JSON.stringify(raw) }] } },
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'original-turn', last_agent_message: JSON.stringify(raw) } },
+  ];
+  const nativeText = nativeRows.map(row => JSON.stringify(row)).join('\n') + '\n';
+  const now = new Date();
+  const nativeDirectory = path.join(home, 'sessions', String(now.getFullYear()), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+  fs.mkdirSync(nativeDirectory, { recursive: true });
+  const nativePath = path.join(nativeDirectory, session + '.jsonl'); fs.writeFileSync(nativePath, nativeText);
   const runtimeEvidence = { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai',
     session_id: session, worktree: f.root, ticket: value.prepared.ticket, phase: 38,
     ...(input ? { input_transport: 'host-files', input_bundle: input.input_bundle } : {}),
+    native_session_evidence: { session_id: session, bytes: Buffer.byteLength(nativeText), sha256: hash(nativeText) },
+    input_consumption: { native_session_sha256: hash(nativeText) },
     code_review: binding, transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: hash(stream) } };
-  mutateEvidence(runtimeEvidence);
+  mutateEvidence(runtimeEvidence, { nativePath, nativeRows, transcript, records });
   const agent = admissions.get(value);
   const boundary = boundaryModule.createDispatchBoundary({ recorder, adapters: { codex: {
     validateGeneratedAgent(r) { return { valid: true, exists: true, content_verified: true, policy_hash: r.policy_hash,
@@ -119,7 +138,7 @@ function dispatchFixture(f, value, mutate = () => {}, evidence = true, mutateEvi
     dispatch_id: association.dispatch_id }, { ticket: value.prepared.ticket, subject_kind: 'phase' }));
   assert.equal(dispatch.dispatch_id, association.dispatch_id);
   assert.ok(recorder.getVerifiedRecord(dispatch.dispatch_id));
-  return { dispatch, recorder, raw, runtimeEvidence };
+  return { dispatch, recorder, raw, runtimeEvidence, nativePath };
 }
 
 function review(f, mutate = () => {}, builder = context, boundaryModule) {
@@ -1177,5 +1196,125 @@ test('expanded material preserves own-head disagreement and twin identities in b
     assert.throws(() => f.prepare(), error => error.code === 'CODE_REVIEW_ROUND_LIMIT');
     assert.throws(() => f.pureClaude(), error => error.code === 'CODE_REVIEW_ROUND_LIMIT');
     r5archiveUnchanged(f, pins);
+  } finally { f.cleanup(); }
+});
+
+function d35SealInput(f, value, d, result) {
+  return { worktreePath: f.root, role: 'code-review', ticket: value.prepared.ticket, pr: f.pr.number,
+    base: value.prepared.base, phase: value.prepared.binding.phase, ticketSet: value.prepared.binding.ticketSet,
+    ticketSetDigest: value.prepared.binding.membership, recorder: d.recorder, dispatchId: d.dispatch.dispatch_id,
+    result, io: { execFileSync(executable, args, options) {
+      if (executable === 'gh') return JSON.stringify(f.pr);
+      return execFileSync(executable, args, options);
+    } } };
+}
+
+for (const partitioned of [false, true]) test('D35 Codex completed original normalization reaches seal validate and current: ' + partitioned, () => {
+  const f = fixture();
+  try {
+    if (partitioned) {
+      write(f.project, f.row.plan, fs.readFileSync(path.join(f.project, f.row.plan), 'utf8') + 'x'.repeat(1100000));
+    }
+    const r = review(f, raw => { raw.findings = [warning({ severity: 'BLOCKER' }), { id: 'info', severity: 'INFO', summary: 'Observation' }]; });
+    assert.equal(r.result.result.verdict, 'pass');
+    assert.equal(r.result.result.demoted_for_evidence, 1); assert.equal(r.result.result.info_dropped, 1);
+    assert.notDeepEqual(r.raw.findings, r.result.result.findings);
+    const input = d35SealInput(f, r.value, r, r.result.result);
+    assert.equal(artifact.validateJudgmentManifest({ ...input, artifactPath: r.result.artifact.ref,
+      artifactDigest: r.result.artifact.digest }).envelope.outcome, 'pass');
+    const lookup = () => artifact.currentCodeReviewVerdict({ worktreePath: f.root, pr: f.pr.number,
+      head: f.pr.headRefOid, baseName: f.pr.baseRefName, baseCommit: f.pr.baseRefOid, graphDir: f.graphDir });
+    assert.equal(lookup().verdict, 'pass');
+    const bytes = fs.readFileSync(r.nativePath); fs.writeFileSync(r.nativePath, bytes.subarray(0, bytes.length - 1));
+    assert.throws(() => artifact.validateJudgmentManifest({ ...input, artifactPath: r.result.artifact.ref,
+      artifactDigest: r.result.artifact.digest }), /native|original/);
+    assert.equal(lookup(), null);
+    fs.writeFileSync(r.nativePath, bytes); assert.equal(lookup().verdict, 'pass');
+  } finally { f.cleanup(); }
+});
+
+for (const kind of ['needs-fix', 'incomplete']) test('D35 Codex public sealer refuses substituted pass before finish: ' + kind, () => {
+  const f = fixture();
+  try {
+    const value = f.prepare(); admit(f, value);
+    const d = dispatchFixture(f, value, raw => {
+      if (kind === 'needs-fix') raw.findings = [blocker()];
+      else { raw.review_completeness = 'incomplete'; raw.limitations = ['Unread source']; }
+    });
+    const core = require(path.join(scripts, 'code-review-core.cjs'));
+    const { evidence_markdown: _markdown, ...normalized } = core.normalizeResult(d.raw, { round: 1, scope: 'full',
+      readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') });
+    const { digest: _digest, ...packet } = value.prepared.packet;
+    const forged = { ...normalized, verdict: 'pass', findings: [], dispositions: [], blocking_count: 0, finding_count: 0,
+      review_completeness: 'complete', limitations: [], unresolved_sources: [], prior_head: null,
+      contract_digest: value.prepared.contractDigest, dispositions_digest: value.prepared.dispositionsDigest,
+      reuse_key: core.reuseKey({ head: value.prepared.canonical.head, baseCommit: value.prepared.baseCommit,
+        contractDigest: value.prepared.contractDigest }), host_context: {
+        original_packet: require(path.join(scripts, 'context-packet.cjs')).encodeUniqueContent(packet),
+        planning_reference: packet.role_context.planning_reference, selected_refs: value.evidence.selected_refs } };
+    assert.throws(() => artifact.sealJudgment(d35SealInput(f, value, d, forged)), { code: 'REVIEW_NATIVE_INVALID' });
+    assert.equal(context.finish(value, d.dispatch, d.recorder).result.verdict, kind);
+  } finally { f.cleanup(); }
+});
+
+for (const mutation of ['stream-missing', 'native-final', 'native-completion', 'session', 'selection', 'packet'])
+  test('D35 Codex refuses original native custody mutation: ' + mutation, () => {
+    const f = fixture();
+    try {
+      const value = f.prepare(); admit(f, value);
+      const d = dispatchFixture(f, value);
+      const pin = d.runtimeEvidence;
+      if (mutation === 'stream-missing') fs.unlinkSync(pin.transcript.path);
+      else if (mutation === 'packet') {
+        const rows = fs.readFileSync(d.nativePath, 'utf8').trim().split('\n').map(JSON.parse);
+        rows[3].payload.content[0].text = rows[3].payload.content[0].text.replace('AUTHENTICATED_CONTEXT_PACKET', 'FOREIGN_CONTEXT_PACKET');
+        fs.writeFileSync(d.nativePath, rows.map(JSON.stringify).join('\n') + '\n');
+      } else {
+        const rows = fs.readFileSync(d.nativePath, 'utf8').trim().split('\n').map(JSON.parse);
+        if (mutation === 'native-final') rows[4].payload.content[0].text = '{}';
+        if (mutation === 'native-completion') rows.pop();
+        if (mutation === 'session') rows[0].payload.id = crypto.randomUUID();
+        if (mutation === 'selection') rows[1].payload.effort = 'low';
+        fs.writeFileSync(d.nativePath, rows.map(JSON.stringify).join('\n') + '\n');
+      }
+      assert.throws(() => context.finish(value, d.dispatch, d.recorder), mutation === 'stream-missing'
+        ? { code: 'MISSING_RECEIPT', message: 'codex-arch-review-context: Codex architecture transcript is unavailable' }
+        : /native|original|semantic|session/);
+    } finally { f.cleanup(); }
+  });
+
+for (const mutation of ['native-final', 'completion', 'session', 'selection'])
+  test('D35 Codex refuses authenticated foreign or incomplete native completion: ' + mutation, () => {
+    const f = fixture();
+    try {
+      const value = f.prepare(); admit(f, value);
+      const d = dispatchFixture(f, value, () => {}, true, (evidence, native) => {
+        if (mutation === 'native-final') native.nativeRows[4].payload.content[0].text = '{}';
+        if (mutation === 'completion') native.nativeRows.pop();
+        if (mutation === 'session') native.nativeRows[0].payload.id = crypto.randomUUID();
+        if (mutation === 'selection') native.nativeRows[1].payload.effort = 'low';
+        const text = native.nativeRows.map(JSON.stringify).join('\n') + '\n';
+        fs.writeFileSync(native.nativePath, text);
+        evidence.native_session_evidence.bytes = Buffer.byteLength(text); evidence.native_session_evidence.sha256 = hash(text);
+        evidence.input_consumption.native_session_sha256 = hash(text);
+      });
+      assert.throws(() => context.finish(value, d.dispatch, d.recorder), /native|original|policy|session/);
+    } finally { f.cleanup(); }
+  });
+
+test('D35 Codex delta replay retains original carried identity and dispositions after later history', () => {
+  const f = fixture();
+  try {
+    const first = review(f, raw => { raw.findings = [blocker()]; });
+    f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), 'unrelated source addition\n'));
+    const second = review(f, raw => { raw.dispositions = [{ ref: 'P-01', disposition: 'unresolved', justification: 'Still fails' }]; });
+    assert.equal(second.result.result.review_scope, 'delta'); assert.equal(second.result.result.verdict, 'needs-fix');
+    assert.equal(second.value.prepared.packet.role_context.normalization_inputs.prior_findings[0].identity,
+      first.result.result.findings[0].identity);
+    const third = review(f, raw => { raw.dispositions = [{ ref: 'P-01', disposition: 'resolved' }]; });
+    assert.equal(third.result.result.verdict, 'pass');
+    const input = d35SealInput(f, second.value, second, second.result.result);
+    assert.equal(artifact.validateJudgmentManifest({ ...input, artifactPath: second.result.artifact.ref,
+      artifactDigest: second.result.artifact.digest }).findings.verdict, 'needs-fix');
   } finally { f.cleanup(); }
 });

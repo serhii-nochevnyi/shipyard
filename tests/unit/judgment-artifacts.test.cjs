@@ -11,45 +11,7 @@ const roleArtifact = require('../../plugins/delivery-pipeline/scripts/role-artif
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 
 function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
-  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-  const crypto = require('node:crypto');
-  const refs = input.result.ticket_set.map(item => item.row.plan);
-  for (const plan of refs) {
-    const absolute = path.join(planningRoot, plan);
-    fs.mkdirSync(path.dirname(absolute), { recursive: true });
-    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
-  }
-  const graphDir = path.join(planningRoot, '.planning/graph');
-  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
-    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
-      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
-      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
-      exact_diff: { content: f.git([
-        'diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-        input.result.review_scope === 'delta' ? input.result.prior_head : f.base,
-        'HEAD', ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()
-      ]) },
-      integration_base: { commit: f.base } } });
-  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
-    const session = 'original-' + r.dispatch_id;
-    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
-    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
-      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
-        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
-    fs.writeFileSync(transcript, content);
-    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
-      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
-      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
-      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
-        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
-        transcript: { path: transcript, bytes: Buffer.byteLength(content),
-          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
-  } } } });
-  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
-    { ticket: input.ticket, subject_kind: 'phase' });
-  return { ...input, dispatchId: dispatch.dispatch_id };
+  return require('../fixtures/code-review/artifact-fixture.cjs').retainPlanningInput(f, input, planningRoot, repo);
 }
 
 function withOriginalPlanning(f) {
@@ -885,6 +847,9 @@ test('code-review suppressed index survives sealing, while evidence and findings
     const prior=core.carryPriorFindings({priorFindings:first.result.findings,deltaDiff:'',readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8'),disagreements:{[current.identity]:{reason:'Caller guarantees acknowledgement',recorded_by:'operator'}}});
     const normalized=core.normalizeResult({review_completeness:'complete',limitations:[],unresolved_sources:[],findings:[],dispositions:[]},{round:1,scope:'full',priorFindings:prior,readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8')});
     first.result={...first.result,...normalized};
+    require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(first, { review_completeness: 'complete',
+      limitations: [], unresolved_sources: [], findings: [], dispositions: [] }, prior);
+    retainPlanningInput(f, first);
     for (const disagreement_identity of [null, {}, ['a'.repeat(64)], 'a'.repeat(63), 'A'.repeat(64)]) {
       const invalid = structuredClone(first.result);
       invalid.findings[0].disagreement_identity = disagreement_identity;
@@ -915,9 +880,12 @@ test('code-review seals a recorded WARNING returned with BLOCKER severity withou
     delete warning.fix_ticket;
     const priorFindings = core.carryPriorFindings({ priorFindings: [warning], deltaDiff: '', readSource,
       disagreements: { [warning.identity]: { reason: 'Caller handles this case', recorded_by: 'operator' } } });
-    const normalized = core.normalizeResult({ review_completeness: 'complete', limitations: [], unresolved_sources: [],
-      findings: [input.result.findings[0]], dispositions: [] }, { round: 1, scope: 'full', priorFindings, readSource });
+    const original = { review_completeness: 'complete', limitations: [], unresolved_sources: [],
+      findings: [input.result.findings[0]], dispositions: [] };
+    const normalized = core.normalizeResult(original, { round: 1, scope: 'full', priorFindings, readSource });
     input.result = { ...input.result, ...normalized };
+    require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(input, original, priorFindings);
+    retainPlanningInput(f, input);
     const sealed = roleArtifact.sealJudgment(input);
     const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
     assert.equal(validated.findings.findings[0].severity, 'WARNING');
@@ -962,6 +930,10 @@ test('code-review seals 129 small reviewed references within the shared asset ca
     input.result.verdict = 'incomplete';
     input.result.review_completeness = 'incomplete';
     input.result.limitations = ['One source was not reviewed'];
+    require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(input, { review_completeness: 'incomplete',
+      limitations: ['One source was not reviewed'], unresolved_sources: [], findings: [], dispositions: [],
+      coverage: coverage.map((ref, index) => ({ ...ref, status: index ? 'reviewed' : 'not-reviewed' })) });
+    retainPlanningInput(f, input);
     const sealed = roleArtifact.sealJudgment(input);
     const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
     assert.equal(validated.manifest.partitions_total, 129);
@@ -981,11 +953,13 @@ test('code-review seals colliding 128-byte labels after normalization', () => {
       const first = { ...input.result.findings[0], id };
       const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
       const priorFindings = core.carryPriorFindings({ priorFindings: [first], deltaDiff: '', readSource });
-      const result = core.normalizeResult({ review_completeness: 'complete', limitations: [], unresolved_sources: [],
+      const original = { review_completeness: 'complete', limitations: [], unresolved_sources: [],
         findings: [{ id, severity: 'WARNING', path: 'source.js', line: 101, summary: 'Another statement' }],
-        dispositions: [{ ref: 'P-01', disposition: 'unresolved', justification: 'Still fails' }] },
-      { round: 1, scope: 'full', priorFindings, readSource });
+        dispositions: [{ ref: 'P-01', disposition: 'unresolved', justification: 'Still fails' }] };
+      const result = core.normalizeResult(original, { round: 1, scope: 'full', priorFindings, readSource });
       input.result = { ...input.result, ...result };
+      require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(input, original, priorFindings);
+      retainPlanningInput(f, input);
       const sealed = roleArtifact.sealJudgment(input);
       const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
       assert.equal(validated.findings.findings.length, 2);
@@ -1055,6 +1029,11 @@ test('old-format code-review remains historical and cannot open the default hold
     }, { defaultBranch: 'main' });
     assert.equal(status.state, 'owed');
     assert.equal(flow.evaluateGate(status).ok, false);
+    assert.equal(f.lookup(), null);
+    const history = roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root, repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
+    assert.equal(history.length, 1); assert.equal(history[0].answer_authenticated, false);
+    assert.equal(require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs').nextRound({
+      priorVerdicts: history, head: input.result.head, isAncestor: () => true }).rounds_used, 1);
     for (const pin of archives) assert.deepEqual(fs.readFileSync(path.join(f.root, pin.path)), pin.bytes);
   } finally {
     f.cleanup();
@@ -1193,6 +1172,57 @@ else if (args[0] === 'pr' && args[1] === 'view') {
     assert.equal(loaded.exports.currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
     assert.equal(current.contract, roleArtifact.INTEGRATION_REVIEW_V3);
   });
+});
+
+test('D35 complete native answer rejects independent semantic and host substitutions', () => {
+  const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const f = withOriginalPlanning(fixtures.fixture('d35-substitution'));
+  try {
+    const input = f.input(f.advance(1));
+    const mutations = [
+      r => { r.summary = 'Substituted summary'; },
+      r => { r.findings[0].summary = 'Substituted finding'; },
+      r => { r.findings[0].id = 'foreign-finding'; },
+      r => { r.findings[0].rule = 'foreign-rule'; },
+      r => { r.findings[0].identity = 'a'.repeat(64); },
+      r => { r.findings[0].line_text = 'Foreign source text'; },
+      r => { r.findings[0].occurrence = 2; },
+      r => { r.findings[0].fix_ticket.scope = 'Substituted repair scope'; },
+      r => { r.findings[0].fix_ticket.files = ['foreign.js']; },
+      r => { r.review_completeness = 'incomplete'; r.verdict = 'incomplete'; r.limitations = ['Substituted limitation']; },
+      r => { r.review_completeness = 'incomplete'; r.verdict = 'incomplete'; r.unresolved_sources = ['foreign.js']; },
+      r => { r.dispositions = [{ ref: 'P-99', disposition: 'disputed', source: 'reviewer', justification: 'Foreign disposition' }]; },
+      r => { r.info_dropped++; },
+      r => { r.coverage = [{ partition: 1, status: 'reviewed' }]; },
+      r => { r.prior_head = f.base; },
+      r => { r.review_round = 2; },
+      r => { r.review_scope = 'delta'; r.prior_head = f.base; },
+      r => { r.dispositions_digest = 'a'.repeat(64); },
+      r => { r.contract_digest = 'a'.repeat(64); r.reuse_key = core.reuseKey({ head: r.head, baseCommit: f.base, contractDigest: r.contract_digest }); },
+    ];
+    for (const key of ['focused', 'selected_refs', 'planning_reference', 'original_packet', 'graph_dir', 'source_root',
+      'phase_repo', 'phase_archive_selection', 'evidence_sha256']) mutations.push(r => { r.host_context = { [key]: 'foreign' }; });
+    for (const mutate of mutations) {
+      const result = structuredClone(input.result); mutate(result);
+      assert.throws(() => roleArtifact.sealJudgment({ ...input, result }), error => error.code === 'REVIEW_NATIVE_INVALID');
+    }
+    const evidencePath = path.join(f.root, '.shipyard-code-review-evidence.md'), evidence = fs.readFileSync(evidencePath);
+    fs.writeFileSync(evidencePath, Buffer.concat([evidence, Buffer.from('Substituted evidence')]));
+    assert.throws(() => roleArtifact.sealJudgment(input), error => error.code === 'REVIEW_NATIVE_INVALID');
+    fs.writeFileSync(evidencePath, evidence);
+    const sealed = roleArtifact.sealJudgment(input);
+    assert.equal(roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref,
+      artifactDigest: sealed.artifact_digest }).findings.verdict, 'needs-fix');
+    const manifestBytes = fs.readFileSync(sealed.artifact_ref), downgraded = JSON.parse(manifestBytes);
+    delete downgraded.current_review;
+    const changed = Buffer.from(JSON.stringify(downgraded) + '\n'); fs.writeFileSync(sealed.artifact_ref, changed);
+    assert.throws(() => roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref,
+      artifactDigest: crypto.createHash('sha256').update(changed).digest('hex') }), error => error.code === 'REVIEW_COVERAGE_INVALID');
+    fs.writeFileSync(sealed.artifact_ref, manifestBytes);
+    assert.equal(roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref,
+      artifactDigest: sealed.artifact_digest }).findings.verdict, 'needs-fix');
+  } finally { f.cleanup(); }
 });
 
 done();

@@ -3176,6 +3176,8 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
   const raw = readImmutableFile(fs, pin.path, 'current native stream', 128 * 1024 * 1024);
   if (raw.length !== pin.bytes || digest(raw) !== pin.sha256)
     fail('REVIEW_NATIVE_INVALID', 'original current native stream changed');
+  if (receipt.role === 'code-review' && (!raw.toString('utf8').endsWith('\n') || runtime.completed_source || runtime.review_continuation))
+    fail('REVIEW_NATIVE_INVALID', 'one complete original code-review turn is required');
   let original, text;
   if (receipt.runtime === 'codex') {
     const parsed = require('./codex-runtime-host.cjs').parseCodexStream(raw.toString('utf8'));
@@ -3185,7 +3187,7 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
     const nativePin = retained?.native;
     if (!object(nativePin) || nativePin.sha256 !== runtime.native_session_evidence?.sha256
         || (!(receipt.role === 'arch-review' && runtime.focused_review?.review_contract === require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT)
-          && original.review_contract !== INTEGRATION_REVIEW_V3
+          && receipt.role !== 'code-review' && original.review_contract !== INTEGRATION_REVIEW_V3
           && runtime.input_consumption?.native_session_sha256 !== nativePin.sha256)
         || runtime.native_session_evidence?.session_id !== runtime.session_id)
       fail('REVIEW_NATIVE_REQUIRED', 'original current semantic consumption authority is required');
@@ -3220,6 +3222,14 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
     }
     if (!object(original) || Buffer.byteLength(JSON.stringify(original)) > 128 * 1024)
       fail('REVIEW_NATIVE_INVALID', 'original second-runtime complete bounded JSON is required');
+    if (receipt.role === 'code-review') {
+      if (parsed.result.subtype !== 'success') fail('REVIEW_NATIVE_INVALID', 'original code-review turn did not complete');
+      if (parsed.result.structured_output !== undefined && typeof parsed.result.result === 'string') {
+        let terminal;
+        try { terminal = JSON.parse(parsed.result.result.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
+        if (stable(terminal) !== stable(original)) fail('REVIEW_NATIVE_INVALID', 'original code-review terminal carriers disagree');
+      }
+    }
     const selection = runtime.selection_evidence, nativePin = currentClaudeSemanticPin(trusted);
     if (!object(selection) || selection.source !== 'claude-session-assistant-transcript'
         || selection.session_id !== runtime.session_id || selection.model !== receipt.observed_model
@@ -3244,7 +3254,7 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
     if (observed.model !== selection.model || observed.effort !== selection.effort
         || observed.assistant_records !== selection.assistant_records)
       fail('REVIEW_NATIVE_INVALID', 'original second-runtime native role policy differs');
-    if (original.review_contract === INTEGRATION_REVIEW_V3
+    if (receipt.role === 'code-review' || original.review_contract === INTEGRATION_REVIEW_V3
         || receipt.role === 'arch-review' && original.review_contract === require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT) {
       const answers = [];
       for (const row of rows) {
@@ -3261,6 +3271,7 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
         fail('REVIEW_NATIVE_INVALID', 'current second-runtime stream differs from its original native answer');
     }
   } else fail('REVIEW_NATIVE_INVALID', 'unsupported current native runtime');
+  if (receipt.role === 'code-review') return original;
   const { host_context: _nativeContext, evidence_markdown: markdown, ...nativeResult } = original;
   const { host_context: _sealedContext, ...sealedResult } = result;
   if (stable(nativeResult) !== stable(sealedResult)
@@ -3458,6 +3469,7 @@ function originalInlinePacket(trusted) {
   const raw = readImmutableFile(fs, pin.path, 'original inline semantic transcript', 128 * 1024 * 1024);
   if (raw.length !== pin.bytes || digest(raw) !== pin.sha256) fail('REVIEW_NATIVE_INVALID', 'original inline transcript changed');
   const packets = [];
+  let inputManifest = null;
   for (const row of raw.toString('utf8').split('\n').filter(Boolean).map(JSON.parse)) {
     if (row.type !== 'user' || row.sessionId !== runtime.session_id) continue;
     const content = row.message?.content;
@@ -3470,6 +3482,7 @@ function originalInlinePacket(trusted) {
       const collector = require('./codex-arch-review-context.cjs');
       const checked = collector.verifyFileInput(JSON.parse(match[1]), { sealed: true, historical: true,
         association: { role: trusted.receipt.role, dispatch_id: trusted.dispatchId } });
+      inputManifest = checked.manifest;
       if (checked.manifest.binding?.review_contract !== (trusted.receipt.role === 'code-review'
           ? collector.CODE_REVIEW_CONTRACT : collector.FOCUSED_CONTRACT))
         fail('REVIEW_NATIVE_INVALID', 'original focused manifest contract differs');
@@ -3484,7 +3497,7 @@ function originalInlinePacket(trusted) {
     }
   }
   if (packets.length !== 1) fail('REVIEW_COVERAGE_INVALID', 'one complete original inline current packet is required');
-  return { packet: packets[0], pin };
+  return { packet: packets[0], pin, ...(inputManifest ? { manifest: inputManifest } : {}) };
 }
 
 function originalPacketRoot(worktree, packet) {
@@ -3580,6 +3593,10 @@ function authenticateInlineCoverage({ trusted, result, evidence, identity }) {
 
 function currentReviewRetention(worktree, trusted) {
   const runtime = trusted.receipt.runtime_evidence;
+  if (trusted.receipt.role === 'code-review') {
+    return { schema: 'shipyard.current-review-authority.v2', receipt_store: trusted.recorder.storeDir,
+      native: partitionNativePin(trusted) };
+  }
   if (trusted.receipt.runtime === 'codex' && runtime?.completed_source) {
     const source = validateCompletedSourceEvidence(runtime);
     const originalFinal = authenticateReaderCapacityReferences({ worktree: source.identity.worktree,
@@ -6033,6 +6050,175 @@ function codeReviewManifestFields(source) {
     .map(key => [key, source[key]]));
 }
 
+function codeReviewPlanningContext(packet) {
+  const context = packet.role_context;
+  const paths = [...new Set(context.ticket_set.map(item => item.row?.plan))];
+  if (!Array.isArray(packet.required_refs) || paths.length !== packet.required_refs.length
+      || paths.some(file => typeof file !== 'string' || !packet.required_refs.some(ref => ref.path === file)))
+    fail('REVIEW_NATIVE_INVALID', 'original complete code-review planning inventory differs');
+  return { planning_reference: context.planning_reference, selected_refs: paths.map(file => {
+    const { path, sha256, bytes } = packet.required_refs.find(ref => ref.path === file);
+    return { path, sha256, bytes };
+  }) };
+}
+
+function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, retained }) {
+  const core = require('./code-review-core.cjs'), packets = require('./context-packet.cjs');
+  const collector = require('./codex-arch-review-context.cjs');
+  const retention = retained || currentReviewRetention(identity.worktree, trusted);
+  const original = originalCurrentResponse(trusted, result, evidence, retention);
+  const runtime = currentRuntimeEvidence(trusted), candidates = [];
+  let manifest = null, prompt = null;
+  if (trusted.receipt.runtime === 'claude') {
+    if (retention?.native && stable(retention.native) !== stable(currentClaudeSemanticPin(trusted)))
+      fail('REVIEW_NATIVE_INVALID', 'original code-review semantic pin differs from retained authority');
+    const inline = originalInlinePacket(trusted);
+    manifest = inline.manifest || null;
+    candidates.push(inline.packet);
+  } else {
+    if (runtime.ticket !== trusted.record.ticket || runtime.worktree !== identity.worktree
+        || runtime.dispatch_id !== undefined && runtime.dispatch_id !== trusted.dispatchId)
+      fail('REVIEW_NATIVE_INVALID', 'original code-review runtime association differs');
+    const raw = readImmutableFile(fs, retention.native.path, 'original code-review input', 128 * 1024 * 1024);
+    if (raw.length !== retention.native.bytes || digest(raw) !== retention.native.sha256 || !raw.toString('utf8').endsWith('\n'))
+      fail('REVIEW_NATIVE_INVALID', 'original code-review input changed or is incomplete');
+    const inputs = raw.toString('utf8').split('\n').filter(Boolean).map(JSON.parse)
+      .filter(row => row.type === 'response_item' && row.payload?.role === 'user')
+      .map(row => row.payload.content?.map(block => block.text || '').join(''))
+      .filter(text => text?.includes('launch_digest=' + runtime.code_review?.launch_digest));
+    if (inputs.length !== 1) fail('REVIEW_NATIVE_REQUIRED', 'one original code-review launch input is required');
+    prompt = inputs[0];
+    for (const match of prompt.matchAll(/<AUTHENTICATED_CONTEXT_PACKET>\s*([\s\S]*?)\s*<\/AUTHENTICATED_CONTEXT_PACKET>/g))
+      candidates.push(packets.decodeUniqueContent(JSON.parse(match[1])));
+    if (candidates.length > 1) fail('REVIEW_NATIVE_INVALID', 'original code-review launch has multiple inline packets');
+  }
+  if (runtime.input_transport === 'host-files') {
+    const checked = collector.verifyFileInput(runtime.input_bundle, { sealed: true, historical: true,
+      association: { role: 'code-review', dispatch_id: trusted.dispatchId } });
+    if (!checked.material.length) fail('REVIEW_NATIVE_INVALID', 'original code-review material packet is required');
+    if (manifest && stable(manifest) !== stable(checked.manifest))
+      fail('REVIEW_NATIVE_INVALID', 'original code-review file manifest representations differ');
+    manifest = checked.manifest;
+    const packet = packets.decodeUniqueContent(JSON.parse(checked.material[0]));
+    if (manifest.binding?.packet_digest !== (trusted.receipt.runtime === 'codex'
+        ? digest(JSON.stringify(packets.encodeUniqueContent(packet))) : digest(stable(packet)))
+        || stable(manifest.binding.focused) !== stable({ ...packet.role_context?.focused,
+          context_digest: manifest.binding.packet_digest })
+        || stable(manifest.snapshot.planning_reference) !== stable(packet.role_context?.planning_reference))
+      fail('REVIEW_NATIVE_INVALID', 'original code-review manifest and packet differ');
+    candidates.push(packet);
+  }
+  if (result.host_context?.original_packet !== undefined) {
+    if (!object(result.host_context.original_packet)) fail('REVIEW_NATIVE_INVALID', 'retained original code-review packet is malformed');
+    candidates.push(packets.decodeUniqueContent(result.host_context.original_packet));
+  }
+  if (!candidates.length || candidates.some(packet => stable(packet) !== stable(candidates[0])))
+    fail('REVIEW_NATIVE_INVALID', 'original code-review packet representations disagree or are missing');
+  const packet = candidates[0], context = packet.role_context, focused = context?.focused;
+  const packetDigest = trusted.receipt.runtime === 'codex'
+    ? digest(JSON.stringify(packets.encodeUniqueContent(packet))) : digest(stable(packet));
+  const binding = { ...focused, context_digest: packetDigest };
+  const expectedIdentity = { review_contract: core.CONTRACT_ID, repository: identity.repository.identity,
+    id: trusted.record.ticket, pr: result.pr, head: identity.head, base_commit: identity.base_commit,
+    merge_base: identity.merge_base, base_tree: identity.merge_base_tree, ticket_set_digest: require('./architecture-target.cjs').PHASE_SUBJECT.exec(trusted.record.ticket)?.[3] };
+  if (stable(focused) !== stable(expectedIdentity) || packet.role !== 'code-review'
+      || packet.subject !== trusted.record.ticket || packet.source_revision !== identity.head
+      || packet.policy_hash !== trusted.receipt.policy_hash || context.integration_base?.commit !== identity.base_commit
+      || stable(context.ticket_set) !== stable(result.ticket_set)
+      || context.review_contract !== core.CONTRACT_ID || context.subject !== trusted.record.ticket)
+    fail('REVIEW_NATIVE_INVALID', 'original code-review subject, source or membership differs');
+  if (!object(context.planning_reference) || packet.canonical_root !== originalPacketRoot(identity.worktree, packet))
+    fail('REVIEW_NATIVE_INVALID', 'original code-review planning association differs');
+  for (const ref of packet.required_refs || []) {
+    if (typeof ref.content !== 'string' || Buffer.byteLength(ref.content) !== ref.bytes || digest(ref.content) !== ref.sha256)
+      fail('REVIEW_NATIVE_INVALID', 'original code-review planning material differs');
+  }
+  const planningContext = codeReviewPlanningContext(packet);
+  let referenceDigest;
+  if (trusted.receipt.runtime === 'codex') {
+    const launch = runtime.code_review;
+    if (stable(launch) !== stable({ ...binding, launch_digest: original.launch_digest })
+        || !/^[a-f0-9]{64}$/.test(launch.launch_digest || '') || !prompt.includes('launch_digest=' + launch.launch_digest))
+      fail('REVIEW_NATIVE_INVALID', 'original code-review private launch differs');
+    const ref = context.reference;
+    const bytes = readImmutableFile(fs, path.join(__dirname, '..', 'references/code-review.md'), 'code-review instructions', 1024 * 1024);
+    if (!object(ref) || ref.sha256 !== digest(bytes) || ref.bytes !== bytes.length || ref.content !== bytes.toString('utf8'))
+      fail('REVIEW_NATIVE_INVALID', 'original code-review instructions differ');
+    referenceDigest = ref.sha256;
+  } else {
+    const bytes = require('./claude-reference-content.cjs').loadClaudeReferenceContent('code-review');
+    const reference = { sha256: digest(bytes), bytes: Buffer.byteLength(bytes) };
+    if (stable(reference) !== stable(context.reference_digest)
+        || original.launch_digest !== digest(stable({ packet_digest: packetDigest, reference_digest: reference })))
+      fail('REVIEW_NATIVE_INVALID', 'original code-review reference or launch differs');
+    referenceDigest = reference.sha256;
+    if (original.host_context !== undefined) fail('REVIEW_NATIVE_INVALID', 'native code-review host context is reserved');
+  }
+  for (const [key, value] of Object.entries(binding))
+    if (original[key] !== value) fail('REVIEW_NATIVE_INVALID', 'original code-review answer differs from ' + key);
+  if (original.head_tree !== undefined && original.head_tree !== identity.head_tree
+      || original.merge_base_tree !== undefined && original.merge_base_tree !== identity.merge_base_tree)
+    fail('REVIEW_NATIVE_INVALID', 'original code-review source trees differ');
+  if (stable(original.ticket_set) !== stable(context.ticket_set)
+      || context.contract_digest !== core.contractDigest(referenceDigest)
+      || !Object.hasOwn(context, 'dispositions_digest')
+      || (context.dispositions_digest !== null && !/^[a-f0-9]{64}$/.test(context.dispositions_digest || '')))
+    fail('REVIEW_NATIVE_INVALID', 'original code-review contract or dispositions association differs');
+  const prior = context.normalization_inputs?.prior_findings
+    ?? (Array.isArray(context.prior_findings) && context.prior_findings.length === 0 ? [] : null);
+  if (!Array.isArray(prior) || prior.length > 128 || stable(context.prior_findings) !== stable(prior.map(
+      ({ identity: _identity, stored_identity: _stored, disagreement_identity: _disagreement, ...finding }) => finding)))
+    fail('REVIEW_NATIVE_REQUIRED', 'complete original code-review normalization inputs are required');
+  const sourceReader = head => core.createSourceReader({ head, git: (args, maximum) =>
+    execFileSync('git', ['-C', identity.worktree, ...args], { encoding: 'utf8', timeout: 30000, maxBuffer: maximum }) });
+  const readSource = sourceReader(identity.head), readPriorSource = sourceReader(context.prior_head || identity.head);
+  for (const finding of prior) {
+    const citation = core.resolveCitation({ path: finding.path, line: finding.line, quotedText: finding.line_text, readSource });
+    if (finding.identity && (citation.identity !== finding.identity || citation.occurrence !== finding.occurrence))
+      fail('REVIEW_NATIVE_INVALID', 'original carried citation differs from reviewed source');
+    for (const key of ['stored_identity', 'disagreement_identity']) {
+      if (!finding[key]) continue;
+      const source = readPriorSource(finding.path);
+      let ordinal = 0, found = false;
+      for (const line of (source || '').split('\n')) {
+        if (core.normalizeSourceLine(line) !== core.normalizeSourceLine(finding.line_text || '')) continue;
+        if (core.lineIdentity({ path: finding.path, lineText: line, ordinal: ++ordinal }) === finding[key]) found = true;
+      }
+      if (!found && (!finding.occurrence || !finding.line_text || core.lineIdentity({ path: finding.path,
+          lineText: finding.line_text, ordinal: finding.occurrence }) !== finding[key]))
+        fail('REVIEW_NATIVE_INVALID', 'original carried identity lacks authenticated source');
+    }
+  }
+  const options = { round: context.review_round, scope: context.review_scope, priorFindings: prior, readSource };
+  let normalized;
+  if (trusted.receipt.runtime === 'claude') normalized = core.normalizeResult({ ...original,
+    ...collector.validateCodeReviewCoverage(original, manifest) }, options);
+  else {
+    normalized = core.normalizeResult(original, options);
+    if (manifest) Object.assign(normalized, collector.validateCodeReviewCoverage(normalized, manifest));
+  }
+  const { evidence_markdown: markdown, host_context: _host, ...expected } = normalized;
+  if (typeof markdown !== 'string' || !markdown.trim() || Buffer.byteLength(markdown) > HISTORICAL_ARCHIVE_MAX_BYTES
+      || !Buffer.from(markdown).equals(evidence)) fail('REVIEW_NATIVE_INVALID', 'original code-review evidence differs');
+  Object.assign(expected, { ticket_set: context.ticket_set, prior_head: context.prior_head,
+    contract_digest: context.contract_digest, dispositions_digest: context.dispositions_digest,
+    reuse_key: core.reuseKey({ head: identity.head, baseCommit: identity.base_commit, contractDigest: context.contract_digest }) });
+  if (trusted.receipt.runtime === 'codex') expected.host_context = {
+    ...(!manifest ? { original_packet: packets.encodeUniqueContent(packet) } : {}),
+    ...planningContext };
+  const { ticketSetDigest: aliasDigest, ...sealed } = result;
+  if ((sealed.ticket_set_digest ?? aliasDigest ?? focused.ticket_set_digest) !== focused.ticket_set_digest
+      || aliasDigest !== undefined && aliasDigest !== focused.ticket_set_digest)
+    fail('REVIEW_NATIVE_INVALID', 'sealed code-review membership digest differs');
+  sealed.ticket_set_digest = focused.ticket_set_digest;
+  if (stable(JSON.parse(JSON.stringify(expected))) !== stable(JSON.parse(JSON.stringify(sealed))))
+    fail('REVIEW_NATIVE_INVALID', 'sealed code-review result differs from original completed answer replay');
+  if (!codeReviewCoverageRange(trusted, result, identity))
+    fail('REVIEW_NATIVE_INVALID', 'original code-review material range differs from reviewed source');
+  return Object.freeze({ schema: 'shipyard.current-review-contract.v2', role: 'code-review', contract: core.CONTRACT_ID,
+    context_digest: packetDigest, launch_digest: original.launch_digest, answer_sha256: digest(stable(original)) });
+}
+
 function codeReviewCoverageRange(trusted, findings, identity) {
   const packets = require('./context-packet.cjs');
   const runtime = trusted.receipt.runtime_evidence;
@@ -6198,7 +6384,14 @@ function authenticatedCodeReviewRecord(worktree, record, repository) {
     fail('ARCHIVE_AUTHORITY_INVALID', 'code-review envelope differs from authenticated findings');
   if (typeof record.sealed_at !== 'string' || !Number.isFinite(Date.parse(record.sealed_at)))
     fail('ARCHIVE_AUTHORITY_INVALID', 'code-review seal time is missing');
-  return { ...data, coverage_range: codeReviewCoverageRange(trusted, findings, identity), head: manifest.head, base_commit: manifest.base_commit, prior_head: manifest.prior_head,
+  let answerAuthenticated = false;
+  try {
+    const replay = authenticateCodeReviewAnswer({ trusted, result: findings, evidence: Buffer.from(evidence.content),
+      identity, retained: record.review_current });
+    answerAuthenticated = stable(replay) === stable(manifest.current_review || replay);
+  } catch {}
+  return { ...data, answer_authenticated: answerAuthenticated,
+    coverage_range: answerAuthenticated ? codeReviewCoverageRange(trusted, findings, identity) : null, head: manifest.head, base_commit: manifest.base_commit, prior_head: manifest.prior_head,
     sealed_at: record.sealed_at, artifact_ref: path.join(worktree, manifestFile.path), artifact_digest: manifestFile.sha256,
     dispatch_id: record.dispatch_id, subject, fields };
 }
@@ -6223,9 +6416,9 @@ function priorCodeReviewVerdicts({ worktreePath, repository, phaseDir, graphDir 
   }
   return records.sort((a,b) => a.sealed_at.localeCompare(b.sealed_at)).map(({ head, base_commit, verdict, review_completeness,
     review_round, review_scope, prior_head, blocking_count, findings, dispositions, disagreement_suppressed,
-    citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest, coverage_range, dispatch_id }) => ({ head, base_commit, verdict,
+    citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest, coverage_range, answer_authenticated, dispatch_id }) => ({ head, base_commit, verdict,
     review_completeness, review_round, review_scope, prior_head, blocking_count, findings, dispositions,
-    disagreement_suppressed, citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest, coverage_range, dispatch_id }));
+    disagreement_suppressed, citations_unresolved, partitions_not_reviewed, sealed_at, artifact_ref, artifact_digest, coverage_range, answer_authenticated, dispatch_id }));
 }
 
 function codeReviewPlanningReference({ worktree, graphDir, repo = null, phase, branch }) {
@@ -6346,6 +6539,7 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
   };
   for (const verdict of prior) {
     if (verdict.head !== head || verdict.base_commit !== baseCommit) continue;
+    if (!verdict.answer_authenticated) { current = null; currentPlanning = null; continue; }
     const manifestBytes = readImmutableFile(fs, verdict.artifact_ref, 'code-review manifest', HISTORICAL_ARCHIVE_MAX_BYTES);
     if (digest(manifestBytes) !== verdict.artifact_digest) fail('ARCHIVE_AUTHORITY_INVALID', 'code-review manifest changed during lookup');
     const manifest = JSON.parse(manifestBytes);
@@ -6395,8 +6589,7 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
       originalReference = originalPacket.role_context?.planning_reference || originalReference;
       if (!originalReference) { current = null; currentPlanning = null; continue; }
       if (originalReference) {
-        const originalContext = { planning_reference: originalReference,
-          selected_refs: originalPacket.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
+        const originalContext = codeReviewPlanningContext(originalPacket);
         if ((selectedPlanning !== undefined || trusted.receipt.runtime === 'codex')
             && stable(originalContext) !== stable(selectedPlanning)) {
           current = null; currentPlanning = null; continue;
@@ -6406,8 +6599,7 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
     }
     if (findings.host_context?.original_packet) {
       const retainedPacket = packets.decodeUniqueContent(findings.host_context.original_packet);
-      const retainedPlanning = { planning_reference: retainedPacket.role_context?.planning_reference,
-        selected_refs: retainedPacket.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
+      const retainedPlanning = codeReviewPlanningContext(retainedPacket);
       if (originalPacket && stable(retainedPacket) !== stable(originalPacket)) {
         current = null; currentPlanning = null; continue;
       }
@@ -7061,8 +7253,10 @@ function sealJudgment(value, options) {
   if (role === 'arch-review' && trusted.receipt.runtime === 'codex' && result.coverage === undefined
       && digest(sourceEvidence) !== result?.host_context?.evidence_sha256)
     fail('ARTIFACT_DIGEST_MISMATCH', 'complete judgment evidence differs from host-captured digest');
-  const currentReview = ['arch-review', 'integrator'].includes(role)
-    ? authenticateCurrentCoverage({ trusted, result, evidence: sourceEvidence, identity, integrationReview: input.integrationReview }) : null;
+  const currentReview = role === 'code-review'
+    ? authenticateCodeReviewAnswer({ trusted, result, evidence: sourceEvidence, identity })
+    : ['arch-review', 'integrator'].includes(role)
+      ? authenticateCurrentCoverage({ trusted, result, evidence: sourceEvidence, identity, integrationReview: input.integrationReview }) : null;
   const completeResult = sanitizedRoleResult(result, trusted);
   let findingsBytes;
   try {
@@ -7239,8 +7433,16 @@ function validateJudgmentManifest(value, options) {
       actual: actualDigest,
     });
   }
-  const currentReview = ['arch-review', 'integrator'].includes(role)
-    ? authenticateCurrentCoverage({ trusted, result, evidence: evidence.content, identity, integrationReview: input.integrationReview }) : null;
+  const retainedRecord = role === 'code-review' && fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))
+    ? authorityState(worktree).payload.records[dispatchId] : null;
+  const historicalCodeReview = role === 'code-review' && manifest.current_review === undefined
+    && !retainedRecord?.review_current && retainedRecord?.pins.some(pin => pin.path === path.relative(worktree, manifestResolved)
+      && pin.sha256 === actualDigest && pin.bytes === manifestBytes.length);
+  const currentReview = role === 'code-review' && !historicalCodeReview
+    ? authenticateCodeReviewAnswer({ trusted, result, evidence: evidence.content, identity,
+      retained: retainedRecord?.review_current })
+    : ['arch-review', 'integrator'].includes(role)
+      ? authenticateCurrentCoverage({ trusted, result, evidence: evidence.content, identity, integrationReview: input.integrationReview }) : null;
   if (stable(manifest.integration_partition || null) !== stable(currentReview?.integration_partition || null))
     partitionError('phase manifest partition authority differs');
   if (stable(manifest.current_review || null) !== stable(currentReview))
@@ -7304,7 +7506,7 @@ function validateJudgmentManifest(value, options) {
       commit: manifest.base_commit,
       tree: manifest.base_tree,
     },
-    historical: false,
+    historical: historicalCodeReview === true,
   });
 }
 

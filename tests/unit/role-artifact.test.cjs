@@ -2422,44 +2422,7 @@ test('the Claude semantic transcript falls back through the shared Claude home',
 });
 
 function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
-  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-  const crypto = require('node:crypto');
-  const refs = input.result.ticket_set.map(item => item.row.plan);
-  for (const plan of refs) {
-    const absolute = path.join(planningRoot, plan);
-    fs.mkdirSync(path.dirname(absolute), { recursive: true });
-    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
-  }
-  const graphDir = path.join(planningRoot, '.planning/graph');
-  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
-    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
-      dispositions_digest: null,
-      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
-      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
-      exact_diff: { content: f.git(['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-        input.result.review_scope === 'delta' ? input.result.prior_head : f.base, 'HEAD',
-        ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()]) },
-      integration_base: { commit: f.base } } });
-  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
-    const session = 'original-' + r.dispatch_id;
-    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
-    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
-      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
-        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
-    fs.writeFileSync(transcript, content);
-    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
-      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
-      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
-      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
-        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
-        transcript: { path: transcript, bytes: Buffer.byteLength(content),
-          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
-  } } } });
-  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
-    { ticket: input.ticket, subject_kind: 'phase' });
-  return { ...input, dispatchId: dispatch.dispatch_id };
+  return require('../fixtures/code-review/artifact-fixture.cjs').retainPlanningInput(f, input, planningRoot, repo);
 }
 
 function withOriginalPlanning(f) {
@@ -2483,7 +2446,9 @@ for (const incomplete of [false, true]) test('legacy reordered code-review membe
   try {
     f.graph.tickets['T-52-01'].files = ['source.js', 'round.txt'];
     const binding = f.advance(1);
-    const input = f.input(binding);
+    const input = f.input(binding, 1, null, incomplete ? {
+      ...JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/code-review/review.json'))),
+      review_completeness: 'incomplete', limitations: ['Unread source remains'] } : undefined);
     input.result.ticket_set = reverseReviewKeys(binding.ticketSet);
     assert.deepEqual(input.result.ticket_set, binding.ticketSet);
     assert.notEqual(JSON.stringify(input.result.ticket_set), JSON.stringify(binding.ticketSet));
@@ -2692,14 +2657,17 @@ test('sealed disagreements retain their original target through three rounds and
         const priorFindings = core.carryPriorFindings({ priorFindings: prior, deltaDiff, disagreements, readSource });
         assert.deepEqual(priorFindings.filter(finding => finding.disagreement).map(finding => finding.line), [5]);
         const blank = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [] };
-        const result = core.normalizeResult({ ...blank,
+        const original = { ...blank,
           findings: round === 2 ? [{ ...raw.findings[0], line: 5, line_text: 'return null;' }] : [],
           dispositions: priorFindings.filter(finding => !finding.disagreement).map(finding => ({
             ref: finding.ref, disposition: 'unresolved', justification: 'The other caller still fails',
           })),
-        }, { round, scope: 'delta', priorFindings, readSource });
+        };
+        const result = core.normalizeResult(original, { round, scope: 'delta', priorFindings, readSource });
         const input = f.input(binding, round, previous, blank);
         input.result = { ...input.result, ...result };
+        require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(input, original, priorFindings);
+        retainPlanningInput(f, input);
         const sealed = roleArtifact.sealJudgment(input);
         const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
         const suppressed = validated.findings.findings.filter(finding => finding.suppressed);
