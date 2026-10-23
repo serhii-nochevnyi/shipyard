@@ -94,7 +94,7 @@ function fixture(t) {
       .map(([key, value]) => `# shipyard-policy-${key} = "${value}"`),
     `name = "${selection.agent_file.replace(/\.toml$/, '')}"`,
     `model = "${selection.model}"`, `model_reasoning_effort = "${selection.effort}"`,
-    'sandbox_mode = "read-only"', "developer_instructions = '''Research the scoped input.'''", '',
+    'sandbox_mode = "read-only"', "developer_instructions = '''", 'Research the scoped input.', "'''", '',
   ].join('\n');
   fs.writeFileSync(path.join(agentDir, selection.agent_file), content);
   const agentManifest = path.join(agentDir, '.shipyard-manifest.json');
