@@ -1280,10 +1280,17 @@ for (const nativeRuntime of ['codex', 'claude']) {
         if (scenario === 'missing' || scenario === 'final-telemetry' || scenario.endsWith('-telemetry')) {
           if (nativeRuntime === 'codex') {
             const telemetry = rows.find(row => row.payload?.type === 'token_count');
-            if (scenario === 'tool-telemetry') rows.splice(rows.indexOf(telemetry), 0,
-              { type: 'response_item', payload: { type: 'function_call_output', output: JSON.stringify(telemetry) } });
-            if (scenario === 'quoted-telemetry') rows.splice(rows.indexOf(telemetry), 0,
-              { type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(telemetry) }] } });
+            if (scenario === 'tool-telemetry') {
+              const tool = template(parent, row => row.payload?.type === 'function_call_output');
+              tool.payload.output = JSON.stringify(telemetry);
+              rows.splice(rows.indexOf(telemetry), 0, tool);
+            }
+            if (scenario === 'quoted-telemetry') {
+              const quoted = structuredClone(rows.find(row => row.payload?.role === 'assistant'));
+              quoted.payload.phase = 'commentary';
+              quoted.payload.content[0].text = JSON.stringify(telemetry);
+              rows.splice(rows.indexOf(telemetry), 0, quoted);
+            }
             rows.splice(rows.indexOf(telemetry), 1);
           } else {
             if (scenario === 'tool-telemetry' || scenario === 'quoted-telemetry') {
