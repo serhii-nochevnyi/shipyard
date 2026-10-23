@@ -7,10 +7,11 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
-const entryOnly = process.argv.includes('--code-review-entry-only');
-const integratorDefaultOnly = process.argv.includes('--integrator-default-only');
-if (process.argv.slice(2).some(value => !['--code-review-entry-only', '--integrator-default-only'].includes(value))
-    || process.argv.slice(2).length > 1)
+const selectionArgs = require.main === module ? process.argv.slice(2) : [];
+const entryOnly = selectionArgs.includes('--code-review-entry-only');
+const integratorDefaultOnly = selectionArgs.includes('--integrator-default-only');
+if (selectionArgs.some(value => !['--code-review-entry-only', '--integrator-default-only'].includes(value))
+    || selectionArgs.length > 1)
   throw new Error('Unknown or conflicting delivery-host selection');
 let entrySelected = 0, entryVariants = 0, integratorDefaultSelected = 0;
 function test(name, callback) {
