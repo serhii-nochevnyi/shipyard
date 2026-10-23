@@ -1,6 +1,32 @@
 'use strict';
 
-const { test } = require('node:test');
+const { test: registerIntegrationTest } = require('node:test');
+const integrationSelection = { partition: null, list: false };
+if (require.main === module) {
+  for (const arg of process.argv.slice(2)) {
+    if (/^--integration-partition=[1-4]$/.test(arg) && integrationSelection.partition === null)
+      integrationSelection.partition = Number(arg.slice(-1));
+    else if (arg === '--list-integration-tests' && !integrationSelection.list) integrationSelection.list = true;
+    else {
+      process.stderr.write('Invalid or duplicate integration test argument: ' + arg + '\n');
+      process.exit(2);
+    }
+  }
+}
+const integrationRegisteredNames = new Set();
+const integrationSelectedNames = [];
+let integrationLegacyCount = 0;
+function test(name, ...args) {
+  if (integrationRegisteredNames.has(name)) throw new Error('Duplicate integration test: ' + name);
+  integrationRegisteredNames.add(name);
+  const partition = name.startsWith('D36 codex aggregate ') ? 1
+    : name.startsWith('D36 claude aggregate ') ? 2
+      : name.startsWith('D36 codex ') ? 3
+        : name.startsWith('D36 claude ') ? 4 : 3 + integrationLegacyCount++ % 2;
+  if (integrationSelection.partition !== null && integrationSelection.partition !== partition) return;
+  integrationSelectedNames.push(name);
+  if (!integrationSelection.list) return registerIntegrationTest(name, ...args);
+}
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -1614,3 +1640,6 @@ test('D36 ' + nativeRuntime + ' aggregate refuses the complete actual final over
     }
   });
 });
+
+if (require.main === module && integrationSelection.list)
+  process.stdout.write(JSON.stringify(integrationSelectedNames) + '\n');

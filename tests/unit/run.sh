@@ -25,10 +25,39 @@ if [[ -n "${UNIT_SHARD:-}" ]]; then
   unit_files=()
   while IFS= read -r unit_file; do
     unit_files+=("$unit_file")
-  done < <(node tests/unit/shard-files.cjs "$UNIT_SHARD")
+  done < <(node - "$UNIT_SHARD" <<'NODE'
+const shards = require('./tests/unit/shard-files.cjs');
+const check = 'integration-test-partitions.test.cjs';
+const files = shards.unitFiles();
+const { index, count } = shards.parseSpec(process.argv[2]);
+const selected = shards.assign(files.filter(file => file !== check), shards.readWeights(), count)[index - 1].files;
+if (files.includes(check) && selected.includes('phase49-incremental-integration.test.cjs')) selected.push(check);
+for (const file of selected) process.stdout.write('tests/unit/' + file + '\n');
+NODE
+)
   [[ ${#unit_files[@]} -gt 0 ]] || { echo "UNIT_SHARD=$UNIT_SHARD selected no unit tests"; exit 1; }
   [[ "${UNIT_SHARD%%/*}" == 1 ]] || unit_sweep=0
 fi
+
+unit_queue=()
+unit_partitions=()
+unit_queue_count=0
+unit_progress=0
+for unit_file in "${unit_files[@]}"; do
+  if [[ "$unit_file" == tests/unit/phase49-incremental-integration.test.cjs ]]; then
+    unit_progress=1
+    for unit_partition in 1 2 3 4; do
+      unit_partitions[unit_queue_count]="$unit_partition"
+      unit_queue[unit_queue_count]="$unit_file"
+      unit_queue_count=$((unit_queue_count + 1))
+    done
+  else
+    unit_partitions[unit_queue_count]=''
+    unit_queue[unit_queue_count]="$unit_file"
+    unit_queue_count=$((unit_queue_count + 1))
+  fi
+done
+unit_files=("${unit_queue[@]}")
 
 if [[ "$unit_sweep" == 1 ]]; then
   for f in plugins/delivery-pipeline/scripts/*.cjs capabilities/delivery-pipeline/checks/*.cjs scripts/*.cjs; do
@@ -54,7 +83,7 @@ emit_logs() {
     unit_emitted=1
     local i
     for ((i=0; i<unit_log_count; i++)); do
-      echo "═══ ${unit_files[$i]}"
+      echo "═══ ${unit_files[$i]}${unit_partitions[$i]:+ --integration-partition=${unit_partitions[$i]}}"
       cat "${unit_logs[$i]}"
     done
   fi
@@ -111,6 +140,13 @@ while ((unit_next < ${#unit_files[@]} || unit_active_count > 0)); do
     git config --file "$unit_worker/gitconfig" commit.gpgsign false
     git config --file "$unit_worker/gitconfig" tag.gpgsign false
     git config --file "$unit_worker/gitconfig" init.defaultBranch main
+    unit_args=()
+    if [[ -n "${unit_partitions[$unit_next]}" ]]; then
+      unit_args=("--integration-partition=${unit_partitions[$unit_next]}")
+    fi
+    if [[ "$unit_progress" == 1 ]]; then
+      echo "unit worker start: ${unit_files[$unit_next]}${unit_args[*]:+ ${unit_args[*]}}"
+    fi
     # @invariant: Enable private worker process groups only during launch, suppressing asynchronous job notices.
     set -m
     HOME="$unit_worker/home" CODEX_HOME="$unit_worker/codex" \
@@ -119,7 +155,7 @@ while ((unit_next < ${#unit_files[@]} || unit_active_count > 0)); do
       XDG_CONFIG_HOME="$unit_worker/config" XDG_CACHE_HOME="$unit_worker/cache" \
       XDG_STATE_HOME="$unit_worker/state" XDG_DATA_HOME="$unit_worker/data" \
       XDG_RUNTIME_DIR="$unit_worker/runtime" GIT_CONFIG_GLOBAL="$unit_worker/gitconfig" \
-      GIT_CONFIG_NOSYSTEM=1 node "${unit_files[$unit_next]}" >"${unit_logs[$unit_next]}" 2>&1 &
+      GIT_CONFIG_NOSYSTEM=1 node "${unit_files[$unit_next]}" ${unit_args[@]+"${unit_args[@]}"} >"${unit_logs[$unit_next]}" 2>&1 &
     unit_pids[$unit_next]=$!
     unit_active[unit_active_count]=$!
     set +m
@@ -133,7 +169,17 @@ while ((unit_next < ${#unit_files[@]} || unit_active_count > 0)); do
       unit_remaining[$unit_remaining_count]="$unit_pid"
       unit_remaining_count=$((unit_remaining_count + 1))
     else
-      wait "$unit_pid" || failed=1
+      unit_status=0
+      wait "$unit_pid" || unit_status=$?
+      if [[ "$unit_status" != 0 ]]; then failed=1; fi
+      if [[ "$unit_progress" == 1 ]]; then
+        for ((unit_index=0; unit_index<unit_next; unit_index++)); do
+          if [[ "${unit_pids[$unit_index]:-}" == "$unit_pid" ]]; then
+            echo "unit worker complete: ${unit_files[$unit_index]}${unit_partitions[$unit_index]:+ --integration-partition=${unit_partitions[$unit_index]}} status=$unit_status"
+            break
+          fi
+        done
+      fi
       if ! kill -0 -- "-$unit_pid" 2>/dev/null; then
         for ((unit_index=0; unit_index<unit_next; unit_index++)); do
           if [[ "${unit_pids[$unit_index]:-}" == "$unit_pid" ]]; then
