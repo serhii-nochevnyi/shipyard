@@ -16,6 +16,7 @@
     "tests/unit/subscription-observation.test.cjs"
   ],
   "migrating": [
+    "tests/unit/codex-code-review-context.test.cjs",
     "tests/unit/usage-attribution.test.cjs",
     "tests/unit/usage-report.test.cjs"
   ],

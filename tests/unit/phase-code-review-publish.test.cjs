@@ -185,7 +185,7 @@ for (const jira of [null, 'PRJ-42']) {
     } finally { f.cleanup(); }
   });
 
-  test('limit posts pending status only; unreviewed owed head cannot publish: ' + jira, () => {
+  test('D37 limit posts pending status only; unreviewed owed head cannot publish: ' + jira, () => {
     const f = fixture(jira);
     try {
       assert.throws(() => flow.publish(f.input(), f.options), /sealed|owed/);
@@ -347,7 +347,7 @@ test('the host citation is printed in full at the 1024-byte line bound', () => {
   } finally { f.cleanup(); }
 });
 
-test('third-round needs-fix publishes pending with the operator exit', () => {
+test('D37 third-round needs-fix publishes pending with the operator exit', () => {
   const f = fixture(null, 'hold');
   try {
     let prior = null;
@@ -396,11 +396,19 @@ test('every status grammar uses safe integer counts and passes hygiene at the ma
   assert.throws(() => flow.statusDescription({ state: 'current', verdict: 'needs-fix', blocking_count: 'model text', warning_count: 0 }));
 });
 
-test('comment stays within 60000 characters and names omitted findings', () => {
+test('D37 comment stays within 60000 characters and names omitted findings', () => {
   const f = fixture();
   try {
-    f.seal(raw(true, Array.from({ length: 128 }, (_, i) => ({ ...blocker, id: 'finding-' + i,
-      summary: 's'.repeat(1024), failure_scenario: 'f'.repeat(1024) }))));
+    const sealed = f.seal(raw(true, Array.from({ length: 128 }, (_, i) => ({ ...blocker, id: 'finding-' + i,
+      summary: 's'.repeat(250), failure_scenario: 'f'.repeat(250) }))));
+    const receipt = f.recorder.getVerifiedRecord(JSON.parse(fs.readFileSync(sealed.artifact_ref)).producer_dispatch).receipt;
+    const stream = fs.readFileSync(receipt.transcript.path, 'utf8').trim().split('\n').map(JSON.parse);
+    const original = stream.at(-1).structured_output;
+    assert.equal(original.findings.length, 128);
+    assert.ok(Buffer.byteLength(JSON.stringify(original)) <= 128 * 1024);
+    const renderedMinimum = original.findings.map(finding => finding.summary + '\nFailure scenario: '
+      + finding.failure_scenario + '\n').join('');
+    assert.ok(renderedMinimum.length > 60000);
     const result = flow.publish(f.input(), f.options);
     assert.equal(result.comment.ok, true); assert(f.comments[0].body.length <= 60000);
     assert.match(f.comments[0].body, /and \d+ more/); assert.match(f.comments[0].body, /citations_unresolved: 0/);
@@ -460,7 +468,7 @@ test('readGate ignores a newer pending code-review status beside merge-gate succ
 });
 
 
-test('published retained locator reloads the original target and leaves a later twin blocking', () => {
+test('D37 published retained locator reloads the original target and leaves a later twin blocking', () => {
   const f = fixture();
   try {
     const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
@@ -750,7 +758,7 @@ test('invalidation after namespace validation prevents lock initialization', () 
 
 for (const bound of [false, true]) {
   for (const boundary of ['lookup', 'live-head', 'comment-write', 'comment', 'temporary-file', 'atomic-write']) {
-    test('invalidation before ' + boundary + ' stops later mutations: bound=' + bound, () => {
+    test((bound ? 'D37 ' : '') + 'invalidation before ' + boundary + ' stops later mutations: bound=' + bound, () => {
       const f = fixture();
       const originalOpen = fs.openSync, originalClose = fs.closeSync, originalLstat = fs.lstatSync;
       try {
@@ -839,7 +847,7 @@ test('unbound human marker quotations, legacy summaries and copied genuine repor
   } finally { f.cleanup(); donor.cleanup(); }
 });
 
-test('manual edits and deletion replace the binding; later sealed heads reuse the eligible ID', () => {
+test('D37 manual edits and deletion replace the binding; later sealed heads reuse the eligible ID', () => {
   const f = fixture();
   try {
     f.seal(); const head = f.live().headRefOid;
