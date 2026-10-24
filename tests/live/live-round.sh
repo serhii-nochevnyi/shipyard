@@ -195,7 +195,8 @@ host_request() {
       + " and a delivery block (ticket: T-01-<MM>, risk: low, human_checkpoint: false), then these Markdown sections as ## headings with bullet lists:"
       + " Goal, Context (Reads), Scope, Out of scope, Acceptance criteria, Test strategy, Verification commands."
       + " Verification commands are scoped to files_modified and runnable offline. For the code ticket, use node --test tests/greeting.test.cjs"
-      + " and put all acceptance assertions in that owned test file. The fixture approves only node --test and node -e sandbox prefixes;"
+      + ". Each verification command bullet must be an entire bare line containing only a dash, a space and the exact command in backticks: - `node --test tests/greeting.test.cjs`. Put explanations outside command bullets."
+      + " Put all acceptance assertions in that owned test file. The fixture approves only node --test and node -e sandbox prefixes;"
       + " no git, npm, shell pipelines or shell expansion."
       + " Return changed_paths relative to the phase directory: 01-01-PLAN.md and 01-02-PLAN.md, without a .planning/phases/ prefix."
       + " List every file actually changed, and do not list unchanged files."
@@ -303,6 +304,102 @@ ticket_worktree="$(cd "$project" && bash "$SCRIPTS/ticket-worktree.sh" create "$
   || fail_stage executor "ticket-worktree create failed (see $work/worktree.log)" "" "executor"
 [ -d "$ticket_worktree" ] || fail_stage executor "ticket-worktree create returned no worktree (see $work/worktree.log)" "" "executor"
 
+verification_preflight() {
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const [scripts, project, graph, ticket, repo] = process.argv.slice(1);
+    try {
+      const row = JSON.parse(fs.readFileSync(path.join(graph, "tickets.json"), "utf8")).tickets[ticket];
+      if (typeof row.plan !== "string" || !row.plan || path.isAbsolute(row.plan) || row.plan.split("/").includes("..")) {
+        throw new Error("selected ticket has no safe relative PLAN path");
+      }
+      const plan = fs.readFileSync(path.resolve(project, row.plan), "utf8");
+      const config = require(path.join(scripts, "pipeline-config.cjs"));
+      const loaded = config.loadConfig(project);
+      if (!loaded.valid) throw new Error("invalid verification configuration: " + loaded.error.message);
+      const verification = require(path.join(scripts, "host-verification.cjs"));
+      if (!verification.planCommands(plan).length) throw new Error("selected PLAN has no verification commands");
+      const assigned = verification.assignPlan(plan, config.repoValue(loaded, "verification_commands", repo));
+      if (!assigned || !assigned.length) throw new Error("selected PLAN has no approved verification commands");
+      process.stdout.write(JSON.stringify({ plan: row.plan, commands: assigned }));
+    } catch (error) { console.error(String(error.message).slice(0, 1000)); process.exit(1); }
+  ' "$SCRIPTS" "$project" "$graph_dir" "$ticket" "$repo"
+}
+
+verification_preflight > "$work/verification-preflight.json" 2> "$work/verification-preflight.log" \
+  || fail_stage executor "PLAN admission failed (see $work/verification-preflight.log)" "" "executor"
+
+ticket_base="$(node "$SCRIPTS/ticket-base.cjs" resolve --graph-dir "$graph_dir" --ticket "$ticket" --requested-base "$ticket_base")" \
+  || fail_stage executor "cannot resolve canonical ticket PR base" "" "executor"
+
+executor_completion() {
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const { execFileSync } = require("child_process");
+    const [scripts, file, runtime, ticket, branch, base, worktree, start, admitted] = process.argv.slice(1);
+    const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
+    const nonempty = v => typeof v === "string" && v.length > 0;
+    const git = (...args) => execFileSync("git", ["-C", worktree, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    const requireValue = (ok, message) => { if (!ok) throw new Error(message); };
+    const identity = value => {
+      requireValue(object(value), "missing native identity");
+      for (const [key, expected] of [["runtime", runtime], ["role", "executor"], ["ticket", ticket]]) {
+        requireValue(value[key] === undefined || value[key] === expected, "conflicting " + key);
+      }
+    };
+    try {
+      const wait = JSON.parse(fs.readFileSync(file, "utf8"));
+      requireValue(object(wait) && wait.status === "exited-ok" && (wait.exit_code === undefined || wait.exit_code === 0), "executor transport failed");
+      identity(wait);
+      let result;
+      if (runtime === "claude") {
+        requireValue(Array.isArray(wait.result) && wait.result.length === 1, "expected one Claude ticket completion");
+        result = wait.result[0];
+        requireValue(object(result) && result.id === ticket && result.status === "committed", "Claude executor did not commit selected ticket");
+        requireValue(result.branch === branch, "Claude completion branch mismatch");
+        const artifact = result.artifact;
+        requireValue(nonempty(result.artifact_ref) && nonempty(result.artifact_digest) && object(result.evidence_index)
+          && object(artifact) && artifact.ref === result.artifact_ref && artifact.digest === result.artifact_digest
+          && object(artifact.envelope) && artifact.envelope.outcome === "committed"
+          && object(artifact.evidence_index), "Claude validated artifact references missing");
+        identity(artifact.envelope);
+      } else {
+        result = wait.result;
+        requireValue(object(result), "expected Codex dispatch completion");
+        requireValue(result.status === undefined || result.status === "committed", "Codex executor failure status");
+        const artifact = result.artifact;
+        requireValue(object(artifact) && artifact.schema === "shipyard.codex-delivery-artifact.v1"
+          && artifact.status === "committed" && artifact.ticket === ticket && nonempty(artifact.commit)
+          && Array.isArray(artifact.changed) && artifact.changed.length > 0
+          && artifact.changed.every(nonempty), "Codex committed artifact missing or conflicting");
+      }
+      identity(result);
+      requireValue(object(result.receipt), "native executor receipt missing");
+      identity(result.receipt);
+      requireValue(result.branch === undefined || result.branch === branch, "completion branch mismatch");
+      requireValue(git("symbolic-ref", "--short", "HEAD") === branch, "actual ticket branch mismatch");
+      const head = git("rev-parse", "HEAD^{commit}");
+      requireValue(head !== start, "executor HEAD is unchanged");
+      git("merge-base", "--is-ancestor", start, head);
+      let baseHead;
+      try { baseHead = git("rev-parse", "--verify", "refs/remotes/origin/" + base + "^{commit}"); }
+      catch { baseHead = git("rev-parse", "--verify", base + "^{commit}"); }
+      requireValue(baseHead !== head, "ticket has no commits beyond PR base");
+      git("merge-base", "--is-ancestor", baseHead, head);
+      const { changedProductPaths } = require(path.join(scripts, "development-artifacts.cjs"));
+      requireValue(changedProductPaths(start, head, worktree).length > 0
+        && changedProductPaths(baseHead, head, worktree).length > 0, "executor has no new committed product delta");
+      requireValue(result.commit === undefined || result.commit === head, "completion commit mismatch");
+      if (runtime === "codex") requireValue(result.artifact.commit === head, "Codex artifact commit mismatch");
+      if (admitted) {
+        const prior = JSON.parse(fs.readFileSync(admitted, "utf8"));
+        requireValue(prior.head === head && prior.branch === branch && prior.base === baseHead, "publication revision changed after admission");
+      }
+      process.stdout.write(JSON.stringify({ result, head, branch, base: baseHead }));
+    } catch (error) { console.error(String(error.message).slice(0, 1000)); process.exit(1); }
+  ' "$SCRIPTS" "$work/executor.wait.json" "$runtime" "$ticket" "$ticket_branch" "$ticket_base" "$ticket_worktree" "$executor_start" "${1:-}"
+}
+
 launch_and_wait() {
   local role="$1" launched dispatch
   local from="$project"
@@ -315,32 +412,36 @@ launch_and_wait() {
   node "$SCRIPTS/deliver-dispatch.cjs" wait --dispatch "$dispatch" --timeout-ms 3600000 > "$work/$role.wait.json" || return 1
 }
 
+executor_start="$(git -C "$ticket_worktree" rev-parse --verify 'HEAD^{commit}')" \
+  || fail_stage executor "cannot capture executor start HEAD" "" "executor"
+(git -C "$ticket_worktree" rev-parse --verify "refs/remotes/origin/$ticket_base^{commit}" 2>/dev/null \
+  || git -C "$ticket_worktree" rev-parse --verify "$ticket_base^{commit}") > "$work/executor-base.txt" 2>&1 \
+  || fail_stage executor "cannot resolve ticket PR base (see $work/executor-base.txt)" "" "executor"
 executor_dispatch="$(launch_and_wait executor)" || fail_stage executor "executor dispatch failed" "${executor_dispatch:-}" "executor"
-record_rung_stage executor executor "$executor_dispatch" "$(cat "$work/executor.wait.json")"
+executor_completion > "$work/executor-admitted.json" 2> "$work/executor-admission.log" \
+  || fail_stage executor "native completion or committed revision refused (see $work/executor-admission.log)" "$executor_dispatch" "executor"
 
-head_branch="$(node -e '
-  const r = [].concat(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).result || [])[0] || {};
-  process.stdout.write(r.branch || r.head || "");
-' "$work/executor.wait.json")"
-[ -n "$head_branch" ] || head_branch="$ticket_branch"
-[ -n "$head_branch" ] || fail_stage publish "executor result names no branch" "$executor_dispatch" "executor" null null
+head_branch="$ticket_branch"
 body_file="$work/pr-body.md"
 node -e '
   const fs = require("fs");
-  const r = [].concat(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).result || [])[0] || {};
+  const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).result;
   const body = r.pr_body || r.body || (r.prBodyPath && fs.existsSync(r.prBodyPath) ? fs.readFileSync(r.prBodyPath, "utf8") : "");
   process.stdout.write(body);
-' "$work/executor.wait.json" > "$body_file"
+' "$work/executor-admitted.json" > "$body_file"
 if [ ! -s "$body_file" ]; then
   ticket_title="$(node -e 'process.stdout.write(String(require(process.argv[1]).tickets[process.argv[2]].title || ""))' "$graph_dir/tickets.json" "$ticket")"
   printf '## Summary\n\n%s\n\n## Test evidence\n\nThe repository CI runs `make test` on this pull request.\n' "$ticket_title" > "$body_file"
 fi
 title="$(node -e '
-  const r = [].concat(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).result || [])[0] || {};
+  const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).result;
   process.stdout.write(r.pr_title || r.title || "");
-' "$work/executor.wait.json")"
+' "$work/executor-admitted.json")"
 [ -n "$title" ] || title="$(node "$SCRIPTS/pr-hygiene.cjs" format --project-root "$project" --repo "$repo" --type feat --subject "add greeting styles")"
 base_branch="$ticket_base"
+executor_completion "$work/executor-admitted.json" > "$work/executor-publication.json" 2> "$work/executor-publication.log" \
+  || fail_stage executor "publication revision recheck failed (see $work/executor-publication.log)" "$executor_dispatch" "executor"
+record_rung_stage executor executor "$executor_dispatch" "$(cat "$work/executor.wait.json")"
 git -C "$ticket_worktree" push -q -u origin "$head_branch" > "$work/push.log" 2>&1 \
   || fail_stage publish "git push of $head_branch failed (see $work/push.log)" "$executor_dispatch" "executor" null null
 node "$SCRIPTS/pr-hygiene.cjs" check --project-root "$project" --repo "$repo" --base "$base_branch" --head "$head_branch" \
