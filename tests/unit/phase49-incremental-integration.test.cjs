@@ -4,7 +4,7 @@ const { test: registerIntegrationTest } = require('node:test');
 const integrationSelection = { partition: null, list: false };
 if (require.main === module) {
   for (const arg of process.argv.slice(2)) {
-    if (/^--integration-partition=[1-4]$/.test(arg) && integrationSelection.partition === null)
+    if (/^--integration-partition=[1-6]$/.test(arg) && integrationSelection.partition === null)
       integrationSelection.partition = Number(arg.slice(-1));
     else if (arg === '--list-integration-tests' && !integrationSelection.list) integrationSelection.list = true;
     else {
@@ -15,14 +15,133 @@ if (require.main === module) {
 }
 const integrationRegisteredNames = new Set();
 const integrationSelectedNames = [];
-let integrationLegacyCount = 0;
+const integrationPartitionEntries = Object.freeze([
+  ["D36 claude aggregate refuses the complete actual final over bound and preserves accepted originals", 2],
+  ["D36 claude contracts refuses acceptance before authority", 3],
+  ["D36 claude contracts refuses changed-effort before authority", 3],
+  ["D36 claude contracts refuses final-completion before authority", 3],
+  ["D36 claude contracts refuses final-index before authority", 6],
+  ["D36 claude contracts refuses foreign-session before authority", 5],
+  ["D36 claude contracts refuses incomplete-unit before authority", 6],
+  ["D36 claude contracts refuses input-drift before authority", 4],
+  ["D36 claude contracts refuses needs-fix-unit before authority", 5],
+  ["D36 claude contracts refuses primary-duplicate before authority", 3],
+  ["D36 claude contracts refuses primary-tail before authority", 6],
+  ["D36 claude contracts refuses seam before authority", 4],
+  ["D36 claude contracts refuses semantic-disagreement before authority", 5],
+  ["D36 claude contracts refuses support before authority", 3],
+  ["D36 claude geometry phase-shaped complete governing floor fits with at most three primary segments", 5],
+  ["D36 claude positive cumulative accounting above a window preserves fitting per-request samples", 5],
+  ["D36 claude positive observed caller authenticates complete originals and cold current authority", 6],
+  ["D36 claude signals refuses answer-text-telemetry before authority", 6],
+  ["D36 claude signals refuses compaction before authority", 4],
+  ["D36 claude signals refuses final-telemetry before authority", 5],
+  ["D36 claude signals refuses foreign-model before authority", 5],
+  ["D36 claude signals refuses malformed-usage before authority", 4],
+  ["D36 claude signals refuses missing before authority", 5],
+  ["D36 claude signals refuses missing-counter before authority", 3],
+  ["D36 claude signals refuses missing-window before authority", 3],
+  ["D36 claude signals refuses negative-counter before authority", 6],
+  ["D36 claude signals refuses negative-window before authority", 4],
+  ["D36 claude signals refuses overflow-later before authority", 5],
+  ["D36 claude signals refuses quoted-telemetry before authority", 3],
+  ["D36 claude signals refuses rate-only before authority", 3],
+  ["D36 claude signals refuses rollback before authority", 6],
+  ["D36 claude signals refuses tool-telemetry before authority", 4],
+  ["D36 claude signals refuses truncation before authority", 5],
+  ["D36 claude signals refuses unsafe-counter before authority", 3],
+  ["D36 claude signals refuses unsafe-window before authority", 5],
+  ["D36 claude signals refuses zero-window before authority", 6],
+  ["D36 codex aggregate refuses the complete actual final over bound and preserves accepted originals", 1],
+  ["D36 codex contracts refuses acceptance before authority", 3],
+  ["D36 codex contracts refuses changed-effort before authority", 4],
+  ["D36 codex contracts refuses final-completion before authority", 3],
+  ["D36 codex contracts refuses final-index before authority", 4],
+  ["D36 codex contracts refuses foreign-session before authority", 6],
+  ["D36 codex contracts refuses incomplete-unit before authority", 4],
+  ["D36 codex contracts refuses input-drift before authority", 5],
+  ["D36 codex contracts refuses needs-fix-unit before authority", 3],
+  ["D36 codex contracts refuses primary-duplicate before authority", 6],
+  ["D36 codex contracts refuses primary-tail before authority", 4],
+  ["D36 codex contracts refuses seam before authority", 4],
+  ["D36 codex contracts refuses semantic-disagreement before authority", 6],
+  ["D36 codex contracts refuses support before authority", 3],
+  ["D36 codex geometry phase-shaped complete governing floor fits with at most three primary segments", 4],
+  ["D36 codex ingress actual ASCII unit and fresh final retain original producer across cold readers", 3],
+  ["D36 codex ingress actual public stage rejects changed or unowned oversized launches before any process", 5],
+  ["D36 codex ingress supplied strict public caller retains the legacy static prompt guard", 5],
+  ["D36 codex positive cumulative accounting above a window preserves fitting per-request samples", 3],
+  ["D36 codex positive observed caller authenticates complete originals and cold current authority", 6],
+  ["D36 codex signals refuses answer-text-telemetry before authority", 6],
+  ["D36 codex signals refuses compaction before authority", 4],
+  ["D36 codex signals refuses final-telemetry before authority", 4],
+  ["D36 codex signals refuses foreign-model before authority", 5],
+  ["D36 codex signals refuses malformed-usage before authority", 5],
+  ["D36 codex signals refuses missing before authority", 3],
+  ["D36 codex signals refuses missing-counter before authority", 5],
+  ["D36 codex signals refuses missing-window before authority", 3],
+  ["D36 codex signals refuses negative-counter before authority", 6],
+  ["D36 codex signals refuses negative-window before authority", 6],
+  ["D36 codex signals refuses overflow-later before authority", 4],
+  ["D36 codex signals refuses quoted-telemetry before authority", 4],
+  ["D36 codex signals refuses rate-only before authority", 4],
+  ["D36 codex signals refuses rollback before authority", 5],
+  ["D36 codex signals refuses tool-telemetry before authority", 5],
+  ["D36 codex signals refuses truncation before authority", 3],
+  ["D36 codex signals refuses unsafe-counter before authority", 5],
+  ["D36 codex signals refuses unsafe-window before authority", 6],
+  ["D36 codex signals refuses zero-window before authority", 6],
+  ["a shared contract change conservatively requires complete integration reading", 4],
+  ["actual final caller and reviewer reference require trusted preparation and fresh complete coverage", 4],
+  ["actual integration preparation, native adapter and original sealer issue a fresh repair judgment", 5],
+  ["changed base and complete current member set invalidate inheritance independently", 6],
+  ["complete focused architecture success cannot supply missing current integration lineage", 4],
+  ["fresh integration refuses forged lineage", 4],
+  ["fresh integration refuses incomplete membership", 6],
+  ["fresh integration refuses missing original evidence", 5],
+  ["fresh integration refuses old HEAD", 3],
+  ["fresh integration refuses old base", 4],
+  ["fresh integration refuses omitted impact boundary", 4],
+  ["fresh integration refuses omitted limitations", 6],
+  ["fresh integration refuses uncovered obligation", 5],
+  ["fresh integration refuses unknown coverage version", 3],
+  ["genuine integration refuses transient lineage over 32 MiB while source stages fit 16 MiB", 6],
+  ["large real integration proves bounded preparation and reconstruction without native semantic credit", 6],
+  ["legacy original integration cannot silently supply incremental authority", 3],
+  ["live base movement refuses before native integration launch", 4],
+  ["live membership movement refuses before native integration launch", 3],
+  ["movement after preparation refuses the original current-subject launch", 6],
+  ["native incomplete reads cannot produce a sealed fresh integration verdict", 6],
+  ["second runtime adapter fixture seals a fresh full current judgment without a provider process", 5],
+  ["second runtime producer retains complete inline full review and cannot borrow Codex authority", 3],
+  ["supported claude final preserves planted cross-unit mismatch: contradictory-pass", 6],
+  ["supported claude final preserves planted cross-unit mismatch: incomplete", 6],
+  ["supported claude final preserves planted cross-unit mismatch: needs-fix", 5],
+  ["supported claude v3 caller reaches normal final consumer with linked canonical planning", 5],
+  ["supported codex final preserves planted cross-unit mismatch: contradictory-pass", 6],
+  ["supported codex final preserves planted cross-unit mismatch: incomplete", 4],
+  ["supported codex final preserves planted cross-unit mismatch: needs-fix", 5],
+  ["supported codex v3 caller reaches normal final consumer with linked canonical planning", 6],
+  ["unknown integration and dictionary versions fail closed while v1 full input stays supported", 5]
+]);
+const integrationPartitions = Object.freeze(Object.fromEntries(integrationPartitionEntries));
+const integrationPartitionCounts = [1, 1, 24, 25, 28, 28];
+if (integrationPartitionEntries.length !== 107 || Object.keys(integrationPartitions).length !== integrationPartitionEntries.length
+  || integrationPartitionCounts.some((count, index) =>
+    Object.values(integrationPartitions).filter(partition => partition === index + 1).length !== count))
+  throw new Error('Invalid integration partition map');
+queueMicrotask(() => {
+  if (Object.keys(integrationPartitions).some(name => !integrationRegisteredNames.has(name)))
+    throw new Error('Incomplete integration partition registrations');
+});
 function test(name, ...args) {
   if (integrationRegisteredNames.has(name)) throw new Error('Duplicate integration test: ' + name);
   integrationRegisteredNames.add(name);
-  const partition = name.startsWith('D36 codex aggregate ') ? 1
-    : name.startsWith('D36 claude aggregate ') ? 2
-      : name.startsWith('D36 codex ') ? 3
-        : name.startsWith('D36 claude ') ? 4 : 3 + integrationLegacyCount++ % 2;
+  if (!Object.hasOwn(integrationPartitions, name)) {
+    if (require.main !== module) return registerIntegrationTest(name, ...args);
+    throw new Error('Unknown integration test: ' + name);
+  }
+  const partition = integrationPartitions[name];
   if (integrationSelection.partition !== null && integrationSelection.partition !== partition) return;
   integrationSelectedNames.push(name);
   if (!integrationSelection.list) return registerIntegrationTest(name, ...args);
