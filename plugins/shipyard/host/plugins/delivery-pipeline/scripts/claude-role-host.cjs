@@ -1916,12 +1916,31 @@ function prepareReviewInput(prepared, options) {
 }
 
 function integrationStageSchema(stage) {
+  if (typeof stage.input !== 'string' || sha(stage.input) !== stage.input_sha256)
+    reject('integration schema requires exact authenticated input', 'INVALID_INPUT');
+  const opening = '\n<AUTHENTICATED_INTEGRATION_PARTITION>\n';
+  const closing = '\n</AUTHENTICATED_INTEGRATION_PARTITION>';
+  const start = stage.input.indexOf(opening);
+  if (start < 0 || stage.input.indexOf(opening, start + opening.length) !== -1 || !stage.input.endsWith(closing))
+    reject('integration schema requires one terminal authenticated payload', 'INVALID_INPUT');
+  const raw = stage.input.slice(start + opening.length, -closing.length);
+  if (/[\r\n]/.test(raw)) reject('integration schema authenticated payload is not one line', 'INVALID_INPUT');
+  let payload;
+  try { payload = JSON.parse(raw); }
+  catch { reject('integration schema authenticated payload is malformed', 'INVALID_INPUT'); }
+  if (!object(payload) || !object(payload.reviewed_identity))
+    reject('integration schema authenticated identity is missing', 'INVALID_INPUT');
+  const properties = Object.fromEntries(Object.entries(payload.reviewed_identity)
+    .filter(([, value]) => typeof value !== 'number' || Number.isFinite(value))
+    .map(([key, value]) => [key, value !== null && typeof value === 'object'
+      ? { type: Array.isArray(value) ? 'array' : 'object' } : { const: value }]));
+  const required = Object.keys(properties).filter(key => Object.hasOwn(properties[key], 'const'));
   const schema = stage.kind === 'phase' ? roleOutputSchema('integrator') : { type: 'object', properties: {}, required: [] };
   Object.assign(schema.properties, {
     schema: { type: 'string' }, review_contract: { const: roleArtifact.INTEGRATION_REVIEW_V3 },
     kind: { const: stage.kind }, runtime: { const: 'claude' }, subject: { const: stage.subject },
     plan_sha256: { const: stage.plan_sha256 }, input_sha256: { const: stage.input_sha256 },
-    reviewed_identity: { type: 'object' }, completeness: { enum: ['complete', 'incomplete'] },
+    reviewed_identity: { type: 'object', properties, required }, completeness: { enum: ['complete', 'incomplete'] },
     outcome: { enum: ['passed', 'needs-fix', 'human-review-required'] }, unit_id: { type: 'string' },
     coverage: { type: 'object' }, blocking_count: { type: 'integer', minimum: 0 },
     conclusions: { type: 'array' }, findings: { type: 'array' }, limitations: { type: 'array' },

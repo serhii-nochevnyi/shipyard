@@ -2122,6 +2122,7 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
       || baseline.ticket_set_digest !== current.ticket_set_digest))
     fail('baseline role or subject differs from the current review', 'REVIEW_BASELINE_INVALID');
   const checked = verifyFileInput(currentInput), root = current.worktree;
+  const maximumBytes = integrationLimits(checked.manifest.role, checked.manifest.binding).material;
   const endpoint = baseline?.head || current.merge_base;
   const previousInventory = endpointInventory(root, endpoint), inventory = endpointInventory(root, current.head);
   const delta = endpointChanges(root, endpoint, current.head);
@@ -2139,7 +2140,7 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
       return content;
     }
     const size = Number(git({}, root, ['cat-file', '-s', entry.object]));
-    if (!Number.isSafeInteger(size) || size < 0 || size > FILE_LIMITS.material || total + size > FILE_LIMITS.material)
+    if (!Number.isSafeInteger(size) || size < 0 || size > FILE_LIMITS.material || total + size > maximumBytes)
       fail('complete impact sources exceed their bound', 'CONTEXT_OVER_BOUND');
     const raw = execFileSync('git', ['-C', root, 'cat-file', 'blob', entry.object], { maxBuffer: FILE_LIMITS.material });
     total += raw.length;
@@ -2209,7 +2210,7 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
   if (uncertainty.length) { mode = 'full'; limitations.push({ reason: 'uncertain-dependency-closure', boundaries: uncertainty }); }
   const encoded = checked.material.length === 1 ? JSON.parse(checked.material[0]) : null;
   if (encoded?.schema !== 'shipyard.semantic-content.v1') fail('complete current semantic packet is required', 'REVIEW_BASELINE_UNSUPPORTED');
-  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded, integrationLimits(checked.manifest.role, checked.manifest.binding).material);
+  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded, maximumBytes);
   const members = originalPacket.ticket_set || originalPacket.role_context?.ticket_set;
   if (!Array.isArray(members) || JSON.stringify(members.map(item => typeof item === 'string' ? item : item.id).sort()) !== JSON.stringify([...current.ticket_set].sort())
       || (originalPacket.ticket_set_digest || originalPacket.role_context?.ticket_set_digest) !== current.ticket_set_digest)
@@ -2276,7 +2277,7 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
       mechanical_preflight: 'complete-current-phase-required' }, current_logical_obligations: logical,
     original_packet: encoded, semantic_credit: false };
   const raw = JSON.stringify(canonical(lineage));
-  const rawBytes = Buffer.byteLength(raw), maximumBytes = integrationLimits(checked.manifest.role, checked.manifest.binding).material;
+  const rawBytes = Buffer.byteLength(raw);
   if (rawBytes > maximumBytes) fail('complete impact packet exceeds its bound: raw_lineage_bytes observed ' + rawBytes
     + ', required at most ' + maximumBytes, 'CONTEXT_OVER_BOUND');
   verifyFileInput(currentInput);

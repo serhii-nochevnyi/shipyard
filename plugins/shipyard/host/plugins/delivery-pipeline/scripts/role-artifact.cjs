@@ -4297,7 +4297,7 @@ function partitionProfile(plan) {
 }
 function partitionInputBytes(plan, input, kind) {
   if (!observedPartition(plan) || plan.runtime !== 'claude') return bytes(input);
-  const schema = require('./claude-role-host.cjs').integrationStageSchema({ kind, subject: plan.subject,
+  const schema = require('./claude-role-host.cjs').integrationStageSchema({ kind, subject: plan.subject, input,
     plan_sha256: plan.plan_sha256, input_sha256: digest(input) });
   return bytes(JSON.stringify({ type: 'user', message: { role: 'user', content: input } }) + '\n') + bytes(JSON.stringify(schema));
 }
