@@ -88,9 +88,10 @@ function fixture(jira = null, mode = 'report', pr = 52) {
     const request = f.input(binding, round, priorHead, raw());
     Object.assign(request.result, core.normalizeResult(result, { round, scope: round === 1 ? 'full' : 'delta',
       priorFindings, readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') }));
+    require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(request, result, priorFindings);
     return artifact.sealJudgment(retainPlanningInput(f, request, planningRoot));
   };
-  return { ...f, branch, live, input, options, seal, writes, comments, hooks,
+  return { ...f, rawInput: f.input, branch, live, input, options, seal, writes, comments, hooks,
     sealLinked: linked => {
       const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
         repository: target.repositoryIdentity(linked), branch, pr, head: live().headRefOid, base: f.base });
@@ -184,7 +185,7 @@ for (const jira of [null, 'PRJ-42']) {
     } finally { f.cleanup(); }
   });
 
-  test('limit posts pending status only; unreviewed owed head cannot publish: ' + jira, () => {
+  test('D37 limit posts pending status only; unreviewed owed head cannot publish: ' + jira, () => {
     const f = fixture(jira);
     try {
       assert.throws(() => flow.publish(f.input(), f.options), /sealed|owed/);
@@ -346,7 +347,7 @@ test('the host citation is printed in full at the 1024-byte line bound', () => {
   } finally { f.cleanup(); }
 });
 
-test('third-round needs-fix publishes pending with the operator exit', () => {
+test('D37 third-round needs-fix publishes pending with the operator exit', () => {
   const f = fixture(null, 'hold');
   try {
     let prior = null;
@@ -395,11 +396,19 @@ test('every status grammar uses safe integer counts and passes hygiene at the ma
   assert.throws(() => flow.statusDescription({ state: 'current', verdict: 'needs-fix', blocking_count: 'model text', warning_count: 0 }));
 });
 
-test('comment stays within 60000 characters and names omitted findings', () => {
+test('D37 comment stays within 60000 characters and names omitted findings', () => {
   const f = fixture();
   try {
-    f.seal(raw(true, Array.from({ length: 128 }, (_, i) => ({ ...blocker, id: 'finding-' + i,
-      summary: 's'.repeat(1024), failure_scenario: 'f'.repeat(1024) }))));
+    const sealed = f.seal(raw(true, Array.from({ length: 128 }, (_, i) => ({ ...blocker, id: 'finding-' + i,
+      summary: 's'.repeat(250), failure_scenario: 'f'.repeat(250) }))));
+    const receipt = f.recorder.getVerifiedRecord(JSON.parse(fs.readFileSync(sealed.artifact_ref)).producer_dispatch).receipt;
+    const stream = fs.readFileSync(receipt.transcript.path, 'utf8').trim().split('\n').map(JSON.parse);
+    const original = stream.at(-1).structured_output;
+    assert.equal(original.findings.length, 128);
+    assert.ok(Buffer.byteLength(JSON.stringify(original)) <= 128 * 1024);
+    const renderedMinimum = original.findings.map(finding => finding.summary + '\nFailure scenario: '
+      + finding.failure_scenario + '\n').join('');
+    assert.ok(renderedMinimum.length > 60000);
     const result = flow.publish(f.input(), f.options);
     assert.equal(result.comment.ok, true); assert(f.comments[0].body.length <= 60000);
     assert.match(f.comments[0].body, /and \d+ more/); assert.match(f.comments[0].body, /citations_unresolved: 0/);
@@ -459,7 +468,7 @@ test('readGate ignores a newer pending code-review status beside merge-gate succ
 });
 
 
-test('published retained locator reloads the original target and leaves a later twin blocking', () => {
+test('D37 published retained locator reloads the original target and leaves a later twin blocking', () => {
   const f = fixture();
   try {
     const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
@@ -625,52 +634,7 @@ for (const linked of [false, true]) test('retained locators require authenticate
 });
 
 function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
-  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-  const crypto = require('node:crypto');
-  const refs = input.result.ticket_set.map(item => item.row.plan);
-  for (const plan of refs) {
-    const absolute = path.join(planningRoot, plan);
-    fs.mkdirSync(path.dirname(absolute), { recursive: true });
-    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
-  }
-  const graphDir = path.join(planningRoot, '.planning/graph');
-  const carrier = path.join(planningRoot, '.planning/phases', f.phase, 'code-review-disagreements.json');
-  let dispositionsDigest = null;
-  try { dispositionsDigest = crypto.createHash('sha256').update(fs.readFileSync(carrier)).digest('hex'); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
-  input.result.dispositions_digest = dispositionsDigest;
-  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
-    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
-      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
-      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
-      exact_diff: { content: f.git([
-        'diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-        input.result.review_scope === 'delta' ? input.result.prior_head : f.base,
-        'HEAD', ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()
-      ]) },
-      dispositions_digest: dispositionsDigest, integration_base: { commit: f.base } } });
-  input.result.host_context = { planning_reference: packet.role_context.planning_reference,
-    selected_refs: packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
-  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
-    const session = 'original-' + r.dispatch_id;
-    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
-    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
-      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
-        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
-    fs.writeFileSync(transcript, content);
-    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
-      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
-      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
-      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
-        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
-        transcript: { path: transcript, bytes: Buffer.byteLength(content),
-          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
-  } } } });
-  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
-    { ticket: input.ticket, subject_kind: 'phase' });
-  return { ...input, dispatchId: dispatch.dispatch_id };
+  return require('../fixtures/code-review/artifact-fixture.cjs').retainPlanningInput(f, input, planningRoot, repo);
 }
 
 function publicationState(f, pr = 52) {
@@ -794,7 +758,7 @@ test('invalidation after namespace validation prevents lock initialization', () 
 
 for (const bound of [false, true]) {
   for (const boundary of ['lookup', 'live-head', 'comment-write', 'comment', 'temporary-file', 'atomic-write']) {
-    test('invalidation before ' + boundary + ' stops later mutations: bound=' + bound, () => {
+    test((bound ? 'D37 ' : '') + 'invalidation before ' + boundary + ' stops later mutations: bound=' + bound, () => {
       const f = fixture();
       const originalOpen = fs.openSync, originalClose = fs.closeSync, originalLstat = fs.lstatSync;
       try {
@@ -883,7 +847,7 @@ test('unbound human marker quotations, legacy summaries and copied genuine repor
   } finally { f.cleanup(); donor.cleanup(); }
 });
 
-test('manual edits and deletion replace the binding; later sealed heads reuse the eligible ID', () => {
+test('D37 manual edits and deletion replace the binding; later sealed heads reuse the eligible ID', () => {
   const f = fixture();
   try {
     f.seal(); const head = f.live().headRefOid;
@@ -1162,4 +1126,43 @@ test('a contended publication lock fails the comment independently without a wri
     assert.match(result.comment.reason, /lock/);
     assert.equal(f.writes.length, count + 1); assert.equal(f.comments[0].body, before);
   } finally { if (handle) handle.release(); f.cleanup(); }
+});
+
+for (const partitioned of [false, true]) test('D35 publication requires the completed original normalized answer: ' + partitioned, () => {
+  const f = fixture(null, 'hold');
+  try {
+    const review = raw(true, [{ ...blocker, failure_scenario: undefined, fix_ticket: undefined }]);
+    if (partitioned) review.coverage = Array.from({ length: 129 }, () => ({ status: 'reviewed' }));
+    f.seal(review);
+    assert.equal(f.lookup().verdict, 'pass');
+    assert.equal(flow.verifyCodeReview({ ...f.input(), live: f.live() }).ok, true);
+    const published = flow.publish(f.input(), f.options);
+    assert.equal(published.status.ok, true); assert.equal(published.comment.ok, true);
+    assert.equal(f.writes.find(write => write.endpoint.includes('/statuses/')).fields.state, 'success');
+    const current = f.lookup(), receipt = f.recorder.getVerifiedRecord(current.dispatch_id).receipt;
+    const pin = receipt.transcript, bytes = fs.readFileSync(pin.path), writes = f.writes.length;
+    fs.writeFileSync(pin.path, bytes.subarray(0, bytes.length - 1));
+    assert.equal(f.lookup(), null);
+    assert.throws(() => flow.publish(f.input(), f.options), /owed/);
+    assert.equal(f.writes.length, writes); assert.equal(flow.verifyCodeReview({ ...f.input(), live: f.live() }).ok, false);
+    fs.writeFileSync(pin.path, bytes);
+    assert.equal(flow.publish(f.input(), f.options).status.ok, true);
+  } finally { f.cleanup(); }
+});
+
+test('D35 input-only historical pass cannot publish success or open hold', () => {
+  const f = fixture(null, 'hold');
+  const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+  try {
+    fs.writeFileSync(path.join(f.root, 'round.txt'), '1');
+    f.git(['add', 'round.txt']); f.git(['commit', '--quiet', '-m', 'reviewed history head']);
+    const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
+      repository: target.repositoryIdentity(f.root), branch: f.branch, pr: 52, head: f.live().headRefOid, base: f.base });
+    const unretained = f.rawInput(binding, 1, null, raw());
+    const sealed = fixtures.sealInputOnlyHistory(unretained), bytes = fs.readFileSync(sealed.artifact_ref);
+    assert.equal(f.lookup(), null); assert.equal(flow.status({ ...f.input(), live: f.live() }).rounds_used, 1);
+    assert.equal(flow.verifyCodeReview({ ...f.input(), live: f.live() }).ok, false);
+    assert.throws(() => flow.publish(f.input(), f.options), /owed/); assert.equal(f.writes.length, 0);
+    assert.deepEqual(fs.readFileSync(sealed.artifact_ref), bytes);
+  } finally { f.cleanup(); }
 });

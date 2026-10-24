@@ -1,6 +1,32 @@
 'use strict';
 
-const { test } = require('node:test');
+const { test: registerIntegrationTest } = require('node:test');
+const integrationSelection = { partition: null, list: false };
+if (require.main === module) {
+  for (const arg of process.argv.slice(2)) {
+    if (/^--integration-partition=[1-4]$/.test(arg) && integrationSelection.partition === null)
+      integrationSelection.partition = Number(arg.slice(-1));
+    else if (arg === '--list-integration-tests' && !integrationSelection.list) integrationSelection.list = true;
+    else {
+      process.stderr.write('Invalid or duplicate integration test argument: ' + arg + '\n');
+      process.exit(2);
+    }
+  }
+}
+const integrationRegisteredNames = new Set();
+const integrationSelectedNames = [];
+let integrationLegacyCount = 0;
+function test(name, ...args) {
+  if (integrationRegisteredNames.has(name)) throw new Error('Duplicate integration test: ' + name);
+  integrationRegisteredNames.add(name);
+  const partition = name.startsWith('D36 codex aggregate ') ? 1
+    : name.startsWith('D36 claude aggregate ') ? 2
+      : name.startsWith('D36 codex ') ? 3
+        : name.startsWith('D36 claude ') ? 4 : 3 + integrationLegacyCount++ % 2;
+  if (integrationSelection.partition !== null && integrationSelection.partition !== partition) return;
+  integrationSelectedNames.push(name);
+  if (!integrationSelection.list) return registerIntegrationTest(name, ...args);
+}
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -552,7 +578,7 @@ if (args[1] === 'list' && args.includes('--head')) {
 } else process.exit(2);
 `, { mode: 0o755 });
   process.env.PATH = bin + path.delimiter + process.env.PATH;
-  const recorder = boundary.createDurableRecorder(path.join(f.root, nativeRuntime + '-public-receipts'));
+  let recorder = boundary.createDurableRecorder(path.join(f.root, nativeRuntime + '-public-receipts'));
   let options;
   if (nativeRuntime === 'codex') {
     const { codexPartitionFixture } = partitionFixtureFunctions('codex-delivery-host.test.cjs', ['codexPartitionFixture']);
@@ -569,15 +595,24 @@ if (args[1] === 'list' && args.includes('--head')) {
     options = { ...projectOptions(f), storageRoot: original.storageRoot,
       integrationCapacity: claudePartitionCapacity(original, controls),
       createRuntimeHost: fakeRuntimeFactory(original, { originalStream: true,
+        observedTelemetry: controls.observed === true,
+        mutateObservation: (rows, stream, final) => controls.observation?.(rows, stream, final),
         onLaunch(input) {
           const payload = JSON.parse(input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
           (controls.launches ||= []).push({ input, payload });
           controls.onLaunch?.(input, payload);
         }, mutateResult: (result, payload) => controls.result?.(result, payload) }) };
+    const createRuntimeHost = options.createRuntimeHost;
+    options.createRuntimeHost = input => {
+      const host = createRuntimeHost(input);
+      recorder = host.recorder;
+      return host;
+    };
     options.integrationCapacity.recorder = recorder;
   }
   options.integrationCapacity.capacity.unit_input_bytes = 128 * 1024;
-  return { options, recorder, controls };
+  if (controls.observed) delete options.integrationCapacity;
+  return { options, get recorder() { return recorder; }, controls };
 }
 
 async function publicIntegrationFixture(action) {
@@ -1116,3 +1151,500 @@ test('complete focused architecture success cannot supply missing current integr
     }
   });
 });
+
+function d36NativeMutation(runtimeName, mutate) {
+  return runtimeName === 'codex' ? { native(rows) { mutate(rows, null, null); } }
+    : { observation(rows, stream, final) { mutate(rows, stream, final); } };
+}
+
+function d36Telemetry(runtimeName, rows, stream) {
+  return runtimeName === 'codex' ? rows.find(row => row.type === 'event_msg' && row.payload?.type === 'token_count').payload.info
+    : (stream || rows).find(row => row.type === 'assistant').message.usage;
+}
+
+for (const nativeRuntime of ['codex', 'claude']) {
+  test('D36 ' + nativeRuntime + ' positive observed caller authenticates complete originals and cold current authority', async () => {
+    await publicIntegrationFixture(async f => {
+      write(f.worktree, 'src/unchanged.cjs', 'exports.primary = "complete source continuation Ω";\n'.repeat(6500));
+      commit(f, 'observed complete source inventory');
+      const prepared = publicPartitionFixture(f, nativeRuntime, { observed: true });
+      assert.equal(Object.hasOwn(prepared.options, 'integrationCapacity'), false);
+      prepared.controls.onLaunch = (_input, payload) => {
+        assert.equal(currentPartitionConsumer(f), null);
+        if (payload.kind === 'unit') {
+          assert.ok(payload.assignment.primary_segments.length <= 3);
+          assert.ok(payload.assignment.primary_segments.every(part => part.end_byte - part.start_byte <= 65536));
+          assert.ok(Buffer.byteLength(_input) <= 2097152);
+        } else {
+          assert.ok(payload.obligations.length > 0);
+          assert.equal(payload.assignments.length, payload.unit_artifacts.length);
+          assert.ok(Buffer.byteLength(_input) <= 4194304);
+        }
+      };
+      const result = await supportedPartitionCaller(f, nativeRuntime, prepared.options);
+      assert.equal(result.result.outcome, 'passed');
+      const sessions = originalPartitionSessions(f, nativeRuntime, prepared.recorder, prepared.controls);
+      assert.ok(sessions.filter(item => item.result.kind === 'unit').length > 1);
+      assert.equal(sessions.filter(item => item.result.kind === 'phase').length, 1);
+      const current = currentPartitionConsumer(f);
+      assert.equal(current?.authenticated, true);
+      const protectedDirectory = authority.archiveAuthorityDirectory(f.worktree);
+      for (const name of fs.readdirSync(protectedDirectory).filter(name => /^integration-(?:plan|observation|capacity)-/.test(name))) {
+        const file = path.join(protectedDirectory, name), saved = fs.readFileSync(file);
+        try {
+          const envelope = JSON.parse(saved);
+          if (name.startsWith('integration-plan-')) envelope.payload.plan.capacity.unit_input_bytes++;
+          else if (name.startsWith('integration-observation-')) delete envelope.payload.samples;
+          else envelope.payload.schema = 'shipyard.integration-partition-capacity.v1';
+          fs.writeFileSync(file, JSON.stringify(envelope), { mode: 0o600 });
+          assert.equal(currentPartitionConsumer(f), null, 'protected mode/budget/observation swaps refuse');
+        } finally { fs.writeFileSync(file, saved, { mode: 0o600 }); }
+      }
+      const modulePath = require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+      delete require.cache[modulePath];
+      authority = require(modulePath);
+      assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
+      for (const session of [sessions.find(item => item.result.kind === 'unit'), sessions.find(item => item.result.kind === 'phase')]) {
+        const saved = fs.readFileSync(session.pin.path);
+        try {
+          const rows = saved.toString('utf8').trim().split('\n').map(JSON.parse);
+          if (nativeRuntime === 'codex') rows.find(row => row.payload?.type === 'token_count').payload.info.model_context_window = 0;
+          else delete rows.find(row => row.type === 'assistant').message.usage;
+          fs.writeFileSync(session.pin.path, serialize(rows));
+          delete require.cache[modulePath]; authority = require(modulePath);
+          assert.equal(currentPartitionConsumer(f), null, 'changed original telemetry refuses cold current authority');
+        } finally { fs.writeFileSync(session.pin.path, saved); }
+        assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
+      }
+    });
+  });
+
+  test('D36 ' + nativeRuntime + ' positive cumulative accounting above a window preserves fitting per-request samples', async () => {
+    await publicIntegrationFixture(async f => {
+      const controls = { observed: true, ...d36NativeMutation(nativeRuntime, (rows, stream, final) => {
+        if (nativeRuntime === 'codex') {
+          const info = d36Telemetry(nativeRuntime, rows);
+          info.last_token_usage = { input_tokens: 900, cached_input_tokens: 850, output_tokens: 100, reasoning_output_tokens: 80, total_tokens: 1000 };
+          info.model_context_window = 1100;
+          info.total_token_usage = { input_tokens: 900000, cached_input_tokens: 850000, output_tokens: 100000, reasoning_output_tokens: 80000, total_tokens: 1000000 };
+          const update = structuredClone(rows.find(row => row.payload?.type === 'token_count'));
+          rows.splice(rows.indexOf(rows.find(row => row.payload?.phase === 'final_answer')), 0, update);
+        } else {
+          const assistant = rows.find(row => row.type === 'assistant');
+          assistant.message.usage = { input_tokens: 100, cache_read_input_tokens: 700, cache_creation_input_tokens: 100, output_tokens: 100 };
+          const earlier = structuredClone(assistant); earlier.message.stop_reason = null; earlier.message.usage.output_tokens = 1;
+          rows.splice(1, 0, earlier);
+          stream.splice(1, stream.length - 2, ...rows.filter(row => row.type === 'assistant').map(row => structuredClone(row)));
+          Object.values(final.modelUsage)[0].contextWindow = 1100;
+          Object.values(final.modelUsage)[0].inputTokens = 999999;
+          final.usage.input_tokens = 999999;
+        }
+      }) };
+      const prepared = publicPartitionFixture(f, nativeRuntime, controls);
+      const result = await supportedPartitionCaller(f, nativeRuntime, prepared.options);
+      assert.equal(result.result.outcome, 'passed');
+      assert.equal(currentPartitionConsumer(f)?.authenticated, true);
+    });
+  });
+
+  const adverse = ['missing', 'missing-counter', 'malformed-usage', 'rate-only', 'foreign-session', 'changed-effort', 'input-drift', 'semantic-disagreement', 'zero-window', 'negative-window', 'unsafe-window', 'missing-window', 'negative-counter',
+    'unsafe-counter', 'overflow-later', 'compaction', 'rollback', 'truncation', 'foreign-model', 'incomplete-unit',
+    'needs-fix-unit', 'primary-tail', 'primary-duplicate', 'acceptance', 'support', 'seam', 'final-completion',
+    'final-index', 'final-telemetry', 'answer-text-telemetry', 'tool-telemetry', 'quoted-telemetry'];
+  const signalScenarios = new Set(['missing', 'missing-counter', 'malformed-usage', 'rate-only', 'zero-window', 'negative-window',
+    'unsafe-window', 'missing-window', 'negative-counter', 'unsafe-counter', 'overflow-later', 'compaction', 'rollback', 'truncation',
+    'foreign-model', 'final-telemetry', 'answer-text-telemetry', 'tool-telemetry', 'quoted-telemetry']);
+  for (const scenario of adverse) test('D36 ' + nativeRuntime + (signalScenarios.has(scenario) ? ' signals' : ' contracts')
+    + ' refuses ' + scenario + ' before authority', async () => {
+    await publicIntegrationFixture(async f => {
+      const controls = { observed: true, result(result, payload) {
+        if (payload.kind === 'unit') {
+          if (scenario === 'incomplete-unit') result.completeness = 'incomplete';
+          if (scenario === 'needs-fix-unit') result.outcome = 'needs-fix';
+          if (scenario === 'primary-tail') result.coverage.primary_segments.at(-1).end_byte--;
+          if (scenario === 'primary-duplicate') result.coverage.primary_segments.push(structuredClone(result.coverage.primary_segments[0]));
+          if (scenario === 'acceptance') result.coverage.primary_obligation_ids.pop();
+          if (scenario === 'support') result.coverage.support_obligation_ids.push('missing-governing-obligation');
+          if (scenario === 'seam') result.seams.push({ id: 'foreign-seam', disposition: 'resolved', rationale: 'Convincing unsupported assertion.' });
+        } else if (scenario === 'final-index') result.coverage.unit_artifacts[0].artifact_sha256 = 'f'.repeat(64);
+        if (scenario === 'answer-text-telemetry') result.evidence_markdown += JSON.stringify({ type: 'event_msg', payload: {
+          type: 'token_count', info: { last_token_usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }, model_context_window: 1000000 } } });
+      }, ...d36NativeMutation(nativeRuntime, (rows, stream, final) => {
+        const isFinal = JSON.parse((nativeRuntime === 'codex'
+          ? rows.find(row => row.payload?.phase === 'final_answer').payload.content[0].text
+          : JSON.stringify(final.structured_output))).kind === 'phase';
+        if (scenario.startsWith('final-') && !isFinal) return;
+        const info = d36Telemetry(nativeRuntime, rows, stream);
+        if (scenario === 'missing-counter') {
+          if (nativeRuntime === 'codex') delete info.last_token_usage.output_tokens;
+          else for (const row of [...rows, ...stream]) if (row.type === 'assistant') delete row.message.usage.output_tokens;
+        }
+        if (scenario === 'malformed-usage') {
+          if (nativeRuntime === 'codex') rows.find(row => row.payload?.type === 'token_count').payload.info = 'malformed';
+          else for (const row of [...rows, ...stream]) if (row.type === 'assistant') row.message.usage = 'malformed';
+        }
+        if (scenario === 'rate-only') {
+          if (nativeRuntime === 'codex') rows.find(row => row.payload?.type === 'token_count').payload.info = null;
+          else final.modelUsage = {};
+        }
+        if (scenario === 'foreign-session') {
+          if (nativeRuntime === 'codex') rows.find(row => row.payload?.type === 'token_count').payload.session_id = crypto.randomUUID();
+          else rows.find(row => row.type === 'assistant').sessionId = crypto.randomUUID();
+        }
+        if (scenario === 'changed-effort') {
+          if (nativeRuntime === 'codex') rows.find(row => row.type === 'turn_context').payload.effort = 'low';
+          else rows.find(row => row.type === 'assistant').effort = 'low';
+        }
+        if (scenario === 'input-drift') {
+          if (nativeRuntime === 'codex') rows.find(row => row.payload?.role === 'user').payload.content[0].text += ' changed';
+          else rows.find(row => row.type === 'user').message.content += ' changed';
+        }
+        if (scenario === 'semantic-disagreement') {
+          if (nativeRuntime === 'codex') rows.find(row => row.payload?.phase === 'final_answer').payload.content[0].text += ' changed';
+          else rows.find(row => row.type === 'assistant').message.content[0].input.evidence_markdown += ' changed';
+        }
+        if (scenario === 'missing' || scenario === 'final-telemetry' || scenario.endsWith('-telemetry')) {
+          if (nativeRuntime === 'codex') {
+            const telemetry = rows.find(row => row.payload?.type === 'token_count');
+            if (scenario === 'tool-telemetry') {
+              const tool = template(parent, row => row.payload?.type === 'function_call_output');
+              tool.payload.output = JSON.stringify(telemetry);
+              rows.splice(rows.indexOf(telemetry), 0, tool);
+            }
+            if (scenario === 'quoted-telemetry') {
+              const quoted = structuredClone(rows.find(row => row.payload?.role === 'assistant'));
+              quoted.payload.phase = 'commentary';
+              quoted.payload.content[0].text = JSON.stringify(telemetry);
+              rows.splice(rows.indexOf(telemetry), 0, quoted);
+            }
+            rows.splice(rows.indexOf(telemetry), 1);
+          } else {
+            if (scenario === 'tool-telemetry' || scenario === 'quoted-telemetry') {
+              const telemetry = structuredClone(rows.find(row => row.type === 'assistant'));
+              rows.push({ type: 'user', sessionId: telemetry.sessionId, message: { role: 'user', content: [
+                { type: 'tool_result', content: JSON.stringify(telemetry) }] } });
+            }
+            for (const row of [...rows, ...stream]) if (row.type === 'assistant') delete row.message.usage;
+          }
+        }
+        const windowKey = nativeRuntime === 'codex' ? 'model_context_window' : 'contextWindow';
+        const window = nativeRuntime === 'codex' ? info : Object.values(final.modelUsage)[0];
+        if (scenario === 'zero-window') window[windowKey] = 0;
+        if (scenario === 'negative-window') window[windowKey] = -1;
+        if (scenario === 'unsafe-window') window[windowKey] = Number.MAX_SAFE_INTEGER + 1;
+        if (scenario === 'missing-window') delete window[windowKey];
+        if (scenario === 'negative-counter' || scenario === 'unsafe-counter') {
+          if (nativeRuntime === 'codex') info.last_token_usage.input_tokens = scenario === 'negative-counter' ? -1 : Number.MAX_SAFE_INTEGER + 1;
+          else for (const row of [...rows, ...stream]) if (row.type === 'assistant') row.message.usage.input_tokens = scenario === 'negative-counter' ? -1 : Number.MAX_SAFE_INTEGER + 1;
+        }
+        if (scenario === 'overflow-later') {
+          if (nativeRuntime === 'codex') {
+            const later = structuredClone(rows.find(row => row.payload?.type === 'token_count'));
+            later.payload.info.model_context_window = 1;
+            later.payload.info.total_token_usage.total_tokens++;
+            rows.splice(rows.length - 2, 0, later);
+          } else {
+            const later = structuredClone(rows.find(row => row.type === 'assistant'));
+            later.message.id += '-later'; later.message.usage.input_tokens = Object.values(final.modelUsage)[0].contextWindow;
+            rows.push(later); stream.splice(stream.length - 1, 0, structuredClone(later));
+          }
+        }
+        if (scenario === 'compaction' || scenario === 'rollback') {
+          const event = nativeRuntime === 'codex'
+            ? { type: 'event_msg', payload: { type: scenario === 'compaction' ? 'context_compacted' : 'thread_rolled_back' } }
+            : { type: 'system', subtype: 'compact_boundary' };
+          rows.splice(1, 0, event);
+        }
+        if (scenario === 'truncation') {
+          if (nativeRuntime === 'codex') rows.splice(1, 0, { type: 'event_msg', payload: { type: 'output_truncated' } });
+          else for (const row of [...rows, ...stream]) if (row.type === 'assistant') row.message.stop_reason = 'max_tokens';
+        }
+        if (scenario === 'foreign-model') {
+          if (nativeRuntime === 'codex') rows.find(row => row.type === 'turn_context').payload.model = 'foreign-model';
+          else final.modelUsage = { 'foreign-model': Object.values(final.modelUsage)[0] };
+        }
+        if (scenario === 'final-completion') {
+          if (nativeRuntime === 'codex') rows.splice(rows.findIndex(row => row.payload?.type === 'task_complete'), 1);
+          else final.subtype = 'error_max_turns';
+        }
+      }) };
+      const prepared = publicPartitionFixture(f, nativeRuntime, controls);
+      await assert.rejects(supportedPartitionCaller(f, nativeRuntime, prepared.options));
+      assert.ok(controls.launches.length > 0, 'refusal follows an ordinary original native attempt');
+      assert.equal(currentPartitionConsumer(f), null);
+      if (scenario.startsWith('final-')) assert.ok(partitionManifests(f).some(manifest => manifest.artifact_kind === 'integration-unit'));
+    });
+  });
+}
+
+function codexIngressGeometry(f) {
+  const governing = 'Required complete plan context: every assigned range preserves this material.\n'.repeat(2250);
+  for (const row of Object.values(f.rows))
+    fs.appendFileSync(path.join(f.worktree, row.plan), '\n## Required governing context\n' + governing);
+  for (const id of ['015', '016', '017', '018']) {
+    const relative = '.planning/architecture/ADR-' + id + '-governing.md';
+    write(f.worktree, relative, '# ADR-' + id + '\n' + governing);
+    fs.appendFileSync(path.join(f.worktree, f.rows['T-49-01'].plan), '\n' + relative + '\n');
+  }
+  write(f.worktree, 'src/unchanged.cjs', 'exports.context = "complete primary ASCII";\n'.repeat(7000));
+  commit(f, 'actual ASCII Codex ingress geometry');
+}
+
+async function withCodexIngressHost(intercept, action) {
+  const runtimePath = require.resolve('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const deliveryPath = require.resolve('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const authorityPath = require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const evidenceHostPath = require.resolve('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  const originalRuntime = require.cache[runtimePath].exports, originalDelivery = require.cache[deliveryPath];
+  const originalAuthority = require.cache[authorityPath], originalReader = authority;
+  const originalEvidenceHost = require.cache[evidenceHostPath];
+  try {
+    require.cache[runtimePath].exports = { ...originalRuntime,
+      createCodexRuntimeHost: options => intercept(options, originalRuntime.createCodexRuntimeHost) };
+    delete require.cache[evidenceHostPath];
+    require(evidenceHostPath);
+    delete require.cache[deliveryPath];
+    require(deliveryPath);
+    require.cache[runtimePath].exports = originalRuntime;
+    await action();
+  } finally {
+    require.cache[runtimePath].exports = originalRuntime;
+    require.cache[deliveryPath] = originalDelivery;
+    require.cache[evidenceHostPath] = originalEvidenceHost;
+    require.cache[authorityPath] = originalAuthority;
+    authority = originalReader;
+  }
+}
+
+test('D36 codex ingress actual ASCII unit and fresh final retain original producer across cold readers', async () => {
+  await publicIntegrationFixture(async f => {
+    codexIngressGeometry(f);
+    const prepared = publicPartitionFixture(f, 'codex', { observed: true });
+    const producerPath = require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    let resources = 0;
+    await withCodexIngressHost((options, createHost) => {
+      if (options.integrationIngress) {
+        const authorize = options.integrationIngress;
+        options = { ...options, integrationIngress(input) { resources++; return authorize(input); } };
+        delete require.cache[producerPath];
+        authority = require(producerPath);
+      }
+      return createHost(options);
+    }, async () => {
+      prepared.controls.onLaunch = (input, payload) => {
+        const prefix = runtime.generatedInstructions(f.agents.integrator.text) + '\n\n';
+        const base = input.slice(prefix.length);
+        assert.ok(base.length > 1048576, 'stripped actual ASCII input exceeds the legacy character guard');
+        assert.equal(input, prefix + base);
+        assert.ok(Buffer.byteLength(input) <= (payload.kind === 'unit' ? 2097152 : 4194304));
+        assert.equal(currentPartitionConsumer(f), null);
+        if (payload.kind !== 'unit') return;
+        assert.ok(payload.assignment.primary_segments.length <= 3);
+        for (const relative of [ ...Object.values(f.rows).map(row => row.plan),
+          ...['015', '016', '017', '018'].map(id => '.planning/architecture/ADR-' + id + '-governing.md') ]) {
+          const segments = [...payload.primary_segments, ...payload.support_segments].filter(segment =>
+            segment.aliases.some(alias => alias.path === relative)).sort((a, b) => a.start_byte - b.start_byte);
+          const complete = segments.map(segment => segment.content).join('');
+          assert.equal(complete, fs.readFileSync(path.join(f.worktree, relative), 'utf8'));
+          assert.ok(/^[\x00-\x7f]*$/.test(complete), 'complete governing references stay ASCII');
+          assert.equal(complete.split('Required complete plan context: every assigned range preserves this material.\n').length - 1, 2250);
+        }
+      };
+      const result = await supportedPartitionCaller(f, 'codex', prepared.options);
+      assert.equal(result.result.outcome, 'passed');
+      const sessions = originalPartitionSessions(f, 'codex', prepared.recorder, prepared.controls);
+      assert.equal(resources, sessions.length, 'only oversized actual native stages consult the resource');
+      assert.ok(sessions.filter(item => item.result.kind === 'unit').length > 1);
+      assert.equal(sessions.filter(item => item.result.kind === 'phase').length, 1);
+      assert.equal(currentPartitionConsumer(f)?.authenticated, true);
+      assert.ok(result.operational_diagnostic.actual_final_input_bytes <= 4194304);
+    });
+  });
+});
+
+test('D36 codex ingress actual public stage rejects changed or unowned oversized launches before any process', async () => {
+  await publicIntegrationFixture(async f => {
+    codexIngressGeometry(f);
+    const prepared = publicPartitionFixture(f, 'codex', { observed: true });
+    const foreignWorktree = path.join(f.root, 'foreign-worktree');
+    fs.mkdirSync(foreignWorktree);
+    let processes = 0, checked = false;
+    const stop = new Error('ingress negative controls complete');
+    const spawn = prepared.options.spawn;
+    prepared.options.spawn = (...args) => { processes++; return spawn(...args); };
+    await withCodexIngressHost((options, createHost) => {
+      const host = createHost(options);
+      if (!options.integrationIngress) return host;
+      return { ...host, async launchStatic(selection, context) {
+        assert.equal(checked, false);
+        checked = true;
+        const deny = async (name, creator = {}, handoff = {}, input = {}) => {
+          const candidate = createHost({ ...options, controller: undefined, ...creator });
+          await assert.rejects(candidate.launchStatic({ ...selection, ...handoff }, { ...context, ...input }),
+            error => ['INVALID_INPUT', 'RUNTIME_UNAVAILABLE', 'INTEGRATION_CAPACITY_UNPROVEN', 'INTEGRATION_PARTITION_INVALID',
+              'ARCHIVE_AUTHORITY_INVALID', 'STALE_GENERATED_AGENT', 'RUNTIME_CAPABILITY_MISSING'].includes(error.code), name);
+          assert.equal(processes, 0, name + ' must launch zero processes');
+        };
+        await deny('missing private resource', { integrationIngress: undefined });
+        await deny('JSON copied resource', { integrationIngress: JSON.parse(JSON.stringify({ mode: 'native-observed', input_byte_ceiling: 4194304 })) });
+        for (const contract of ['shipyard.integration-review.v1', 'shipyard.integration-review.v2', 'shipyard.integration-review.v3'])
+          await deny('serialized flags ' + contract, { integrationIngress: undefined }, {}, {
+            review_contract: contract, mode: 'native-observed', input_byte_ceiling: 4194304, integrationIngress: true });
+        for (const [key, value] of [['ticket', 'foreign-phase-subject'], ['phase', 50], ['worktree', foreignWorktree], ['run_id', 'foreign-run'], ['repository', 'foreign-repository']])
+          await deny('changed scope ' + key, { scope: { ...options.scope, [key]: value } });
+        await deny('changed dispatch', {}, {}, { dispatch_id: context.dispatch_id + '-foreign' });
+        await deny('changed complete input', {}, {}, { prompt: context.prompt + 'changed' });
+        await deny('wrong static role', {}, { agent_file: 'shipyard-research.toml' });
+        await deny('missing static handoff', {}, { agent_file: undefined, agent_file_content: undefined, agent_file_digest: undefined });
+        const changed = selection.agent_file_content.replace('Read', 'Changed');
+        assert.notEqual(changed, selection.agent_file_content);
+        await deny('changed pinned instructions', {}, { agent_file_content: changed, agent_file_digest: hash(changed) });
+        await deny('changed sandbox', {}, { sandbox_mode: 'workspace-write' });
+        await deny('changed model', {}, { model: 'unselected-model' });
+        await deny('changed effort', {}, { reasoning_effort: selection.reasoning_effort === 'low' ? 'high' : 'low' });
+        for (const bound of [undefined, NaN, Infinity, 8388608, -1])
+          await deny('malformed resource bound ' + bound, { integrationIngress: () => bound });
+        let consulted = 0;
+        await deny('finite complete UTF8 ceiling', { integrationIngress() { consulted++; return Infinity; } }, {},
+          { prompt: 'x'.repeat(4194305) });
+        await deny('finite multibyte complete UTF8 ceiling', { integrationIngress() { consulted++; return 4194304; } }, {},
+          { prompt: '\u20ac'.repeat(1500000) });
+        assert.equal(consulted, 0, 'absolute ceiling precedes even a malformed host resource');
+        await deny('independent unit UTF8 ceiling', { integrationIngress: () => 2097152 }, {},
+          { prompt: 'x'.repeat(2097153) });
+        const directory = authority.archiveAuthorityDirectory(f.worktree);
+        const launch = fs.readdirSync(directory).filter(name => name.startsWith('integration-launch-'))
+          .map(name => JSON.parse(fs.readFileSync(path.join(directory, name))).payload)
+          .find(value => value.dispatch_id === context.dispatch_id);
+        assert.ok(launch);
+        for (const stage of [launch, { ...launch, mode: 'strict' }, { ...launch, kind: 'phase' }]) {
+          assert.throws(() => authority.createCodexIntegrationIngress({ prepared: stage, host: {}, scope: options.scope }), /private/);
+          await deny('nonprivate copied stage', { integrationIngress: request =>
+            authority.createCodexIntegrationIngress({ prepared: stage, host: {}, scope: options.scope })(request) });
+        }
+        const admissionPath = path.join(directory, 'integration-capacity-' + hash(require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify(launch)) + '.json');
+        const saved = fs.readFileSync(admissionPath);
+        try {
+          fs.unlinkSync(admissionPath);
+          await deny('missing local protected admission');
+          const envelope = JSON.parse(saved); envelope.payload.profile_sha256 = '0'.repeat(64);
+          fs.writeFileSync(admissionPath, JSON.stringify(envelope), { mode: 0o600 });
+          await deny('changed local protected admission');
+        } finally { fs.writeFileSync(admissionPath, saved, { mode: 0o600 }); }
+        assert.equal(currentPartitionConsumer(f), null);
+        let ordinarySpawns = 0, ordinaryResourceCalls = 0;
+        const ordinary = createHost({ ...options, controller: undefined,
+          integrationIngress() { ordinaryResourceCalls++; throw new Error('ordinary resource must stay lazy'); },
+          spawn() { ordinarySpawns++; throw new Error('ordinary input reached controlled spawn'); } });
+        await assert.rejects(ordinary.launchStatic(selection, { ...context, prompt: 'Complete ordinary static review.' }),
+          error => error.code === 'RUNTIME_UNAVAILABLE' && /ordinary input reached controlled spawn/.test(error.message));
+        assert.equal(ordinarySpawns, 1);
+        assert.equal(ordinaryResourceCalls, 0);
+        throw stop;
+      } };
+    }, async () => {
+      await assert.rejects(supportedPartitionCaller(f, 'codex', prepared.options), error => error === stop);
+    });
+    assert.equal(checked, true);
+    assert.equal(processes, 0);
+  });
+});
+
+test('D36 codex ingress supplied strict public caller retains the legacy static prompt guard', async () => {
+  await publicIntegrationFixture(async f => {
+    codexIngressGeometry(f);
+    const prepared = publicPartitionFixture(f, 'codex');
+    prepared.options.integrationCapacity.capacity.unit_input_bytes = 2097152;
+    let processes = 0, stages = 0;
+    prepared.options.spawn = () => { processes++; throw new Error('strict oversized launch must not spawn'); };
+    await withCodexIngressHost((options, createHost) => {
+      const host = createHost(options);
+      if (!options.scope.run_id.startsWith('integration-')) return host;
+      assert.equal(options.integrationIngress, undefined);
+      return { ...host, launchStatic(selection, context) {
+        stages++;
+        assert.ok(context.prompt.trim().length > 1048576);
+        return host.launchStatic(selection, context);
+      } };
+    }, async () => {
+      await assert.rejects(supportedPartitionCaller(f, 'codex', prepared.options),
+        error => error.code === 'RUNTIME_UNAVAILABLE' && /Codex process input failed:.*prompt exceeds 1048576 characters/.test(error.message));
+    });
+    assert.equal(stages, 1);
+    assert.equal(processes, 0);
+    assert.equal(currentPartitionConsumer(f), null);
+  });
+});
+
+for (const nativeRuntime of ['codex', 'claude'])
+test('D36 ' + nativeRuntime + ' geometry phase-shaped complete governing floor fits with at most three primary segments', async () => {
+  await publicIntegrationFixture(async f => {
+    const governing = 'Required complete plan context: every assigned range preserves this material.\n'.repeat(2250);
+    for (const row of Object.values(f.rows))
+      fs.appendFileSync(path.join(f.worktree, row.plan), '\n## Required governing context\n' + governing);
+    for (const id of ['015', '016', '017', '018']) {
+      const relative = '.planning/architecture/ADR-' + id + '-governing.md';
+      write(f.worktree, relative, '# ADR-' + id + '\n' + governing);
+      fs.appendFileSync(path.join(f.worktree, f.rows['T-49-01'].plan), '\n' + relative + '\n');
+    }
+    write(f.worktree, 'src/unchanged.cjs', 'exports.context = "complete primary Ω";\n'.repeat(7000));
+    commit(f, 'phase-shaped governing and primary geometry');
+    const prepared = publicPartitionFixture(f, nativeRuntime, { observed: true });
+    prepared.controls.onLaunch = (input, payload) => {
+      if (payload.kind !== 'unit') return;
+      assert.ok(payload.assignment.primary_segments.length <= 3);
+      const union = [...payload.primary_segments, ...payload.support_segments].filter(segment =>
+        segment.aliases.some(alias => alias.path === f.rows['T-49-01'].plan)).sort((a, b) => a.start_byte - b.start_byte);
+      assert.equal(union.map(segment => segment.content).join(''), fs.readFileSync(path.join(f.worktree, f.rows['T-49-01'].plan), 'utf8'));
+      assert.ok(Buffer.byteLength(input) > 965386);
+      assert.ok(Buffer.byteLength(input) <= 2097152);
+    };
+    const result = await supportedPartitionCaller(f, nativeRuntime, prepared.options);
+    assert.equal(result.result.outcome, 'passed');
+    const diagnostic = result.operational_diagnostic || result.context.operational_diagnostic;
+    assert.equal(diagnostic.authoritative, false);
+    assert.ok(diagnostic.units.every(unit => unit.primary_bytes <= 196608 && unit.complete_input_bytes <= 2097152));
+    assert.equal(diagnostic.unit_count, diagnostic.units.length);
+    assert.ok(diagnostic.actual_final_input_bytes <= 4194304);
+    const allMaximaTemplateBytes = diagnostic.unit_count * 6 * (8192 + 4096 + 98304);
+    assert.ok(allMaximaTemplateBytes > 4194304, 'strict hypothetical reservation would refuse before this fitting actual final');
+    assert.equal(currentPartitionConsumer(f)?.authenticated, true);
+  });
+});
+
+for (const nativeRuntime of ['codex', 'claude'])
+test('D36 ' + nativeRuntime + ' aggregate refuses the complete actual final over bound and preserves accepted originals', async () => {
+  await publicIntegrationFixture(async f => {
+    for (let index = 0; index < 120; index++)
+      write(f.worktree, 'src/complete-unit-' + String(index).padStart(3, '0') + '.cjs',
+        'exports.value = "complete original source ' + index + '";\n');
+    commit(f, 'actual aggregate bound requires complete unit conclusions');
+    const prepared = publicPartitionFixture(f, nativeRuntime, { observed: true, result(result, payload) {
+      assert.equal(payload.kind, 'unit', 'oversized actual final must never dispatch');
+      result.conclusions = ['c'.repeat(16370)];
+      result.limitations = ['l'.repeat(8180)];
+      result.findings = [{ id: 'N1', type: 'note', blocking: false, evidence: 'Complete assigned source.', summary: 'f'.repeat(32500) }];
+      if (result.seams.length) {
+        const current = Buffer.byteLength(JSON.stringify(result.seams));
+        result.seams[0].rationale += 's'.repeat(Math.max(0, 32750 - current));
+      }
+    } });
+    await assert.rejects(supportedPartitionCaller(f, nativeRuntime, prepared.options), error =>
+      error.code === 'INTEGRATION_INPUT_OVER_BOUND' && /actual complete phase.*HOLD/.test(error.message));
+    assert.ok(prepared.controls.launches.length > 40);
+    assert.ok(prepared.controls.launches.every(launch => launch.payload.kind === 'unit'));
+    const manifests = partitionManifests(f);
+    assert.equal(manifests.length, prepared.controls.launches.length);
+    assert.ok(manifests.every(manifest => manifest.artifact_kind === 'integration-unit'));
+    assert.equal(currentPartitionConsumer(f), null);
+    for (const manifest of manifests) {
+      const original = JSON.parse(fs.readFileSync(path.join(f.worktree, manifest.files.findings.path)));
+      assert.equal(original.conclusions[0].length, 16370);
+      assert.equal(original.findings[0].summary.length, 32500);
+      assert.equal(original.limitations[0].length, 8180);
+    }
+  });
+});
+
+if (require.main === module && integrationSelection.list)
+  process.stdout.write(JSON.stringify(integrationSelectedNames) + '\n');

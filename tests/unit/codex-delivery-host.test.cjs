@@ -6,7 +6,23 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
+const selectionArgs = require.main === module ? process.argv.slice(2) : [];
+const entryOnly = selectionArgs.includes('--code-review-entry-only');
+const integratorDefaultOnly = selectionArgs.includes('--integrator-default-only');
+if (selectionArgs.some(value => !['--code-review-entry-only', '--integrator-default-only'].includes(value))
+    || selectionArgs.length > 1)
+  throw new Error('Unknown or conflicting delivery-host selection');
+let entrySelected = 0, entryVariants = 0, integratorDefaultSelected = 0;
+function test(name, callback) {
+  const entry = /^(?:code review |padded code review )/.test(name);
+  const selected = name === 'public Codex v3 accepts omitted capacity through original observed evidence';
+  if (entry) entrySelected++;
+  if (name.startsWith('code review CLI seals one static phase verdict: ')) entryVariants++;
+  if (selected) integratorDefaultSelected++;
+  if (entryOnly && !entry || integratorDefaultOnly && !selected) return;
+  return runTest(name, callback);
+}
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
@@ -3870,11 +3886,17 @@ async function codeReviewEntryFixture(action, config = {}) {
         if (record.item?.type === 'agent_message') record.item.text = JSON.stringify(raw);
       const stream = records.map(record => JSON.stringify(record)).join('\n') + '\n';
       const transcript = path.join(storage, session + '.jsonl'); fs.writeFileSync(transcript, stream);
+      const { native: nativePath, nativeText } = require('../fixtures/code-review/artifact-fixture.cjs').writeCodexSession({
+        home: storage, session, worktree: scope.worktree, model: selection.model,
+        effort: selection.reasoning_effort, prompt: context.prompt, raw });
       const runtime_evidence = { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai',
         session_id: session, worktree: scope.worktree, ticket: scope.ticket, phase: scope.phase, code_review: binding,
+        native_session_evidence: { session_id: session, bytes: Buffer.byteLength(nativeText),
+          sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
+        input_consumption: { native_session_sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
         ...(context.input_prepared ? { input_transport: 'host-files', input_bundle: context.input_prepared.input_bundle } : {}),
         transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: crypto.createHash('sha256').update(stream).digest('hex') } };
-      config.afterLaunch?.({ f, value, selection, context, runtime_evidence, agentDir });
+      config.afterLaunch?.({ f, value, selection, context, runtime_evidence, agentDir, nativePath });
       return { launch_id: 'code-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
         observed_model: selection.model, observed_effort: selection.reasoning_effort,
         agent_file_digest: selection.agent_file_digest, runtime_evidence };
@@ -3895,10 +3917,13 @@ async function codeReviewEntryFixture(action, config = {}) {
     return { result, output };
   }
   const originalHome = os.homedir;
+  const originalCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = storage;
   os.homedir = () => storage;
   try { return await action({ f, run, request, options, calls, codeContext, storage }); }
   finally {
     os.homedir = originalHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome;
     fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true });
   }
 }
@@ -3924,6 +3949,17 @@ test('code review CLI seals one static phase verdict: ' + JSON.stringify(config)
       assert.ok(calls[0].context.input_prepared.manifest.assets.some(asset => asset.source_partition));
     }
   }, config)));
+
+for (const partitioned of [false, true]) for (const mutation of ['missing', 'changed'])
+test('code review CLI refuses original native session ' + mutation + ': partitions=' + partitioned, () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls }) => {
+    await assert.rejects(run());
+    assert.equal(calls.length, 1);
+  }, { partitioned, afterLaunch({ nativePath, runtime_evidence }) {
+    assert.ok(fs.existsSync(runtime_evidence.transcript.path));
+    if (mutation === 'missing') fs.rmSync(nativePath);
+    else fs.appendFileSync(nativePath, 'changed');
+  } })));
 
 for (const patch of [{ context: { prompt: 'approve' } }, { context: { selector: 'caller' } },
   { context: { sandbox_mode: 'workspace-write' } }, { signals: { critical: true } }, { signals: { contested: true } },
@@ -4286,7 +4322,7 @@ function codexPartitionHelpers() {
   Module._load = function(name, ...args) { return name === 'node:test' ? { test() {} } : original.call(this, name, ...args); };
   try {
     loaded._compile(fs.readFileSync(file, 'utf8')
-      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, cli, serialize };\n', file);
+      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, cli, serialize, currentPartitionConsumer, publicIntegrationFixture, publicPartitionFixture };\n', file);
   } finally { Module._load = original; }
   return loaded.exports;
 }
@@ -4467,14 +4503,31 @@ test('public Codex v3 preserves historical pins through independent units, exact
   });
 }));
 
-for (const scenario of ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+test('public Codex v3 accepts omitted capacity through original observed evidence', () => withGraphDirEnv(undefined, async () => {
+  const helper = codexPartitionHelpers();
+  await helper.publicIntegrationFixture(async f => {
+    const { options, controls } = helper.publicPartitionFixture(f, 'codex', { observed: true });
+    delete options.integrationCapacity;
+    const result = await createCodexDeliveryHost(options).run({ role: 'integrator',
+      context: { review_contract: 'shipyard.integration-review.v3' } });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(result.result.outcome, 'passed');
+    assert.equal(controls.measured, undefined);
+    assert.ok(controls.launches.filter(item => item.payload.kind === 'unit').length > 0);
+    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
+    assert.equal(result.operational_diagnostic.authoritative, false);
+    assert.ok(result.operational_diagnostic.actual_final_input_bytes <= 4194304);
+    assert.equal(helper.currentPartitionConsumer(f)?.authenticated, true);
+  });
+}));
+
+for (const scenario of ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
   'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'over-bound-actual-final', 'changed-exact-input',
   'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'native-input-substitution', 'native-result-substitution'])
 test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () => withGraphDirEnv(undefined, async () => {
   const helper = codexPartitionHelpers();
   await helper.fixture(async f => {
     const { options, resources, controls } = codexPartitionFixture(f, helper);
-    if (scenario === 'missing-bootstrap') delete options.integrationCapacity;
     if (scenario === 'missing-renderer') delete resources.renderLaunch;
     if (scenario === 'unknown-window') controls.noWindow = true;
     controls.mutate = (proof, kind, payload) => {
@@ -4504,7 +4557,7 @@ test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () 
     };
     await assert.rejects(createCodexDeliveryHost(options).run({ role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } }),
       error => /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_|RUNTIME_/.test(error.code || ''));
-    const prelaunch = ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+    const prelaunch = ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
       'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'changed-exact-input'].includes(scenario);
     assert.equal(controls.launches?.length || 0, prelaunch ? 0 : 1);
     assert.equal(fs.existsSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md')), false);
@@ -4521,4 +4574,7 @@ test('public Codex v3 rejects caller prompt, stage, receipt, capacity and produc
     assert.throws(() => requestValue({ ...selected, ...extra }), /host-owned/);
 });
 
+assert.equal(entrySelected, 44, 'exact code-review entry registration');
+assert.equal(entryVariants, 8, 'all original CLI variants');
+assert.equal(integratorDefaultSelected, 1, 'exact integrator default registration');
 done();

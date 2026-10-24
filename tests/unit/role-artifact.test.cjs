@@ -33,8 +33,22 @@ const targetOldPath = process.env.PATH;
 process.env.PATH = targetBin + path.delimiter + targetOldPath;
 process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
 const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
+const selectionArgs = require.main === module ? process.argv.slice(2) : [];
+const d37Only = selectionArgs.includes('--code-review-d37-only');
+const reuseOnly = selectionArgs.includes('--code-review-reuse-only');
+if (selectionArgs.some(value => !['--code-review-d37-only', '--code-review-reuse-only'].includes(value)) || selectionArgs.length > 1)
+  throw new Error('Unknown code-review D37 selection');
+let d37Selected = 0, reuseSelected = 0;
+const d37Case = name => [
+  'code-review lineage survives real fix-ticket membership changes and keeps reuse exact',
+  'sealed disagreements retain their original target through three rounds and twin ordinal shifts',
+  'code-review reuse refuses a moved base or reference contract and ticket-form subject',
+].includes(name) || name.startsWith('existing-format foreign native input retains original planning pins: ');
 let pendingCase = Promise.resolve();
 function test(name, callback) {
+  if (d37Case(name)) d37Selected++;
+  if (name === 'code-review reuse refuses a moved base or reference contract and ticket-form subject') reuseSelected++;
+  if (d37Only && !d37Case(name) || reuseOnly && name !== 'code-review reuse refuses a moved base or reference contract and ticket-form subject') return;
   runTest(name, () => {
     const current = pendingCase.then(callback);
     pendingCase = current.catch(() => {});
@@ -2422,44 +2436,7 @@ test('the Claude semantic transcript falls back through the shared Claude home',
 });
 
 function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
-  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-  const crypto = require('node:crypto');
-  const refs = input.result.ticket_set.map(item => item.row.plan);
-  for (const plan of refs) {
-    const absolute = path.join(planningRoot, plan);
-    fs.mkdirSync(path.dirname(absolute), { recursive: true });
-    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
-  }
-  const graphDir = path.join(planningRoot, '.planning/graph');
-  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
-    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
-      dispositions_digest: null,
-      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
-      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
-      exact_diff: { content: f.git(['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-        input.result.review_scope === 'delta' ? input.result.prior_head : f.base, 'HEAD',
-        ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()]) },
-      integration_base: { commit: f.base } } });
-  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
-    const session = 'original-' + r.dispatch_id;
-    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
-    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
-      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
-        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
-    fs.writeFileSync(transcript, content);
-    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
-      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
-      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
-      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
-        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
-        transcript: { path: transcript, bytes: Buffer.byteLength(content),
-          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
-  } } } });
-  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
-    { ticket: input.ticket, subject_kind: 'phase' });
-  return { ...input, dispatchId: dispatch.dispatch_id };
+  return require('../fixtures/code-review/artifact-fixture.cjs').retainPlanningInput(f, input, planningRoot, repo);
 }
 
 function withOriginalPlanning(f) {
@@ -2483,7 +2460,9 @@ for (const incomplete of [false, true]) test('legacy reordered code-review membe
   try {
     f.graph.tickets['T-52-01'].files = ['source.js', 'round.txt'];
     const binding = f.advance(1);
-    const input = f.input(binding);
+    const input = f.input(binding, 1, null, incomplete ? {
+      ...JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/code-review/review.json'))),
+      review_completeness: 'incomplete', limitations: ['Unread source remains'] } : undefined);
     input.result.ticket_set = reverseReviewKeys(binding.ticketSet);
     assert.deepEqual(input.result.ticket_set, binding.ticketSet);
     assert.notEqual(JSON.stringify(input.result.ticket_set), JSON.stringify(binding.ticketSet));
@@ -2676,6 +2655,7 @@ test('sealed disagreements retain their original target through three rounds and
         path: 'source.js', line_text: 'return null;', occurrence: 2,
         reason: 'The middle caller handles absence', recorded_by: 'operator',
       }] });
+      fs.writeFileSync(path.join(f.root, '.planning/phases', f.phase, 'code-review-disagreements.json'), file);
       const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
       let previous = first.result.head;
       for (const round of [2,3]) {
@@ -2692,14 +2672,17 @@ test('sealed disagreements retain their original target through three rounds and
         const priorFindings = core.carryPriorFindings({ priorFindings: prior, deltaDiff, disagreements, readSource });
         assert.deepEqual(priorFindings.filter(finding => finding.disagreement).map(finding => finding.line), [5]);
         const blank = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [] };
-        const result = core.normalizeResult({ ...blank,
+        const original = { ...blank,
           findings: round === 2 ? [{ ...raw.findings[0], line: 5, line_text: 'return null;' }] : [],
           dispositions: priorFindings.filter(finding => !finding.disagreement).map(finding => ({
             ref: finding.ref, disposition: 'unresolved', justification: 'The other caller still fails',
           })),
-        }, { round, scope: 'delta', priorFindings, readSource });
+        };
+        const result = core.normalizeResult(original, { round, scope: 'delta', priorFindings, readSource });
         const input = f.input(binding, round, previous, blank);
         input.result = { ...input.result, ...result };
+        require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(input, original, priorFindings);
+        retainPlanningInput(f, input);
         const sealed = roleArtifact.sealJudgment(input);
         const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
         const suppressed = validated.findings.findings.filter(finding => finding.suppressed);
@@ -2716,15 +2699,21 @@ test('sealed disagreements retain their original target through three rounds and
 
 test('code-review reuse refuses a moved base or reference contract and ticket-form subject', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
-  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
   const f = withOriginalPlanning(reviewFixture());
   try {
-    const binding=f.advance(1), input=f.input(binding);
-    const originalReference=fs.readFileSync(path.join(__dirname,'../../plugins/delivery-pipeline/references/code-review.md'));
-    const changedReference=require('node:crypto').createHash('sha256').update(originalReference).update('Changed reference').digest('hex');
-    input.result.contract_digest=core.contractDigest(changedReference);
-    input.result.reuse_key=core.reuseKey({head:input.result.head,baseCommit:f.base,contractDigest:input.result.contract_digest});
-    roleArtifact.sealJudgment(input); assert.equal(f.lookup(),null);
+    const binding=f.advance(1);
+    const historicalRoot = path.join(f.root, '.planning/historical-reference');
+    fs.cpSync(path.join(__dirname, '../../plugins/delivery-pipeline'), historicalRoot, { recursive: true });
+    fs.appendFileSync(path.join(historicalRoot, 'references/code-review.md'), '\nChanged reference\n');
+    const reference = require(path.join(historicalRoot, 'scripts/claude-reference-content.cjs')).loadClaudeReferenceContent('code-review');
+    const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+    const input = fixtures.retainPlanningInput(f, f.input(binding), f.root, null, { reference });
+    const historical = require(path.join(historicalRoot, 'scripts/role-artifact.cjs'));
+    const historicalRecorder = require(path.join(historicalRoot, 'scripts/dispatch-boundary.cjs')).createDurableRecorder(path.join(f.root, 'receipts'));
+    const sealed = historical.sealJudgment({ ...input, recorder: historicalRecorder });
+    assert.equal(historical.currentCodeReviewVerdict({ worktreePath: f.root, pr: 52, head: input.result.head,
+      baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.branch }).artifact_digest, sealed.artifact_digest);
+    assert.equal(f.lookup(),null);
     roleArtifact.sealJudgment(f.input(binding)); assert.equal(f.lookup().authenticated,true);
     const head=f.git(['rev-parse','HEAD']);
     f.git(['update-ref','refs/remotes/origin/main',head]); assert.equal(f.lookup(),null);
@@ -2889,55 +2878,14 @@ for (const partitioned of [false, true]) for (const changed of ['plan', 'config'
   test('existing-format foreign native input retains original planning pins: partitions=' + partitioned + ', ' + changed, () => {
     const f = foreignCodeReviewArchive();
     try {
-      const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-      const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-      const crypto = require('node:crypto');
       const plan = f.graph.tickets['T-52-01'].plan;
-      fs.mkdirSync(path.dirname(path.join(f.coordinator, plan)), { recursive: true });
-      fs.writeFileSync(path.join(f.coordinator, plan), '# Complete plan acceptance\n');
-      const planning = packets.resolvePlanningReference({ worktree: f.root, graphDir: f.graphDir, repo: 'acme/app' });
-      const packet = packets.buildContextPacket({ root: f.coordinator, role: 'code-review', subject: f.binding.subject,
-        sourceRevision: f.live.headRefOid, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-        scope: { files_modified: ['source.js'] }, requiredRefs: [plan], roleContext: {
-          dispositions_digest: null, planning_reference: planning, ticket_set: f.binding.ticketSet, prior_findings: [],
-          plan_acceptance: [], exact_diff: { content: f.git(['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-        f.base, 'HEAD',
-        ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()]) },
-          integration_base: { commit: f.base } } });
-      const recorder = f.recorder;
-      let transcript;
-      const boundary = createDispatchBoundary({ recorder, adapters: { claude: { launch(r) {
-        const session = 'native-' + r.dispatch_id;
-        transcript = path.join(f.coordinator, session + '.jsonl');
-        let prompt = '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
-          + '\n</AUTHENTICATED_CONTEXT_PACKET>';
-        if (partitioned) {
-          const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-          const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
-            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
-          const contextDigest = crypto.createHash('sha256').update(JSON.stringify(stable(packet))).digest('hex');
-          const input = collector.prepareFileInput({ worktree: f.root, ticket: f.binding.subject, phase: 52 },
-            JSON.stringify(packets.encodeUniqueContent(packet)), { role: 'code-review', dispatchId: r.dispatch_id,
-              graphDir: f.graphDir, phaseRepo: 'acme/app', storageRoot: path.join(f.coordinator, 'inputs'),
-              binding: { review_contract: collector.CODE_REVIEW_CONTRACT, packet_digest: contextDigest,
-                focused: { context_digest: contextDigest } } });
-          prompt = '<AUTHENTICATED_FOCUSED_INPUT>\n' + JSON.stringify(input.input_bundle)
-            + '\n</AUTHENTICATED_FOCUSED_INPUT>';
-        }
-        const content = JSON.stringify({ type: 'user', sessionId: session, message: { content: prompt } }) + '\n';
-        fs.writeFileSync(transcript, content);
-        return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
-          launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
-          applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
-          policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
-            session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
-            transcript: { path: transcript, bytes: Buffer.byteLength(content),
-              sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
-      } } } });
-      const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
-        { ticket: f.binding.subject, subject_kind: 'phase' });
+      const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+      fixtures.retainPlanningInput(f, f.input, f.coordinator, 'acme/app',
+        { transport: partitioned ? 'host-files' : 'inline' });
+      const native = f.recorder.getVerifiedRecord(f.input.dispatchId).receipt.selection_evidence.transcript;
+      const transcript = native.path;
       assert.equal(f.input.result.host_context, undefined);
-      const seal = roleArtifact.sealJudgment({ ...f.input, recorder, dispatchId: dispatch.dispatch_id });
+      const seal = roleArtifact.sealJudgment(f.input);
       assert.equal(f.lookup().artifact_digest, seal.artifact_digest);
       if (changed === 'plan') fs.appendFileSync(path.join(f.coordinator, plan), 'Changed acceptance\n');
       if (changed === 'config') fs.appendFileSync(path.join(f.coordinator, '.planning/config.json'), ' ');
@@ -3432,7 +3380,7 @@ test('D-32 frozen full inventory, protected unit custody, restart and independen
     const original = partitionTestReview(f, helper), { review } = original;
     const capacity = partitionTestCapacity();
     assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review: { ...review }, capacity }), /private/);
-    assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review, capacity: {} }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
     const partitions = original.partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity });
     const { plan } = partitions;
     assert.ok(plan.units.length > 1, 'complete rendered input budgets determine the unit count');
@@ -3801,4 +3749,6 @@ for (const mode of ['incomplete', 'needs-fix']) test('D-32 authentic ' + mode + 
   });
 });
 
+assert.equal(d37Selected, 9, 'exact role-artifact D37 registration');
+assert.equal(reuseSelected, 1, 'exact role-artifact reuse registration');
 done();

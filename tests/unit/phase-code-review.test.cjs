@@ -15,6 +15,7 @@ const { createDispatchBoundary } = require(path.join(scripts, 'dispatch-boundary
 const flow = require(path.join(scripts, 'phase-code-review.cjs'));
 const target = require(path.join(scripts, 'architecture-target.cjs'));
 const artifact = require(path.join(scripts, 'role-artifact.cjs'));
+const core = require(path.join(scripts, 'code-review-core.cjs'));
 const builder = require(path.join(scripts, 'deliver-dispatch.cjs'));
 const { fixture: artifactFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
 const shapes = [null, 'PRJ-42'];
@@ -177,7 +178,7 @@ for (const jira of shapes) {
     } finally { f.cleanup(); }
   });
 
-  for (const mode of ['hold', 'report']) test('fix tickets change the ticket-set digest between rounds and the cap still holds: ' + jira + ' ' + mode, () => {
+  for (const mode of ['hold', 'report']) test('D37 fix tickets change the ticket-set digest between rounds and the cap still holds: ' + jira + ' ' + mode, () => {
     const f = fixture(jira);
     try {
       f.mode(mode);
@@ -389,7 +390,7 @@ for (const jira of shapes) test('CLI status, gate, repair and usage exits are st
   } finally { f.cleanup(); fs.rmSync(temporary, { recursive: true, force: true }); }
 });
 
-for (const jira of shapes) test('a complete delta pass opens the hold and unrelated heads spend no rounds: ' + jira, () => {
+for (const jira of shapes) test('D37 a complete delta pass opens the hold and unrelated heads spend no rounds: ' + jira, () => {
   const f = fixture(jira);
   try {
     const first = f.advance(1), head = f.live().headRefOid;
@@ -406,7 +407,7 @@ for (const jira of shapes) test('a complete delta pass opens the hold and unrela
   } finally { f.cleanup(); }
 });
 
-for (const jira of shapes) test('fatal ancestry preserves refusal across an authenticated three-round lineage: ' + jira, () => {
+for (const jira of shapes) test('D37 fatal ancestry preserves refusal across an authenticated three-round lineage: ' + jira, () => {
   const f = fixture(jira);
   try {
     let priorHead = null;
@@ -599,41 +600,305 @@ else { assert.deepEqual(args, repo); process.stdout.write('main\\n'); }
 }
 
 function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
-  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-  const crypto = require('node:crypto');
-  const refs = input.result.ticket_set.map(item => item.row.plan);
-  for (const plan of refs) {
-    const absolute = path.join(planningRoot, plan);
-    fs.mkdirSync(path.dirname(absolute), { recursive: true });
-    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
-  }
-  const graphDir = path.join(planningRoot, '.planning/graph');
-  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
-    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
-      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
-      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
-      exact_diff: { content: f.git(['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-        input.result.review_scope === 'delta' ? input.result.prior_head : f.base, 'HEAD',
-        ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()]) },
-      integration_base: { commit: f.base } } });
-  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
-    const session = 'original-' + r.dispatch_id;
-    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
-    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
-      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
-        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
-    fs.writeFileSync(transcript, content);
-    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
-      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
-      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
-      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
-        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
-        transcript: { path: transcript, bytes: Buffer.byteLength(content),
-          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
-  } } } });
-  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
-    { ticket: input.ticket, subject_kind: 'phase' });
-  return { ...input, dispatchId: dispatch.dispatch_id };
+  return require('../fixtures/code-review/artifact-fixture.cjs').retainPlanningInput(f, input, planningRoot, repo);
 }
+
+for (const mode of ['hold', 'report']) test('D35 completed normalization controls public current status and hold: ' + mode, () => {
+  const f = fixture(null);
+  try {
+    f.mode(mode);
+    const binding = f.advance(1);
+    const input = artifactInput(f, binding, raw(true, [{ ...blocker, fix_ticket: undefined }]));
+    const sealed = artifact.sealJudgment(input);
+    assert.equal(input.result.demoted_for_evidence, 1); assert.equal(input.result.verdict, 'pass');
+    assert.equal(flow.status(f.input()).state, 'current'); assert.equal(flow.status(f.input()).reuse, true);
+    assert.equal(flow.verifyCodeReview(f.input()).ok, true);
+    assert.equal(flow.evaluateGate(f.input()).ok, true);
+    const receipt = f.recorder.getVerifiedRecord(input.dispatchId).receipt;
+    const original = fs.readFileSync(receipt.selection_evidence.transcript.path);
+    fs.writeFileSync(receipt.selection_evidence.transcript.path, original.subarray(0, original.length - 1));
+    assert.equal(artifact.currentCodeReviewVerdict({ worktreePath: f.root, pr: 52, head: f.live().headRefOid,
+      baseName: 'main', baseCommit: f.base, graphDir: f.graphDir }), null);
+    const owed = flow.status(f.input());
+    assert.equal(owed.state, 'owed'); assert.equal(owed.reuse, false); assert.equal(owed.rounds_used, 1);
+    assert.equal(flow.verifyCodeReview(f.input()).ok, mode === 'report');
+    assert.equal(flow.evaluateGate(f.input()).ok, mode === 'report');
+    assert.throws(() => artifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref,
+      artifactDigest: sealed.artifact_digest }), /authenticated complete current material coverage/);
+    fs.writeFileSync(receipt.selection_evidence.transcript.path, original);
+    assert.equal(flow.status(f.input()).state, 'current'); assert.equal(flow.verifyCodeReview(f.input()).ok, true);
+  } finally { f.cleanup(); }
+});
+
+test('D35 immutable input-only history retains rounds and cannot authorize public hold or delta coverage', () => {
+  const f = fixture(null);
+  const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+  try {
+    const binding = f.advance(1), input = f.inputArtifact(binding, 1, null, raw());
+    const old = fixtures.sealInputOnlyHistory(input), bytes = fs.readFileSync(old.artifact_ref);
+    const prior = artifact.priorCodeReviewVerdicts({ worktreePath: f.root,
+      repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
+    assert.equal(prior.length, 1); assert.equal(prior[0].answer_authenticated, false);
+    assert.equal(flow.status(f.input()).state, 'owed'); assert.equal(flow.status(f.input()).rounds_used, 1);
+    assert.equal(flow.verifyCodeReview(f.input()).ok, false); assert.equal(flow.evaluateGate(f.input()).ok, false);
+    const delta = artifactInput(f, binding, raw(), 2, input.result.head);
+    assert.throws(() => artifact.sealJudgment(delta), { code: 'JUDGMENT_OUTCOME_MISMATCH' });
+    const fresh = f.inputArtifact(binding, 2, input.result.head, raw());
+    fresh.result.review_scope = 'full'; retainPlanningInput(f, fresh);
+    artifact.sealJudgment(fresh);
+    assert.equal(flow.status(f.input()).state, 'current'); assert.equal(flow.status(f.input()).rounds_used, 2);
+    assert.equal(flow.verifyCodeReview(f.input()).ok, true);
+    assert.deepEqual(fs.readFileSync(old.artifact_ref), bytes);
+  } finally { f.cleanup(); }
+});
+
+test('D35 cold public CLI refuses changed native evidence and accepts restored original bytes', () => {
+  const f = fixture(null), directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'd35-gate-')));
+  try {
+    const input = artifactInput(f, f.advance(1), raw()); artifact.sealJudgment(input);
+    fs.writeFileSync(path.join(directory, 'gh'), '#!/usr/bin/env node\nprocess.stdout.write(process.env.D35_PR);\n', { mode: 0o755 });
+    const gate = () => spawnSync(process.execPath, [path.join(scripts, 'phase-code-review.cjs'), 'gate', f.phase,
+      '--phase', '52', '--pr', '52', '--worktree', f.root, '--graph', f.graphDir], {
+      cwd: directory, encoding: 'utf8', env: { ...process.env, HOME: home,
+        PATH: directory + path.delimiter + process.env.PATH, D35_PR: JSON.stringify(f.live()) } });
+    const passed = gate(); assert.equal(passed.status, 0, passed.stderr);
+    const pin = f.recorder.getVerifiedRecord(input.dispatchId).receipt.transcript;
+    const bytes = fs.readFileSync(pin.path); fs.writeFileSync(pin.path, 'Foreign native stream\n');
+    const refused = gate(); assert.equal(refused.status, 1, refused.stderr); assert.match(refused.stderr, /owed/);
+    fs.writeFileSync(pin.path, bytes);
+    const restored = gate(); assert.equal(restored.status, 0, restored.stderr);
+  } finally { f.cleanup(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+const d37Fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+const d37Modes = ['claude', 'codex'].flatMap(runtime => ['inline', 'host-files'].map(transport => ({ runtime, transport })));
+const d37Prior = f => artifact.priorCodeReviewVerdicts({ worktreePath: f.root, graphDir: f.graphDir,
+  repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
+function d37Input(f, binding, mode, original = raw(), round = 1, priorHead = null, priorFindings = [], extra = {}) {
+  const input = f.inputArtifact(binding, round, priorHead, priorFindings.length ? raw() : original);
+  d37Fixtures.setOriginalReview(input, original, priorFindings);
+  return d37Fixtures.retainPlanningInput(f, input, f.root, null, { ...mode, ...extra });
+}
+
+for (const mode of d37Modes) test('D37 frozen original survives real membership, twin carry and three-round cap: ' + JSON.stringify(mode), () => {
+  const f = fixture(null);
+  try {
+    const source = name => fs.readFileSync(path.join(__dirname, '../fixtures/code-review', name), 'utf8');
+    fs.writeFileSync(path.join(f.root, 'source.js'), source('twins.js')); f.git(['add', 'source.js']);
+    let previous = null, originalTarget;
+    const membership = [];
+    for (const round of [1, 2, 3]) {
+      if (round === 2) {
+        fs.writeFileSync(path.join(f.root, 'source.js'), source('twins-added.js')); f.git(['add', 'source.js']);
+      }
+      const binding = f.advance(round); membership.push(binding.membership);
+      const history = d37Prior(f);
+      assert.equal(history.length, round - 1);
+      assert.ok(history.every(entry => entry.answer_authenticated && entry.coverage_range));
+      const owed = flow.status(f.input());
+      assert.equal(owed.scope, round === 1 ? 'full' : 'delta'); assert.equal(owed.round, round);
+      const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
+      let priorFindings = [];
+      const original = raw(true, round === 1 ? [2, 4, 6].map((line, index) => ({ ...blocker,
+        id: 'twin-' + index, line, line_text: 'return null;' })) : []);
+      if (round > 1) {
+        const deltaDiff = f.git(['diff', '--unified=50', previous, 'HEAD']);
+        const carried = core.carryPriorFindings({ priorFindings: history.at(-1), deltaDiff, readSource });
+        const text = JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [{
+          path: 'source.js', line_text: 'return null;', occurrence: 2,
+          reason: 'The middle caller handles absence', recorded_by: 'operator' }] });
+        write(path.join(f.root, '.planning/phases', f.phase, 'code-review-disagreements.json'), JSON.parse(text));
+        const disagreements = core.parseDisagreements(text, { priorFindings: carried });
+        priorFindings = core.carryPriorFindings({ priorFindings: history.at(-1), deltaDiff, disagreements, readSource });
+        original.dispositions = priorFindings.filter(finding => !finding.disagreement).map(finding => ({
+          ref: finding.ref, disposition: 'unresolved', justification: 'Other callers still fail' }));
+      }
+      const input = d37Input(f, binding, mode, original, round, previous, priorFindings);
+      const sealed = artifact.sealJudgment(input);
+      const validated = artifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref,
+        artifactDigest: sealed.artifact_digest });
+      assert.equal(validated.manifest.repository_identity, target.repositoryIdentity(f.root));
+      assert.equal(validated.manifest.worktree_realpath, f.root);
+      const current = f.lookup();
+      assert.equal(current.artifact_digest, sealed.artifact_digest);
+      assert.equal(current.blocking_count, round === 1 ? 3 : 2);
+      if (round === 1) originalTarget = input.result.findings.find(finding => finding.line === 4).identity;
+      else {
+        const suppressed = current.findings.filter(finding => finding.suppressed);
+        assert.equal(suppressed.length, 1); assert.equal(suppressed[0].line, 5);
+        assert.equal(suppressed[0].occurrence, 3); assert.equal(suppressed[0].disagreement_identity, originalTarget);
+        assert.equal(current.disagreement_suppressed, 1);
+      }
+      assert.equal(flow.evaluateGate(f.input()).ok, false);
+      assert.throws(() => artifact.sealJudgment({ ...input, dispatchId: 'foreign-dispatch' }));
+      previous = input.result.head;
+    }
+    assert.equal(new Set(membership).size, 3);
+    const history = d37Prior(f);
+    assert.ok(history.every(entry => entry.answer_authenticated && entry.coverage_range));
+    assert.equal(core.lineageComplete({ verdict: history.at(-1), priorVerdicts: history }), true);
+    f.advance(4);
+    assert.equal(flow.status(f.input()).state, 'limit'); assert.equal(flow.status(f.input()).rounds_used, 3);
+    assert.equal(flow.fixTickets(f.input(), { stderr: { write() {} } }).length, 0);
+    f.mode('report'); assert.equal(flow.evaluateGate(f.input()).ok, true);
+    assert.ok(d37Prior(f).every(entry => entry.answer_authenticated && entry.coverage_range));
+  } finally { f.cleanup(); }
+});
+
+for (const mode of d37Modes) for (const carrier of ['stream', 'semantic']) for (const change of ['missing', 'changed'])
+test('D37 original custody refuses and exact restoration authenticates: ' + JSON.stringify({ ...mode, carrier, change }), () => {
+  const f = fixture(null);
+  try {
+    const input = d37Input(f, f.advance(1), mode);
+    artifact.sealJudgment(input);
+    const receipt = f.recorder.getVerifiedRecord(input.dispatchId).receipt;
+    let file = receipt.transcript?.path || receipt.runtime_evidence.transcript.path;
+    if (carrier === 'semantic' && mode.runtime === 'claude') file = receipt.selection_evidence.transcript.path;
+    if (carrier === 'semantic' && mode.runtime === 'codex') {
+      const files = fs.readdirSync(path.join(process.env.CODEX_HOME, 'sessions'), { recursive: true });
+      file = path.join(process.env.CODEX_HOME, 'sessions', files.find(name => name.endsWith('.jsonl')));
+    }
+    const bytes = fs.readFileSync(file);
+    assert.equal(d37Prior(f)[0].answer_authenticated, true);
+    if (change === 'missing') fs.rmSync(file); else fs.appendFileSync(file, 'changed');
+    const refused = d37Prior(f)[0];
+    assert.equal(refused.answer_authenticated, false); assert.equal(refused.coverage_range, null);
+    assert.equal(f.lookup(), null); assert.equal(flow.status(f.input()).state, 'owed');
+    assert.equal(flow.evaluateGate(f.input()).ok, false);
+    fs.writeFileSync(file, bytes);
+    assert.equal(d37Prior(f)[0].answer_authenticated, true); assert.equal(f.lookup().verdict, 'pass');
+  } finally { f.cleanup(); }
+});
+
+for (const mode of d37Modes) for (const change of ['graph', 'config', 'plan', 'dispositions', 'head', 'base'])
+test('D37 historical authenticity grants no changed current authority: ' + JSON.stringify({ ...mode, change }), () => {
+  const f = fixture(null);
+  try {
+    const binding = f.advance(1), input = d37Input(f, binding, mode);
+    artifact.sealJudgment(input); assert.equal(f.lookup().verdict, 'pass');
+    let file, bytes;
+    if (change === 'graph') file = path.join(f.graphDir, 'tickets.json');
+    if (change === 'config') file = path.join(f.root, '.planning/config.json');
+    if (change === 'plan') file = path.join(f.root, binding.ticketSet[0].row.plan);
+    if (file) { bytes = fs.readFileSync(file); fs.appendFileSync(file, '\n'); }
+    if (change === 'dispositions') {
+      file = path.join(f.root, '.planning/phases', f.phase, 'code-review-disagreements.json');
+      write(file, { schema: 'shipyard.code-review-disagreements.v1', entries: [] });
+    }
+    if (change === 'head') f.git(['commit', '--allow-empty', '--quiet', '-m', 'new current head']);
+    if (change === 'base') f.git(['update-ref', 'refs/remotes/origin/main', input.result.head]);
+    const historical = d37Prior(f)[0];
+    assert.equal(historical.answer_authenticated, true); assert.ok(historical.coverage_range);
+    assert.equal(f.lookup(), null); assert.equal(flow.evaluateGate(f.input()).ok, false);
+    if (file) { if (bytes) fs.writeFileSync(file, bytes); else fs.rmSync(file); }
+    if (change === 'base') f.git(['update-ref', 'refs/remotes/origin/main', f.base]);
+    if (change !== 'head') assert.equal(f.lookup().verdict, 'pass');
+    if (['graph', 'config'].includes(change)) {
+      fs.appendFileSync(file, '\n');
+      assert.throws(() => artifact.sealJudgment(input));
+      fs.writeFileSync(file, bytes);
+    }
+  } finally { f.cleanup(); }
+});
+
+for (const mode of d37Modes) for (const change of ['session', 'selection', 'association', 'repository', 'packet', 'answer', 'evidence'])
+test('D37 pinned old archives cannot authenticate inconsistent originals: ' + JSON.stringify({ ...mode, change }), () => {
+  const f = fixture(null);
+  try {
+    const input = d37Input(f, f.advance(1), mode, raw(), 1, null, [], {
+      mutateNative(rows, _stream, { packet }) {
+        if (change === 'session') {
+          if (mode.runtime === 'claude') rows[0].sessionId = 'foreign-session';
+          else rows[0].payload.id = 'foreign-session';
+        }
+        if (change === 'selection') {
+          if (mode.runtime === 'claude') rows[1].message.model = 'foreign-model';
+          else rows[1].payload.model = 'foreign-model';
+        }
+        if (['packet', 'association', 'repository'].includes(change)) {
+          const packets = require(path.join(scripts, 'context-packet.cjs'));
+          const altered = structuredClone(packet);
+          if (change === 'packet') altered.role_context.dispositions_digest = '0'.repeat(64);
+          if (change === 'association') altered.canonical_root = path.join(f.root, '.planning');
+          if (change === 'repository') altered.role_context.focused.repository = f.root + '-foreign';
+          const extra = '<AUTHENTICATED_CONTEXT_PACKET>\n'
+            + JSON.stringify(packets.encodeUniqueContent(altered)) + '\n</AUTHENTICATED_CONTEXT_PACKET>';
+          if (mode.runtime === 'claude') rows[0].message.content += extra;
+          else rows[3].payload.content[0].text += extra;
+        }
+      },
+    });
+    if (change === 'answer') input.result.limitations = ['Not in original answer'];
+    if (change === 'answer') {
+      input.result.review_completeness = 'incomplete'; input.result.verdict = 'incomplete';
+    }
+    if (change === 'evidence') fs.writeFileSync(path.join(f.root, '.shipyard-code-review-evidence.md'), 'Substituted evidence\n');
+    assert.throws(() => artifact.sealJudgment(input));
+    const old = d37Fixtures.sealInputOnlyHistory(input);
+    const prior = d37Prior(f);
+    assert.equal(prior.length, 1); assert.equal(prior[0].artifact_digest, old.artifact_digest);
+    assert.equal(prior[0].answer_authenticated, false); assert.equal(prior[0].coverage_range, null);
+    assert.equal(f.lookup(), null); assert.equal(flow.evaluateGate(f.input()).ok, false);
+    assert.equal(flow.status(f.input()).rounds_used, change === 'answer' ? 0 : 1);
+  } finally { f.cleanup(); }
+});
+
+for (const mode of d37Modes) test('D37 input-only history cannot authorize successor coverage: ' + JSON.stringify(mode), () => {
+  const f = fixture(null);
+  try {
+    const binding = f.advance(1), input = f.inputArtifact(binding, 1, null, raw());
+    const old = d37Fixtures.sealInputOnlyHistory(input);
+    const prior = d37Prior(f);
+    assert.equal(prior[0].artifact_digest, old.artifact_digest);
+    assert.equal(prior[0].answer_authenticated, false); assert.equal(prior[0].coverage_range, null);
+    assert.equal(flow.status(f.input()).rounds_used, 1); assert.equal(flow.evaluateGate(f.input()).ok, false);
+    const delta = d37Input(f, binding, mode, raw(), 2, input.result.head);
+    assert.throws(() => artifact.sealJudgment(delta), { code: 'JUDGMENT_OUTCOME_MISMATCH' });
+  } finally { f.cleanup(); }
+});
+
+for (const mode of d37Modes) test('D37 foreign mapping and selected references refuse current reuse independently: ' + JSON.stringify(mode), () => {
+  const f = fixture(null);
+  const coordinator = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'd37-coordinator-')));
+  try {
+    const git = args => execFileSync('git', ['-C', coordinator, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+    git(['init', '--quiet', '--initial-branch=main']);
+    git(['config', 'user.name', 'Code Review Test']); git(['config', 'user.email', 'review@example.test']);
+    git(['config', 'commit.gpgsign', 'false']);
+    f.advance(1);
+    f.graph.tickets['T-52-01'].repo = 'acme/app';
+    f.graph.epics['052'].repos = ['acme/app']; f.writeGraph();
+    fs.renameSync(path.join(f.root, '.planning'), path.join(coordinator, '.planning'));
+    const config = path.join(coordinator, '.planning/config.json');
+    write(config, { git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'hold', repos: { 'acme/app': f.root } } });
+    git(['add', '.']); git(['commit', '--quiet', '-m', 'canonical planning mapping']);
+    const graphDir = path.join(coordinator, '.planning/graph');
+    const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52, repo: 'acme/app',
+      repository: target.repositoryIdentity(f.root), branch: f.branch, pr: 52,
+      head: f.live().headRefOid, base: f.base });
+    const input = f.inputArtifact(binding, 1, null, raw());
+    d37Fixtures.retainPlanningInput(f, input, coordinator, 'acme/app', mode);
+    const sealed = artifact.sealJudgment(input);
+    const prior = () => artifact.priorCodeReviewVerdicts({ worktreePath: f.root, graphDir,
+      repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
+    const lookup = () => artifact.currentCodeReviewVerdict({ worktreePath: f.root, graphDir, repo: 'acme/app',
+      pr: 52, head: f.live().headRefOid, headBranch: f.branch, baseName: 'main', baseCommit: f.base });
+    assert.equal(lookup().artifact_digest, sealed.artifact_digest);
+    const savedConfig = fs.readFileSync(config), graph = path.join(graphDir, 'tickets.json'), savedGraph = fs.readFileSync(graph);
+    for (const change of ['mapping', 'selected-plan', 'membership']) {
+      if (change === 'mapping') write(config, { git: { base_branch: 'main' },
+        delivery_pipeline: { code_review: 'hold', repos: { 'acme/app': coordinator } } });
+      else {
+        const altered = JSON.parse(savedGraph);
+        if (change === 'selected-plan') altered.tickets['T-52-01'].plan = '.planning/phases/' + f.phase + '/52-99-PLAN.md';
+        else altered.tickets['T-52-02'] = { ...altered.tickets['T-52-01'] };
+        write(graph, altered);
+      }
+      let current; try { current = lookup(); } catch { current = null; }
+      assert.equal(current, null);
+      assert.equal(prior()[0].answer_authenticated, true); assert.ok(prior()[0].coverage_range);
+      fs.writeFileSync(config, savedConfig); fs.writeFileSync(graph, savedGraph);
+      assert.equal(lookup().artifact_digest, sealed.artifact_digest);
+    }
+  } finally { f.cleanup(); fs.rmSync(coordinator, { recursive: true, force: true }); }
+});

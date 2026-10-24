@@ -659,6 +659,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
       tree: git(options, canonical.worktree, ['rev-parse', '--verify', `${live.baseRefOid}^{tree}`]) },
     ticketSet: binding.ticketSet, planAcceptance: plans.map(({ id, path, acceptance, verification }) => ({ id, path, acceptance, verification })),
     priorFindings, round, changeMetadata, referenceDigest: referenceDigest(reference).sha256 });
+  roleContext.dispositions_digest = disagreements.dispositions_digest;
   roleContext.reference_digest = referenceDigest(reference);
   roleContext.ticket_set_digest = binding.membership;
   roleContext.phase_repo = binding.repo;
@@ -1944,6 +1945,8 @@ function prepareClaudeIntegrationPartitions(options, request) {
     generatedInstructionBytes: reference.length,
     instructionBinding: { agent_file: path.basename(referencePath), agent_path: referencePath,
       agent_sha256: sha(reference), installed_files: [], policy_hash: policy.POLICY_HASH } });
+  if (options.integrationCapacity !== undefined && (!object(options.integrationCapacity) || !options.integrationCapacity.capacity))
+    reject('supplied strict capacity resources are malformed', 'INTEGRATION_CAPACITY_UNPROVEN');
   const previous = options.integrationCapacity?.plan_sha256;
   const partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity: options.integrationCapacity?.capacity,
     ...(previous ? { plan_sha256: previous } : {}) });
@@ -1973,7 +1976,7 @@ async function runClaudeIntegrationPartitions(options, execution) {
   execution.partitions = roleArtifact.prepareIntegrationPartitions({ review, plan_sha256: execution.partitions.plan.plan_sha256 });
   const { partitions } = execution;
   delivery.recheckIntegrationReview(review, partitions);
-  for (const stage of [partitions.reserved_template, ...execution.stages]) {
+  for (const stage of [partitions.reserved_template, ...execution.stages].filter(Boolean)) {
     if (execution.recovered) break;
     if (execution.admissions.has(stage.launch_sha256)) continue;
     await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: capacityHost });
@@ -2027,6 +2030,9 @@ async function runClaudeIntegrationPartitions(options, execution) {
         phase: prepared.phase, ticket_set_digest: prepared.ticketSetDigest, result: judgment, dispatch: record,
         artifact: { ref: validated.artifact_ref, digest: validated.artifact_digest, outcome: validated.envelope.outcome },
         context: { run_id: runId, source_revision: prepared.canonical.head, policy_hash: record.policy_hash,
+          ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
+            actual_final_input_bytes: Buffer.byteLength(JSON.stringify({ type: 'user', message: { role: 'user', content: stage.input } }) + '\n')
+              + Buffer.byteLength(JSON.stringify(integrationStageSchema(stage))) } } : {}),
           host_identity: HOST_IDENTITY, plan_sha256: partitions.plan.plan_sha256, prompt_bytes: Buffer.byteLength(stage.input),
           model: record.applied_model, effort: record.applied_effort } });
     } catch (error) {
@@ -2292,6 +2298,7 @@ module.exports = Object.freeze({
   assertNativeIntegrationMergeProof,
   isPreparedIntegratorContext,
   integrationPacketWithCoverage,
+  integrationStageSchema,
   assertEvidenceOnlyChanges,
   createClaudeRoleHost,
   runClaudeRoleCli,

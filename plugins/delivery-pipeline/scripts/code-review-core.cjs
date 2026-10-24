@@ -206,7 +206,7 @@ function countableVerdicts({ priorVerdicts, head, isAncestor }) {
   return countable;
 }
 function lineageComplete({ verdict, priorVerdicts }) {
-  if (verdict.review_completeness !== 'complete') return false;
+  if (verdict.answer_authenticated === false || verdict.review_completeness !== 'complete') return false;
   if (verdict.review_scope === 'full') return true;
   const previous = countableVerdicts({ priorVerdicts: priorVerdicts.filter(entry => entry !== verdict
     && (!verdict.sealed_at || !entry.sealed_at || entry.sealed_at < verdict.sealed_at)), head: verdict.head, isAncestor: () => true });
@@ -218,12 +218,12 @@ function coverageComplete({ verdict, priorVerdicts, mergeBase, isAncestor }) {
     && (!verdict.sealed_at || entry.sealed_at < verdict.sealed_at));
   const prove = (entry, earlier) => {
     const material = entry.coverage_range;
-    if (entry.review_completeness !== 'complete' || !material || material.to !== entry.head
+    if (entry.answer_authenticated === false || entry.review_completeness !== 'complete' || !material || material.to !== entry.head
         || !material.merge_base || !isAncestor(material.merge_base, entry.head)) return null;
     if (entry.review_scope === 'full') return material.from === material.merge_base ? material.from : null;
     if (entry.review_scope !== 'delta' || material.from !== entry.prior_head
         || !isAncestor(entry.prior_head, entry.head)) return null;
-    const previous = countableVerdicts({ priorVerdicts: earlier, head: entry.head, isAncestor }).at(-1);
+    const previous = countableVerdicts({ priorVerdicts: earlier.filter(value => value.answer_authenticated !== false), head: entry.head, isAncestor }).at(-1);
     if (!previous || previous.head !== entry.prior_head) return null;
     const root = prove(previous, earlier.filter(value => value !== previous
       && value.sealed_at < previous.sealed_at));
@@ -235,7 +235,8 @@ function coverageComplete({ verdict, priorVerdicts, mergeBase, isAncestor }) {
 function nextRound(options) {
   const verdicts = countableVerdicts(options), used = verdicts.length;
   if (used >= ROUND_CAP) return { round: null, state: 'limit', rounds_used: used };
-  const inherit = used && (options.mergeBase === undefined || coverageComplete({ verdict: verdicts.at(-1),
+  const inherit = used && verdicts.at(-1).answer_authenticated !== false
+    && (options.mergeBase === undefined || coverageComplete({ verdict: verdicts.at(-1),
     priorVerdicts: verdicts, mergeBase: options.mergeBase, isAncestor: options.isAncestor }));
   return { round: used + 1, state: 'ready', scope: inherit ? 'delta' : 'full', rounds_used: used,
     priorHead: used ? verdicts.at(-1).head : null, deltaBase: inherit ? verdicts.at(-1).head : null };
@@ -406,6 +407,8 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
   if (!object(identity) || identity.id !== subject) fail('JUDGMENT_IDENTITY_MISMATCH','packet identity differs from subject');
   for (const [key,value] of Object.entries({exact_diff:exactDiff,integration_base:integrationBase,ticket_set:ticketSet,plan_acceptance:planAcceptance,prior_findings:priorFindings}))
     if (value === undefined || value === null) fail('MISSING_JUDGMENT_CONTEXT',`packet requires ${key}`);
+  if (!Array.isArray(priorFindings) || priorFindings.length > 128)
+    fail('INVALID_RESULT', 'original normalization findings exceed their bound');
   const focused = { review_contract: CONTRACT_ID };
   for (const key of ['repository','id','pr','head','base_commit','merge_base','base_tree','ticket_set_digest']) {
     if (identity[key] === undefined || identity[key] === null) fail('MISSING_JUDGMENT_CONTEXT',`packet identity requires ${key}`);
@@ -413,6 +416,7 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
   }
   return { review_contract: CONTRACT_ID, focused, subject, exact_diff: exactDiff, integration_base: integrationBase,
     ticket_set: ticketSet, plan_acceptance: planAcceptance,
+    normalization_inputs: { prior_findings: structuredClone(priorFindings) },
     prior_findings: priorFindings.map(({ identity: _identity, stored_identity: _stored, disagreement_identity: _disagreement, ...finding }) => finding),
     review_round: round.round, review_scope: round.scope, prior_head: round.priorHead || null,
     change_metadata: changeMetadata, contract_digest: contractDigest(referenceDigest) };

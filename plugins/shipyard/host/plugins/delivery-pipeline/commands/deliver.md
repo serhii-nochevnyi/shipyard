@@ -3021,8 +3021,9 @@ driving PRs hands the user a half-truth.
            review_contract: 'shipyard.integration-review.v3' });
      ```
 
-     `options` selects the canonical graph and supported installed runtime; it
-     supplies no model-authored authority. Consume only the returned original
+     Omit `options.integrationCapacity` entirely for this production observed
+     default on both runtimes. `options` selects the canonical graph and
+     supported installed runtime; it supplies no model-authored authority. Consume only the returned original
      receipt and sealed current artifact. No unit, stage, index, receipt, model
      or capacity authority is serialized in the request. Both public `run`
      entrypoints own frozen full factual preparation, private partition/admission
@@ -3034,17 +3035,45 @@ driving PRs hands the user a half-truth.
      runtime restores it. Preserve original stdin, transcript and receipt input
      identity. Claude uses its own original native boundary and receipts.
 
-     Trusted bootstrap resources must supply each runtime's original renderer,
-     non-model counter and independent current window evidence. Both production
-     counters/windows remain unproven: the documented default is
-     `INTEGRATION_CAPACITY_UNPROVEN` before any native reservation or model
-     launch. Fixture capacity supplies behavior credit only. Context overflow
-     (`INTEGRATION_INPUT_OVER_BOUND`/`CONTEXT_OVER_BOUND`), missing context,
-     unresolved seams, incomplete/failing units and stale facts/pins block.
-     Protected same-plan restart can reuse authenticated complete original units
-     only; changed plans, source, producer, membership, head or base require a new
-     current freeze and fresh proof. Never retry the same oversized full packet,
-     increase caps, filter obligations or add a general reduction tree.
+     The host owns the native-observed profile: each complete rendered unit is
+     bounded at 2,097,152 bytes, with at most three primary segments of at most
+     65,536 bytes each, and its complete actual final at 4,194,304 bytes. Required
+     governing plans, support, acceptance, verification, identity, instructions
+     and output schema remain present. Detail ceilings are 16,384 bytes for
+     conclusions, 32,768 for findings, 8,192 each for limitations and required
+     context, and 32,768 for seams. Exceeding a ceiling refuses without clipping.
+     These are operational bytes, never certified token counts or guaranteed
+     prelaunch native fit. The protected operational launch binding authorizes
+     an attempt only; it cannot validate as a strict capacity certificate.
+
+     Before any unit or final can seal, the original receipt-pinned CLI/session
+     records must authenticate selected model/effort, exact input/instructions,
+     ordered successful completion and actual per-request usage with the native
+     selected-model context window. Codex cached input and reasoning are already
+     included in its native input/output totals. Claude cache-read/cache-creation
+     categories are separate inputs; repeated message chunks use field maxima.
+     Cumulative session cost is never compared with one context window. Quoted
+     telemetry in model text or tool content grants no evidence. Missing,
+     changed, malformed, foreign or ambiguous telemetry, overflow, compaction,
+     rollback, truncation and incomplete answers produce HOLD without authority.
+     Healthy counts cannot turn needs-fix or incomplete semantics into passed.
+
+     The hypothetical all-maxima final template is not constructed in observed
+     mode. After every exact original unit is authenticated and semantically
+     passed, render the complete actual final with all acceptance, governing,
+     support/primary mappings, original conclusions and seams. Check its actual
+     operational bound before the fresh independent final dispatch. An oversized
+     actual final is `INTEGRATION_INPUT_OVER_BOUND` HOLD; preserve the authentic
+     completed unit index and originals. Never drop context, shorten findings,
+     retry an oversized full packet or introduce a reduction tree.
+
+     Supplied strict capacity resources retain their original exact/certified
+     all-input counter, independent window and reserved-template contracts.
+     Malformed supplied resources refuse rather than fall back to observed mode.
+     Both modes preserve protected same-plan completed-unit reuse and repeated
+     current validation of source/head/base/membership, producer/instructions,
+     mode/profile, original receipts/input, observations and index. Changed facts
+     require a new freeze; strict and observed evidence cannot be substituted.
 
      V3 results bind a fresh `reviewed_identity`, exact primary byte/obligation
      coverage, explicit support/context, complete findings/limitations and seam
@@ -3062,30 +3091,24 @@ driving PRs hands the user a half-truth.
      receipt. Premature or incomplete output stays rejected and failed originals
      remain failed history. Generated publication is a separate downstream gate.
 
-     **Current full-packet native acceptance handoff.** After ALL four repairs
-     T-52-28…31 land, the coordinator re-freezes the then-current full packet:
-     complete graph/plans/merge ancestry and every material, acceptance,
-     verification, governing and impact obligation. Use the existing production
-     `prepareNativeIntegratorContext`, `prepareIntegrationLineage`,
-     `prepareIntegrationPartitions` and `createIntegrationCapacityHost`/
-     `admitIntegrationCapacity` APIs with actual installed instructions and
-     separate runtime evidence. Retain in the protected preparation/plan record
-     the complete real unit inventory; exact original material/obligation
-     membership, ranges and digests; each full rendered input and all-in token
-     bound with instruction/framing/tool/output reserves; maximum bounded final
-     template and fresh actual-final bound/index; measured unit count and final
-     headroom. Derive counts from current preparation and actual launches.
-     Historical 27-ticket measurements (4,227,821 dictionary tokens; largest diff
-     1,075,740; 495 obligations/96,491 metadata tokens; 27 contracts/21,223 tokens
-     including 208 acceptance/145 verification; 14,774 governing tokens; 136,879
-     minimum aggregate reference tokens) are diagnostics, never new authority.
-     Do not launch on the stale old packet or send its 563,798-token body/all raw
-     unit sources to the final. Unknown capacity, missing support or an impossible
-     single final is a named capacity/context blocker before readiness.
+     **Current full-packet native acceptance handoff.** After T-52-34 delivery,
+     the coordinator re-freezes the then-current complete graph/plans/merge
+     ancestry and every primary, support, acceptance, verification, governing and
+     impact obligation. Use the supported selector-only caller above with actual
+     installed instructions and omitted `integrationCapacity` for native-observed
+     mode. Retain the protected complete unit inventory, source ranges/digests,
+     operational profile and full rendered inputs, original application receipts,
+     per-request native observations and exact index. Preparation reports a
+     non-authoritative byte diagnostic and unit count. Only the complete actual
+     final after accepted units can establish its actual byte fit; retain that
+     size and all original bounded outputs. Historical packets and sizing,
+     controlled original-format fixtures and ticket delivery establish neither
+     exact token fit nor current production semantic acceptance. Named context,
+     telemetry and actual-final bound failures remain HOLD with originals intact.
 
      The separate genuine Codex and Claude acceptance obligations belong to each
      runtime's native coordinator: fresh bounded units and a fresh final with its
-     own original receipts and actual capacity reports. Recheck exact repository,
+     own original receipts and authenticated per-request native observations. Recheck exact repository,
      head/base, complete membership/plans and producer/policy/instruction pins
      immediately before each run and at current final consumption. A later
      producer/policy/instruction edit invalidates affected frozen authority and

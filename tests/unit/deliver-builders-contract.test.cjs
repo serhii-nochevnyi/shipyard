@@ -2,7 +2,17 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
+const integratorCallerOnly = process.argv.includes('--integrator-caller-only');
+if (process.argv.slice(2).some(value => value !== '--integrator-caller-only') || process.argv.slice(2).length > 1)
+  throw new Error('Unknown integrator caller selection');
+let integratorCallerSelected = 0;
+function test(name, callback) {
+  const selected = name === 'both supported integrator callers select v3 before legacy full-inline formatting';
+  if (integratorCallerOnly && !selected) return;
+  if (selected) integratorCallerSelected++;
+  return runTest(name, callback);
+}
 
 const repositoryRoot = path.resolve(__dirname, '../..');
 const deliverPath = path.join(repositoryRoot, 'plugins/delivery-pipeline/commands/deliver.md');
@@ -98,9 +108,13 @@ test('both supported integrator callers select v3 before legacy full-inline form
   assert.match(caller, /schema: 'shipyard.claude-role-request.v1',[\s\S]*role: 'integrator', worktree, phase: String\(phase\)/);
   for (const field of ['dispatch_id', 'stage', 'unit_id', 'index', 'receipt', 'model', 'capacity', 'input_budget'])
     assert.ok(!new RegExp('\\b' + field + '\\s*:').test(caller), `caller must not serialize ${field} authority`);
-  assert.match(integration, /INTEGRATION_CAPACITY_UNPROVEN/);
-  assert.match(integration, /before any native reservation/);
-  assert.match(integration, /same-plan restart/);
+  assert.match(integration, /Omit `options\.integrationCapacity` entirely for this production observed\s+default on both runtimes/);
+  assert.match(integration, /Supplied strict capacity resources retain their original exact\/certified/);
+  assert.match(integration, /Malformed supplied resources refuse rather than fall back to observed mode/);
+  assert.match(integration, /original receipt-pinned CLI\/session/);
+  assert.match(integration, /actual per-request usage/);
+  assert.match(integration, /overflow, compaction,[\s\S]*truncation and incomplete answers produce HOLD/);
+  assert.match(integration, /same-plan completed-unit reuse/);
   assert.match(integration, /separate.*Codex.*Claude/s);
   assert.match(integration, /R8 INCOMPLETE/);
   assert.match(integration, /human.*merge/s);
@@ -241,4 +255,5 @@ for (const outcome of ['passed', 'needs-fix', 'human-review-required']) {
   });
 }
 
+if (integratorCallerOnly && integratorCallerSelected !== 1) throw new Error('Expected exactly one integrator caller case');
 done();

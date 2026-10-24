@@ -40,7 +40,17 @@ else if (args[0] === 'pr' && args[1] === 'view') {
 const targetOldPath = process.env.PATH;
 process.env.PATH = targetBin + path.delimiter + targetOldPath;
 process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
-const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
+const d37Only = process.argv.includes('--code-review-d37-only');
+if (process.argv.slice(2).some(value => value !== '--code-review-d37-only') || process.argv.slice(2).length > 1)
+  throw new Error('Unknown code-review D37 selection');
+let d37Selected = 0;
+function test(name, callback) {
+  const selected = name.startsWith('default hold guards phase architecture builders (');
+  if (selected) d37Selected++;
+  if (d37Only && !selected) return;
+  return runTest(name, callback);
+}
 
 const codexSessionEnv = Object.fromEntries(['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CLAUDE_PLUGIN_ROOT', 'CLAUDE_CODE_ENTRYPOINT', 'SHIPYARD_RUNTIME', 'GSD_RUNTIME', 'SHIPYARD_GRAPH_DIR']
   .map((name) => [name, process.env[name]]));
@@ -68,45 +78,7 @@ const prHygiene = require('../../plugins/delivery-pipeline/scripts/pr-hygiene.cj
 suite('deliver-dispatch — front-to-dispatch entry point');
 
 function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
-  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-  const crypto = require('node:crypto');
-  const refs = input.result.ticket_set.map(item => item.row.plan);
-  for (const plan of refs) {
-    const absolute = path.join(planningRoot, plan);
-    fs.mkdirSync(path.dirname(absolute), { recursive: true });
-    if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
-  }
-  const graphDir = path.join(planningRoot, '.planning/graph');
-  const packet = packets.buildContextPacket({ root: planningRoot, role: 'code-review', subject: input.ticket,
-    sourceRevision: input.result.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-    scope: { files_modified: ['source.js'] }, requiredRefs: refs, roleContext: {
-      planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
-      ticket_set: input.result.ticket_set, prior_findings: [], plan_acceptance: [],
-      exact_diff: { content: f.git([
-        'diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-        input.result.review_scope === 'delta' ? input.result.prior_head : f.base,
-        'HEAD', ...require('../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()
-      ]) },
-      integration_base: { commit: f.base } } });
-  const boundary = createDispatchBoundary({ recorder: f.recorder, adapters: { claude: { launch(r) {
-    const session = 'original-' + r.dispatch_id;
-    const transcript = path.join(planningRoot, '.planning', session + '.jsonl');
-    const content = JSON.stringify({ type: 'user', sessionId: session, message: {
-      content: '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
-        + '\n</AUTHENTICATED_CONTEXT_PACKET>' } }) + '\n';
-    fs.writeFileSync(transcript, content);
-    return { receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role, dispatch_id: r.dispatch_id,
-      launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
-      applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
-      policy_hash: r.policy_hash, selection_evidence: { source: 'claude-session-assistant-transcript',
-        session_id: session, assistant_records: 1, model: r.model, effort: r.effort,
-        transcript: { path: transcript, bytes: Buffer.byteLength(content),
-          sha256: crypto.createHash('sha256').update(content).digest('hex') } } };
-  } } } });
-  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'code-review', signals: {} },
-    { ticket: input.ticket, subject_kind: 'phase' });
-  return { ...input, dispatchId: dispatch.dispatch_id };
+  return require('../fixtures/code-review/artifact-fixture.cjs').retainPlanningInput(f, input, planningRoot, repo);
 }
 
 function withOriginalPlanning(f) {
@@ -1236,4 +1208,5 @@ for (const jira of [null, 'PRJ-42']) test(`default hold guards phase architectur
   } finally { f.cleanup(); }
 });
 
+assert.equal(d37Selected, 2, 'exact dispatch D37 registration');
 done();
