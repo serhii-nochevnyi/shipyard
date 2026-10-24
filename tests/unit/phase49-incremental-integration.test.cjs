@@ -1401,8 +1401,6 @@ async function withCodexIngressHost(intercept, action) {
   try {
     require.cache[runtimePath].exports = { ...originalRuntime,
       createCodexRuntimeHost: options => intercept(options, originalRuntime.createCodexRuntimeHost) };
-    // Keep the evidence checker and producer on the same private authority generation,
-    // even when the launch below cold-loads a separate current-authority reader.
     delete require.cache[evidenceHostPath];
     require(evidenceHostPath);
     delete require.cache[deliveryPath];
