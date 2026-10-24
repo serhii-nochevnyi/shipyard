@@ -6386,8 +6386,6 @@ function historicalCodeReviewRoot(worktree, original) {
   return current.root;
 }
 
-// This state belongs to one public read/seal operation. In particular, successful
-// replay is never cached across cold reads of original receipt/native/archive pins.
 function codeReviewReplayState() {
   return { active: new Set(), memo: new Map(), catalogues: new Map(), records: 0 };
 }
@@ -6442,8 +6440,6 @@ function authenticateCarriedCodeReviewFindings({ trusted, identity, packet, prio
     if (!previous || previous.repository !== fields.repository || previous.phase !== fields.phase
         || previous.pr !== fields.pr || previous.head !== context.prior_head
         || own && !(record.sealed_at < own.sealed_at)) continue;
-    // Filter on pinned original bytes before recursive replay. A round must
-    // strictly decrease; labels, origin hints and matching Git text grant no authority.
     const pin = record.pins.find(pin => pin.path === archiveRelative(record.dispatch_id, FINDINGS_NAME));
     if (!pin) continue;
     const original = JSON.parse(readPinnedArchiveFile(worktree, pin, 'original lineage findings'));
@@ -6451,8 +6447,6 @@ function authenticateCarriedCodeReviewFindings({ trusted, identity, packet, prio
     const predecessor = authenticatedCodeReviewRecord(worktree, record, identity.repository.identity, state);
     if (!predecessor.answer_authenticated) continue;
     const carried = core.carryPriorFindings({ priorFindings: predecessor, deltaDiff, readSource, disagreements });
-    // Full carry equality binds the finding index, source citation, immediate
-    // stored identity and inherited disagreement to the *same* sealed finding.
     if (stable(JSON.parse(JSON.stringify(carried))) === stable(prior)) matches.add(record.dispatch_id);
   }
   if (matches.size !== 1) fail('REVIEW_NATIVE_INVALID', matches.size

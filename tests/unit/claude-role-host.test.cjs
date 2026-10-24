@@ -3874,8 +3874,6 @@ test('D36 Claude supported native per-iteration samples fit independently of cum
 });
 
 
-// Controlled completed native records, not provider/model acceptance. Each
-// operation reopens the isolated authority home, including a separate Node process.
 function d35t36Review(mode = 'deletion', options = {}) {
   const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
@@ -4009,8 +4007,6 @@ test('D35T36 claude three completed native rounds conserve original disagreement
         assert.ok(others.every(finding => finding.blocking && !finding.disagreement_identity));
         assert.equal(new Set(findings.map(finding => finding.identity)).size, 3);
         assert.deepEqual(others.map(finding => finding.occurrence), [2, 4]);
-        // The shifted unrelated twin now has the old target's ordinal identity,
-        // but it must keep blocking and receive no retained disagreement.
         assert.equal(others[0].identity, r.original.identity);
       }
       const history = r.artifacts.priorCodeReviewVerdicts({ worktreePath: r.f.root,
@@ -4128,8 +4124,6 @@ test('D35T36 claude later same-head history cannot redirect an earlier frozen or
   const r = d35t36Review();
   try {
     r.next(2); const third = r.next(3);
-    // A second actual round-two seal after round three is deliberately not an
-    // eligible predecessor of the already frozen/sealed round-three packet.
     const originalHead = r.f.git(['rev-parse', 'HEAD']);
     const graph = fs.readFileSync(path.join(r.f.graphDir, 'tickets.json'));
     const state = fs.readFileSync(path.join(r.f.graphDir, 'delivery-state.json'));
