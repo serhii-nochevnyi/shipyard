@@ -32,7 +32,7 @@ if (partition === undefined) {
       assert.equal(lines.length, 1);
       const inventory = JSON.parse(lines[0].slice(lines[0].indexOf(marker) + marker.length));
       assert.equal(inventory.part, report.part);
-      assert.equal(inventory.all.length, 29);
+      assert.equal(inventory.all.length, 30);
       assert.equal(new Set(inventory.all).size, inventory.all.length);
       assert.ok(inventory.selected.length > 0);
       for (const field of ['tests', 'pass']) {
@@ -160,7 +160,7 @@ test('root-only phase coverage arrays still refuse sealing', async () => {
   });
 });
 
-for (const mode of ['complete', 'complete-multi', 'complete-mismatch']) test('legacy Claude ' + mode, async () => {
+for (const mode of ['complete', 'complete-updates', 'complete-multi', 'complete-mismatch']) test('legacy Claude ' + mode, async () => {
   await publicIntegrationFixture(async f => {
     const prepared = publicPartitionFixture(f, 'claude', { observed: true,
       observation(rows, stream, final) {
@@ -171,7 +171,13 @@ for (const mode of ['complete', 'complete-multi', 'complete-mismatch']) test('le
             iterations: [0, 1].map(() => ({ type: 'message', ...counters })) };
           Object.values(final.modelUsage)[0].contextWindow = 1100;
         }
-        stream.splice(1, stream.length - 2, structuredClone(assistant));
+        if (mode === 'complete-updates') {
+          const earlier = structuredClone(assistant);
+          earlier.message.stop_reason = null; earlier.message.usage.output_tokens = 1;
+          if (earlier.message.usage.output_tokens_details) earlier.message.usage.output_tokens_details.thinking_tokens = 1;
+          rows.splice(rows.indexOf(assistant), 0, earlier);
+          stream.splice(1, stream.length - 2, ...rows.filter(row => row.type === 'assistant').map(row => structuredClone(row)));
+        } else stream.splice(1, stream.length - 2, structuredClone(assistant));
         if (mode === 'complete-mismatch') stream[1].message.usage.output_tokens++;
       } });
     if (mode === 'complete-mismatch') {
@@ -182,6 +188,17 @@ for (const mode of ['complete', 'complete-multi', 'complete-mismatch']) test('le
       assert.equal((await supportedPartitionCaller(f, 'claude', prepared.options)).result.outcome, 'passed');
       assert.equal(currentPartitionConsumer(f)?.authenticated, true);
     }
+  });
+  if (mode === 'complete-updates') await publicIntegrationFixture(async f => {
+    const prepared = publicPartitionFixture(f, 'claude', { observed: true,
+      observation(rows, stream) {
+        const assistant = rows.find(row => row.type === 'assistant');
+        assistant.message.stop_reason = null;
+        stream.splice(1, stream.length - 2, structuredClone(assistant));
+      } });
+    await assert.rejects(supportedPartitionCaller(f, 'claude', prepared.options), error =>
+      error.code === 'INTEGRATION_PARTITION_INVALID');
+    assert.equal(currentPartitionConsumer(f), null);
   });
 });
 

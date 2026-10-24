@@ -5165,8 +5165,10 @@ function nativeObservationSamples(trusted, launch, native, streamRows) {
     if (user < 0 || native.rows.some((row, index) => row.type === 'assistant' && index <= user))
       partitionError('original Claude request usage precedes its assigned input');
     const partial = streamRows.some(row => row.type === 'assistant' && row.message?.stop_reason == null);
-    if (!partial) {
-      const original = group(native.rows), streamed = group(streamRows);
+    const original = group(native.rows), streamed = group(streamRows);
+    const completeConcordance = original.every(sample => sample.stop_reason !== null)
+      && stable(original) === stable(streamed);
+    if (!partial || completeConcordance) {
       if (stable(original) !== stable(streamed)) partitionError('original Claude native/stream per-request usage differs');
       samples.push(...original);
     } else {
