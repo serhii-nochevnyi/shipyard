@@ -2404,7 +2404,7 @@ test('role-artifact holds no private subject grammar or home expression', () => 
   assert.ok(!/process\.env\.CODEX_HOME/.test(source), 'the Codex home has one resolver');
   assert.ok(!/process\.env\.CLAUDE_CONFIG_DIR/.test(source), 'the Claude home has one resolver');
   assert.ok(!/'\.codex'/.test(source) && !/'\.claude'/.test(source), 'no private home fallback');
-  assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 5, 'definition plus the architecture and code-review phase-record sites');
+  assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 8, 'definition plus the architecture and code-review phase-record sites and authenticated lineage readers');
   assert.equal((source.match(/parseSubject\('integrator'/g) || []).length >= 3, true);
   assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 3);
   assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 3,

@@ -11,7 +11,6 @@ unset CLAUDE_PLUGIN_ROOT CLAUDE_CODE_ENTRYPOINT CODEX_SANDBOX CODEX_SANDBOX_NETW
 
 command -v node >/dev/null 2>&1 || { echo "node not found on PATH"; exit 1; }
 
-# UNIT_SHARD=<i>/<n> runs one balanced slice of the suite (CI runs four of them in parallel);
 # @contract: UNIT_SHARD=<i>/<n> runs one slice; UNIT_WORKERS=<n|auto> sets concurrency, default 4.
 unit_workers="${UNIT_WORKERS:-4}"
 if [[ "$unit_workers" == auto ]]; then
@@ -20,44 +19,46 @@ fi
 [[ "$unit_workers" =~ ^[1-9][0-9]*$ ]] || { echo "UNIT_WORKERS must be a positive integer or auto, got '${UNIT_WORKERS:-}'"; exit 2; }
 
 unit_files=(tests/unit/*.test.cjs)
-unit_sweep=1
-if [[ -n "${UNIT_SHARD:-}" ]]; then
-  unit_files=()
-  while IFS= read -r unit_file; do
-    unit_files+=("$unit_file")
-  done < <(node - "$UNIT_SHARD" <<'NODE'
+unit_tasks=("${unit_files[@]}")
+if [[ -n "${UNIT_SHARD:-}" || -f tests/unit/shard-files.cjs || -f tests/unit/phase49-incremental-integration.test.cjs ]]; then
+  unit_selection="$(node - "${UNIT_SHARD:-}" <<'NODE'
 const shards = require('./tests/unit/shard-files.cjs');
-const check = 'integration-test-partitions.test.cjs';
-const files = shards.unitFiles();
-const { index, count } = shards.parseSpec(process.argv[2]);
-const selected = shards.assign(files.filter(file => file !== check), shards.readWeights(), count)[index - 1].files;
-if (files.includes(check) && selected.includes('phase49-incremental-integration.test.cjs')) selected.push(check);
-for (const file of selected) process.stdout.write('tests/unit/' + file + '\n');
+try {
+  const spec = process.argv[2];
+  const selected = spec ? shards.selectTaskShard(spec) : shards.unitTasks(shards.unitFiles());
+  for (const task of selected) {
+    const { file, partition } = shards.parseTask(task);
+    if (file === 'phase49-incremental-integration.test.cjs' && partition === null)
+      throw new Error('physical integration owner is not a queue task');
+    process.stdout.write('tests/unit/' + file + (partition === null ? '' : '#integration-partition=' + partition) + '\n');
+  }
+} catch (error) {
+  process.stderr.write('shard-files: ' + error.message + '\n');
+  process.exitCode = 2;
+}
 NODE
-)
-  [[ ${#unit_files[@]} -gt 0 ]] || { echo "UNIT_SHARD=$UNIT_SHARD selected no unit tests"; exit 1; }
-  [[ "${UNIT_SHARD%%/*}" == 1 ]] || unit_sweep=0
+)" || exit $?
+  [[ -n "$unit_selection" ]] || { echo "UNIT_SHARD=${UNIT_SHARD:-} selected no unit tests"; exit 1; }
+  unit_tasks=()
+  while IFS= read -r unit_task; do unit_tasks+=("$unit_task"); done <<<"$unit_selection"
 fi
-
-unit_queue=()
+unit_sweep=1
+if [[ -n "${UNIT_SHARD:-}" && "${UNIT_SHARD%%/*}" != 1 ]]; then unit_sweep=0; fi
+unit_files=()
 unit_partitions=()
 unit_queue_count=0
 unit_progress=0
-for unit_file in "${unit_files[@]}"; do
-  if [[ "$unit_file" == tests/unit/phase49-incremental-integration.test.cjs ]]; then
+for unit_task in "${unit_tasks[@]}"; do
+  unit_file="${unit_task%%#*}"
+  unit_partition=''
+  if [[ "$unit_task" == *'#integration-partition='* ]]; then
+    unit_partition="${unit_task##*#integration-partition=}"
     unit_progress=1
-    for unit_partition in 1 2 3 4; do
-      unit_partitions[unit_queue_count]="$unit_partition"
-      unit_queue[unit_queue_count]="$unit_file"
-      unit_queue_count=$((unit_queue_count + 1))
-    done
-  else
-    unit_partitions[unit_queue_count]=''
-    unit_queue[unit_queue_count]="$unit_file"
-    unit_queue_count=$((unit_queue_count + 1))
   fi
+  unit_files[unit_queue_count]="$unit_file"
+  unit_partitions[unit_queue_count]="$unit_partition"
+  unit_queue_count=$((unit_queue_count + 1))
 done
-unit_files=("${unit_queue[@]}")
 
 if [[ "$unit_sweep" == 1 ]]; then
   for f in plugins/delivery-pipeline/scripts/*.cjs capabilities/delivery-pipeline/checks/*.cjs scripts/*.cjs; do
