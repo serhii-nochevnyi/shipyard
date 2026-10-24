@@ -3380,7 +3380,7 @@ test('D-32 frozen full inventory, protected unit custody, restart and independen
     const original = partitionTestReview(f, helper), { review } = original;
     const capacity = partitionTestCapacity();
     assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review: { ...review }, capacity }), /private/);
-    assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review, capacity: {} }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
     const partitions = original.partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity });
     const { plan } = partitions;
     assert.ok(plan.units.length > 1, 'complete rendered input budgets determine the unit count');

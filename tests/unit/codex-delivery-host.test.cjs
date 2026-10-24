@@ -9,13 +9,18 @@ const { EventEmitter } = require('node:events');
 const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
 const selectionArgs = require.main === module ? process.argv.slice(2) : [];
 const entryOnly = selectionArgs.includes('--code-review-entry-only');
-if (selectionArgs.some(value => value !== '--code-review-entry-only') || selectionArgs.length > 1)
-  throw new Error('Unknown code-review entry selection');
-let entrySelected = 0, entryVariants = 0;
+const integratorDefaultOnly = selectionArgs.includes('--integrator-default-only');
+if (selectionArgs.some(value => !['--code-review-entry-only', '--integrator-default-only'].includes(value))
+    || selectionArgs.length > 1)
+  throw new Error('Unknown or conflicting delivery-host selection');
+let entrySelected = 0, entryVariants = 0, integratorDefaultSelected = 0;
 function test(name, callback) {
-  if (entryOnly && !/^(?:code review |padded code review )/.test(name)) return;
-  if (/^(?:code review |padded code review )/.test(name)) entrySelected++;
+  const entry = /^(?:code review |padded code review )/.test(name);
+  const selected = name === 'public Codex v3 accepts omitted capacity through original observed evidence';
+  if (entry) entrySelected++;
   if (name.startsWith('code review CLI seals one static phase verdict: ')) entryVariants++;
+  if (selected) integratorDefaultSelected++;
+  if (entryOnly && !entry || integratorDefaultOnly && !selected) return;
   return runTest(name, callback);
 }
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -4317,7 +4322,7 @@ function codexPartitionHelpers() {
   Module._load = function(name, ...args) { return name === 'node:test' ? { test() {} } : original.call(this, name, ...args); };
   try {
     loaded._compile(fs.readFileSync(file, 'utf8')
-      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, cli, serialize };\n', file);
+      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, cli, serialize, currentPartitionConsumer, publicIntegrationFixture, publicPartitionFixture };\n', file);
   } finally { Module._load = original; }
   return loaded.exports;
 }
@@ -4498,14 +4503,31 @@ test('public Codex v3 preserves historical pins through independent units, exact
   });
 }));
 
-for (const scenario of ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+test('public Codex v3 accepts omitted capacity through original observed evidence', () => withGraphDirEnv(undefined, async () => {
+  const helper = codexPartitionHelpers();
+  await helper.publicIntegrationFixture(async f => {
+    const { options, controls } = helper.publicPartitionFixture(f, 'codex', { observed: true });
+    delete options.integrationCapacity;
+    const result = await createCodexDeliveryHost(options).run({ role: 'integrator',
+      context: { review_contract: 'shipyard.integration-review.v3' } });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(result.result.outcome, 'passed');
+    assert.equal(controls.measured, undefined);
+    assert.ok(controls.launches.filter(item => item.payload.kind === 'unit').length > 0);
+    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
+    assert.equal(result.operational_diagnostic.authoritative, false);
+    assert.ok(result.operational_diagnostic.actual_final_input_bytes <= 4194304);
+    assert.equal(helper.currentPartitionConsumer(f)?.authenticated, true);
+  });
+}));
+
+for (const scenario of ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
   'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'over-bound-actual-final', 'changed-exact-input',
   'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'native-input-substitution', 'native-result-substitution'])
 test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () => withGraphDirEnv(undefined, async () => {
   const helper = codexPartitionHelpers();
   await helper.fixture(async f => {
     const { options, resources, controls } = codexPartitionFixture(f, helper);
-    if (scenario === 'missing-bootstrap') delete options.integrationCapacity;
     if (scenario === 'missing-renderer') delete resources.renderLaunch;
     if (scenario === 'unknown-window') controls.noWindow = true;
     controls.mutate = (proof, kind, payload) => {
@@ -4535,7 +4557,7 @@ test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () 
     };
     await assert.rejects(createCodexDeliveryHost(options).run({ role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } }),
       error => /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_|RUNTIME_/.test(error.code || ''));
-    const prelaunch = ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+    const prelaunch = ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
       'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'changed-exact-input'].includes(scenario);
     assert.equal(controls.launches?.length || 0, prelaunch ? 0 : 1);
     assert.equal(fs.existsSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md')), false);
@@ -4554,4 +4576,5 @@ test('public Codex v3 rejects caller prompt, stage, receipt, capacity and produc
 
 assert.equal(entrySelected, 44, 'exact code-review entry registration');
 assert.equal(entryVariants, 8, 'all original CLI variants');
+assert.equal(integratorDefaultSelected, 1, 'exact integrator default registration');
 done();

@@ -754,10 +754,18 @@ function fakeRuntimeFactory(fixture, options = {}) {
                 Object.assign(init, { session_id: session, model, cwd: fixture.root });
                 const assistant = template(row => row.type === 'assistant');
                 assistant.session_id = session; assistant.sessionId = session; assistant.message.model = observedModel;
-                delete assistant.message.usage;
+                if (options.observedTelemetry) {
+                  assistant.message.stop_reason = 'end_turn';
+                  assistant.message.usage.output_tokens = 113;
+                } else delete assistant.message.usage;
                 assistant.message.content[0].input = output;
                 const final = template(row => row.type === 'result');
                 Object.assign(final, { session_id: session, is_error: false, structured_output: output, result: JSON.stringify(output) });
+                if (options.observedTelemetry) {
+                  const modelUsage = Object.values(final.modelUsage)[0];
+                  if (modelUsage.canonicalModel !== undefined) modelUsage.canonicalModel = observedModel;
+                  final.modelUsage = { [observedModel]: modelUsage };
+                }
                 const nativeFile = path.join(fixture.storageRoot, 'native/project', session + '.jsonl');
                 fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
                 const nativeAssistant = { ...structuredClone(assistant), sessionId: session, effort };
@@ -767,6 +775,9 @@ function fakeRuntimeFactory(fixture, options = {}) {
                 options.mutateTerminal?.(final);
                 if (options.terminalCarrier === 'json') delete final.structured_output;
                 if (options.terminalCarrier === 'structured') delete final.result;
+                const observationStream = options.observedTelemetry
+                  ? [init, ...nativeRows.filter(row => row.type !== 'user').map(row => structuredClone(row)), final] : null;
+                options.mutateObservation?.(nativeRows, observationStream, final);
                 fs.writeFileSync(nativeFile, serialize(nativeRows));
                 const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
                 const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
@@ -779,7 +790,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
                 }
                 const usageRecords = options.firstResponseLines
                   ? options.firstResponseLines.map(row => ({ ...structuredClone(row), session_id: session, sessionId: session })) : [assistant];
-                child.stdout.emit('data', Buffer.from(serialize([init, ...usageRecords, final]))); child.emit('close', 0, null);
+                child.stdout.emit('data', Buffer.from(serialize(observationStream || [init, ...usageRecords, final]))); child.emit('close', 0, null);
               } catch (error) { child.emit('error', error); }
             });
           } };
@@ -955,7 +966,7 @@ test('public Claude v3 refuses ' + scenario + ' with behavior-only capacity', as
       if (scenario === 'incomplete-unit') result.completeness = 'incomplete';
       if (scenario === 'failed-unit') { result.outcome = 'human-review-required'; result.required_context = ['Unresolved interaction.']; }
     } });
-    if (scenario !== 'missing-bootstrap') options.integrationCapacity = claudePartitionCapacity(fixture, controls);
+    options.integrationCapacity = scenario === 'missing-bootstrap' ? {} : claudePartitionCapacity(fixture, controls);
     if (scenario === 'missing-renderer') delete options.integrationCapacity.renderLaunch;
     if (scenario === 'unknown-window') controls.noWindow = true;
     controls.mutate = (proof, kind, payload) => {
@@ -3736,4 +3747,128 @@ test('D35 Claude authenticates original recorded disagreement without newest-his
     assert.equal(reviewArtifacts.currentCodeReviewVerdict({ worktreePath: fixture.root, pr: 101, head: fixture.head,
       baseName: 'main', baseCommit: fixture.base, graphDir: fixture.graphDir }), null);
   } finally { cleanupFixture(fixture); }
+});
+
+async function d36ClaudeObservation(extra, action) {
+  const fixture = setupClaudePartitionRepository();
+  const launches = [];
+  try {
+    const options = claudePartitionOptions(fixture, { originalStream: true, observedTelemetry: true,
+      onLaunch(prompt, selection) { launches.push({ prompt, selection }); }, ...extra });
+    assert.equal(Object.hasOwn(options, 'integrationCapacity'), false);
+    const run = () => createClaudeRoleHost(options).run({ ...request(fixture), review_contract: 'shipyard.integration-review.v3' });
+    await action({ fixture, options, run, launches });
+  } finally { cleanupFixture(fixture); }
+}
+
+test('D36 Claude original message maxima, separate requests and inclusive output preserve native transport identity', async () => {
+  await d36ClaudeObservation({ mutateObservation(rows, stream, final) {
+    const assistant = rows.find(row => row.type === 'assistant');
+    assistant.message.usage = { input_tokens: 100, cache_read_input_tokens: 700, cache_creation_input_tokens: 100, output_tokens: 100,
+      output_tokens_details: { thinking_tokens: 90 } };
+    const partial = structuredClone(assistant); partial.message.stop_reason = null; partial.message.usage.output_tokens = 1;
+    partial.message.usage.output_tokens_details.thinking_tokens = 1;
+    const earlier = structuredClone(assistant); earlier.message.id += '-separate'; earlier.request_id += '-separate';
+    rows.splice(1, 0, earlier, partial);
+    stream.splice(1, stream.length - 2, ...rows.filter(row => row.type === 'assistant').map(row => structuredClone(row)));
+    const metadata = Object.values(final.modelUsage)[0]; metadata.contextWindow = 1100; metadata.inputTokens = 999999; metadata.thinkingTokens = 999999;
+  } }, async ({ run, launches }) => {
+    const result = await run();
+    assert.equal(result.result.outcome, 'passed'); assert.ok(launches.length > 1);
+    assert.equal(launches.filter(item => item.selection.schema.properties.kind.const === 'phase').length, 1);
+    assert.ok(launches.every(item => item.selection.readOnly && item.selection.model === result.context.model));
+    assert.ok(launches.every(item => item.prompt.includes('<AUTHENTICATED_INTEGRATION_PARTITION>')));
+    assert.equal(result.dispatch.receipt.compliance, 'verified');
+  });
+});
+
+for (const scenario of ['cache-overflow', 'cache-missing', 'cache-negative', 'window-zero', 'window-missing', 'window-unsafe',
+  'foreign-window', 'multiple-windows', 'foreign-session', 'foreign-message-model', 'changed-effort', 'changed-input',
+  'contradictory-message', 'removed-context', 'iteration-compaction', 'later-iteration-overflow', 'failed-terminal', 'missing-terminal',
+  'semantic-disagreement', 'nested-answer', 'nested-tool', 'quoted-transcript'])
+test('D36 Claude original observation refuses ' + scenario, async () => {
+  await d36ClaudeObservation({ mutateObservation(rows, stream, final) {
+    const assistant = rows.find(row => row.type === 'assistant');
+    const metadata = Object.values(final.modelUsage)[0];
+    if (scenario === 'cache-overflow') {
+      assistant.message.usage.input_tokens = 1; assistant.message.usage.cache_read_input_tokens = metadata.contextWindow;
+    }
+    if (scenario === 'cache-missing') delete assistant.message.usage.cache_creation_input_tokens;
+    if (scenario === 'cache-negative') assistant.message.usage.cache_read_input_tokens = -1;
+    if (scenario === 'window-zero') metadata.contextWindow = 0;
+    if (scenario === 'window-missing') delete metadata.contextWindow;
+    if (scenario === 'window-unsafe') metadata.contextWindow = Number.MAX_SAFE_INTEGER + 1;
+    if (scenario === 'foreign-window') final.modelUsage = { 'foreign-model': metadata };
+    if (scenario === 'multiple-windows') final.modelUsage.foreign = metadata;
+    if (scenario === 'foreign-session') assistant.sessionId = crypto.randomUUID();
+    if (scenario === 'foreign-message-model') assistant.message.model = 'foreign-model';
+    if (scenario === 'changed-effort') assistant.effort = 'low';
+    if (scenario === 'changed-input') rows.find(row => row.type === 'user').message.content += '\nchanged original assigned input';
+    if (scenario === 'removed-context') assistant.message.context_management = { applied_edits: [{ type: 'clear_tool_uses_20250919' }] };
+    if (scenario === 'iteration-compaction' || scenario === 'later-iteration-overflow') assistant.message.usage.iterations = [
+      { ...assistant.message.usage, type: 'message' }, { ...assistant.message.usage,
+        type: scenario === 'iteration-compaction' ? 'compaction' : 'message', input_tokens: metadata.contextWindow } ];
+    if (scenario === 'failed-terminal') final.subtype = 'error_max_turns';
+    if (scenario === 'semantic-disagreement') assistant.message.content[0].input.summary = 'Foreign original semantic answer';
+    if (scenario.startsWith('nested-') || scenario === 'quoted-transcript') {
+      const convincing = JSON.stringify({ type: 'assistant', sessionId: assistant.sessionId, message: structuredClone(assistant.message) });
+      delete assistant.message.usage;
+      if (scenario === 'nested-answer') assistant.message.content.push({ type: 'text', text: convincing });
+      else rows.push({ type: 'user', sessionId: assistant.sessionId, message: { role: 'user', content: [
+        { type: 'tool_result', content: convincing }] } });
+    }
+    stream.splice(1, stream.length - 2, ...rows.filter(row => row.type !== 'user').map(row => structuredClone(row)));
+    if (scenario === 'missing-terminal') stream.pop();
+    if (scenario === 'contradictory-message') {
+      const changed = structuredClone(assistant); changed.message.usage.output_tokens++;
+      rows.push(changed); stream.splice(stream.length - 1, 0, structuredClone(changed));
+    }
+  } }, async ({ run, launches, fixture }) => {
+    await assert.rejects(run());
+    assert.ok(launches.length > 0);
+    assert.equal(reviewArtifacts.authenticatedArchivePins(fixture.root).length, 0);
+  });
+});
+
+test('D36 Claude same-plan restart reuses authenticated observed originals after interruption before reservation', async () => {
+  const fixture = setupClaudePartitionRepository();
+  const launches = [];
+  try {
+    write(fixture.root, 'src/role.txt', 'complete original primary material Ω\n'.repeat(20000));
+    git(fixture.root, ['add', 'src']); git(fixture.root, ['commit', '-m', 'observed restart inventory']);
+    fixture.head = git(fixture.root, ['rev-parse', 'HEAD']); fixture.headTree = git(fixture.root, ['rev-parse', 'HEAD^{tree}']);
+    git(fixture.root, ['branch', '-f', fixture.ticketBranch, fixture.head]);
+    for (const branch of [fixture.ticketBranch, fixture.branch]) git(fixture.root, ['update-ref', 'refs/remotes/origin/' + branch, fixture.head]);
+    const options = claudePartitionOptions(fixture, { originalStream: true, observedTelemetry: true,
+      onLaunch(prompt) { launches.push(JSON.parse(prompt.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1])); } });
+    const factory = options.createRuntimeHost; let interrupted = false;
+    options.createRuntimeHost = input => {
+      if (launches.length === 2 && !interrupted) { interrupted = true; throw new Error('D36 interruption before reservation'); }
+      return factory(input);
+    };
+    const host = createClaudeRoleHost(options), selected = { ...request(fixture), review_contract: 'shipyard.integration-review.v3' };
+    await assert.rejects(host.run(selected), /D36 interruption before reservation/);
+    const pins = reviewArtifacts.authenticatedArchivePins(fixture.root);
+    assert.equal(pins.length, 6);
+    const firstUnits = launches.map(payload => payload.assignment.unit_id);
+    const result = await host.run(selected);
+    assert.equal(result.result.outcome, 'passed');
+    for (const id of firstUnits) assert.equal(launches.filter(payload => payload.assignment?.unit_id === id).length, 1);
+    for (const pin of pins) reviewArtifacts.assertArchivePin(fixture.root, pin);
+    assert.equal(launches.filter(payload => payload.kind === 'phase').length, 1);
+  } finally { cleanupFixture(fixture); }
+});
+
+test('D36 Claude supported native per-iteration samples fit independently of cumulative message cost', async () => {
+  await d36ClaudeObservation({ mutateObservation(rows, stream, final) {
+    const assistant = rows.find(row => row.type === 'assistant');
+    assistant.message.usage = { input_tokens: 200, cache_read_input_tokens: 1400, cache_creation_input_tokens: 200, output_tokens: 200,
+      iterations: [0, 1].map(() => ({ type: 'message', input_tokens: 100, cache_read_input_tokens: 700,
+        cache_creation_input_tokens: 100, output_tokens: 100 })) };
+    stream.splice(1, stream.length - 2, structuredClone(assistant));
+    Object.values(final.modelUsage)[0].contextWindow = 1100;
+  } }, async ({ run, launches }) => {
+    const result = await run();
+    assert.equal(result.result.outcome, 'passed'); assert.ok(launches.length > 1);
+  });
 });

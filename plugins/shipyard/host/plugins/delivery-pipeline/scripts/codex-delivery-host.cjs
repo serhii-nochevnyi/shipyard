@@ -1024,7 +1024,7 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
   }
   if (!execution.admitted) {
     execution.admissions ||= new Set();
-    for (const stage of [partitions.reserved_template, ...execution.stages]) {
+    for (const stage of [partitions.reserved_template, ...execution.stages].filter(Boolean)) {
       if (execution.admissions.has(stage.launch_sha256)) continue;
       await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: execution.capacityHost });
       execution.admissions.add(stage.launch_sha256);
@@ -1042,7 +1042,10 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
     const storage = storageDirectory(options, { ...scope, run_id: runId });
     const controller = options.controller === false ? null : createRunController({ storeDir: path.join(storage, 'controller'), ownerId });
     if (controller) controller.begin(runScope);
-    const native = createCodexRuntimeHost({ scope: { ...scope, run_id: runId }, controller,
+    const nativeScope = { ...scope, run_id: runId };
+    const native = createCodexRuntimeHost({ scope: nativeScope, controller,
+      ...(stage.mode === 'native-observed' ? { integrationIngress: request =>
+        roleArtifact.createCodexIntegrationIngress({ prepared: stage, host: execution.capacityHost, scope: nativeScope })(request) } : {}),
       recorder: runtimeHost.recorder, capabilities: runtimeHost.capabilities,
       agentDir: options.agentDir, agentManifest: options.agentManifest, executable: options.executable, probe: options.probe,
       env: options.env, spawn: options.spawn, ephemeral: options.ephemeral, approveForMe: options.approveForMe,
@@ -1091,7 +1094,9 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
         roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
       }
       if (controller) controller.complete(runId);
-      return Object.freeze({ ...dispatch, result, artifact });
+      return Object.freeze({ ...dispatch, result, artifact,
+        ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
+          actual_final_input_bytes: stage.kind === 'phase' ? Buffer.byteLength(stage.input) : null } } : {}) });
     } catch (error) {
       if (controller) controller.fail(runId, { reason: String(error.message).slice(0, 500) });
       throw error;
@@ -1171,6 +1176,8 @@ function prepareIntegratorInput(scope, request, options) {
       generatedInstructionBytes: instructions.generated_instruction_bytes,
       instructionBinding: { agent_file: selected.agent_file, agent_path: path.resolve(installed.agentDir, installed.agentFile),
         agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
+    if (options.integrationCapacity !== undefined && (!object(options.integrationCapacity) || !options.integrationCapacity.capacity))
+      fail('INTEGRATION_CAPACITY_UNPROVEN', 'supplied strict capacity resources are malformed');
     const previous = options.integrationCapacity?.plan_sha256;
     const partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity: options.integrationCapacity?.capacity,
       ...(previous ? { plan_sha256: previous } : {}) });
