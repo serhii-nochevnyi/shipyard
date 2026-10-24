@@ -20,6 +20,15 @@ function withOriginalPlanning(f) {
   return f;
 }
 
+function sealedReviewHistory(f, dispatchId) {
+  const records = roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root, graphDir: f.graphDir,
+    repository: require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').repositoryIdentity(f.root),
+    phaseDir: f.phase });
+  const original = records.find(record => record.dispatch_id === dispatchId);
+  assert(original && original.answer_authenticated);
+  return original;
+}
+
 function git(root, args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
 }
@@ -843,9 +852,12 @@ test('code-review suppressed index survives sealing, while evidence and findings
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
   const f=withOriginalPlanning(reviewFixture());
   try {
-    const binding=f.advance(1), first=f.input(binding), current=first.result.findings[0];
-    const prior=core.carryPriorFindings({priorFindings:first.result.findings,deltaDiff:'',readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8'),disagreements:{[current.identity]:{reason:'Caller guarantees acknowledgement',recorded_by:'operator'}}});
-    const normalized=core.normalizeResult({review_completeness:'complete',limitations:[],unresolved_sources:[],findings:[],dispositions:[]},{round:1,scope:'full',priorFindings:prior,readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8')});
+    const original=f.input(f.advance(1));
+    roleArtifact.sealJudgment(original);
+    const history=sealedReviewHistory(f,original.dispatchId), current=history.findings[0];
+    const first=f.input(f.advance(2),2,history.head);
+    const prior=core.carryPriorFindings({priorFindings:history,deltaDiff:'',readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8'),disagreements:{[current.identity]:{reason:'Caller guarantees acknowledgement',recorded_by:'operator'}}});
+    const normalized=core.normalizeResult({review_completeness:'complete',limitations:[],unresolved_sources:[],findings:[],dispositions:[]},{round:2,scope:'delta',priorFindings:prior,readSource:file=>fs.readFileSync(path.join(f.root,file),'utf8')});
     first.result={...first.result,...normalized};
     require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(first, { review_completeness: 'complete',
       limitations: [], unresolved_sources: [], findings: [], dispositions: [] }, prior);
@@ -874,15 +886,24 @@ test('code-review seals a recorded WARNING returned with BLOCKER severity withou
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
   const f = withOriginalPlanning(reviewFixture());
   try {
-    const input = f.input(f.advance(1));
+    const seed = f.input(f.advance(1));
     const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
-    const warning = { ...input.result.findings[0], severity: 'WARNING', blocking: false };
+    const reported = structuredClone(seed.result.findings[0]);
+    const warning = { ...reported, severity: 'WARNING', blocking: false };
     delete warning.fix_ticket;
-    const priorFindings = core.carryPriorFindings({ priorFindings: [warning], deltaDiff: '', readSource,
-      disagreements: { [warning.identity]: { reason: 'Caller handles this case', recorded_by: 'operator' } } });
+    const firstRaw = { review_completeness: 'complete', limitations: [], unresolved_sources: [],
+      findings: [warning], dispositions: [] };
+    Object.assign(seed.result, core.normalizeResult(firstRaw, { round: 1, scope: 'full', readSource }));
+    require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(seed, firstRaw);
+    retainPlanningInput(f, seed);
+    roleArtifact.sealJudgment(seed);
+    const history = sealedReviewHistory(f, seed.dispatchId);
+    const input = f.input(f.advance(2), 2, history.head);
+    const priorFindings = core.carryPriorFindings({ priorFindings: history, deltaDiff: '', readSource,
+      disagreements: { [history.findings[0].identity]: { reason: 'Caller handles this case', recorded_by: 'operator' } } });
     const original = { review_completeness: 'complete', limitations: [], unresolved_sources: [],
-      findings: [input.result.findings[0]], dispositions: [] };
-    const normalized = core.normalizeResult(original, { round: 1, scope: 'full', priorFindings, readSource });
+      findings: [reported], dispositions: [] };
+    const normalized = core.normalizeResult(original, { round: 2, scope: 'delta', priorFindings, readSource });
     input.result = { ...input.result, ...normalized };
     require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(input, original, priorFindings);
     retainPlanningInput(f, input);
@@ -945,18 +966,25 @@ test('code-review seals 129 small reviewed references within the shared asset ca
 test('code-review seals colliding 128-byte labels after normalization', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
-  const f = withOriginalPlanning(reviewFixture());
-  try {
-    const binding = f.advance(1);
-    for (const id of ['x'.repeat(128), 'é'.repeat(64), '界'.repeat(42) + 'ab']) {
-      const input = f.input(binding);
-      const first = { ...input.result.findings[0], id };
+  for (const id of ['x'.repeat(128), 'é'.repeat(64), '界'.repeat(42) + 'ab']) {
+    const f = withOriginalPlanning(reviewFixture());
+    try {
+      const seed = f.input(f.advance(1));
+      const first = { ...seed.result.findings[0], id };
       const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
-      const priorFindings = core.carryPriorFindings({ priorFindings: [first], deltaDiff: '', readSource });
+      const firstRaw = { review_completeness: 'complete', limitations: [], unresolved_sources: [],
+        findings: [first], dispositions: [] };
+      Object.assign(seed.result, core.normalizeResult(firstRaw, { round: 1, scope: 'full', readSource }));
+      require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(seed, firstRaw);
+      retainPlanningInput(f, seed);
+      roleArtifact.sealJudgment(seed);
+      const history = sealedReviewHistory(f, seed.dispatchId);
+      const input = f.input(f.advance(2), 2, history.head);
+      const priorFindings = core.carryPriorFindings({ priorFindings: history, deltaDiff: '', readSource });
       const original = { review_completeness: 'complete', limitations: [], unresolved_sources: [],
         findings: [{ id, severity: 'WARNING', path: 'source.js', line: 101, summary: 'Another statement' }],
         dispositions: [{ ref: 'P-01', disposition: 'unresolved', justification: 'Still fails' }] };
-      const result = core.normalizeResult(original, { round: 1, scope: 'full', priorFindings, readSource });
+      const result = core.normalizeResult(original, { round: 2, scope: 'delta', priorFindings, readSource });
       input.result = { ...input.result, ...result };
       require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(input, original, priorFindings);
       retainPlanningInput(f, input);
@@ -965,8 +993,8 @@ test('code-review seals colliding 128-byte labels after normalization', () => {
       assert.equal(validated.findings.findings.length, 2);
       assert.equal(new Set(validated.findings.findings.map(finding => finding.id)).size, 2);
       assert(validated.findings.findings.every(finding => Buffer.byteLength(finding.id) <= 128));
-    }
-  } finally { f.cleanup(); }
+    } finally { f.cleanup(); }
+  }
 });
 
 test('code-review incomplete first round cannot authorize a complete delta pass', () => {

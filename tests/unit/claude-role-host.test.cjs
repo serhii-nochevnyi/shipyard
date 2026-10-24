@@ -4031,8 +4031,14 @@ test('D35T36 claude cold replay loses authority for missing or altered original 
     const receiptFile = path.join(r.f.root, 'receipts', 'record-' + crypto.createHash('sha256').update(r.first.dispatchId).digest('hex') + '.json');
     const blob = r.f.git(['rev-parse', r.first.result.head + ':source.js']);
     const sourceObject = path.join(r.f.root, '.git/objects', blob.slice(0, 2), blob.slice(2));
-    const catalogue = walk(path.join(os.homedir(), '.local/state/shipyard/role-artifact-authority'))
-      .find(file => path.basename(file) === 'catalogue.json' && JSON.parse(fs.readFileSync(file)).payload.worktree === r.f.root);
+    const authority = path.join(os.homedir(), '.local/state/shipyard/role-artifact-authority');
+    const neighbour = path.join(authority, 'unrelated-cold-fixture');
+    fs.mkdirSync(neighbour, { recursive: true });
+    fs.writeFileSync(path.join(neighbour, 'catalogue.json'), JSON.stringify({ unrelated: true }));
+    const catalogues = walk(authority).filter(file => path.basename(file) === 'catalogue.json'
+      && JSON.parse(fs.readFileSync(file)).payload?.worktree === r.f.root);
+    assert.equal(catalogues.length, 1);
+    const [catalogue] = catalogues;
     assert.ok(catalogue); assert.ok(native);
     const originals = [...r.archives.slice(0, 3).map(pin => pin.absolute), receiptFile, native, stream, sourceObject, catalogue];
     for (const absolute of originals) {

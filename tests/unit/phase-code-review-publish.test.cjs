@@ -72,7 +72,7 @@ function fixture(jira = null, mode = 'report', pr = 52) {
     return [comments];
   } };
   const input = () => ({ phase: 52, phaseDirectory: f.phase, pr, worktree: f.root, graphDir: f.graphDir });
-  const seal = (result = raw(), round = 1, priorHead = null, priorFindings = []) => {
+  const seal = (result = raw(), round = 1, priorHead = null, priorFindings = [], scope = round === 1 ? 'full' : 'delta') => {
     fs.writeFileSync(path.join(f.root, 'round.txt'), String(round));
     f.git(['add', 'round.txt']); f.git(['commit', '--quiet', '-m', 'round ' + round]);
     if (round > 1) {
@@ -83,10 +83,11 @@ function fixture(jira = null, mode = 'report', pr = 52) {
         head_sha: live().headRefOid, merge_sha: live().headRefOid };
     }
     f.writeGraph();
+    if (planningRoot !== f.root) fs.cpSync(f.graphDir, path.join(planningRoot, '.planning/graph'), { recursive: true });
     const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
       repository: target.repositoryIdentity(f.root), branch, pr, head: live().headRefOid, base: f.base });
     const request = f.input(binding, round, priorHead, raw());
-    Object.assign(request.result, core.normalizeResult(result, { round, scope: round === 1 ? 'full' : 'delta',
+    Object.assign(request.result, core.normalizeResult(result, { round, scope,
       priorFindings, readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') }));
     require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(request, result, priorFindings);
     return artifact.sealJudgment(retainPlanningInput(f, request, planningRoot));
@@ -524,7 +525,13 @@ test('D37 published retained locator reloads the original target and leaves a la
       assert.throws(() => load(latest), { code: 'DISPOSITION_TARGET_UNKNOWN' });
     }
     writeCarrier(tuple);
-    const thirdPrior = core.carryPriorFindings({ priorFindings: second, deltaDiff: '', disagreements: load(latest), readSource });
+    const secondHistory = artifact.priorCodeReviewVerdicts({ worktreePath: f.root, graphDir: f.graphDir,
+      repository: target.repositoryIdentity(f.root), phaseDir: f.phase })
+      .find(record => record.dispatch_id === second.dispatch_id);
+    assert.ok(secondHistory?.answer_authenticated);
+    assert.equal(secondHistory.head, secondHead);
+    assert.equal(secondHistory.review_round, 2);
+    const thirdPrior = core.carryPriorFindings({ priorFindings: secondHistory, deltaDiff: '', disagreements: load(latest), readSource });
     f.seal(raw(true, [{ ...blocker, id: 'later-twin', line: 3, line_text: 'return null;' }]), 3, secondHead, thirdPrior);
     const third = f.lookup();
     assert.equal(third.blocking_count, 1);
@@ -561,9 +568,12 @@ for (const linked of [false, true]) test('retained locators require authenticate
     const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
     fs.writeFileSync(path.join(f.root, 'source.js'), 'function a() {\nreturn null;\n}\nreturn null;\n');
     f.git(['add', 'source.js']); f.git(['commit', '--quiet', '-m', 'original twins']);
-    const originalHead = f.live().headRefOid;
-    const first = core.normalizeResult(raw(true, [{ ...blocker, line: 4, line_text: 'return null;' }]),
-      { round: 1, scope: 'full', readSource });
+    f.seal(raw(true, [{ ...blocker, line: 4, line_text: 'return null;' }]));
+    const first = artifact.priorCodeReviewVerdicts({ worktreePath: f.root, graphDir: f.graphDir,
+      repository: target.repositoryIdentity(f.root), phaseDir: f.phase })[0];
+    assert.ok(first.answer_authenticated);
+    const firstArtifact = fs.readFileSync(first.artifact_ref);
+    const originalHead = first.head;
     const original = { path: 'source.js', line_text: 'return null;', occurrence: 2,
       reason: 'Caller handles absence', recorded_by: 'operator' };
     const entries = core.parseDisagreements(JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1',
@@ -583,7 +593,7 @@ for (const linked of [false, true]) test('retained locators require authenticate
     fs.mkdirSync(path.dirname(carrier), { recursive: true });
     fs.writeFileSync(carrier, JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [original] }));
     const originalCarrier = fs.readFileSync(carrier);
-    f.seal(raw(), 1, null, prior);
+    f.seal(raw(), 2, originalHead, prior, 'full');
     const before = JSON.stringify(f.lookup());
     const originalArtifact = fs.readFileSync(JSON.parse(before).artifact_ref);
     const publicationInput = () => linked ? { ...f.input(), graphDir: path.join(coordinator, path.relative(f.root, f.graphDir)) } : f.input();
@@ -607,11 +617,18 @@ for (const linked of [false, true]) test('retained locators require authenticate
         assert.throws(() => flow.publish(publicationInput(), f.options));
         const history = artifact.priorCodeReviewVerdicts({ worktreePath: f.root,
           graphDir: path.join(coordinator, '.planning/graph'), repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
-        assert.equal(history.length, 1);
-        assert.equal(history[0].review_round, 1);
-        assert.deepEqual(fs.readFileSync(history[0].artifact_ref), originalArtifact);
-        assert.equal(history[0].artifact_digest, JSON.parse(before).artifact_digest);
-        assert.deepEqual(history[0].findings, JSON.parse(before).findings);
+        assert.equal(history.length, 2);
+        const originalHistory = history.find(record => record.dispatch_id === first.dispatch_id);
+        const currentHistory = history.find(record => record.dispatch_id === JSON.parse(before).dispatch_id);
+        assert.equal(originalHistory.review_round, 1);
+        assert.equal(currentHistory.review_round, 2);
+        assert.equal(currentHistory.review_scope, 'full');
+        assert.ok(originalHistory.answer_authenticated);
+        assert.ok(currentHistory.answer_authenticated);
+        assert.deepEqual(fs.readFileSync(originalHistory.artifact_ref), firstArtifact);
+        assert.deepEqual(fs.readFileSync(currentHistory.artifact_ref), originalArtifact);
+        assert.equal(currentHistory.artifact_digest, JSON.parse(before).artifact_digest);
+        assert.deepEqual(currentHistory.findings, JSON.parse(before).findings);
       }
       fs.rmSync(carrier, { force: true });
       fs.writeFileSync(carrier, originalCarrier);
