@@ -3872,3 +3872,364 @@ test('D36 Claude supported native per-iteration samples fit independently of cum
     assert.equal(result.result.outcome, 'passed'); assert.ok(launches.length > 1);
   });
 });
+
+
+function d35t36Review(mode = 'deletion', options = {}) {
+  const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const artifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const targets = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const f = fixtures.fixture('D35T36-claude-' + mode);
+  const source = name => fs.readFileSync(path.join(__dirname, '../fixtures/code-review', name), 'utf8');
+  const raw = JSON.parse(source('review.json'));
+  const targetLine = mode === 'deletion' ? 6 : 4;
+  const lines = options.lines || (mode === 'insertion' ? [2, 4, 6] : [6]);
+  const firstRaw = { ...raw, findings: lines.map((line, index) => ({ ...raw.findings[0], id: 'CR-' + index,
+    line, line_text: 'return null;' })) };
+  const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
+  const retain = (input, extra = {}) => fixtures.retainPlanningInput(f, input, f.root, null,
+    { runtime: 'claude', ...extra });
+  const lookup = () => ({ worktreePath: f.root, pr: 52, head: f.git(['rev-parse', 'HEAD']),
+    baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.branch });
+  const cold = () => JSON.parse(execFileSync(process.execPath, ['-e',
+    "require('node:os').homedir = () => " + JSON.stringify(os.homedir()) + ';'
+      + 'const a = require(' + JSON.stringify(require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs')) + ');'
+      + 'try { process.stdout.write(JSON.stringify({current:a.currentCodeReviewVerdict('
+      + JSON.stringify(lookup()) + ')})); } catch(e) { process.stdout.write(JSON.stringify({current:null,error:e.code})); }',
+  ], { encoding: 'utf8', env: { ...process.env } }));
+  const archives = [];
+  const remember = sealed => {
+    const manifest = JSON.parse(fs.readFileSync(sealed.artifact_ref));
+    for (const absolute of [sealed.artifact_ref, ...Object.values(manifest.files).map(pin => path.join(f.root, pin.path))])
+      archives.push({ absolute, bytes: fs.readFileSync(absolute) });
+    return manifest;
+  };
+  try {
+    fs.writeFileSync(path.join(f.root, 'source.js'), source('twins.js'));
+    f.git(['add', 'source.js']);
+    let firstBinding = f.advance(1);
+    if (options.originScope === 'foreign-pr') firstBinding = targets.phaseBinding({ graph: f.graph, state: f.state,
+      phase: 52, repository: targets.repositoryIdentity(f.root), pr: 53, head: f.git(['rev-parse', 'HEAD']), base: f.base, branch: f.branch });
+    if (options.originScope === 'foreign-phase') {
+      const graph = { tickets: { 'T-53-01': { ...f.graph.tickets['T-52-01'], phase: 53,
+        plan: '.planning/phases/53-foreign/53-01-PLAN.md' } } };
+      const state = { 'T-53-01': f.state['T-52-01'] };
+      fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), JSON.stringify(graph));
+      fs.writeFileSync(path.join(f.graphDir, 'delivery-state.json'), JSON.stringify({ tickets: state }));
+      firstBinding = targets.phaseBinding({ graph, state, phase: 53, repository: targets.repositoryIdentity(f.root),
+        pr: 52, head: f.git(['rev-parse', 'HEAD']), base: f.base, branch: f.branch });
+    }
+    const first = f.input(firstBinding, 1, null, firstRaw);
+    if (options.originScope === 'foreign-pr') { first.pr = 53; first.result.pr = 53; }
+    if (!options.inputOnly || options.inputOnly === 'native') retain(first);
+    let firstSeal = null;
+    if (!options.unsealed) {
+      firstSeal = options.inputOnly ? fixtures.sealInputOnlyHistory(first) : artifacts.sealJudgment(first);
+      remember(firstSeal);
+    }
+    f.writeGraph();
+    const original = first.result.findings.find(finding => finding.line === targetLine);
+    const text = JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [{
+      path: 'source.js', line_text: 'return null;', occurrence: mode === 'deletion' ? 3 : 2,
+      reason: 'The original target caller handles absence', recorded_by: 'operator',
+    }] });
+    fs.mkdirSync(path.join(f.root, '.planning/phases', f.phase), { recursive: true });
+    fs.writeFileSync(path.join(f.root, '.planning/phases', f.phase, 'code-review-disagreements.json'), text);
+    let previous = first.result.head, lastResult = first.result;
+    return { f, core, artifacts, fixtures, targets, first, firstRaw, firstBinding, firstSeal, original, archives, cold, lookup, retain,
+      assertOriginals() { for (const pin of archives) assert.deepEqual(fs.readFileSync(pin.absolute), pin.bytes); },
+      next(round, extra = {}) {
+        if (round === 2) {
+          fs.writeFileSync(path.join(f.root, 'source.js'), mode === 'deletion' ? 'end();\n\treturn null;\n' : source('twins-added.js'));
+          f.git(['add', 'source.js']);
+        }
+        const binding = f.advance(round);
+        const deltaDiff = f.git(['diff', '--no-ext-diff', '--no-textconv', '--unified=50', previous, 'HEAD']);
+        const prior = extra.predecessor || lastResult;
+        const mapped = core.carryPriorFindings({ priorFindings: prior, deltaDiff, readSource });
+        const disagreements = core.parseDisagreements(text, { priorFindings: mapped });
+        const priorFindings = core.carryPriorFindings({ priorFindings: prior, deltaDiff, readSource, disagreements });
+        extra.mutatePrior?.(priorFindings);
+        const blank = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [] };
+        const answer = { ...blank,
+          findings: mode === 'insertion' && round === 2 ? [{ ...raw.findings[0], line: 5, line_text: 'return null;' }] : [],
+          dispositions: priorFindings.filter(finding => !finding.disagreement).map(finding => ({
+            ref: finding.ref, disposition: 'unresolved', justification: 'The other caller still fails',
+          })),
+        };
+        extra.mutateAnswer?.(answer);
+        const input = f.input(binding, round, previous, blank);
+        fixtures.setOriginalReview(input, answer, priorFindings);
+        retain(input, extra.native || {});
+        extra.mutateInput?.(input);
+        const sealed = artifacts.sealJudgment(input);
+        const manifest = remember(sealed);
+        const validated = artifacts.validateJudgmentManifest({ ...input,
+          artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+        previous = input.result.head; lastResult = input.result;
+        return { input, sealed, manifest, validated, priorFindings, deltaDiff };
+      },
+    };
+  } catch (error) { f.cleanup(); throw error; }
+}
+
+for (const [mode, lines] of [['deletion', [6]], ['insertion', [4]], ['insertion', [2, 4, 6]]])
+test('D35T36 claude three completed native rounds conserve original disagreement through ' + mode + ' with ' + lines.length + ' findings', () => {
+  const r = d35t36Review(mode, { lines });
+  try {
+    for (const round of [2, 3]) {
+      const v = r.next(round);
+      const currentLine = mode === 'deletion' ? 2 : 5;
+      const occurrence = mode === 'deletion' ? 1 : 3;
+      if (round === 2) assert.deepEqual(r.core.mapLineThroughDiff('source.js', r.original.line, v.deltaDiff), { line: currentLine });
+      const carried = v.priorFindings.find(finding => finding.disagreement);
+      assert.equal(carried.delta_touch, false);
+      assert.equal(carried.line, currentLine); assert.equal(carried.occurrence, occurrence);
+      assert.equal(carried.disagreement_identity, r.original.identity);
+      assert.equal(carried.stored_identity, round === 2 ? r.original.identity
+        : r.core.lineIdentity({ path: 'source.js', lineText: 'return null;', ordinal: occurrence }));
+      assert.equal(carried.disagreement.reason, 'The original target caller handles absence');
+      const findings = v.validated.findings.findings;
+      const suppressed = findings.filter(finding => finding.suppressed);
+      assert.equal(suppressed.length, 1);
+      assert.equal(suppressed[0].line, currentLine); assert.equal(suppressed[0].occurrence, occurrence);
+      assert.equal(suppressed[0].identity, r.core.lineIdentity({ path: 'source.js', lineText: 'return null;', ordinal: occurrence }));
+      assert.equal(suppressed[0].disagreement_identity, r.original.identity);
+      assert.equal(v.validated.findings.dispositions.find(entry => entry.source === 'recorded_disagreement').justification,
+        'The original target caller handles absence');
+      const current = r.cold().current;
+      assert.equal(current.disagreement_suppressed, 1); assert.equal(current.round, round);
+      assert.equal(current.blocking_count, lines.length - 1);
+      assert.deepEqual(current.findings, findings);
+      if (mode === 'insertion' && lines.length === 3) {
+        const others = findings.filter(finding => !finding.suppressed);
+        assert.deepEqual(others.map(finding => finding.line), [3, 7]);
+        assert.ok(others.every(finding => finding.blocking && !finding.disagreement_identity));
+        assert.equal(new Set(findings.map(finding => finding.identity)).size, 3);
+        assert.deepEqual(others.map(finding => finding.occurrence), [2, 4]);
+        assert.equal(others[0].identity, r.original.identity);
+      }
+      const history = r.artifacts.priorCodeReviewVerdicts({ worktreePath: r.f.root,
+        repository: r.targets.repositoryIdentity(r.f.root), phaseDir: r.f.phase });
+      assert.equal(history.length, round); assert.ok(history.every(entry => entry.answer_authenticated));
+      r.assertOriginals();
+    }
+  } finally { r.f.cleanup(); }
+});
+
+test('D35T36 claude cold replay loses authority for missing or altered original custody and recovers exact originals', () => {
+  const r = d35t36Review();
+  try {
+    r.next(2); const third = r.next(3);
+    const receipt = r.f.recorder.getVerifiedRecord(r.first.dispatchId).receipt;
+    const walk = root => fs.readdirSync(root, { withFileTypes: true }).flatMap(entry => entry.isDirectory()
+      ? walk(path.join(root, entry.name)) : [path.join(root, entry.name)]);
+    const native = 'claude' === 'codex'
+      ? walk(path.join(r.f.root, '.planning/codex-fixture/sessions')).find(file => file.endsWith(receipt.runtime_evidence.session_id + '.jsonl'))
+      : receipt.selection_evidence.transcript.path;
+    const stream = 'claude' === 'codex' ? receipt.runtime_evidence.transcript.path : receipt.transcript.path;
+    const receiptFile = path.join(r.f.root, 'receipts', 'record-' + crypto.createHash('sha256').update(r.first.dispatchId).digest('hex') + '.json');
+    const blob = r.f.git(['rev-parse', r.first.result.head + ':source.js']);
+    const sourceObject = path.join(r.f.root, '.git/objects', blob.slice(0, 2), blob.slice(2));
+    const authority = path.join(os.homedir(), '.local/state/shipyard/role-artifact-authority');
+    const neighbour = path.join(authority, 'unrelated-cold-fixture');
+    fs.mkdirSync(neighbour, { recursive: true });
+    fs.writeFileSync(path.join(neighbour, 'catalogue.json'), JSON.stringify({ unrelated: true }));
+    const catalogues = walk(authority).filter(file => path.basename(file) === 'catalogue.json'
+      && JSON.parse(fs.readFileSync(file)).payload?.worktree === r.f.root);
+    assert.equal(catalogues.length, 1);
+    const [catalogue] = catalogues;
+    assert.ok(catalogue); assert.ok(native);
+    const originals = [...r.archives.slice(0, 3).map(pin => pin.absolute), receiptFile, native, stream, sourceObject, catalogue];
+    for (const absolute of originals) {
+      const bytes = fs.readFileSync(absolute), mode = fs.statSync(absolute).mode & 0o777;
+      fs.chmodSync(absolute, 0o600);
+      for (const mutation of ['missing', 'altered']) {
+        assert.equal(r.cold().current.round, 3);
+        if (mutation === 'missing') fs.unlinkSync(absolute);
+        else fs.writeFileSync(absolute, Buffer.concat([bytes, Buffer.from('\nchanged original evidence')]));
+        try {
+          assert.equal(r.cold().current, null, absolute + ': ' + mutation);
+          assert.throws(() => r.artifacts.validateJudgmentManifest({ ...third.input,
+            artifactPath: third.sealed.artifact_ref, artifactDigest: third.sealed.artifact_digest }));
+          assert.throws(() => r.artifacts.sealJudgment(third.input));
+        } finally { fs.writeFileSync(absolute, bytes, { mode: 0o600 }); }
+        assert.equal(r.cold().current.round, 3);
+      }
+      fs.chmodSync(absolute, mode);
+    }
+    r.assertOriginals();
+  } finally { r.f.cleanup(); }
+});
+
+for (const kind of ['stored-identity', 'original-binding', 'wrong-association', 'model-origin', 'request-origin', 'snapshot-origin'])
+test('D35T36 claude refuses authenticated carried snapshot provenance forgery: ' + kind, () => {
+  const r = d35t36Review();
+  try {
+    r.next(2);
+    assert.throws(() => r.next(3, {
+      mutatePrior(prior) {
+        if (kind === 'stored-identity') prior[0].stored_identity = r.original.identity;
+        else if (kind === 'wrong-association') { prior[0].id = 'an-unrelated-archived-finding'; prior[0].summary = 'Same text, wrong sealed finding'; }
+        else prior[0].disagreement_identity = r.core.lineIdentity({ path: 'source.js', lineText: 'return null;', ordinal: 2 });
+        if (kind === 'snapshot-origin') Object.assign(prior[0], { origin_head: r.first.result.head, origin_dispatch: r.first.dispatchId });
+      },
+      mutateAnswer(answer) {
+        if (kind === 'model-origin') Object.assign(answer, { origin_head: r.first.result.head, origin_dispatch: r.first.dispatchId,
+          origin_artifact: r.firstSeal.artifact_ref });
+      },
+      mutateInput(input) {
+        if (kind === 'request-origin') Object.assign(input, { origin_head: r.first.result.head, origin_dispatch: r.first.dispatchId,
+          origin_artifact: r.firstSeal.artifact_ref });
+      },
+    }), error => error.code === 'REVIEW_NATIVE_INVALID');
+    assert.equal(r.cold().current, null); r.assertOriginals();
+  } finally { r.f.cleanup(); }
+});
+
+test('D35T36 claude arbitrary historical Git text and an unsealed native finding grant no origin authority', () => {
+  const r = d35t36Review('deletion', { unsealed: true });
+  try {
+    assert.ok(r.f.git(['show', r.first.result.head + ':source.js']).includes('return null;'));
+    assert.throws(() => r.next(2, { mutateAnswer(answer) {
+      answer.review_completeness = 'incomplete'; answer.limitations = ['Controlled origin refusal'];
+    } }), error => error.code === 'REVIEW_NATIVE_INVALID');
+    assert.equal(r.cold().current, null);
+  } finally { r.f.cleanup(); }
+});
+
+for (const inputOnly of [true, 'native'])
+test('D35T36 claude input-only sealed history remains readable but supplies neither origin nor pass coverage: ' + inputOnly, () => {
+  const r = d35t36Review('deletion', { inputOnly });
+  try {
+    const history = r.artifacts.priorCodeReviewVerdicts({ worktreePath: r.f.root,
+      repository: r.targets.repositoryIdentity(r.f.root), phaseDir: r.f.phase });
+    assert.equal(history.length, 1); assert.equal(history[0].answer_authenticated, false);
+    assert.equal(history[0].coverage_range, null);
+    assert.equal(r.core.coverageComplete({ verdict: history[0], priorVerdicts: [], mergeBase: r.f.base, isAncestor: () => true }), false);
+    assert.throws(() => r.next(2, { mutateAnswer(answer) {
+      answer.review_completeness = 'incomplete'; answer.limitations = ['Controlled input-only origin refusal'];
+    } }), error => error.code === 'REVIEW_NATIVE_INVALID');
+    assert.equal(r.cold().current, null); r.assertOriginals();
+  } finally { r.f.cleanup(); }
+});
+
+test('D35T36 claude two distinct fully authenticated eligible predecessor lineages are ambiguous', () => {
+  const r = d35t36Review();
+  try {
+    const duplicate = r.retain(r.f.input(r.firstBinding, 1, null, r.firstRaw));
+    r.artifacts.sealJudgment(duplicate);
+    assert.throws(() => r.next(2, { mutateAnswer(answer) {
+      answer.review_completeness = 'incomplete'; answer.limitations = ['Controlled ambiguous origin refusal'];
+    } }), error => error.code === 'REVIEW_NATIVE_INVALID' && /ambiguous/.test(error.message));
+    assert.equal(r.cold().current, null); r.assertOriginals();
+  } finally { r.f.cleanup(); }
+});
+
+test('D35T36 claude later same-head history cannot redirect an earlier frozen origin', () => {
+  const r = d35t36Review();
+  try {
+    r.next(2); const third = r.next(3);
+    const originalHead = r.f.git(['rev-parse', 'HEAD']);
+    const graph = fs.readFileSync(path.join(r.f.graphDir, 'tickets.json'));
+    const state = fs.readFileSync(path.join(r.f.graphDir, 'delivery-state.json'));
+    const second = r.artifacts.priorCodeReviewVerdicts({ worktreePath: r.f.root,
+      repository: r.targets.repositoryIdentity(r.f.root), phaseDir: r.f.phase })[1];
+    r.f.git(['reset', '--hard', second.head]);
+    const binding = r.targets.phaseBinding({ graph: r.f.graph, state: r.f.state, phase: 52,
+      repository: r.targets.repositoryIdentity(r.f.root), pr: 52, head: second.head, base: r.f.base, branch: r.f.branch });
+    const blank = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [] };
+    const answer = { ...blank, findings: [{ ...r.firstRaw.findings[0], id: 'CR-later', line: 1, line_text: 'end();' }] };
+    const input = r.f.input(binding, 2, r.first.result.head, blank);
+    const carried = r.core.carryPriorFindings({ priorFindings: r.first.result,
+      deltaDiff: r.f.git(['diff', '--unified=50', r.first.result.head, second.head]),
+      readSource: file => fs.readFileSync(path.join(r.f.root, file), 'utf8'),
+      disagreements: { [r.original.identity]: { reason: 'A different later operator reason', recorded_by: 'operator' } } });
+    r.fixtures.setOriginalReview(input, answer, carried); r.retain(input);
+    r.artifacts.sealJudgment(input);
+    r.f.git(['reset', '--hard', originalHead]);
+    fs.writeFileSync(path.join(r.f.graphDir, 'tickets.json'), graph); fs.writeFileSync(path.join(r.f.graphDir, 'delivery-state.json'), state);
+    assert.equal(r.cold().current.dispatch_id, third.input.dispatchId);
+    assert.equal(r.cold().current.disagreement_suppressed, 1); r.assertOriginals();
+  } finally { r.f.cleanup(); }
+});
+
+for (const kind of ['native-answer-disagreement', 'normalized-substitution'])
+test('D35T36 claude preserves completed-answer custody and complete-result equality: ' + kind, () => {
+  const r = d35t36Review();
+  try {
+    assert.throws(() => r.next(2, kind === 'normalized-substitution' ? {
+      mutateInput(input) { input.result.summary = 'Substituted after original native completion'; },
+    } : { native: { mutateNative(rows) {
+      if ('claude' === 'codex') {
+        const final = rows.find(row => row.type === 'response_item' && row.payload?.role === 'assistant');
+        const answer = JSON.parse(final.payload.content[0].text); answer.summary = 'Different original session answer';
+        final.payload.content[0].text = JSON.stringify(answer);
+      } else rows.find(row => row.type === 'assistant').message.content[0].input.summary = 'Different original session answer';
+    } } }));
+    assert.equal(r.cold().current, null); r.assertOriginals();
+  } finally { r.f.cleanup(); }
+});
+
+
+test('D35T36 claude genuine same-text archive for a different finding cannot supply the original binding', () => {
+  const r = d35t36Review('deletion', { lines: [2] });
+  try {
+    const history = r.artifacts.priorCodeReviewVerdicts({ worktreePath: r.f.root,
+      repository: r.targets.repositoryIdentity(r.f.root), phaseDir: r.f.phase });
+    assert.equal(history[0].answer_authenticated, true);
+    assert.equal(history[0].findings[0].occurrence, 1);
+    const fake = r.core.normalizeResult({ ...r.firstRaw, findings: [{ ...r.firstRaw.findings[0], line: 6 }] }, {
+      round: 1, scope: 'full', readSource: file => fs.readFileSync(path.join(r.f.root, file), 'utf8'),
+    });
+    assert.equal(fake.findings[0].occurrence, 3);
+    assert.throws(() => r.next(2, { predecessor: { ...r.first.result, findings: fake.findings } }),
+      error => error.code === 'REVIEW_NATIVE_INVALID');
+    assert.equal(r.cold().current, null); r.assertOriginals();
+  } finally { r.f.cleanup(); }
+});
+
+for (const originScope of ['foreign-phase', 'foreign-pr'])
+test('D35T36 claude a fully authenticated ' + originScope + ' archive cannot authorize this predecessor', () => {
+  const r = d35t36Review('deletion', { originScope });
+  try {
+    const history = r.artifacts.priorCodeReviewVerdicts({ worktreePath: r.f.root,
+      repository: r.targets.repositoryIdentity(r.f.root), phaseDir: originScope === 'foreign-phase' ? '53-foreign' : r.f.phase });
+    assert.equal(history.length, 1); assert.equal(history[0].answer_authenticated, true);
+    assert.throws(() => r.next(2, { mutateAnswer(answer) {
+      answer.review_completeness = 'incomplete'; answer.limitations = ['Controlled foreign origin refusal'];
+      Object.assign(answer, { origin_head: r.first.result.head, origin_dispatch: r.first.dispatchId,
+        origin_artifact: r.firstSeal.artifact_ref });
+    } }), error => error.code === 'REVIEW_NATIVE_INVALID');
+    assert.equal(r.cold().current, null); r.assertOriginals();
+  } finally { r.f.cleanup(); }
+});
+
+test('D35T36 claude a genuine foreign repository archive and request origin hints grant no lineage', () => {
+  const foreign = d35t36Review();
+  const r = d35t36Review('deletion', { unsealed: true });
+  try {
+    const history = foreign.artifacts.priorCodeReviewVerdicts({ worktreePath: foreign.f.root,
+      repository: foreign.targets.repositoryIdentity(foreign.f.root), phaseDir: foreign.f.phase });
+    assert.equal(history[0].answer_authenticated, true);
+    assert.equal(foreign.original.identity, r.original.identity);
+    assert.throws(() => r.next(2, { mutateAnswer(answer) {
+      answer.review_completeness = 'incomplete'; answer.limitations = ['Controlled foreign repository refusal'];
+    }, mutateInput(input) {
+      Object.assign(input, { origin_head: foreign.first.result.head, origin_dispatch: foreign.first.dispatchId,
+        origin_artifact: foreign.firstSeal.artifact_ref });
+    } }), error => error.code === 'REVIEW_NATIVE_INVALID');
+    assert.equal(r.cold().current, null); foreign.assertOriginals();
+  } finally { r.f.cleanup(); foreign.f.cleanup(); }
+});
+
+test('D35T36 claude a valid original archive outside current source ancestry grants no lineage', () => {
+  const r = d35t36Review();
+  try {
+    r.f.git(['reset', '--hard', r.f.base]);
+    assert.throws(() => r.next(2, { mutateAnswer(answer) {
+      answer.review_completeness = 'incomplete'; answer.limitations = ['Controlled unrelated ancestry refusal'];
+    } }), error => error.code === 'REVIEW_NATIVE_INVALID' && /ancestry/.test(error.message));
+    assert.equal(r.cold().current, null); r.assertOriginals();
+  } finally { r.f.cleanup(); }
+});

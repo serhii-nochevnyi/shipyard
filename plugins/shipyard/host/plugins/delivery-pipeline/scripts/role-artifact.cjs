@@ -6386,7 +6386,74 @@ function historicalCodeReviewRoot(worktree, original) {
   return current.root;
 }
 
-function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, retained }, replay) {
+function codeReviewReplayState() {
+  return { active: new Set(), memo: new Map(), catalogues: new Map(), records: 0 };
+}
+
+function codeReviewLineageCatalogues(identity, packet, fields, state) {
+  const roots = new Set([identity.worktree, ...registeredPhaseWorktrees(identity.worktree), packet.canonical_root]);
+  if (roots.size > 1000) fail('REVIEW_NATIVE_INVALID', 'original code-review lineage worktrees exceed their bound');
+  const rows = [];
+  for (const root of roots) {
+    if (typeof root !== 'string' || fs.realpathSync(root) !== root)
+      fail('REVIEW_NATIVE_INVALID', 'original code-review lineage worktree is not physical');
+    const key = root + ':' + fields.repository + ':' + fields.phase;
+    if (!state.catalogues.has(key)) {
+      const records = (fs.existsSync(path.join(archiveAuthorityDirectory(root), 'catalogue.json'))
+        ? Object.values(authorityState(root).payload.records) : []).filter(record => {
+          if (record.receipt?.role !== 'code-review') return false;
+          const subject = phaseSubjectFields(authenticatedRecordSubject(record));
+          return subject?.repository === fields.repository && subject.phase === fields.phase;
+        });
+      state.records += records.length;
+      if (state.records > 1000) fail('REVIEW_NATIVE_INVALID', 'original code-review lineage records exceed their bound');
+      state.catalogues.set(key, records);
+    }
+    for (const record of state.catalogues.get(key)) rows.push({ worktree: root, record });
+  }
+  return rows;
+}
+
+function authenticateCarriedCodeReviewFindings({ trusted, identity, packet, prior, readSource, state }) {
+  if (!prior.length) return;
+  const core = require('./code-review-core.cjs'), context = packet.role_context;
+  const fields = phaseSubjectFields(trusted.record.ticket);
+  if (!fields || !context.prior_head || context.review_round < 2)
+    fail('REVIEW_NATIVE_INVALID', 'original carried findings require a sealed predecessor');
+  try { reviewGit(identity.worktree, ['merge-base', '--is-ancestor', context.prior_head, identity.head]); }
+  catch { fail('REVIEW_NATIVE_INVALID', 'original carried predecessor is not reviewed ancestry'); }
+  const rows = codeReviewLineageCatalogues(identity, packet, fields, state);
+  const own = rows.find(row => row.record.dispatch_id === trusted.dispatchId)?.record;
+  const disagreements = new Map();
+  for (const finding of prior) {
+    if (!finding.disagreement) continue;
+    const key = finding.disagreement_identity;
+    if (!key || disagreements.has(key)) fail('REVIEW_NATIVE_INVALID', 'original carried disagreement binding is invalid');
+    disagreements.set(key, finding.disagreement);
+  }
+  const deltaDiff = reviewGit(identity.worktree, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
+    context.prior_head, identity.head, ...require('./development-artifacts.cjs').productPathspec()]);
+  const matches = new Set();
+  for (const { worktree, record } of rows) {
+    if (record.receipt?.role !== 'code-review' || !record.review_current || record.dispatch_id === trusted.dispatchId) continue;
+    const previous = phaseSubjectFields(authenticatedRecordSubject(record));
+    if (!previous || previous.repository !== fields.repository || previous.phase !== fields.phase
+        || previous.pr !== fields.pr || previous.head !== context.prior_head
+        || own && !(record.sealed_at < own.sealed_at)) continue;
+    const pin = record.pins.find(pin => pin.path === archiveRelative(record.dispatch_id, FINDINGS_NAME));
+    if (!pin) continue;
+    const original = JSON.parse(readPinnedArchiveFile(worktree, pin, 'original lineage findings'));
+    if (original.review_round !== context.review_round - 1 || original.review_completeness !== 'complete') continue;
+    const predecessor = authenticatedCodeReviewRecord(worktree, record, identity.repository.identity, state);
+    if (!predecessor.answer_authenticated) continue;
+    const carried = core.carryPriorFindings({ priorFindings: predecessor, deltaDiff, readSource, disagreements });
+    if (stable(JSON.parse(JSON.stringify(carried))) === stable(prior)) matches.add(record.dispatch_id);
+  }
+  if (matches.size !== 1) fail('REVIEW_NATIVE_INVALID', matches.size
+    ? 'original carried source lineage is ambiguous' : 'original carried findings lack authenticated sealed source lineage');
+}
+
+function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, retained }, replay, lineage = codeReviewReplayState()) {
   const core = require('./code-review-core.cjs'), packets = require('./context-packet.cjs');
   const collector = require('./codex-arch-review-context.cjs');
   const retention = retained || currentReviewRetention(identity.worktree, trusted);
@@ -6497,24 +6564,13 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
     fail('REVIEW_NATIVE_REQUIRED', 'complete original code-review normalization inputs are required');
   const sourceReader = head => core.createSourceReader({ head, git: (args, maximum) =>
     execFileSync('git', ['-C', identity.worktree, ...args], { encoding: 'utf8', timeout: 30000, maxBuffer: maximum }) });
-  const readSource = sourceReader(identity.head), readPriorSource = sourceReader(context.prior_head || identity.head);
+  const readSource = sourceReader(identity.head);
   for (const finding of prior) {
     const citation = core.resolveCitation({ path: finding.path, line: finding.line, quotedText: finding.line_text, readSource });
     if (finding.identity && (citation.identity !== finding.identity || citation.occurrence !== finding.occurrence))
       fail('REVIEW_NATIVE_INVALID', 'original carried citation differs from reviewed source');
-    for (const key of ['stored_identity', 'disagreement_identity']) {
-      if (!finding[key]) continue;
-      const source = readPriorSource(finding.path);
-      let ordinal = 0, found = false;
-      for (const line of (source || '').split('\n')) {
-        if (core.normalizeSourceLine(line) !== core.normalizeSourceLine(finding.line_text || '')) continue;
-        if (core.lineIdentity({ path: finding.path, lineText: line, ordinal: ++ordinal }) === finding[key]) found = true;
-      }
-      if (!found && (!finding.occurrence || !finding.line_text || core.lineIdentity({ path: finding.path,
-          lineText: finding.line_text, ordinal: finding.occurrence }) !== finding[key]))
-        fail('REVIEW_NATIVE_INVALID', 'original carried identity lacks authenticated source');
-    }
   }
+  authenticateCarriedCodeReviewFindings({ trusted, identity, packet, prior, readSource, state: lineage });
   const options = { round: context.review_round, scope: context.review_scope, priorFindings: prior, readSource };
   let normalized;
   if (trusted.receipt.runtime === 'claude') normalized = core.normalizeResult({ ...original,
@@ -6670,7 +6726,20 @@ function codeReviewResultData(result, metadata, input, identity, ticketSet) {
     partitions_total: coverage.length, partitions_not_reviewed: notReviewed };
 }
 
-function authenticatedCodeReviewRecord(worktree, record, repository) {
+function authenticatedCodeReviewRecord(worktree, record, repository, lineage = codeReviewReplayState()) {
+  const key = worktree + ':' + record.dispatch_id;
+  if (lineage.active.has(record.dispatch_id) || lineage.active.size >= require('./code-review-core.cjs').ROUND_CAP)
+    fail('REVIEW_NATIVE_INVALID', 'original code-review source lineage is cyclic or exceeds its bound');
+  if (lineage.memo.has(key)) return lineage.memo.get(key);
+  lineage.active.add(record.dispatch_id);
+  try {
+    const reviewed = replayCodeReviewRecord(worktree, record, repository, lineage);
+    lineage.memo.set(key, reviewed);
+    return reviewed;
+  } finally { lineage.active.delete(record.dispatch_id); }
+}
+
+function replayCodeReviewRecord(worktree, record, repository, lineage) {
   const subject = authenticatedRecordSubject(record);
   const fields = phaseSubjectFields(subject);
   if (!fields || fields.repository !== repository) return null;
@@ -6713,8 +6782,9 @@ function authenticatedCodeReviewRecord(worktree, record, repository) {
   let answerAuthenticated = false;
   try {
     const replay = authenticateCodeReviewAnswer({ trusted, result: findings, evidence: Buffer.from(evidence.content),
-      identity, retained: record.review_current }, HISTORICAL_CODE_REVIEW_REPLAY);
-    answerAuthenticated = stable(replay) === stable(manifest.current_review || replay);
+      identity, retained: record.review_current }, HISTORICAL_CODE_REVIEW_REPLAY, lineage);
+    answerAuthenticated = !!record.review_current && !!manifest.current_review
+      && stable(replay) === stable(manifest.current_review);
   } catch {}
   return { ...data, answer_authenticated: answerAuthenticated,
     coverage_range: answerAuthenticated ? codeReviewCoverageRange(trusted, findings, identity) : null, head: manifest.head, base_commit: manifest.base_commit, prior_head: manifest.prior_head,
@@ -6727,14 +6797,14 @@ function priorCodeReviewVerdicts({ worktreePath, repository, phaseDir, graphDir 
   const candidates = new Set([root, ...registeredPhaseWorktrees(root)]);
   if (graphDir) candidates.add(fs.realpathSync(path.resolve(graphDir, '../..')));
   if (candidates.size > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'code-review worktrees exceed their bound');
-  const records = [], seen = new Set();
+  const records = [], seen = new Set(), lineage = codeReviewReplayState();
   for (const worktree of candidates) {
     if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
     for (const record of Object.values(authorityState(worktree).payload.records)) {
       if (record.receipt?.role !== 'code-review') continue;
       const fields = phaseSubjectFields(authenticatedRecordSubject(record));
       if (!fields || fields.phase !== phaseDir || fields.repository !== repository) continue;
-      const reviewed = authenticatedCodeReviewRecord(worktree, record, repository);
+      const reviewed = authenticatedCodeReviewRecord(worktree, record, repository, lineage);
       if (seen.has(record.dispatch_id)) continue;
       if (records.length >= 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'code-review verdicts exceed their bound');
       seen.add(record.dispatch_id); records.push(reviewed);
