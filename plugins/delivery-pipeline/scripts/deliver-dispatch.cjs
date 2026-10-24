@@ -514,8 +514,8 @@ function buildFail(field, message) {
 function parseBuildArgs(argv) {
   const role = argv[0];
   const ticket = argv[1];
-  if (!['arch-review', 'ci-fix', 'review-fix', 'research', 'decomposition'].includes(role)) {
-    buildFail('--role', 'build role must be arch-review, ci-fix, review-fix, research, or decomposition');
+  if (!['arch-review', 'code-review', 'ci-fix', 'review-fix', 'research', 'decomposition'].includes(role)) {
+    buildFail('--role', 'build role must be arch-review, code-review, ci-fix, review-fix, research, or decomposition');
   }
   if (typeof ticket !== 'string' || !ticket.trim()) buildFail('<ticket>', 'build ticket or planning input is required');
   const args = { role, ticket, runtime: 'claude' };
@@ -564,8 +564,9 @@ function parseBuildArgs(argv) {
   if (role === 'research' && !/^INV-[A-Za-z0-9-]+$/.test(ticket)) {
     buildFail('<INV-id>', `invalid investigation id ${ticket}`);
   }
+  if (role === 'code-review' && (!args.phase || !args.pr)) buildFail('--phase/--pr', 'code-review requires --phase and --pr');
   if (role === 'decomposition' && !args.phase) buildFail('--phase', 'decomposition requires --phase <N>');
-  if (!['decomposition', 'arch-review', 'research'].includes(role) && args.phase) {
+  if (!['decomposition', 'arch-review', 'code-review', 'research'].includes(role) && args.phase) {
     buildFail('--phase', '--phase is only valid for research, decomposition, or phase architecture review');
   }
   if (role === 'decomposition' && !/^INV-[A-Za-z0-9-]+$/.test(ticket)
@@ -575,7 +576,7 @@ function parseBuildArgs(argv) {
   if ((role === 'research' || role === 'decomposition') && args.pr !== undefined) {
     buildFail('--pr', '--pr is not valid for planning requests');
   }
-  if (args.repo !== undefined && !(role === 'arch-review' && args.phase)) buildFail('--repo', '--repo requires phase architecture review');
+  if (args.repo !== undefined && !(['arch-review', 'code-review'].includes(role) && args.phase)) buildFail('--repo', '--repo requires phase architecture review');
   return args;
 }
 
@@ -1154,9 +1155,10 @@ function requireArchitectureTarget(input, args, options) {
   return live;
 }
 function buildPhaseArchitectureRequest(args, options) {
-  if (!args.pr) buildFail('--pr', 'phase architecture review requires an explicit integration PR');
+  if (!args.pr) buildFail('--pr', 'phase review requires an explicit integration PR');
   const input = planningBuildContext(options);
   const branch = git(input.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const repository = repositoryIdentity(input.worktree);
   const repo = args.repo ?? null;
   let row;
   try {
@@ -1168,15 +1170,34 @@ function buildPhaseArchitectureRequest(args, options) {
   const state = stateRaw?.tickets || stateRaw;
   if (!object(state)) buildFail('state', 'canonical phase evidence is unavailable');
   const live = requireArchitectureTarget({ ...input, row, branch, stateRow: {} }, args, options);
-  const repository = repositoryIdentity(input.worktree);
+  const flow = require('./phase-code-review.cjs');
+  const match = flow.matchEpicPullRequest({ graph: input.graph, state, live, repo, phase: args.phase });
+  if (args.role === 'code-review' && match.kind !== 'epic') buildFail('--pr',
+    `phase code review is ${match.kind}: ${match.reason || 'this PR is a ticket PR; the phase code review applies only to the phase epic PR'}. ` +
+    `The operator can set delivery_pipeline.code_review to "report" in ${path.join(input.projectRoot, '.planning/config.json')} for this PR (nothing is held in report mode); there is no override flag and no waiver record.`);
+  if (args.role === 'arch-review') {
+    const gate = flow.evaluateGate({ phase: args.phase, pr: args.pr, worktree: input.worktree,
+      graphDir: input.graphDir, repo, live }, options);
+    if (!gate.ok) buildFail('--pr', gate.message);
+  }
   const binding = require('./architecture-target.cjs').phaseBinding({ graph: input.graph, state,
-    phase: args.phase, repository, repo, branch, pr: args.pr, head: live.headRefOid, base: live.baseRefOid });
-  if (args.ticket !== binding.phase) buildFail('<phase>', 'phase selector must name its canonical directory');
-  if (args.runtime === 'claude') return { schema: claudeRoleHost.REQUEST_SCHEMA, role: 'arch-review',
-    worktree: input.worktree, phase: binding.phase, pr: args.pr, repo: binding.repo };
-  return { scope: { run_id: `deliver-arch-${crypto.randomUUID()}`, ticket: binding.subject,
+    phase: args.phase, repository, repo, branch: match.branch || branch, pr: args.pr, head: live.headRefOid, base: live.baseRefOid });
+  require('./architecture-target.cjs').parseSubject('architecture-review', binding.subject);
+  if (args.ticket !== binding.phase || (match.kind === 'epic' && binding.phase !== match.phase_dir)) buildFail('<phase>', 'phase selector must name its canonical directory');
+  if (args.runtime === 'claude') {
+    const request = { schema: claudeRoleHost.REQUEST_SCHEMA, role: args.role,
+      worktree: input.worktree, phase: binding.phase, pr: args.pr, repo: binding.repo };
+    validateBuildRequest(args.role, claudeRoleHost.parseRequest, request);
+    return request;
+  }
+  const request = { scope: { run_id: `deliver-${args.role}-${crypto.randomUUID()}`, ticket: binding.subject,
     phase: args.phase, worktree: input.worktree, runtime: 'codex', provider: 'openai' },
-    graph_dir: input.graphDir, role: 'arch-review', signals: {}, context: { repo: binding.repo } };
+    graph_dir: input.graphDir, role: args.role, signals: {}, context: { repo: binding.repo } };
+  validateBuildRequest(args.role, value => {
+    const { scope: _scope, graph_dir: _graphDir, ...launch } = value;
+    return codexHost.validateArgs(launch);
+  }, request);
+  return request;
 }
 
 function build(argv, options = {}) {
@@ -1191,7 +1212,7 @@ function build(argv, options = {}) {
   if (args.role === 'research' || args.role === 'decomposition') {
     return buildPlanningRequest(args, options);
   }
-  if (args.role === 'arch-review' && args.phase) return buildPhaseArchitectureRequest(args, options);
+  if (['arch-review', 'code-review'].includes(args.role) && args.phase) return buildPhaseArchitectureRequest(args, options);
   const input = buildTicketContext(args, options);
   if (args.role === 'arch-review') requireArchitectureTarget(input, args, options);
   const signals = buildSignals(input.row);

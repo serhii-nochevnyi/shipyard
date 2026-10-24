@@ -1,0 +1,592 @@
+{
+ "runs": {
+  "A1": [
+   {
+    "id": "CR-01",
+    "sev": "CR",
+    "title": "A corrupt or malformed `jira-projection.json` is read as \"nothing projected\", re",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 139,
+    "text": "function load(dir = GRAPH_DIR) {",
+    "key": "b2fab0f3ec"
+   },
+   {
+    "id": "WR-01",
+    "sev": "WR",
+    "title": "`plan` run from the wrong cwd answers \"projection switched off (the default)\" wi",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 441,
+    "text": "function planItems(dir = GRAPH_DIR) {",
+    "key": "cd9a6053fe"
+   },
+   {
+    "id": "WR-02",
+    "sev": "WR",
+    "title": "The planner's empty answer cannot tell a misconfigured map, an unreadable `ticke",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 444,
+    "text": "const { config, valid, error } = loadConfig(root);",
+    "key": "aa760610e1"
+   },
+   {
+    "id": "WR-03",
+    "sev": "WR",
+    "title": "`delivery.jira` is passed through unvalidated and interpolated raw into the huma",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 477,
+    "text": "const keyOf = new Map();",
+    "key": "6894c4779a"
+   },
+   {
+    "id": "WR-04",
+    "sev": "WR",
+    "title": "`mutate`'s refusal is bypassed for any explicit `dir`, and the lock is not \"besi",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 104,
+    "text": "const lockRootFor = (dir) => path.resolve(dir, '..', '..');",
+    "key": "0f263a0132"
+   },
+   {
+    "id": "IN-01",
+    "sev": "IN",
+    "title": "Collapse-then-filter silently drops a mapped intermediate status when the final ",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 502,
+    "text": "const latest = new Map();",
+    "key": "d87cf08577"
+   },
+   {
+    "id": "IN-02",
+    "sev": "IN",
+    "title": "An undatable item `ts` suppresses an unreachable report forever for the same `to",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 419,
+    "text": "function unreachableSuppressed(item, store) {",
+    "key": "be03f8ca5b"
+   },
+   {
+    "id": "IN-03",
+    "sev": "IN",
+    "title": "The `--graph` / `SHIPYARD_GRAPH_DIR` parsing block is now copy-pasted a fifth ti",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 53,
+    "text": "// Same resolution and the same flag spelling as drift-record.cjs /",
+    "key": "1819b26673"
+   },
+   {
+    "id": "IN-04",
+    "sev": "IN",
+    "title": "Test gaps that matter for the defects above",
+    "path": null,
+    "line": null,
+    "text": null,
+    "key": null
+   },
+   {
+    "id": "IN-05",
+    "sev": "IN",
+    "title": "Inconsistent `--json` shape and an undocumented verb alias",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 442,
+    "text": "const out = { graph: dir, enabled: true, reason: null, items: [], warn",
+    "key": "2b868a8434"
+   }
+  ],
+  "A2": [
+   {
+    "id": "CR-01",
+    "sev": "CR",
+    "title": "An unparseable `jira-projection.json` is silently replaced on the next write, de",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 139,
+    "text": "function load(dir = GRAPH_DIR) {",
+    "key": "b2fab0f3ec"
+   },
+   {
+    "id": "WR-01",
+    "sev": "WR",
+    "title": "`planItems` discards every warning `loadConfig` produced, then reports a mistype",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 444,
+    "text": "const { config, valid, error } = loadConfig(root);",
+    "key": "aa760610e1"
+   },
+   {
+    "id": "WR-02",
+    "sev": "WR",
+    "title": "Collapse runs before the mapping filter, so a status the operator mapped is neve",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 502,
+    "text": "const latest = new Map();",
+    "key": "d87cf08577"
+   },
+   {
+    "id": "WR-03",
+    "sev": "WR",
+    "title": "`plan` run from a cwd with no ticket graph exits 0 and says the feature is \"off\"",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 441,
+    "text": "function planItems(dir = GRAPH_DIR) {",
+    "key": "cd9a6053fe"
+   },
+   {
+    "id": "WR-04",
+    "sev": "WR",
+    "title": "Two `--graph` spellings still resolve to a directory the parser claims to reject",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 59,
+    "text": "const GRAPH_FLAG_AT = ARGV_ALL.indexOf('--graph');",
+    "key": "e4810e3d17"
+   },
+   {
+    "id": "WR-05",
+    "sev": "WR",
+    "title": "The project root and the lock root are derived by a blind `dir/../..`, and the w",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 104,
+    "text": "const lockRootFor = (dir) => path.resolve(dir, '..', '..');",
+    "key": "0f263a0132"
+   },
+   {
+    "id": "WR-06",
+    "sev": "WR",
+    "title": "The exported `compareStatus` gives confident answers for unknown statuses, and i",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 112,
+    "text": "function statusRank(status) {",
+    "key": "034e96cfc6"
+   },
+   {
+    "id": "WR-07",
+    "sev": "WR",
+    "title": "The watermark store's shape is checked only for truthiness, so malformed-but-par",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 142,
+    "text": "return raw && typeof raw === 'object' && raw.tickets ? raw : { tickets",
+    "key": "84c6c1a8c2"
+   },
+   {
+    "id": "IN-01",
+    "sev": "IN",
+    "title": "`lockRootFor` and `projectRootFor` are the same function twice",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 104,
+    "text": "const lockRootFor = (dir) => path.resolve(dir, '..', '..');",
+    "key": "0f263a0132"
+   },
+   {
+    "id": "IN-02",
+    "sev": "IN",
+    "title": "An unrecognised `projected_to` suppresses a ticket forever with no signal, and a",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 168,
+    "text": "function hasProjected(ticket, to, store = load()) {",
+    "key": "1053a63bd7"
+   },
+   {
+    "id": "IN-03",
+    "sev": "IN",
+    "title": "The seek is defeated in steady state, and each step re-reads and re-parses the w",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 352,
+    "text": "const need = new Map();",
+    "key": "a2159eac8b"
+   },
+   {
+    "id": "IN-04",
+    "sev": "IN",
+    "title": "A no-op `markProjected` still rewrites the store",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 199,
+    "text": "fs.mkdirSync(dir, { recursive: true });",
+    "key": "647589b6ea"
+   },
+   {
+    "id": "IN-05",
+    "sev": "IN",
+    "title": "The test suite leaves the defects above unpinned, and its negative pin is weaker",
+    "path": "tests/unit/jira-project.test.cjs",
+    "line": 133,
+    "text": "test('the EMPTY MAP is the default, and the default is off', () => {",
+    "key": "22db0dfe57"
+   }
+  ],
+  "B1": [
+   {
+    "id": "CR-01",
+    "sev": "CR",
+    "title": "A corrupt or mis-shaped `jira-projection.json` is silently read as \"empty\", and ",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 139,
+    "text": "function load(dir = GRAPH_DIR) {",
+    "key": "b2fab0f3ec"
+   },
+   {
+    "id": "WR-01",
+    "sev": "WR",
+    "title": "The exported `compareStatus` answers \"earlier\" for an unknown status, contradict",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 108,
+    "text": "// Where a status sits in OUR order, or -1 when the value is not one o",
+    "key": "5a379db590"
+   },
+   {
+    "id": "WR-02",
+    "sev": "WR",
+    "title": "A mapped lower status is never projected when the board skips past it, and the p",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 496,
+    "text": "// COLLAPSE, in append order. Several `status_change`s for one ticket ",
+    "key": "948b05ce7f"
+   },
+   {
+    "id": "WR-03",
+    "sev": "WR",
+    "title": "The \"no ticket graph\" refusal is bypassed for any explicit directory, so a typo'",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 190,
+    "text": "if (!GRAPH_EXPLICIT && dir === GRAPH_DIR && !fs.existsSync(path.join(d",
+    "key": "3f24b640bf"
+   },
+   {
+    "id": "WR-04",
+    "sev": "WR",
+    "title": "The project root is assumed to be `<graph>/../..`, so a non-standard graph dir s",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 104,
+    "text": "const lockRootFor = (dir) => path.resolve(dir, '..', '..');",
+    "key": "0f263a0132"
+   },
+   {
+    "id": "WR-05",
+    "sev": "WR",
+    "title": "The \"reports what the tracker was last TOLD\" test cannot fail: the fixture makes",
+    "path": "tests/unit/jira-project.test.cjs",
+    "line": 249,
+    "text": "test('with a watermark the item reports what the tracker was last TOLD",
+    "key": "b68ac19343"
+   },
+   {
+    "id": "WR-06",
+    "sev": "WR",
+    "title": "Deterministic item ordering is unasserted, and the tests sort on their own side,",
+    "path": "tests/unit/jira-project.test.cjs",
+    "line": 422,
+    "text": "assert.deepEqual(ids(out).sort(), ['T-21-02', 'T-24-05']);",
+    "key": "1a3c3d69bb"
+   },
+   {
+    "id": "IN-01",
+    "sev": "IN",
+    "title": "`ci-wait.cjs` gains an unrelated, meaningless trailing comment after the infinit",
+    "path": "plugins/delivery-pipeline/scripts/ci-wait.cjs",
+    "line": 609,
+    "text": "",
+    "key": null
+   },
+   {
+    "id": "IN-02",
+    "sev": "IN",
+    "title": "`plan --json` has an unstable shape, and an unorderable watermark is skipped for",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 441,
+    "text": "function planItems(dir = GRAPH_DIR) {",
+    "key": "cd9a6053fe"
+   },
+   {
+    "id": "IN-03",
+    "sev": "IN",
+    "title": "`statusChangesIn` accepts events with no or unknown `to`, unlike `front.cjs`'s j",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 310,
+    "text": "if (!e || e.event !== 'status_change' || !e.ticket) continue;",
+    "key": "faaf5e9228"
+   },
+   {
+    "id": "IN-04",
+    "sev": "IN",
+    "title": "Speculative and duplicated code for a ticket that has not landed",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 104,
+    "text": "const lockRootFor = (dir) => path.resolve(dir, '..', '..');",
+    "key": "0f263a0132"
+   },
+   {
+    "id": "IN-05",
+    "sev": "IN",
+    "title": "Test header overstates provenance, and a hard-coded line reference will rot",
+    "path": "tests/unit/jira-project.test.cjs",
+    "line": 30,
+    "text": "// Every fixture line is a REAL record copied out of `.planning/graph/",
+    "key": "0678653ed7"
+   }
+  ],
+  "B2": [
+   {
+    "id": "CR-01",
+    "sev": "CR",
+    "title": "A corrupt or conflicted `jira-projection.json` is treated as \"nothing projected\"",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 151,
+    "text": "function load(dir = GRAPH_DIR) {",
+    "key": "b2fab0f3ec"
+   },
+   {
+    "id": "WR-01",
+    "sev": "WR",
+    "title": "A `status_change` with no `to` makes the journal scan stop early and silently dr",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 384,
+    "text": "for (const e of events) {",
+    "key": "cb0aa9bf13"
+   },
+   {
+    "id": "WR-02",
+    "sev": "WR",
+    "title": "`plan` from the wrong cwd answers \"switched off (the default)\", misdiagnoses the",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 453,
+    "text": "function planItems(dir = GRAPH_DIR) {",
+    "key": "cd9a6053fe"
+   },
+   {
+    "id": "IN-01",
+    "sev": "IN",
+    "title": "Twelve placeholder comment lines wedged into the file's explanatory header",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 21,
+    "text": "// replay shim: twelve explanatory comment lines inserted above every ",
+    "key": "3082ecea84"
+   },
+   {
+    "id": "IN-02",
+    "sev": "IN",
+    "title": "Comments that have gone stale now that the planner lives in this file",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 79,
+    "text": "// CLI only, deliberately: T-29-04's planner `require`s this file for ",
+    "key": "1b02e0aee1"
+   },
+   {
+    "id": "IN-03",
+    "sev": "IN",
+    "title": "`readSync`'s byte count is ignored, and `size` can go stale between `stat` and r",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 355,
+    "text": "const readFrom = (start) => {",
+    "key": "5c7ccd3fd3"
+   },
+   {
+    "id": "IN-04",
+    "sev": "IN",
+    "title": "Suppression lifts on a wall-clock comparison, while collapse explicitly refuses ",
+    "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+    "line": 431,
+    "text": "function unreachableSuppressed(item, store) {",
+    "key": "be03f8ca5b"
+   }
+  ]
+ },
+ "byKey": {
+  "b2fab0f3ec": {
+   "text": "function load(dir = GRAPH_DIR) {",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A1": "CR-01",
+    "A2": "CR-01",
+    "B1": "CR-01",
+    "B2": "CR-01"
+   }
+  },
+  "cd9a6053fe": {
+   "text": "function planItems(dir = GRAPH_DIR) {",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A1": "WR-01",
+    "A2": "WR-03",
+    "B1": "IN-02",
+    "B2": "WR-02"
+   }
+  },
+  "aa760610e1": {
+   "text": "const { config, valid, error } = loadConfig(root);",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A1": "WR-02",
+    "A2": "WR-01"
+   }
+  },
+  "6894c4779a": {
+   "text": "const keyOf = new Map();",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A1": "WR-03"
+   }
+  },
+  "0f263a0132": {
+   "text": "const lockRootFor = (dir) => path.resolve(dir, '..', '..');",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A1": "WR-04",
+    "A2": "IN-01",
+    "B1": "IN-04"
+   }
+  },
+  "d87cf08577": {
+   "text": "const latest = new Map();",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A1": "IN-01",
+    "A2": "WR-02"
+   }
+  },
+  "be03f8ca5b": {
+   "text": "function unreachableSuppressed(item, store) {",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A1": "IN-02",
+    "B2": "IN-04"
+   }
+  },
+  "1819b26673": {
+   "text": "// Same resolution and the same flag spelling as drift-record.cjs /",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A1": "IN-03"
+   }
+  },
+  "2b868a8434": {
+   "text": "const out = { graph: dir, enabled: true, reason: null, items: [], warn",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A1": "IN-05"
+   }
+  },
+  "e4810e3d17": {
+   "text": "const GRAPH_FLAG_AT = ARGV_ALL.indexOf('--graph');",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A2": "WR-04"
+   }
+  },
+  "034e96cfc6": {
+   "text": "function statusRank(status) {",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A2": "WR-06"
+   }
+  },
+  "84c6c1a8c2": {
+   "text": "return raw && typeof raw === 'object' && raw.tickets ? raw : { tickets",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A2": "WR-07"
+   }
+  },
+  "1053a63bd7": {
+   "text": "function hasProjected(ticket, to, store = load()) {",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A2": "IN-02"
+   }
+  },
+  "a2159eac8b": {
+   "text": "const need = new Map();",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A2": "IN-03"
+   }
+  },
+  "647589b6ea": {
+   "text": "fs.mkdirSync(dir, { recursive: true });",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "A2": "IN-04"
+   }
+  },
+  "22db0dfe57": {
+   "text": "test('the EMPTY MAP is the default, and the default is off', () => {",
+   "path": "tests/unit/jira-project.test.cjs",
+   "runs": {
+    "A2": "IN-05"
+   }
+  },
+  "5a379db590": {
+   "text": "// Where a status sits in OUR order, or -1 when the value is not one o",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "B1": "WR-01"
+   }
+  },
+  "948b05ce7f": {
+   "text": "// COLLAPSE, in append order. Several `status_change`s for one ticket ",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "B1": "WR-02"
+   }
+  },
+  "3f24b640bf": {
+   "text": "if (!GRAPH_EXPLICIT && dir === GRAPH_DIR && !fs.existsSync(path.join(d",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "B1": "WR-03"
+   }
+  },
+  "b68ac19343": {
+   "text": "test('with a watermark the item reports what the tracker was last TOLD",
+   "path": "tests/unit/jira-project.test.cjs",
+   "runs": {
+    "B1": "WR-05"
+   }
+  },
+  "1a3c3d69bb": {
+   "text": "assert.deepEqual(ids(out).sort(), ['T-21-02', 'T-24-05']);",
+   "path": "tests/unit/jira-project.test.cjs",
+   "runs": {
+    "B1": "WR-06"
+   }
+  },
+  "faaf5e9228": {
+   "text": "if (!e || e.event !== 'status_change' || !e.ticket) continue;",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "B1": "IN-03"
+   }
+  },
+  "0678653ed7": {
+   "text": "// Every fixture line is a REAL record copied out of `.planning/graph/",
+   "path": "tests/unit/jira-project.test.cjs",
+   "runs": {
+    "B1": "IN-05"
+   }
+  },
+  "cb0aa9bf13": {
+   "text": "for (const e of events) {",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "B2": "WR-01"
+   }
+  },
+  "3082ecea84": {
+   "text": "// replay shim: twelve explanatory comment lines inserted above every ",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "B2": "IN-01"
+   }
+  },
+  "1b02e0aee1": {
+   "text": "// CLI only, deliberately: T-29-04's planner `require`s this file for ",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "B2": "IN-02"
+   }
+  },
+  "5c7ccd3fd3": {
+   "text": "const readFrom = (start) => {",
+   "path": "plugins/delivery-pipeline/scripts/jira-project.cjs",
+   "runs": {
+    "B2": "IN-03"
+   }
+  }
+ }
+}

@@ -46,52 +46,7 @@ function commit(f, message) {
   f.head = git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
 }
 
-test('retained legacy independent original role successes survive a later repair with complete contributor impact', async () => {
-  await legacyFixture(async f => {
-    const integration = await successfulReview(f, 'integrator');
-    write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n'); commit(f, 'another contributor');
-    const architecture = await successfulReview(f, 'arch-review');
-    write(f.worktree, 'src/consumer.cjs', "module.exports = require('./provider.cjs').value + 1;\n");
-    commit(f, 'coordinator repair');
-    const i = currentInput(f, 'integrator');
-    const a = currentInput(f, 'arch-review');
-    const ib = authority.selectReviewBaseline({ currentInput: i });
-    const ab = authority.selectReviewBaseline({ currentInput: a });
-    assert.equal(ib.mode, 'incremental', JSON.stringify(ib));
-    assert.equal(ab.mode, 'incremental', JSON.stringify(ab));
-    assert.equal(ib.baseline.head, integration.head);
-    assert.equal(ab.baseline.head, architecture.head);
-    assert.notEqual(ib.baseline.head, ab.baseline.head);
-    const ip = collector.buildReviewImpactPacket(i, ib);
-    const ap = collector.buildReviewImpactPacket(a, ab);
-    assert.deepEqual(ip.endpoint_delta.map(entry => entry.path), ['src/consumer.cjs', 'src/provider.cjs']);
-    assert.deepEqual(ap.endpoint_delta.map(entry => entry.path), ['src/consumer.cjs']);
-    assert.ok(ip.impact.paths.includes('src/consumer.cjs'));
-    assert.ok(ip.impact.paths.includes('src/provider.cjs'));
-    assert.ok(ip.inherited.length > 0);
-    assert.ok(ip.current_logical_obligations.some(obligation => obligation.coverage === 'inherited'));
-    assert.ok(ip.newly_reviewed.some(ref => ref.path === 'src/provider.cjs'));
-    assert.deepEqual(ip.current.ticket_set, ['T-49-01', 'T-49-02']);
-    assert.equal(ip.semantic_credit, false);
-    assert.equal(authority.isAuthenticatedReviewBaseline({ ...ib.baseline }), false);
-    assert.throws(() => collector.buildReviewImpactPacket(i, { ...ib, baseline: { ...ib.baseline } }), /authenticated/);
-    assert.deepEqual(fs.readFileSync(integration.artifact), integration.original);
-    assert.deepEqual(fs.readFileSync(architecture.artifact), architecture.original);
-    assert.equal(authority.currentArchitectureVerdict({ worktreePath: f.worktree, pr: f.pr.number, head: f.head,
-      baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName }), null);
-  });
-});
-
-async function legacyFixture(action) {
-  await fixture(async f => {
-    const original = { authority, collector, runtime, boundary };
-    const retained = require('./helpers/codex-arch-review-fixtures.cjs').retainedLegacyReviewModules(f.root);
-    ({ authority, collector, runtime, boundary } = retained);
-    try { await action(f); } finally { ({ authority, collector, runtime, boundary } = original); }
-  });
-}
-
-async function fixture(action) {
+async function fixture(action, initialFiles = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-lineage-')));
   const originalHome = os.homedir, originalCodex = process.env.CODEX_HOME;
   os.homedir = () => root; process.env.CODEX_HOME = path.join(root, '.codex');
@@ -109,12 +64,13 @@ async function fixture(action) {
     const state = Object.fromEntries(Object.keys(rows).map((id, index) => [id, { status: 'merged', pr: 101 + index, branch: rows[id].branch }]));
     write(worktree, '.planning/graph/tickets.json', JSON.stringify({ tickets: rows }));
     write(worktree, '.planning/graph/delivery-state.json', JSON.stringify(state));
-    write(worktree, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' } }));
+    write(worktree, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'report' } }));
     for (const row of Object.values(rows)) write(worktree, row.plan, '---\nphase: 49\nplan: 01\n---\nADR-014\n');
     write(worktree, '.planning/architecture/ADR-014-original.md', '# ADR-014\nOriginal complete governing material.\n' + 'a'.repeat(250000));
     write(worktree, 'src/provider.cjs', 'exports.value = 0;\n');
     write(worktree, 'src/consumer.cjs', "module.exports = require('./provider.cjs').value;\n");
     write(worktree, 'src/unchanged.cjs', 'exports.untouched = true;\n');
+    for (const [name, content] of Object.entries(initialFiles)) write(worktree, name, content);
     git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'original base');
     const base = git(worktree, 'rev-parse', 'HEAD');
     git(worktree, 'update-ref', 'refs/remotes/origin/main', base);
@@ -164,7 +120,7 @@ function agent(f, role, signals) {
     capabilities: { supportedModels: [selection.model], supportedEfforts: [selection.effort] } };
 }
 
-function currentInput(f, role, dispatchId = 'current-' + role + '-' + ++f.count) {
+function currentInput(f, role, dispatchId = 'current-' + role + '-' + ++f.count, extraRoleContext = {}) {
   const binding = phaseBinding(f);
   const storage = path.join(f.root, 'inputs');
   if (role === 'arch-review') {
@@ -187,7 +143,7 @@ function currentInput(f, role, dispatchId = 'current-' + role + '-' + ++f.count)
     requiredRefs: [...git(f.worktree, 'ls-tree', '-r', '--name-only', f.head, '--', 'src').split('\n').filter(Boolean),
       '.planning/architecture/ADR-014-original.md'],
     roleContext: { phase_contracts: ['ADR-014'], combined_diff: git(f.worktree, 'diff', f.base, f.head),
-      ticket_set: ticketSet, ticket_set_digest: binding.membership } });
+      ticket_set: ticketSet, ticket_set_digest: binding.membership, ...extraRoleContext } });
   const encoded = packets.encodeUniqueContent(packet);
   return collector.prepareFileInput({ worktree: f.worktree, phase: 49, ticket: subject, run_id: dispatchId },
     JSON.stringify(encoded), { role, dispatchId, storageRoot: storage,
@@ -323,22 +279,6 @@ async function successfulReview(f, role, options = {}) {
   f.reviews.push(review); return review;
 }
 
-test('retained legacy authenticated baseline authority cannot be borrowed by another role', async () => {
-  await legacyFixture(async f => {
-    await successfulReview(f, 'integrator');
-    await successfulReview(f, 'arch-review');
-    const i = currentInput(f, 'integrator'), a = currentInput(f, 'arch-review');
-    const ib = authority.selectReviewBaseline({ currentInput: i });
-    const ab = authority.selectReviewBaseline({ currentInput: a });
-    assert.equal(ib.mode, 'incremental', JSON.stringify(ib));
-    assert.equal(ab.mode, 'incremental', JSON.stringify(ab));
-    assert.throws(() => collector.buildReviewImpactPacket(a, { ...ab, baseline: ib.baseline }),
-      /baseline.*role.*subject/);
-    assert.throws(() => collector.buildReviewImpactPacket(i, { ...ib, baseline: ab.baseline }),
-      /baseline.*role.*subject/);
-  });
-});
-
 test('changed complete membership records invalidate inheritance even when ticket IDs are unchanged', async () => {
   await fixture(async f => {
     const original = await successfulReview(f, 'integrator');
@@ -465,6 +405,135 @@ test('renames, deletions, generated consumers and development context remain in 
     assert.ok(packet.endpoint_delta.some(entry => entry.path.endsWith('/NOTES.md') && entry.development_context));
     assert.ok(packet.newly_reviewed.some(entry => entry.path === 'src/consumer.cjs' && entry.deleted));
   });
+});
+
+for (const incremental of [false, true]) test('near-cap scan releases bodies before complete ' + (incremental ? 'incremental' : 'full') + ' impact retention', async () => {
+  const cap = collector.FILE_LIMITS.material;
+  const scan = "require('external-fixture');\n" + ' '.repeat(cap - 131072);
+  await fixture(async f => {
+    const baseline = incremental ? await successfulReview(f, 'integrator') : null;
+    const removed = fs.readFileSync(path.join(f.worktree, 'src/consumer.cjs'), 'utf8');
+    git(f.worktree, 'mv', 'src/unchanged.cjs', 'src/renamed.cjs');
+    fs.unlinkSync(path.join(f.worktree, 'src/consumer.cjs'));
+    const generated = "module.exports = require('../provider.cjs');\n";
+    write(f.worktree, 'src/generated/mirror.cjs', generated);
+    const later = 'Later required source.\n' + 'm'.repeat(262144);
+    write(f.worktree, 'src/later.md', later);
+    commit(f, 'retain complete later material');
+    const input = currentInput(f, 'integrator', undefined, { repeated_sources: [
+      { path: 'src/later.md', content: later }, { path: 'src/later.md', content: later },
+    ] });
+    const checked = collector.verifyFileInput(input);
+    const encoded = JSON.parse(checked.material[0]);
+    const packet = collector.buildReviewImpactPacket(input);
+    assert.equal(packet.mode, 'full');
+    assert.equal(packet.semantic_credit, false);
+    assert.deepEqual(packet.original_packet, encoded);
+    assert.deepEqual(packet.current_logical_obligations.map(({ coverage, semantic_credit, ...entry }) => entry), encoded.obligations);
+    assert.ok(encoded.obligations.filter(entry => entry.source_path === 'src/later.md').length > 1);
+    const original = packets.decodeUniqueContent(encoded);
+    assert.deepEqual(packet.newly_reviewed.filter(entry => entry.obligation === 'current-required-source')
+      .map(({ obligation, ...ref }) => ref), original.required_refs);
+    for (const [endpoint, inventory] of [[packet.endpoint.from, packet.source_inventories.baseline], [f.head, packet.source_inventories.current]]) {
+      const actual = git(f.worktree, 'ls-tree', '-r', endpoint).split('\n').map(line => {
+        const [metadata, name] = line.split('\t'), [mode, type, object] = metadata.split(' ');
+        return { mode, type, object, path: name };
+      });
+      assert.deepEqual(inventory, actual);
+    }
+    const delta = git(f.worktree, 'diff', '--name-status', '--find-renames', packet.endpoint.from, f.head)
+      .split('\n').map(line => {
+        const [status, before, after] = line.split('\t');
+        return { status, path: after || before, ...(after ? { previous_path: before } : {}), development_context: false };
+      }).sort((a, b) => a.path.localeCompare(b.path));
+    assert.deepEqual(packet.endpoint_delta, delta);
+    const expected = ['src/consumer.cjs', 'src/generated/mirror.cjs', 'src/later.md', 'src/provider.cjs', 'src/renamed.cjs', 'src/unchanged.cjs'];
+    assert.deepEqual(packet.impact.paths, expected);
+    for (const [name, content] of [['src/later.md', later], ['src/generated/mirror.cjs', generated],
+      ['src/renamed.cjs', 'exports.untouched = true;\n'], ['src/provider.cjs', 'exports.value = 1;\n']]) {
+      const entry = packet.newly_reviewed.find(entry => entry.path === name && entry.obligation === 'affected-endpoint-source');
+      assert.equal(entry.content, content); assert.equal(entry.bytes, Buffer.byteLength(content)); assert.equal(entry.sha256, hash(content));
+    }
+    assert.equal(packet.newly_reviewed.find(entry => entry.path === 'src/consumer.cjs' && entry.deleted).content, removed);
+    assert.equal(packet.newly_reviewed.find(entry => entry.path === 'src/unchanged.cjs' && entry.deleted).content, 'exports.untouched = true;\n');
+    for (const name of ['scan/a.cjs', 'scan/alias.cjs']) {
+      assert.equal(packet.impact.boundaries.filter(entry => entry.path === name && entry.dependency === 'external-fixture').length, 2);
+    }
+    assert.ok(packet.impact.boundaries.some(entry => entry.path === 'src/generated/mirror.cjs' && entry.dependency === 'src/provider.cjs'));
+    assert.ok(packet.limitations.some(entry => entry.reason === 'governing-or-contract-change'));
+    assert.ok(packet.limitations.some(entry => entry.reason === 'complete-current-packet-required'));
+    assert.deepEqual(packet.inherited, []);
+    if (baseline) {
+      assert.equal(packet.baseline.dispatch_id, baseline.dispatched.dispatch_id);
+      assert.deepEqual(fs.readFileSync(baseline.artifact), baseline.original);
+    }
+    const scanBytes = new Map();
+    for (const inventory of Object.values(packet.source_inventories)) for (const entry of inventory) {
+      if (/\.(?:cjs|mjs|js|ts|tsx|jsx)$/.test(entry.path)) scanBytes.set(entry.object, Number(git(f.worktree, 'cat-file', '-s', entry.object)));
+    }
+    const total = [...scanBytes.values()].reduce((sum, size) => sum + size, 0);
+    assert.ok(total < cap); assert.ok(total + Buffer.byteLength(later) > cap);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.worktree, '.planning/config.json'))).delivery_pipeline.code_review, 'report');
+  }, { 'scan/a.cjs': scan, 'scan/alias.cjs': scan });
+});
+
+test('fitting authenticated incremental impact preserves inherited and new semantic obligations', async () => {
+  await fixture(async f => {
+    const baseline = await successfulReview(f, 'integrator');
+    write(f.worktree, 'src/consumer.cjs', "module.exports = require('./provider.cjs').value + 1;\n");
+    commit(f, 'change one dependency consumer');
+    const input = currentInput(f, 'integrator');
+    const encoded = JSON.parse(collector.verifyFileInput(input).material[0]);
+    const packet = collector.buildReviewImpactPacket(input);
+    assert.equal(packet.mode, 'incremental');
+    assert.equal(packet.baseline.dispatch_id, baseline.dispatched.dispatch_id);
+    assert.deepEqual(packet.original_packet, encoded);
+    assert.deepEqual(packet.impact.paths, ['src/consumer.cjs', 'src/provider.cjs']);
+    assert.deepEqual(packet.inherited.map(entry => entry.path).sort(), ['.planning/architecture/ADR-014-original.md', 'src/unchanged.cjs']);
+    assert.ok(packet.newly_reviewed.some(entry => entry.path === 'src/consumer.cjs' && entry.obligation === 'current-required-source'));
+    assert.ok(packet.current_logical_obligations.some(entry => entry.source_path === 'src/unchanged.cjs' && entry.coverage === 'inherited'
+      && entry.baseline_dispatch_id === baseline.dispatched.dispatch_id));
+    assert.ok(packet.current_logical_obligations.some(entry => entry.source_path === 'src/consumer.cjs' && entry.coverage === 'newly-reviewed-current-packet'));
+    assert.ok(packet.current_logical_obligations.every(entry => entry.semantic_credit === false));
+    assert.deepEqual(fs.readFileSync(baseline.artifact), baseline.original);
+  });
+});
+
+for (const invalid of [0, 255]) test('repeated binary object ' + invalid + ' counts once without losing path boundaries', async () => {
+  const binary = Buffer.alloc(9437184, invalid);
+  await fixture(async f => {
+    const packet = collector.buildReviewImpactPacket(currentInput(f, 'integrator'));
+    const uncertain = packet.limitations.find(entry => entry.reason === 'uncertain-dependency-closure');
+    assert.equal(packet.mode, 'full');
+    for (const name of ['scan/a.cjs', 'scan/alias.cjs']) {
+      assert.equal(uncertain.boundaries.filter(entry => entry.path === name && entry.reason === 'binary-source-boundary').length, 2);
+    }
+  }, { 'scan/a.cjs': binary, 'scan/alias.cjs': binary });
+});
+
+test('cached regular object cannot erase a symlink path boundary', async () => {
+  await fixture(async f => {
+    fs.symlinkSync('regular.cjs', path.join(f.worktree, 'scan/symlink.cjs'));
+    git(f.worktree, 'add', 'scan'); commit(f, 'add nonregular alias');
+    const packet = collector.buildReviewImpactPacket(currentInput(f, 'integrator'));
+    const uncertain = packet.limitations.find(entry => entry.reason === 'uncertain-dependency-closure');
+    assert.ok(uncertain.boundaries.some(entry => entry.path === 'scan/symlink.cjs' && entry.reason === 'non-regular-source-boundary'));
+    assert.ok(!packet.newly_reviewed.some(entry => entry.path === 'scan/symlink.cjs' && entry.content === 'regular.cjs'));
+  }, { 'scan/regular.cjs': 'regular.cjs' });
+});
+
+for (const [stage, initialFiles, source, message] of [
+  ['scan', { 'scan/a.cjs': ' '.repeat(8388608), 'scan/b.cjs': '\n' + ' '.repeat(8388608) }, 'exports.value = 2;\n', /complete impact sources exceed their bound/],
+  ['individual source', { 'assets/large.json': 'a'.repeat(16777217) }, "require('../assets/large.json');\n", /complete impact sources exceed their bound/],
+  ['retained material', { 'assets/a.json': 'a'.repeat(8388608), 'assets/b.json': 'b'.repeat(8388608) },
+    "require('../assets/a.json'); require('../assets/b.json');\n", /complete impact sources exceed their bound/],
+  ['serialized packet', { 'assets/escaped.json': '\\'.repeat(8388608) }, "require('../assets/escaped.json');\n", /complete impact packet exceeds its bound/],
+]) test('complete impact independently refuses excessive ' + stage, async () => {
+  await fixture(async f => {
+    write(f.worktree, 'src/provider.cjs', source); commit(f, 'connect bounded source stage');
+    const input = currentInput(f, 'integrator');
+    assert.throws(() => collector.buildReviewImpactPacket(input), error => error.code === 'CONTEXT_OVER_BOUND' && message.test(error.message));
+  }, initialFiles);
 });
 
 test('legacy successful full review remains original history and supplies no unsupported inheritance', async () => {

@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { buildSubject, PHASE_ONLY_ROLES } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { createCodexDispatchAdapter, CODEX_MODEL_IDS, REPAIR, repairFor } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
@@ -14,6 +15,14 @@ const capabilities = {
   supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   observedModel: false, observedEffort: false,
 };
+function subjectContext(role) {
+  return PHASE_ONLY_ROLES.includes(role) ? {
+    subject_kind: 'phase', ticket: buildSubject('architecture-review', {
+      phase: '52-adapter-fixture', repository: '/tmp/worktree/.git', tickets: 'a'.repeat(64),
+      pr: '91', head: 'b'.repeat(40), base: 'c'.repeat(40),
+    }),
+  } : {};
+}
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-adapter-'));
   const manifest = { policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
@@ -31,7 +40,7 @@ function fixture() {
         'name = "' + file.replace(/\.toml$/, '') + '"',
         'model = "' + CODEX_MODEL_IDS[rung.model_key] + '"',
         'model_reasoning_effort = "' + rung.effort + '"',
-        'sandbox_mode = "' + (['arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write') + '"',
+        'sandbox_mode = "' + (['arch-review', 'code-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write') + '"',
         "developer_instructions = '''\nRun the exact role.\n'''\n",
       ].join('\n');
       fs.writeFileSync(path.join(root, file), content);
@@ -127,12 +136,12 @@ test('all base roles receive explicit ADR-014 selections', () => {
     research: ['gpt-6.1-sol', 'high'], decomposition: ['gpt-6.1-sol', 'high'],
     executor: ['gpt-6.1-sol', 'low'], 'pr-sentinel': ['gpt-6-luna', 'medium'],
     integrator: ['gpt-6.1-sol', 'high'], 'drift-check': ['gpt-6.1-sol', 'low'],
-    'arch-review': ['gpt-6.1-sol', 'high'], 'ci-fix': ['gpt-6.1-sol', 'low'],
-    'review-fix': ['gpt-6.1-sol', 'low'],
+    'arch-review': ['gpt-6.1-sol', 'high'], 'code-review': ['gpt-6.1-sol', 'high'],
+    'ci-fix': ['gpt-6.1-sol', 'low'], 'review-fix': ['gpt-6.1-sol', 'low'],
   };
   try {
     for (const [role, [model, effort]] of Object.entries(expected)) {
-      const result = f.boundary.dispatch({ runtime: 'codex', role });
+      const result = f.boundary.dispatch({ runtime: 'codex', role }, subjectContext(role));
       const launch = f.calls.at(-1);
       assert.equal(launch.model, model);
       assert.equal(launch.reasoning_effort, effort);
@@ -298,6 +307,8 @@ test('default sandbox per role: researchers write, the plan-checker stays read-o
     [{ role: 'decomposition', gsd_role: 'gsd-plan-checker' }, ':workspace', false],
     [{ role: 'arch-review' }, ':read-only', true],
     [{ role: 'arch-review' }, ':workspace', false],
+    [{ role: 'code-review' }, ':read-only', true],
+    [{ role: 'code-review' }, ':workspace', false],
   ];
   for (const [request, baseProfile, accepted] of cases) {
     const launch = (selection, context) => {
@@ -312,7 +323,7 @@ test('default sandbox per role: researchers write, the plan-checker stays read-o
       launchTypedGsd: launch } });
     try {
       const run = () => f.boundary.dispatch({ runtime: 'codex', ...request },
-        { preRecordValidation: f.preRecordValidation });
+        { ...subjectContext(request.role), preRecordValidation: f.preRecordValidation });
       if (accepted) assert.equal(run().receipt.compliance, 'verified');
       else assert.throws(run, (error) => error.code === 'MISSING_RECEIPT');
     } finally { clean(f); }
@@ -323,6 +334,7 @@ test('static judgment receipts accept only their named evidence file write grant
   for (const [role, evidenceName] of [
     ['drift-check', '.shipyard-drift-evidence.md'],
     ['arch-review', '.shipyard-arch-review-evidence.md'],
+    ['code-review', '.shipyard-code-review-evidence.md'],
   ]) {
     for (const [grant, accepted] of [[evidenceName, true], ['unrelated.md', false]]) {
       const f = setup({ host: {
@@ -338,7 +350,7 @@ test('static judgment receipts accept only their named evidence file write grant
         },
       } });
       try {
-        const run = () => f.boundary.dispatch({ runtime: 'codex', role });
+        const run = () => f.boundary.dispatch({ runtime: 'codex', role }, subjectContext(role));
         if (accepted) assert.equal(run().receipt.compliance, 'verified');
         else assert.throws(run, (error) => error.code === 'MISSING_RECEIPT');
       } finally { clean(f); }
@@ -600,6 +612,28 @@ test('an adapter-level config refusal carries the config remedy, not a reinstall
 test('an adapter-level refusal without an identified config key keeps the historical reinstall remedy', () => {
   assert.equal(repairFor('CONFLICTING_OVERRIDE', {}), REPAIR);
   assert.equal(repairFor('STALE_GENERATED_AGENT', { key: 'anything' }), REPAIR);
+});
+
+for (const [signals, file] of [[{}, 'shipyard-code-review.toml'], [{ critical: true }, 'shipyard-code-review-critical.toml'],
+  [{ checkpoint: true }, 'shipyard-code-review-critical.toml'], [{ contested: true, inputTokens: 1000000 }, 'shipyard-code-review.toml']])
+test('code review adapter selects its static read-only file: ' + JSON.stringify(signals), () => {
+  const f = setup();
+  try {
+    const result = f.boundary.dispatch({ runtime: 'codex', role: 'code-review', signals }, subjectContext('code-review'));
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].agent_file, file);
+    assert.equal(f.calls[0].sandbox_mode, 'read-only');
+    assert.equal(result.receipt.agent_file, file);
+  } finally { clean(f); }
+});
+
+test('code review adapter refuses a changed static agent with the installed upgrade remedy', () => {
+  const f = setup();
+  try {
+    fs.appendFileSync(path.join(f.root, 'shipyard-code-review.toml'), '\nchanged');
+    rejected(() => f.boundary.dispatch({ runtime: 'codex', role: 'code-review' }, subjectContext('code-review')), 'STALE_GENERATED_AGENT');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
 });
 
 done();

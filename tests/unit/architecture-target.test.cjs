@@ -12,7 +12,14 @@ process.on('exit', () => {
   fs.rmSync(authorityHome,{recursive:true,force:true});
 });
 const { resolveIntegrationBranch, architectureTarget, phaseBinding, PHASE_SUBJECT, buildSubject, parseSubject,
-  repositoryIdentity, acceptedRepositoryValues } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  repositoryIdentity, acceptedRepositoryValues, PHASE_SUBJECT_ROLES, PHASE_ONLY_ROLES } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+
+test('phase subject roles and phase-only roles are exact frozen shared lists', () => {
+  assert.deepEqual(PHASE_SUBJECT_ROLES, ['arch-review', 'code-review']);
+  assert.deepEqual(PHASE_ONLY_ROLES, ['code-review']);
+  assert.ok(Object.isFrozen(PHASE_SUBJECT_ROLES));
+  assert.ok(Object.isFrozen(PHASE_ONLY_ROLES));
+});
 
 test('configuration wins for the project; foreign repositories keep their own default', () => {
   const config = { git: { base_branch: 'develop' } };
@@ -122,7 +129,7 @@ test('public phase builder and native context use the explicit aggregate PR and 
     graph.tickets[TICKET].epic = 'epic/38-codex-arch-review';
     write(f.root,'.planning/graph/tickets.json',JSON.stringify(graph));
     write(f.root,'.planning/phases/38-codex-arch-review/38-01-SUMMARY.md','Original acceptance: installed obligations remain HOLD.');
-    write(f.root,'.planning/config.json',JSON.stringify({git:{base_branch:'develop'}}));
+    write(f.root,'.planning/config.json',JSON.stringify({git:{base_branch:'develop'},delivery_pipeline:{code_review:'report'}}));
     git(f.root,['branch','develop',f.base]);git(f.root,['update-ref','refs/remotes/origin/develop',f.base]);
     git(f.root,['switch','-c',graph.tickets[TICKET].epic]);git(f.root,['add','.']);git(f.root,['commit','-m','phase evidence']);
     f.pr = {...f.pr,number:801,headRefName:graph.tickets[TICKET].epic,headRefOid:git(f.root,['rev-parse','HEAD']),baseRefName:'develop'};
@@ -182,7 +189,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     graph.tickets[TICKET].epic = 'epic/38-codex-arch-review';
     write(f.root,'.planning/graph/tickets.json',JSON.stringify(graph));
     write(f.root,'.planning/phases/38-codex-arch-review/38-01-SUMMARY.md','Original acceptance: installed obligations remain HOLD.');
-    write(f.root,'.planning/config.json',JSON.stringify({git:{base_branch:'develop'}}));
+    write(f.root,'.planning/config.json',JSON.stringify({git:{base_branch:'develop'},delivery_pipeline:{code_review:'report'}}));
     git(f.root,['branch','develop',f.base]);git(f.root,['update-ref','refs/remotes/origin/develop',f.base]);
     git(f.root,['switch','-c',graph.tickets[TICKET].epic]);git(f.root,['add','.']);git(f.root,['commit','-m','phase evidence']);
     f.pr = {...f.pr,number:801,headRefName:graph.tickets[TICKET].epic,headRefOid:git(f.root,['rev-parse','HEAD']),baseRefName:'develop'};

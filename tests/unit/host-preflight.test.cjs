@@ -276,7 +276,7 @@ describe('host preflight', () => {
       assert.equal(launch(role).ok, true, role);
     }
     assert.equal(preflight(base(layout, { worktree: bad.root, graphDir: bad.graphDir })).ok, true);
-    for (const role of ['research', 'decomposition', 'integrator', 'arch-review']) {
+    for (const role of ['research', 'decomposition', 'integrator', 'arch-review', 'code-review']) {
       assert.deepEqual(codes(launch(role)), ['REPOSITORY_IDENTITY_INVALID'], role);
     }
   });

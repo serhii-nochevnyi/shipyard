@@ -614,6 +614,81 @@ criteria. The verdict `passed | needs-fix | human-review-required` goes into
 `INTEGRATION.md`; `needs-fix` spawns fix tickets that go through the same
 delivery loop (section 6.1) — this is the feedback cycle.
 
+#### Phase code review before the finale
+
+The phase epic PR runs code review, then the integrator, then phase `arch-review`,
+once on the final head, before readiness and human hand-off. The read-only code
+review role reports source BLOCKERs and WARNINGs through sealed evidence. The
+trusted host's `phase-code-review.cjs publish` writes the `code-review` commit
+status and one marker-based PR comment edited in place. A complete pass is
+`success`; needs-fix, incomplete and limit are `pending`, never failure or error.
+The status uses fixed text and integer counts only and is posted independently
+before comment hygiene: a refused comment cannot remove the verdict status.
+Publication accepts only the graph epic row's branch and exact live PR head,
+never a ticket PR or a head shared with a graph ticket PR. This works for both
+plain epic branches and Jira-named epic branches.
+
+`delivery_pipeline.code_review` in the project root's `.planning/config.json`
+selects `hold` (the shipped default) or `report`. Report mode observes without
+holding and shows proposed fix tickets without injecting them; hold feeds them
+to decompose Step 4 only in rounds 1 and 2. Round 3 requires an operator for
+remaining blockers. Incomplete reviews retry after the cause is fixed; the three-round cap permits no further
+review after limit. Hold stops with the printed reason and the single exit:
+set `delivery_pipeline.code_review` to `report` for this PR; there is no override
+flag or waiver record. The prelaunch gate and architecture builder require a
+current complete pass with no blocking finding on the exact head in hold mode.
+Readiness and hand-off wait too. Both modes publish the status, and a human can
+still merge. A push re-owes code review before the later reviews.
+
+An operator records disagreements in the project root's
+`.planning/phases/<phase-directory>/code-review-disagreements.json`, using schema
+`shipyard.code-review-disagreements.v1` with an `entries` array. Copy each
+entry's `path`, whole normalised `line_text` and `occurrence` from the PR comment,
+then add `reason` and `recorded_by`. The host computes those citation values;
+partial source text does not identify a finding. The comment also reports the
+suppressed-finding count and `citations_unresolved`.
+
+Run each review builder from the epic worktree with the same explicit canonical
+project graph used by status, gate, publish and verify; a tracked graph in the
+epic checkout can carry a different mode. Add `--repo owner/name` consistently
+for a foreign repository:
+
+```sh
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build code-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
+```
+
+Each review builder prints the request to launch. For Codex, save that request
+in a mode-0600 file in a directory made with `mktemp -d` outside every worktree,
+then from the epic worktree run
+`node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs --args-file <request.json>`.
+This entry prepares context after preflight; an in-process Codex run refuses
+both review roles without it. For Claude, use
+`createClaudeRoleHost(options).run(request)` with `options.graphDir` selecting
+the project's graph. Consume only the original receipt and sealed artifact in
+the returned JSON; a refusal parks with its verbatim text. The integrator keeps
+its existing in-process route on both runtimes.
+
+Restore the epic worktree on every integrator outcome: `passed`, `needs-fix`,
+`human-review-required`, a refused or blocked launch, or a seal or validate
+refusal. After validation, the live-file GSD projection and its check, and copying
+needs-fix findings from the validated artifact with `role-artifact.cjs read`, run
+`role-artifact.cjs prepare --worktree <epic-worktree> --role integrator --phase <phase-directory>`.
+Restore a tracked `INTEGRATION.md` with `git checkout --` afterward. An absent file
+is harmless; the restore precedes every outcome branch. List worktree status
+before code review and after restore: only scratch names from
+`conveyor-scratch.cjs list` and `.shipyard-role-artifacts/` paths may remain.
+Any other entry parks the phase. The live file refuses both review hosts, so the
+phase architecture review after passed and the re-owed code review after
+needs-fix both need this restore. The sealed copy stays in its authenticated
+archive; commit nothing, since a commit would move the head and re-owe review.
+
+The check-reader audit found that `state-sync.cjs`, `sentinel.cjs`, `ci-wait.cjs`
+and `front.cjs` read ticket checks only; none reads the epic-to-integration PR's
+rollup. `gate-trailer.cjs` reads only the `merge-gate` context. A pending status
+would count as a running check if read, so publication is inert by its epic-only
+target. Registry and tally tests require a fresh audit if a reader is added.
+
 ### 6.5. Pipeline telemetry (input for improvement)
 
 The pipeline accumulates an append-only log `.planning/graph/delivery-log.jsonl`:
@@ -703,6 +778,9 @@ integrator    opus     high     the last mechanical judgment before a person mer
 arch-review   opus     high     reads a whole diff against every ADR; its effort is
                                 fixed by the compatibility reader, not by a runtime
                                 model preference
+code-review   opus     high     a balanced general review of the whole epic diff; its
+                                effort is fixed by the compatibility reader, not by a
+                                runtime model preference
 executor      opus     high     it implements a contract; falsifying that contract
                                 belongs upstream of it
 ci-fix        opus     high     diagnosing a failing pipeline
@@ -778,6 +856,7 @@ The canonical role/rung/signal ladder is:
 | `integrator` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` |
 | `drift-check` | Sol/low, fixed; no automatic tier promotion | Sonnet/medium, fixed; reroute uncertain scope through a policy amendment |
 | `arch-review` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, or `contested: true`; Fable/medium on measured `inputTokens > 250000` with `pipeline.fable: auto` consent |
+| `code-review` | Sol/high → Sol/xhigh on `critical: true` or `checkpoint: true` | Sonnet/xhigh → Opus/high on `critical: true` or `checkpoint: true` |
 | `ci-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |
 | `review-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |
 
@@ -852,6 +931,7 @@ are:
 | `integrator` | `shipyard-integrator.toml`, `shipyard-integrator-critical.toml` |
 | `drift-check` | `shipyard-drift-check.toml` |
 | `arch-review` | `shipyard-arch-review.toml`, `shipyard-arch-review-critical.toml` |
+| `code-review` | `shipyard-code-review.toml`, `shipyard-code-review-critical.toml` |
 | `ci-fix` | `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
 | `review-fix` | `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 

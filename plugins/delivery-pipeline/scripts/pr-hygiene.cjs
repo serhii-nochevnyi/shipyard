@@ -387,6 +387,7 @@ function runFormatCli(argv) {
 
 module.exports = {
   applies,
+  internalLeakViolations,
   conventionalType,
   CONVENTIONAL_TYPES,
   DEFAULT_TITLE_FORMAT,

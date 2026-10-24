@@ -1,0 +1,7 @@
+diff --git a/source.js b/source.js
+--- a/source.js
++++ b/source.js
+@@ -90,0 +91,3 @@
++insertedOne();
++insertedTwo();
++insertedThree();

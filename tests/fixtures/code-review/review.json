@@ -1,0 +1,37 @@
+{
+  "review_completeness": "complete",
+  "limitations": [],
+  "unresolved_sources": [],
+  "findings": [
+    {
+      "id": "CR-01",
+      "severity": "CR",
+      "path": "source.js",
+      "line": 100,
+      "line_text": "const value100 = 100;",
+      "summary": "The write loses data.",
+      "failure_scenario": "A retry deletes the pending record.",
+      "fix_ticket": {
+        "title": "Keep pending records",
+        "scope": "Delete after acknowledgement",
+        "files": [
+          "source.js"
+        ],
+        "depends_on": []
+      }
+    },
+    {
+      "id": "WR-01",
+      "severity": "WR",
+      "path": "source.js",
+      "line": 101,
+      "summary": "The retry has no log."
+    },
+    {
+      "id": "IN-01",
+      "severity": "IN",
+      "summary": "Observation"
+    }
+  ],
+  "dispositions": []
+}

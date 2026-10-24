@@ -6,7 +6,23 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
+const selectionArgs = require.main === module ? process.argv.slice(2) : [];
+const entryOnly = selectionArgs.includes('--code-review-entry-only');
+const integratorDefaultOnly = selectionArgs.includes('--integrator-default-only');
+if (selectionArgs.some(value => !['--code-review-entry-only', '--integrator-default-only'].includes(value))
+    || selectionArgs.length > 1)
+  throw new Error('Unknown or conflicting delivery-host selection');
+let entrySelected = 0, entryVariants = 0, integratorDefaultSelected = 0;
+function test(name, callback) {
+  const entry = /^(?:code review |padded code review )/.test(name);
+  const selected = name === 'public Codex v3 accepts omitted capacity through original observed evidence';
+  if (entry) entrySelected++;
+  if (name.startsWith('code review CLI seals one static phase verdict: ')) entryVariants++;
+  if (selected) integratorDefaultSelected++;
+  if (entryOnly && !entry || integratorDefaultOnly && !selected) return;
+  return runTest(name, callback);
+}
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
@@ -1912,6 +1928,8 @@ test('current dictionary integrity retains logical obligations without semantic 
   const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
   const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
   try {
+    const graphDir = path.join(f.root, '.planning/graph');
+    fs.cpSync(f.graphDir, graphDir, { recursive: true });
     const packet = packets.buildContextPacket({ root: f.root, role: 'integrator', subject: f.scope.ticket,
       sourceRevision: f.base, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
       scope: { files_modified: ['src/owned.txt'] }, requiredRefs: ['src/owned.txt'],
@@ -1928,7 +1946,7 @@ test('current dictionary integrity retains logical obligations without semantic 
     incomplete.obligations.pop();
     assert.throws(() => context.preflightReviewMaterial(incomplete, expected), /logical obligations|provenance/);
     const input = context.prepareFileInput(f.scope, JSON.stringify(encoded), {
-      role: 'integrator', dispatchId: 'preflight-fixture', storageRoot: f.storageRoot, graphDir: f.graphDir });
+      role: 'integrator', dispatchId: 'preflight-fixture', storageRoot: f.storageRoot, graphDir });
     assert.equal(context.verifyFileInput(input).semantic_credit, false);
     fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'changed\n');
     assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
@@ -2139,8 +2157,11 @@ test('serialized full paged feedback selects global Node IDs across Actor varian
   assert.equal(result.digest, crypto.createHash('sha256').update(canonicalInventory).digest('hex'));
 });
 
-async function originalFixerFixture(outcome, mutation, evolution = null) {
+async function originalFixerFixture(outcome, mutation, evolution = null, historicalRecovery = null) {
   const f = fixture({ physicalPaths: true });
+  if (['pending', 'action'].includes(historicalRecovery)) fs.writeFileSync(path.join(f.graphDir, 'delivery-log.jsonl'),
+    JSON.stringify({ ts: '2026-10-19T07:31:21.739Z', event: 'status_change', ticket: 'T-999-98',
+      from: null, to: 'pending', pr: null }) + '\n');
   const defaultAgents = mutation?.startsWith('normalized-default-') || mutation?.startsWith('normalized-cli-default-');
   const defaultOsHome = mutation?.endsWith('-os-home');
   const home = defaultOsHome ? path.join(fs.realpathSync(temporary), '.codex')
@@ -2210,7 +2231,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
   const gh = (_program, args) => {
     if (_program === 'git' && args[0] === 'push') {
       pushes++; publishedHead = git(f.root, 'rev-parse', 'HEAD');
-      if (mutation === 'publication-response-loss') throw new Error('Original push response was lost after remote confirmation');
+      if (mutation === 'publication-response-loss' || (historicalRecovery === 'pending' && launches > 1)) throw new Error('Original push response was lost after remote confirmation');
       return 'confirmed host push';
     }
     if (args[0] === 'repo') return JSON.stringify({ nameWithOwner: 'fixture/repository' });
@@ -2238,7 +2259,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
         body: '', state: 'COMMENTED', author: actor });
       if ((mutation === 'thread-response-loss' || mutation === 'companion-cli-response-loss' || mutation === 'companion-cli-legacy-absent'
           || mutation?.startsWith('pending-')) && replies.length === 1) throw new Error('Original accepted thread reply response lost');
-      if (mutation === 'companion-cli-reuse-response-loss' && replies.length === 2)
+      if ((mutation === 'companion-cli-reuse-response-loss' && replies.length === 2)
+          || (historicalRecovery === 'action' && launches > 1 && replies.length === 3))
         throw new Error('Original accepted later thread reply response lost');
       return JSON.stringify({ data: { addPullRequestReviewThreadReply: { comment } } });
     }
@@ -2346,7 +2368,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
             : launchRole.agent_file.replace('.toml', effort === 'high' ? '-repeat.toml' : '-deep.toml') };
         if (executing) assert.equal(applied.agent_file, null, 'executor uses the original dynamic native launch');
         const final = JSON.stringify(output);
-        if (outcome === 'source' || executing) fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
+        if (historicalRecovery && !executing && launches > 1) fs.writeFileSync(path.join(f.root, 'outside.txt'), 'Subsequent native source correction.\n');
+        if (outcome === 'source' || executing || (historicalRecovery && launches > 1)) fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
         if (mutation === 'foreign-dirty') fs.writeFileSync(path.join(f.root, 'outside.txt'), 'foreign mutation');
         if (mutation === 'self-commit') { git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'unauthorized producer commit'); }
         if (mutation === 'plan-movement') fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
@@ -2448,6 +2471,9 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
         return child;
       },
       };
+      if (historicalRecovery === 'admitted' && launches > 0 && !executing) {
+        hostOptions.finalizeCommit = () => { throw Object.assign(new Error('Fixture finalizer interruption'), { code: 'SIGNING_FAILED' }); };
+      }
       if (defaultAgents) {
         delete hostOptions.agentDir;
         delete hostOptions.agentManifest;
@@ -2892,7 +2918,161 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
         assert.equal(replies.length + prReplies.length, 3);
         return;
       }
-      const second = await run();
+      let second;
+      if (historicalRecovery) {
+        output.status = 'fixed';
+        if (historicalRecovery === 'direct') {
+          second = await run();
+          const counters = [launches, pushes, replies.length, prReplies.length];
+          const recovery = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport,
+            verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() });
+          for (let retry = 0; retry < 2; retry++) {
+            const resumed = await recovery.resumeFinalization(second.artifact.candidate_id, f.scope);
+            assert.equal(resumed.artifact.commit, second.artifact.commit);
+            assert.equal(resumed.actions.status, 'confirmed');
+            assert.deepEqual([launches, pushes, replies.length, prReplies.length], counters);
+          }
+        } else {
+          await assert.rejects(run);
+          const candidates = fs.readdirSync(path.join(stateRoot(f), 'candidates')).map(file =>
+            JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'candidates', file))).payload);
+          const candidate = candidates.find(item => item.expected_head === currentHead && item.expected_role === 'review-fix');
+          assert.ok(candidate);
+          const historical = candidate.repair_subject.actionable_feedback.coverage.map(item =>
+            repairCoverageTransition(item, candidate.repair_subject.actionable_feedback));
+          assert.equal(historical.length, 3);
+          assert.ok(historical.every(item => item.historical && item.semantic_credit === false
+            && (item.source_transition ? item.source_transition.to === currentHead : firstHead === currentHead)));
+          assert.deepEqual(candidate.files_modified, graph.tickets[f.scope.ticket].files);
+          const counters = [launches, pushes, replies.length, prReplies.length];
+          const originals = [...retainedFiles];
+          for (const directory of ['candidates', 'finalized']) {
+            const root = path.join(stateRoot(f), directory);
+            if (fs.existsSync(root)) for (const file of fs.readdirSync(root)) originals.push({
+              file: path.join(root, file), bytes: fs.readFileSync(path.join(root, file)) });
+          }
+          const recoveryOptions = { ...cliOptions(f), getPullRequest: live, execFileSync: transport,
+            verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() };
+          const recovery = createFinalizationRecoveryHost(recoveryOptions);
+          const resume = () => recovery.resumeFinalization(candidate.candidate_id, f.scope);
+          const unchangedCounters = () => assert.deepEqual([launches, pushes, replies.length, prReplies.length], counters);
+          const rejectFileChange = async (file, mutate) => {
+            const bytes = fs.readFileSync(file);
+            const mode = fs.statSync(file).mode & 0o777;
+            try { mutate(file, bytes); await assert.rejects(resume); unchangedCounters(); }
+            finally { fs.writeFileSync(file, bytes, { mode }); fs.chmodSync(file, mode); }
+          };
+          await rejectFileChange(f.plan, file => fs.appendFileSync(file, '\nChanged current PLAN'));
+          await rejectFileChange(graphFile, file => {
+            const changed = JSON.parse(fs.readFileSync(file)); changed.tickets[f.scope.ticket].files.push('foreign-owner.txt');
+            fs.writeFileSync(file, JSON.stringify(changed));
+          });
+          await rejectFileChange(evidenceFile, file => fs.appendFileSync(file, '\nReplaced evidence'));
+          for (const directory of ['candidates', 'finalized', 'repair-publications', 'repair-actions', 'repair-attempts']) {
+            const root = path.join(stateRoot(f), directory);
+            if (!fs.existsSync(root)) continue;
+            for (const name of fs.readdirSync(root).filter(name => name.endsWith('.json')
+                && (!['candidates', 'finalized', 'repair-publications'].includes(directory) || name === candidate.candidate_id + '.json'))) {
+              const file = path.join(root, name);
+              await rejectFileChange(file, (target, bytes) => {
+                const envelope = JSON.parse(bytes); envelope.payload.ticket = 'T-38-99';
+                fs.writeFileSync(target, JSON.stringify(envelope));
+              });
+              await rejectFileChange(file, target => fs.unlinkSync(target));
+            }
+          }
+          for (const original of retainedFiles.filter(item => !item.file.includes('repair-actions') && !path.basename(item.file).startsWith('reservation-'))) {
+            await rejectFileChange(original.file, file => fs.appendFileSync(file, '\nTampered original native custody'));
+          }
+          await assert.rejects(() => recovery.resumeFinalization(candidate.candidate_id, { ...f.scope, repository: 'foreign-repository' }));
+          unchangedCounters();
+          verificationAllowList.push({ argv: ['node', '--invalid-recovery-policy'], profile: 'host', timeout_s: 600 });
+          try { await assert.rejects(resume); unchangedCounters(); } finally { verificationAllowList.pop(); }
+          const baseBefore = git(f.root, 'rev-parse', 'main');
+          try {
+            git(f.root, 'update-ref', 'refs/heads/main', candidate.expected_head === baseBefore ? 'HEAD' : candidate.expected_head);
+            if (git(f.root, 'rev-parse', 'main') !== baseBefore) { await assert.rejects(resume); unchangedCounters(); }
+          } finally { git(f.root, 'update-ref', 'refs/heads/main', baseBefore); }
+          const branchBefore = git(f.root, 'symbolic-ref', 'HEAD');
+          try {
+            git(f.root, 'update-ref', 'refs/heads/foreign-recovery', 'HEAD');
+            git(f.root, 'symbolic-ref', 'HEAD', 'refs/heads/foreign-recovery');
+            await assert.rejects(resume); unchangedCounters();
+          } finally { git(f.root, 'symbolic-ref', 'HEAD', branchBefore); }
+          const originalSigner = git(f.root, 'config', 'user.signingkey');
+          try {
+            git(f.root, 'config', 'user.signingkey', 'F'.repeat(40));
+            await assert.rejects(resume); unchangedCounters();
+          } finally { git(f.root, 'config', 'user.signingkey', originalSigner); }
+          const originalPublished = publishedHead;
+          try { publishedHead = '1'.repeat(40); await assert.rejects(resume); unchangedCounters(); }
+          finally { publishedHead = originalPublished; }
+          const sourceHead = git(f.root, 'rev-parse', 'HEAD');
+          const unrelated = git(f.root, 'commit-tree', '-S', git(f.root, 'rev-parse', 'HEAD^{tree}'),
+            '-p', sourceHead, '-m', 'Unrelated authentic equal-tree signed commit');
+          try {
+            git(f.root, 'update-ref', 'HEAD', unrelated); publishedHead = unrelated;
+            await assert.rejects(resume); unchangedCounters();
+          } finally { git(f.root, 'update-ref', 'HEAD', sourceHead); publishedHead = originalPublished; }
+          if (['pending', 'action'].includes(historicalRecovery)) {
+            const originalGraph = fs.readFileSync(graphFile);
+            const snapshot = path.join(f.root, '.git', 'original-recovery-graph.json');
+            fs.writeFileSync(snapshot, originalGraph);
+            recoveryOptions.recoveryGraphSnapshot = snapshot;
+            const journal = candidate.repair_subject.journal;
+            assert.ok(journal);
+            const journalBytes = fs.readFileSync(journal.path);
+            const row = { ts: '2026-10-20T07:31:21.739Z', event: 'status_change', ticket: 'T-999-99',
+              from: null, to: 'pending', pr: null };
+            const append = value => fs.writeFileSync(journal.path, Buffer.concat([journalBytes, Buffer.from(value)]));
+            for (const invalid of [JSON.stringify(row), 'false\n', '{bad}\n',
+              JSON.stringify({ ...row, ticket: f.scope.ticket }) + '\n',
+              JSON.stringify({ ...row, pr: candidate.repair_subject.pr }) + '\n',
+              JSON.stringify({ ...row, event: 'repair_attempt' }) + '\n',
+              JSON.stringify({ ...row, to: false }) + '\n', Buffer.from([0xff, 10])]) {
+              append(invalid);
+              await assert.rejects(resume); unchangedCounters();
+            }
+            append(JSON.stringify(row) + '\n');
+            const evolved = JSON.parse(originalGraph);
+            evolved.tickets['T-999-99'] = { ...evolved.tickets[f.scope.ticket], depends_on: [f.scope.ticket] };
+            fs.writeFileSync(graphFile, JSON.stringify(evolved));
+            await rejectFileChange(snapshot, file => fs.appendFileSync(file, ' '));
+            await rejectFileChange(graphFile, file => {
+              const changed = JSON.parse(fs.readFileSync(file)); changed.tickets[f.scope.ticket].risk = 'changed';
+              fs.writeFileSync(file, JSON.stringify(changed));
+            });
+            await rejectFileChange(journal.path, (file, bytes) => {
+              const changed = Buffer.from(bytes); changed[0] ^= 1; fs.writeFileSync(file, changed);
+            });
+            await rejectFileChange(journal.path, file => fs.writeFileSync(file, journalBytes.subarray(0, -1)));
+            await rejectFileChange(graphFile, file => {
+              const changed = JSON.parse(fs.readFileSync(file)); changed.epics = { forged: true };
+              fs.writeFileSync(file, JSON.stringify(changed));
+            });
+            delete recoveryOptions.recoveryGraphSnapshot;
+            await assert.rejects(resume); unchangedCounters();
+            recoveryOptions.recoveryGraphSnapshot = snapshot;
+          }
+          const resumed = await resume();
+          assert.equal(resumed.publication.status, 'confirmed');
+          assert.equal(resumed.actions.status, 'confirmed');
+          assert.notEqual(resumed.artifact.commit, currentHead);
+          const accepted = [launches, pushes, replies.length, prReplies.length];
+          assert.equal(accepted[0], counters[0]);
+          if (historicalRecovery !== 'admitted') assert.equal(accepted[1], counters[1]);
+          const again = await recovery.resumeFinalization(candidate.candidate_id, f.scope);
+          assert.deepEqual(again.artifact, resumed.artifact);
+          assert.deepEqual([launches, pushes, replies.length, prReplies.length], accepted);
+          if (candidate.repair_subject.journal) {
+            const pin = candidate.repair_subject.journal;
+            assert.equal(crypto.createHash('sha256').update(fs.readFileSync(pin.path).subarray(0, pin.bytes)).digest('hex'), pin.sha256);
+          }
+          for (const original of originals) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
+          for (const original of retainedFiles) assert.deepEqual(fs.readFileSync(original.file), original.bytes);
+          return;
+        }
+      } else second = await run();
       const unknown = !!evolution || coveredSource || ['normalized-external', 'normalized-missing-actions'].includes(mutation);
       assert.equal(second.resolution.signals.signatureState, unknown ? 'first' : 'repeat');
       assert.equal(second.receipt.applied_effort, unknown ? 'low' : 'high');
@@ -2968,7 +3148,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null) {
         await assert.rejects(run, { code: 'REPAIR_POLICY_EXHAUSTED' });
         assert.equal(launches, 3);
       }
-      assert.equal(git(f.root, 'rev-parse', 'HEAD'), currentHead);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), historicalRecovery === 'direct' ? second.artifact.commit : currentHead);
       return;
     }
     if (mutation) {
@@ -3537,7 +3717,11 @@ test('--preflight reports a state directory inside the worktree and an unreadabl
     assert.deepEqual(legacy.findings.map((finding) => finding.code), ['LEGACY_WRITER_STATE']);
     assert.equal(legacy.ok, false);
     assert.match(stderr.join(''), /hint\[LEGACY_WRITER_STATE\]/);
-  } finally { process.env.HOME = home; }
+  } finally {
+    if (home === undefined) delete process.env.HOME;
+    else process.env.HOME = home;
+  }
+  assert.strictEqual(process.env.HOME, home);
 });
 
 test('a launch that passes preflight prints warnings on stderr without a bare ok line and no preflight JSON', () => {
@@ -3602,4 +3786,795 @@ test('a malformed --preflight argv is a usage error', async () => {
   await assert.rejects(runCli(['--preflight', '--bogus'], { write() {} }, {}), (error) => error.code === 'INVALID_INPUT');
 });
 
+test('code review requires private CLI preparation before any in-process launch', async () => {
+  const f = fixture();
+  try {
+    for (const codeReviewContext of [undefined, {}, { schema: 'shipyard.codex-code-review-context.v1', prepared: {} }]) {
+      await assert.rejects(delivery(f, { codeReviewContext }).run({ role: 'code-review', context: { repo: null } }),
+        error => error.code === 'CODE_REVIEW_CONTEXT_REQUIRED');
+    }
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('code review builder request admits graph_dir and refuses serialized private custody', () => {
+  const root = fs.mkdtempSync(path.join(temporary, 'code-request-'));
+  const file = path.join(root, 'request.json');
+  const request = { scope: {}, graph_dir: path.join(root, '.planning/graph'), role: 'code-review', signals: {}, context: { repo: null } };
+  fs.writeFileSync(file, JSON.stringify(request));
+  assert.equal(readRequestFile(file).graphDir, request.graph_dir);
+  assert.equal(validateArgs({ role: 'code-review', signals: {}, context: { repo: null } }).request.role, 'code-review');
+  for (const role of [' code-review ', '\tcode-review\n']) {
+    assert.equal(requestValue({ role }).role, 'code-review');
+    fs.writeFileSync(file, JSON.stringify({ ...request, role }));
+    const parsed = readRequestFile(file);
+    assert.equal(parsed.launch.role, 'code-review');
+    assert.equal(parsed.graphDir, request.graph_dir);
+  }
+  for (const role of ['executor', 'research']) {
+    fs.writeFileSync(file, JSON.stringify({ ...request, role }));
+    assert.throws(() => readRequestFile(file), error => error.code === 'INVALID_INPUT');
+  }
+  for (const role of ['code-review', 'arch-review', 'executor']) {
+    const launch = { role, context: { code_review_prepared: {} } };
+    assert.throws(() => requestValue(launch), error => error.code === 'INVALID_INPUT');
+    fs.writeFileSync(file, JSON.stringify({ scope: {}, ...launch }));
+    assert.throws(() => readRequestFile(file), error => error.code === 'INVALID_INPUT');
+  }
+});
+
+async function codeReviewEntryFixture(action, config = {}) {
+  const helper = require('./helpers/codex-arch-review-fixtures.cjs');
+  const codeContext = require('../../plugins/delivery-pipeline/scripts/codex-code-review-context.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const f = helper.fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(temporary, 'code-entry-')));
+  if (config.label) {
+    const renamed = path.join(storage, config.label); fs.renameSync(f.root, renamed); f.root = renamed;
+  }
+  const graphDir = path.join(f.root, '.planning/graph');
+  const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
+  const row = Object.values(graph.tickets)[0];
+  row.epic = 'epic/38-code-review'; row.human_checkpoint = config.checkpoint || false; row.critical = config.critical || false;
+  helper.write(f.root, '.planning/graph/tickets.json', JSON.stringify(graph));
+  if (config.partitioned) helper.write(f.root, 'src/reviewed.txt', ('large line ' + 'x'.repeat(240) + '\n').repeat(5000));
+  helper.git(f.root, ['add', '.']); helper.git(f.root, ['commit', '-m', 'code review phase fixture']);
+  helper.git(f.root, ['switch', '-c', row.epic]);
+  Object.assign(f.pr, { headRefName: row.epic, headRefOid: helper.git(f.root, ['rev-parse', 'HEAD']) });
+  const state = JSON.parse(fs.readFileSync(path.join(graphDir, 'delivery-state.json')));
+  const scope = { run_id: 'code-entry-' + crypto.randomUUID(), runtime: 'codex', provider: 'openai', phase: 38, worktree: f.root,
+    ticket: target.phaseBinding({ graph, state, phase: 38, repository: target.repositoryIdentity(f.root),
+      pr: f.pr.number, head: f.pr.headRefOid, base: f.pr.baseRefOid, branch: row.epic }).subject };
+  const agentDir = path.join(storage, 'agents'); fs.mkdirSync(agentDir);
+  const manifest = { policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH,
+    agent_files: [], agent_digests: {} };
+  for (const signals of [{}, { critical: true }]) {
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: 'code-review', signals });
+    const file = selected.agent_file;
+    const content = [
+      '# shipyard-policy-id = "' + policy.POLICY.id + '"', '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
+      '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"', '# shipyard-policy-runtime = "codex"',
+      '# shipyard-policy-role = "code-review"', '# shipyard-policy-rung = "' + selected.rung + '"',
+      'name = "' + file.replace(/\.toml$/, '') + '"', 'model = "' + selected.model + '"',
+      'model_reasoning_effort = "' + selected.effort + '"', 'sandbox_mode = "read-only"',
+      "developer_instructions = '''\nReview the complete authenticated phase.\n'''", '',
+    ].join('\n');
+    fs.writeFileSync(path.join(agentDir, file), content);
+    manifest.agent_files.push(file); manifest.agent_digests[file] = crypto.createHash('sha256').update(content).digest('hex');
+  }
+  const agentManifest = path.join(agentDir, '.shipyard-manifest.json'); fs.writeFileSync(agentManifest, JSON.stringify(manifest));
+  const recorder = createDurableRecorder(path.join(storage, 'receipts'));
+  const calls = [];
+  const host = { scope, capabilities: { supportedModels: ['gpt-6.1-sol'], supportedEfforts: ['high', 'xhigh'] }, recorder,
+    launch() { assert.fail('code review must launch statically'); },
+    launchStatic(selection, context) {
+      calls.push({ selection, context });
+      const value = context.code_review_prepared;
+      const binding = codeContext.authenticateLaunch(value, context.prompt, { ticket: scope.ticket, phase: scope.phase,
+        worktree: scope.worktree, dispatch_id: context.dispatch_id, agent_file: selection.agent_file,
+        agent_file_digest: selection.agent_file_digest });
+      const raw = { ...binding, ticket_set: value.prepared.binding.ticketSet, findings: [], dispositions: [],
+        summary: 'Reviewed complete phase input', review_completeness: config.incomplete ? 'incomplete' : 'complete',
+        limitations: config.incomplete ? ['unresolved source'] : [], unresolved_sources: [], evidence_markdown: 'Code review evidence.\n' };
+      if (context.input_prepared) raw.coverage = context.input_prepared.manifest.assets.filter(asset => asset.source_partition)
+        .map(asset => ({ partition: asset.ordinal, status: 'reviewed' }));
+      helper.write(f.root, '.shipyard-code-review-evidence.md', raw.evidence_markdown);
+      const session = crypto.randomUUID();
+      const records = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
+        .trim().split('\n').map(JSON.parse);
+      for (const record of records)
+        if (record.item?.type === 'agent_message') record.item.text = JSON.stringify(raw);
+      const stream = records.map(record => JSON.stringify(record)).join('\n') + '\n';
+      const transcript = path.join(storage, session + '.jsonl'); fs.writeFileSync(transcript, stream);
+      const { native: nativePath, nativeText } = require('../fixtures/code-review/artifact-fixture.cjs').writeCodexSession({
+        home: storage, session, worktree: scope.worktree, model: selection.model,
+        effort: selection.reasoning_effort, prompt: context.prompt, raw });
+      const runtime_evidence = { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai',
+        session_id: session, worktree: scope.worktree, ticket: scope.ticket, phase: scope.phase, code_review: binding,
+        native_session_evidence: { session_id: session, bytes: Buffer.byteLength(nativeText),
+          sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
+        input_consumption: { native_session_sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
+        ...(context.input_prepared ? { input_transport: 'host-files', input_bundle: context.input_prepared.input_bundle } : {}),
+        transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: crypto.createHash('sha256').update(stream).digest('hex') } };
+      config.afterLaunch?.({ f, value, selection, context, runtime_evidence, agentDir, nativePath });
+      return { launch_id: 'code-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
+        observed_model: selection.model, observed_effort: selection.reasoning_effort,
+        agent_file_digest: selection.agent_file_digest, runtime_evidence };
+    } };
+  let controllerReads = 0;
+  Object.defineProperty(host, 'controller', { enumerable: true, get() {
+    if (++controllerReads === 2) config.beforeLaunch?.({ f, agentDir, manifest, agentManifest });
+    return undefined;
+  } });
+  const file = path.join(storage, 'request.json');
+  const request = { scope, graph_dir: graphDir, role: 'code-review', signals: {}, context: { repo: null } };
+  const options = { host, capabilities: host.capabilities, agentDir, agentManifest, storageRoot: storage,
+    graphDir, refreshGit: false, getPullRequest: () => f.pr, env: {} };
+  async function run(patch = {}, extra = {}) {
+    fs.writeFileSync(file, JSON.stringify({ ...request, ...patch }));
+    let output = '';
+    const result = await runCli(['--args-file', file], { write(chunk) { output += chunk; } }, { ...options, ...extra });
+    return { result, output };
+  }
+  const originalHome = os.homedir;
+  const originalCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = storage;
+  os.homedir = () => storage;
+  try { return await action({ f, run, request, options, calls, codeContext, storage }); }
+  finally {
+    os.homedir = originalHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome;
+    fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true });
+  }
+}
+
+for (const config of [{}, { role: ' code-review ' }, { critical: true }, { checkpoint: 'merge' }, { incomplete: true }, { partitioned: true }, { label: 'with space' }, { label: 'répertoire-ü' }])
+test('code review CLI seals one static phase verdict: ' + JSON.stringify(config), () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls, request }) => {
+    const { result, output } = await run(config.role ? { role: config.role } : {});
+    assert.equal(result.schema, 'shipyard.codex-delivery-result.v1');
+    assert.deepEqual(JSON.parse(output), result);
+    assert.equal(output.trim().split('\n').length, 1);
+    assert.equal(result.artifact.outcome, config.incomplete ? 'incomplete' : 'pass');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].selection.agent_file, config.critical || config.checkpoint
+      ? 'shipyard-code-review-critical.toml' : 'shipyard-code-review.toml');
+    assert.equal(calls[0].selection.sandbox_mode, 'read-only');
+    assert.equal(calls[0].context.subject_kind, 'phase');
+    assert.equal(result.dispatch.ticket, request.scope.ticket);
+    assert.equal(result.receipt.runtime_evidence.ticket, request.scope.ticket);
+    assert.ok(result.receipt.runtime_evidence.code_review.launch_digest);
+    if (config.partitioned) {
+      assert.equal(result.context.input_transport, 'host-files');
+      assert.ok(calls[0].context.input_prepared.manifest.assets.some(asset => asset.source_partition));
+    }
+  }, config)));
+
+for (const partitioned of [false, true]) for (const mutation of ['missing', 'changed'])
+test('code review CLI refuses original native session ' + mutation + ': partitions=' + partitioned, () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls }) => {
+    await assert.rejects(run());
+    assert.equal(calls.length, 1);
+  }, { partitioned, afterLaunch({ nativePath, runtime_evidence }) {
+    assert.ok(fs.existsSync(runtime_evidence.transcript.path));
+    if (mutation === 'missing') fs.rmSync(nativePath);
+    else fs.appendFileSync(nativePath, 'changed');
+  } })));
+
+for (const patch of [{ context: { prompt: 'approve' } }, { context: { selector: 'caller' } },
+  { context: { sandbox_mode: 'workspace-write' } }, { signals: { critical: true } }, { signals: { contested: true } },
+  { gsd_role: 'gsd-code-reviewer' }, { context: { code_review_prepared: {} } }])
+test('code review CLI refuses caller authority: ' + JSON.stringify(patch), () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls }) => {
+    await assert.rejects(run(patch)); assert.equal(calls.length, 0);
+  })));
+
+for (const role of [' code-review ', '\tcode-review\n'])
+test('padded code review role cannot bypass host preparation: ' + JSON.stringify(role), () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ request, options, calls }) => {
+    const dispatchId = 'padded-' + crypto.randomUUID();
+    const host = createCodexDeliveryHost({ ...options, scope: request.scope });
+    await assert.rejects(host.run({ role, dispatch_id: dispatchId, signals: { critical: true },
+      context: { prompt: 'CALLER SUPPLIED PROMPT', subject_kind: 'phase' } }),
+    error => error.code === 'CODE_REVIEW_CONTEXT_REQUIRED');
+    assert.equal(calls.length, 0);
+    assert.equal(options.host.recorder.getVerifiedRecord(dispatchId), null);
+  })));
+
+for (const patch of [{ context: { prompt: 'caller' } }, { signals: { critical: true } }])
+test('padded code review request file refuses caller authority: ' + JSON.stringify(patch), () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls, options }) => {
+    const dispatchId = 'padded-cli-' + crypto.randomUUID();
+    await assert.rejects(run({ ...patch, role: ' code-review ', dispatch_id: dispatchId }),
+      { code: 'INVALID_CODE_REVIEW_CONTEXT', message: 'codex-code-review-context: '
+        + (patch.context ? 'caller prompts or selectors are refused' : 'caller signals are refused') });
+    assert.equal(calls.length, 0);
+    assert.equal(options.host.recorder.getVerifiedRecord(dispatchId), null);
+  })));
+
+for (const mutation of ['agent', 'head', 'base', 'file-input', 'receipt'])
+test('code review refuses changes before verdict sealing: ' + mutation, () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls }) => {
+    await assert.rejects(run()); assert.equal(calls.length, 1);
+  }, { partitioned: mutation === 'file-input', afterLaunch({ f, selection, context, runtime_evidence, agentDir }) {
+    if (mutation === 'agent') fs.appendFileSync(path.join(agentDir, selection.agent_file), '\nchanged');
+    if (mutation === 'head') f.pr.headRefOid = 'a'.repeat(40);
+    if (mutation === 'base') f.pr.baseRefOid = 'b'.repeat(40);
+    if (mutation === 'receipt') delete runtime_evidence.code_review;
+    if (mutation === 'file-input') {
+      const filename = context.input_prepared.manifest.assets.find(asset => asset.source_partition).path;
+      fs.chmodSync(filename, 0o600); fs.appendFileSync(filename, 'changed');
+    }
+  } })));
+
+for (const mutation of ['look-alike', 'ticket', 'phase', 'worktree', 'prompt', 'signals', 'dispatch', 'sandbox', 'selector'])
+test('code review delivery rejects a mismatched prepared context: ' + mutation, () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ f, request, options, codeContext, calls, storage }) => {
+    const scope = { ...request.scope };
+    const value = codeContext.prepare(scope, { role: 'code-review', context: {}, signals: {} },
+      { graphDir: options.graphDir, storageRoot: storage, refreshGit: false, getPullRequest: options.getPullRequest });
+    const launch = { ...value.launch, signals: { ...value.launch.signals }, context: { ...value.launch.context } };
+    if (mutation === 'ticket') scope.ticket += 'foreign';
+    if (mutation === 'phase') scope.phase++;
+    if (mutation === 'worktree') {
+      scope.worktree = path.join(storage, 'foreign-worktree');
+      require('./helpers/codex-arch-review-fixtures.cjs').git(f.root, ['worktree', 'add', '--detach', scope.worktree, 'HEAD']);
+    }
+    if (mutation === 'prompt') launch.context.prompt += 'foreign';
+    if (mutation === 'signals') launch.signals.critical = !launch.signals.critical;
+    if (mutation === 'dispatch') launch.dispatch_id += 'foreign';
+    if (mutation === 'sandbox') launch.context.sandbox_mode = 'workspace-write';
+    if (mutation === 'selector') launch.context.selector = 'foreign';
+    const host = createCodexDeliveryHost({ ...options, scope, host: { ...options.host, scope },
+      codeReviewContext: mutation === 'look-alike' ? { ...value } : value });
+    await assert.rejects(host.run(launch), error => error.code === (mutation === 'sandbox' ? 'CONFLICTING_OVERRIDE'
+      : mutation === 'selector' ? 'INVALID_INPUT' : 'CODE_REVIEW_CONTEXT_REQUIRED'));
+    assert.equal(calls.length, 0);
+  })));
+
+test('code review argument validation refuses caller prompts, signals and selectors', () => {
+  for (const role of ['code-review', ' code-review ', '\tcode-review\n'])
+  for (const patch of [{ gsd_role: 'gsd-code-reviewer' }, { signals: { contested: true } },
+    { context: { prompt: 'caller' } }, { context: { selector: 'caller' } }, { context: { sandbox_mode: 'workspace-write' } }]) {
+    assert.throws(() => validateArgs({ role, ...patch }), error => error.code === 'INVALID_INPUT');
+  }
+});
+
+test('code review launch preflight refuses semicolon repository identity before preparing evidence', () => withGraphDirEnv(undefined, async () => {
+  const f = fixture({ physicalPaths: true });
+  const baseOptions = cliOptions(f);
+  const oldRoot = f.root, root = oldRoot + ';colon';
+  fs.renameSync(oldRoot, root);
+  const file = path.join(f.storageRoot, 'semicolon-code-review-request.json');
+  fs.mkdirSync(f.storageRoot, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ scope: { ...f.scope, worktree: root }, role: 'code-review', signals: {}, context: {} }));
+  let diagnostics = '';
+  try {
+    await assert.rejects(runCli(['--args-file', file], { write() {} }, {
+      ...baseOptions, host: { ...f.host, scope: { ...f.scope, worktree: root } },
+      preflightStderr: { write(chunk) { diagnostics += chunk; } },
+    }), error => error.code === 'REPOSITORY_IDENTITY_INVALID');
+    assert.match(diagnostics, /hint\[REPOSITORY_IDENTITY_INVALID\]/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(fs.existsSync(path.join(root, '.shipyard-code-review-evidence.md')), false);
+  } finally { fs.renameSync(root, oldRoot); clean(f); }
+}));
+
+for (const mutation of ['agent', 'head', 'base'])
+test('code review wrapper refuses installed or live changes immediately before launch: ' + mutation, () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls }) => {
+    await assert.rejects(run(), error => error.code === 'STALE_CONTEXT');
+    assert.equal(calls.length, 0);
+  }, { beforeLaunch({ f, agentDir, manifest, agentManifest }) {
+    if (mutation === 'agent') {
+      for (const file of manifest.agent_files) {
+        fs.appendFileSync(path.join(agentDir, file), '\n ');
+        manifest.agent_digests[file] = crypto.createHash('sha256').update(fs.readFileSync(path.join(agentDir, file))).digest('hex');
+      }
+      fs.writeFileSync(agentManifest, JSON.stringify(manifest));
+    } else f.pr[mutation === 'head' ? 'headRefOid' : 'baseRefOid'] = 'a'.repeat(40);
+  } })));
+
+test('public integration-review.v2 completes shared preparation with coordinator-only planning', () => withGraphDirEnv(undefined, async () => {
+  const Module = require('node:module');
+  const file = require.resolve('./phase49-incremental-integration.test.cjs');
+  const loaded = new Module(file, module);
+  loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
+  const load = Module._load;
+  Module._load = function(name, ...args) {
+    if (name === 'node:test') return { test() {} };
+    return load.call(this, name, ...args);
+  };
+  try {
+    loaded._compile(fs.readFileSync(file, 'utf8')
+      + '\nmodule.exports = { fixture, projectOptions, agent, git, write };\n', file);
+  } finally { Module._load = load; }
+  const helper = loaded.exports;
+  const originalHomedir = os.homedir;
+  const hadCodexHome = Object.prototype.hasOwnProperty.call(process.env, 'CODEX_HOME');
+  const originalCodexHome = process.env.CODEX_HOME;
+  for (const large of [false, true]) {
+    await helper.fixture(async f => {
+      if (large) {
+        for (const file of ['src/complete.cjs', 'tests/complete.test.cjs', 'plugins/generated/complete.cjs']) {
+          helper.write(f.worktree, file, Array.from({ length: 17000 }, (_, index) =>
+            '// ' + file + ' ' + index + ' ' + 'x'.repeat(55) + '\n').join(''));
+        }
+        helper.git(f.worktree, 'add', '.'); helper.git(f.worktree, 'commit', '-qm', 'complete product material');
+        f.head = helper.git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
+      }
+      const coordinator = path.join(f.root, 'coordinator');
+      helper.git(f.worktree, 'worktree', 'add', '--detach', coordinator, f.head);
+      for (const row of Object.values(f.rows)) {
+        fs.appendFileSync(path.join(coordinator, row.plan), '\nSelects `.planning/backlog/selected.md`.\n'
+          + (large ? 'Complete current plan obligation.\n'.repeat(5000) : ''));
+      }
+      helper.write(coordinator, '.planning/backlog/selected.md', '# Coordinator backlog\n\nComplete selected backlog.\n'
+        + (large ? 'Selected current backlog obligation.\n'.repeat(3000) : ''));
+      if (large) fs.appendFileSync(path.join(coordinator, '.planning/architecture/ADR-014-original.md'),
+        'Required current governing reference.\n'.repeat(3000));
+      helper.write(coordinator, '.planning/phases/' + f.phase + '/CONTEXT.md', 'Coordinator context.\n');
+      helper.write(coordinator, 'src/provider.cjs', 'exports.value = 99;\n');
+      helper.git(coordinator, 'add', '.'); helper.git(coordinator, 'commit', '-qm', 'coordinator-only references');
+      helper.git(f.worktree, 'rm', '-r', '.planning');
+      helper.git(f.worktree, 'commit', '-qm', 'planning belongs to coordinator');
+      f.head = helper.git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
+      helper.git(f.worktree, 'update-ref', 'refs/remotes/origin/' + f.pr.headRefName, f.head);
+      f.graphDir = path.join(coordinator, '.planning/graph');
+      assert.equal(fs.existsSync(path.join(f.worktree, '.planning')), false);
+      const options = helper.projectOptions(f);
+      const shared = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+      if (large) assert.throws(() => shared.prepareIntegratorContext(options, { worktree: f.worktree, phase: '49',
+        deferInline: true, review_contract: 'shipyard.integration-review.v2' }), /over its bound of 750000/);
+      const prepared = shared.prepareNativeIntegratorContext(options, { worktree: f.worktree, phase: '49' });
+      if (large) assert.ok(prepared.packet.accounting.estimated_tokens > 750000);
+      assert.equal(prepared.prompt, undefined);
+      assert.equal(shared.isPreparedIntegratorContext({ ...prepared }), false);
+      assert.equal(prepared.canonical.worktree, f.worktree);
+      assert.equal(prepared.canonical.head, f.head);
+      assert.equal(prepared.canonical.projectRoot, coordinator);
+      assert.ok(prepared.packet.required_refs.some(ref => ref.path.endsWith('ADR-014-original.md')));
+      assert.ok(prepared.packet.backlog.selected.some(item => item.content.includes('Complete selected backlog.')));
+      assert.ok(prepared.packet.role_context.combined_diff.content.includes('+exports.value = 1;'));
+      assert.ok(!prepared.packet.role_context.combined_diff.content.includes('exports.value = 99;'));
+      const a = helper.agent(f, 'integrator', prepared.signals);
+      const scope = { worktree: f.worktree, repository: prepared.canonical.commonPath, phase: 49,
+        ticket: prepared.ticket, run_id: 'coordinator-integration' };
+      const publicHost = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+      const request = { role: 'integrator', dispatch_id: scope.run_id, signals: {},
+        context: { review_contract: 'shipyard.integration-review.v2' } };
+      const nativeOptions = { ...options, scope,
+        agentDir: a.dir, agentManifest: a.manifest, capabilities: a.capabilities,
+        storageRoot: path.join(f.root, 'coordinator-delivery'), env: { CODEX_HOME: process.env.CODEX_HOME } };
+      const input = publicHost.prepareIntegratorInput(scope, request, nativeOptions);
+      const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+      const checked = context.verifyFileInput(input);
+      const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+      const packet = packets.decodeUniqueContent(JSON.parse(checked.material[0]));
+      const original = context.verifyFileInput(checked.manifest.binding.original_input_bundle, { sealed: true });
+      for (const verified of [original, checked]) {
+        assert.equal(verified.manifest.role, 'integrator');
+        assert.equal(verified.manifest.binding.review_contract, 'shipyard.integration-review.v2');
+        assert.equal(verified.manifest.max_chunk_reads, 4160);
+        assert.equal(verified.chunk_reads, Math.ceil(verified.manifest_bytes.length / 8192)
+          + verified.manifest.assets.reduce((sum, asset) => sum + Math.ceil(asset.bytes / 8192), 0));
+      }
+      assert.equal(input.input_bundle.review_contract, 'shipyard.integration-review.v2');
+      assert.equal(checked.manifest.binding.original_input_bundle.review_contract, 'shipyard.integration-review.v2');
+      assert.throws(() => context.prepareFileInput(scope, original.material[0], {
+        role: 'integrator', dispatchId: scope.run_id, graphDir: f.graphDir,
+        binding: original.manifest.binding, integrationProducer: { ...prepared },
+        storageRoot: path.join(f.root, 'copied-producer') }), /private producer/);
+
+      for (const change of ['content', 'hash']) {
+        const changed = packets.decodeUniqueContent(JSON.parse(original.material[0]), 32 * 1024 * 1024);
+        const ref = changed.required_refs[0];
+        if (change === 'content') {
+          ref.content += '\nAltered complete reference.\n';
+          ref.bytes = Buffer.byteLength(ref.content);
+          ref.sha256 = crypto.createHash('sha256').update(ref.content).digest('hex');
+        } else ref.sha256 = '0'.repeat(64);
+        assert.throws(() => {
+          const encoded = packets.encodeUniqueContent(changed, 32 * 1024 * 1024);
+          return context.prepareFileInput(scope, JSON.stringify(encoded), {
+            role: 'integrator', dispatchId: scope.run_id, graphDir: f.graphDir,
+            integrationProducer: prepared, storageRoot: path.join(f.root, 'changed-reference-' + change),
+            binding: { ...original.manifest.binding, packet_digest: crypto.createHash('sha256')
+              .update(require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify(encoded)).digest('hex') } });
+        }, /original private producer|immutable identity/);
+      }
+
+      const canonicalPacket = value => {
+        const copy = structuredClone(value);
+        for (const key of ['logical_source_obligations', 'required_refs']) {
+          copy[key].sort((a, b) => a.path.localeCompare(b.path));
+        }
+        return copy;
+      };
+      require('node:assert').deepStrictEqual(
+        canonicalPacket(packets.decodeUniqueContent(JSON.parse(original.material[0]))),
+        canonicalPacket(prepared.packet));
+      for (const verified of [original, checked]) for (const [index, asset] of verified.manifest.assets.entries()) {
+        assert.equal(crypto.createHash('sha256').update(verified.material[index]).digest('hex'), asset.sha256);
+      }
+      for (const copy of [undefined, { ...input }, JSON.parse(JSON.stringify(input))]) {
+        assert.throws(() => publicHost.prepareIntegratorInput(scope, { ...request, context: { ...request.context } },
+          { ...nativeOptions, fileInputContext: copy }), /private producer authority/);
+      }
+      const unassociated = context.prepareFileInput(scope, original.material[0], {
+        role: 'integrator', dispatchId: scope.run_id, graphDir: f.graphDir,
+        storageRoot: path.join(f.root, 'unassociated-input') });
+      assert.throws(() => publicHost.prepareIntegratorInput(scope, { role: 'integrator', dispatch_id: scope.run_id,
+        context: { review_contract: 'shipyard.integration-review.v2', input_transport: 'host-files',
+          input_bundle: unassociated.input_bundle, prompt: unassociated.prompt } },
+        { ...nativeOptions, fileInputContext: unassociated }), /original private preparation/);
+      assert.throws(() => publicHost.prepareIntegrationLineage(scope, { ...prepared },
+        { ...nativeOptions, nativeRuntime: 'codex' }), /complete private runtime preparation/);
+      assert.throws(() => publicHost.prepareIntegratorInput(scope, { role: 'integrator', dispatch_id: scope.run_id,
+        context: { review_contract: 'shipyard.integration-review.v2', deferInline: true } },
+        { ...nativeOptions, readerCapacity: {} }), /reader|capacity|schema/i);
+      if (large) for (const file of ['src/complete.cjs', 'tests/complete.test.cjs', 'plugins/generated/complete.cjs']) {
+        assert.ok(packet.role_context.combined_diff.content.includes('diff --git a/' + file));
+        assert.ok(packet.role_context.combined_diff.content.includes(file + ' 16999 '));
+      }
+      assert.equal(checked.manifest.snapshot.worktree, f.worktree);
+      assert.equal(checked.manifest.snapshot.head, f.head);
+      assert.equal(checked.manifest.snapshot.head_tree, prepared.canonical.headTree);
+      assert.equal(packet.role_context.ticket_set_digest, prepared.ticketSetDigest);
+      assert.deepEqual(packet.role_context.ticket_set, prepared.ticketSet);
+      assert.equal(packet.role_context.combined_diff.content, prepared.packet.role_context.combined_diff.content);
+      assert.equal(packet.canonical_root, coordinator);
+      assert.equal(packet.source_revision, f.head);
+      for (const ref of packet.required_refs) {
+        assert.equal(fs.existsSync(path.join(f.worktree, ref.path)), false);
+        assert.equal(ref.content, fs.readFileSync(path.join(coordinator, ref.path), 'utf8'));
+      }
+      assert.ok(packet.backlog.selected.some(item => item.content.includes('Complete selected backlog.')));
+      const foreign = path.join(f.root, 'foreign'); fs.mkdirSync(foreign);
+      fs.cpSync(path.join(coordinator, '.planning'), path.join(foreign, '.planning'), { recursive: true });
+      helper.git(foreign, 'init', '-qb', 'main'); helper.git(foreign, 'add', '.');
+      helper.git(foreign, 'commit', '-qm', 'unrelated planning graph');
+      assert.throws(() => publicHost.prepareIntegratorInput(scope, { ...request, context: {
+        review_contract: 'shipyard.integration-review.v2' } }, { ...options,
+        graphDir: path.join(foreign, '.planning/graph') }), /unrelated repository/);
+      fs.appendFileSync(path.join(coordinator, Object.values(f.rows)[0].plan), '\nchanged required planning bytes\n');
+      assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
+      if (large) {
+        const oversized = 'Complete selected obligation.\n'.repeat(1200000);
+        assert.ok(Buffer.byteLength(oversized) > 32 * 1024 * 1024);
+        fs.appendFileSync(path.join(coordinator, '.planning/backlog/selected.md'), oversized);
+        helper.git(coordinator, 'add', '.planning'); helper.git(coordinator, 'commit', '-qm', 'complete oversized planning input');
+        assert.throws(() => publicHost.prepareIntegratorInput(scope, { role: 'integrator', dispatch_id: scope.run_id,
+          context: { review_contract: 'shipyard.integration-review.v2' } }, nativeOptions),
+          error => (error.code === 'CONTEXT_OVER_BOUND' && /complete material exceeds its bound/.test(error.message))
+            || (error.code === 'INVALID_CONTEXT_PACKET' && /semantic packet exceeds its bound/.test(error.message)));
+      }
+    });
+    assert.equal(os.homedir, originalHomedir);
+    assert.equal(Object.prototype.hasOwnProperty.call(process.env, 'CODEX_HOME'), hadCodexHome);
+    assert.equal(process.env.CODEX_HOME, originalCodexHome);
+  }
+}));
+
+for (const historicalRecovery of ['direct', 'admitted', 'pending', 'action']) {
+  for (const mutation of ['normalized-repeat', 'normalized-covered-source']) {
+    test('historical signed source publication preserves original custody through ' + historicalRecovery + ' ' + mutation,
+      () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation, 'all', historicalRecovery)));
+  }
+}
+
+test('recovery source opening refuses real FIFOs and replacement races within a bounded child', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'recovery-opening-')));
+  const host = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const script = `
+    const fs = require('node:fs'), path = require('node:path');
+    const assert = require('node:assert/strict');
+    const { execFileSync } = require('node:child_process');
+    const [host, root, mode] = process.argv.slice(1);
+    const source = fs.readFileSync(host, 'utf8');
+    const body = source.slice(source.indexOf('function recoveryBytes('), source.indexOf('function recoveryGraphMatches('));
+    const fail = code => { const error = new Error(code); error.code = code; throw error; };
+    const read = new Function('fs', 'path', 'MAX_GRAPH_BYTES', 'fail', body + '; return recoveryBytes;')(fs, path, 1024, fail);
+    const file = path.join(root, mode);
+    if (mode === 'fifo') execFileSync('mkfifo', [file]);
+    else if (mode === 'directory') fs.mkdirSync(file);
+    else if (mode === 'symlink') fs.symlinkSync(host, file);
+    else fs.writeFileSync(file, 'original');
+    const descriptors = new Set(), originalOpen = fs.openSync, originalClose = fs.closeSync;
+    fs.openSync = function (...args) {
+      const fd = originalOpen.apply(fs, args); descriptors.add(fd); return fd;
+    };
+    fs.closeSync = function (fd) { originalClose.call(fs, fd); descriptors.delete(fd); };
+    if (mode === 'replacement') {
+      const open = fs.openSync;
+      fs.openSync = function (target, flags) {
+        if (target === file) { fs.unlinkSync(file); execFileSync('mkfifo', [file]); }
+        return open.call(fs, target, flags);
+      };
+    }
+    if (mode === 'changed') {
+      const readFile = fs.readFileSync;
+      fs.readFileSync = function (target, ...args) {
+        const bytes = readFile.call(fs, target, ...args);
+        if (typeof target === 'number') fs.appendFileSync(file, 'changed');
+        return bytes;
+      };
+    }
+    if (mode === 'regular') assert.equal(read(file, root).toString(), 'original');
+    else assert.throws(() => read(file, root), error => error.code === 'REPAIR_SUBJECT_CHANGED');
+    assert.equal(descriptors.size, 0);
+  `;
+  try {
+    for (const mode of ['fifo', 'replacement', 'directory', 'symlink', 'changed', 'regular']) {
+      const result = spawnSync(process.execPath, ['-e', script, host, root, mode], { encoding: 'utf8', timeout: 3000 });
+      assert.equal(result.error, undefined, mode + ': ' + String(result.error));
+      assert.equal(result.signal, null, mode);
+      assert.equal(result.status, 0, mode + ': ' + result.stderr);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+function codexPartitionHelpers() {
+  const Module = require('node:module'), file = require.resolve('./phase49-incremental-integration.test.cjs');
+  const loaded = new Module(file, module);
+  loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
+  const original = Module._load;
+  Module._load = function(name, ...args) { return name === 'node:test' ? { test() {} } : original.call(this, name, ...args); };
+  try {
+    loaded._compile(fs.readFileSync(file, 'utf8')
+      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, cli, serialize, currentPartitionConsumer, publicIntegrationFixture, publicPartitionFixture };\n', file);
+  } finally { Module._load = original; }
+  return loaded.exports;
+}
+
+function codexPartitionFixture(f, helper, controls = {}) {
+  const roleArtifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const native = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const stable = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify;
+  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+  const complete = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
+    .prepareNativeIntegratorContext(helper.projectOptions(f), { worktree: f.worktree, phase: '49',
+      review_contract: roleArtifacts.INTEGRATION_REVIEW_V3 });
+  const a = helper.agent(f, 'integrator', complete.signals);
+  const frameRows = () => {
+    const meta = helper.template(helper.parent, row => row.type === 'session_meta');
+    const context = helper.template(helper.parent, row => row.type === 'turn_context');
+    Object.assign(context.payload, { model: a.selection.model, effort: a.selection.effort, cwd: f.worktree, workspace_roots: [f.worktree] });
+    context.payload.sandbox_policy.type = 'read-only';
+    Object.assign(context.payload.collaboration_mode.settings, { model: a.selection.model, reasoning_effort: a.selection.effort });
+    const developer = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.role === 'developer');
+    developer.payload.content = [{ type: 'input_text', text: native.generatedInstructions(a.text) }];
+    return { meta, context, developer };
+  };
+  const directory = path.join(f.root, 'codex-behavior-only-capacity'); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const retain = proof => {
+    const raw = stable({ ...proof, behavior_only: true }), file = path.join(directory, digest(raw) + '.json');
+    if (!fs.existsSync(file)) fs.writeFileSync(file, raw, { mode: 0o600 });
+    return { path: file, bytes: Buffer.byteLength(raw), sha256: digest(raw) };
+  };
+  const capacity = { max_input_bytes: 8 * 1024 * 1024, unit_input_bytes: 256 * 1024, segment_bytes: 16 * 1024,
+    output_reserve_tokens: 32000, tool_reserve_tokens: 10000,
+    output_limits: { conclusions: 1024, findings: 2048, limitations: 1024, required_context: 1024, seams: 16384 },
+    recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'native-exact' } };
+  const resources = { capacity, counterSource: 'codex-behavior-only-counter', windowSource: 'codex-behavior-only-window',
+    renderLaunch(launch) {
+      controls.render?.(launch);
+      const { meta, context, developer } = frameRows(), { turn_id, ...framing } = context.payload;
+      const frame = { developers: [{ role: developer.payload.role, content: developer.payload.content }], other_users: [],
+        base_instructions: meta.payload.base_instructions || null, contexts: [framing] };
+      const request = { schema: 'shipyard.integration-native-request.v1', runtime: 'codex', model: launch.model,
+        effort: launch.effort, input: launch.input, instruction_sha256: launch.instruction_sha256,
+        recipe_sha256: digest(stable(capacity.recipe)), frame, tools: [],
+        native_payload: stable({ frame, tools: [], input: launch.input, model: launch.model, effort: launch.effort }) };
+      controls.mutate?.(request, 'request', launch);
+      return request;
+    },
+    readWindow(identity) {
+      if (controls.noWindow) throw new Error('fixture window unavailable');
+      const proof = { schema: 'shipyard.integration-runtime-window.v1', ...identity,
+        source: 'codex-behavior-only-window', evidence_id: 'codex-behavior-only-window', window_tokens: 100000000 };
+      controls.mutate?.(proof, 'window');
+      return retain(proof);
+    },
+    measureInput(request, identity) {
+      const payload = JSON.parse(request.input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
+      (controls.measured ||= []).push(payload);
+      const proof = { schema: 'shipyard.integration-input-measurement.v1', ...identity, runtime: 'codex', model: request.model,
+        source: 'codex-behavior-only-counter', evidence_id: 'codex-behavior-only-count-' + identity.launch_sha256,
+        input_tokens_upper_bound: 1000 };
+      controls.mutate?.(proof, 'measurement', payload);
+      return retain(proof);
+    } };
+  const options = { ...helper.projectOptions(f), scope: { worktree: f.worktree, phase: 49,
+    repository: complete.canonical.commonPath, ticket: complete.ticket, run_id: 'public-codex-v3-' + ++f.count },
+    storageRoot: path.join(f.root, 'public-codex-v3-' + f.count), agentDir: a.dir, agentManifest: a.manifest,
+    capabilities: a.capabilities, env: { ...process.env, CODEX_HOME: process.env.CODEX_HOME },
+    probe: { status: 'available', executable: 'codex-fixture', runtime_version: 'fixture', capabilities: a.capabilities },
+    integrationCapacity: resources,
+    spawn(_file, _args) {
+      const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = process.pid;
+      let input = '';
+      child.stdin = { write(raw) { input += raw; }, end() { process.nextTick(() => {
+        try {
+          input = input.replace(/\n$/, '');
+          const payload = JSON.parse(input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
+          (controls.launches ||= []).push({ input, payload });
+          controls.onLaunch?.(input, payload);
+          const identity = payload.reviewed_identity, assignment = payload.assignment;
+          const result = { review_contract: roleArtifacts.INTEGRATION_REVIEW_V3, kind: payload.kind, runtime: 'codex',
+            subject: payload.subject, plan_sha256: payload.plan_sha256, input_sha256: digest(input), reviewed_identity: identity,
+            completeness: 'complete', outcome: 'passed', blocking_count: 0, findings: [], evidence_markdown: 'Original Codex fixture evidence; behavior only.' };
+          if (payload.kind === 'unit') Object.assign(result, { schema: 'shipyard.integration-unit-result.v1', unit_id: assignment.unit_id,
+            coverage: { primary_segments: assignment.primary_segments, primary_obligation_ids: assignment.primary_obligation_ids,
+              support_segments: assignment.support_segments, support_obligation_ids: assignment.support_obligation_ids },
+            conclusions: ['All exact primary fixture bytes and obligations evaluated.'], limitations: [], required_context: [],
+            seams: assignment.seam_ids.map(id => ({ id, disposition: 'unresolved', rationale: 'Final must independently judge the interaction.' })) });
+          else Object.assign(result, { phase: identity.phase, head: identity.head, head_tree: identity.head_tree,
+            base: identity.base_ref.replace(new RegExp('^refs/remotes/'), ''), base_tree: identity.base_tree,
+            ticket_set: identity.ticket_set, ticket_set_digest: identity.ticket_set_digest, summary: 'Separate Codex fixture final.',
+            coverage: { ...payload.coverage, limitations: [], seam_dispositions: payload.seams.map(seam => ({
+              id: seam.id, disposition: 'resolved', rationale: 'Independent fixture final judged complete acceptance and this seam.' })) } });
+          controls.result?.(result, payload);
+          const session = crypto.randomUUID(), text = JSON.stringify(result), { meta, context, developer } = frameRows();
+          Object.assign(meta.payload, { id: session, session_id: session, cwd: f.worktree, runtime_workspace_roots: [f.worktree] });
+          const start = helper.template(helper.parent, row => row.payload?.type === 'task_started'), turn = start.payload.turn_id;
+          context.payload.turn_id = turn;
+          const user = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.role === 'user');
+          user.payload.content = [{ type: 'input_text', text: input }];
+          const final = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.phase === 'final_answer');
+          final.payload.content.forEach(block => { block.text = text; }); final.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+          const completion = helper.template(helper.parent, row => row.payload?.type === 'task_complete');
+          Object.assign(completion.payload, { turn_id: turn, last_agent_message: text });
+          const rows = [meta, context, start, developer, user,
+            helper.template(helper.parent, row => row.payload?.type === 'token_count'), final, completion];
+          controls.native?.(rows);
+          const now = new Date(), root = path.join(process.env.CODEX_HOME, 'sessions', String(now.getFullYear()),
+            String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+          fs.mkdirSync(root, { recursive: true }); fs.writeFileSync(path.join(root, session + '.jsonl'), helper.serialize(rows));
+          const cli = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
+            .map(type => helper.template(helper.cli, row => row.type === type));
+          cli[0].thread_id = session; cli[2].item.text = text;
+          child.stdout.emit('data', Buffer.from(helper.serialize(cli))); child.emit('close', 0);
+        } catch (error) { child.emit('error', error); }
+      }); } };
+      return child;
+    } };
+  return { options, resources, controls };
+}
+
+test('public Codex v3 preserves historical pins through independent units, exact-plan restart and one actual final', () => withGraphDirEnv(undefined, async () => {
+  const helper = codexPartitionHelpers();
+  await helper.fixture(async f => {
+    const roleArtifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    const prior = await helper.successfulReview(f, 'integrator', { legacy: true });
+    const historical = roleArtifacts.authenticatedArchivePins(f.worktree);
+    const receipt = structuredClone(prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt);
+    const evidencePath = path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md');
+    helper.write(f.worktree, 'src/consumer.cjs', 'exact Codex primary line Ω\n'.repeat(3000)); helper.commit(f, 'complete partitioned source');
+    const { options, controls } = codexPartitionFixture(f, helper);
+    options.integrationCapacity.capacity.unit_input_bytes = 128 * 1024;
+    let interrupted = false;
+    controls.render = launch => {
+      if (controls.launches?.length === 2 && launch.kind !== 'reserved-template' && !interrupted) {
+        interrupted = true; throw new Error('fixture interruption before next native reservation');
+      }
+    };
+    controls.onLaunch = (input, payload) => {
+      assert.equal(input.includes('<AUTHENTICATED_CONTEXT_PACKET>'), false);
+      assert.equal(controls.measured.filter(item => item.reserved_template).length, 1);
+      assert.ok(controls.measured.filter(item => item.kind === 'unit').length > 1);
+      assert.equal(fs.existsSync(evidencePath), false);
+      if (payload.kind === 'phase') assert.ok(payload.unit_artifacts.length > 1);
+    };
+    const host = createCodexDeliveryHost(options), selected = { role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } };
+    await assert.rejects(host.run(selected), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
+    assert.equal(controls.launches.length, 2);
+    for (const pin of historical) roleArtifacts.assertArchivePin(f.worktree, pin);
+    const old = fs.readFileSync(path.join(f.worktree, historical[0].path));
+    fs.appendFileSync(path.join(f.worktree, historical[0].path), 'tamper');
+    await assert.rejects(host.run(selected), /archive|pin|changed|digest/i);
+    fs.writeFileSync(path.join(f.worktree, historical[0].path), old);
+    helper.write(f.worktree, roleArtifacts.ARTIFACT_ARCHIVE_DIR + '/unlisted/unrelated.json', '{}');
+    await assert.rejects(host.run(selected), /archive|membership/i);
+    fs.rmSync(path.join(f.worktree, roleArtifacts.ARTIFACT_ARCHIVE_DIR, 'unlisted'), { recursive: true });
+    options.integrationCapacity.plan_sha256 = controls.measured[0].plan_sha256;
+    const restarted = createCodexDeliveryHost(options);
+    const result = await restarted.run(selected);
+    assert.equal(result.result.kind, 'phase');
+    assert.equal(result.result.outcome, 'passed');
+    assert.equal(result.receipt.runtime, 'codex');
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
+    const units = controls.launches.filter(item => item.payload.kind === 'unit');
+    assert.equal(new Set(units.map(item => item.payload.assignment.unit_id)).size, units.length);
+    assert.equal(controls.measured.length, controls.launches.length + 1);
+    const final = controls.measured.at(-1);
+    assert.equal(final.kind, 'phase'); assert.equal(final.reserved_template, undefined);
+    assert.notEqual(final.verified_index_sha256, '0'.repeat(64));
+    assert.equal(final.unit_artifacts.length, units.length);
+    assert.deepEqual(prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt, receipt);
+    for (const pin of historical) roleArtifacts.assertArchivePin(f.worktree, pin);
+    const manifests = roleArtifacts.authenticatedArchivePins(f.worktree).filter(pin => pin.path.endsWith('/.shipyard-role-artifact.json'))
+      .map(pin => JSON.parse(fs.readFileSync(path.join(f.worktree, pin.path))));
+    assert.equal(new Set(manifests.map(item => item.producer_launch)).size, manifests.length);
+    assert.equal(manifests.filter(item => item.artifact_kind === 'integration-unit').length, units.length);
+    await assert.rejects(restarted.run(selected), /reserved|archive|membership|baseline/i);
+    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
+  });
+}));
+
+test('public Codex v3 accepts omitted capacity through original observed evidence', () => withGraphDirEnv(undefined, async () => {
+  const helper = codexPartitionHelpers();
+  await helper.publicIntegrationFixture(async f => {
+    const { options, controls } = helper.publicPartitionFixture(f, 'codex', { observed: true });
+    delete options.integrationCapacity;
+    const result = await createCodexDeliveryHost(options).run({ role: 'integrator',
+      context: { review_contract: 'shipyard.integration-review.v3' } });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(result.result.outcome, 'passed');
+    assert.equal(controls.measured, undefined);
+    assert.ok(controls.launches.filter(item => item.payload.kind === 'unit').length > 0);
+    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
+    assert.equal(result.operational_diagnostic.authoritative, false);
+    assert.ok(result.operational_diagnostic.actual_final_input_bytes <= 4194304);
+    assert.equal(helper.currentPartitionConsumer(f)?.authenticated, true);
+  });
+}));
+
+for (const scenario of ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+  'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'over-bound-actual-final', 'changed-exact-input',
+  'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'native-input-substitution', 'native-result-substitution'])
+test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () => withGraphDirEnv(undefined, async () => {
+  const helper = codexPartitionHelpers();
+  await helper.fixture(async f => {
+    const { options, resources, controls } = codexPartitionFixture(f, helper);
+    if (scenario === 'missing-renderer') delete resources.renderLaunch;
+    if (scenario === 'unknown-window') controls.noWindow = true;
+    controls.mutate = (proof, kind, payload) => {
+      if (scenario === 'foreign-window' && kind === 'window') proof.runtime = 'claude';
+      if (scenario === 'foreign-counter' && kind === 'measurement') proof.runtime = 'claude';
+      if (scenario === 'unknown-instructions' && kind === 'request') delete proof.frame.base_instructions;
+      if (scenario === 'over-bound-unit' && kind === 'measurement' && payload.kind === 'unit'
+          || scenario === 'over-bound-template' && kind === 'measurement' && payload.reserved_template
+          || scenario === 'over-bound-actual-final' && kind === 'measurement' && payload.kind === 'phase' && !payload.reserved_template)
+        proof.input_tokens_upper_bound = 100000000;
+      if (scenario === 'changed-exact-input' && kind === 'request' && controls.measured?.length >= 2) proof.input += 'changed';
+    };
+    controls.onLaunch = () => { if (scenario === 'source-substitution') fs.appendFileSync(path.join(f.worktree, 'src/provider.cjs'), 'changed'); };
+    controls.result = result => {
+      if (scenario === 'wrong-output') result.runtime = 'claude';
+      if (scenario === 'incomplete-unit') result.completeness = 'incomplete';
+      if (scenario === 'failed-unit') { result.outcome = 'human-review-required'; result.required_context = ['Unresolved interaction.']; }
+    };
+    controls.native = rows => {
+      if (scenario === 'native-input-substitution') rows.find(row => row.payload?.role === 'user').payload.content[0].text += 'changed';
+      if (scenario === 'native-result-substitution') {
+        const final = rows.find(row => row.payload?.phase === 'final_answer');
+        const result = JSON.parse(final.payload.content[0].text); result.conclusions = ['Substituted original native result.'];
+        final.payload.content[0].text = JSON.stringify(result);
+        rows.find(row => row.payload?.type === 'task_complete').payload.last_agent_message = JSON.stringify(result);
+      }
+    };
+    await assert.rejects(createCodexDeliveryHost(options).run({ role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } }),
+      error => /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_|RUNTIME_/.test(error.code || ''));
+    const prelaunch = ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
+      'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'changed-exact-input'].includes(scenario);
+    assert.equal(controls.launches?.length || 0, prelaunch ? 0 : 1);
+    assert.equal(fs.existsSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md')), false);
+  });
+}));
+
+test('public Codex v3 rejects caller prompt, stage, receipt, capacity and producer authority', () => {
+  const selected = { role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } };
+  assert.equal(requestValue(selected).context.review_contract, selected.context.review_contract);
+  for (const field of ['prompt', 'kind', 'unit_id', 'plan_sha256', 'partitions', 'verified_index_sha256', 'receipt',
+    'integrationCapacity', 'renderLaunch', 'measureInput', 'readWindow', 'capacity_certificate', 'input_prepared'])
+    assert.throws(() => requestValue({ ...selected, context: { ...selected.context, [field]: {} } }), /host-owned/);
+  for (const extra of [{ dispatch_id: 'caller-stage' }, { signals: { critical: true } }, { gsd_role: 'integrator' }])
+    assert.throws(() => requestValue({ ...selected, ...extra }), /host-owned/);
+});
+
+assert.equal(entrySelected, 44, 'exact code-review entry registration');
+assert.equal(entryVariants, 8, 'all original CLI variants');
+assert.equal(integratorDefaultSelected, 1, 'exact integrator default registration');
 done();

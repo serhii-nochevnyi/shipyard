@@ -9,6 +9,8 @@ const REPOSITORY_CLASS = '[^;\\x00-\\x1f\\x7f]+';
 const REPOSITORY_VALUE = new RegExp(`^${REPOSITORY_CLASS}$`);
 const PHASE_SUBJECT = new RegExp('^phase=(\\d+-[A-Za-z0-9._-]+);repository=(' + REPOSITORY_CLASS + ');tickets=([a-f0-9]{64});pr=([1-9]\\d*);head=([a-f0-9]{40});base=([a-f0-9]{40})$');
 const GIT_SCOPE_KEYS = Object.freeze(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']);
+const PHASE_SUBJECT_ROLES = Object.freeze(['arch-review', 'code-review']);
+const PHASE_ONLY_ROLES = Object.freeze(['code-review']);
 const gitEnvironment = () => {
   const env = { ...process.env };
   for (const key of GIT_SCOPE_KEYS) delete env[key];
@@ -161,4 +163,5 @@ function parseSubject(name, text) {
 }
 
 module.exports = { GIT_SCOPE_KEYS, repositoryIdentity, legacyRepositoryForms, acceptedRepositoryValues, buildSubject, parseSubject,
-  REPOSITORY_CLASS, resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, phaseEvidencePaths, PHASE_SUBJECT };
+  REPOSITORY_CLASS, resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, phaseEvidencePaths, PHASE_SUBJECT,
+  PHASE_SUBJECT_ROLES, PHASE_ONLY_ROLES };

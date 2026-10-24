@@ -1188,4 +1188,69 @@ test('carry validates the live PR in the supplied worktree before refusing new-h
   assert.deepStrictEqual(r.posted, []);
 });
 
+for (const jira of [null, 'PRJ-42']) test(`verify prints code_review and follows the project graph mode (${jira})`, () => {
+  const cp = require('node:child_process');
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(W, 'code-verify-')));
+  const root = path.join(temporary, 'project'), linked = path.join(temporary, 'linked'), unrelated = path.join(temporary, 'unrelated');
+  fs.mkdirSync(root);
+  const git = (...args) => cp.execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
+  git('init', '--quiet', '-b', 'main'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.test');
+  git('config', 'commit.gpgsign', 'false');
+  const graphDir = path.join(root, '.planning/graph'); fs.mkdirSync(graphDir, { recursive: true });
+  const branch = jira ? 'feat/PRJ-42-review' : 'epic/52-review';
+  const graph = { epics: { 52: { branch, phaseDir: '52-review', repos: [null], jira } },
+    tickets: { 'T-52-01': { phase: 52, phaseDir: '52-review', plan: '.planning/phases/52-review/52-01-PLAN.md',
+      epic: branch, branch: 'feat/review-ticket', repo: null } } };
+  fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify(graph));
+  fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), '{}');
+  const config = (directory, mode) => fs.writeFileSync(path.join(directory, '.planning/config.json'),
+    JSON.stringify({ git: { base_branch: 'main' }, delivery_pipeline: { code_review: mode } }));
+  config(root, 'report'); git('add', '.'); git('commit', '--quiet', '-m', 'seed');
+  const head = git('rev-parse', 'HEAD');
+  git('worktree', 'add', '--quiet', '-b', branch, linked);
+  cp.execFileSync('git', ['clone', '--quiet', root, unrelated]);
+  cp.execFileSync('git', ['-C', unrelated, 'checkout', '--quiet', branch]);
+  fs.rmSync(path.join(unrelated, '.planning'), { recursive: true, force: true });
+  const preload = path.join(temporary, 'architecture.cjs');
+  fs.writeFileSync(preload, `
+    const Module = require('node:module'), originalLoad = Module._load;
+    Module._load = function(request, parent, isMain) {
+      const loaded = originalLoad.call(this, request, parent, isMain);
+      if (parent?.filename === ${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/gate-trailer.cjs'))}
+          && request === './role-artifact.cjs') {
+        Module._load = originalLoad;
+        return { ...loaded, currentArchitectureVerdict: () => ({verdict:'conform'}), currentIntegrationVerdict: () => null };
+      }
+      return loaded;
+    };
+  `);
+  const live = { number: 9, state: 'OPEN', headRefName: branch, headRefOid: head, baseRefName: 'main', baseRefOid: head };
+  const run = (worktree, patch = {}) => {
+    fs.writeFileSync(PRVIEW, JSON.stringify({ ...live, ...patch }));
+    return spawnSync(process.execPath, [path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/gate-trailer.cjs'),
+      'verify', '9', '--worktree', worktree, '--graph', graphDir], { cwd: worktree, encoding: 'utf8',
+      env: { ...process.env, PATH: BIN + path.delimiter + process.env.PATH, SHIPYARD_TRAILER_PRVIEW: PRVIEW,
+        NODE_OPTIONS: '--require=' + preload } });
+  };
+  for (const mode of ['hold', 'report']) {
+    config(root, mode); config(linked, mode === 'hold' ? 'report' : 'hold');
+    for (const worktree of [linked, unrelated]) {
+      const result = run(worktree);
+      assert.strictEqual(result.status, mode === 'hold' ? 1 : 0, result.stderr);
+      const state = JSON.parse(result.stdout).code_review;
+      assert.strictEqual(state.state, 'owed'); assert.strictEqual(state.mode, mode);
+      assert.strictEqual(state.ok, mode === 'report');
+      const unmatched = run(worktree, { headRefName: 'unknown' });
+      assert.strictEqual(unmatched.status, mode === 'hold' ? 1 : 0, unmatched.stderr);
+      assert.strictEqual(JSON.parse(unmatched.stdout).code_review.state, 'unmatched');
+      if (mode === 'hold') assert.ok(JSON.parse(unmatched.stdout).code_review.reason.includes(path.join(root, '.planning/config.json')));
+      for (const patch of [{ headRefName: 'feat/review-ticket' }, { baseRefName: 'ticket-base' }]) {
+        const skipped = run(worktree, patch);
+        assert.strictEqual(skipped.status, 0, skipped.stderr);
+        assert.strictEqual(JSON.parse(skipped.stdout).code_review, null);
+      }
+    }
+  }
+});
+
 done();

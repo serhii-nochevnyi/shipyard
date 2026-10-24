@@ -23,6 +23,7 @@ const RECORDED_PALETTES = Object.freeze({
     claude: Object.freeze({ sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' }),
   }),
   'adr-014.v7': Object.freeze({ codex: CODEX_MODEL_IDS, claude: CLAUDE_MODEL_ALIASES }),
+  'adr-014.v8': Object.freeze({ codex: CODEX_MODEL_IDS, claude: CLAUDE_MODEL_ALIASES }),
 });
 
 const RECORDED_POLICIES = Object.freeze({
@@ -30,6 +31,11 @@ const RECORDED_POLICIES = Object.freeze({
     policy_version: 'adr-014.v6',
     policy_hash: '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968',
     palettes: RECORDED_PALETTES['adr-014.v6'],
+  }),
+  'adr-014.v7': Object.freeze({
+    policy_version: 'adr-014.v7',
+    policy_hash: '3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570',
+    palettes: RECORDED_PALETTES['adr-014.v7'],
   }),
 });
 

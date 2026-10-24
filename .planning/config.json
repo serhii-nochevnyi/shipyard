@@ -916,6 +916,209 @@
           ],
           "profile": "sandbox",
           "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase52-diff-sizes.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/context-packet.test.cjs",
+            "tests/unit/dispatch-record.test.cjs",
+            "tests/unit/conveyor-scratch.test.cjs",
+            "tests/unit/claude-reference-content.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/front.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/files-contract.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/architecture-target.test.cjs",
+            "tests/unit/dispatch-boundary.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/run-contract.test.cjs",
+            "tests/unit/dispatch-record.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-arch-review-context.test.cjs",
+            "tests/unit/claude-role-host.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/code-review-core.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/role-artifact.test.cjs",
+            "tests/unit/judgment-artifacts.test.cjs",
+            "tests/unit/judgment-contract.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/claude-role-host.test.cjs",
+            "tests/unit/code-review-core.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-code-review-context.test.cjs",
+            "tests/unit/codex-arch-review-context.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-delivery-host.test.cjs",
+            "tests/unit/codex-runtime-host.test.cjs",
+            "tests/unit/codex-dispatch-adapter.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase-code-review.test.cjs",
+            "tests/unit/deliver-dispatch.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/trailer.test.cjs",
+            "tests/unit/sentinel.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/pipeline-config.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase-code-review-publish.test.cjs",
+            "tests/unit/deliver-builders-contract.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/pr-hygiene.test.cjs",
+            "tests/unit/check-state.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/pipeline-config.test.cjs",
+            "tests/unit/phase-code-review.test.cjs",
+            "tests/unit/deliver-dispatch.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/architecture-target.test.cjs",
+            "tests/unit/codex-arch-review-context.test.cjs",
+            "tests/unit/phase49-review-lineage.test.cjs",
+            "tests/unit/phase49-incremental-integration.test.cjs",
+            "tests/unit/deliver-builders-contract.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/marketplace-install.test.cjs",
+            "tests/unit/source-contract.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
         }
       ]
     }

@@ -8,11 +8,11 @@ const { execFileSync } = require('node:child_process');
 const { createCodexRuntimeHost, normalizeScope, parseCodexStream, probeCodexRuntime } = require('./codex-runtime-host.cjs');
 const { encodeUniqueContent } = require('./context-packet.cjs');
 const { stableStringify } = require('./model-policy-internal.cjs');
-const integrationPreflight = require('./phase-integrator-preflight.cjs');
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
 const archReviewContext = require('./codex-arch-review-context.cjs');
+const codeReviewContext = require('./codex-code-review-context.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
@@ -99,13 +99,18 @@ function requestValue(input) {
     if (!allowed.has(key)) fail('INVALID_INPUT', 'unsupported delivery request field ' + key);
   }
   if (typeof input.role !== 'string' || !input.role.trim()) fail('INVALID_INPUT', 'role is required');
-  const role = ROLE_ALIASES[input.role] || input.role;
+  const role = ROLE_ALIASES[input.role.trim()] || input.role.trim();
+  if (input.context?.review_contract === roleArtifact.INTEGRATION_REVIEW_V3
+      && (role !== 'integrator' || input.gsd_role !== undefined || input.dispatch_id !== undefined
+        || Object.keys(input.signals || {}).length
+        || Object.keys(input.context).some(key => key !== 'review_contract')))
+    fail('INVALID_INPUT', 'v3 accepts only the integrator contract selector; all stage authority is host-owned');
   if (input.signals !== undefined && !object(input.signals)) fail('INVALID_INPUT', 'signals must be an object');
   if (role === 'review-fix' && Object.keys(input.signals || {}).length)
     fail('INVALID_INPUT', 'repair rungs are derived only from original protected repair history');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
   for (const key of Object.keys(input.context || {})) {
-    if (key === 'focused_prepared' || key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment' || key === 'input_prepared') {
+    if (key === 'focused_prepared' || key === 'code_review_prepared' || key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment' || key === 'input_prepared') {
       fail('INVALID_INPUT', 'request context cannot supply host authority');
     }
     if (key.startsWith('plan') && key !== 'plan_sha256') {
@@ -117,7 +122,7 @@ function requestValue(input) {
     fail('INVALID_INPUT', 'context.plan_sha256 must be a 64-character hex digest');
   }
   if (input.context?.review_contract !== undefined
-      && (role !== 'integrator' || !['shipyard.integration-review.v1', 'shipyard.integration-review.v2'].includes(input.context.review_contract)))
+      && (role !== 'integrator' || !['shipyard.integration-review.v1', 'shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3].includes(input.context.review_contract)))
     fail('INVALID_INPUT', 'unsupported integration review contract');
   if (input.dispatch_id !== undefined
       && (typeof input.dispatch_id !== 'string' || !input.dispatch_id.trim())) {
@@ -131,6 +136,9 @@ function requestValue(input) {
 // @contract: pure — no fs writes or spawn; the boundary's UNSUPPORTED_SIGNAL surfaces unchanged.
 function validateArgs(args) {
   const request = requestValue(args);
+  if (request.role === 'code-review' && (request.gsd_role !== undefined
+      || Object.keys(request.signals).length || Object.keys(request.context).some(key => key !== 'repo')))
+    fail('INVALID_INPUT', 'code-review accepts only host-built prompts, selectors and signals');
   const resolution = policy.resolveDispatch({
     runtime: 'codex', role: request.role, signals: request.signals,
     ...(request.dispatch_id ? { dispatch_id: request.dispatch_id } : {}),
@@ -749,20 +757,31 @@ function admitArchitectureInput(prepared, request, options, capabilities) {
   fail('CONTEXT_OVER_BOUND', 'selected generated instruction accounting did not stabilize');
 }
 
+function admitCodeReviewInput(prepared, options, capabilities) {
+  const signals = { ...prepared.prepared.signals };
+  const selected = policy.resolveDispatch({ runtime: 'codex', role: 'code-review', signals });
+  codeReviewContext.admitInstalledLaunch(prepared, installedAgentOptions(options, selected, capabilities));
+  const input = codeReviewContext.admittedFileInput(prepared);
+  return input ? { ...signals, inputTokens: input.inputTokens } : signals;
+}
+
 const inlineIntegratorInputs = new WeakMap();
 const integrationInputs = new WeakMap();
+const integrationExecutions = new WeakMap();
 
 function integrationDigest(value) {
   return crypto.createHash('sha256').update(stableStringify(value)).digest('hex');
 }
 
 function completeIntegrationPreflight(prepared, options) {
-  const proof = integrationPreflight.preflight({ phase: prepared.phaseNumber,
-    graphDir: prepared.graph.directory, worktree: prepared.canonical.worktree }, {
-    listPullRequests: options.listPullRequests, getPullRequest: options.getPullRequest,
-    git: (worktree, args) => (options.execFileSync || execFileSync)('git', ['-C', worktree, ...args], {
-      encoding: 'utf8', maxBuffer: MAX_GRAPH_BYTES, stdio: ['ignore', 'pipe', 'pipe'] }).trim(),
-  });
+  const proof = prepared.nativeMergeProof
+    ? require('./claude-role-host.cjs').createNativeIntegrationMergeProof(prepared, options)
+    : require('./phase-integrator-preflight.cjs').preflight({ phase: prepared.phaseNumber,
+      graphDir: prepared.graph.directory, worktree: prepared.canonical.worktree }, {
+      listPullRequests: options.listPullRequests, getPullRequest: options.getPullRequest,
+      git: (worktree, args) => (options.execFileSync || execFileSync)('git', ['-C', worktree, ...args], {
+        encoding: 'utf8', maxBuffer: MAX_GRAPH_BYTES, stdio: ['ignore', 'pipe', 'pipe'] }).trim(),
+    });
   if (proof.epic.commit !== prepared.canonical.head || proof.epic.tree !== prepared.canonical.headTree
       || JSON.stringify(proof.ticket_set) !== JSON.stringify(prepared.ticketSet)
       || proof.ticket_set_digest !== prepared.ticketSetDigest)
@@ -795,10 +814,10 @@ function prepareIntegrationLineage(scope, prepared, options) {
     base: prepared.baseCommit, base_ref: baseRef, merge_base: prepared.mergeBase,
     merge_base_tree: prepared.mergeBaseTree, ticket_set: prepared.ticketSet.map(member => member.id),
     ticket_set_digest: prepared.ticketSetDigest, preflight: proof };
-  const fileOptions = { role: 'integrator', dispatchId: options.dispatchId,
+  const fileOptions = { role: 'integrator', integrationProducer: prepared, dispatchId: options.dispatchId,
     storageRoot: options.storageRoot, graphDir: prepared.graph.directory,
     generatedInstructionBytes: options.generatedInstructionBytes, readerCapacity: options.readerCapacity, readerProfile: options.readerProfile };
-  const original = encodeUniqueContent(prepared.packet);
+  const original = encodeUniqueContent(prepared.packet, 32 * 1024 * 1024);
   let currentInput = archReviewContext.prepareFileInput(scope, JSON.stringify(original), {
     ...fileOptions, readerCapacity: undefined, readerProfile: undefined, binding: { ...binding, packet_digest: integrationDigest(original) } });
   if (options.nativeRuntime === 'codex' && options.readerProfile && typeof options.host?.restoreIntegrationSourceInput === 'function')
@@ -820,7 +839,7 @@ function prepareIntegrationLineage(scope, prepared, options) {
     ...coverage, reviewed_identity: reviewedIdentity, original_input: { manifest_sha256: currentInput.input_bundle.manifest_sha256,
       packet_digest: currentInput.manifest.binding.packet_digest }, complete_preflight: proof,
   });
-  const encoded = encodeUniqueContent(packet);
+  const encoded = encodeUniqueContent(packet, 32 * 1024 * 1024);
   const input = archReviewContext.prepareFileInput(scope, JSON.stringify(encoded), {
     ...fileOptions, relayPrefix: reference + '\n\nIssue a fresh current integration judgment. Read every required dictionary entry and logical obligation. '
       + 'Treat inherited conclusions as inherited; evaluate every newly reviewed obligation, affected boundary and limitation. '
@@ -835,10 +854,10 @@ function prepareIntegrationLineage(scope, prepared, options) {
   return review;
 }
 
-function recheckIntegrationReview(review) {
+function recheckIntegrationReview(review, partitions) {
   if (!review || integrationInputs.get(review.input) !== review)
     fail('INVALID_INPUT', 'integration review requires its original private producer association');
-  roleArtifact.assertArchiveInventory(review.prepared.canonical.worktree, review.archivePins);
+  roleArtifact.assertArchiveInventory(review.prepared.canonical.worktree, review.archivePins, partitions ? { partitions } : {});
   archReviewContext.verifyFileInput(review.currentInput);
   archReviewContext.verifyFileInput(review.input);
   archReviewContext.reviewProgressIdentity(review.input);
@@ -958,6 +977,161 @@ function finishIntegrationReview(review, dispatch, recorder) {
   return Object.freeze({ ...dispatch, result: judgment, artifact });
 }
 
+function partitionedCodexResult(dispatch, recorder) {
+  const recorded = recorder?.getVerifiedRecord?.(dispatch?.dispatch_id);
+  const receipt = recorded?.receipt;
+  if (!recorded || recorded.role !== 'integrator' || recorded.dispatch_id !== dispatch?.dispatch_id
+      || dispatch.runtime !== 'codex' || dispatch.role !== 'integrator' || receipt?.role !== 'integrator'
+      || receipt.runtime !== 'codex' || receipt.dispatch_id !== dispatch.dispatch_id || receipt.compliance !== 'verified'
+      || stableStringify(receipt) !== stableStringify(dispatch.receipt)
+      || stableStringify(receipt.runtime_evidence) !== stableStringify(dispatch.application_evidence?.runtime_evidence))
+    fail('MISSING_RECEIPT', 'partition requires its original verified durable integrator receipt');
+  const pin = receipt.runtime_evidence?.transcript;
+  if (!pin || !path.isAbsolute(pin.path || '') || pin.bytes < 1 || pin.bytes > 128 * 1024 * 1024)
+    fail('MISSING_RECEIPT', 'partition requires its original complete native stream');
+  const stat = fs.lstatSync(pin.path), raw = fs.readFileSync(pin.path);
+  if (!stat.isFile() || stat.isSymbolicLink() || raw.length !== pin.bytes || sha256(raw) !== pin.sha256)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'original partition stream changed');
+  const parsed = parseCodexStream(raw.toString('utf8'));
+  if (parsed.session_id !== receipt.runtime_evidence.session_id)
+    fail('INVALID_RESULT', 'partition requires its original native session');
+  const text = repairStreamFinal(parsed, 'INVALID_RESULT', false);
+  const start = parsed.records.findLastIndex(row => row.type === 'turn.started');
+  const contracts = parsed.records.filter((row, index) => {
+    if (index <= start || row.type !== 'item.completed' || row.item?.type !== 'agent_message') return false;
+    try { const result = JSON.parse(row.item.text); return object(result) && result.review_contract !== undefined; }
+    catch { return false; }
+  });
+  if (contracts.length !== 1 || Buffer.byteLength(text || '') > 128 * 1024)
+    fail('INVALID_RESULT', 'partition requires one complete bounded terminal contract');
+  try { return JSON.parse(text); } catch { fail('INVALID_RESULT', 'partition result must be complete JSON'); }
+}
+
+async function runCodexIntegrationPartitions(review, runtimeHost, scope, options) {
+  const execution = integrationExecutions.get(review);
+  if (!execution) fail('INVALID_INPUT', 'original private partition execution is required');
+  const { partitions } = execution, resources = options.integrationCapacity || {};
+  recheckIntegrationReview(review, partitions);
+  if (!execution.capacityHost) execution.capacityHost = roleArtifact.createIntegrationCapacityHost({
+    ...resources, partitions, runtime: 'codex', recorder: runtimeHost.recorder });
+  if (!execution.stages.length) for (const unit of partitions.plan.units) {
+    try { roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); continue; }
+    catch (error) {
+      if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
+    }
+    execution.stages.push(roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
+      dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id }));
+  }
+  if (!execution.admitted) {
+    execution.admissions ||= new Set();
+    for (const stage of [partitions.reserved_template, ...execution.stages].filter(Boolean)) {
+      if (execution.admissions.has(stage.launch_sha256)) continue;
+      await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: execution.capacityHost });
+      execution.admissions.add(stage.launch_sha256);
+    }
+    execution.admitted = true;
+  }
+  const launch = async stage => {
+    recheckIntegrationReview(review, partitions);
+    require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
+      ...review.prepared, integrationReview: review, integrationPartitions: partitions });
+    const runId = 'integration-' + crypto.randomUUID(), ownerId = 'integration-owner-' + crypto.randomUUID();
+    const runScope = createRunScope({ run_id: runId, repository_id: review.prepared.canonical.commonPath,
+      phase: scope.phase, ticket: scope.ticket, worktree: scope.worktree, runtime: 'codex', owner_id: ownerId,
+      dispatch: { runtime: 'codex', role: 'integrator', dispatch_id: stage.dispatch_id } });
+    const storage = storageDirectory(options, { ...scope, run_id: runId });
+    const controller = options.controller === false ? null : createRunController({ storeDir: path.join(storage, 'controller'), ownerId });
+    if (controller) controller.begin(runScope);
+    const nativeScope = { ...scope, run_id: runId };
+    const native = createCodexRuntimeHost({ scope: nativeScope, controller,
+      ...(stage.mode === 'native-observed' ? { integrationIngress: request =>
+        roleArtifact.createCodexIntegrationIngress({ prepared: stage, host: execution.capacityHost, scope: nativeScope })(request) } : {}),
+      recorder: runtimeHost.recorder, capabilities: runtimeHost.capabilities,
+      agentDir: options.agentDir, agentManifest: options.agentManifest, executable: options.executable, probe: options.probe,
+      env: options.env, spawn: options.spawn, ephemeral: options.ephemeral, approveForMe: options.approveForMe,
+      transcriptDir: path.join(storage, 'transcripts'),
+      additionalProtectedPaths: [hostStateRoot(options, scope), roleArtifact.archiveAuthorityDirectory(scope.worktree)] });
+    let heartbeatError;
+    const heartbeat = controller ? setInterval(() => {
+      try { controller.heartbeat(runId); } catch (error) { heartbeatError = error; }
+    }, 60000) : null;
+    heartbeat?.unref();
+    try {
+      const installed = installedAgentOptions(options, {}, native.capabilities);
+      const pin = partitions.plan.instruction_pins.find(item => item.sha256 === stage.agent_sha256);
+      if (!pin) fail('STALE_GENERATED_AGENT', 'partition requires its original installed instruction pin');
+      const prefix = require('./codex-runtime-host.cjs').generatedInstructions(
+        fs.readFileSync(path.resolve(pin.root, pin.path), 'utf8')) + '\n\n';
+      if (!stage.input.startsWith(prefix))
+        fail('INVALID_INPUT', 'partition full native input differs from its installed static instruction prefix');
+      roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: stage, host: execution.capacityHost });
+      const dispatch = await launchAgent('integrator', { cwd: scope.worktree, flags: new Map(),
+        signals: review.prepared.signals, dispatch_id: stage.dispatch_id, scope: native.scope,
+        host: native, recorder: native.recorder, controller, capabilities: native.capabilities,
+        agentDir: installed.agentDir, agentManifest: installed.agentManifest, env: options.env || process.env,
+        context: { ticket: scope.ticket, phase: scope.phase, worktreePath: scope.worktree,
+          runtime: 'codex', provider: 'openai', prompt: stage.input.slice(prefix.length) } });
+      if (heartbeatError) throw heartbeatError;
+      recheckIntegrationReview(review, partitions);
+      require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
+        ...review.prepared, integrationReview: review, integrationPartitions: partitions });
+      const result = partitionedCodexResult(dispatch, native.recorder);
+      let artifact;
+      if (stage.kind === 'unit') artifact = roleArtifact.sealIntegrationUnit({ prepared: stage,
+        recorder: native.recorder, dispatchId: stage.dispatch_id, result });
+      else {
+        const { evidence_markdown, ...judgment } = result;
+        if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
+          fail('INVALID_RESULT', 'final requires the complete original evidence handoff');
+        const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
+        roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase, evidencePath });
+        fs.writeFileSync(evidencePath, evidence_markdown);
+        const input = { worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase,
+          ticket: scope.ticket, base: review.prepared.base, ticketSet: review.prepared.ticketSet,
+          ticketSetDigest: review.prepared.ticketSetDigest, recorder: native.recorder, dispatchId: stage.dispatch_id,
+          result: judgment, evidencePath, integrationReview: review };
+        artifact = roleArtifact.sealJudgment(input);
+        roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
+      }
+      if (controller) controller.complete(runId);
+      return Object.freeze({ ...dispatch, result, artifact,
+        ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
+          actual_final_input_bytes: stage.kind === 'phase' ? Buffer.byteLength(stage.input) : null } } : {}) });
+    } catch (error) {
+      if (controller) controller.fail(runId, { reason: String(error.message).slice(0, 500) });
+      throw error;
+    } finally { if (heartbeat) clearInterval(heartbeat); }
+  };
+  for (const unit of partitions.plan.units) {
+    let completed;
+    try { completed = roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); }
+    catch (error) {
+      if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
+    }
+    if (!completed) {
+      completed = await launch(execution.stages.find(stage => stage.unit_id === unit.unit_id));
+    }
+    if (completed.result.completeness !== 'complete' || completed.result.outcome !== 'passed' || completed.result.required_context.length)
+      fail('INTEGRATION_PARTITION_INVALID', 'incomplete, failing or context-blocked unit requires repair');
+  }
+  recheckIntegrationReview(review, partitions);
+  if (!execution.final) execution.final = roleArtifact.prepareIntegrationAggregate({ partitions,
+    dispatch_id: 'integration-final-' + partitions.plan.plan_sha256 });
+  if (execution.recovered && !execution.finalAdmitted) {
+    try {
+      roleArtifact.assertIntegrationAdmission({ prepared: execution.final, launch: execution.final, host: execution.capacityHost });
+      execution.finalAdmitted = true;
+    } catch (error) {
+      if (error.code !== 'INTEGRATION_CAPACITY_UNPROVEN' || !error.message.endsWith('exact launch has no protected capacity admission')) throw error;
+    }
+  }
+  if (!execution.finalAdmitted) {
+    await roleArtifact.admitIntegrationCapacity({ prepared: execution.final, host: execution.capacityHost });
+    execution.finalAdmitted = true;
+  }
+  return launch(execution.final);
+}
+
 function recheckInlineIntegrator(scope, request) {
   const pin = inlineIntegratorInputs.get(request);
   if (!pin) return;
@@ -980,6 +1154,36 @@ function automaticReaderProfile(installed, selected) {
 }
 
 function prepareIntegratorInput(scope, request, options) {
+  if (request.context.review_contract === roleArtifact.INTEGRATION_REVIEW_V3) {
+    if (Object.keys(request.context).some(key => key !== 'review_contract') || Object.keys(request.signals || {}).length)
+      fail('INVALID_INPUT', 'partition inputs and authority are private to the host');
+    if (options.fileInputContext) {
+      const review = integrationInputs.get(options.fileInputContext);
+      const execution = integrationExecutions.get(review);
+      if (!execution || review.options.nativeRuntime !== 'codex' || review.prepared.ticket !== scope.ticket
+          || review.prepared.canonical.worktree !== scope.worktree)
+        fail('INVALID_INPUT', 'restart requires original private same-runtime integration preparation');
+      execution.partitions = roleArtifact.prepareIntegrationPartitions({ review, plan_sha256: execution.partitions.plan.plan_sha256 });
+      return review.input;
+    }
+    const prepared = require('./claude-role-host.cjs').prepareNativeIntegratorContext(options, {
+      worktree: scope.worktree, phase: String(scope.phase), review_contract: roleArtifact.INTEGRATION_REVIEW_V3 });
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: prepared.signals });
+    const installed = installedAgentOptions(options, selected, options.host?.capabilities || options.capabilities);
+    const instructions = archReviewContext.instructionEvidence(installed.agentDir, installed.agentFile, installed.agentManifest);
+    const review = prepareIntegrationLineage(scope, prepared, { ...options, nativeRuntime: 'codex',
+      dispatchId: request.dispatch_id, storageRoot: storageDirectory(options, scope),
+      generatedInstructionBytes: instructions.generated_instruction_bytes,
+      instructionBinding: { agent_file: selected.agent_file, agent_path: path.resolve(installed.agentDir, installed.agentFile),
+        agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
+    if (options.integrationCapacity !== undefined && (!object(options.integrationCapacity) || !options.integrationCapacity.capacity))
+      fail('INTEGRATION_CAPACITY_UNPROVEN', 'supplied strict capacity resources are malformed');
+    const previous = options.integrationCapacity?.plan_sha256;
+    const partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity: options.integrationCapacity?.capacity,
+      ...(previous ? { plan_sha256: previous } : {}) });
+    integrationExecutions.set(review, { partitions, stages: [], admitted: !!previous, recovered: !!previous, final: null });
+    return review.input;
+  }
   if (request.context.review_contract !== undefined
       && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2'].includes(request.context.review_contract))
     fail('INVALID_INPUT', 'unsupported integration review contract');
@@ -999,8 +1203,9 @@ function prepareIntegratorInput(scope, request, options) {
     return prepared;
   }
   if (request.context.review_contract === 'shipyard.integration-review.v2') {
-    const prepared = require('./claude-role-host.cjs').prepareIntegratorContext(options, {
-      worktree: scope.worktree, phase: String(scope.phase), signals: undefined });
+    const prepared = require('./claude-role-host.cjs').prepareNativeIntegratorContext(options, {
+      worktree: scope.worktree, phase: String(scope.phase), signals: undefined,
+      review_contract: 'shipyard.integration-review.v2' });
     let signals = { ...prepared.signals };
     for (let attempt = 0; attempt < 4; attempt++) {
       const selected = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals });
@@ -1794,7 +1999,45 @@ function repairScopeIdentity(value) {
     allow_list: value.verificationAllowList };
 }
 
-function recheckHistoricalRepair(prepared, prior, originalHead) {
+function candidateCommit(candidate) {
+  return { worktree: candidate.worktree, ticket: candidate.ticket, expectedHead: candidate.expected_head,
+    expectedBase: candidate.expected_base, expectedBranch: candidate.branch,
+    files_modified: [...candidate.files_modified], expectedSigner: candidate.signer };
+}
+
+function repairHistoricalEndpoint(prepared) {
+  const transition = prepared.repair.signed_transition;
+  if (!transition) return prepared.commit.expectedHead;
+  if (!/^[a-f0-9]{64}$/.test(transition.candidate_id || ''))
+    fail('REPAIR_PREDECESSOR_INVALID', 'signed publication lacks its original candidate identity');
+  const candidate = readSealed(candidateFile(prepared.stateRoot, transition.candidate_id), prepared.key);
+  const { candidate_id: id, ...body } = candidate || {};
+  const finalized = candidate && readSealed(finalizationFile(prepared.stateRoot, id), prepared.key);
+  const publication = candidate && readSealed(path.join(privateDirectory(prepared.stateRoot, 'repair-publications'), id + '.json'), prepared.key);
+  const expectedTransition = candidate && finalized && { candidate_id: id, from: candidate.expected_head,
+    to: finalized.commit, tree: candidate.scoped_tree, signer: candidate.signer };
+  const expectedSubject = candidate && finalized && { ...candidate.repair_subject,
+    live: { ...candidate.repair_subject.live, headRefOid: finalized.commit }, signed_transition: expectedTransition };
+  if (!candidate || candidate.schema !== CANDIDATE_SCHEMA || sha256(canonical(body)) !== id
+      || !finalized || candidate.expected_role !== 'review-fix' || canonical(transition) !== canonical(expectedTransition)
+      || finalized.schema !== FINALIZATION_SCHEMA || finalized.candidate_id !== id || finalized.parent !== candidate.expected_head
+      || finalized.tree !== candidate.scoped_tree || finalized.signer !== candidate.signer
+      || canonical(prepared.repair) !== canonical(expectedSubject)
+      || canonical(candidateCommit(candidate)) !== canonical({ ...prepared.commit, expectedHead: candidate.expected_head })
+      || candidate.repository !== prepared.repository || candidate.repo !== prepared.repo
+      || candidate.graph_sha256 !== prepared.graphDigest || candidate.plan_path !== prepared.plan.path
+      || candidate.plan_sha256 !== prepared.plan.sha256 || candidate.base_ref !== prepared.baseRef
+      || candidate.verification.allow_list_sha256 !== allowListDigest(prepared.verificationAllowList)
+      || transition.to !== prepared.commit.expectedHead || !publication
+      || publication.candidate_id !== id || publication.commit !== finalized.commit
+      || !['pending', 'confirmed'].includes(publication.status)
+      || canonical(publication.subject) !== canonical(publication.status === 'pending' ? candidate.repair_subject : prepared.repair))
+    fail('REPAIR_PREDECESSOR_INVALID', 'historical endpoint lacks its exact authenticated signed publication');
+  verifySignedCommit(prepared.commit.worktree, candidate, finalized.commit);
+  return candidate.expected_head;
+}
+
+function recheckHistoricalRepair(prepared, prior, originalHead, endpoint = prepared.commit.expectedHead) {
   try {
     const root = prepared.commit.worktree, scope = prior.scope_transition, transition = prior.source_transition;
     if (prior.semantic_credit !== false || (!scope && !transition)) throw new Error('missing zero-credit transition');
@@ -1813,10 +2056,10 @@ function recheckHistoricalRepair(prepared, prior, originalHead) {
         throw new Error('historical base signatures or ancestry changed');
     }
     if (!transition) {
-      if (originalHead !== prepared.commit.expectedHead) throw new Error('scope evolution lost its original source head');
+      if (originalHead !== endpoint) throw new Error('scope evolution lost its original source head');
       return;
     }
-    if (transition.from !== originalHead || transition.to !== prepared.commit.expectedHead
+    if (transition.from !== originalHead || transition.to !== endpoint
         || !Array.isArray(transition.records) || !transition.records.length || transition.records.length > 500)
       throw new Error('historical source no longer binds the current head');
     git(root, ['merge-base', '--is-ancestor', transition.from, transition.to]);
@@ -2157,12 +2400,86 @@ function resolvePreparedRepair(prepared, dispatchId, options, capabilities) {
 }
 
 
+const terminalRepairRecovery = Symbol('terminalRepairRecovery');
+
+function recoveryBytes(file, root) {
+  const relative = path.relative(root, path.resolve(file));
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)
+      || fs.realpathSync(file) !== path.resolve(file)) fail('REPAIR_SUBJECT_CHANGED', 'recovery source escapes its root');
+  const initial = fs.lstatSync(file);
+  if (!initial.isFile() || initial.size > MAX_GRAPH_BYTES)
+    fail('REPAIR_SUBJECT_CHANGED', 'unbounded recovery source');
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const before = fs.fstatSync(fd);
+    if (!before.isFile() || before.size > MAX_GRAPH_BYTES || before.dev !== initial.dev || before.ino !== initial.ino
+        || before.size !== initial.size || before.mtimeMs !== initial.mtimeMs || before.ctimeMs !== initial.ctimeMs)
+      fail('REPAIR_SUBJECT_CHANGED', 'recovery source changed before read');
+    const bytes = fs.readFileSync(fd);
+    const after = fs.fstatSync(fd), live = fs.lstatSync(file);
+    if (bytes.length !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs
+        || before.ctimeMs !== after.ctimeMs || live.dev !== before.dev || live.ino !== before.ino
+        || !live.isFile() || live.size !== before.size || live.mtimeMs !== before.mtimeMs || live.ctimeMs !== before.ctimeMs)
+      fail('REPAIR_SUBJECT_CHANGED', 'recovery source changed during read');
+    return bytes;
+  } finally { fs.closeSync(fd); }
+}
+
+function recoveryGraphMatches(prepared, graph, options) {
+  if (graph.sha256 === prepared.graphDigest) return true;
+  if (!prepared[terminalRepairRecovery] || !options.recoveryGraphSnapshot) return false;
+  const bytes = recoveryBytes(options.recoveryGraphSnapshot, prepared.commit.worktree);
+  if (sha256(bytes) !== prepared.graphDigest) return false;
+  const original = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  const current = JSON.parse(fs.readFileSync(prepared.graphFile, 'utf8'));
+  const { tickets: oldTickets, ...oldMetadata } = original;
+  const { tickets: newTickets, ...newMetadata } = current;
+  if (canonical(oldMetadata) !== canonical(newMetadata)) return false;
+  const seen = new Set();
+  const visit = ticket => {
+    if (seen.has(ticket)) return true;
+    seen.add(ticket);
+    const old = oldTickets?.[ticket], next = newTickets?.[ticket];
+    if (!object(old) || canonical(old) !== canonical(next)) return false;
+    const dependencies = [...(old.depends_on || []), ...(old.cross_phase_deps || []), ...(old.cross_repo_deps || []),
+      ...(old.primary_parent ? [old.primary_parent] : [])];
+    return dependencies.every(dependency => typeof dependency === 'string' && visit(dependency));
+  };
+  return visit(prepared.commit.ticket);
+}
+
+function recheckRepairJournal(prepared) {
+  const pin = prepared.repair.journal;
+  if (!pin) return;
+  const bytes = recoveryBytes(pin.path, path.dirname(prepared.graphFile));
+  if (sha256(bytes) === pin.sha256) return;
+  if (!prepared[terminalRepairRecovery] || !Number.isSafeInteger(pin.bytes) || pin.bytes < 1
+      || pin.bytes >= bytes.length || bytes[pin.bytes - 1] !== 10
+      || sha256(bytes.subarray(0, pin.bytes)) !== pin.sha256 || bytes[bytes.length - 1] !== 10)
+    fail('REPAIR_PREDECESSOR_INVALID', 'original complete repair history changed');
+  let rows;
+  try { rows = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(pin.bytes)).slice(0, -1).split('\n').map(JSON.parse); }
+  catch { fail('REPAIR_PREDECESSOR_INVALID', 'invalid appended repair history'); }
+  for (const row of rows) {
+    if (!object(row) || Object.keys(row).some(key => !['ts', 'event', 'ticket', 'from', 'to', 'pr'].includes(key))
+        || row.event !== 'status_change' || typeof row.ticket !== 'string' || !/^T-\d+-\d+$/.test(row.ticket)
+        || row.ticket === prepared.commit.ticket || typeof row.ts !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.ts)
+        || !Number.isFinite(Date.parse(row.ts)) || new Date(row.ts).toISOString() !== row.ts
+        || !(row.from === null || typeof row.from === 'string' && row.from.length > 0)
+        || typeof row.to !== 'string' || !row.to || row.pr !== null)
+      fail('REPAIR_PREDECESSOR_INVALID', 'appended repair history is not an unrelated status change');
+  }
+}
+
 function recheckRepair(prepared, options, { clean = false, feedback = prepared.repair.feedback, signedHead } = {}) {
   const root = prepared.commit.worktree;
-  if (prepared.repair.journal && sha256(fs.readFileSync(prepared.repair.journal.path)) !== prepared.repair.journal.sha256)
-    fail('REPAIR_PREDECESSOR_INVALID', 'original complete repair history changed');
+  const historicalEndpoint = repairHistoricalEndpoint(prepared);
+  if (signerFingerprint(root) !== prepared.commit.expectedSigner)
+    fail('REPAIR_SUBJECT_CHANGED', 'configured repair signer changed');
+  recheckRepairJournal(prepared);
   const graph = graphSnapshot(prepared.graphFile, prepared.commit.ticket);
-  if (graph.sha256 !== prepared.graphDigest || planSnapshot(prepared.graphFile, graph.row).sha256 !== prepared.plan.sha256
+  if (!recoveryGraphMatches(prepared, graph, options) || planSnapshot(prepared.graphFile, graph.row).sha256 !== prepared.plan.sha256
       || effectiveBaseRef(root, prepared.graphFile, prepared.commit.ticket, graph) !== prepared.baseRef
       || 'git-common:' + sha256(fs.realpathSync(git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']))) !== prepared.repository
       || git(root, ['rev-parse', 'HEAD']) !== (signedHead || prepared.commit.expectedHead)
@@ -2184,7 +2501,7 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
     if (prior.historical) {
       const actions = readSealed(file, prepared.key);
       recheckHistoricalRepair(prepared, repairCoverageTransition(prior, prepared.repair.actionable_feedback),
-        actions.subject?.live?.headRefOid);
+        actions.subject?.live?.headRefOid, historicalEndpoint);
     }
     if (prior.reply_review) {
       const actions = readSealed(file, prepared.key);
@@ -2310,8 +2627,7 @@ function performSignedRepairPublication(prepared, signed, options) {
 
 function finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder) {
   const graph = graphSnapshot(graphFile(options, candidate.worktree), candidate.ticket);
-  const prepared = { commit: { worktree: candidate.worktree, ticket: candidate.ticket,
-    expectedHead: candidate.expected_head, expectedBase: candidate.expected_base, expectedBranch: candidate.branch },
+  const prepared = { [terminalRepairRecovery]: true, commit: candidateCommit(candidate),
     graphFile: graphFile(options, candidate.worktree), graphDigest: candidate.graph_sha256,
     plan: planSnapshot(graphFile(options, candidate.worktree), graph.row), baseRef: candidate.base_ref,
     repair: candidate.repair_subject, repo: candidate.repo, repository: candidate.repository,
@@ -2736,8 +3052,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     });
     check('graph', () => graph && graph.snapshot.sha256 === candidate.graph_sha256);
     if (candidate.expected_role === 'review-fix') check('repair-subject', () => {
-      recheckRepair({ commit: { worktree, ticket: candidate.ticket, expectedHead: candidate.expected_head,
-        expectedBase: candidate.expected_base, expectedBranch: candidate.branch }, graphFile: graph.file,
+      recheckRepair({ commit: candidateCommit(candidate), stateRoot, key, graphFile: graph.file,
         graphDigest: candidate.graph_sha256, plan: planSnapshot(graph.file, graph.snapshot.row),
         baseRef: candidate.base_ref, repair: candidate.repair_subject, repo: candidate.repo, repository: candidate.repository,
         verificationAllowList: currentAllowList }, options);
@@ -2908,6 +3223,8 @@ function createCodexDeliveryHost(options = {}) {
   }
   const { agentDir, agentManifest } = installedAgentOptions(options, {}, runtimeHost.capabilities);
   const env = options.env || process.env;
+  let partitionInput;
+  let partitionRunning = false;
 
   return Object.freeze({
     schema: SCHEMA,
@@ -2917,6 +3234,15 @@ function createCodexDeliveryHost(options = {}) {
     resumeRepairActions: (dispatchId, liveScope) => resumeRepairActions(options, dispatchId, liveScope),
     async run(rawRequest) {
       const request = requestValue(rawRequest);
+      if (request.context.review_contract === roleArtifact.INTEGRATION_REVIEW_V3) {
+        if (partitionRunning) fail('INVALID_INPUT', 'partition execution is already active');
+        partitionRunning = true;
+        try {
+          partitionInput = prepareIntegratorInput(scope, { ...request, dispatch_id: newDispatchId() }, {
+            ...options, host: runtimeHost, fileInputContext: partitionInput || options.fileInputContext });
+          return await runCodexIntegrationPartitions(integrationInputs.get(partitionInput), runtimeHost, scope, options);
+        } finally { partitionRunning = false; }
+      }
       if (request.gsd_role !== undefined && GSD_DELIVERY_ROLES[request.gsd_role] !== request.role) {
         fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
       }
@@ -2957,7 +3283,29 @@ function createCodexDeliveryHost(options = {}) {
         if (fileInput) Object.assign(request.context, { input_transport: 'host-files', input_bundle: fileInput.input_bundle });
         request.context.prompt = archReviewContext.admittedPrompt(prepared);
       }
-      if (request.role !== 'arch-review') fileInput = prepareIntegratorInput(scope, request, { ...options, host: runtimeHost, automaticReader: !options.readerCapacity });
+      if (request.role === 'code-review') {
+        const prepared = options.codeReviewContext;
+        if (!codeReviewContext.isPreparedContext(prepared)
+            || prepared.prepared.ticket !== scope.ticket
+            || prepared.prepared.phaseNumber !== scope.phase
+            || prepared.prepared.canonical.worktree !== scope.worktree
+            || request.dispatch_id !== prepared.launch.dispatch_id
+            || request.context.prompt !== prepared.prepared.prompt
+            || ![prepared.prepared.signals, options.codeReviewSignals].filter(Boolean)
+              .some(signals => JSON.stringify(request.signals) === JSON.stringify(signals)))
+          fail('CODE_REVIEW_CONTEXT_REQUIRED', 'code-review context must be host-built and graph-bound');
+        if (Object.hasOwn(request.context, 'sandbox_mode'))
+          fail('CONFLICTING_OVERRIDE', 'sandbox mode is owned by the generated role');
+        if (Object.keys(request.context).some(key => !['prompt', 'input_transport', 'input_bundle'].includes(key)))
+          fail('INVALID_INPUT', 'code-review context cannot carry caller selectors or overrides');
+        if (options.codeReviewSignals) codeReviewContext.recheckInstalledLaunch(prepared);
+        request.signals = admitCodeReviewInput(prepared, options, runtimeHost.capabilities);
+        fileInput = codeReviewContext.admittedFileInput(prepared);
+        if (fileInput) Object.assign(request.context, { input_transport: 'host-files', input_bundle: fileInput.input_bundle });
+        request.context.prompt = codeReviewContext.admittedPrompt(prepared);
+      }
+      if (!['arch-review', 'code-review'].includes(request.role))
+        fileInput = prepareIntegratorInput(scope, request, { ...options, host: runtimeHost, automaticReader: !options.readerCapacity });
       let completedSourceReference;
       if (fileInput?.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
         if (options.readerCapacity || options.readerProfile) fail('READER_CAPACITY_UNSUPPORTED', 'automatic candidate accepts no caller profile or capacity');
@@ -3019,6 +3367,7 @@ function createCodexDeliveryHost(options = {}) {
         }
       }
       const context = request.context;
+      if (request.role === 'code-review') context.code_review_prepared = options.codeReviewContext;
       if (request.role === 'arch-review' && archReviewContext.isFocusedContext(options.archReviewContext))
         context.focused_prepared = options.archReviewContext;
       if (fileInput) context.input_prepared = fileInput;
@@ -3033,7 +3382,7 @@ function createCodexDeliveryHost(options = {}) {
       }
       bind(context, 'run_id', scope.run_id);
       bind(context, 'ticket', scope.ticket);
-      if (request.role === 'arch-review' && scope.ticket.startsWith('phase=')) context.subject_kind = 'phase';
+      if (['arch-review', 'code-review'].includes(request.role) && scope.ticket.startsWith('phase=')) context.subject_kind = 'phase';
       bind(context, 'phase', scope.phase);
       bind(context, 'worktreePath', scope.worktree);
       bind(context, 'runtime', 'codex');
@@ -3056,7 +3405,7 @@ function createCodexDeliveryHost(options = {}) {
         const block = planDeliveryBlock(delivery, undefined);
         if (block) context.prompt = originalPrompt + block;
       }
-      const reviewHost = repairPrepared || request.role === 'arch-review' || request.role === 'integrator'
+      const reviewHost = repairPrepared || request.role === 'arch-review' || request.role === 'code-review' || request.role === 'integrator'
         ? { ...runtimeHost } : runtimeHost;
       if (reviewHost !== runtimeHost) {
         for (const method of ['launch', 'launchStatic']) {
@@ -3080,6 +3429,7 @@ function createCodexDeliveryHost(options = {}) {
               recheckRepair(repairPrepared, options, { clean: true });
               return runtimeHost.launchStatic(selection, boundContext);
             }
+            if (request.role === 'code-review') codeReviewContext.recheckInstalledLaunch(options.codeReviewContext);
             if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
             if (fileInput && integrationInputs.has(fileInput)) recheckIntegrationReview(integrationInputs.get(fileInput));
             if (fileInput) archReviewContext.verifyFileInput(fileInput);
@@ -3210,6 +3560,7 @@ function createCodexDeliveryHost(options = {}) {
           throw error;
         }
       };
+      if (request.role === 'code-review') codeReviewContext.recheckInstalledLaunch(options.codeReviewContext);
       if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
       if (request.role === 'integrator') recheckInlineIntegrator(scope, request);
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
@@ -3224,6 +3575,8 @@ function createCodexDeliveryHost(options = {}) {
       }
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
       options.controller?.assertOwner(scope.run_id);
+      if (request.role === 'code-review')
+        return codeReviewContext.finish(options.codeReviewContext, result, runtimeHost.recorder);
       if (request.role === 'arch-review') {
         writeCompletedArchitectureEvidence(options.archReviewContext, result, runtimeHost.recorder);
         const completed = archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
@@ -3313,20 +3666,24 @@ function readRequestFile(file) {
       fail('INVALID_INPUT', 'unsupported scope field ' + key);
     }
   }
-  const { scope, graph_dir: graphDir, ...launch } = request;
-  if (graphDir !== undefined && (!['arch-review', 'review-fix'].includes(launch.role)
+  const { scope, graph_dir: graphDir, ...rawLaunch } = request;
+  const launch = requestValue(rawLaunch);
+  if (graphDir !== undefined && (!['arch-review', 'code-review', 'review-fix'].includes(launch.role)
       || typeof graphDir !== 'string' || !path.isAbsolute(graphDir)))
     fail('INVALID_INPUT', 'graph_dir requires an absolute architecture graph selector');
-  return { scope, launch: requestValue(launch), ...(graphDir ? { graphDir } : {}) };
+  return { scope, launch, ...(graphDir ? { graphDir } : {}) };
 }
 
 function parseResumeArguments(argv) {
-  if (!Array.isArray(argv) || argv.length !== 4 || argv[0] !== '--resume-finalization' || argv[2] !== '--scope-file'
+  if (!Array.isArray(argv) || ![4, 6].includes(argv.length)
+      || (argv.length === 6 && (argv[4] !== '--original-graph-file' || typeof argv[5] !== 'string' || !argv[5].trim()))
+      || argv[0] !== '--resume-finalization' || argv[2] !== '--scope-file'
       || typeof argv[1] !== 'string' || !/^[0-9a-f]{64}$/.test(argv[1])
       || typeof argv[3] !== 'string' || !argv[3].trim()) {
     fail('INVALID_INPUT', 'usage: codex-delivery-host.cjs --resume-finalization <candidate-id> --scope-file <json>');
   }
-  return { candidateId: argv[1], scopeFile: path.resolve(argv[3]) };
+  return { candidateId: argv[1], scopeFile: path.resolve(argv[3]),
+    ...(argv.length === 6 ? { recoveryGraphSnapshot: path.resolve(argv[5]) } : {}) };
 }
 
 function parseRepairActionResumeArguments(argv) {
@@ -3422,6 +3779,7 @@ async function runResumeCli(argv, stdout, options) {
   try {
     const host = createFinalizationRecoveryHost({
       controller, graphDir: options.graphDir, storageRoot: options.storageRoot,
+      recoveryGraphSnapshot: parsed.recoveryGraphSnapshot,
       finalizeCommit: options.finalizeCommit, verification: options.verification,
       verificationAllowList: options.verificationAllowList,
       recorder: options.recorder, scopedTree: options.scopedTree,
@@ -3533,19 +3891,31 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       refreshGit: options.refreshGit,
       inflightDispatchId: archDispatchId, storageRoot: storageDirectory(options, scope),
     }) : null;
-  const request = preparedArchReview ? { ...preparedArchReview.launch, signals: { ...preparedArchReview.launch.signals },
-    context: { ...preparedArchReview.launch.context }, dispatch_id: archDispatchId } : parsed.launch;
+  const codeDispatchId = parsed.launch.role === 'code-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
+  const preparedCodeReview = parsed.launch.role === 'code-review'
+    ? codeReviewContext.prepare(scope, parsed.launch, {
+      graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
+      execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
+      refreshGit: options.refreshGit,
+      inflightDispatchId: codeDispatchId, storageRoot: storageDirectory(options, scope),
+    }) : null;
+  const preparedReview = preparedArchReview || preparedCodeReview;
+  const request = preparedReview ? { ...preparedReview.launch, signals: { ...preparedReview.launch.signals },
+    context: { ...preparedReview.launch.context }, dispatch_id: archDispatchId || codeDispatchId } : parsed.launch;
   request.dispatch_id = request.dispatch_id || newDispatchId();
   const preparedRepair = request.role === 'review-fix' ? prepareRepair(options, scope, request.context) : null;
-  const fileInputContext = preparedArchReview ? null : prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
+  const fileInputContext = preparedReview ? null : prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
   const archReviewSignals = preparedArchReview ? admitArchitectureInput(preparedArchReview, request, { ...options, automaticReader: !options.readerCapacity },
     options.host?.capabilities || options.capabilities || {}) : null;
   if (archReviewSignals) request.signals = archReviewSignals;
+  const codeReviewSignals = preparedCodeReview ? admitCodeReviewInput(preparedCodeReview, options,
+    options.host?.capabilities || options.capabilities || {}) : null;
+  if (codeReviewSignals) request.signals = codeReviewSignals;
 
   if (request.gsd_role !== undefined && GSD_DELIVERY_ROLES[request.gsd_role] !== request.role) {
     fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
   }
-  const dispatchId = archDispatchId || request.dispatch_id || newDispatchId();
+  const dispatchId = archDispatchId || codeDispatchId || request.dispatch_id || newDispatchId();
   const resolution = preparedRepair && preparedRepair.repair.signature_state !== 'first'
     ? resolvePreparedRepair(preparedRepair, dispatchId, options, options.host?.capabilities || options.capabilities || {})
     : policy.resolveDispatch({ runtime: 'codex', role: request.role,
@@ -3605,13 +3975,14 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   heartbeat.unref?.();
   const inflightDir = inflightGraphDir(options, scope.worktree);
   const inflight = inflightDir ? { graphDir: inflightDir, worktree: scope.worktree, dispatch_id: dispatchId, pid: process.pid,
-    ...(preparedArchReview && path.resolve(inflightDir, '../..') === fs.realpathSync(scope.worktree)
+    ...(preparedReview && path.resolve(inflightDir, '../..') === fs.realpathSync(scope.worktree)
       ? { refreshBoard: false } : {}) } : null;
   let result;
   try {
     if (inflight) {
       recordInflight({ ...inflight, ticket: scope.ticket, role: resolution.role, host: 'codex' });
       if (preparedArchReview) archReviewContext.admitBookkeeping(preparedArchReview);
+      if (preparedCodeReview) codeReviewContext.admitBookkeeping(preparedCodeReview);
     }
     const host = createCodexDeliveryHost({
       scope,
@@ -3640,6 +4011,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       host: options.host,
       writerSession,
       archReviewContext: preparedArchReview, archReviewSignals, fileInputContext,
+      codeReviewContext: preparedCodeReview, codeReviewSignals,
       repairContext: preparedRepair, getPullRequest: options.getPullRequest, execFileSync: options.execFileSync,
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });

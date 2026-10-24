@@ -560,7 +560,7 @@ function installedCodexCliVersion() {
   return match ? match[1] : null;
 }
 
-const IDENTITY_ROLES = new Set(['research', 'decomposition', 'integrator', 'arch-review']);
+const IDENTITY_ROLES = new Set(['research', 'decomposition', 'integrator', 'arch-review', 'code-review']);
 
 // @contract: the Codex delivery host checks the identity only for roles that build a subject from it.
 function roleNeedsRepositoryIdentity(role) {
