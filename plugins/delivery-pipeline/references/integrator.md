@@ -66,12 +66,50 @@ Return the ordinary integration judgment fields below plus `review_contract` v3,
 Copy the actual input's `coverage` with schema
 `shipyard.integration-partition-coverage.v1`, `plan_sha256`, `coverage_sha256`,
 `unit_artifacts`, `primary_segment_ids` and `primary_obligation_ids`. Add
-`seam_dispositions`, retaining every supplied seam once with `id`,
+`coverage.seam_dispositions` inside `coverage`, retaining every supplied seam once with `id`,
 `disposition: "resolved" | "unresolved"` and substantive `rationale`, plus complete
-`limitations`. Use the exact ordered ticket set from `reviewed_identity`.
+`coverage.limitations` inside `coverage`. Use the exact ordered ticket set from `reviewed_identity`.
 Unresolved seams, unit limitations, missing/incomplete/failing units or incomplete
 acceptance cannot yield passed. A new final judgment is required even if every
 unit passed independently.
+
+The following shape is scoped to the v3 phase final (copy supplied identities,
+hashes, references and coverage values exactly; placeholders are illustrative):
+
+```json
+{
+  "review_contract": "shipyard.integration-review.v3",
+  "kind": "phase",
+  "runtime": "<assigned runtime>",
+  "subject": "<supplied subject>",
+  "plan_sha256": "<supplied plan hash>",
+  "input_sha256": "<actual input hash>",
+  "reviewed_identity": { "<copy>": "complete supplied identity" },
+  "completeness": "complete",
+  "outcome": "passed",
+  "phase": "<supplied phase>",
+  "head": "<supplied combined head>",
+  "head_tree": "<supplied combined tree>",
+  "base": "<supplied base>",
+  "base_tree": "<supplied base tree>",
+  "ticket_set": [{"id": "<ticket>", "pr": 123, "head": "<PR head>", "base": "<PR base>", "branch": "<ticket branch>"}],
+  "ticket_set_digest": "<supplied ticket set digest>",
+  "blocking_count": 0,
+  "summary": "<independent final judgment>",
+  "findings": [],
+  "coverage": {
+    "schema": "shipyard.integration-partition-coverage.v1",
+    "plan_sha256": "<supplied plan hash>",
+    "coverage_sha256": "<supplied coverage hash>",
+    "unit_artifacts": [],
+    "primary_segment_ids": [],
+    "primary_obligation_ids": [],
+    "seam_dispositions": [{ "id": "<supplied seam>", "disposition": "resolved", "rationale": "<substantive judgment>" }],
+    "limitations": []
+  },
+  "evidence_markdown": "<complete final evidence>"
+}
+```
 
 For v3, hand evidence to the host only through `evidence_markdown`. Units never
 write `INTEGRATION.md` or invoke phase sealing. Only the host writes and seals the
