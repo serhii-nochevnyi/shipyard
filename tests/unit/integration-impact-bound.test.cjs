@@ -14,13 +14,14 @@ try {
   Module._load = function(name, ...args) {
     return name === 'node:test' ? { test() {} } : originalLoad.call(this, name, ...args);
   };
-  loaded._compile(fs.readFileSync(owner, 'utf8') + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, projectOptions, write, git, commit };', owner);
+  loaded._compile(fs.readFileSync(owner, 'utf8') + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, projectOptions, write, git, commit, agent };', owner);
 } finally { Module._load = originalLoad; }
-const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, projectOptions, write, git, commit } = loaded.exports;
+const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, projectOptions, write, git, commit, agent } = loaded.exports;
 const root = '../../plugins/delivery-pipeline/scripts/';
 const claude = require(root + 'claude-role-host.cjs');
 const delivery = require(root + 'codex-delivery-host.cjs');
 const collector = require(root + 'codex-arch-review-context.cjs');
+const roleArtifact = require(root + 'role-artifact.cjs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const artifactOwner = path.resolve(__dirname, root + 'role-artifact.cjs');
 const measured = new Module(artifactOwner, module);
@@ -44,9 +45,24 @@ function endpoints(f, sources, provider = 'exports.value = 2;\n') {
 function prepare(f, runtime) {
   const options = projectOptions(f);
   const context = claude.prepareNativeIntegratorContext(options, { worktree: f.worktree, phase: '49' });
+  let instructionBinding, generatedInstructionBytes;
+  if (runtime === 'codex') {
+    const installed = agent(f, 'integrator', context.signals);
+    const instructions = collector.instructionEvidence(installed.dir, installed.selection.agent_file, installed.manifest);
+    generatedInstructionBytes = instructions.generated_instruction_bytes;
+    instructionBinding = { agent_file: installed.selection.agent_file,
+      agent_path: path.join(installed.dir, installed.selection.agent_file), agent_sha256: instructions.sha256,
+      installed_files: instructions.installed_files, policy_hash: installed.selection.policy_hash };
+  } else {
+    const referencePath = require(root + 'claude-reference-content.cjs').REFERENCE_PATHS.integrator;
+    const reference = fs.readFileSync(referencePath);
+    generatedInstructionBytes = reference.length;
+    instructionBinding = { agent_file: path.basename(referencePath), agent_path: referencePath,
+      agent_sha256: hash(reference), installed_files: [], policy_hash: require(root + 'model-policy.cjs').POLICY_HASH };
+  }
   const scope = { worktree: f.worktree, phase: 49, ticket: context.ticket, run_id: 'impact-' + runtime + ++f.count };
   return delivery.prepareIntegrationLineage(scope, context, { ...options, nativeRuntime: runtime,
-    dispatchId: scope.run_id, storageRoot: path.join(f.root, scope.run_id), generatedInstructionBytes: 0 });
+    dispatchId: scope.run_id, storageRoot: path.join(f.root, scope.run_id), generatedInstructionBytes, instructionBinding });
 }
 for (const runtime of ['codex', 'claude']) test(runtime + ' authentic scan crosses generic bound with deduplicated unchanged paths', async () => {
   await publicIntegrationFixture(async f => {
@@ -64,6 +80,13 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' authentic scan cross
     assert.ok(total > 16 * MiB && total < 32 * MiB);
     assert.ok(Buffer.byteLength(JSON.stringify(review.coverage)) < MiB);
     assert.ok(collector.verifyFileInput(review.input).manifest.accounting.material_bytes < 16 * MiB);
+    assert.equal(review.coverage.semantic_credit, false);
+    const partitions = roleArtifact.prepareIntegrationPartitions({ review });
+    assert.equal(partitions.plan.runtime, runtime);
+    assert.ok(Object.isFrozen(partitions.plan));
+    const reopened = roleArtifact.prepareIntegrationPartitions({ review, plan_sha256: partitions.plan.plan_sha256 });
+    assert.deepEqual(reopened.plan, partitions.plan);
+    assert.ok(Object.isFrozen(reopened.plan));
     assert.equal(review.coverage.semantic_credit, false);
   });
 });
