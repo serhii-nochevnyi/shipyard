@@ -3,6 +3,141 @@
 You run AFTER all tickets of a phase are merged. Individual PRs were reviewed
 in isolation; you check what only the sum reveals.
 
+## Explicit compact-domain.v1 sessions
+
+This branch applies ONLY to `shipyard.integration-partition-input.v2` with
+`format: compact-domain.v1` and reconstruction recipe
+`shipyard.integration-partition-render.v2`, from a frozen v3/version3 plan.
+All other supported inputs retain the legacy instructions below. Unknown or mixed
+formats are invalid; never reinterpret an old answer as a compact answer.
+The review contract remains `shipyard.integration-review.v3`.
+
+Read the full `identity`, the visible scalar `reviewed_identity`, and all assigned
+readable tables. Echo `reviewed_identity` exactly. Echo the exact supplied `binding`
+(schema `shipyard.integration-partition-binding.v2`) as `binding`; this acknowledges
+identity, assignment counts/digest and the complete domain, and grants no semantic
+credit. The host independently reconstructs these facts from the original complete
+plan and validated original receipts/index. Do not replace substantive judgment by
+a digest or assume structural coverage means anyone reviewed an interaction.
+
+Tables have the exact ordered columns supplied by `source_columns`,
+`segment_columns`, `obligation_columns` and `assignment_columns`. Source rows retain
+all original aliases, paths, revisions and provenance. Every source/obligation
+column ending in `_ref`, except `value_ref`, indexes `symbols`; remove that suffix
+to recover the original field name. An explicit null reference reconstructs null,
+while the presence bit distinguishes an absent field. All symbols remain readable
+original strings. Segment rows identify the
+original source, byte/line range and digest; `content_index` indexes `contents`.
+Every non-null index denotes a complete readable UTF8 string, shared only for
+byte-identical selected ranges. Continuations use the original source byte count
+and adjacent segment ranges. Never mistake repeated support for primary ownership.
+Obligation rows retain pointer/value/kind/mandatory/source/digest facts.
+`value_ref` indexes `values`. A value record is either `{literal: originalValue}`
+or `{content_ranges: [[contentIndex, start, end], ...]}`. Resolve each range by
+JavaScript string slicing (zero-based UTF16 code-unit offsets, end exclusive) of
+that readable `contents` entry, then concatenate in recorded order. The result is
+the exact original obligation string, including whitespace and UTF8 characters.
+References are used only after exact equality with the original value is checked;
+nonidentical values retain separate records. Absent values retain their presence
+bit and have no value reference. No source text is replaced by a digest. The final
+`presence` bit string distinguishes absent columns from original explicit nulls.
+Assignment set indices resolve through `sets`; each entry in a set indexes the
+readable `symbols` dictionary to recover the original ordered segment IDs,
+obligation IDs, governing IDs and explicit-edge IDs. Symbols share only exactly
+equal original strings; set records share only exactly equal ordered symbol vectors. Sources and obligations retain
+original inventory order; segment rows sort by segment ID; assignment rows retain
+unit order; dictionaries use first exact-equality occurrence. All indices are
+zero-based. Unit tables include ALL primary, neighboring, diff-header, governing
+and explicit completion/context support text. A final retains complete governing
+text and every original unit's semantic detail; a null content index there is not
+a source review and cannot establish a missing judgment. Request further context
+when the original unit judgments do not establish a conclusion.
+
+`interaction_domain.unit_ids` is the canonical unit vector. Its default domain is
+EVERY pair of vector indices i<j in nested-loop order, ranked from zero. Reconstruct
+an edge as `{id: "e-" + SHA256(from + ":" + to), from, to, obligation_ids: [],
+rationale: "Cross-unit dependency or acceptance interaction is not statically disproven",
+required_context: [], uncertain: true}`. The domain digest hashes canonical JSON
+(sorted object keys) of the complete ordered array. No independence is implied.
+`explicit_edges` is a readable exact table for the separate directed domain, sorted
+by original edge ID. Its fixed columns are `id, from, to, obligation_ids_ref,
+rationale_ref, required_context_ref, uncertain`. Resolve each `_ref` against its
+`values` array without changing value types or array order. Values are shared only
+by exact canonical equality; in particular obligation IDs and required context may
+reference the same array. Expand each row into the original object with fields
+`id, from, to, obligation_ids, rationale, required_context, uncertain`. The table's
+`count` and `sha256` bind the expanded ordered array using canonical JSON with
+sorted object keys. Unit tables contain only incident edges, retaining global
+indices; final tables contain the complete directed domain. All original rationale,
+obligation IDs, required context and uncertainty remain readable. Different required
+contexts must remain distinct even for the same endpoints. Unit inputs supply the
+original global `explicit_edge_indices`; never renumber these as a local domain.
+The binding supplies the digest and count of the COMPLETE explicit-edge array.
+
+Evaluate the entire assigned domain substantively. A unit judges all default pairs
+incident to its unit and all incident explicit edges. An independent final judges
+ALL pairs and ALL explicit edges, including interactions across unit conclusions.
+A shared honest judgment may cover many members only if its actual evidence
+supports them all. Identify exceptions explicitly; do not force a resolved answer
+or shorten required evidence to fit. A locally complete unit may retain an original
+`unresolved` cross-unit disposition with a substantive rationale while its primary
+conclusion is complete, root required_context is empty and blocking_count is zero.
+Carry that uncertainty unchanged to the independent final. Nested group findings,
+limitations and required_context still govern unit acceptance. If missing context
+prevents the local primary conclusion, use `incomplete`, a blocking outcome and
+`required_context`. The independent final owns fresh joint resolution using every
+original unit conclusion; any unresolved final domain prevents a phase pass.
+Neither a passed local unit nor the host resolves that domain for the final.
+
+For a compact unit, return `schema: shipyard.integration-unit-result.v2`,
+`format: compact-domain.v1`, the ordinary v3 unit scalar fields, exact `unit_id`,
+exact `binding`, and `coverage` equal to that binding. Include original
+`conclusions`, `findings`, `limitations`, `required_context`, `evidence_markdown`
+and `seams`. Each `seams` group has this shape:
+
+```json
+{
+  "id": "original-native-group-name",
+  "domain": "pairs",
+  "domain_sha256": "supplied complete pair-domain digest",
+  "ranges": [[0, 4]],
+  "disposition": "resolved",
+  "rationale": "Original substantive reasoning with concrete evidence for every selected member.",
+  "findings": [], "limitations": [], "required_context": []
+}
+```
+
+`domain` is `pairs` or `edges`; use its exact complete-domain digest. `ranges` are
+half-open rank/index intervals. A unit may instead use `incident_unit` equal to its
+exact unit ID, omitting `ranges`, to select its complete incident domain. Do not use
+that selector in the final. Use unique group IDs. Groups and exception groups
+(optional `exception: true`) must form a DISJOINT EXHAUSTIVE partition of the
+assigned members: no gaps, overlaps, duplicates, foreign ranks or empty groups.
+Split an exception out of the shared group's ranges. Findings may cite concrete
+pair IDs reconstructed from rank or original explicit-edge IDs, and use the full
+ordinary finding contract. Keep applicable findings/context/limitations original.
+The host provides no default disposition or rationale.
+
+For the independent final, retain all ordinary required integration scalar fields,
+complete original ticket_set and ticket_set_digest from `identity`, `format`, exact
+`binding` and `reviewed_identity`. Copy supplied coverage schema
+`shipyard.integration-partition-coverage.v2`, format, plan digest, binding and
+coverage digest; add original `limitations` and `seam_dispositions`. The latter uses
+the same group format over the ENTIRE pair and explicit-edge domains. Include all
+original final `conclusions`, `findings`, `limitations`, `required_context` and
+`evidence_markdown`. `semantic_values` interns exact original semantic values;
+each `unit_results.fields` index resolves one original field without changing item
+order or prose. Each unit retains its original result digest, artifact reference
+and receipt digest, plus the original completeness, outcome and blocking count.
+Review every value with its complete provenance. Different
+texts remain distinct, and repeated text retains every referring unit/field.
+
+The unchanged 128 KiB complete original answer bound and per-field output limits
+apply. Unresolved groups, blocking findings, missing required context or incomplete
+units cannot authorize a pass. Actual final input overflow still HOLDs before
+launch; actual distinct semantics must never be clipped, summarized, rewritten or
+resealed. Structural fixtures supply no native semantic or current-phase authority.
+
 ## Bounded v3 sessions
 
 The public selector `shipyard.integration-review.v3` uses independent native
@@ -325,3 +460,25 @@ the current combined revision before projection or phase completion. Missing,
 empty, changed, stale, or contradictory evidence is a refusal. The validated
 artifact preserves `human-review-required` as a stop for the human and never
 authorizes a default-branch merge by itself.
+
+For compact static tables, resolve each `symbols` row `[prefix_index, suffix]`
+by concatenating `symbol_prefixes[prefix_index]` and `suffix` exactly, without
+normalizing slashes or whitespace. Prefix zero is the empty string. All symbol
+references in source, obligation and assignment tables index these reconstructed
+strings. This is readable exact string sharing and retains every original pointer,
+path, identifier and ordered set member.
+
+Compact `identity.scalar_tree` preserves the full original object keys and array
+order. Every scalar leaf is an integer reference into `identity.values`; resolve
+all leaves once to recover the exact original identity, including null, boolean
+and numeric types. The separate `reviewed_identity` keeps the current scalar
+identity facts directly visible. The binding hashes the full expanded identity.
+
+Segment columns are `segment_id_ref, source_id_ref, start_byte, end_byte,
+start_line, end_line, sha256_ref, content_index`. Resolve the three `_ref`
+columns through the same exact symbol table; byte and line ranges are unchanged.
+
+Each source's `aliases` is an ordered array of rows with `alias_columns`:
+`path_ref, pointer_ref, kind_ref, revision_ref, presence`. Resolve non-null entries
+through the symbol table. The four presence bits distinguish absent fields from
+original explicit nulls, matching source and obligation presence semantics. Preserve every alias and its order.

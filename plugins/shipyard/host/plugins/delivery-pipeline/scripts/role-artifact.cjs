@@ -4070,6 +4070,278 @@ const PARTITION_PLAN_FIELDS = ['schema', 'version', 'review_contract', 'runtime'
   'original_packet_sha256', 'material', 'obligations', 'units', 'seams', 'governing',
   'producer_pins', 'instruction_pins', 'capacity'];
 
+const COMPACT_PLAN_FIELDS = [...PARTITION_PLAN_FIELDS, 'format', 'interaction_domain', 'reconstruction'];
+function compactPartition(plan) { return plan.schema === 'shipyard.integration-partition-plan.v3'; }
+function partitionPlanFields(plan) { return compactPartition(plan) ? COMPACT_PLAN_FIELDS : PARTITION_PLAN_FIELDS; }
+function compactProfile() {
+  return { ...observedPartitionProfile(), schema: 'shipyard.integration-native-observed-profile.v2',
+    recipe: { rendering: 'shipyard.integration-partition-render.v2', measurement: 'original-native-observation' } };
+}
+function compactPair(plan, rank) {
+  const n = plan.units.length, count = n * (n - 1) / 2;
+  if (!Number.isSafeInteger(rank) || rank < 0 || rank >= count) partitionError('foreign pair rank');
+  let low = 0, high = n - 2;
+  const firstRank = index => index * (2 * n - index - 1) / 2;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (firstRank(middle) <= rank) low = middle; else high = middle - 1;
+  }
+  const i = low, offset = rank - firstRank(i);
+  const from = plan.units[i].unit_id, to = plan.units[i + offset + 1].unit_id;
+  return { id: 'e-' + digest(from + ':' + to), from, to, obligation_ids: [],
+    rationale: 'Cross-unit dependency or acceptance interaction is not statically disproven', required_context: [], uncertain: true };
+}
+function compactInteractionDomain(plan) {
+  const count = plan.units.length * (plan.units.length - 1) / 2, hash = crypto.createHash('sha256');
+  hash.update('[');
+  for (let rank = 0; rank < count; rank++) { if (rank) hash.update(','); hash.update(stable(compactPair(plan, rank))); }
+  hash.update(']');
+  return { rule: 'ordered-index-pairs-i<j', unit_ids: plan.units.map(unit => unit.unit_id), count, sha256: hash.digest('hex') };
+}
+function compactExplicitEdges(plan) {
+  const edges = new Map(), units = plan.units;
+  const connect = (from, to, obligations, rationale) => {
+    if (!from || !to || from === to) return;
+    const key = [from.unit_id, to.unit_id, ...obligations].join(':');
+    edges.set(key, { id: 'e-' + digest(key), from: from.unit_id, to: to.unit_id,
+      obligation_ids: obligations, rationale, required_context: obligations, uncertain: true });
+  };
+  for (const source of plan.material) {
+    const owners = units.filter(unit => unit.primary_segments.some(segment => segment.source_id === source.source_id));
+    const obligations = plan.obligations.filter(item => item.source_id === source.source_id).map(item => item.id);
+    for (let i = 1; i < owners.length; i++) connect(owners[i - 1], owners[i], obligations, 'Exact original source continuation and logical completion');
+    for (const obligation of obligations) for (const owner of owners)
+      connect(owner, units.find(unit => unit.primary_obligation_ids.includes(obligation)), [obligation], 'All original source segments required for logical completion');
+  }
+  return [...edges.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function compactReviewedIdentity(plan) {
+  return Object.fromEntries(Object.entries(plan.identity).filter(([, value]) => value === null || typeof value !== 'object'));
+}
+function compactBinding(plan, unit, verified) {
+  const assignment = unit || { ...partitionCoverage(plan), unit_artifacts: verified.units.map(item => item.reference) };
+  return { schema: 'shipyard.integration-partition-binding.v2', format: plan.format, plan_sha256: plan.plan_sha256,
+    scope: unit ? 'unit' : 'phase', unit_id: unit?.unit_id || null, identity_sha256: digest(stable(plan.identity)),
+    assignment_sha256: digest(stable(assignment)), unit_count: plan.units.length,
+    source_count: plan.material.length, obligation_count: plan.obligations.length,
+    primary_segment_count: unit ? unit.primary_segments.length : partitionCoverage(plan).primary_segment_ids.length,
+    primary_obligation_count: unit ? unit.primary_obligation_ids.length : plan.obligations.length,
+    domain_sha256: plan.interaction_domain.sha256, pair_count: plan.interaction_domain.count,
+    explicit_edge_sha256: digest(stable(plan.seams)), explicit_edge_count: plan.seams.length,
+    verified_index_sha256: verified ? digest(stable(verified.index)) : null };
+}
+const compactTableCache = new WeakMap();
+function compactTableMetadata(plan) {
+  let cached = compactTableCache.get(plan.material);
+  if (!cached || cached.maximum !== plan.capacity.segment_bytes || cached.sources.length !== plan.material.length
+      || cached.sources.some((item, index) => item.source !== plan.material[index] || item.content !== item.source.content || item.source_id !== item.source.source_id)) {
+    cached = { maximum: plan.capacity.segment_bytes, sources: plan.material.map(source => ({ source, content: source.content, source_id: source.source_id })), metadata: new Map() };
+    compactTableCache.set(plan.material, cached);
+  }
+  return source => {
+    if (!cached.metadata.has(source)) {
+      let offset = 0;
+      const content = Buffer.from(source.content);
+      const ranges = partitionSegments(source, cached.maximum).map(segment => {
+        const text = content.subarray(segment.start_byte, segment.end_byte).toString('utf8');
+        const range = { segment, text, start: offset, end: offset + text.length };
+        offset = range.end;
+        return range;
+      });
+      cached.metadata.set(source, { ranges, texts: new Map(ranges.map(range => [partitionSegmentId(range.segment), range.text])), values: new Map() });
+    }
+    return cached.metadata.get(source);
+  };
+}
+function compactSymbolTable(symbols) {
+  const counts = new Map();
+  for (const value of symbols) for (let i = value.indexOf('/'); i >= 0; i = value.indexOf('/', i + 1)) {
+    const prefix = value.slice(0, i + 1);
+    counts.set(prefix, (counts.get(prefix) || 0) + 1);
+  }
+  const prefixes = [''], indices = new Map([['', 0]]);
+  const rows = symbols.map(value => {
+    let prefix = '';
+    for (let i = value.indexOf('/'); i >= 0; i = value.indexOf('/', i + 1)) {
+      const candidate = value.slice(0, i + 1);
+      if (candidate.length > 16 && counts.get(candidate) > 1) prefix = candidate;
+    }
+    if (!indices.has(prefix)) { indices.set(prefix, prefixes.length); prefixes.push(prefix); }
+    return [indices.get(prefix), value.slice(prefix.length)];
+  });
+  return { symbol_prefixes: prefixes, symbols: rows };
+}
+function compactStaticTables(plan, units, includeContent = true) {
+  const sourceIds = new Set(units.flatMap(unit => [...unit.primary_segments, ...unit.support_segments]).map(item => item.source_id));
+  const obligationIds = new Set(units.flatMap(unit => [...unit.primary_obligation_ids, ...unit.support_obligation_ids]));
+  const sources = plan.material.filter(source => sourceIds.has(source.source_id));
+  const selected = new Map();
+  for (const unit of units) for (const segment of [...unit.primary_segments, ...unit.support_segments]) selected.set(partitionSegmentId(segment), segment);
+  const segments = [...selected].sort(([a], [b]) => a.localeCompare(b));
+  const metadata = compactTableMetadata(plan), selectedContents = new Map();
+  const contents = [], contentIndex = new Map(), sets = [], setIndex = new Map(), symbols = [], symbolIndex = new Map();
+  const intern = (value, table, index) => { const key = stable(value); if (!index.has(key)) { index.set(key, table.length); table.push(value); } return index.get(key); };
+  const symbol = value => value === null ? null : intern(value, symbols, symbolIndex);
+  const set = value => intern(value.map(symbol), sets, setIndex);
+  const content = segment => {
+    const source = sources.find(item => item.source_id === segment.source_id);
+    const id = partitionSegmentId(segment);
+    if (!selectedContents.has(id)) selectedContents.set(id, intern(metadata(source).texts.get(id), contents, contentIndex));
+    return selectedContents.get(id);
+  };
+  for (const [, segment] of segments) if (typeof includeContent === 'function' ? includeContent(segment) : includeContent) content(segment);
+  const values = [], valueIndex = new Map();
+  const value = original => {
+    const key = stable(original);
+    if (valueIndex.has(key)) return valueIndex.get(key);
+    let encoded = { literal: original };
+    if (typeof original === 'string' && original.length >= 64) for (const source of sources) {
+      const sourceMetadata = metadata(source);
+      if (!sourceMetadata.values.has(original)) {
+        const start = source.content.indexOf(original), end = start + original.length;
+        sourceMetadata.values.set(original, start < 0 ? null : sourceMetadata.ranges
+          .filter(range => range.end > start && range.start < end)
+          .map(range => ({ segment: range.segment, left: Math.max(start, range.start) - range.start,
+            right: Math.min(end, range.end) - range.start })));
+      }
+      const selectedRanges = sourceMetadata.values.get(original);
+      if (!selectedRanges) continue;
+      const ranges = [];
+      for (const { segment, left, right } of selectedRanges) {
+        const index = selectedContents.get(partitionSegmentId(segment));
+        if (index === undefined) break;
+        ranges.push([index, left, right]);
+      }
+      if (ranges.length === selectedRanges.length && ranges.length
+          && ranges.map(([index, left, right]) => contents[index].slice(left, right)).join('') === original) {
+        encoded = { content_ranges: ranges }; break;
+      }
+    }
+    const index = values.length; valueIndex.set(key, index); values.push(encoded); return index;
+  };
+  const tables = { alias_columns: ['path_ref', 'pointer_ref', 'kind_ref', 'revision_ref', 'presence'], source_columns: ['source_id_ref', 'path_ref', 'kind_ref', 'revision_ref', 'bytes', 'sha256_ref', 'aliases', 'presence'],
+    sources: sources.map(source => [...['source_id', 'path', 'kind', 'revision', 'bytes', 'sha256', 'aliases'].map(key => (Object.hasOwn(source, key) && source[key] !== undefined) ? (key === 'aliases' ? source.aliases.map(alias => [...['path', 'pointer', 'kind', 'revision'].map(field => alias[field] === undefined ? null : symbol(alias[field])), ['path', 'pointer', 'kind', 'revision'].map(field => Object.hasOwn(alias, field) && alias[field] !== undefined ? '1' : '0').join('')]) : key === 'bytes' ? source[key] : symbol(source[key])) : null),
+      ['source_id', 'path', 'kind', 'revision', 'bytes', 'sha256', 'aliases'].map(key => (Object.hasOwn(source, key) && source[key] !== undefined) ? '1' : '0').join('')]),
+    segment_columns: ['segment_id_ref', 'source_id_ref', 'start_byte', 'end_byte', 'start_line', 'end_line', 'sha256_ref', 'content_index'],
+    segments: segments.map(([id, item]) => [symbol(id), symbol(item.source_id), item.start_byte, item.end_byte, item.start_line, item.end_line, symbol(item.sha256), (typeof includeContent === 'function' ? includeContent(item) : includeContent) ? content(item) : null]),
+    contents, obligation_columns: ['id_ref', 'path_ref', 'pointer_ref', 'sha256_ref', 'source_id_ref', 'kind_ref', 'mandatory', 'bytes', 'value_ref', 'governing', 'presence'],
+    obligations: plan.obligations.filter(item => obligationIds.has(item.id)).map(item =>
+      [...['id', 'path', 'pointer', 'sha256', 'source_id', 'kind', 'mandatory', 'bytes', 'value', 'governing'].map(key => (Object.hasOwn(item, key) && item[key] !== undefined) ? (key === 'value' ? value(item[key]) : ['id', 'path', 'pointer', 'sha256', 'source_id', 'kind'].includes(key) ? symbol(item[key]) : item[key]) : null),
+        ['id', 'path', 'pointer', 'sha256', 'source_id', 'kind', 'mandatory', 'bytes', 'value', 'governing'].map(key => (Object.hasOwn(item, key) && item[key] !== undefined) ? '1' : '0').join('')]),
+    assignment_columns: ['unit_id', 'primary_segments', 'support_segments', 'primary_obligations', 'support_obligations', 'governing', 'explicit_edges'],
+    assignments: units.map(unit => [unit.unit_id, set(unit.primary_segments.map(partitionSegmentId)), set(unit.support_segments.map(partitionSegmentId)),
+      set(unit.primary_obligation_ids), set(unit.support_obligation_ids), set(unit.governing_ids), set(unit.seam_ids)]), sets, symbols, values };
+  return { ...tables, ...compactSymbolTable(symbols) };
+}
+function compactDomainJudgments(plan, groups, unit) {
+  if (!Array.isArray(groups) || bytes(stable(groups)) > plan.capacity?.output_limits?.seams || new Set(groups.map(group => group.id)).size !== groups.length)
+    partitionError('compact original domain groups exceed their ceiling or duplicate identity');
+  const pairCount = plan.interaction_domain.count, edgeCount = plan.seams.length;
+  const covered = { pairs: new Set(), edges: new Set() };
+  const expected = (domain, rank) => {
+    const edge = domain === 'pairs' ? compactPair(plan, rank) : plan.seams[rank];
+    return !unit || edge.from === unit.unit_id || edge.to === unit.unit_id;
+  };
+  for (const group of groups) {
+    if (!object(group) || typeof group.id !== 'string' || !group.id.trim() || !['pairs', 'edges'].includes(group.domain)
+        || group.domain_sha256 !== (group.domain === 'pairs' ? plan.interaction_domain.sha256 : digest(stable(plan.seams)))
+        || !['resolved', 'unresolved'].includes(group.disposition) || typeof group.rationale !== 'string' || !group.rationale.trim()
+        || ['findings', 'limitations', 'required_context'].some(field => !Array.isArray(group[field])))
+      partitionError('original substantive domain judgment or domain identity is missing');
+    if (Object.keys(group).some(key => !['id', 'domain', 'domain_sha256', 'ranges', 'incident_unit', 'disposition', 'rationale', 'findings', 'limitations', 'required_context', 'exception'].includes(key))
+        || group.exception !== undefined && typeof group.exception !== 'boolean') partitionError('unsupported domain group selector');
+    completeFindingIndex({ findings: group.findings, blocking_count: group.findings.filter(finding => finding.blocking === true).length }, 'integrator');
+    const count = group.domain === 'pairs' ? pairCount : edgeCount;
+    let memberCount = 0;
+    const include = rank => {
+      if (!expected(group.domain, rank) || covered[group.domain].has(rank)) partitionError('overlapping or foreign domain judgment');
+      covered[group.domain].add(rank); memberCount++;
+    };
+    if (Object.hasOwn(group, 'incident_unit')) {
+      if (!unit || group.incident_unit !== unit.unit_id || Object.hasOwn(group, 'ranges')) partitionError('foreign incident domain selector');
+      if (group.domain === 'pairs') {
+        const n = plan.units.length, index = plan.units.findIndex(item => item.unit_id === unit.unit_id);
+        for (let other = 0; other < n; other++) if (other !== index) {
+          const i = Math.min(index, other), j = Math.max(index, other);
+          include(i * (2 * n - i - 1) / 2 + j - i - 1);
+        }
+      } else for (let rank = 0; rank < count; rank++) if (expected(group.domain, rank)) include(rank);
+    } else {
+      if (!Array.isArray(group.ranges) || !group.ranges.length) partitionError('empty domain membership');
+      for (const range of group.ranges) {
+        if (!Array.isArray(range) || range.length !== 2 || range.some(value => !Number.isSafeInteger(value))
+            || range[0] < 0 || range[1] > count || range[0] >= range[1]) partitionError('foreign domain range');
+        for (let rank = range[0]; rank < range[1]; rank++) include(rank);
+      }
+    }
+    if (!memberCount) partitionError('vacuous domain judgment');
+  }
+  const expectedPairs = unit ? Math.max(0, plan.units.length - 1) : pairCount;
+  const expectedEdges = unit ? plan.seams.filter(edge => edge.from === unit.unit_id || edge.to === unit.unit_id).length : edgeCount;
+  if (covered.pairs.size !== expectedPairs || covered.edges.size !== expectedEdges) partitionError('domain judgment gap');
+}
+function compactIdentityTable(identity) {
+  const values = [], indices = new Map();
+  const encode = value => {
+    if (Array.isArray(value)) return value.map(encode);
+    if (object(value)) return Object.fromEntries(Object.keys(value).sort().map(key => [key, encode(value[key])]));
+    const key = stable(value);
+    if (!indices.has(key)) { indices.set(key, values.length); values.push(value); }
+    return indices.get(key);
+  };
+  return { scalar_tree: encode(identity), values };
+}
+function compactEdgeTable(edges) {
+  const values = [], indices = new Map();
+  const reference = value => {
+    const key = stable(value);
+    if (!indices.has(key)) { indices.set(key, values.length); values.push(value); }
+    return indices.get(key);
+  };
+  return { columns: ['id', 'from', 'to', 'obligation_ids_ref', 'rationale_ref', 'required_context_ref', 'uncertain'],
+    rows: edges.map(edge => [edge.id, edge.from, edge.to, reference(edge.obligation_ids), reference(edge.rationale),
+      reference(edge.required_context), edge.uncertain]), values, count: edges.length, sha256: digest(stable(edges)) };
+}
+function compactUnitPayload(plan, unit) {
+  return { schema: 'shipyard.integration-partition-input.v2', format: plan.format, reconstruction: plan.reconstruction,
+    review_contract: INTEGRATION_REVIEW_V3, kind: 'unit', runtime: plan.runtime, subject: plan.subject,
+    plan_sha256: plan.plan_sha256, unit_id: unit.unit_id, reviewed_identity: compactReviewedIdentity(plan),
+    identity: compactIdentityTable(plan.identity), binding: compactBinding(plan, unit), tables: compactStaticTables(plan, [unit]),
+    interaction_domain: plan.interaction_domain, explicit_edges: compactEdgeTable(plan.seams.filter(edge => unit.seam_ids.includes(edge.id))),
+    explicit_edge_indices: unit.seam_ids.map(id => plan.seams.findIndex(edge => edge.id === id)), output_limits: plan.capacity.output_limits };
+}
+
+function compactAggregatePayload(record, verified) {
+  const { plan } = record, binding = compactBinding(plan, null, verified), semantic_values = [], semanticIndex = new Map();
+  const intern = value => { const key = stable(value); if (!semanticIndex.has(key)) { semanticIndex.set(key, semantic_values.length); semantic_values.push(value); } return semanticIndex.get(key); };
+  const governingSources = new Set(plan.obligations.filter(item => plan.governing.includes(item.id)).map(item => item.source_id));
+  const unit_results = verified.units.map(checked => ({ unit_id: checked.result.unit_id,
+    result_sha256: digest(stable(checked.result)), reference: checked.reference,
+    completeness: checked.result.completeness, outcome: checked.result.outcome, blocking_count: checked.result.blocking_count,
+    ...(checked.result.finding_count !== undefined ? { finding_count: checked.result.finding_count } : {}),
+    receipt_sha256: verified.index.entries.find(entry => entry.unit_id === checked.result.unit_id)?.receipt_sha256,
+    fields: Object.fromEntries(['conclusions', 'findings', 'limitations', 'seams', 'required_context', 'evidence_markdown',
+      ...(checked.result.summary !== undefined ? ['summary'] : [])]
+      .map(field => [field, intern(checked.result[field])])) }));
+  return { schema: 'shipyard.integration-partition-input.v2', format: plan.format, reconstruction: plan.reconstruction,
+    review_contract: INTEGRATION_REVIEW_V3, kind: 'phase', runtime: plan.runtime, subject: plan.subject,
+    plan_sha256: plan.plan_sha256, reviewed_identity: compactReviewedIdentity(plan), identity: compactIdentityTable(plan.identity), binding,
+    tables: compactStaticTables(plan, plan.units, segment => governingSources.has(segment.source_id)),
+    interaction_domain: plan.interaction_domain, explicit_edges: compactEdgeTable(plan.seams), output_limits: plan.capacity.output_limits,
+    verified_index_sha256: binding.verified_index_sha256, coverage: { schema: 'shipyard.integration-partition-coverage.v2',
+      format: plan.format, plan_sha256: plan.plan_sha256, binding, coverage_sha256: digest(stable(binding)) },
+    semantic_values, unit_results };
+}
+function legacyStaticOverflow(plan) {
+  const verified = { index: { entries: [] }, units: plan.units.map(unit => ({ reference: { unit_id: unit.unit_id },
+    result: { unit_id: unit.unit_id, conclusions: [], findings: [], limitations: [], seams: [], required_context: [] } })) };
+  const minimumInput = renderPartitionInput(plan, aggregatePayload({ plan }, verified));
+  const minimumResult = { reviewed_identity: plan.identity, ticket_set: plan.identity.ticket_set,
+    coverage: { ...partitionCoverage(plan), seam_dispositions: plan.seams.map(seam => ({ id: seam.id, disposition: '', rationale: '' })) } };
+  return partitionInputBytes(plan, minimumInput, 'phase') > plan.capacity.max_input_bytes || bytes(stable(minimumResult)) > PARTITION_RESULT_LIMIT;
+}
+
 function partitionError(message, code = 'INTEGRATION_PARTITION_INVALID') { fail(code, message); }
 function partitionCopy(value) { return JSON.parse(stable(value)); }
 function partitionFreeze(value) {
@@ -4083,7 +4355,8 @@ function partitionHash(plan) {
     'unit_artifacts', 'final_result', 'final_results', 'result', 'results', 'outcome']);
   const preExecution = value => Array.isArray(value) ? value.map(preExecution) : object(value)
     ? Object.fromEntries(Object.keys(value).filter(key => !executionFields.has(key)).map(key => [key, preExecution(value[key])])) : value;
-  return digest(stable(preExecution(Object.fromEntries(PARTITION_PLAN_FIELDS.map(key => [key, plan[key]])))));
+  const fields = Object.fromEntries(partitionPlanFields(plan).map(key => [key, plan[key]]));
+  return digest(stable(compactPartition(plan) ? fields : preExecution(fields)));
 }
 function partitionFileName(kind, hash) {
   if (!['plan', 'units', 'launch', 'capacity', 'host-evidence', 'observation'].includes(kind) || !/^[a-f0-9]{64}$/.test(hash || ''))
@@ -4187,7 +4460,10 @@ function partitionInventory(packet) {
   if (new Set(obligations.map(item => item.id)).size !== obligations.length) partitionError('duplicate logical obligation identity');
   return { material, obligations };
 }
+const partitionSegmentCache = new WeakMap();
 function partitionSegments(source, maximum) {
+  const cached = partitionSegmentCache.get(source);
+  if (cached?.maximum === maximum && cached.content === source.content && cached.source_id === source.source_id) return cached.segments;
   const content = Buffer.from(source.content), segments = [];
   let start = 0, line = 1;
   while (start < content.length) {
@@ -4203,6 +4479,7 @@ function partitionSegments(source, maximum) {
       start_line: line, end_line: line + newlines - (part.at(-1) === 10 ? 1 : 0), sha256: digest(part) });
     start = end; line += newlines;
   }
+  partitionSegmentCache.set(source, { maximum, content: source.content, source_id: source.source_id, segments });
   return segments;
 }
 function partitionSegmentId(segment) { return 'b-' + digest(stable(segment)); }
@@ -4211,6 +4488,8 @@ function partitionCoverage(plan) {
     primary_obligation_ids: plan.units.flatMap(unit => unit.primary_obligation_ids) };
 }
 function assertPartitionCoverage(plan) {
+  if (compactPartition(plan) && (plan.format !== 'compact-domain.v1' || plan.reconstruction !== 'shipyard.integration-partition-render.v2'
+      || stable(plan.interaction_domain) !== stable(compactInteractionDomain(plan)) || stable(plan.seams) !== stable(compactExplicitEdges(plan)))) partitionError('compact reconstruction identity differs');
   const assigned = plan.units.flatMap(unit => unit.primary_segments);
   if (new Set(plan.units.map(unit => unit.unit_id)).size !== plan.units.length) partitionError('duplicate primary unit');
   for (const source of plan.material) {
@@ -4256,6 +4535,7 @@ function assertPartitionCoverage(plan) {
   }
 }
 function partitionUnitPayload(plan, unit) {
+  if (compactPartition(plan)) return compactUnitPayload(plan, unit);
   const segment = item => {
     const source = plan.material.find(source => source.source_id === item.source_id);
     return { ...item, content: Buffer.from(source.content).subarray(item.start_byte, item.end_byte).toString('utf8'),
@@ -4284,7 +4564,7 @@ function renderPartitionInput(plan, payload) {
     + stable({ instructions, recipe: plan.capacity.recipe }) + '\n<AUTHENTICATED_INTEGRATION_PARTITION>\n'
     + stable(payload) + '\n</AUTHENTICATED_INTEGRATION_PARTITION>';
 }
-function observedPartition(plan) { return plan.schema === 'shipyard.integration-partition-plan.v2'; }
+function observedPartition(plan) { return plan.schema === 'shipyard.integration-partition-plan.v2' || compactPartition(plan); }
 function observedPartitionProfile() {
   return { schema: 'shipyard.integration-native-observed-profile.v1', mode: 'native-observed',
     max_input_bytes: 4194304, unit_input_bytes: 2097152, segment_bytes: 65536, primary_segments_per_unit: 3,
@@ -4293,7 +4573,7 @@ function observedPartitionProfile() {
 }
 function partitionProfile(plan) {
   if (!observedPartition(plan)) return partitionCapacityOptions(plan.capacity);
-  if (stable(plan.capacity) !== stable(observedPartitionProfile())) partitionError('observed mode or operational budget changed');
+  if (stable(plan.capacity) !== stable(compactPartition(plan) ? compactProfile() : observedPartitionProfile())) partitionError('observed mode or operational budget changed');
   return plan.capacity;
 }
 function partitionInputBytes(plan, input, kind) {
@@ -4319,7 +4599,7 @@ function partitionCapacityOptions(options) {
     partitionError('static all-in budget, output ceilings and exact rendering/measurement recipe are required', 'INTEGRATION_CAPACITY_UNPROVEN');
   return capacity;
 }
-function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0) {
+function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0, localReservations = new Map()) {
   if (attempt >= 64 || reservedContextBytes >= plan.capacity.unit_input_bytes)
     partitionError('complete context/seam representation cannot stabilize within the static budget', 'INTEGRATION_INPUT_OVER_BOUND');
   plan.units = []; plan.seams = [];
@@ -4332,26 +4612,26 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0) {
     return unit;
   };
   const governingSources = new Set(plan.obligations.filter(item => plan.governing.includes(item.id) && item.source_id).map(item => item.source_id));
-  const support = plan.material.filter(item => governingSources.has(item.source_id)).flatMap(item => partitionSegments(item, plan.capacity.segment_bytes));
+  const sourceRanges = new Map(plan.material.map(source => [source, partitionSegments(source, plan.capacity.segment_bytes)]));
+  const neighbors = new Map();
+  for (const [source, ranges] of sourceRanges) ranges.forEach((segment, index) => neighbors.set(partitionSegmentId(segment),
+    [...(index ? [ranges[index - 1]] : []), ...(index + 1 < ranges.length ? [ranges[index + 1]] : []), ...(/diff/.test(source.kind) ? [ranges[0]] : [])]));
+  const support = plan.material.filter(item => governingSources.has(item.source_id)).flatMap(item => sourceRanges.get(item));
+  const reservationKeys = unit => [...unit.primary_segments.map(partitionSegmentId), ...unit.primary_obligation_ids];
+  const reservation = unit => compactPartition(plan)
+    ? Math.max(0, ...reservationKeys(unit).map(key => localReservations.get(key) || 0)) : reservedContextBytes;
   const fit = unit => {
     if (observedPartition(plan) && unit.primary_segments.length > plan.capacity.primary_segments_per_unit) return false;
     unit.support_obligation_ids = plan.governing.filter(id => !unit.primary_obligation_ids.includes(id));
     const context = [...support];
-    for (const source of plan.material) {
-      const ranges = partitionSegments(source, plan.capacity.segment_bytes);
-      for (let index = 0; index < ranges.length; index++) if (unit.primary_segments.some(item => stable(item) === stable(ranges[index]))) {
-        if (index) context.push(ranges[index - 1]);
-        if (index + 1 < ranges.length) context.push(ranges[index + 1]);
-        if (/diff/.test(source.kind)) context.push(ranges[0]);
-      }
-    }
+    for (const segment of unit.primary_segments) context.push(...neighbors.get(partitionSegmentId(segment)));
     unit.support_segments = [...new Map(context.filter(item => !unit.primary_segments.some(own => stable(own) === stable(item)))
       .map(item => [partitionSegmentId(item), item])).values()];
     return (!observedPartition(plan) || unit.primary_segments.length <= plan.capacity.primary_segments_per_unit)
-      && partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, unit)), 'unit') <= plan.capacity.unit_input_bytes - reservedContextBytes;
+      && partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, unit)), 'unit') <= plan.capacity.unit_input_bytes - reservation(unit);
   };
   let unit = create();
-  for (const source of plan.material) for (const segment of partitionSegments(source, plan.capacity.segment_bytes)) {
+  for (const source of plan.material) for (const segment of sourceRanges.get(source)) {
     unit.primary_segments.push(segment);
     if (!fit(unit)) {
       unit.primary_segments.pop(); fit(unit);
@@ -4360,9 +4640,29 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0) {
       if (!fit(unit)) partitionError('one full segment with required context exceeds launch budget', 'INTEGRATION_INPUT_OVER_BOUND');
     }
   }
-  for (const obligation of plan.obligations) {
+  const assignUnbound = obligations => {
+    const owner = units.at(-1), previous = owner.primary_obligation_ids.length;
+    owner.primary_obligation_ids.push(...obligations.map(item => item.id));
+    if (fit(owner)) return;
+    owner.primary_obligation_ids.length = previous; fit(owner);
+    if (obligations.length === 1) {
+      const next = create(); next.primary_obligation_ids.push(obligations[0].id);
+      if (!fit(next)) partitionError('complete logical obligation cannot fit', 'INTEGRATION_INPUT_OVER_BOUND');
+      return;
+    }
+    const middle = Math.floor(obligations.length / 2);
+    assignUnbound(obligations.slice(0, middle)); assignUnbound(obligations.slice(middle));
+  };
+  for (let obligationIndex = 0; obligationIndex < plan.obligations.length; obligationIndex++) {
+    const obligation = plan.obligations[obligationIndex];
+    if (compactPartition(plan) && !obligation.source_id) {
+      let end = obligationIndex + 1;
+      while (end < plan.obligations.length && !plan.obligations[end].source_id) end++;
+      assignUnbound(plan.obligations.slice(obligationIndex, end)); obligationIndex = end - 1;
+      continue;
+    }
     const owners = obligation.source_id ? units.filter(candidate => candidate.primary_segments.some(item => item.source_id === obligation.source_id)) : [];
-    let owner = owners.at(-1) || unit;
+    let owner = owners.at(-1) || (compactPartition(plan) ? units.at(-1) : unit);
     owner.primary_obligation_ids.push(obligation.id);
     if (!fit(owner)) {
       owner.primary_obligation_ids.pop(); fit(owner); owner = create(); owner.primary_obligation_ids.push(obligation.id);
@@ -4389,9 +4689,10 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0) {
       for (const owner of owners) connect(owner, completion, [obligation], 'All original source segments required for logical completion');
     }
   }
-  for (let from = 0; from < units.length; from++) for (let to = from + 1; to < units.length; to++)
+  if (!compactPartition(plan)) for (let from = 0; from < units.length; from++) for (let to = from + 1; to < units.length; to++)
     connect(units[from], units[to], [], 'Cross-unit dependency or acceptance interaction is not statically disproven');
   plan.seams = [...edges.values()].sort((a, b) => a.id.localeCompare(b.id));
+  if (compactPartition(plan)) plan.interaction_domain = compactInteractionDomain(plan);
   let overflow = 0;
   for (const candidate of units) {
     candidate.seam_ids = plan.seams.filter(seam => seam.from === candidate.unit_id || seam.to === candidate.unit_id).map(seam => seam.id);
@@ -4399,26 +4700,32 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0) {
       ...plan.governing.filter(id => !candidate.primary_obligation_ids.includes(id)),
       ...plan.seams.filter(seam => candidate.seam_ids.includes(seam.id)).flatMap(seam => seam.required_context)])]
       .filter(id => !candidate.primary_obligation_ids.includes(id));
-    overflow = Math.max(overflow, partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, candidate)), 'unit') - plan.capacity.unit_input_bytes);
+    const actualOverflow = partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, candidate)), 'unit') - plan.capacity.unit_input_bytes;
+    overflow = Math.max(overflow, actualOverflow);
+    if (compactPartition(plan) && actualOverflow > 0) {
+      const next = reservation(candidate) + actualOverflow;
+      for (const key of reservationKeys(candidate)) localReservations.set(key, next);
+    }
     const minimumResult = { schema: 'shipyard.integration-unit-result.v1', review_contract: INTEGRATION_REVIEW_V3, kind: 'unit',
       runtime: plan.runtime, subject: plan.subject, plan_sha256: plan.plan_sha256, unit_id: candidate.unit_id,
       input_sha256: '0'.repeat(64), reviewed_identity: plan.identity, completeness: 'incomplete', outcome: 'human-review-required',
       coverage: { primary_segments: candidate.primary_segments, primary_obligation_ids: candidate.primary_obligation_ids,
         support_segments: candidate.support_segments, support_obligation_ids: candidate.support_obligation_ids } };
-    if (bytes(stable(minimumResult)) + (observedPartition(plan) ? 0 : Object.values(plan.capacity.output_limits).reduce((a, b) => a + b, 0))
+    if (bytes(stable(compactPartition(plan) ? { ...minimumResult, reviewed_identity: compactReviewedIdentity(plan), coverage: compactBinding(plan, candidate) } : minimumResult)) + (observedPartition(plan) ? 0 : Object.values(plan.capacity.output_limits).reduce((a, b) => a + b, 0))
         + 8192 > PARTITION_RESULT_LIMIT)
       partitionError('complete bounded unit result cannot represent its assignment/detail ceilings', 'INTEGRATION_INPUT_OVER_BOUND');
   }
-  if (overflow > 0) return buildPartitionUnits(plan, reservedContextBytes + overflow, attempt + 1);
+  if (overflow > 0) return buildPartitionUnits(plan, compactPartition(plan) ? 0 : reservedContextBytes + overflow, attempt + 1, localReservations);
   assertPartitionCoverage(plan);
 }
 function partitionPlanRecord(worktree, hash) {
   const record = readPartitionEnvelope(worktree, 'plan', hash), plan = record.plan;
   if (!(plan?.schema === 'shipyard.integration-partition-plan.v1' && plan.version === 1
-      || plan?.schema === 'shipyard.integration-partition-plan.v2' && plan.version === 2)
+      || plan?.schema === 'shipyard.integration-partition-plan.v2' && plan.version === 2
+      || plan?.schema === 'shipyard.integration-partition-plan.v3' && plan.version === 3)
       || plan.review_contract !== INTEGRATION_REVIEW_V3 || plan.plan_sha256 !== hash || partitionHash(plan) !== hash
       || plan.identity.worktree !== worktree) partitionError('frozen plan identity or pre-execution hash differs');
-  if (stable(Object.keys(plan).sort()) !== stable([...PARTITION_PLAN_FIELDS, 'plan_sha256'].sort())
+  if (stable(Object.keys(plan).sort()) !== stable([...partitionPlanFields(plan), 'plan_sha256'].sort())
       || stable(partitionProfile(plan)) !== stable(plan.capacity)) partitionError('unsupported immutable plan fields');
   assertPartitionCoverage(plan);
   return record;
@@ -4443,7 +4750,7 @@ function partitionNativePin(trusted) {
   if (candidates.length !== 1) partitionError('original native session is missing or ambiguous');
   return { path: candidates[0], bytes: native.bytes, sha256: native.sha256 };
 }
-function partitionOriginalInput(trusted, launch, nativePin) {
+function partitionOriginalInput(trusted, launch, nativePin, checkedRecord) {
   const pin = nativePin || partitionNativePin(trusted);
   const originalPin = partitionNativePin(trusted);
   if (stable(pin) !== stable(originalPin)) partitionError('native input pin differs from original runtime receipt');
@@ -4474,7 +4781,8 @@ function partitionOriginalInput(trusted, launch, nativePin) {
   const developers = rows.filter(row => row.type === 'response_item' && ['developer', 'system'].includes(row.payload?.role))
     .map(row => ({ role: row.payload.role, content: row.payload.content }));
   if (trusted.receipt.runtime === 'codex') {
-    const record = partitionPlanRecord(launch.worktree, launch.plan_sha256);
+    const record = compactPartition(checkedRecord?.plan || {}) ? checkedRecord : partitionPlanRecord(launch.worktree, launch.plan_sha256);
+    if (record.plan.plan_sha256 !== launch.plan_sha256 || record.plan.identity.worktree !== launch.worktree) partitionError('original input plan metadata differs');
     const agent = record.plan.instruction_pins.find(pin => pin.sha256 === launch.agent_sha256);
     const instructions = require('./codex-runtime-host.cjs').generatedInstructions(
       readImmutableFile(fs, path.resolve(agent.root, agent.path), 'installed generated agent', PARTITION_LIMIT).toString('utf8'));
@@ -4620,7 +4928,16 @@ function prepareIntegrationPartitions({ review, capacity, plan_sha256: previous 
     runtime: review.options.nativeRuntime, subject: review.prepared.ticket, identity,
     original_packet_sha256: digest(stable(packet)), ...inventory, units: [], seams: [], governing,
     producer_pins: producerPins, instruction_pins: partitionCopy(instructionPins), capacity: observed ? observedPartitionProfile() : partitionCapacityOptions(capacity), plan_sha256: '0'.repeat(64) };
-  buildPartitionUnits(plan);
+  try {
+    buildPartitionUnits(plan);
+    if (observed && legacyStaticOverflow(plan)) partitionError('legacy deterministic structure exceeds unchanged bounds', 'INTEGRATION_INPUT_OVER_BOUND');
+  } catch (error) {
+    if (!observed || error.code !== 'INTEGRATION_INPUT_OVER_BOUND') throw error;
+    Object.assign(plan, { schema: 'shipyard.integration-partition-plan.v3', version: 3, format: 'compact-domain.v1',
+      reconstruction: 'shipyard.integration-partition-render.v2', capacity: compactProfile(), units: [], seams: [] });
+    plan.interaction_domain = compactInteractionDomain(plan);
+    buildPartitionUnits(plan);
+  }
   plan.plan_sha256 = partitionHash(plan);
   const record = { plan, archive_pins: partitionCopy(review.archivePins), original_input_bundle: review.currentInput.input_bundle,
     ...(observed ? { operational_diagnostic: { authoritative: false, unit_count: plan.units.length,
@@ -4658,6 +4975,7 @@ function privatePartitions(value) {
 }
 function aggregatePayload(record, verified, reserved = false) {
   const { plan } = record;
+  if (compactPartition(plan)) { if (reserved) partitionError('compact has no strict reserved template'); return compactAggregatePayload(record, verified); }
   const payload = { schema: 'shipyard.integration-partition-input.v1', review_contract: INTEGRATION_REVIEW_V3,
     kind: 'phase', runtime: plan.runtime, subject: plan.subject, plan_sha256: plan.plan_sha256,
     reviewed_identity: plan.identity, governing: plan.obligations.filter(item => plan.governing.includes(item.id)),
@@ -4702,6 +5020,9 @@ function aggregatePayload(record, verified, reserved = false) {
       unit_artifacts: payload.unit_artifacts, verified_index_sha256: payload.verified_index_sha256 })) };
   return payload;
 }
+function assertPartitionInputBound(plan, input, kind) {
+  if (partitionInputBytes(plan, input, kind) > (kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes)) partitionError('actual complete ' + kind + ' rendered input exceeds static bound; HOLD', 'INTEGRATION_INPUT_OVER_BOUND');
+}
 function preparePartitionStage(partitions, kind, unitId, dispatchId, verified) {
   const found = partitionPreparations.get(partitions);
   if (!found) partitionError('private frozen partition preparation is required');
@@ -4713,8 +5034,9 @@ function preparePartitionStage(partitions, kind, unitId, dispatchId, verified) {
   const input = renderPartitionInput(plan, payload);
   if (!observedPartition(plan) && kind === 'phase' && bytes(input) > bytes(renderPartitionInput(plan, aggregatePayload(record, null, true))))
     partitionError('actual complete final exceeds its frozen reserved-template representation', 'INTEGRATION_INPUT_OVER_BOUND');
-  if (partitionInputBytes(plan, input, kind) > (kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes)) partitionError('actual complete ' + kind + ' rendered input exceeds static bound; HOLD', 'INTEGRATION_INPUT_OVER_BOUND');
-  const launch = { schema: 'shipyard.integration-partition-launch.v' + (observedPartition(plan) ? 2 : 1), plan_sha256: plan.plan_sha256,
+  assertPartitionInputBound(plan, input, kind);
+  const launch = { schema: 'shipyard.integration-partition-launch.v' + (compactPartition(plan) ? 3 : observedPartition(plan) ? 2 : 1), plan_sha256: plan.plan_sha256,
+    ...(compactPartition(plan) ? { format: plan.format, reconstruction: plan.reconstruction, domain_sha256: plan.interaction_domain.sha256 } : {}),
     ...(observedPartition(plan) ? { mode: 'native-observed', profile_sha256: digest(stable(plan.capacity)) } : {}),
     kind, unit_id: unitId, dispatch_id: dispatchId, runtime: plan.runtime, subject: plan.subject,
     worktree: plan.identity.worktree, model: plan.identity.model, effort: plan.identity.effort,
@@ -5001,7 +5323,8 @@ function verifyPartitionAdmission(record, launch, hash) {
 function observedPartitionAdmission(record, launch, hash, receiptStore) {
   const { plan } = record;
   partitionProfile(plan);
-  if (launch.schema !== 'shipyard.integration-partition-launch.v2' || launch.mode !== 'native-observed'
+  if (launch.schema !== 'shipyard.integration-partition-launch.v' + (compactPartition(plan) ? 3 : 2)
+      || compactPartition(plan) && (launch.format !== plan.format || launch.reconstruction !== plan.reconstruction || launch.domain_sha256 !== plan.interaction_domain.sha256) || launch.mode !== 'native-observed'
       || launch.profile_sha256 !== digest(stable(plan.capacity)) || launch.plan_sha256 !== plan.plan_sha256
       || launch.worktree !== plan.identity.worktree || launch.runtime !== plan.runtime || launch.subject !== plan.subject
       || launch.model !== plan.identity.model || launch.effort !== plan.identity.effort
@@ -5303,30 +5626,39 @@ function authenticateNativeObservation(trusted, record, launch, native, create) 
 }
 function partitionResult(result, record, launch) {
   const { plan } = record, unit = plan.units.find(unit => unit.unit_id === launch.unit_id);
-  if (!object(result) || bytes(stable(result)) > PARTITION_RESULT_LIMIT || result.schema !== 'shipyard.integration-unit-result.v1'
+  if (!object(result) || bytes(stable(result)) > PARTITION_RESULT_LIMIT || result.schema !== 'shipyard.integration-unit-result.v' + (compactPartition(plan) ? 2 : 1)
+      || !compactPartition(plan) && (result.format !== undefined || result.binding !== undefined)
       || result.review_contract !== INTEGRATION_REVIEW_V3 || result.kind !== 'unit' || result.runtime !== plan.runtime
       || result.subject !== plan.subject || result.plan_sha256 !== plan.plan_sha256 || result.unit_id !== unit?.unit_id
-      || result.input_sha256 !== launch.input_sha256 || stable(result.reviewed_identity) !== stable(plan.identity)
+      || result.input_sha256 !== launch.input_sha256 || stable(result.reviewed_identity) !== stable(compactPartition(plan) ? compactReviewedIdentity(plan) : plan.identity)
       || !['complete', 'incomplete'].includes(result.completeness) || !['passed', 'needs-fix', 'human-review-required'].includes(result.outcome)
-      || stable(result.coverage) !== stable({ primary_segments: unit.primary_segments, primary_obligation_ids: unit.primary_obligation_ids,
+      || compactPartition(plan) && (result.format !== plan.format || stable(result.binding) !== stable(compactBinding(plan, unit)))
+      || stable(result.coverage) !== stable(compactPartition(plan) ? compactBinding(plan, unit) : { primary_segments: unit.primary_segments, primary_obligation_ids: unit.primary_obligation_ids,
         support_segments: unit.support_segments, support_obligation_ids: unit.support_obligation_ids }))
     partitionError('unit result identity, completeness or exact coverage differs');
   for (const field of ['conclusions', 'findings', 'limitations', 'seams', 'required_context']) {
     if (!Array.isArray(result[field]) || bytes(stable(result[field])) > plan.capacity.output_limits[field])
       partitionError('complete unit detail exceeds frozen final-template ceiling; no truncation permitted', 'INTEGRATION_INPUT_OVER_BOUND');
   }
+  if (compactPartition(plan) && (!Number.isInteger(result.blocking_count)
+      || Object.keys(result).some(key => !['schema', 'review_contract', 'kind', 'runtime', 'subject', 'plan_sha256', 'unit_id',
+        'input_sha256', 'reviewed_identity', 'completeness', 'outcome', 'blocking_count', 'finding_count', 'coverage', 'binding',
+        'format', 'conclusions', 'findings', 'limitations', 'seams', 'required_context', 'evidence_markdown', 'summary'].includes(key))))
+    partitionError('unsupported compact original result fields or native blocking count');
   const findings = completeFindingIndex({ ...result, blocking_count: result.blocking_count ?? result.findings.filter(finding => finding.blocking === true).length }, 'integrator');
   if (result.completeness === 'complete' && result.outcome === 'passed'
       && (findings.blocking_count || result.required_context.length)) partitionError('complete passing unit has unresolved blocking context');
-  if (stable(result.seams.map(seam => seam.id).sort()) !== stable([...unit.seam_ids].sort())
+  if (compactPartition(plan)) compactDomainJudgments(plan, result.seams, unit);
+  else if (stable(result.seams.map(seam => seam.id).sort()) !== stable([...unit.seam_ids].sort())
       || new Set(result.seams.map(seam => seam.id)).size !== result.seams.length
       || result.seams.some(seam => !['resolved', 'unresolved'].includes(seam.disposition) || typeof seam.rationale !== 'string' || !seam.rationale.trim()))
     partitionError('unit must retain every explicit seam and its uncertainty');
+  if (compactPartition(plan) && result.outcome === 'passed' && result.seams.some(group => group.required_context.length || group.limitations.length || group.findings.some(finding => finding.blocking))) partitionError('context-blocked compact original domain cannot pass');
   if (typeof result.evidence_markdown !== 'string' || !result.evidence_markdown.trim()) partitionError('unit complete original evidence is required');
   return result;
 }
 function authenticatePartitionResult(trusted, result, record, launch, pin, createObservation = false) {
-  const native = partitionOriginalInput(trusted, launch, pin);
+  const native = partitionOriginalInput(trusted, launch, pin, record);
   const admitted = readPartitionEnvelope(launch.worktree, 'capacity', digest(stable(launch)));
   if (admitted.receipt_store !== trusted.recorder.storeDir) partitionError('semantic launch changed its admitted original receipt store');
   if (!observedPartition(record.plan) && native.frame_sha256 !== admitted.frame_sha256) partitionError('complete native instructions/framing changed after admission');
@@ -5445,7 +5777,7 @@ function authenticatePartitionFinal({ trusted, result, evidence, identity, integ
   recheckPartitionRecord(record, integrationReview, trusted);
   const verified = verifiedPartitionUnits(record), reference = result.coverage?.unit_artifacts;
   const references = verified.units.map(unit => unit.reference), coverage = partitionCoverage(plan);
-  const coverageDigest = digest(stable({ plan_sha256: plan.plan_sha256, ...coverage, unit_artifacts: references,
+  const coverageDigest = compactPartition(plan) ? digest(stable(compactBinding(plan, null, verified))) : digest(stable({ plan_sha256: plan.plan_sha256, ...coverage, unit_artifacts: references,
     verified_index_sha256: digest(stable(verified.index)) }));
   const originalLaunch = readPartitionEnvelope(identity.worktree, 'launch', digest(stable([plan.plan_sha256, trusted.dispatchId])));
   const launchHash = originalLaunch.launch_sha256;
@@ -5457,15 +5789,33 @@ function authenticatePartitionFinal({ trusted, result, evidence, identity, integ
   verifyPartitionAdmission(record, launchReference, launchHash);
   if (verified.index.entries.some(entry => entry.dispatch_id === trusted.dispatchId
       || entry.native_input_pin.sha256 === partitionNativePin(trusted).sha256)) partitionError('unit session cannot act as the independent final');
-  const native = partitionOriginalInput(trusted, launchReference);
+  const native = partitionOriginalInput(trusted, launchReference, undefined, record);
   const admission = readPartitionEnvelope(identity.worktree, 'capacity', launchHash);
   if (admission.receipt_store !== trusted.recorder.storeDir) partitionError('actual final changed its admitted original receipt store');
   if (!observedPartition(plan) && native.frame_sha256 !== admission.frame_sha256) partitionError('actual final instructions/framing differs from admitted input');
   originalCurrentResponse(trusted, result, evidence, { native: native.pin });
   if (observedPartition(plan)) authenticateNativeObservation(trusted, record, launchReference, native,
     !authorityState(identity.worktree, false, false).payload.records[trusted.dispatchId]);
+  if (compactPartition(plan)) {
+    const expected = compactAggregatePayload(record, verified).coverage;
+    const { limitations, seam_dispositions, ...bindingCoverage } = result.coverage || {};
+    if (result.runtime !== plan.runtime || result.subject !== plan.subject || result.input_sha256 !== launchReference.input_sha256
+        || result.format !== plan.format || stable(result.reviewed_identity) !== stable(compactReviewedIdentity(plan))
+        || stable(result.binding) !== stable(expected.binding) || result.completeness !== 'complete'
+        || stable(bindingCoverage) !== stable(expected) || !Array.isArray(limitations)
+        || stable(result.ticket_set) !== stable(plan.identity.ticket_set) || result.ticket_set_digest !== plan.identity.ticket_set_digest)
+      partitionError('compact final independently reconstructed identity/coverage differs');
+    compactDomainJudgments(plan, seam_dispositions);
+    for (const field of ['conclusions', 'findings', 'limitations', 'required_context'])
+      if (!Array.isArray(result[field]) || bytes(stable(result[field])) > plan.capacity.output_limits[field]) partitionError('complete compact final detail exceeds unchanged ceiling', 'INTEGRATION_INPUT_OVER_BOUND');
+    if (bytes(stable(limitations)) > plan.capacity.output_limits.limitations
+        || result.outcome === 'passed' && (limitations.length || result.limitations.length || result.required_context.length
+          || seam_dispositions.some(group => group.disposition !== 'resolved' || group.limitations.length || group.required_context.length || group.findings.some(finding => finding.blocking))
+          || verified.units.some(unit => unit.result.limitations.length))) partitionError('unsupported compact final cannot pass');
+  } else {
+  if (result.format !== undefined || result.binding !== undefined) partitionError('mixed legacy final format');
   if (result.runtime !== plan.runtime || result.subject !== plan.subject || result.input_sha256 !== launchReference.input_sha256
-      || stable(result.reviewed_identity) !== stable(plan.identity) || result.completeness !== 'complete'
+      || stable(result.reviewed_identity) !== stable(compactPartition(plan) ? compactReviewedIdentity(plan) : plan.identity) || result.completeness !== 'complete'
       || result.coverage?.schema !== 'shipyard.integration-partition-coverage.v1' || result.coverage.plan_sha256 !== plan.plan_sha256
       || result.coverage.coverage_sha256 !== coverageDigest || stable(reference) !== stable(references)
       || stable(result.coverage.primary_segment_ids) !== stable(coverage.primary_segment_ids)
@@ -5479,6 +5829,7 @@ function authenticatePartitionFinal({ trusted, result, evidence, identity, integ
       || seams.some(seam => !['resolved', 'unresolved'].includes(seam.disposition) || typeof seam.rationale !== 'string' || !seam.rationale.trim())
       || result.outcome === 'passed' && (seams.some(seam => seam.disposition !== 'resolved') || result.coverage.limitations.length
         || verified.units.some(unit => unit.result.limitations.length))) partitionError('unresolved seams or limits cannot yield passed');
+  }
   return Object.freeze({ schema: 'shipyard.current-review-contract.v3', role: 'integrator', contract: INTEGRATION_REVIEW_V3,
     integration_partition: { kind: 'phase', plan_sha256: plan.plan_sha256, coverage_sha256: coverageDigest, unit_artifacts: references },
     launch_sha256: launchHash });

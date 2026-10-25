@@ -1946,6 +1946,27 @@ function integrationStageSchema(stage) {
     conclusions: { type: 'array' }, findings: { type: 'array' }, limitations: { type: 'array' },
     seams: { type: 'array' }, required_context: { type: 'array' }, evidence_markdown: { type: 'string' },
   });
+  if (payload.schema === 'shipyard.integration-partition-input.v2') {
+    if (payload.kind !== stage.kind || payload.runtime !== 'claude' || payload.subject !== stage.subject || payload.plan_sha256 !== stage.plan_sha256)
+      reject('compact integration stage differs from exact input', 'INVALID_INPUT');
+    const binding = require('./codex-arch-review-context.cjs').integrationPartitionBinding(payload);
+    const properties = Object.fromEntries(Object.entries(binding).map(([key, value]) => [key, { const: value }]));
+    schema.properties.reviewed_identity.additionalProperties = false;
+    schema.properties.format = { const: payload.format };
+    schema.properties.binding = { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
+    if (stage.kind === 'unit') {
+      schema.properties.schema = { const: 'shipyard.integration-unit-result.v2' };
+      schema.properties.unit_id = { const: payload.unit_id };
+    }
+    if (stage.kind === 'unit') schema.properties.coverage = schema.properties.binding;
+    else {
+      const properties = Object.fromEntries(Object.entries(payload.coverage).filter(([, value]) => value === null || typeof value !== 'object')
+        .map(([key, value]) => [key, { const: value }]));
+      Object.assign(properties, { binding: schema.properties.binding, limitations: { type: 'array' }, seam_dispositions: { type: 'array' } });
+      schema.properties.coverage = { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
+    }
+    schema.required = [...schema.required, 'format', 'binding', 'blocking_count', 'conclusions', 'findings', 'limitations', 'required_context'];
+  } else if (payload.format !== undefined || payload.binding !== undefined) reject('mixed integration format', 'INVALID_INPUT');
   schema.required = [...new Set([...schema.required, 'review_contract', 'kind', 'runtime', 'subject', 'plan_sha256',
     'input_sha256', 'reviewed_identity', 'completeness', 'outcome', 'coverage', 'evidence_markdown',
     ...(stage.kind === 'unit' ? ['schema', 'unit_id', 'conclusions', 'findings', 'limitations', 'seams', 'required_context'] : [])])];

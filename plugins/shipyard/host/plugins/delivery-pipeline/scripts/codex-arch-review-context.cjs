@@ -2403,12 +2403,53 @@ function validateSealedContext(input, options = {}) {
   return true;
 }
 
+function integrationPartitionBinding(payload) {
+  const binding = payload?.binding;
+  const table = payload?.identity;
+  if (!object(table) || !object(table.scalar_tree) || !Array.isArray(table.values)
+      || Object.keys(table).sort().join(',') !== 'scalar_tree,values'
+      || table.values.some(value => value !== null && typeof value === 'object')
+      || new Set(table.values.map(value => JSON.stringify(canonical(value)))).size !== table.values.length)
+    fail('malformed compact identity table', 'INVALID_INPUT');
+  const expand = value => {
+    if (Array.isArray(value)) return value.map(expand);
+    if (object(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, expand(item)]));
+    if (!Number.isSafeInteger(value) || value < 0 || value >= table.values.length)
+      fail('foreign compact identity scalar reference', 'INVALID_INPUT');
+    return table.values[value];
+  };
+  const identity = expand(table.scalar_tree);
+  if (payload?.schema !== 'shipyard.integration-partition-input.v2' || payload.format !== 'compact-domain.v1'
+      || payload.reconstruction !== 'shipyard.integration-partition-render.v2'
+      || !object(payload.identity) || !object(payload.reviewed_identity) || !object(binding)
+      || binding.schema !== 'shipyard.integration-partition-binding.v2' || binding.format !== payload.format
+      || binding.plan_sha256 !== payload.plan_sha256 || binding.scope !== payload.kind
+      || binding.unit_id !== (payload.kind === 'unit' ? payload.unit_id : null)
+      || binding.identity_sha256 !== digest(JSON.stringify(canonical(identity)))
+      || JSON.stringify(canonical(payload.reviewed_identity)) !== JSON.stringify(canonical(Object.fromEntries(
+        Object.entries(identity).filter(([, value]) => value === null || typeof value !== 'object'))))
+      || !['unit', 'phase'].includes(payload.kind)
+      || Object.values(binding).some(value => value !== null && typeof value === 'object'))
+    fail('unsupported compact integration identity binding', 'INVALID_INPUT');
+  const keys = ['schema', 'format', 'plan_sha256', 'scope', 'unit_id', 'identity_sha256', 'assignment_sha256', 'unit_count',
+    'source_count', 'obligation_count', 'primary_segment_count', 'primary_obligation_count', 'domain_sha256', 'pair_count',
+    'explicit_edge_sha256', 'explicit_edge_count', 'verified_index_sha256'];
+  if (JSON.stringify(Object.keys(binding).sort()) !== JSON.stringify(keys.sort())) fail('compact binding fields differ', 'INVALID_INPUT');
+  for (const key of ['unit_count', 'source_count', 'obligation_count', 'primary_segment_count', 'primary_obligation_count', 'pair_count', 'explicit_edge_count'])
+    if (!Number.isSafeInteger(binding[key]) || binding[key] < 0) fail('compact binding count is malformed', 'INVALID_INPUT');
+  for (const key of ['plan_sha256', 'identity_sha256', 'assignment_sha256', 'domain_sha256', 'explicit_edge_sha256'])
+    if (!/^[a-f0-9]{64}$/.test(binding[key] || '')) fail('compact binding digest is malformed', 'INVALID_INPUT');
+  if (payload.kind === 'phase' ? !/^[a-f0-9]{64}$/.test(binding.verified_index_sha256 || '') : binding.verified_index_sha256 !== null)
+    fail('compact binding complete index differs', 'INVALID_INPUT');
+  return binding;
+}
+
 if (require.main === module) {
   try { process.stdout.write(readBatchCli(process.argv.slice(2))); }
   catch (error) { process.stderr.write((error.code || 'INVALID_INPUT') + ': ' + error.message + '\n'); process.exitCode = 1; }
 }
 
-module.exports = Object.freeze({ restoreMeasuredIntegrationInput, restoreMeasuredSourceInput, restoreInstalledMeasuredInput, createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
+module.exports = Object.freeze({ integrationPartitionBinding, restoreMeasuredIntegrationInput, restoreMeasuredSourceInput, restoreInstalledMeasuredInput, createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
   FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, codexResultText, boundedBytes, file, validateCodeReviewCoverage,
   isFocusedContext, focusedProducerFiles, focusedChangeInventory, selectFocusedArchitecture, validateFocusedResult, authenticateFocusedLaunch,
   batchCommand, batchFrames, batchOutput, readBatchCli, SCHEMA, FILE_LIMITS, freezeReviewBaseline: deepFreeze, validateOriginalReviewContext, buildReviewImpactPacket, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreCompletedSourceInput, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });
