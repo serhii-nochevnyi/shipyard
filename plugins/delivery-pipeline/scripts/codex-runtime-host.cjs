@@ -1233,7 +1233,7 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
   return verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, measurement, prefix);
 }
 
-function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, measurement, prefix) {
+function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, measurement, prefix, integrationText = false) {
   const chunkBytes = measurement?.chunk_bytes || prepared.input_bundle.chunk_bytes;
   const v3 = checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3';
   const v2 = Boolean(measurement || prepared.input_bundle.transport);
@@ -1278,6 +1278,7 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
       + ' skip=' + index + ' count=1 2>/dev/null | base64',
     bytes: asset.bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes),
   })));
+  if (integrationText) reads = require('./codex-arch-review-context.cjs').integrationTextReads(prepared.input_bundle, checked);
   if (v3) {
     const collector = require('./codex-arch-review-context.cjs');
     reads = checked.manifest.batches.flatMap(batch => {
@@ -1290,6 +1291,12 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
     const start = prefix?.start || 0;
     if (reads[start] && reads[start].frame_index !== 0) fail('REVIEW_RESTART_REQUIRED', 'resume is inside an atomic batch');
   }
+  const integrationUsers = integrationText ? records.map((row, index) => row.type === 'response_item'
+    && row.payload?.role === 'user' && row.payload.content?.some(block => typeof block.text === 'string'
+      && block.text.includes('INPUT_MANIFEST_SHA256=' + prepared.input_bundle.manifest_sha256)) ? index : -1)
+    .filter(index => index >= 0) : [];
+  if (integrationText && (integrationUsers.length !== 1 || integrationUsers[0] <= starts[0]
+      || integrationUsers[0] >= boundary)) fail('RUNTIME_EVIDENCE_MISMATCH', 'integration relay lacks one original ordered user input');
   let at = prefix?.start || 0;
   const completedRanges = [];
   const lines = nativeRaw.split('\n').filter(Boolean);
@@ -1327,17 +1334,18 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
       }
       if (typeof args.cmd !== 'string' || !(v3
         ? args.cmd.includes('--read-batch')
+        : integrationText ? reads.some(read => args.cmd === read.command) || args.cmd.startsWith("'" + process.execPath + "' '-e' ")
         : expected.some(asset => args.cmd.startsWith('dd if=' + quote(asset.path) + ' ')))) continue;
       if ((prefix || item.internal_chat_message_metadata_passthrough?.turn_id !== undefined)
           && item.internal_chat_message_metadata_passthrough?.turn_id !== records[starts[0]].payload.turn_id)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native read belongs to a foreign task');
-      if (index <= starts[0] || index >= boundary) fail('RUNTIME_EVIDENCE_MISMATCH', 'native read is outside the original task input boundary');
+      if (index <= starts[0] || index >= boundary || integrationText && index <= integrationUsers[0]) fail('RUNTIME_EVIDENCE_MISMATCH', 'native read is outside the original task input boundary');
       if (args.cmd !== reads[at]?.command || at >= prepared.input_bundle.max_chunk_reads)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read is reordered, duplicated or exceeds its budget');
       if (pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'ordered file read did not finish before the next read');
       if (typeof item.call_id !== 'string' || !item.call_id || calls.has(item.call_id))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read repeats a call identity');
-      if ((v2 || prefix) && ((!custom && !v3) || args.max_output_tokens !== 10000
+      if ((v2 || prefix || integrationText) && ((!custom && !v3 && !integrationText) || args.max_output_tokens !== 10000
           || Object.keys(args).some(key => !['cmd', 'max_output_tokens'].includes(key))))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native reader changed its supported output policy');
       calls.add(item.call_id);
@@ -1398,6 +1406,10 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
           if (v3 && results[0].original_token_count !== undefined
               && (!Number.isSafeInteger(results[0].original_token_count) || results[0].original_token_count < 0))
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native token count is invalid');
+          if (integrationText && (results[0].truncated === true
+              || /^Warning: truncated output \(original token count:/.test(results[0].output || '')
+              || results[0].original_token_count !== undefined && (!Number.isSafeInteger(results[0].original_token_count)
+                || results[0].original_token_count < 0))) truncation('nested', results[0], results[0].output);
           output = results[0].output;
         } else {
           let parsed; try { parsed = JSON.parse(output); } catch {}
@@ -1416,11 +1428,20 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
             if (v3 && parsed.original_token_count !== undefined
                 && (!Number.isSafeInteger(parsed.original_token_count) || parsed.original_token_count < 0))
               fail('RUNTIME_EVIDENCE_MISMATCH', 'native token count is invalid');
+            if (integrationText && (parsed.truncated === true || typeof parsed.output !== 'string'
+                || /^Warning: truncated output \(original token count:/.test(parsed.output)
+                || parsed.original_token_count !== undefined && (!Number.isSafeInteger(parsed.original_token_count)
+                  || parsed.original_token_count < 0))) truncation('nested', parsed, parsed.output);
             output = parsed.output ?? parsed.stdout;
           }
         }
         const encoded = read.bytes.toString('base64');
-        if (v3) {
+        if (integrationText) {
+          const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(read.bytes);
+          if (output !== text || !Buffer.from(output).equals(read.bytes))
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'lossless original integration text read differs');
+          encodedBytes += Buffer.byteLength(output); rawBytes += read.bytes.length;
+        } else if (v3) {
           if (output !== read.output) fail('RUNTIME_EVIDENCE_MISMATCH', 'batch header, ordered frames or terminal differs from complete source');
           if (!measurement && (envelopeBytes > prepared.input_bundle.reader_capacity.largest_envelope_bytes
               || Buffer.byteLength(read.custom ? item.output[1].text : item.output) > prepared.input_bundle.reader_capacity.largest_nested_bytes))
@@ -2648,6 +2669,9 @@ function createCodexCliLauncher(options = {}) {
     const resumeReview = launchOptions.resume_review ? reviewResumptions.get(launchOptions.resume_review) : null;
     if (launchOptions.resume_review && !resumeReview) fail('REVIEW_PROGRESS_INVALID', 'serialized continuation has no host claim');
     const fileTransport = launchOptions.input_transport !== undefined || launchOptions.input_bundle !== undefined || fileInput !== undefined;
+    const integrationFile = fileTransport && require('./codex-arch-review-context.cjs').isIntegrationFileInput(fileInput);
+    if (fileInput?.input_bundle?.integration_input_sha256 && !integrationFile)
+      fail('INVALID_INPUT', 'integration files lack private stage transport custody');
     if (fileTransport) {
       const collector = require('./codex-arch-review-context.cjs');
       if (launchOptions.input_transport !== 'host-files' || !collector.isPreparedFileInput(fileInput)
@@ -2656,6 +2680,8 @@ function createCodexCliLauncher(options = {}) {
       const normalizeRelay = value => value.replace(/launch_digest=[a-f0-9]{64}/g, 'launch_digest=' + '0'.repeat(64));
       if (typeof prompt !== 'string' || normalizeRelay(prompt) !== normalizeRelay(resumeReview ? resumeReview.prompt : fileInput.prompt))
         fail('INVALID_INPUT', 'native relay differs from private prepared input');
+      if (integrationFile && (typedRole || resumeReview || capacityProbe || focused || codeReview
+          || typeof options.integrationIngress !== 'function')) fail('INVALID_INPUT', 'integration file ingress is unavailable');
       if (!capacityProbe && !focused && !codeReview) collector.requireReaderBatchCapacity(fileInput);
       if (focused && (fileInput !== collector.admittedFileInput(launchOptions.focused_prepared)
           || fileInput.manifest.binding?.review_contract !== collector.FOCUSED_CONTRACT))
@@ -2703,6 +2729,13 @@ function createCodexCliLauncher(options = {}) {
     } catch (error) {
       if (error.code === 'INVALID_INPUT') fail('RUNTIME_UNAVAILABLE', 'Codex process input failed: ' + error.message);
       throw error;
+    }
+    if (integrationFile) {
+      if (Buffer.byteLength(staticInput) > 1048576) fail('INVALID_INPUT', 'complete integration relay exceeds native character bound');
+      const ceiling = options.integrationIngress({ input: staticInput, instructions: generatedInstructions(content),
+        scope, dispatch_id: launchOptions.dispatch_id, model, effort, agent_file: launchOptions.agent_file,
+        agent_file_digest: launchOptions.agent_file_digest, agent_file_content: content, sandbox_mode: sandbox, fileInput });
+      if (![2097152, 4194304].includes(ceiling)) fail('INVALID_INPUT', 'integration file admission differs');
     }
     const env = launchEnvironment(installedHost, { ...process.env, ...environment });
     const task = agent ? writeTaskFile(taskDir, scope, launchOptions.dispatch_id, launchPrompt(prompt)) : null;
@@ -3025,12 +3058,14 @@ function createCodexCliLauncher(options = {}) {
           : agent && verified.native_child_evidence
           ? readReviewNativeFile(originalReviewFile(verified.native_child_evidence.session_id, env, scope.worktree), scope.worktree)
           : readNativeParentRaw(parsed.session_id, nativeEvidence, env);
-        const consumed = resumedConsumption || verifyFileConsumption(fileInput, semanticRaw, capacityProbe ? probeState.association.review_dispatch_id : launchOptions.dispatch_id,
+        const consumed = integrationFile ? verifyCheckedFileConsumption(
+          require('./codex-arch-review-context.cjs').verifyFileInput(fileInput), fileInput, semanticRaw, resultText, null, null, true)
+          : resumedConsumption || verifyFileConsumption(fileInput, semanticRaw, capacityProbe ? probeState.association.review_dispatch_id : launchOptions.dispatch_id,
           agent ? verified.last_agent_message : resultText,
           capacityProbe ? { chunk_bytes: fileInput.manifest.chunk_bytes, output_tokens: 10000 } : null);
         let result;
         try { result = JSON.parse(resultText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
-        for (const [key, expected] of Object.entries({ input_manifest_sha256: fileInput.input_bundle.manifest_sha256,
+        if (!integrationFile) for (const [key, expected] of Object.entries({ input_manifest_sha256: fileInput.input_bundle.manifest_sha256,
           input_material_bytes: fileInput.input_bundle.total_bytes, input_asset_count: fileInput.input_bundle.asset_count,
           input_chunk_reads: consumed.chunk_reads,
           ...(fileInput.manifest.transport?.schema === 'shipyard.native-reader-transport.v3' ? {
@@ -3869,6 +3904,12 @@ module.exports = Object.freeze({
   verifyCompletedReviewConsumption,
   measureReaderCapacity,
   readerCapacityContract,
+  verifyIntegrationFileConsumption: (bundle, raw, dispatch, result) => {
+    const checked = require('./codex-arch-review-context.cjs').verifyFileInput(bundle, { sealed: true, association: { dispatch_id: dispatch } });
+    if (!bundle.integration_input_sha256 || checked.manifest.binding?.review_contract !== 'shipyard.integration-review.v3')
+      fail('INVALID_INPUT', 'original integration text binding required');
+    return verifyCheckedFileConsumption(checked, { input_bundle: bundle }, raw, result, null, null, true);
+  },
   verifyFileConsumption: (prepared, raw, dispatch, result) => verifyFileConsumption(prepared, raw, dispatch, result),
   observedSelection,
   writeTranscript,
