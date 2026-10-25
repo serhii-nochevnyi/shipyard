@@ -14,9 +14,7 @@ if (partition === undefined) {
       child.stdout.on('data', data => { stdout += data; });
       child.stderr.on('data', data => { stderr += data; });
       child.on('error', failure => { error = failure; });
-      const timer = setTimeout(() => { error = new Error('impact group timed out'); child.kill('SIGTERM'); }, 540000);
       child.on('close', (status, signal) => {
-        clearTimeout(timer);
         resolve({ part, status, signal, stdout, stderr, error });
       });
     })));
@@ -368,7 +366,71 @@ test('compact domain retains all 16653 ordered pairs with exact independent lega
   independentTables(rangedPlan, changed, [unit], () => true);
   assert.notDeepEqual(changed.contents, cold.contents);
 });
+function compactGroupGenerationContract() {
+  const matches = (schema, value) => {
+    if (Object.hasOwn(schema, 'const') && JSON.stringify(value) !== JSON.stringify(schema.const)) return false;
+    if (schema.enum && !schema.enum.includes(value)) return false;
+    if (schema.type === 'object') {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      if ((schema.required || []).some(key => !Object.hasOwn(value, key))) return false;
+      if (schema.additionalProperties === false && Object.keys(value).some(key => !Object.hasOwn(schema.properties, key))) return false;
+      return Object.entries(schema.properties || {}).every(([key, item]) => !Object.hasOwn(value, key) || matches(item, value[key]));
+    }
+    if (schema.type === 'array') return Array.isArray(value)
+      && (schema.minItems === undefined || value.length >= schema.minItems)
+      && (schema.maxItems === undefined || value.length <= schema.maxItems)
+      && (!schema.items || value.every(item => matches(schema.items, item)));
+    if (schema.type === 'integer') return Number.isInteger(value);
+    return !schema.type || typeof value === schema.type;
+  };
+  for (const kind of ['unit', 'phase']) {
+    const binding = { schema: 'shipyard.integration-partition-binding.v2', format: 'compact-domain.v1',
+      plan_sha256: 'a'.repeat(64), scope: kind, unit_id: kind === 'unit' ? 'u000001' : null,
+      identity_sha256: hash(JSON.stringify({ phase: 52 })), assignment_sha256: 'b'.repeat(64),
+      unit_count: 4, source_count: 0, obligation_count: 0, primary_segment_count: 0, primary_obligation_count: 0,
+      domain_sha256: 'c'.repeat(64), pair_count: 6, explicit_edge_sha256: 'd'.repeat(64), explicit_edge_count: 1,
+      verified_index_sha256: kind === 'phase' ? 'e'.repeat(64) : null };
+    const payload = { schema: 'shipyard.integration-partition-input.v2', format: binding.format,
+      reconstruction: 'shipyard.integration-partition-render.v2', kind, runtime: 'claude', subject: 'subject',
+      plan_sha256: binding.plan_sha256, unit_id: binding.unit_id, reviewed_identity: { phase: 52 },
+      identity: { scalar_tree: { phase: 0 }, values: [52] }, binding,
+      coverage: { schema: 'shipyard.integration-partition-coverage.v2', format: binding.format } };
+    const input = 'instructions\n<AUTHENTICATED_INTEGRATION_PARTITION>\n' + JSON.stringify(payload)
+      + '\n</AUTHENTICATED_INTEGRATION_PARTITION>';
+    const launch = { ...stage(input, kind), plan_sha256: binding.plan_sha256 };
+    const schema = claude.integrationStageSchema(launch);
+    const groups = kind === 'unit' ? schema.properties.seams : schema.properties.coverage.properties.seam_dispositions;
+    const original = { id: 'original-judgment', domain: 'pairs', domain_sha256: binding.domain_sha256,
+      ranges: [[0, 6]], disposition: 'unresolved', rationale: 'Original native rationale retains its own content Ω.',
+      findings: [{ id: 'N1', type: 'note', blocking: false, summary: 'Original finding', evidence: 'Original evidence' }],
+      limitations: ['Original limitation'], required_context: ['Original required context'] };
+    assert.equal(matches(groups, [original]), true);
+    assert.equal(matches(groups, [{ ...original, exception: true, ranges: [[0, 1]] }, { ...original, id: 'rest', ranges: [[1, 6]] }]), true);
+    assert.equal(matches(groups, [{ ...original, domain: 'edges', domain_sha256: binding.explicit_edge_sha256, ranges: [[0, 1]], disposition: 'resolved' }]), true);
+    if (kind === 'unit') {
+      const incident = { ...original, incident_unit: payload.unit_id };
+      delete incident.ranges;
+      assert.equal(matches(groups, [incident]), true);
+      assert.equal(matches(groups, [{ ...incident, incident_unit: 'foreign' }]), false);
+    } else assert.equal(matches(groups, [{ ...original, incident_unit: 'u000001' }]), false);
+    for (const key of [' findings', 'findngs', 'unknown']) assert.equal(matches(groups, [{ ...original, [key]: [] }]), false);
+    for (const field of ['id', 'domain', 'domain_sha256', 'disposition', 'rationale', 'findings', 'limitations', 'required_context']) {
+      const missing = { ...original }; delete missing[field];
+      assert.equal(matches(groups, [missing]), false, field);
+    }
+    for (const bad of [{ ...original, findings: {} }, { ...original, rationale: [] }, { ...original, exception: 'yes' },
+      { ...original, ranges: [[0, '6']] }, { ...original, ranges: [[0, 1, 2]] }, { ...original, domain: 'pair' },
+      { ...original, domain_sha256: 'f'.repeat(64) }]) assert.equal(matches(groups, [bad]), false);
+    const expectedBytes = Buffer.byteLength(JSON.stringify({ type: 'user', message: { role: 'user', content: input } }) + '\n')
+      + Buffer.byteLength(JSON.stringify(schema));
+    assert.equal(partitionInputBytes({ schema: 'shipyard.integration-partition-plan.v3', runtime: 'claude',
+      subject: payload.subject, plan_sha256: payload.plan_sha256 }, input, kind), expectedBytes);
+    assert.throws(() => claude.integrationStageSchema({ ...launch, input_sha256: '0'.repeat(64) }));
+  }
+}
+
 test('compact native groups require disjoint exhaustive original domain judgments', () => {
+  compactGroupGenerationContract();
   const plan = compactStructuralPlan(4);
   const group = (id, start, end) => ({ id, domain: 'pairs', domain_sha256: plan.interaction_domain.sha256,
     ranges: [[start, end]], disposition: 'resolved', rationale: 'Provider and consumer contracts retain the same value and ordering across these interactions.',

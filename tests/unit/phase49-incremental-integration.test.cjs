@@ -663,6 +663,34 @@ test('second runtime adapter fixture seals a fresh full current judgment without
   });
 });
 
+function compactPartitionFixtureResult(result, payload) {
+  const decode = value => Array.isArray(value) ? value.map(decode)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, decode(item)]))
+      : payload.identity.values[value];
+  const identity = decode(payload.identity.scalar_tree), unit = payload.kind === 'unit';
+  const groups = [];
+  for (const domain of ['pairs', 'edges']) {
+    const count = domain === 'pairs' ? payload.binding.pair_count : payload.binding.explicit_edge_count;
+    const incident = domain === 'pairs' ? payload.interaction_domain.unit_ids.length > 1 : payload.explicit_edge_indices?.length;
+    if (!count || unit && !incident) continue;
+    groups.push({ id: domain + '-fixture-evaluation', domain,
+      domain_sha256: domain === 'pairs' ? payload.binding.domain_sha256 : payload.binding.explicit_edge_sha256,
+      ...(unit ? { incident_unit: payload.unit_id } : { ranges: [[0, count]] }),
+      disposition: unit ? 'unresolved' : 'resolved',
+      rationale: unit ? 'Synthetic original unit evaluated its complete assigned source; independent final must judge every selected interaction.'
+        : 'Synthetic independent final evaluated the complete original unit conclusions and every selected interaction.',
+      findings: [], limitations: [], required_context: [] });
+  }
+  Object.assign(result, { format: payload.format, binding: payload.binding, reviewed_identity: payload.reviewed_identity,
+    conclusions: ['Synthetic fixture evaluated all complete assigned source bytes and obligations.'], limitations: [], required_context: [] });
+  if (unit) Object.assign(result, { schema: 'shipyard.integration-unit-result.v2', unit_id: payload.unit_id,
+    coverage: payload.binding, seams: groups });
+  else Object.assign(result, { phase: identity.phase, head: identity.head, head_tree: identity.head_tree,
+    base: identity.base_ref.replace(new RegExp('^refs/remotes/'), ''), base_tree: identity.base_tree,
+    ticket_set: identity.ticket_set, ticket_set_digest: identity.ticket_set_digest, summary: 'Independent compact fixture final.',
+    coverage: { ...payload.coverage, limitations: [], seam_dispositions: groups } });
+}
+
 function partitionFixtureFunctions(file, names, bindings = {}) {
   const source = fs.readFileSync(path.join(__dirname, file), 'utf8');
   const declarations = names.map(name => {
@@ -670,11 +698,13 @@ function partitionFixtureFunctions(file, names, bindings = {}) {
     assert.ok(start >= 0, 'existing runtime fixture declaration: ' + name);
     const ends = ['\nfunction ', '\ntest(', '\nfor ('].map(marker => source.indexOf(marker, start + 1))
       .filter(index => index > start);
-    return source.slice(start, Math.min(...ends));
+    return source.slice(start, Math.min(...ends)).replace(
+      "if (payload.kind === 'unit') Object.assign(result,",
+      "if (payload.format === 'compact-domain.v1') compactPartitionFixtureResult(result, payload);\n          else if (payload.kind === 'unit') Object.assign(result,");
   }).join('\n');
-  return new Function('require', '__dirname', 'fs', 'path', 'crypto', 'assert', 'EventEmitter', ...Object.keys(bindings),
+  return new Function('require', '__dirname', 'fs', 'path', 'crypto', 'assert', 'EventEmitter', 'compactPartitionFixtureResult', ...Object.keys(bindings),
     declarations + '\nreturn { ' + names.join(', ') + ' };')(
-    require, __dirname, fs, path, crypto, assert, EventEmitter, ...Object.values(bindings));
+    require, __dirname, fs, path, crypto, assert, EventEmitter, compactPartitionFixtureResult, ...Object.values(bindings));
 }
 
 function publicPartitionFixture(f, nativeRuntime, controls = {}) {
@@ -1734,15 +1764,16 @@ test('D36 ' + nativeRuntime + ' geometry phase-shaped complete governing floor f
 for (const nativeRuntime of ['codex', 'claude'])
 test('D36 ' + nativeRuntime + ' aggregate refuses the complete actual final over bound and preserves accepted originals', async () => {
   await publicIntegrationFixture(async f => {
-    for (let index = 0; index < 120; index++)
+    for (let index = 0; index < 139; index++)
       write(f.worktree, 'src/complete-unit-' + String(index).padStart(3, '0') + '.cjs',
         'exports.value = "complete original source ' + index + '";\n');
     commit(f, 'actual aggregate bound requires complete unit conclusions');
     const prepared = publicPartitionFixture(f, nativeRuntime, { observed: true, result(result, payload) {
       assert.equal(payload.kind, 'unit', 'oversized actual final must never dispatch');
-      result.conclusions = ['c'.repeat(16370)];
-      result.limitations = ['l'.repeat(8180)];
-      result.findings = [{ id: 'N1', type: 'note', blocking: false, evidence: 'Complete assigned source.', summary: 'f'.repeat(32500) }];
+      const semanticText = (field, length, fill) => (field + ' for original unit ' + result.unit_id + ': ').padEnd(length, fill);
+      result.conclusions = [semanticText('Conclusion', 16370, 'c')];
+      result.limitations = [semanticText('Limitation', 8180, 'l')];
+      result.findings = [{ id: 'N1', type: 'note', blocking: false, evidence: 'Complete assigned source.', summary: semanticText('Finding', 32500, 'f') }];
       if (result.seams.length) {
         const current = Buffer.byteLength(JSON.stringify(result.seams));
         result.seams[0].rationale += 's'.repeat(Math.max(0, 32750 - current));

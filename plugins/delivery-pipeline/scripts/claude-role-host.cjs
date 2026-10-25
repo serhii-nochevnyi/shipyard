@@ -1958,11 +1958,24 @@ function integrationStageSchema(stage) {
       schema.properties.schema = { const: 'shipyard.integration-unit-result.v2' };
       schema.properties.unit_id = { const: payload.unit_id };
     }
-    if (stage.kind === 'unit') schema.properties.coverage = schema.properties.binding;
+    const groups = { type: 'array', items: { type: 'object', properties: {
+      id: { type: 'string' }, domain: { enum: ['pairs', 'edges'] },
+      domain_sha256: { enum: [binding.domain_sha256, binding.explicit_edge_sha256] },
+      ranges: { type: 'array', minItems: 1, items: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'integer' } } },
+      ...(stage.kind === 'unit' ? { incident_unit: { const: payload.unit_id } } : {}),
+      disposition: { enum: ['resolved', 'unresolved'] }, rationale: { type: 'string' },
+      findings: { type: 'array' }, limitations: { type: 'array' }, required_context: { type: 'array' },
+      exception: { type: 'boolean' },
+    }, required: ['id', 'domain', 'domain_sha256', 'disposition', 'rationale', 'findings', 'limitations', 'required_context',
+      ...(stage.kind === 'phase' ? ['ranges'] : [])], additionalProperties: false } };
+    if (stage.kind === 'unit') {
+      schema.properties.seams = groups;
+      schema.properties.coverage = schema.properties.binding;
+    }
     else {
       const properties = Object.fromEntries(Object.entries(payload.coverage).filter(([, value]) => value === null || typeof value !== 'object')
         .map(([key, value]) => [key, { const: value }]));
-      Object.assign(properties, { binding: schema.properties.binding, limitations: { type: 'array' }, seam_dispositions: { type: 'array' } });
+      Object.assign(properties, { binding: schema.properties.binding, limitations: { type: 'array' }, seam_dispositions: groups });
       schema.properties.coverage = { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
     }
     schema.required = [...schema.required, 'format', 'binding', 'blocking_count', 'conclusions', 'findings', 'limitations', 'required_context'];
