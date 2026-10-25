@@ -1133,7 +1133,7 @@ test('D-32 legacy v2 and D-34 authenticated chain finals preserve separate curre
 const fs = require('node:fs');
 const prs = JSON.parse(fs.readFileSync(${JSON.stringify(prFile)}));
 const args = process.argv.slice(2);
-if (args[0] === 'repo' && args[1] === 'view') process.stdout.write('main');
+if (args[0] === 'repo' && args[1] === 'view' && args.includes('--jq') && args[args.indexOf('--json') + 1] === 'defaultBranchRef') process.stdout.write('main');
 else if (args[0] === 'pr' && args[1] === 'list')
   process.stdout.write(JSON.stringify(prs.filter(pr => pr.headRefName === args[args.indexOf('--head') + 1])));
 else if (args[0] === 'pr' && args[1] === 'view') {
