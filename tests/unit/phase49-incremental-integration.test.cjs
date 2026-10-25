@@ -1086,7 +1086,7 @@ function agent(f, role, signals) {
     '# shipyard-policy-hash = "' + selection.policy_hash + '"', '# shipyard-policy-runtime = "codex"',
     '# shipyard-policy-role = "' + role + '"', '# shipyard-policy-rung = "' + selection.rung + '"',
     'name = "' + selection.agent_file.replace(/\.toml$/, '') + '"', 'model = "' + selection.model + '"',
-    'model_reasoning_effort = "' + selection.effort + '"', 'sandbox_mode = "read-only"',
+    'model_reasoning_effort = "' + selection.effort + '"', 'sandbox_mode = "' + (f.integratorSandbox || 'read-only') + '"',
     "developer_instructions = '''", 'Read complete original material.', "'''", '',
   ].join('\n');
   fs.writeFileSync(path.join(dir, selection.agent_file), text);
@@ -1613,6 +1613,7 @@ test('D36 codex ingress actual ASCII unit and fresh final retain original produc
 
 test('D36 codex ingress actual public stage rejects changed or unowned oversized launches before any process', async () => {
   await publicIntegrationFixture(async f => {
+    f.integratorSandbox = 'workspace-write';
     codexIngressGeometry(f);
     const prepared = publicPartitionFixture(f, 'codex', { observed: true });
     const foreignWorktree = path.join(f.root, 'foreign-worktree');
@@ -1648,7 +1649,6 @@ test('D36 codex ingress actual public stage rejects changed or unowned oversized
         const changed = selection.agent_file_content.replace('Read', 'Changed');
         assert.notEqual(changed, selection.agent_file_content);
         await deny('changed pinned instructions', {}, { agent_file_content: changed, agent_file_digest: hash(changed) });
-        await deny('changed sandbox', {}, { sandbox_mode: 'workspace-write' });
         await deny('changed model', {}, { model: 'unselected-model' });
         await deny('changed effort', {}, { reasoning_effort: selection.reasoning_effort === 'low' ? 'high' : 'low' });
         for (const bound of [undefined, NaN, Infinity, 8388608, -1])
@@ -1689,6 +1689,14 @@ test('D36 codex ingress actual public stage rejects changed or unowned oversized
           error => error.code === 'RUNTIME_UNAVAILABLE' && /ordinary input reached controlled spawn/.test(error.message));
         assert.equal(ordinarySpawns, 1);
         assert.equal(ordinaryResourceCalls, 0);
+        assert.equal(selection.sandbox_mode, 'workspace-write');
+        let admittedSpawns = 0;
+        const admitted = createHost({ ...options, controller: undefined,
+          spawn() { admittedSpawns++; throw new Error('workspace integration reached controlled spawn'); } });
+        await assert.rejects(admitted.launchStatic(selection, context),
+          error => error.code === 'RUNTIME_UNAVAILABLE' && /workspace integration reached controlled spawn/.test(error.message));
+        assert.equal(admittedSpawns, 1, 'workspace-write oversized input reaches the existing native launch boundary');
+        assert.equal(currentPartitionConsumer(f), null);
         throw stop;
       } };
     }, async () => {
