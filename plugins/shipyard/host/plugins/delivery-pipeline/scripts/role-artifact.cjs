@@ -5111,7 +5111,7 @@ function createCodexIntegrationIngress({ prepared, host, scope } = {}) {
         || !object(request) || stable(request.scope) !== stable(originalScope)
         || request.dispatch_id !== launch.dispatch_id || request.model !== launch.model || request.effort !== launch.effort
         || request.agent_file !== plan.identity.agent_file || request.agent_file_digest !== launch.agent_sha256
-        || request.agent_file_content !== content || request.instructions !== instructions || request.sandbox_mode !== 'read-only'
+        || request.agent_file_content !== content || request.instructions !== instructions
         || request.input !== launch.input || digest(request.input) !== launch.input_sha256
         || launch.plan_sha256 !== plan.plan_sha256 || launch.profile_sha256 !== digest(stable(partitionProfile(plan)))
         || (launch.kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes) !== ceiling
