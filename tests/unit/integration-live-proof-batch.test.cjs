@@ -251,18 +251,23 @@ for (const runtime of ['codex', 'claude']) {
       const prepared = publicPartitionFixture(f, runtime, { observed: true });
       assert.equal((await supportedPartitionCaller(f, runtime, prepared.options)).result.outcome, 'passed');
       const verify = host.assertNativeIntegrationMergeProof;
+      const originalProofLoad = Module._load;
       let defaultChecks = 0;
       try {
-        host.assertNativeIntegrationMergeProof = (proof, input, ...options) => {
+        const observedHost = { ...host, assertNativeIntegrationMergeProof(proof, input, ...options) {
           assert.ok(options.length <= 1);
           assert.deepEqual(options[0] || {}, {});
           defaultChecks++;
           return verify(proof, input, ...options);
+        } };
+        Module._load = function(...args) {
+          const value = originalProofLoad.apply(this, args);
+          return value === host ? observedHost : value;
         };
         const current = currentPartitionConsumer(f);
         assert.equal(current?.authenticated, true);
         assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
-      } finally { host.assertNativeIntegrationMergeProof = verify; }
+      } finally { Module._load = originalProofLoad; }
       assert.ok(defaultChecks >= 2);
       const sessions = originalPartitionSessions(f, runtime, prepared.recorder, prepared.controls);
       assert.equal(sessions.filter(session => session.result.kind === 'phase').length, 1);
