@@ -1011,10 +1011,11 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
   const execution = integrationExecutions.get(review);
   if (!execution) fail('INVALID_INPUT', 'original private partition execution is required');
   const { partitions } = execution, resources = options.integrationCapacity || {};
+  const lazyUnits = ['shipyard.integration-partition-plan.v2', 'shipyard.integration-partition-plan.v3'].includes(partitions.plan.schema);
   recheckIntegrationReview(review, partitions);
   if (!execution.capacityHost) execution.capacityHost = roleArtifact.createIntegrationCapacityHost({
     ...resources, partitions, runtime: 'codex', recorder: runtimeHost.recorder });
-  if (!execution.stages.length) for (const unit of partitions.plan.units) {
+  if (!lazyUnits && !execution.stages.length) for (const unit of partitions.plan.units) {
     try { roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); continue; }
     catch (error) {
       if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
@@ -1022,7 +1023,7 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
     execution.stages.push(roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
       dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id }));
   }
-  if (!execution.admitted) {
+  if (!lazyUnits && !execution.admitted) {
     execution.admissions ||= new Set();
     for (const stage of [partitions.reserved_template, ...execution.stages].filter(Boolean)) {
       if (execution.admissions.has(stage.launch_sha256)) continue;
@@ -1109,7 +1110,20 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
       if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
     }
     if (!completed) {
-      completed = await launch(execution.stages.find(stage => stage.unit_id === unit.unit_id));
+      let stage = execution.stages.find(stage => stage.unit_id === unit.unit_id);
+      if (lazyUnits) {
+        if (!stage) {
+          stage = roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
+            dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id });
+          execution.stages.push(stage);
+        }
+        execution.admissions ||= new Set();
+        if (!execution.admissions.has(stage.launch_sha256)) {
+          await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: execution.capacityHost });
+          execution.admissions.add(stage.launch_sha256);
+        }
+      }
+      completed = await launch(stage);
     }
     if (completed.result.completeness !== 'complete' || completed.result.outcome !== 'passed' || completed.result.required_context.length)
       fail('INTEGRATION_PARTITION_INVALID', 'incomplete, failing or context-blocked unit requires repair');

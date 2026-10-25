@@ -677,7 +677,111 @@ const NATIVE_MERGE_PROOF_SCHEMA = 'shipyard.native-integration-merge-proof.v1';
 const NATIVE_MERGE_PROOF_MAX_BYTES = 64 * 1024;
 
 // Keep ticket-set serialization unchanged; merge facts have their own hash domain.
-function collectIntegrationMembers(options, canonical, graph, selection) {
+function nativeMemberObservations(options, canonical, graph, selection) {
+  if (options.integrationCapacity !== undefined || typeof options.listPullRequests === 'function'
+      || typeof options.getPullRequest === 'function')
+    return options;
+  const descriptors = selection.rows.map(({ id }) => {
+    const row = rowFor(graph, id), state = graph.state[id];
+    return { branch: state?.pr_branch !== undefined && state.pr_branch !== row.branch
+      ? safeBranch(state.pr_branch, `${id} merged PR branch`) : row.branch, repo: row.repo || null };
+  });
+  const repos = new Set(descriptors.map(item => item.repo));
+  if (repos.size !== 1) reject('native phase tickets span foreign repositories');
+  const repo = descriptors[0]?.repo;
+  let identityRaw;
+  try {
+    identityRaw = command(options, 'gh', ['repo', 'view', ...(repo ? [repo] : []),
+      '--json', 'nameWithOwner,url'], canonical.worktree, 4096);
+  } catch (error) {
+    if (error?.code !== 'PREFLIGHT_FAILED' || String(error.cause?.stdout || '').trim()) throw error;
+    return options;
+  }
+  const identity = JSON.parse(identityRaw);
+  if (!object(identity) || typeof identity.nameWithOwner !== 'string'
+      || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(identity.nameWithOwner)
+      || (repo && repo.toLowerCase() !== identity.nameWithOwner.toLowerCase()))
+    reject('native merge transport repository identity differs');
+  let url;
+  try { url = new URL(identity.url); } catch { reject('native merge transport repository URL is invalid'); }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash
+      || url.pathname.replace(/\/$/, '').toLowerCase() !== '/' + identity.nameWithOwner.toLowerCase())
+    reject('native merge transport repository URL differs');
+  const [owner, name] = identity.nameWithOwner.split('/');
+  const fields = ['number', 'state', 'isDraft', 'title', 'body', 'headRefName', 'headRefOid',
+    'baseRefName', 'baseRefOid', 'mergedAt', 'mergeCommit', 'reviewDecision'];
+  const branches = descriptors.map(item => item.branch);
+  if (new Set(branches).size !== branches.length) reject('duplicate native merge transport branch');
+  const aliases = branches.map((branch, index) => `p${index}:pullRequests(first:100,states:[CLOSED,MERGED],headRefName:${JSON.stringify(branch)}){nodes{number state isDraft title body headRefName headRefOid baseRefName baseRefOid mergedAt mergeCommit{oid} reviewDecision}pageInfo{hasNextPage}}`);
+  const query = `query{repository(owner:${JSON.stringify(owner)},name:${JSON.stringify(name)}){nameWithOwner ${aliases.join(' ')}}}`;
+  if (Buffer.byteLength(query) > 256 * 1024) reject('native merge query exceeds its bounded size', 'INPUT_TOO_LARGE');
+  let raw;
+  try {
+    raw = command(options, 'gh', ['api', '--hostname', url.host, 'graphql', '-f', 'query=' + query],
+      canonical.worktree, 256 * 1024);
+  } catch (error) {
+    if (error?.code !== 'PREFLIGHT_FAILED' || String(error.cause?.stdout || '').trim()) throw error;
+    return options;
+  }
+  if (Buffer.byteLength(raw) > 256 * 1024) reject('native merge response exceeds its bounded size', 'INPUT_TOO_LARGE');
+  const response = JSON.parse(raw);
+  if (!object(response) || Object.hasOwn(response, 'errors') || !object(response.data)
+      || Object.keys(response.data).length !== 1 || !object(response.data.repository))
+    reject('native merge batch is incomplete or malformed');
+  const repository = response.data.repository;
+  const expected = ['nameWithOwner', ...branches.map((_, index) => 'p' + index)].sort();
+  if (repository.nameWithOwner !== identity.nameWithOwner
+      || canonicalJson(Object.keys(repository).sort()) !== canonicalJson(expected))
+    reject('native merge batch repository or alias set differs');
+  const lists = new Map(), details = new Map();
+  for (let index = 0; index < branches.length; index++) {
+    const connection = repository['p' + index];
+    if (!object(connection) || canonicalJson(Object.keys(connection).sort()) !== canonicalJson(['nodes', 'pageInfo'])
+        || !Array.isArray(connection.nodes) || connection.nodes.length > 100
+        || !object(connection.pageInfo) || connection.pageInfo.hasNextPage !== false
+        || Object.keys(connection.pageInfo).length !== 1)
+      reject('native merge batch is truncated or malformed');
+    const list = [];
+    for (const live of connection.nodes) {
+      if (!object(live) || canonicalJson(Object.keys(live).sort()) !== canonicalJson([...fields].sort())
+          || !Number.isSafeInteger(live.number) || live.number < 1 || details.has(live.number)
+          || !['CLOSED', 'MERGED'].includes(live.state) || typeof live.isDraft !== 'boolean'
+          || typeof live.title !== 'string' || typeof live.body !== 'string'
+          || live.headRefName !== branches[index] || typeof live.baseRefName !== 'string'
+          || !(live.headRefOid === null || typeof live.headRefOid === 'string')
+          || !(live.baseRefOid === null || typeof live.baseRefOid === 'string')
+          || !(live.mergedAt === null || typeof live.mergedAt === 'string')
+          || !(live.reviewDecision === null || ['APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED'].includes(live.reviewDecision))
+          || !(live.mergeCommit === null || (object(live.mergeCommit)
+            && Object.keys(live.mergeCommit).length === 1 && typeof live.mergeCommit.oid === 'string')))
+        reject('native merge batch has foreign, duplicate or malformed PR data');
+      if (Buffer.byteLength(JSON.stringify(live)) > 65536)
+        reject('native merged PR exceeds its bounded size', 'INPUT_TOO_LARGE');
+      live.reviewDecision ??= '';
+      details.set(live.number, live);
+      const { title, body, ...listed } = live;
+      list.push(listed);
+    }
+    if (Buffer.byteLength(JSON.stringify(list)) > 256 * 1024)
+      reject('native merged PR list exceeds its bounded size', 'INPUT_TOO_LARGE');
+    lists.set(branches[index], list);
+  }
+  return { ...options,
+    listPullRequests(input) {
+      if (input.worktree !== canonical.worktree || input.repo !== repo
+          || input.state !== 'closed' || !lists.has(input.branch))
+        reject('native merge batch list association differs');
+      return structuredClone(lists.get(input.branch));
+    },
+    getPullRequest(input) {
+      if (input.worktree !== canonical.worktree || input.repo !== repo || !details.has(input.pr))
+        reject('native merge batch detail association differs');
+      return structuredClone(details.get(input.pr));
+    } };
+}
+
+function collectIntegrationMembers(options, canonical, graph, selection, nativeObservation = false) {
+  if (nativeObservation) options = nativeMemberObservations(options, canonical, graph, selection);
   const ticketSet = [];
   const livePullRequests = [];
   for (const item of selection.rows) {
@@ -839,10 +943,10 @@ function collectNativeMergeProof(input, options) {
   const base = branchOid(options, worktree, defaultBranch);
   const baseIdentity = { ref: base.ref, commit: base.oid,
     tree: git(options, worktree, ['rev-parse', '--verify', `${base.oid}^{tree}`]) };
-  const members = collectIntegrationMembers(options, canonical, graph, selection);
+  const members = collectIntegrationMembers(options, canonical, graph, selection, true);
   const proof = buildNativeMergeProof(options, canonical, graph, selection, members, baseIdentity);
   let again;
-  try { again = collectIntegrationMembers(options, canonical, graph, selection); }
+  try { again = collectIntegrationMembers(options, canonical, graph, selection, true); }
   catch (error) { reject('merged PR selection changed during collection', 'STALE_CONTEXT', error); }
   const facts = inventory => inventory.ticketSet.map(member => nativeMergedFact(member.id,
     selection.rows.find(row => row.id === member.id).row.repo,
@@ -2011,7 +2115,8 @@ function prepareClaudeIntegrationPartitions(options, request) {
       model: launch.model, effort: launch.effort, schema: integrationStageSchema(launch), readOnly: true }) } : {}),
     partitions, runtime: 'claude', recorder });
   const stages = [];
-  for (const unit of partitions.plan.units) {
+  const lazyUnits = ['shipyard.integration-partition-plan.v2', 'shipyard.integration-partition-plan.v3'].includes(partitions.plan.schema);
+  if (!lazyUnits) for (const unit of partitions.plan.units) {
     try { roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); continue; }
     catch (error) {
       if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
@@ -2028,8 +2133,9 @@ async function runClaudeIntegrationPartitions(options, execution) {
   const { prepared: original, review, recorder, capacityHost } = execution;
   execution.partitions = roleArtifact.prepareIntegrationPartitions({ review, plan_sha256: execution.partitions.plan.plan_sha256 });
   const { partitions } = execution;
+  const lazyUnits = ['shipyard.integration-partition-plan.v2', 'shipyard.integration-partition-plan.v3'].includes(partitions.plan.schema);
   delivery.recheckIntegrationReview(review, partitions);
-  for (const stage of [partitions.reserved_template, ...execution.stages].filter(Boolean)) {
+  if (!lazyUnits) for (const stage of [partitions.reserved_template, ...execution.stages].filter(Boolean)) {
     if (execution.recovered) break;
     if (execution.admissions.has(stage.launch_sha256)) continue;
     await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: capacityHost });
@@ -2100,7 +2206,20 @@ async function runClaudeIntegrationPartitions(options, execution) {
       if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
     }
     if (!completed) {
-      completed = await launch(execution.stages.find(stage => stage.unit_id === unit.unit_id));
+      let stage = execution.stages.find(stage => stage.unit_id === unit.unit_id);
+      if (lazyUnits) {
+        if (!stage) {
+          stage = roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
+            dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id });
+          execution.stages.push(stage);
+        }
+        execution.admissions ||= new Set();
+        if (!execution.admissions.has(stage.launch_sha256)) {
+          await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: capacityHost });
+          execution.admissions.add(stage.launch_sha256);
+        }
+      }
+      completed = await launch(stage);
     }
     if (completed.result.completeness !== 'complete' || completed.result.outcome !== 'passed' || completed.result.required_context.length)
       reject('incomplete, failing or context-blocked unit requires repair', 'INTEGRATION_PARTITION_INVALID');
