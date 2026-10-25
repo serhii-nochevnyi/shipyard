@@ -14,7 +14,7 @@ if (partition === undefined) {
       child.stdout.on('data', data => { stdout += data; });
       child.stderr.on('data', data => { stderr += data; });
       child.on('error', failure => { error = failure; });
-      const timer = setTimeout(() => { error = new Error('observation group timed out'); child.kill('SIGTERM'); }, 540000);
+      const timer = setTimeout(() => { error = new Error('observation group timed out'); child.kill('SIGTERM'); }, 1800000);
       child.on('close', (status, signal) => {
         clearTimeout(timer);
         resolve({ part, status, signal, stdout, stderr, error });
