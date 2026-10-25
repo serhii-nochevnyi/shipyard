@@ -5816,6 +5816,8 @@ function authenticatePartitionFinal({ trusted, result, evidence, identity, integ
           || verified.units.some(unit => unit.result.limitations.length))) partitionError('unsupported compact final cannot pass');
   } else {
   if (result.format !== undefined || result.binding !== undefined) partitionError('mixed legacy final format');
+  for (const field of ['limitations', 'required_context'])
+    if (Object.hasOwn(result, field) && !Array.isArray(result[field])) partitionError('legacy final ' + field + ' must be an array');
   if (result.runtime !== plan.runtime || result.subject !== plan.subject || result.input_sha256 !== launchReference.input_sha256
       || stable(result.reviewed_identity) !== stable(compactPartition(plan) ? compactReviewedIdentity(plan) : plan.identity) || result.completeness !== 'complete'
       || result.coverage?.schema !== 'shipyard.integration-partition-coverage.v1' || result.coverage.plan_sha256 !== plan.plan_sha256
@@ -5830,6 +5832,7 @@ function authenticatePartitionFinal({ trusted, result, evidence, identity, integ
       || stable(seams.map(seam => seam.id).sort()) !== stable(plan.seams.map(seam => seam.id).sort())
       || seams.some(seam => !['resolved', 'unresolved'].includes(seam.disposition) || typeof seam.rationale !== 'string' || !seam.rationale.trim())
       || result.outcome === 'passed' && (seams.some(seam => seam.disposition !== 'resolved') || result.coverage.limitations.length
+        || result.limitations?.length || result.required_context?.length
         || verified.units.some(unit => unit.result.limitations.length))) partitionError('unresolved seams or limits cannot yield passed');
   }
   return Object.freeze({ schema: 'shipyard.current-review-contract.v3', role: 'integrator', contract: INTEGRATION_REVIEW_V3,
