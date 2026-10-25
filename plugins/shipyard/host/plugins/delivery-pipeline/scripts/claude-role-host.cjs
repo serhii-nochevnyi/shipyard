@@ -689,8 +689,15 @@ function nativeMemberObservations(options, canonical, graph, selection) {
   const repos = new Set(descriptors.map(item => item.repo));
   if (repos.size !== 1) reject('native phase tickets span foreign repositories');
   const repo = descriptors[0]?.repo;
-  const identity = JSON.parse(command(options, 'gh', ['repo', 'view', ...(repo ? [repo] : []),
-    '--json', 'nameWithOwner,url'], canonical.worktree, 4096));
+  let identityRaw;
+  try {
+    identityRaw = command(options, 'gh', ['repo', 'view', ...(repo ? [repo] : []),
+      '--json', 'nameWithOwner,url'], canonical.worktree, 4096);
+  } catch (error) {
+    if (error?.code !== 'PREFLIGHT_FAILED' || String(error.cause?.stdout || '').trim()) throw error;
+    return options;
+  }
+  const identity = JSON.parse(identityRaw);
   if (!object(identity) || typeof identity.nameWithOwner !== 'string'
       || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(identity.nameWithOwner)
       || (repo && repo.toLowerCase() !== identity.nameWithOwner.toLowerCase()))
@@ -708,8 +715,14 @@ function nativeMemberObservations(options, canonical, graph, selection) {
   const aliases = branches.map((branch, index) => `p${index}:pullRequests(first:100,states:[CLOSED,MERGED],headRefName:${JSON.stringify(branch)}){nodes{number state isDraft title body headRefName headRefOid baseRefName baseRefOid mergedAt mergeCommit{oid} reviewDecision}pageInfo{hasNextPage}}`);
   const query = `query{repository(owner:${JSON.stringify(owner)},name:${JSON.stringify(name)}){nameWithOwner ${aliases.join(' ')}}}`;
   if (Buffer.byteLength(query) > 256 * 1024) reject('native merge query exceeds its bounded size', 'INPUT_TOO_LARGE');
-  const raw = command(options, 'gh', ['api', '--hostname', url.host, 'graphql', '-f', 'query=' + query],
-    canonical.worktree, 256 * 1024);
+  let raw;
+  try {
+    raw = command(options, 'gh', ['api', '--hostname', url.host, 'graphql', '-f', 'query=' + query],
+      canonical.worktree, 256 * 1024);
+  } catch (error) {
+    if (error?.code !== 'PREFLIGHT_FAILED' || String(error.cause?.stdout || '').trim()) throw error;
+    return options;
+  }
   if (Buffer.byteLength(raw) > 256 * 1024) reject('native merge response exceeds its bounded size', 'INPUT_TOO_LARGE');
   const response = JSON.parse(raw);
   if (!object(response) || Object.hasOwn(response, 'errors') || !object(response.data)

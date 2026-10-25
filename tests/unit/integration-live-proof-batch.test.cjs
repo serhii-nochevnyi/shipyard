@@ -93,6 +93,7 @@ test('pure malformed complete observations fail closed', async () => {
     for (const [name, mutate] of Object.entries(malformed)) {
       const t = transport(f, mutate);
       assert.throws(() => host.prepareNativeIntegratorContext(t.options, { worktree: f.worktree, phase: '49', review_contract: 'shipyard.integration-review.v3' }), undefined, name);
+      assert.equal(t.calls.filter(call => call.argv[0] === 'pr').length, 0, name);
     }
     const changed = transport(f, (response, pass) => {
       if (pass === 2) response.data.repository.p0.nodes[0].reviewDecision = 'APPROVED';
@@ -157,11 +158,118 @@ test('pure repository resolution refuses invalid identities before querying', as
       };
       assert.throws(() => host.prepareNativeIntegratorContext(t.options, { worktree: f.worktree, phase: '49', review_contract: 'shipyard.integration-review.v3' }));
       assert.equal(queries, 0);
+      assert.equal(t.calls.filter(call => call.argv[0] === 'pr').length, 0);
+    }
+  });
+});
+
+test('pure command-only bulk failure reruns complete independent fresh legacy passes', async () => {
+  await publicIntegrationFixture(async f => {
+    for (const failed of ['repo', 'api']) {
+      const t = transport(f), run = t.options.execFileSync, calls = [];
+      t.options.execFileSync = (file, argv, options) => {
+        if (file === 'gh') calls.push([...argv]);
+        if (file === 'gh' && argv[0] === failed) {
+          const error = new Error('unsupported fixture command');
+          error.status = 2; error.stdout = ''; error.stderr = 'unsupported fixture command';
+          throw error;
+        }
+        return run(file, argv, options);
+      };
+      const expected = host.prepareNativeIntegratorContext(t.legacy, { worktree: f.worktree, phase: '49', review_contract: 'shipyard.integration-review.v3' });
+      const actual = host.prepareNativeIntegratorContext(t.options, { worktree: f.worktree, phase: '49', review_contract: 'shipyard.integration-review.v3' });
+      assert.deepEqual(actual.nativeMergeProof, expected.nativeMergeProof);
+      assert.deepEqual(host.assertNativeIntegrationMergeProof(actual.nativeMergeProof,
+        { worktree: f.worktree, graphDir: f.graphDir }, t.options), expected.nativeMergeProof);
+      const pass = [...(failed === 'api' ? ['repo', 'api'] : ['repo']), 'pr list', 'pr view', 'pr list', 'pr view'];
+      assert.deepEqual(calls.map(argv => argv[0] === 'pr' ? argv.slice(0, 2).join(' ') : argv[0]), Array(4).fill(pass).flat());
+      assert.ok(calls.filter(argv => argv[0] === 'pr' && argv[1] === 'list').every(argv =>
+        argv[argv.indexOf('--state') + 1] === 'closed' && argv[argv.indexOf('--limit') + 1] === '100'));
+    }
+  });
+});
+
+test('pure bulk response failures never select legacy transport', async () => {
+  await publicIntegrationFixture(async f => {
+    for (const failed of ['repo', 'api']) {
+      for (const mode of ['invalid JSON', 'null JSON', 'command response', 'overflow']) {
+        const t = transport(f), run = t.options.execFileSync;
+        let legacyCalls = 0;
+        t.options.execFileSync = (file, argv, options) => {
+          if (file === 'gh' && argv[0] === 'pr') legacyCalls++;
+          if (file !== 'gh' || argv[0] !== failed) return run(file, argv, options);
+          if (mode === 'invalid JSON') return '{';
+          if (mode === 'null JSON') return 'null';
+          const error = new Error(mode);
+          if (mode === 'overflow') error.code = 'ENOBUFS';
+          else { error.status = 1; error.stdout = JSON.stringify({ data: null, errors: [{ message: 'incomplete' }] }); }
+          throw error;
+        };
+        assert.throws(() => host.prepareNativeIntegratorContext(t.options, { worktree: f.worktree, phase: '49', review_contract: 'shipyard.integration-review.v3' }), undefined, failed + ': ' + mode);
+        assert.equal(legacyCalls, 0);
+      }
+    }
+  });
+});
+
+test('pure legacy fallback preserves list and detail refusal and independent-pass drift checks', async () => {
+  await publicIntegrationFixture(async f => {
+    for (const failed of ['repo', 'api']) {
+      for (const mode of ['list error', 'detail error', 'list null', 'detail null', 'second pass drift', 'second pass detail error']) {
+        const t = transport(f), run = t.options.execFileSync;
+        let pass = 0, lists = 0, details = 0;
+        t.options.execFileSync = (file, argv, options) => {
+          if (file === 'gh' && argv[0] === failed) {
+            pass++;
+            throw new Error('unsupported fixture command');
+          }
+          const raw = run(file, argv, options);
+          if (file !== 'gh' || argv[0] !== 'pr') return raw;
+          if (argv[1] === 'list') {
+            lists++;
+            if (mode === 'list error') throw new Error('list unavailable');
+            if (mode === 'list null') return 'null';
+          } else {
+            details++;
+            if (mode === 'detail error' || (mode === 'second pass detail error' && pass === 2)) throw new Error('detail unavailable');
+            if (mode === 'detail null') return 'null';
+            if (mode === 'second pass drift' && pass === 2) return JSON.stringify({ ...JSON.parse(raw), reviewDecision: 'APPROVED' });
+          }
+          return raw;
+        };
+        assert.throws(() => host.prepareNativeIntegratorContext(t.options, { worktree: f.worktree, phase: '49', review_contract: 'shipyard.integration-review.v3' }), undefined, failed + ': ' + mode);
+        assert.ok(lists > 0);
+        if (mode.startsWith('second pass')) { assert.equal(pass, 2); assert.ok(details > 2); }
+      }
     }
   });
 });
 
 for (const runtime of ['codex', 'claude']) {
+  test('behavior ' + runtime + ' default cold consumer authenticates with unchanged legacy gh fixture', async () => {
+    await publicIntegrationFixture(async f => {
+      const prepared = publicPartitionFixture(f, runtime, { observed: true });
+      assert.equal((await supportedPartitionCaller(f, runtime, prepared.options)).result.outcome, 'passed');
+      const verify = host.assertNativeIntegrationMergeProof;
+      let defaultChecks = 0;
+      try {
+        host.assertNativeIntegrationMergeProof = (proof, input, ...options) => {
+          assert.ok(options.length <= 1);
+          assert.deepEqual(options[0] || {}, {});
+          defaultChecks++;
+          return verify(proof, input, ...options);
+        };
+        const current = currentPartitionConsumer(f);
+        assert.equal(current?.authenticated, true);
+        assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
+      } finally { host.assertNativeIntegrationMergeProof = verify; }
+      assert.ok(defaultChecks >= 2);
+      const sessions = originalPartitionSessions(f, runtime, prepared.recorder, prepared.controls);
+      assert.equal(sessions.filter(session => session.result.kind === 'phase').length, 1);
+      fs.appendFileSync(sessions[0].pin.path, '{}\n');
+      assert.equal(currentPartitionConsumer(f), null);
+    });
+  });
   for (const mode of ['strict', 'observed', 'compact']) test('behavior ' + runtime + ' ordered ' + mode + ' original custody and independent final', async () => {
     await publicIntegrationFixture(async f => {
       const observed = mode !== 'strict';
@@ -188,7 +296,11 @@ for (const runtime of ['codex', 'claude']) {
         if (payload.kind === 'phase') {
           const originals = payload.format === 'compact-domain.v1' ? payload.unit_results : payload.unit_artifacts;
           assert.equal(originals.length, events.filter(event => event.kind === 'unit').length);
-          if (payload.format !== 'compact-domain.v1') assert.equal(payload.assignments.length, originals.length);
+          if (payload.format !== 'compact-domain.v1') {
+            assert.equal(payload.unit_results.length, originals.length);
+            if (observed) assert.equal(payload.assignments.length, originals.length);
+            else assert.equal(Object.hasOwn(payload, 'assignments'), false);
+          }
         }
       };
       assert.equal((await supportedPartitionCaller(f, runtime, prepared.options)).result.outcome, 'passed');
