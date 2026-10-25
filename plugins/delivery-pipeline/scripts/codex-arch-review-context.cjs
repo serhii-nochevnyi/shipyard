@@ -2122,6 +2122,7 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
       || baseline.ticket_set_digest !== current.ticket_set_digest))
     fail('baseline role or subject differs from the current review', 'REVIEW_BASELINE_INVALID');
   const checked = verifyFileInput(currentInput), root = current.worktree;
+  const maximumBytes = integrationLimits(checked.manifest.role, checked.manifest.binding).material;
   const endpoint = baseline?.head || current.merge_base;
   const previousInventory = endpointInventory(root, endpoint), inventory = endpointInventory(root, current.head);
   const delta = endpointChanges(root, endpoint, current.head);
@@ -2139,7 +2140,7 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
       return content;
     }
     const size = Number(git({}, root, ['cat-file', '-s', entry.object]));
-    if (!Number.isSafeInteger(size) || size < 0 || size > FILE_LIMITS.material || total + size > FILE_LIMITS.material)
+    if (!Number.isSafeInteger(size) || size < 0 || size > FILE_LIMITS.material || total + size > maximumBytes)
       fail('complete impact sources exceed their bound', 'CONTEXT_OVER_BOUND');
     const raw = execFileSync('git', ['-C', root, 'cat-file', 'blob', entry.object], { maxBuffer: FILE_LIMITS.material });
     total += raw.length;
@@ -2209,7 +2210,7 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
   if (uncertainty.length) { mode = 'full'; limitations.push({ reason: 'uncertain-dependency-closure', boundaries: uncertainty }); }
   const encoded = checked.material.length === 1 ? JSON.parse(checked.material[0]) : null;
   if (encoded?.schema !== 'shipyard.semantic-content.v1') fail('complete current semantic packet is required', 'REVIEW_BASELINE_UNSUPPORTED');
-  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded, integrationLimits(checked.manifest.role, checked.manifest.binding).material);
+  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded, maximumBytes);
   const members = originalPacket.ticket_set || originalPacket.role_context?.ticket_set;
   if (!Array.isArray(members) || JSON.stringify(members.map(item => typeof item === 'string' ? item : item.id).sort()) !== JSON.stringify([...current.ticket_set].sort())
       || (originalPacket.ticket_set_digest || originalPacket.role_context?.ticket_set_digest) !== current.ticket_set_digest)
@@ -2276,7 +2277,7 @@ function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectRe
       mechanical_preflight: 'complete-current-phase-required' }, current_logical_obligations: logical,
     original_packet: encoded, semantic_credit: false };
   const raw = JSON.stringify(canonical(lineage));
-  const rawBytes = Buffer.byteLength(raw), maximumBytes = integrationLimits(checked.manifest.role, checked.manifest.binding).material;
+  const rawBytes = Buffer.byteLength(raw);
   if (rawBytes > maximumBytes) fail('complete impact packet exceeds its bound: raw_lineage_bytes observed ' + rawBytes
     + ', required at most ' + maximumBytes, 'CONTEXT_OVER_BOUND');
   verifyFileInput(currentInput);
@@ -2402,12 +2403,53 @@ function validateSealedContext(input, options = {}) {
   return true;
 }
 
+function integrationPartitionBinding(payload) {
+  const binding = payload?.binding;
+  const table = payload?.identity;
+  if (!object(table) || !object(table.scalar_tree) || !Array.isArray(table.values)
+      || Object.keys(table).sort().join(',') !== 'scalar_tree,values'
+      || table.values.some(value => value !== null && typeof value === 'object')
+      || new Set(table.values.map(value => JSON.stringify(canonical(value)))).size !== table.values.length)
+    fail('malformed compact identity table', 'INVALID_INPUT');
+  const expand = value => {
+    if (Array.isArray(value)) return value.map(expand);
+    if (object(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, expand(item)]));
+    if (!Number.isSafeInteger(value) || value < 0 || value >= table.values.length)
+      fail('foreign compact identity scalar reference', 'INVALID_INPUT');
+    return table.values[value];
+  };
+  const identity = expand(table.scalar_tree);
+  if (payload?.schema !== 'shipyard.integration-partition-input.v2' || payload.format !== 'compact-domain.v1'
+      || payload.reconstruction !== 'shipyard.integration-partition-render.v2'
+      || !object(payload.identity) || !object(payload.reviewed_identity) || !object(binding)
+      || binding.schema !== 'shipyard.integration-partition-binding.v2' || binding.format !== payload.format
+      || binding.plan_sha256 !== payload.plan_sha256 || binding.scope !== payload.kind
+      || binding.unit_id !== (payload.kind === 'unit' ? payload.unit_id : null)
+      || binding.identity_sha256 !== digest(JSON.stringify(canonical(identity)))
+      || JSON.stringify(canonical(payload.reviewed_identity)) !== JSON.stringify(canonical(Object.fromEntries(
+        Object.entries(identity).filter(([, value]) => value === null || typeof value !== 'object'))))
+      || !['unit', 'phase'].includes(payload.kind)
+      || Object.values(binding).some(value => value !== null && typeof value === 'object'))
+    fail('unsupported compact integration identity binding', 'INVALID_INPUT');
+  const keys = ['schema', 'format', 'plan_sha256', 'scope', 'unit_id', 'identity_sha256', 'assignment_sha256', 'unit_count',
+    'source_count', 'obligation_count', 'primary_segment_count', 'primary_obligation_count', 'domain_sha256', 'pair_count',
+    'explicit_edge_sha256', 'explicit_edge_count', 'verified_index_sha256'];
+  if (JSON.stringify(Object.keys(binding).sort()) !== JSON.stringify(keys.sort())) fail('compact binding fields differ', 'INVALID_INPUT');
+  for (const key of ['unit_count', 'source_count', 'obligation_count', 'primary_segment_count', 'primary_obligation_count', 'pair_count', 'explicit_edge_count'])
+    if (!Number.isSafeInteger(binding[key]) || binding[key] < 0) fail('compact binding count is malformed', 'INVALID_INPUT');
+  for (const key of ['plan_sha256', 'identity_sha256', 'assignment_sha256', 'domain_sha256', 'explicit_edge_sha256'])
+    if (!/^[a-f0-9]{64}$/.test(binding[key] || '')) fail('compact binding digest is malformed', 'INVALID_INPUT');
+  if (payload.kind === 'phase' ? !/^[a-f0-9]{64}$/.test(binding.verified_index_sha256 || '') : binding.verified_index_sha256 !== null)
+    fail('compact binding complete index differs', 'INVALID_INPUT');
+  return binding;
+}
+
 if (require.main === module) {
   try { process.stdout.write(readBatchCli(process.argv.slice(2))); }
   catch (error) { process.stderr.write((error.code || 'INVALID_INPUT') + ': ' + error.message + '\n'); process.exitCode = 1; }
 }
 
-module.exports = Object.freeze({ restoreMeasuredIntegrationInput, restoreMeasuredSourceInput, restoreInstalledMeasuredInput, createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
+module.exports = Object.freeze({ integrationPartitionBinding, restoreMeasuredIntegrationInput, restoreMeasuredSourceInput, restoreInstalledMeasuredInput, createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
   FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, codexResultText, boundedBytes, file, validateCodeReviewCoverage,
   isFocusedContext, focusedProducerFiles, focusedChangeInventory, selectFocusedArchitecture, validateFocusedResult, authenticateFocusedLaunch,
   batchCommand, batchFrames, batchOutput, readBatchCli, SCHEMA, FILE_LIMITS, freezeReviewBaseline: deepFreeze, validateOriginalReviewContext, buildReviewImpactPacket, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreCompletedSourceInput, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });

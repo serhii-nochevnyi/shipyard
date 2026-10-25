@@ -18,7 +18,7 @@ const shards = require('./shard-files.cjs');
 const counts = [1, 1, 24, 25, 28, 28];
 const taskKeys = [1, 2, 3, 4, 5, 6].map(number => ownerName + '#integration-partition=' + number);
 const suffixAnchor = "const assert = require('node:assert/strict');";
-const suffixDigest = '7380ba17fb731ba3151c058b5e2b54c0737140150200e033cf51f62e7dbf6f9b';
+const suffixDigest = '20f6f0ad59a3c7ff6b4d097739ed83d4d54b1544520c48df07afc1af89bf5bfa';
 assert.equal(crypto.createHash('sha256').update(source.slice(source.indexOf(suffixAnchor))).digest('hex'), suffixDigest);
 function discover(args = []) {
   const result = spawnSync(process.execPath, [owner, '--list-integration-tests', ...args], {

@@ -36,7 +36,8 @@ const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
 const selectionArgs = require.main === module ? process.argv.slice(2) : [];
 const d37Only = selectionArgs.includes('--code-review-d37-only');
 const reuseOnly = selectionArgs.includes('--code-review-reuse-only');
-if (selectionArgs.some(value => !['--code-review-d37-only', '--code-review-reuse-only'].includes(value)) || selectionArgs.length > 1)
+const legacyCompatibilityOnly = selectionArgs.includes('--integrator-legacy-compatibility-only');
+if (selectionArgs.some(value => !['--code-review-d37-only', '--code-review-reuse-only', '--integrator-legacy-compatibility-only'].includes(value)) || selectionArgs.length > 1)
   throw new Error('Unknown code-review D37 selection');
 let d37Selected = 0, reuseSelected = 0;
 const d37Case = name => [
@@ -45,10 +46,12 @@ const d37Case = name => [
   'code-review reuse refuses a moved base or reference contract and ticket-form subject',
 ].includes(name) || name.startsWith('existing-format foreign native input retains original planning pins: ');
 let pendingCase = Promise.resolve();
+let legacyCompatibilitySelected = 0;
 function test(name, callback) {
+  if (name === "D-32 frozen full inventory, protected unit custody, restart and independent phase authority") legacyCompatibilitySelected++;
   if (d37Case(name)) d37Selected++;
   if (name === 'code-review reuse refuses a moved base or reference contract and ticket-form subject') reuseSelected++;
-  if (d37Only && !d37Case(name) || reuseOnly && name !== 'code-review reuse refuses a moved base or reference contract and ticket-form subject') return;
+  if (d37Only && !d37Case(name) || reuseOnly && name !== 'code-review reuse refuses a moved base or reference contract and ticket-form subject' || legacyCompatibilityOnly && name !== "D-32 frozen full inventory, protected unit custody, restart and independent phase authority") return;
   runTest(name, () => {
     const current = pendingCase.then(callback);
     pendingCase = current.catch(() => {});
@@ -3751,4 +3754,5 @@ for (const mode of ['incomplete', 'needs-fix']) test('D-32 authentic ' + mode + 
 
 assert.equal(d37Selected, 9, 'exact role-artifact D37 registration');
 assert.equal(reuseSelected, 1, 'exact role-artifact reuse registration');
+assert.equal(legacyCompatibilitySelected, 1, 'exact legacy compatibility registration');
 done();

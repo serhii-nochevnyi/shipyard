@@ -10,17 +10,20 @@ const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
 const selectionArgs = require.main === module ? process.argv.slice(2) : [];
 const entryOnly = selectionArgs.includes('--code-review-entry-only');
 const integratorDefaultOnly = selectionArgs.includes('--integrator-default-only');
-if (selectionArgs.some(value => !['--code-review-entry-only', '--integrator-default-only'].includes(value))
+const legacyCompatibilityOnly = selectionArgs.includes('--integrator-legacy-compatibility-only');
+if (selectionArgs.some(value => !['--code-review-entry-only', '--integrator-default-only', '--integrator-legacy-compatibility-only'].includes(value))
     || selectionArgs.length > 1)
   throw new Error('Unknown or conflicting delivery-host selection');
 let entrySelected = 0, entryVariants = 0, integratorDefaultSelected = 0;
+let legacyCompatibilitySelected = 0;
 function test(name, callback) {
+  if (name === "public Codex v3 preserves historical pins through independent units, exact-plan restart and one actual final") legacyCompatibilitySelected++;
   const entry = /^(?:code review |padded code review )/.test(name);
   const selected = name === 'public Codex v3 accepts omitted capacity through original observed evidence';
   if (entry) entrySelected++;
   if (name.startsWith('code review CLI seals one static phase verdict: ')) entryVariants++;
   if (selected) integratorDefaultSelected++;
-  if (entryOnly && !entry || integratorDefaultOnly && !selected) return;
+  if (entryOnly && !entry || integratorDefaultOnly && !selected || legacyCompatibilityOnly && name !== "public Codex v3 preserves historical pins through independent units, exact-plan restart and one actual final") return;
   return runTest(name, callback);
 }
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -4577,4 +4580,5 @@ test('public Codex v3 rejects caller prompt, stage, receipt, capacity and produc
 assert.equal(entrySelected, 44, 'exact code-review entry registration');
 assert.equal(entryVariants, 8, 'all original CLI variants');
 assert.equal(integratorDefaultSelected, 1, 'exact integrator default registration');
+assert.equal(legacyCompatibilitySelected, 1, 'exact legacy compatibility registration');
 done();
