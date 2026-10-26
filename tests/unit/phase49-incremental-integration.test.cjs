@@ -840,12 +840,18 @@ function originalPartitionSessions(f, nativeRuntime, recorder, controls) {
       ? rows.filter(row => row.type === 'response_item' && row.payload?.role === 'user')
         .map(row => row.payload.content.map(block => block.text || '').join(''))
       : rows.filter(row => row.type === 'user' && row.sessionId === session).map(row => row.message.content);
-    const inputs = users.filter(input => input.includes('<AUTHENTICATED_INTEGRATION_PARTITION>'));
+    const inputs = users.filter(input => input.includes('<AUTHENTICATED_INTEGRATION_PARTITION>')
+      || nativeRuntime === 'codex' && receipt.runtime_evidence.input_transport === 'host-files' && /^INPUT_MANIFEST=/m.test(input));
     assert.equal(inputs.length, 1);
     const launch = controls.launches.find(item => hash(item.input) === manifest.input_sha256
       || item.payload.kind === 'phase' && manifest.integration_partition?.kind === 'phase');
     assert.ok(launch, 'original native input must be one actual host stage');
-    assert.equal(inputs[0], launch.input, 'preserve actual stdin/native capture; never replace its generated prefix');
+    assert.equal(inputs[0], launch.wire || launch.input, 'preserve actual stdin/native capture; never replace its generated prefix');
+    if (launch.wire && launch.wire !== launch.input) {
+      const consumed = runtime.verifyIntegrationFileConsumption(receipt.runtime_evidence.input_bundle, raw.toString('utf8'),
+        manifest.dispatch_id, rows.find(row => row.payload?.type === 'task_complete').payload.last_agent_message);
+      assert.deepEqual(consumed.material[0], Buffer.from(launch.input));
+    }
     if (nativeRuntime === 'codex') {
       const a = f.agents.integrator;
       const prefix = runtime.generatedInstructions(a.text) + '\n\n';
@@ -855,7 +861,7 @@ function originalPartitionSessions(f, nativeRuntime, recorder, controls) {
     const nativeResult = nativeRuntime === 'codex'
       ? JSON.parse(rows.find(row => row.payload?.phase === 'final_answer').payload.content[0].text)
       : rows.find(row => row.type === 'assistant').message.content[0].input;
-    assert.equal(nativeResult.input_sha256, hash(inputs[0]));
+    assert.equal(nativeResult.input_sha256, hash(launch.input));
     assert.equal(nativeResult.kind, launch.payload.kind);
     assert.equal(nativeResult.plan_sha256, launch.payload.plan_sha256);
     sessions.push({ session, receipt, pin, result: nativeResult, manifest, launch });
@@ -1566,6 +1572,18 @@ async function withCodexIngressHost(intercept, action) {
 }
 
 test('D36 codex ingress actual ASCII unit and fresh final retain original producer across cold readers', async () => {
+  const textRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'integration-text-boundaries-'));
+  try {
+    const file = path.join(textRoot, 'text.txt');
+    const raw = Buffer.from('\ufeff' + 'a'.repeat(8187) + '\ud83d\ude00\u00e9\r\n \t\n');
+    fs.writeFileSync(file, raw);
+    const reads = collector.integrationTextReads({ manifest_path: file, chunk_bytes: 8192 },
+      { manifest_bytes: raw, manifest: { assets: [] }, material: [] });
+    assert.match(reads.at(-1).command, / '8192' '16384'$/, 'EOF range keeps nominal arguments; the reader clamps actual bytes');
+    assert.deepEqual(Buffer.concat(reads.map(read => read.bytes)), raw);
+    assert.deepEqual(Buffer.concat(reads.map(read => require('node:child_process').execSync(read.command))), raw);
+  } finally { fs.rmSync(textRoot, { recursive: true, force: true }); }
+
   await publicIntegrationFixture(async f => {
     codexIngressGeometry(f);
     const prepared = publicPartitionFixture(f, 'codex', { observed: true });
@@ -1574,13 +1592,21 @@ test('D36 codex ingress actual ASCII unit and fresh final retain original produc
     await withCodexIngressHost((options, createHost) => {
       if (options.integrationIngress) {
         const authorize = options.integrationIngress;
-        options = { ...options, integrationIngress(input) { resources++; return authorize(input); } };
+        options = { ...options, integrationIngress(input) {
+          resources++;
+          assert.equal(input.input, input.instructions + '\n\n' + input.fileInput.prompt,
+            'native wire preserves the exact private prepared relay');
+          return authorize(input);
+        } };
         delete require.cache[producerPath];
         authority = require(producerPath);
       }
       return createHost(options);
     }, async () => {
-      prepared.controls.onLaunch = (input, payload) => {
+      prepared.controls.onLaunch = (input, payload, wire, reads) => {
+        assert.ok(wire.length <= 1048576);
+        assert.notEqual(wire, input);
+        assert.ok(reads.length > 2, 'complete actual file commands executed before original final');
         const prefix = runtime.generatedInstructions(f.agents.integrator.text) + '\n\n';
         const base = input.slice(prefix.length);
         assert.ok(base.length > 1048576, 'stripped actual ASCII input exceeds the legacy character guard');
@@ -1612,6 +1638,17 @@ test('D36 codex ingress actual ASCII unit and fresh final retain original produc
 });
 
 test('D36 codex ingress actual public stage rejects changed or unowned oversized launches before any process', async () => {
+  for (const broken of ['missing-read', 'foreign-read']) await publicIntegrationFixture(async f => {
+    codexIngressGeometry(f);
+    const prepared = publicPartitionFixture(f, 'codex', { observed: true, native(rows) {
+      const index = rows.findIndex(row => row.payload?.type === 'function_call_output');
+      assert.ok(index > 0, 'oversized native fixture must execute actual authenticated text reads');
+      if (broken === 'missing-read') rows.splice(index, 1);
+      else rows[index].payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign-turn';
+    } });
+    await assert.rejects(supportedPartitionCaller(f, 'codex', prepared.options), /read|consumption|foreign/i);
+    assert.equal(currentPartitionConsumer(f), null);
+  });
   await publicIntegrationFixture(async f => {
     f.integratorSandbox = 'workspace-write';
     codexIngressGeometry(f);
@@ -1632,7 +1669,8 @@ test('D36 codex ingress actual public stage rejects changed or unowned oversized
           const candidate = createHost({ ...options, controller: undefined, ...creator });
           await assert.rejects(candidate.launchStatic({ ...selection, ...handoff }, { ...context, ...input }),
             error => ['INVALID_INPUT', 'RUNTIME_UNAVAILABLE', 'INTEGRATION_CAPACITY_UNPROVEN', 'INTEGRATION_PARTITION_INVALID',
-              'ARCHIVE_AUTHORITY_INVALID', 'STALE_GENERATED_AGENT', 'RUNTIME_CAPABILITY_MISSING'].includes(error.code), name);
+              'ARCHIVE_AUTHORITY_INVALID', 'STALE_GENERATED_AGENT', 'RUNTIME_CAPABILITY_MISSING',
+              'STALE_CONTEXT', 'SCOPE_MISMATCH'].includes(error.code), name);
           assert.equal(processes, 0, name + ' must launch zero processes');
         };
         await deny('missing private resource', { integrationIngress: undefined });
@@ -1644,6 +1682,8 @@ test('D36 codex ingress actual public stage rejects changed or unowned oversized
           await deny('changed scope ' + key, { scope: { ...options.scope, [key]: value } });
         await deny('changed dispatch', {}, {}, { dispatch_id: context.dispatch_id + '-foreign' });
         await deny('changed complete input', {}, {}, { prompt: context.prompt + 'changed' });
+        await deny('copied file producer', {}, {}, { input_prepared: JSON.parse(JSON.stringify(context.input_prepared)) });
+        await deny('changed file descriptor', {}, {}, { input_bundle: { ...context.input_bundle, manifest_sha256: '0'.repeat(64) } });
         await deny('wrong static role', {}, { agent_file: 'shipyard-research.toml' });
         await deny('missing static handoff', {}, { agent_file: undefined, agent_file_content: undefined, agent_file_digest: undefined });
         const changed = selection.agent_file_content.replace('Read', 'Changed');
@@ -1685,7 +1725,7 @@ test('D36 codex ingress actual public stage rejects changed or unowned oversized
         const ordinary = createHost({ ...options, controller: undefined,
           integrationIngress() { ordinaryResourceCalls++; throw new Error('ordinary resource must stay lazy'); },
           spawn() { ordinarySpawns++; throw new Error('ordinary input reached controlled spawn'); } });
-        await assert.rejects(ordinary.launchStatic(selection, { ...context, prompt: 'Complete ordinary static review.' }),
+        await assert.rejects(ordinary.launchStatic(selection, { ...context, input_transport: undefined, input_bundle: undefined, input_prepared: undefined, prompt: 'Complete ordinary static review.' }),
           error => error.code === 'RUNTIME_UNAVAILABLE' && /ordinary input reached controlled spawn/.test(error.message));
         assert.equal(ordinarySpawns, 1);
         assert.equal(ordinaryResourceCalls, 0);

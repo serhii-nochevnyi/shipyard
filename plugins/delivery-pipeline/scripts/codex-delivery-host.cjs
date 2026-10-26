@@ -1066,12 +1066,16 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
       if (!stage.input.startsWith(prefix))
         fail('INVALID_INPUT', 'partition full native input differs from its installed static instruction prefix');
       roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: stage, host: execution.capacityHost });
+      const fileInput = stage.mode === 'native-observed' && Buffer.byteLength(stage.input) > 1048576
+        ? roleArtifact.prepareCodexIntegrationFileInput({ prepared: stage, host: execution.capacityHost,
+          scope: native.scope, storageRoot: storage, graphDir: review.prepared.graph.directory }) : null;
       const dispatch = await launchAgent('integrator', { cwd: scope.worktree, flags: new Map(),
         signals: review.prepared.signals, dispatch_id: stage.dispatch_id, scope: native.scope,
         host: native, recorder: native.recorder, controller, capabilities: native.capabilities,
         agentDir: installed.agentDir, agentManifest: installed.agentManifest, env: options.env || process.env,
         context: { ticket: scope.ticket, phase: scope.phase, worktreePath: scope.worktree,
-          runtime: 'codex', provider: 'openai', prompt: stage.input.slice(prefix.length) } });
+          runtime: 'codex', provider: 'openai', prompt: fileInput ? fileInput.prompt : stage.input.slice(prefix.length),
+          ...(fileInput ? { input_transport: 'host-files', input_prepared: fileInput, input_bundle: fileInput.input_bundle } : {}) } });
       if (heartbeatError) throw heartbeatError;
       recheckIntegrationReview(review, partitions);
       require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {

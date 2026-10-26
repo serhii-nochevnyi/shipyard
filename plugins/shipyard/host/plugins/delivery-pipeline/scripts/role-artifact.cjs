@@ -4064,6 +4064,7 @@ const PARTITION_LIMIT = 128 * 1024 * 1024;
 const PARTITION_RESULT_LIMIT = 128 * 1024;
 const partitionPreparations = new WeakMap();
 const partitionStages = new WeakMap();
+const codexIntegrationFiles = new WeakMap();
 const partitionCapacityHosts = new WeakMap();
 const partitionArchiveScopes = [];
 const PARTITION_PLAN_FIELDS = ['schema', 'version', 'review_contract', 'runtime', 'subject', 'identity',
@@ -4359,7 +4360,7 @@ function partitionHash(plan) {
   return digest(stable(compactPartition(plan) ? fields : preExecution(fields)));
 }
 function partitionFileName(kind, hash) {
-  if (!['plan', 'units', 'launch', 'capacity', 'host-evidence', 'observation'].includes(kind) || !/^[a-f0-9]{64}$/.test(hash || ''))
+  if (!['plan', 'units', 'launch', 'capacity', 'host-evidence', 'observation', 'transport'].includes(kind) || !/^[a-f0-9]{64}$/.test(hash || ''))
     partitionError('invalid protected partition reference');
   return 'integration-' + kind + '-' + hash + '.json';
 }
@@ -4760,13 +4761,38 @@ function partitionOriginalInput(trusted, launch, nativePin, checkedRecord) {
   if (digest(raw) !== pin.sha256 || !raw.toString('utf8').endsWith('\n')) partitionError('original native input pin changed');
   const rows = partitionNativeRows(raw), inputs = [];
   const runtime = currentRuntimeEvidence(trusted);
+  let physicalInput = launch.input;
+  if (trusted.receipt.runtime === 'codex' && runtime.input_transport === 'host-files') {
+    const transport = readPartitionEnvelope(launch.worktree, 'transport', digest(stable(launch)));
+    if (transport.launch_sha256 !== digest(stable(launch)) || transport.input_sha256 !== launch.input_sha256
+        || digest(transport.wire) !== transport.wire_sha256 || Buffer.byteLength(transport.wire) > 1048576
+        || stable(runtime.input_bundle) !== stable(transport.input_bundle)
+        || runtime.input_consumption?.native_session_sha256 !== pin.sha256
+        || runtime.input_consumption?.manifest_sha256 !== transport.input_bundle.manifest_sha256)
+      partitionError('original integration wire custody differs');
+    const checked = require('./codex-arch-review-context.cjs').verifyFileInput(transport.input_bundle, { sealed: true });
+    if (transport.scope.run_id !== runtime.run_id || transport.scope.worktree !== launch.worktree
+        || transport.scope.ticket !== launch.subject || checked.manifest.run_id !== transport.scope.run_id
+        || checked.manifest.ticket !== transport.scope.ticket || checked.manifest.phase !== transport.scope.phase
+        || checked.manifest.snapshot.worktree !== launch.worktree
+        || checked.manifest.binding?.integration_launch_sha256 !== digest(stable(launch))
+        || checked.manifest.binding?.integration_input_sha256 !== launch.input_sha256
+        || checked.material.length !== 1 || !checked.material[0].equals(Buffer.from(launch.input)))
+      partitionError('original files differ from complete protected logical input');
+    const completed = rows.filter(row => row.type === 'event_msg' && row.payload?.type === 'task_complete');
+    if (completed.length !== 1) partitionError('original file stage completion is ambiguous');
+    const consumption = require('./codex-runtime-host.cjs').verifyIntegrationFileConsumption(transport.input_bundle,
+      raw.toString('utf8'), launch.dispatch_id, completed[0].payload.last_agent_message);
+    if (runtime.input_consumption?.chunk_reads !== consumption.chunk_reads) partitionError('original file read accounting differs');
+    physicalInput = transport.wire;
+  }
   if (trusted.receipt.runtime === 'codex') {
     const parsed = require('./codex-runtime-host.cjs').parseNativeCodexTranscript(raw.toString('utf8'), runtime.session_id);
     if (!parsed.selections.length || parsed.selections.some(selection => selection.model !== trusted.receipt.observed_model
         || selection.effort !== trusted.receipt.observed_effort)) partitionError('original partition model selection differs');
     for (const row of rows) if (row.type === 'response_item' && row.payload?.role === 'user') {
       const text = row.payload.content?.map(block => block.text || '').join('');
-      if (text?.includes('<AUTHENTICATED_INTEGRATION_PARTITION>')) inputs.push(text);
+      if (text === physicalInput || text?.includes('<AUTHENTICATED_INTEGRATION_PARTITION>')) inputs.push(text);
     }
   } else {
     for (const row of rows) if (row.type === 'user' && row.sessionId === runtime.session_id) {
@@ -4775,7 +4801,7 @@ function partitionOriginalInput(trusted, launch, nativePin, checkedRecord) {
       if (text?.includes('<AUTHENTICATED_INTEGRATION_PARTITION>')) inputs.push(text);
     }
   }
-  if (inputs.length !== 1 || inputs[0] !== launch.input || digest(inputs[0]) !== launch.input_sha256
+  if (inputs.length !== 1 || inputs[0] !== physicalInput || digest(launch.input) !== launch.input_sha256
       || trusted.receipt.runtime !== launch.runtime || !require('./runtime-adapters.cjs').matchesModelObservation(launch.runtime, trusted.receipt.observed_model, launch.model) || trusted.receipt.observed_effort !== launch.effort
       || trusted.receipt.policy_hash !== launch.policy_hash || trusted.receipt.runtime === 'codex' && trusted.receipt.agent_file_digest !== launch.agent_sha256
       || reconciledRecordTicket(trusted) !== launch.subject)
@@ -4792,12 +4818,12 @@ function partitionOriginalInput(trusted, launch, nativePin, checkedRecord) {
       partitionError('original native input lacks the exact installed static instruction prefix');
   }
   const frame = { developers, other_users: rows.filter(row => row.type === 'response_item' && row.payload?.role === 'user'
-      && !row.payload.content?.some(block => block.text?.includes('<AUTHENTICATED_INTEGRATION_PARTITION>'))).map(row => row.payload.content),
+      && !row.payload.content?.some(block => block.text === physicalInput || block.text?.includes('<AUTHENTICATED_INTEGRATION_PARTITION>'))).map(row => row.payload.content),
     base_instructions: rows.find(row => row.type === 'session_meta')?.payload?.base_instructions || null,
     contexts: rows.filter(row => row.type === 'turn_context').map(row => {
       const { turn_id, ...context } = row.payload; return context;
     }) };
-  return { pin, raw, rows, frame_sha256: digest(stable(frame)) };
+  return { pin, raw, rows, input: physicalInput, frame_sha256: digest(stable(frame)) };
 }
 function partitionArchivePins(record, index = readPartitionIndex(record)) {
   const pins = [...record.archive_pins];
@@ -5088,6 +5114,38 @@ function privateCapacityHost(host, stage) {
     partitionError('original private same-plan runtime capacity host is required', 'INTEGRATION_CAPACITY_UNPROVEN');
   return owned;
 }
+function isCodexIntegrationStage(value) { return partitionStages.has(value); }
+function isCodexIntegrationFileInput(value) { return codexIntegrationFiles.has(value); }
+function prepareCodexIntegrationFileInput({ prepared, host, scope, storageRoot, graphDir } = {}) {
+  const stage = partitionStages.get(prepared);
+  if (!stage) partitionError('private stage required for file transport');
+  const owned = privateCapacityHost(host, stage), { launch, launchHash, record } = stage;
+  if (!observedPartition(record.plan) || launch.runtime !== 'codex' || !['unit', 'phase'].includes(launch.kind)
+      || Buffer.byteLength(launch.input) <= 1048576) partitionError('file transport requires oversized original observed Codex stage');
+  const runtime = require('./codex-runtime-host.cjs'), normalized = runtime.normalizeScope(scope);
+  if (normalized.worktree !== launch.worktree || normalized.ticket !== launch.subject
+      || normalized.phase !== Number(record.plan.identity.phase.split('-')[0])) partitionError('file scope differs');
+  const pin = record.plan.instruction_pins.find(pin => pin.sha256 === launch.agent_sha256);
+  const instructions = runtime.generatedInstructions(readImmutableFile(fs, path.resolve(pin.root, pin.path),
+    'integration file instructions', PARTITION_LIMIT, pin.bytes).toString('utf8'));
+  const input = require('./codex-arch-review-context.cjs').prepareFileInput(normalized, launch.input, {
+    role: 'integrator', dispatchId: launch.dispatch_id, storageRoot, graphDir, integrationStage: prepared,
+    generatedInstructionBytes: Buffer.byteLength(instructions + '\n\n'),
+    binding: { review_contract: INTEGRATION_REVIEW_V3, integration_launch_sha256: launchHash,
+      base: record.plan.identity.base, ticket_set_digest: record.plan.identity.ticket_set_digest,
+      ticket_set: record.plan.identity.ticket_set.map(member => member.id),
+      integration_input_sha256: launch.input_sha256, agent_sha256: launch.agent_sha256,
+      installed_files: record.plan.instruction_pins } });
+  const wire = instructions + '\n\n' + input.prompt;
+  if (!launch.input.startsWith(instructions + '\n\n') || Buffer.byteLength(wire) > 1048576)
+    partitionError('complete physical integration wire exceeds native character boundary', 'INTEGRATION_INPUT_OVER_BOUND');
+  const retained = { launch_sha256: launchHash, input_sha256: launch.input_sha256, scope: normalized,
+    input_bundle: input.input_bundle, wire, wire_sha256: digest(wire) };
+  withArchiveAuthorityLock(launch.worktree, () => writePartitionEnvelope(launch.worktree, 'transport', launchHash, retained));
+  codexIntegrationFiles.set(input, { stage, owned, retained });
+  return input;
+}
+
 function createCodexIntegrationIngress({ prepared, host, scope } = {}) {
   const stage = partitionStages.get(prepared);
   if (!stage) partitionError('original private observed Codex stage is required', 'INTEGRATION_CAPACITY_UNPROVEN');
@@ -5107,15 +5165,28 @@ function createCodexIntegrationIngress({ prepared, host, scope } = {}) {
   if (digest(content) !== launch.agent_sha256 || !launch.input.startsWith(instructions + '\n\n'))
     partitionError('observed ingress pinned instructions differ', 'INTEGRATION_CAPACITY_UNPROVEN');
   return request => {
+    const transport = request?.fileInput ? codexIntegrationFiles.get(request.fileInput) : null;
+    if (request?.fileInput && (!transport || transport.stage !== stage || transport.owned !== owned
+        || stable(transport.retained.scope) !== stable(originalScope)
+        || request.input !== transport.retained.wire || digest(request.input) !== transport.retained.wire_sha256
+        || Buffer.byteLength(request.input) > 1048576
+        || stable(readPartitionEnvelope(launch.worktree, 'transport', launchHash)) !== stable(transport.retained)))
+      partitionError('private integration file transport differs', 'INTEGRATION_CAPACITY_UNPROVEN');
+    if (transport) {
+      const checked = require('./codex-arch-review-context.cjs').verifyFileInput(request.fileInput);
+      if (checked.material.length !== 1 || !checked.material[0].equals(Buffer.from(launch.input)))
+        partitionError('file transport changed complete logical stage');
+    }
+    const logicalInput = transport ? launch.input : request?.input;
     if (partitionStages.get(prepared) !== stage || partitionCapacityHosts.get(host) !== owned
         || !object(request) || stable(request.scope) !== stable(originalScope)
         || request.dispatch_id !== launch.dispatch_id || request.model !== launch.model || request.effort !== launch.effort
         || request.agent_file !== plan.identity.agent_file || request.agent_file_digest !== launch.agent_sha256
         || request.agent_file_content !== content || request.instructions !== instructions
-        || request.input !== launch.input || digest(request.input) !== launch.input_sha256
+        || logicalInput !== launch.input || digest(logicalInput) !== launch.input_sha256
         || launch.plan_sha256 !== plan.plan_sha256 || launch.profile_sha256 !== digest(stable(partitionProfile(plan)))
         || (launch.kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes) !== ceiling
-        || bytes(request.input) > ceiling)
+        || bytes(logicalInput) > ceiling)
       partitionError('original observed Codex ingress association differs', 'INTEGRATION_CAPACITY_UNPROVEN');
     const admission = verifyPartitionAdmission(record, launch, launchHash);
     const reservation = owned.recorder.getReservation(launch.dispatch_id);
@@ -5392,7 +5463,7 @@ function nativeObservationSamples(trusted, launch, native, streamRows) {
     const rows = native.rows, start = rows.findIndex(row => row.type === 'event_msg' && row.payload?.type === 'task_started');
     const end = rows.findIndex(row => row.type === 'event_msg' && row.payload?.type === 'task_complete');
     const user = rows.findIndex(row => row.type === 'response_item' && row.payload?.role === 'user'
-      && row.payload.content?.some(block => block.text === launch.input));
+      && row.payload.content?.some(block => block.text === (native.input || launch.input)));
     const turn = rows[start]?.payload.turn_id, groups = new Map();
     if (!turn || start >= user || user >= end) partitionError('original native usage has no ordered assigned turn');
     for (let index = 0; index < rows.length; index++) {
@@ -9066,6 +9137,9 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   prepareIntegrationAggregate,
   createIntegrationCapacityHost,
   createCodexIntegrationIngress,
+  prepareCodexIntegrationFileInput,
+  isCodexIntegrationStage,
+  isCodexIntegrationFileInput,
   admitIntegrationCapacity,
   assertIntegrationAdmission,
   sealIntegrationUnit,

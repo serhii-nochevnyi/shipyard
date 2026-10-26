@@ -4400,9 +4400,35 @@ function codexPartitionFixture(f, helper, controls = {}) {
       child.stdin = { write(raw) { input += raw; }, end() { process.nextTick(() => {
         try {
           input = input.replace(/\n$/, '');
+          const wire = input, readRows = [];
+          assert.ok(wire.length <= 1048576, 'actual native CLI physical character ceiling');
+          if (/^INPUT_MANIFEST=/m.test(wire)) {
+            const manifestPath = /^INPUT_MANIFEST=(.+)$/m.exec(wire)[1];
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            const bundle = { manifest_path: manifestPath, chunk_bytes: manifest.chunk_bytes };
+            const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+            const material = manifest.assets.map(asset => fs.readFileSync(asset.path));
+            const reads = collector.integrationTextReads(bundle, { manifest, manifest_bytes: fs.readFileSync(manifestPath), material });
+            assert.equal(/^MANIFEST_READ=(.+)$/m.exec(wire)?.[1], reads[0].command,
+              'actual relay and native verifier prescribe the same first manifest command');
+            for (const read of reads) {
+              const call = 'integration-read-' + readRows.length;
+              const output = require('node:child_process').execSync(read.command, { maxBuffer: 252 * 1024 });
+              assert.deepEqual(output, read.bytes);
+              const invocation = helper.template(helper.parent, row => row.payload?.type === 'function_call');
+              Object.assign(invocation.payload, { name: 'exec_command', call_id: call,
+                arguments: JSON.stringify({ cmd: read.command, max_output_tokens: 10000 }) });
+              delete invocation.payload.namespace;
+              const response = helper.template(helper.parent, row => row.payload?.type === 'function_call_output');
+              Object.assign(response.payload, { call_id: call,
+                output: JSON.stringify({ exit_code: 0, output: output.toString('utf8') }) });
+              readRows.push(invocation, response);
+            }
+            input = Buffer.concat(material).toString('utf8');
+          }
           const payload = JSON.parse(input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
-          (controls.launches ||= []).push({ input, payload });
-          controls.onLaunch?.(input, payload);
+          (controls.launches ||= []).push({ input, payload, wire, readRows });
+          controls.onLaunch?.(input, payload, wire, readRows);
           const identity = payload.reviewed_identity, assignment = payload.assignment;
           const result = { review_contract: roleArtifacts.INTEGRATION_REVIEW_V3, kind: payload.kind, runtime: 'codex',
             subject: payload.subject, plan_sha256: payload.plan_sha256, input_sha256: digest(input), reviewed_identity: identity,
@@ -4423,12 +4449,13 @@ function codexPartitionFixture(f, helper, controls = {}) {
           const start = helper.template(helper.parent, row => row.payload?.type === 'task_started'), turn = start.payload.turn_id;
           context.payload.turn_id = turn;
           const user = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.role === 'user');
-          user.payload.content = [{ type: 'input_text', text: input }];
+          user.payload.content = [{ type: 'input_text', text: wire }];
           const final = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.phase === 'final_answer');
           final.payload.content.forEach(block => { block.text = text; }); final.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
           const completion = helper.template(helper.parent, row => row.payload?.type === 'task_complete');
           Object.assign(completion.payload, { turn_id: turn, last_agent_message: text });
-          const rows = [meta, context, start, developer, user,
+          for (const row of readRows) row.payload.internal_chat_message_metadata_passthrough = { turn_id: turn };
+          const rows = [meta, context, start, developer, user, ...readRows,
             helper.template(helper.parent, row => row.payload?.type === 'token_count'), final, completion];
           controls.native?.(rows);
           const now = new Date(), root = path.join(process.env.CODEX_HOME, 'sessions', String(now.getFullYear()),
