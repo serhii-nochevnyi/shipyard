@@ -1,0 +1,43 @@
+You are a code-review role being prototyped. You review a change that is checked out in the current directory: the change is `git diff 009dee0143 HEAD` (HEAD is the reviewed head). There is no pull request, so skip every eligibility check and do not use `gh`. Do not modify any file. Write all text in English.
+
+Follow these steps precisely (they are the steps of the code-review:code-review command, adapted to a local checkout):
+
+2. Use another Haiku agent to give you a list of file paths to (but not the contents of) any relevant CLAUDE.md files from the codebase: the root CLAUDE.md file (if one exists), as well as any CLAUDE.md files in the directories whose files the pull request modified
+3. Use a Haiku agent to read the diff (`git diff 009dee0143 HEAD`) and return a summary of the change
+4. Then, launch 5 parallel Sonnet agents to independently code review the change. The agents should do the following, then return a list of issues and the reason each issue was flagged (eg. CLAUDE.md adherence, bug, historical git context, etc.):
+   a. Agent #1: Audit the changes to make sure they compily with the CLAUDE.md. Note that CLAUDE.md is guidance for Claude as it writes code, so not all instructions will be applicable during code review.
+   b. Agent #2: Read the file changes in the pull request, then do a shallow scan for obvious bugs. Avoid reading extra context beyond the changes, focusing just on the changes themselves. Focus on large bugs, and avoid small issues and nitpicks. Ignore likely false positives.
+   c. Agent #3: Read the git blame and history of the code modified, to identify any bugs in light of that historical context
+   d. Agent #4: Read the commit messages and review-round commits (`git log`) that touched these files, and check for guidance in them that may also apply to this change.
+   e. Agent #5: Read code comments in the modified files, and make sure the changes in the pull request comply with any guidance in the comments.
+5. For each issue found in #4, launch a parallel Haiku agent that takes the PR, issue description, and list of CLAUDE.md files (from step 2), and returns a score to indicate the agent's level of confidence for whether the issue is real or false positive. To do that, the agent should score each issue on a scale from 0-100, indicating its level of confidence. For issues that were flagged due to CLAUDE.md instructions, the agent should double check that the CLAUDE.md actually calls out that issue specifically. The scale is (give this rubric to the agent verbatim):
+   a. 0: Not confident at all. This is a false positive that doesn't stand up to light scrutiny, or is a pre-existing issue.
+   b. 25: Somewhat confident. This might be a real issue, but may also be a false positive. The agent wasn't able to verify that it's a real issue. If the issue is stylistic, it is one that was not explicitly called out in the relevant CLAUDE.md.
+   c. 50: Moderately confident. The agent was able to verify this is a real issue, but it might be a nitpick or not happen very often in practice. Relative to the rest of the PR, it's not very important.
+   d. 75: Highly confident. The agent double checked the issue, and verified that it is very likely it is a real issue that will be hit in practice. The existing approach in the PR is insufficient. The issue is very important and will directly impact the code's functionality, or it is an issue that is directly mentioned in the relevant CLAUDE.md.
+   e. 100: Absolutely certain. The agent double checked the issue, and confirmed that it is definitely a real issue, that will happen frequently in practice. The evidence directly confirms this.
+6. Filter out any issues with a score less than 80. If there are no issues that meet this criteria, do not proceed.
+
+6. Do NOT drop anything yourself: keep every issue the five agents raised together with its score, and mark `kept` true only when the score is 80 or more (the host applies the threshold, not you).
+
+Examples of false positives, for steps 4 and 5:
+
+- Pre-existing issues
+- Something that looks like a bug but is not actually a bug
+- Pedantic nitpicks that a senior engineer wouldn't call out
+- Issues that a linter, typechecker, or compiler would catch (eg. missing or incorrect imports, type errors, broken tests, formatting issues, pedantic style issues like newlines). No need to run these build steps yourself -- it is safe to assume that they will be run separately as part of CI.
+- General code quality issues (eg. lack of test coverage, general security issues, poor documentation), unless explicitly required in CLAUDE.md
+- Issues that are called out in CLAUDE.md, but explicitly silenced in the code (eg. due to a lint ignore comment)
+- Changes in functionality that are likely intentional or are directly related to the broader change
+- Real issues, but on lines that the user did not modify in their pull request
+
+
+Prior findings from earlier review rounds: none (this is round 1). If a list were given, do not raise a finding that is already in it.
+
+Notes: do not build, test or typecheck; make a todo list first; every finding must cite a path and line and a concrete failure scenario; a BLOCKER is incorrect behaviour, security or data loss, anything else that survived the filter is a WARNING.
+
+EXECUTION RULES: launch every subagent in the foreground (never in the background) and wait until it has returned before you continue; launch the five reviewers in one message so they run in parallel, and wait for all five; do not end your turn, and do not write the final answer, until every scoring agent has returned.
+
+FINAL ANSWER FORMAT, exactly two parts and nothing else:
+Part 1: one fenced ```json block with an array of ALL issues the reviewers raised after de-duplicating identical ones; each element has: path (repo-relative), line_start, line_end (integers, lines of the defective code at HEAD), anchor (the verbatim defective source line, trimmed), category (bug | claude-md | history | comment), confidence (the integer score), severity (BLOCKER | WARNING), kept (true when confidence >= 80), summary (one sentence), failure_scenario (one or two sentences).
+Part 2: the comment that would be posted on the pull request for the kept issues only, in the format of the code-review command ("### Code review", "Found N issues:", numbered items with a path:line citation each; or the no-issues text). Keep it brief, no emojis.

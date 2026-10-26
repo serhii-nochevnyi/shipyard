@@ -1,0 +1,12 @@
+diff --git a/source.js b/source.js
+--- a/source.js
++++ b/source.js
+@@ -70 +70 @@
+-const value70 = 70;
++const repaired70 = true;
+@@ -105 +105 @@
+-const value105 = 105;
++const repaired105 = true;
+@@ -149 +149 @@
+-const value149 = 149;
++const repaired149 = true;

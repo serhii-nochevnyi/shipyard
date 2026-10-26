@@ -9,11 +9,12 @@ const EVIDENCE_NAME = '.shipyard-evidence.md';
 const REPAIR_EVIDENCE_NAME = '.shipyard-repair-evidence.md';
 const DRIFT_EVIDENCE_NAME = '.shipyard-drift-evidence.md';
 const ARCH_REVIEW_EVIDENCE_NAME = '.shipyard-arch-review-evidence.md';
+const CODE_REVIEW_EVIDENCE_NAME = '.shipyard-code-review-evidence.md';
 const SENTINEL_EVIDENCE_NAME = '.shipyard-sentinel-evidence.md';
 const ARTIFACT_ARCHIVE_DIR = '.shipyard-role-artifacts';
 const SCRATCH_FILES = Object.freeze([
   MANIFEST_NAME, PR_BODY_NAME, EVIDENCE_NAME, REPAIR_EVIDENCE_NAME,
-  DRIFT_EVIDENCE_NAME, ARCH_REVIEW_EVIDENCE_NAME, SENTINEL_EVIDENCE_NAME,
+  DRIFT_EVIDENCE_NAME, ARCH_REVIEW_EVIDENCE_NAME, CODE_REVIEW_EVIDENCE_NAME, SENTINEL_EVIDENCE_NAME,
 ]);
 const SCRATCH_DIRS = Object.freeze([ARTIFACT_ARCHIVE_DIR]);
 const scratchFiles = new Set(SCRATCH_FILES);
@@ -66,6 +67,6 @@ if (require.main === module) {
 
 module.exports = Object.freeze({
   MANIFEST_NAME, PR_BODY_NAME, EVIDENCE_NAME, REPAIR_EVIDENCE_NAME,
-  DRIFT_EVIDENCE_NAME, ARCH_REVIEW_EVIDENCE_NAME, SENTINEL_EVIDENCE_NAME,
+  DRIFT_EVIDENCE_NAME, ARCH_REVIEW_EVIDENCE_NAME, CODE_REVIEW_EVIDENCE_NAME, SENTINEL_EVIDENCE_NAME,
   ARTIFACT_ARCHIVE_DIR, SCRATCH_FILES, SCRATCH_DIRS, isScratch, statusIgnoringScratch,
 });

@@ -1,0 +1,6 @@
+diff --git a/source.js b/source.js
+--- a/source.js
++++ b/source.js
+@@ -81,2 +80,0 @@
+-const value81 = 81;
+-const value82 = 82;

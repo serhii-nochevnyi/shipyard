@@ -30,7 +30,7 @@ suite('claude-reference-content');
 
 test('loads every approved installed Markdown reference by ID and exact path', () => {
   assert.deepEqual(source.REFERENCE_IDS, [
-    'arch-review', 'ci-fix', 'drift-check', 'integrator',
+    'arch-review', 'ci-fix', 'code-review', 'drift-check', 'integrator',
     'inv-research', 'pr-sentinel', 'review-fix',
   ]);
   for (const id of source.REFERENCE_IDS) {
@@ -40,6 +40,17 @@ test('loads every approved installed Markdown reference by ID and exact path', (
     assert.ok(!expected.includes(path.resolve(__dirname, '../../plugins/delivery-pipeline')));
     assert.ok(Buffer.byteLength(expected) <= source.MAX_REFERENCE_BYTES);
   }
+});
+
+test('the code-review reference carries the citation rule, the earlier-findings rule and the optional label', () => {
+  const text = source.loadClaudeReferenceContent('code-review');
+  assert.ok(text.startsWith('# code-review agent'));
+  assert.ok(text.includes('line_text'), 'every finding must cite the verbatim source line');
+  assert.ok(text.includes('prior_findings'), 'the earlier findings are an input of the review');
+  assert.ok(/`rule` is\s+an optional free label/.test(text), 'a rule label is optional and nothing may depend on it');
+  assert.ok(text.includes('.shipyard-code-review-evidence.md'));
+  assert.ok(/## Verification contract/.test(text));
+  assert.ok(Buffer.byteLength(text) <= 40 * 1024, 'the reference stays within its own 40 KiB budget');
 });
 
 test('rejects unknown IDs, arbitrary paths, traversal, and non-string selections', () => {

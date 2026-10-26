@@ -1,0 +1,10 @@
+<config>
+depth: deep
+phase_dir: <scratch>
+review_path: <scratch>/G-A1-REVIEW.md
+diff_base: 009dee0143
+files:
+  - plugins/delivery-pipeline/scripts/jira-project.cjs
+  - tests/unit/jira-project.test.cjs
+</config>
+Write the report in English.

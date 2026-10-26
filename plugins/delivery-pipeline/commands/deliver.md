@@ -31,9 +31,15 @@ review. For the phase epic PR, explicitly select the canonical phase directory a
 actual integration PR from the epic worktree:
 
 ```sh
-node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> [--repo owner/name]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph [--repo owner/name]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph [--repo owner/name]
 ```
+
+For the phase epic PR run the phase code review first, then the integrator,
+then `arch-review`; in `hold` mode the builder refuses until a current verdict
+with no blocking finding exists for the exact head, with the operator exit of
+setting `delivery_pipeline.code_review` to `report` for this PR in the project
+root's `.planning/config.json` (no override flag or waiver record).
 
 For a foreign repository phase, pass `--repo owner/name` to both commands to
 select that repository’s phase tickets and integration PR. For a local repository
@@ -477,6 +483,7 @@ to bypass the boundary or to launch a different file.
 | `drift-check` | Sol/low | none; gate strategy only | generated `shipyard-drift-check.toml` |
 | `integrator` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-integrator.toml` or `shipyard-integrator-critical.toml` |
 | `arch-review` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml` |
+| `code-review` | Sol/high | `critical` or `checkpoint` → Sol/xhigh; `contested` and the measured window never promote | generated `shipyard-code-review.toml` or `shipyard-code-review-critical.toml` |
 | `ci-fix` | Sol/low | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
 | `review-fix` | Sol/low | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 
@@ -1939,10 +1946,10 @@ may be dispatched at all: fix the file.
     it is what the front and the NEXT round see — and it still only ever follows
     the verified receipt, never the launch.
 
-4b. (TUNE, optional) Pre-commit/pre-push review with GSD adapters — cheaper to catch
-    remarks before the PR bots: `/gsd-code-review <phase> --fix` or
-    `/gsd-review --coderabbit --opencode`, if CLI reviewers are configured.
-    Unavailable — skip silently.
+4b. (TUNE, optional) Read-only pre-commit/pre-push review with GSD adapters:
+    `/gsd-code-review <phase>` or `/gsd-review --coderabbit --opencode`, if CLI
+    reviewers are configured. Unavailable — skip silently. GSD's fixer is never
+    run in the conveyor; repairs use scoped tickets and the delivery hosts.
 
 **Phase C — gate and publish (main loop, per ticket).** Never delegate this.
 
@@ -2409,14 +2416,13 @@ loop:
 
      ```text
      node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <T> \
-       --runtime <r> --pr <N>
+       --runtime <r> --pr <N> --graph <project-root>/.planning/graph
      ```
 
-     Codex `requestValue` and `validateArgs` accept `arch-review` without a
-     prompt, but that is shape validation only. The released host still requires
-     a caller-built prompt and does not derive the graph-bound PR diff and ADR
-     corpus, so the builder exits 2 with the named missing host contract.
-     Claude's role host derives those inputs at launch and validates the request.
+     The Codex builder returns a request validated by the Codex host, which
+     derives the graph-bound PR diff and ADR corpus through its architecture
+     context after launch preflight. Claude's role host derives those inputs at
+     launch and validates the request.
      The Claude role host's read-only profile grants write access only to
      `.shipyard-arch-review-evidence.md` for the complete judgment artifact.
      Codex's generated `shipyard-arch-review.toml` and
@@ -2884,14 +2890,107 @@ driving PRs hands the user a half-truth.
    - make sure the integration PR exists: `epic-branch.sh pr <epic>` (in each repo's
      checkout; state-sync's `⚠ epic … has N commit(s) but no PR` line is the trigger
      and it is actionable work, not a note);
+   - **Phase code review.** `delivery_pipeline.code_review` defaults to `hold`;
+     `report` observes without holding and is the single exit for this PR.
+     Before any review launch, list the epic worktree
+     (list only; clear nothing at this point):
+
+     ```sh
+     git -C <epic-worktree> status --porcelain --untracked-files=all
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/conveyor-scratch.cjs list
+     ```
+
+     An entry for `.planning/phases/<phase-directory-name>/INTEGRATION.md`
+     means an earlier integrator step ended without its restore, for example an
+     interrupted session. Run the restore procedure below before any launch in
+     this worktree. Park with the listing if anything remains except the named
+     scratch files and paths under `.shipyard-role-artifacts/`.
+
+     From the epic worktree, using the project's graph (add `--repo owner/name`
+     consistently for a foreign repository):
+
+     ```sh
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-code-review.cjs status <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build code-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
+     ```
+
+     When status prints `unmatched`, stop in both modes and print its reason:
+     the integration PR's head is not the epic branch of the graph's epic row.
+     Correct the PR or graph; builders refuse this PR in every mode and the hold
+     gate refuses it too. The builder command above runs only when status is
+     `owed`; reuse a current sealed verdict, and never launch after `limit`.
+     Launch the printed request as follows for either review role in this step:
+
+     **Review request launch (code review and phase architecture review).** On
+     Codex, write exactly the builder's printed request into a mode-0600 file in
+     a directory made by `mktemp -d` outside every worktree (use a temporary
+     directory outside all checkouts, not the epic worktree). Run from the epic
+     worktree:
+
+     ```sh
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs --args-file <request.json>
+     ```
+
+     Remove the private request directory after consuming the result. This CLI
+     entry builds prepared context after its launch preflight, using the request's
+     `graph_dir`. The in-process Codex delivery host run method refuses both
+     `code-review` and `arch-review` without that prepared context; never use it
+     for either review. The integrator snippet below stays in-process on both
+     runtimes because it prepares its own input inside run.
+     On Claude, use `createClaudeRoleHost(options).run(request)` as in the
+     integrator snippet, with `options.graphDir` set to the project's graph;
+     preparation happens inside run. Its CLI reads the worktree's graph instead
+     and cannot select this graph directory. For either review, a refused or
+     blocked run exits non-zero: park with its text verbatim. Consume the printed
+     JSON result's original receipt and sealed artifact, never a log line.
+
+     After the launch (or reuse), publish through the trusted host and re-read:
+
+     ```sh
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-code-review.cjs publish <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-code-review.cjs status <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
+     ```
+
+     Publish only a sealed exact-head verdict, an incomplete retry, or `limit`
+     (status only); a fresh owed head with no sealed verdict cannot publish.
+     Inspect status and comment results independently: a hygiene-refused comment
+     leaves the verdict status on the PR; show its rule names. The model never
+     writes either to GitHub. In both modes the `code-review` status is on the PR.
+     A complete `pass` continues. In `hold`, `needs-fix` with `repair: tickets`
+     feeds `phase-code-review.cjs fix-tickets <phase-directory> --phase <N>
+     --pr <integration-pr> --graph <project-root>/.planning/graph` into decompose
+     Step 4 and the next delivery loop, only in rounds 1 and 2. In `report`, show
+     those proposed tickets without injecting them and continue. In `hold`,
+     `needs-fix` with `repair: human` (round 3), `incomplete` and `limit` stop for
+     the operator with the printed reason and named exit: set
+     `delivery_pipeline.code_review` to `report` for this PR in the project root's
+     `.planning/config.json`; there is no override flag or waiver record.
+     For `incomplete`, fix the cause and retry, or use that exit. Report mode
+     shows the reason and exit without holding integration. Reviews run once on
+     the final head: the integrator and phase architecture review are not
+     launched until the verdict is current or the mode is `report`. Any push
+     re-owes code review first.
+   - **Code review prelaunch gate.** Immediately before the integrator boundary,
+     on either runtime (the integrator has no builder), run:
+
+     ```sh
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-code-review.cjs gate <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
+     ```
+
+     A non-zero exit parks the phase with the refusal verbatim and does not fall
+     through to the integrator boundary, as with the phase 41 prelaunch gate.
    - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md` — the
      epic diff against the default branch, not the individual ticket-PRs →
-     `.planning/phases/<phase>/INTEGRATION.md`. Measure the epic input (`bytes ÷ 4`), record any journal-
+     `.planning/phases/<phase>/INTEGRATION.md`. Record descriptive epic size
+     separately from host-owned all-in capacity admission, retain any journal-
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
 
      **Fresh final integration contract.** For supported epic final review, use
-     `shipyard.integration-review.v2`. The host derives the complete current
+     `shipyard.integration-review.v3` on BOTH native hosts. Preliminary subject
+     preparation uses the exported `prepareNativeIntegratorContext`; it collects
+     full native facts without first formatting the legacy full-inline prompt.
+     The host derives the complete current
      graph, plans, phase contracts, HEAD/tree, default base and merge-base,
      merged ticket records and live ancestry. It prepares the complete
      dictionary, calls `selectReviewBaseline({currentInput})` independently for
@@ -2906,42 +3005,121 @@ driving PRs hands the user a half-truth.
      original evidence handoff to `sealJudgment` and `validateJudgmentManifest`:
 
      ```javascript
-     const { prepareIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
+     const { prepareNativeIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
      const { createCodexDeliveryHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs`);
-     const current = prepareIntegratorContext(options, { worktree, phase: String(phase) });
+     const current = prepareNativeIntegratorContext(options, {
+       worktree, phase: String(phase), review_contract: 'shipyard.integration-review.v3' });
      const phaseSubject = current.ticket;
      const result = runtime === 'codex'
        ? await createCodexDeliveryHost({ ...options, scope: {
            run_id, worktree, repository: current.canonical.commonPath,
            phase: current.phaseNumber, ticket: phaseSubject,
-         } }).run({ role: 'integrator', dispatch_id,
-           context: { review_contract: 'shipyard.integration-review.v2' } })
+         } }).run({ role: 'integrator',
+           context: { review_contract: 'shipyard.integration-review.v3' } })
        : await createClaudeRoleHost(options).run({ schema: 'shipyard.claude-role-request.v1',
            role: 'integrator', worktree, phase: String(phase),
-           review_contract: 'shipyard.integration-review.v2' });
+           review_contract: 'shipyard.integration-review.v3' });
      ```
 
-     `options` selects the canonical graph and supported installed runtime; it
-     supplies no model-authored authority. Consume only the returned original
-     receipt and sealed current artifact. Both producers retain complete live
-     preflight at launch and finish. The Codex path uses private prepared file
-     input with pinned installed instructions and the protected native progress
-     observer. Continuation uses only the existing authenticated exact-packet
-     host contract; a bare UUID or cursor supplies no coverage. Unsupported
-     baseline transport, including native-child/continuation authority, remains
-     role-specific full fallback. The second runtime preserves its complete
-     inline dictionary and native policy; it currently selects full review.
-     Unknown integration contract versions refuse before launch.
+     Omit `options.integrationCapacity` entirely for this production observed
+     default on both runtimes. `options` selects the canonical graph and
+     supported installed runtime; it supplies no model-authored authority. Consume only the returned original
+     receipt and sealed current artifact. No unit, stage, index, receipt, model
+     or capacity authority is serialized in the request. Both public `run`
+     entrypoints own frozen full factual preparation, private partition/admission
+     and protected archive custody. They retain complete current preflight at
+     every launch and finish. Each unit uses an independent original native
+     session; the phase final uses a separate fresh session after all units.
+     Codex's frozen `stage.input` includes the exact pinned `generatedInstructions`
+     prefix: the host removes that exact prefix before the unchanged static
+     runtime restores it. Preserve original stdin, transcript and receipt input
+     identity. Claude uses its own original native boundary and receipts.
 
-     Read all newly required material and affected boundaries, evaluate inherited
-     assumptions and limitations, and retain every current membership/ancestry
-     check. Return a fresh `reviewed_identity` and explicit
-     `shipyard.integration-coverage-result.v1` inherited/new/impact/limitations
-     coverage. The complete current packet remains available; integrity checks
-     supply no semantic credit. Repaired finals always owe a fresh native verdict
-     and original application receipt. Premature or incomplete output stays
-     rejected and failed originals remain failed history. Current-consumer
-     lineage admission and generated publication are separate downstream gates.
+     The host owns the native-observed profile: each complete rendered unit is
+     bounded at 2,097,152 bytes, with at most three primary segments of at most
+     65,536 bytes each, and its complete actual final at 4,194,304 bytes. Required
+     governing plans, support, acceptance, verification, identity, instructions
+     and output schema remain present. Detail ceilings are 16,384 bytes for
+     conclusions, 32,768 for findings, 8,192 each for limitations and required
+     context, and 32,768 for seams. Exceeding a ceiling refuses without clipping.
+     These are operational bytes, never certified token counts or guaranteed
+     prelaunch native fit. The protected operational launch binding authorizes
+     an attempt only; it cannot validate as a strict capacity certificate.
+
+     Before any unit or final can seal, the original receipt-pinned CLI/session
+     records must authenticate selected model/effort, exact input/instructions,
+     ordered successful completion and actual per-request usage with the native
+     selected-model context window. Codex cached input and reasoning are already
+     included in its native input/output totals. Claude cache-read/cache-creation
+     categories are separate inputs; repeated message chunks use field maxima.
+     Cumulative session cost is never compared with one context window. Quoted
+     telemetry in model text or tool content grants no evidence. Missing,
+     changed, malformed, foreign or ambiguous telemetry, overflow, compaction,
+     rollback, truncation and incomplete answers produce HOLD without authority.
+     Healthy counts cannot turn needs-fix or incomplete semantics into passed.
+
+     The hypothetical all-maxima final template is not constructed in observed
+     mode. After every exact original unit is authenticated and semantically
+     passed, render the complete actual final with all acceptance, governing,
+     support/primary mappings, original conclusions and seams. Check its actual
+     operational bound before the fresh independent final dispatch. An oversized
+     actual final is `INTEGRATION_INPUT_OVER_BOUND` HOLD; preserve the authentic
+     completed unit index and originals. Never drop context, shorten findings,
+     retry an oversized full packet or introduce a reduction tree.
+
+     Supplied strict capacity resources retain their original exact/certified
+     all-input counter, independent window and reserved-template contracts.
+     Malformed supplied resources refuse rather than fall back to observed mode.
+     Both modes preserve protected same-plan completed-unit reuse and repeated
+     current validation of source/head/base/membership, producer/instructions,
+     mode/profile, original receipts/input, observations and index. Changed facts
+     require a new freeze; strict and observed evidence cannot be substituted.
+
+     V3 results bind a fresh `reviewed_identity`, exact primary byte/obligation
+     coverage, explicit support/context, complete findings/limitations and seam
+     dispositions. The final reports `shipyard.integration-partition-coverage.v1`
+     with authenticated unit references and a fresh index-bound actual-final
+     admission. Unit-only success cannot authorize phase evidence. Only the
+     authenticated complete phase final reaches `currentIntegrationVerdict` and
+     the normal gate caller, with exact current canonical plans, producer pins,
+     membership, source/head/base and live PR checks. A planted mismatch must be
+     reported as needs-fix/unresolved or remain incomplete; integrity/read counts
+     never supply semantic credit. Legacy v1/v2 remain independently eligible
+     under their original contracts, including v2's
+     `shipyard.integration-coverage-result.v1`. Unknown versions refuse.
+     Repaired finals always owe a fresh native verdict and original application
+     receipt. Premature or incomplete output stays rejected and failed originals
+     remain failed history. Generated publication is a separate downstream gate.
+
+     **Current full-packet native acceptance handoff.** After T-52-34 delivery,
+     the coordinator re-freezes the then-current complete graph/plans/merge
+     ancestry and every primary, support, acceptance, verification, governing and
+     impact obligation. Use the supported selector-only caller above with actual
+     installed instructions and omitted `integrationCapacity` for native-observed
+     mode. Retain the protected complete unit inventory, source ranges/digests,
+     operational profile and full rendered inputs, original application receipts,
+     per-request native observations and exact index. Preparation reports a
+     non-authoritative byte diagnostic and unit count. Only the complete actual
+     final after accepted units can establish its actual byte fit; retain that
+     size and all original bounded outputs. Historical packets and sizing,
+     controlled original-format fixtures and ticket delivery establish neither
+     exact token fit nor current production semantic acceptance. Named context,
+     telemetry and actual-final bound failures remain HOLD with originals intact.
+
+     The separate genuine Codex and Claude acceptance obligations belong to each
+     runtime's native coordinator: fresh bounded units and a fresh final with its
+     own original receipts and authenticated per-request native observations. Recheck exact repository,
+     head/base, complete membership/plans and producer/policy/instruction pins
+     immediately before each run and at current final consumption. A later
+     producer/policy/instruction edit invalidates affected frozen authority and
+     re-owes current proof, plus supported package/install checks after the last
+     producer edit. This Codex implementation chain launches no Anthropic model
+     and performs no native phase acceptance. Until BOTH genuine results exist,
+     phase acceptance remains incomplete: fixtures, another provider and ticket
+     delivery cannot substitute or establish release readiness. Then obtain
+     fresh architecture on the final current subject, preserving code-review →
+     integration → architecture order, report mode, all original failures and
+     receipts, R8 INCOMPLETE/zero semantic credit and human epic-to-main merge.
 
      **Phase 41 prelaunch gate (both runtimes).** For phase 41, immediately
      before the integrator boundary on either runtime (`runtime: "claude"` or
@@ -3036,11 +3214,6 @@ driving PRs hands the user a half-truth.
      blocking count, and the current combined head/base/tree. Missing, changed,
      stale, or contradictory integration evidence refuses both projection and
      phase completion; `human-review-required` remains a human decision.
-   - `passed` → remove draft from the epic-PR (`gh pr ready`) and hand it to the human to
-     merge epic → default branch (the phase lands as one PR);
-   - `needs-fix` → fix tickets as new plans in the same phase (their base — the epic) →
-     /shipyard:decompose Step 4 → the next /shipyard:deliver.
-   In direct-to-main there is no epic — the integrator looks at the merged ticket-PRs, as before.
    - After the integration verdict is written, publish the native GSD projection:
      `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-sync.cjs`.
      This creates or refreshes `STATE.md`, `REQUIREMENTS.md`, plan `SUMMARY`
@@ -3049,6 +3222,71 @@ driving PRs hands the user a half-truth.
      edit the projection by hand to make the phase pass. Before handing the
      phase to a human, run `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-sync.cjs
      --check` and show any blockers.
+   - **Restore the epic worktree (every integrator outcome).** Treat this as a
+     finally step: run it once whenever the integrator step ends, before acting
+     on any outcome, never only on `passed`. This includes validated `passed`,
+     `needs-fix` and `human-review-required`, a refused or blocked launch, and a
+     seal or validate refusal. Capture the refusal text before restoring; if
+     there is no validated artifact, project no result and create no fix tickets.
+     Finish the last reads first: validation, the `gsd-sync.cjs` write and
+     `--check` runs above when they execute in the epic worktree, and, for
+     `needs-fix`, copy the `fix-ticket` findings out of the validated artifact
+     with `role-artifact.cjs read`. Those findings come from the sealed evidence,
+     not the live file. Then clear exactly the role-owned live file:
+
+     ```sh
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare --worktree <epic-worktree> --role integrator --phase <phase-directory-name>
+     ```
+
+     The command reports `cleared: false` without failing when no file was
+     written, so even a refused launch skips no restore. If the phase tracks a
+     committed copy, restore that copy after prepare (check whether it is tracked
+     with `git -C <epic-worktree> ls-files --error-unmatch --
+     .planning/phases/<phase-directory-name>/INTEGRATION.md`):
+
+     ```sh
+     git -C <epic-worktree> checkout -- .planning/phases/<phase-directory-name>/INTEGRATION.md
+     git -C <epic-worktree> status --porcelain --untracked-files=all
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/conveyor-scratch.cjs list
+     ```
+
+     Run the status listing for untracked-copy phases too. Require that its only
+     entries are the scratch files named by `conveyor-scratch.cjs list` and paths
+     under `.shipyard-role-artifacts/`. Any other entry parks the phase with the
+     listing before any outcome is acted on, because it would refuse every later
+     review launch. The sealed copy stays in the authenticated archive. Nothing
+     is committed and no push is made: a commit moves the head and re-owes code
+     review. The live `INTEGRATION.md` is not scratch; both hosts refuse it.
+     Restoring here prepares the phase architecture review after `passed`, the
+     re-owed code review after `needs-fix` in the next loop, and the review after
+     an operator resolves a `human-review-required` stop or a refused launch.
+   - Act on the integrator outcome only after restore:
+     `needs-fix` → fix tickets as new plans in the same phase (their base — the epic) →
+     /shipyard:decompose Step 4 → the next /shipyard:deliver.
+     `human-review-required` stops for the operator; a launch, seal or validation
+     refusal parks the phase with its captured text verbatim. `passed` continues
+     to the phase architecture review below, without removing the draft here.
+     In direct-to-main there is no epic — the integrator looks at the merged ticket-PRs, as before.
+   - **Phase arch-review (after passed and restore).** From the epic worktree,
+     run the builder, launch its printed request by the review request route
+     above, then run the live verifier, in that order:
+
+     ```sh
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph
+     ```
+
+     Add `--repo owner/name` to both commands for a foreign repository. The
+     builder's hold-mode refusal and the verifier's exit are gates. Apply the
+     existing architecture verdict handling: only `conform` continues; faults
+     or refusal park with their reason. Any push re-owes code review first, then
+     integration and architecture review on the final head.
+   - Only after a conform phase architecture verdict, remove the draft with
+     `gh pr ready <integration-pr>` and hand the epic → integration PR to the
+     human to merge (the phase lands as one PR). In `hold`, readiness and hand-off
+     also require a current complete code-review pass with no blocking finding
+     for the exact head; re-read status before hand-off. In both modes the status
+     remains on the PR. It is non-required: a human can still merge.
 3. Clean up (`reapable`-only, exactly like the reaper in Step 0): for EACH ticket
    whose `state[id].reapable` is true — `ticket-worktree.sh remove <T>` +
    `git branch -D <branch>` (squash-merge → `-D`; the verdict comes from
@@ -3113,8 +3351,9 @@ driving PRs hands the user a half-truth.
   worktree the main loop created and verifies. GSD's `dispatch.isolation` would have
   IT create worktrees too (on Codex it runs `git worktree` itself), and two
   orchestrators isolating the same plans is exactly the collision that loses commits.
-  Read-only and single-plan GSD commands stay fine — that is why 4b's
-  `/gsd-code-review --fix` is allowed, and why `workflow.use_worktrees` must be false.
+  Read-only GSD review commands stay available in 4b. GSD's fixer is never run
+  anywhere in the conveyor; repair work follows scoped tickets through this
+  delivery loop. Worktree ownership stays with the coordinator.
 - Every state change — via state-sync, not by hand-editing state files.
 - Bot reviewers can be wrong: disagreement with justification is a legal
   review-fix result, blind execution is not.

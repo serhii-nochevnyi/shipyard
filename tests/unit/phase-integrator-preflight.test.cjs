@@ -32,8 +32,8 @@ function fixture(ids = ['T-41-01', 'T-41-02']) {
   const dir = path.join(ROOT, `f${counter}`);
   const origin = path.join(dir, 'origin.git');
   const wt = path.join(dir, 'wt');
-  const graphDir = path.join(dir, 'graph');
-  fs.mkdirSync(graphDir, { recursive: true });
+  const graphDir = path.join(wt, '.planning/graph');
+  fs.mkdirSync(dir, { recursive: true });
   git(dir, 'init', '--quiet', '--bare', origin);
   git(dir, 'clone', '--quiet', origin, wt);
   git(wt, 'checkout', '--quiet', '-b', EPIC);
@@ -56,6 +56,7 @@ function fixture(ids = ['T-41-01', 'T-41-02']) {
     merges[id] = { head, merge: git(wt, 'rev-parse', 'HEAD') };
   }
   git(wt, 'push', '--quiet', 'origin', EPIC);
+  fs.mkdirSync(graphDir, { recursive: true });
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets }));
   const prs = {};
   let n = 100;
@@ -123,7 +124,7 @@ test('absent merge SHA refuses', () => { const f = fixture(); f.prs['T-41-01'].m
 test('non-ancestor merge refuses', () => {
   const f = fixture();
   git(f.wt, 'checkout', '--quiet', '-b', 'stray', f.prs['T-41-01'].headRefOid);
-  fs.writeFileSync(path.join(f.wt, 'stray.txt'), 's'); git(f.wt, 'add', '.'); git(f.wt, 'commit', '--quiet', '-m', 's');
+  fs.writeFileSync(path.join(f.wt, 'stray.txt'), 's'); git(f.wt, 'add', '--', 'stray.txt'); git(f.wt, 'commit', '--quiet', '-m', 's');
   const stray = git(f.wt, 'rev-parse', 'HEAD'); git(f.wt, 'checkout', '--quiet', EPIC);
   f.prs['T-41-01'].mergeCommit.oid = stray;
   refuses(f, /is not an ancestor of pinned/);
@@ -249,6 +250,58 @@ test('complete membership refuses graph changes while live PRs are being read', 
     return live;
   };
   refuses(f, /graph or delivery membership changed/, options);
+});
+
+function coordinatorFixture() {
+  const f = fixture();
+  const coordinator = path.join(f.dir, 'coordinator');
+  git(f.wt, 'worktree', 'add', '--detach', coordinator, 'HEAD');
+  fs.mkdirSync(path.join(coordinator, '.planning/graph'), { recursive: true });
+  fs.copyFileSync(path.join(f.graphDir, 'tickets.json'), path.join(coordinator, '.planning/graph/tickets.json'));
+  fs.rmSync(f.graphDir, { recursive: true });
+  git(f.wt, 'rm', '-r', '.planning'); git(f.wt, 'commit', '-qm', 'coordinator owns planning');
+  git(f.wt, 'push', '--quiet', 'origin', EPIC);
+  f.graphDir = path.join(coordinator, '.planning/graph'); f.coordinator = coordinator;
+  assert.strictEqual(fs.existsSync(path.join(f.wt, PLAN_DIR)), false);
+  return f;
+}
+
+test('linked coordinator plans survive both inventories and live proof verification', () => {
+  const f = coordinatorFixture(), options = stubs(f), proof = run(f, options);
+  const proofFile = path.join(f.dir, 'proof.json'); fs.writeFileSync(proofFile, JSON.stringify(proof));
+  assert.strictEqual(proof.planning_reference.root, f.coordinator);
+  assert.strictEqual(proof.epic.commit, git(f.wt, 'rev-parse', 'HEAD'));
+  assert.strictEqual(pre.verifyProof({ worktree: f.wt, graphDir: f.graphDir, proofFile }, options).proof_digest, proof.proof_digest);
+  fs.appendFileSync(path.join(f.coordinator, f.tickets['T-41-01'].plan), 'changed');
+  assert.throws(() => pre.verifyProof({ worktree: f.wt, proofFile }, options), /changed/);
+});
+
+for (const mutation of ['plan', 'config', 'graph', 'extra', 'missing', 'symlink', 'escape', 'foreign'])
+test('coordinator proof refuses ' + mutation + ' during complete inventory', () => {
+  const f = coordinatorFixture(), options = stubs(f), get = options.getPullRequest;
+  if (mutation === 'foreign') {
+    const foreign = fixture(); f.graphDir = foreign.graphDir;
+  } else if (mutation === 'escape') {
+    f.tickets['T-41-01'].plan = '../outside/41-01-PLAN.md';
+    fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), JSON.stringify({ tickets: f.tickets }));
+  } else {
+    let changed = false;
+    options.getPullRequest = input => {
+      const live = get(input);
+      if (!changed) {
+        changed = true;
+        const file = path.join(f.coordinator, f.tickets['T-41-01'].plan);
+        if (mutation === 'plan') fs.appendFileSync(file, 'changed');
+        if (mutation === 'config') fs.writeFileSync(path.join(f.coordinator, '.planning/config.json'), '{}');
+        if (mutation === 'graph') fs.appendFileSync(path.join(f.graphDir, 'tickets.json'), ' ');
+        if (mutation === 'extra') fs.writeFileSync(path.join(f.coordinator, PLAN_DIR, '41-03-PLAN.md'), 'extra');
+        if (mutation === 'missing') fs.unlinkSync(file);
+        if (mutation === 'symlink') { fs.renameSync(file, file + '.real'); fs.symlinkSync(file + '.real', file); }
+      }
+      return live;
+    };
+  }
+  assert.throws(() => run(f, options), /changed|match|symlink|unsafe|multiple plan|unrelated|regular file/i);
 });
 
 done();

@@ -720,6 +720,14 @@ test('finite batch CLI returns only its exact scheduled frames and enforces priv
     const tooManyRanges = contextBuilder.createReaderBatchProfile({ ...parameters, chunk_bytes: 1 });
     assert.throws(() => contextBuilder.prepareFileInput(scope, 'x'.repeat(contextBuilder.FILE_LIMITS.reads + 1),
       { ...options, readerProfile: tooManyRanges }), error => error.code === 'CONTEXT_OVER_BOUND');
+    for (const role of ['integrator', 'arch-review']) {
+      assert.throws(() => contextBuilder.prepareFileInput(scope, 'complete bounded bytes', {
+        ...options, role, binding: { review_contract: 'shipyard.integration-review.v2' },
+        integrationProducer: { canonical: { worktree: f.root }, role: 'integrator' },
+      }), /original.*(producer|integrator)|private producer/);
+    }
+    assert.equal(contextBuilder.FILE_LIMITS.material, 16777216);
+    assert.equal(contextBuilder.FILE_LIMITS.reads, 2064);
     const input = contextBuilder.prepareFileInput(scope, ['x'.repeat(8191) + '€' + 'é'.repeat(6000), 'short terminal €'], options);
     const checked = contextBuilder.verifyFileInput(input);
     assert.equal(input.manifest.schema, 'shipyard.host-file-input.v3');
@@ -3005,6 +3013,189 @@ test('aggregate producer refuses a repository path containing a semicolon at the
   } catch (error) {
     assert.equal(error.code, 'REPOSITORY_IDENTITY_INVALID');
   } finally { cleanupJudgment(f); fs.rmSync(parent, { recursive: true, force: true }); }
+});
+
+test('Codex limits remain INPUT_MAX_BYTES 1048576 bytes and FILE_LIMITS.material 16777216 material bytes', () => {
+  assert.equal(contextBuilder.INPUT_MAX_BYTES, 1048576, 'inline and launch bound in bytes');
+  assert.equal(contextBuilder.FILE_LIMITS.material, 16777216, 'complete material bound in material bytes');
+  assert.equal(contextBuilder.EVIDENCE_MAX_BYTES, 98304, 'evidence bound in bytes');
+});
+
+test('exported Codex helpers retain bounded file and receipt behavior', () => {
+  const f = fileInputFixture('small');
+  try {
+    const value = contextBuilder.file(f.f.root, 'src/reviewed.txt');
+    assert.equal(value.content, fs.readFileSync(path.join(f.f.root, value.path), 'utf8'));
+    assert.equal(value.bytes, Buffer.byteLength(value.content), 'file size in bytes');
+    assert.equal(contextBuilder.boundedBytes(fs, path.join(f.f.root, value.path), value.bytes).toString(), value.content);
+    assert.throws(() => contextBuilder.boundedBytes(fs, path.join(f.f.root, value.path), value.bytes - 1), /bound/);
+    assert.throws(() => contextBuilder.codexResultText({}), { code: 'MISSING_RECEIPT' });
+  } finally { f.clean(); }
+});
+
+for (const encoded of [false, true]) test('code-review contract partitions a complete 3 MiB product diff (' + (encoded ? 'dictionary' : 'packet') + ')', () => {
+  const helpers = require('./helpers/codex-arch-review-fixtures.cjs');
+  const f = fileInputFixture('unused');
+  try {
+    const coordinator = path.join(f.options.storageRoot, 'coordinator');
+    git(f.f.root, ['worktree', 'add', '--detach', coordinator, 'HEAD']);
+    const graphDir = path.join(coordinator, '.planning/graph');
+    const packet = helpers.partitionPacket(f.f.root, f.f.head, {
+      references: ['.planning/architecture/ADR-014-host-bound-review.md'] });
+    const material = JSON.stringify(encoded
+      ? require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').encodeUniqueContent(packet) : packet);
+    assert.equal(packet.schema, 'shipyard.context-packet.v1');
+    assert.equal(contextBuilder.CODE_REVIEW_CONTRACT, 'shipyard.phase-code-review.v1');
+    const input = contextBuilder.prepareFileInput(f.scope, material, { ...f.options, graphDir, role: 'code-review',
+      binding: { review_contract: contextBuilder.CODE_REVIEW_CONTRACT } });
+    const checked = contextBuilder.verifyFileInput(input);
+    assert.equal(checked.manifest.snapshot.worktree, f.f.root);
+    assert.equal(checked.manifest.snapshot.planning_reference.root, coordinator);
+    assert.throws(() => contextBuilder.verifyFileInput({ ...input.input_bundle, trustedRoot: coordinator }),
+      /private producer authority/);
+    for (const [index, change] of [
+      value => { value.canonical_root = coordinator; },
+      value => { value.role_context.planning_reference = { ...checked.manifest.snapshot.planning_reference, root: f.f.root }; },
+    ].entries()) {
+      const wrong = structuredClone(packet); change(wrong);
+      assert.throws(() => contextBuilder.prepareFileInput(f.scope, JSON.stringify(wrong), {
+        ...f.options, graphDir, role: 'code-review', dispatchId: f.options.dispatchId + '-wrong-' + index,
+        binding: { review_contract: contextBuilder.CODE_REVIEW_CONTRACT } }),
+      /root|authority|identity/i);
+    }
+
+    assert.equal(input.input_bundle.review_contract, contextBuilder.CODE_REVIEW_CONTRACT);
+    assert.equal(checked.material[0].toString(), material);
+    let ordinal = 1;
+    const inventory = [{ path: 'current-pr.diff', content: packet.role_context.exact_diff.content }, ...packet.required_refs]
+      .map(source => {
+        const bytes = Buffer.from(source.content), partitions = [];
+        let end = 0;
+        while (end < bytes.length) {
+          assert.ok(checked.material[ordinal].equals(bytes.subarray(end, end + checked.material[ordinal].length)));
+          end += checked.material[ordinal].length;
+          partitions.push(ordinal++);
+        }
+        return { path: source.path, sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex'),
+          bytes: bytes.length, start: 0, end: bytes.length, inline_asset: 0, partitions };
+      });
+    assert.deepEqual(checked.manifest.sources, inventory);
+    assert.equal(ordinal, checked.material.length);
+    assert.equal(inventory[0].bytes, 3145728, 'complete product diff bytes');
+    assert.ok(inventory[0].partitions.length > 1);
+    const coverage = inventory.flatMap(source => source.partitions.map(partition => ({ partition, status: 'reviewed' })));
+    assert.deepEqual(contextBuilder.validateCodeReviewCoverage({ review_completeness: 'complete', coverage,
+      limitations: [], unresolved_sources: [] }, checked.manifest).coverage, coverage);
+  } finally { f.clean(); }
+});
+
+for (const [name, mutate] of [
+  ['one-byte partition change', input => {
+    const filename = input.manifest.assets[1].path, bytes = fs.readFileSync(filename);
+    bytes[0] ^= 1;
+    fs.chmodSync(filename, 0o600); fs.writeFileSync(filename, bytes); fs.chmodSync(filename, 0o400);
+    return input.input_bundle;
+  }],
+  ['reordered partition', input => require('./helpers/codex-arch-review-fixtures.cjs').rewriteInputManifest(input, manifest => {
+    [manifest.assets[1], manifest.assets[2]] = [manifest.assets[2], manifest.assets[1]];
+  })],
+  ['missing partition', input => require('./helpers/codex-arch-review-fixtures.cjs').rewriteInputManifest(input, manifest => {
+    manifest.assets.splice(1, 1);
+  })],
+  ['arch-review role identity', input => require('./helpers/codex-arch-review-fixtures.cjs').rewriteInputManifest(input, manifest => {
+    manifest.role = 'arch-review';
+  })],
+  ['source inventory mismatch', input => require('./helpers/codex-arch-review-fixtures.cjs').rewriteInputManifest(input, manifest => {
+    manifest.sources[0].partitions.pop();
+  })],
+  ['reordered source spans', input => require('./helpers/codex-arch-review-fixtures.cjs').rewriteInputManifest(input, manifest => {
+    [manifest.assets[1].source_partition, manifest.assets[2].source_partition]
+      = [manifest.assets[2].source_partition, manifest.assets[1].source_partition];
+  })],
+]) test('code-review partitions refuse ' + name + ' with STALE_CONTEXT', () => {
+  const f = fileInputFixture('unused');
+  try {
+    const packet = require('./helpers/codex-arch-review-fixtures.cjs').partitionPacket(f.f.root, f.f.head);
+    const input = contextBuilder.prepareFileInput(f.scope, JSON.stringify(packet), { ...f.options, role: 'code-review',
+      binding: { review_contract: 'shipyard.phase-code-review.v1' } });
+    assert.throws(() => contextBuilder.verifyFileInput(mutate(input), { sealed: true }), { code: 'STALE_CONTEXT' });
+  } finally { f.clean(); }
+});
+
+const coverageManifest = { assets: [{ ordinal: 0 },
+  { ordinal: 1, source_partition: { partition: 1 } }, { ordinal: 2, source_partition: { partition: 2 } }] };
+const completeCoverage = { review_completeness: 'complete', limitations: [], unresolved_sources: [],
+  coverage: [{ partition: 2, status: 'reviewed' }, { partition: 1, status: 'reviewed' }] };
+
+test('code-review coverage normalizes every partition exactly once without granting an incomplete verdict', () => {
+  const checked = contextBuilder.validateCodeReviewCoverage(completeCoverage, coverageManifest);
+  assert.deepEqual(checked, { ...completeCoverage, coverage: [...completeCoverage.coverage].reverse() });
+  const incomplete = { ...completeCoverage, review_completeness: 'incomplete', verdict: 'pass',
+    limitations: ['Partition 2 could not be reviewed'], unresolved_sources: ['partition:2'],
+    coverage: [{ partition: 1, status: 'reviewed' }, { partition: 2, status: 'not-reviewed' }] };
+  const normalized = contextBuilder.validateCodeReviewCoverage(incomplete, coverageManifest);
+  assert.equal(normalized.review_completeness, 'incomplete');
+  assert.equal(normalized.coverage[1].status, 'not-reviewed');
+  assert.equal(normalized.verdict, undefined);
+  assert.equal(contextBuilder.validateCodeReviewCoverage({ ...completeCoverage, review_completeness: 'incomplete' },
+    coverageManifest).review_completeness, 'incomplete');
+});
+
+for (const [name, change] of [
+  ['missing partition', { coverage: [{ partition: 1, status: 'reviewed' }] }],
+  ['duplicate partition', { coverage: [{ partition: 1, status: 'reviewed' }, { partition: 1, status: 'reviewed' }] }],
+  ['unknown partition', { coverage: [{ partition: 1, status: 'reviewed' }, { partition: 3, status: 'reviewed' }] }],
+  ['noninteger partition', { coverage: [{ partition: '1', status: 'reviewed' }, { partition: 2, status: 'reviewed' }] }],
+  ['invalid status', { coverage: [{ partition: 1, status: 'skipped' }, { partition: 2, status: 'reviewed' }] }],
+  ['complete with not-reviewed', { coverage: [{ partition: 1, status: 'reviewed' }, { partition: 2, status: 'not-reviewed' }] }],
+  ['complete with limitations', { limitations: ['Not every input could be read'] }],
+  ['complete with unresolved sources', { unresolved_sources: ['current-pr.diff'] }],
+  ['missing limitations', { limitations: undefined }],
+  ['malformed limitations', { limitations: [1] }],
+  ['invalid completeness', { review_completeness: 'unknown' }],
+  ['missing coverage', { coverage: undefined }],
+]) test('code-review coverage refuses ' + name, () => {
+  assert.throws(() => contextBuilder.validateCodeReviewCoverage({ ...completeCoverage, ...change }, coverageManifest),
+    { code: 'INVALID_RESULT' });
+});
+
+test('inline code-review coverage must be an empty array', () => {
+  const inline = { ...completeCoverage, coverage: [] };
+  assert.deepEqual(contextBuilder.validateCodeReviewCoverage(inline, null), inline);
+  assert.throws(() => contextBuilder.validateCodeReviewCoverage(completeCoverage, null), { code: 'INVALID_RESULT' });
+  assert.throws(() => contextBuilder.validateCodeReviewCoverage({ ...inline, coverage: undefined }, null), { code: 'INVALID_RESULT' });
+});
+
+
+test('file snapshot pins coordinator graph/config while source HEAD and tree remain epic-bound', () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'coordinator-relay-')));
+  try {
+    const coordinator = path.join(storage, 'coordinator');
+    git(f.root, ['worktree', 'add', '--detach', coordinator, 'HEAD']);
+    git(f.root, ['rm', '-r', '.planning']); git(f.root, ['commit', '-qm', 'coordinator owns references']);
+    const head = git(f.root, ['rev-parse', 'HEAD']);
+    const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const packet = packets.buildContextPacket({ root: coordinator, role: 'integrator', subject: 'phase=38',
+      sourceRevision: head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+      scope: { files_modified: ['src/reviewed.txt'] }, acceptance: [], verification: [],
+      requiredRefs: [planPath()], roleContext: { phase_contracts: [], combined_diff: { content: 'source diff' } } });
+    const input = contextBuilder.prepareFileInput({ worktree: f.root, ticket: 'phase=38', phase: 38 },
+      JSON.stringify(packets.encodeUniqueContent(packet)), { role: 'integrator', dispatchId: 'coordinator-test',
+        graphDir: path.join(coordinator, '.planning/graph'), storageRoot: storage });
+    for (const value of [input, JSON.parse(JSON.stringify(input.input_bundle))]) {
+      const checked = contextBuilder.verifyFileInput(value, value === input ? {} : { sealed: true });
+      assert.equal(checked.manifest.snapshot.planning_reference.root, coordinator);
+      assert.equal(checked.manifest.snapshot.worktree, f.root);
+      assert.equal(checked.manifest.snapshot.head, head);
+      assert.equal(checked.manifest.snapshot.head_tree, git(f.root, ['rev-parse', 'HEAD^{tree}']));
+    }
+    assert.throws(() => contextBuilder.verifyFileInput({ ...input.input_bundle, trustedRoot: coordinator }),
+      /private producer authority/);
+    write(coordinator, '.planning/config.json', '{"changed":true}');
+    assert.throws(() => contextBuilder.verifyFileInput(input), /changed|stale/i);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true }); }
 });
 
 if (require.main === module) registerTests(require('node:test'));

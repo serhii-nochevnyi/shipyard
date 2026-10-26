@@ -1,0 +1,30 @@
+diff --git a/source.js b/source.js
+--- a/source.js
++++ b/source.js
+@@ -67,7 +67,7 @@
+ const value67 = 67;
+ const value68 = 68;
+ const value69 = 69;
+-const value70 = 70;
++const repaired70 = true;
+ const value71 = 71;
+ const value72 = 72;
+ const value73 = 73;
+@@ -102,7 +102,7 @@
+ const value102 = 102;
+ const value103 = 103;
+ const value104 = 104;
+-const value105 = 105;
++const repaired105 = true;
+ const value106 = 106;
+ const value107 = 107;
+ const value108 = 108;
+@@ -146,7 +146,7 @@
+ const value146 = 146;
+ const value147 = 147;
+ const value148 = 148;
+-const value149 = 149;
++const repaired149 = true;
+ const value150 = 150;
+ const value151 = 151;
+ const value152 = 152;

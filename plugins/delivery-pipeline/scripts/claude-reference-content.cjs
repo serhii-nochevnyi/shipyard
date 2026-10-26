@@ -9,6 +9,7 @@ const MAX_REFERENCE_BYTES = 64 * 1024;
 const REFERENCE_IDS = Object.freeze([
   'arch-review',
   'ci-fix',
+  'code-review',
   'drift-check',
   'integrator',
   'inv-research',

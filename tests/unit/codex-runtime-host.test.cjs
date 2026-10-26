@@ -424,9 +424,7 @@ test('read-only judgment roles can write only their evidence file', async () => 
       env: { CODEX_HOME: codeHome },
       spawn: (_executable, args, options) => {
         calls.push(args);
-        const session = count++ === 0
-          ? '44444444-4444-4444-8444-444444444444'
-          : '55555555-5555-4555-8555-555555555555';
+        const session = ['44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555'][count++];
         writeSession(options.env.CODEX_HOME, session, 'gpt-6.1-sol', 'high');
         return childFor(stream(session), 0, 24040 + count, []);
       },
@@ -1715,6 +1713,16 @@ async function recordedBatchApplication(verified, input, root, cliRaw, separateP
 }
 
 async function fixture(action, options = {}) {
+  const readsWithTelemetry = (reads, turn, offset = 0) => {
+    const records = nativeReads(reads, turn, offset);
+    if (options.telemetry !== undefined) for (const record of records) {
+      if (record.payload?.type !== 'custom_tool_call_output') continue;
+      const value = JSON.parse(record.payload.output[1].text);
+      value.original_token_count = options.telemetry;
+      record.payload.output[1].text = JSON.stringify(value);
+    }
+    return records;
+  };
   const typedRole = options.role === 'integrator' ? 'shipyard-integrator' : 'shipyard-arch-review';
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-continuation-')));
   const oldHome = os.homedir;
@@ -1766,7 +1774,7 @@ async function fixture(action, options = {}) {
       const probe = path.join(probeDirectory, session + '.jsonl');
       fs.writeFileSync(probe, serialize([nativeMetadata(session, worktree), nativeContext('capacity-turn', worktree),
         message('developer', 'capacity-turn', instructions), message('user', 'capacity-turn', input.prompt),
-        event('task_started', 'capacity-turn'), ...nativeReads(reads, 'capacity-turn'), ...finish('capacity-turn', result)]));
+        event('task_started', 'capacity-turn'), ...readsWithTelemetry(reads, 'capacity-turn'), ...finish('capacity-turn', result)]));
       fs.chmodSync(probe, 0o600);
       const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
         env: { CODEX_HOME: probeHome }, resultText: result });
@@ -1821,10 +1829,10 @@ async function fixture(action, options = {}) {
                 taskOutput);
             }
             const prefix = [metadata, context, ...typedRecords, event('task_started', 'original-turn'),
-              ...nativeReads(reads.slice(0, originalCount), 'original-turn'),
-              ...(options.pendingBatch ? nativeReads(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount).slice(0, 1) : []),
+              ...readsWithTelemetry(reads.slice(0, originalCount), 'original-turn'),
+              ...(options.pendingBatch ? readsWithTelemetry(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount).slice(0, 1) : []),
               ...((options.groupedBatch || options.groupedPendingBatch) ? (() => {
-                const nested = nativeReads(reads.slice(originalCount, originalCount + 2), 'original-turn', originalCount);
+                const nested = readsWithTelemetry(reads.slice(originalCount, originalCount + 2), 'original-turn', originalCount);
                 const call = nested[0], output = nested[1];
                 call.payload.call_id = 'original-turn-grouped'; output.payload.call_id = call.payload.call_id;
                 call.payload.input += '\n' + nested[2].payload.input;
@@ -1837,7 +1845,7 @@ async function fixture(action, options = {}) {
                 return [call, output];
               })() : []),
               ...(options.incompleteBatch ? (() => {
-                const interrupted = nativeReads(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount);
+                const interrupted = readsWithTelemetry(reads.slice(originalCount, originalCount + 1), 'original-turn', originalCount);
                 const envelope = JSON.parse(interrupted[1].payload.output[1].text);
                 envelope.output = envelope.output.split('\n').slice(0, -2).join('\n') + '\n';
                 interrupted[1].payload.output[1].text = JSON.stringify(envelope);
@@ -1858,7 +1866,7 @@ async function fixture(action, options = {}) {
             } else { closed = true; child.emit('close', options.premature ? 0 : 1); }
           } else {
             resumedCommands = reads.slice(originalCount).map(read => read.command);
-            let remaining = nativeReads(reads.slice(originalCount), 'resumed-turn', 1);
+            let remaining = readsWithTelemetry(reads.slice(originalCount), 'resumed-turn', 1);
             if (options.directBatch) remaining = directBatchReads(remaining);
             if (options.tamperResume) remaining = options.tamperResume(remaining, reads);
             fs.appendFileSync(native, serialize([nativeContext('resumed-turn', worktree), event('task_started', 'resumed-turn'), ...remaining,
@@ -2118,7 +2126,7 @@ test('v3 completed protected accounting counts shared native pins once and retai
 });
 
 
-for (const layer of ['outer', 'outer-second-block', 'nested']) test('v3 three-range ' + layer + ' truncation preserves atomic credit and failed costs', async () => {
+for (const layer of ['outer', 'outer-second-block', 'nested']) test('reader output telemetry three-range ' + layer + ' truncation preserves atomic credit and failed costs', async () => {
   await fixture(async f => {
     const original = fs.readFileSync(f.native);
     const { selectors } = await completedFixture(f);
@@ -2211,13 +2219,13 @@ test('v3 direct function outputs retain successful physical accounting and exact
 for (const [name, mutate, pending] of [
   ['malformed JSON', () => '{"exit_code":0', 0],
   ['truncated nested', value => { value.truncated = true; }, 0],
-  ['original token count', value => { value.original_token_count = 10001; }, 0],
+  ['invalid original token count', value => { value.original_token_count = -1; }, 0],
   ['wrong bytes', value => { value.output += 'surplus\n'; }, 0],
   ['missing terminal', value => { value.output = value.output.split('\n').slice(0, -2).join('\n') + '\n'; }, 0],
   ['missing output', value => { delete value.output; }, 0],
   ['nonzero exit', value => { value.exit_code = 1; }, 0],
   ['pending session', value => { delete value.exit_code; value.session_id = 123; }, 1],
-]) test('v3 direct ' + name + ' retains an uncredited actual attempt', async () => {
+]) test('reader output telemetry direct ' + name + ' retains an uncredited actual attempt', async () => {
   await fixture(async f => {
     const { selectors } = await completedFixture(f);
     const result = accountingChild(f, selectors);
@@ -2240,7 +2248,7 @@ for (const [name, mutate] of [
   ['changed budget', records => { const args = JSON.parse(records[0].payload.arguments); args.max_output_tokens = 9999; records[0].payload.arguments = JSON.stringify(args); }],
   ['extra command option', records => { const args = JSON.parse(records[0].payload.arguments); args.yield_time_ms = 1; records[0].payload.arguments = JSON.stringify(args); }],
   ['surplus stdout representation', records => { const value = JSON.parse(records[1].payload.output); value.stdout = value.output; delete value.output; records[1].payload.output = JSON.stringify(value); }],
-]) test('v3 direct final refuses ' + name + ' before completed accounting authority', async () => {
+]) test('reader output telemetry direct final refuses ' + name + ' before completed accounting authority', async () => {
   await fixture(async f => {
     await assert.rejects(completedFixture(f));
   }, { batch: true, directBatch: true, tamperResume(records) { mutate(records); return records; } });
@@ -2483,6 +2491,42 @@ for (const role of ['arch-review', 'integrator']) {
       () => require('./phase49-review-continuation.test.cjs').completedSourceReceiptRecoveryFixture(role, true, 'outcome-write', mutation));
 }
 
+for (const directBatch of [false, true]) for (const telemetry of [undefined, 5638])
+  test('reader output telemetry complete measurement and accounting direct=' + directBatch + ' count=' + telemetry, async () => {
+    await fixture(async f => {
+      const original = fs.readFileSync(f.native);
+      const { selectors } = await completedFixture(f);
+      const result = accountingChild(f, selectors);
+      assert.equal(result.attempts[0].successful_calls, 1);
+      assert.equal(result.coverage.total.successful_physical_calls, f.reads.length);
+      assert.equal(result.coverage.total.logical_ranges, collector.verifyFileInput(f.input).chunk_reads);
+      for (const attempt of result.attempts) {
+        assert.equal(attempt.failed_calls, 0); assert.equal(attempt.pending_calls, 0);
+        assert.ok(attempt.observed_nested_bytes > 0); assert.ok(attempt.observed_outer_bytes > 0);
+      }
+      assert.deepEqual(fs.readFileSync(f.native).subarray(0, original.length), original);
+      if (telemetry !== undefined) assert.ok(original.includes(Buffer.from('original_token_count')));
+    }, { batch: true, directBatch, telemetry });
+  });
+
+for (const directBatch of [false, true]) for (const kind of ['truncated', 'warning', 'invalid count', 'terminal'])
+  test('reader output telemetry complete final refuses ' + kind + ' direct=' + directBatch, async () => {
+    await fixture(async f => {
+      await assert.rejects(completedFixture(f));
+    }, { batch: true, directBatch, tamperResume(records) {
+      const item = records.find(record => ['custom_tool_call_output', 'function_call_output'].includes(record.payload?.type)).payload;
+      const value = JSON.parse(directBatch ? item.output : item.output[1].text);
+      value.original_token_count = 5638;
+      if (kind === 'truncated') value.truncated = true;
+      if (kind === 'warning') value.output = 'Warning: truncated output (original token count: 12000)\n' + value.output;
+      if (kind === 'invalid count') value.original_token_count = '5638';
+      if (kind === 'terminal') value.output = value.output.split('\n').slice(0, -2).join('\n') + '\n';
+      if (directBatch) item.output = JSON.stringify(value); else item.output[1].text = JSON.stringify(value);
+      return records;
+    } });
+  });
+
+originalRuntimeCases.push(completedCases);
 }
 
 
@@ -2518,5 +2562,147 @@ test('focused runtime association cannot be minted from serialized contract mark
     review_contract: context.FOCUSED_CONTRACT, ticket: 'T-49-20' } }, 'forged', {
     ticket: 'T-49-20', phase: 49, worktree: '/tmp', dispatch_id: 'forged' }), /private host custody/);
 });
+
+async function codeReviewRuntimeFixture(action, partitioned = false, critical = false) {
+  await Promise.all(originalRuntimeCases);
+  const helper = require('./helpers/codex-arch-review-fixtures.cjs');
+  const code = require('../../plugins/delivery-pipeline/scripts/codex-code-review-context.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const f = helper.fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'code-runtime-')));
+  const originalHome = os.homedir;
+  os.homedir = () => storage;
+  try {
+    const graphDir = path.join(f.root, '.planning/graph');
+    const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
+    const row = Object.values(graph.tickets)[0]; row.epic = 'epic/38-code-runtime'; row.human_checkpoint = false; row.critical = critical;
+    helper.write(f.root, '.planning/graph/tickets.json', JSON.stringify(graph));
+    if (partitioned) helper.write(f.root, 'src/reviewed.txt', ('large line ' + 'x'.repeat(240) + '\n').repeat(5000));
+    helper.git(f.root, ['add', '.']); helper.git(f.root, ['commit', '-m', 'code review runtime phase']);
+    helper.git(f.root, ['switch', '-c', row.epic]);
+    Object.assign(f.pr, { headRefName: row.epic, headRefOid: helper.git(f.root, ['rev-parse', 'HEAD']) });
+    const scope = { run_id: 'code-runtime', phase: 38, worktree: f.root, runtime: 'codex', provider: 'openai',
+      ticket: target.phaseBinding({ graph, state: JSON.parse(fs.readFileSync(path.join(graphDir, 'delivery-state.json'))),
+        phase: 38, repository: target.repositoryIdentity(f.root), pr: f.pr.number,
+        head: f.pr.headRefOid, base: f.pr.baseRefOid, branch: row.epic }).subject };
+    const value = code.prepare(scope, { role: 'code-review', context: {}, signals: {} },
+      { graphDir, storageRoot: storage, refreshGit: false, getPullRequest: () => f.pr, inflightDispatchId: 'code-runtime-dispatch' });
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: 'code-review', signals: value.launch.signals });
+    const content = staticContent(selected).replace('shipyard-policy-role = "research"', 'shipyard-policy-role = "code-review"')
+      .replace('shipyard-inv-research', 'shipyard-code-review');
+    const agentDir = path.join(storage, 'agents'); fs.mkdirSync(agentDir);
+    fs.writeFileSync(path.join(agentDir, selected.agent_file), content);
+    const digest = crypto.createHash('sha256').update(content).digest('hex');
+    const agentManifest = path.join(agentDir, '.shipyard-manifest.json');
+    fs.writeFileSync(agentManifest, JSON.stringify({ agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: digest } }));
+    code.admitInstalledLaunch(value, { agentDir, agentFile: selected.agent_file, agentManifest, capabilities });
+    const input = code.admittedFileInput(value);
+    const selection = { model: selected.model, effort: selected.effort, sandbox_mode: 'read-only', agent_file: selected.agent_file,
+      agent_file_content: content, agent_file_digest: digest };
+    const context = { dispatch_id: value.launch.dispatch_id, prompt: code.admittedPrompt(value), code_review_prepared: value,
+      ...(input ? { input_prepared: input, input_transport: 'host-files', input_bundle: input.input_bundle } : {}) };
+    await action({ f, storage, scope, code, value, selection, context, input });
+  } finally {
+    os.homedir = originalHome;
+    fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true });
+  }
+}
+
+for (const mutation of ['prompt', 'ticket', 'phase', 'worktree', 'dispatch', 'agent', 'look-alike', 'cross-role', 'focused-key', 'file-input', 'partition-file'])
+test('code review runtime refuses foreign private custody: ' + mutation, () => codeReviewRuntimeFixture(async f => {
+  let launches = 0;
+  const scope = { ...f.scope }, context = { ...f.context }, selection = { ...f.selection };
+  if (mutation === 'prompt') context.prompt += 'changed';
+  if (mutation === 'ticket') scope.ticket += 'changed';
+  if (mutation === 'phase') scope.phase++;
+  if (mutation === 'worktree') {
+    scope.worktree = path.join(f.storage, 'foreign-worktree');
+    require('./helpers/codex-arch-review-fixtures.cjs').git(f.f.root, ['worktree', 'add', '--detach', scope.worktree, 'HEAD']);
+  }
+  if (mutation === 'dispatch') context.dispatch_id += 'changed';
+  if (mutation === 'agent') selection.agent_file_digest = 'a'.repeat(64);
+  if (mutation === 'look-alike') context.code_review_prepared = { ...f.value };
+  if (mutation === 'cross-role') selection.agent_file = 'shipyard-arch-review.toml';
+  if (mutation === 'focused-key') context.focused_prepared = {};
+  if (mutation === 'file-input') context.input_prepared = { ...f.input };
+  if (mutation === 'partition-file') {
+    const file = f.input.manifest.assets.find(asset => asset.source_partition).path;
+    fs.chmodSync(file, 0o600); fs.appendFileSync(file, 'changed');
+  }
+  const host = createCodexRuntimeHost({ scope, capabilities, probe: probe(),
+    env: { CODEX_HOME: path.join(f.storage, 'home') }, recorderDir: path.join(f.storage, 'receipts'),
+    transcriptDir: path.join(f.storage, 'transcripts'), spawn() { launches++; throw new Error('unexpected spawn'); } });
+  await assert.rejects(host.launchStatic(selection, context), error => mutation === 'worktree'
+    ? error.code === 'STALE_CONTEXT' && /launch association differs/.test(error.message)
+    : error.message !== 'unexpected spawn');
+  assert.equal(launches, 0);
+  assert.equal(host.recorder.getVerifiedRecord(context.dispatch_id), null);
+}, ['file-input', 'partition-file'].includes(mutation)));
+
+for (const partitioned of [false, true])
+for (const critical of [false, true])
+test('code review runtime requires private custody: ' + JSON.stringify({ partitioned, critical }), () => codeReviewRuntimeFixture(async f => {
+  let launches = 0;
+  const context = { ...f.context };
+  delete context.code_review_prepared;
+  const host = createCodexRuntimeHost({ scope: f.scope, capabilities, probe: probe(),
+    env: { CODEX_HOME: path.join(f.storage, 'home') }, recorderDir: path.join(f.storage, 'receipts'),
+    transcriptDir: path.join(f.storage, 'transcripts'), spawn() { launches++; throw new Error('unexpected spawn'); } });
+  await assert.rejects(host.launchStatic(f.selection, context), error => error.code === 'CODE_REVIEW_CONTEXT_REQUIRED');
+  assert.equal(launches, 0);
+  assert.equal(host.recorder.getVerifiedRecord(context.dispatch_id), null);
+}, partitioned, critical));
+
+for (const partitioned of [false, true])
+for (const critical of [false, true])
+test('code review runtime records private custody and evidence-only permissions: ' + JSON.stringify({ partitioned, critical }), () => codeReviewRuntimeFixture(async f => {
+  const helper = require('./helpers/codex-arch-review-fixtures.cjs');
+  const session = crypto.randomUUID(), home = path.join(f.storage, 'home');
+  const binding = f.code.authenticateLaunch(f.value, f.context.prompt, { ...f.scope, dispatch_id: f.context.dispatch_id });
+  const text = JSON.stringify({ ...binding, ticket_set: f.value.prepared.binding.ticketSet, findings: [], dispositions: [],
+    summary: 'Complete review', review_completeness: 'complete', limitations: [], unresolved_sources: [], evidence_markdown: 'Evidence' });
+  const native = helper.focusedNativeSession({ session, worktree: f.scope.worktree, model: f.selection.model,
+    effort: f.selection.effort, text, prompt: f.context.prompt });
+  const now = new Date();
+  const nativeDir = path.join(home, 'sessions', String(now.getFullYear()), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+  fs.mkdirSync(nativeDir, { recursive: true }); fs.writeFileSync(path.join(nativeDir, session + '.jsonl'), native);
+  const output = transformJsonl(captured(EXEC_FIXTURE, { '<SESSION-1>': session }), record => {
+    if (record.item?.type === 'agent_message') record.item.text = text;
+    return record;
+  });
+  const calls = [];
+  const host = createCodexRuntimeHost({ scope: f.scope, capabilities, probe: probe(), env: { CODEX_HOME: home },
+    recorderDir: path.join(f.storage, 'receipts'), transcriptDir: path.join(f.storage, 'transcripts'),
+    spawn(_executable, args) { calls.push(args); return childFor(output); } });
+  const result = await host.launchStatic(f.selection, f.context);
+  assert.equal(calls.length, 1);
+  assert.equal(f.selection.agent_file, critical ? 'shipyard-code-review-critical.toml' : 'shipyard-code-review.toml');
+  const evidencePath = path.join(f.scope.worktree, '.shipyard-code-review-evidence.md');
+  const sandbox = result.runtime_evidence.sandbox_evidence;
+  const filesystem = calls[0].find(value => value.startsWith('permissions.shipyard-runtime.filesystem='));
+  assert.ok(calls[0].includes('default_permissions="shipyard-runtime"'));
+  assert.ok(calls[0].includes('permissions.shipyard-runtime.extends=":read-only"'));
+  assert.equal(sandbox.base_profile, ':read-only');
+  assert.equal(sandbox.evidence_write_path, evidencePath);
+  assert.ok(sandbox.protected_paths.includes(path.join(f.storage, '.gnupg')));
+  assert.ok(sandbox.protected_paths.includes(path.join(f.storage, '.ssh')));
+  assert.equal(filesystem, 'permissions.shipyard-runtime.filesystem={'
+    + sandbox.protected_paths.map(entry => JSON.stringify(entry) + '="deny"')
+      .concat(JSON.stringify(evidencePath) + '="write"').join(',') + '}');
+  assert.deepEqual(result.runtime_evidence.code_review, binding);
+  assert.equal(result.runtime_evidence.focused_review, undefined);
+  if (partitioned) {
+    assert.equal(result.runtime_evidence.input_transport, 'host-files');
+    assert.deepEqual(result.runtime_evidence.input_bundle, f.input.input_bundle);
+    assert.equal(result.runtime_evidence.input_consumption, undefined);
+  }
+  fs.rmSync(evidencePath, { force: true });
+  fs.symlinkSync(path.join(f.storage, 'outside'), evidencePath);
+  await assert.rejects(host.launchStatic(f.selection, f.context), error => error.code === 'INVALID_INPUT'
+    && /role evidence path must be a regular file/.test(error.message));
+  assert.equal(calls.length, 1);
+}, partitioned, critical));
+
+
 
 done();

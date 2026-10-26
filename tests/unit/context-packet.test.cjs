@@ -13,6 +13,7 @@ const {
   estimateTokens,
   buildContextPacket,
   validateContextPacket,
+  ROLE_REQUIRED_INPUTS,
 } = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
 const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
 const { createDispatchBoundary, createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -98,6 +99,15 @@ test('builds a serializable packet with complete policy, scope, refs and explici
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
   }
+});
+
+test('every routed role that builds a packet has its required inputs, code-review included', () => {
+  assert.deepStrictEqual([...ROLE_REQUIRED_INPUTS['code-review']],
+    ['exact_diff', 'integration_base', 'ticket_set', 'plan_acceptance', 'prior_findings']);
+  for (const role of Object.keys(ROLE_REQUIRED_INPUTS)) {
+    assert.ok(modelPolicy.ROLES.includes(role), `${role} is a routed role`);
+  }
+  assert.ok(Object.isFrozen(ROLE_REQUIRED_INPUTS['code-review']));
 });
 
 test('reads the full selected backlog section and binds its source hash', () => {
@@ -460,4 +470,104 @@ test('retained role evidence shares exact complete bytes while preserving both l
 });
 
 assert.ok(DEFAULT_TOKEN_CEILING >= 12000);
+
+test('planning reference association derives linked root and pins graph/config without trusting packet roots', () => {
+  const { execFileSync } = require('node:child_process');
+  const api = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'planning-association-')));
+  const reviewed = path.join(root, 'epic'), coordinator = path.join(root, 'coordinator');
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8',
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } }).trim();
+  try {
+    fs.mkdirSync(reviewed); git(reviewed, 'init', '-q');
+    git(reviewed, '-c', 'user.name=test', '-c', 'user.email=test@test', '-c', 'commit.gpgsign=false',
+      'commit', '--allow-empty', '-qm', 'source');
+    git(reviewed, 'worktree', 'add', '--detach', coordinator, 'HEAD');
+    fs.mkdirSync(path.join(coordinator, '.planning/graph'), { recursive: true });
+    fs.writeFileSync(path.join(coordinator, '.planning/graph/tickets.json'), '{}');
+    fs.writeFileSync(path.join(coordinator, '.planning/config.json'), '{}');
+    const original = api.resolvePlanningReference({ worktree: reviewed, graphDir: path.join(coordinator, '.planning/graph') });
+    assert.strictEqual(original.root, coordinator);
+    assert.strictEqual(api.authenticatedPlanningRoot(reviewed, original), coordinator);
+    assert.strictEqual(api.authenticatedPlanningRoot(reviewed), reviewed);
+    assert.throws(() => api.authenticatedPlanningRoot(reviewed, { ...original, root: reviewed }), /changed/);
+    assert.throws(() => api.resolvePlanningReference({ worktree: reviewed, graphDir: coordinator }), /placed/);
+    assert.throws(() => api.planningReferencePath(coordinator, '.planning/../outside'), /unsafe/);
+    fs.appendFileSync(path.join(coordinator, '.planning/config.json'), ' ');
+    assert.throws(() => api.authenticatedPlanningRoot(reviewed, original), /changed/);
+    const foreign = path.join(root, 'foreign'); fs.mkdirSync(foreign); git(foreign, 'init', '-q');
+    fs.mkdirSync(path.join(foreign, '.planning/graph'), { recursive: true });
+    fs.writeFileSync(path.join(foreign, '.planning/graph/tickets.json'), '{"tickets":{}}');
+    assert.throws(() => api.resolvePlanningReference({ worktree: reviewed, graphDir: path.join(foreign, '.planning/graph') }), /unrelated/);
+    const selected = api.resolvePlanningReference({ worktree: reviewed, graphDir: path.join(foreign, '.planning/graph'), repo: 'acme/app' });
+    assert.strictEqual(api.authenticatedPlanningRoot(reviewed, selected), foreign);
+    const keys = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE'];
+    const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    const linked = api.resolvePlanningReference({ worktree: reviewed, graphDir: original.directory });
+    const overrides = { GIT_DIR: path.join(reviewed, '.git'), GIT_WORK_TREE: reviewed,
+      GIT_COMMON_DIR: path.join(reviewed, '.git'), GIT_INDEX_FILE: path.join(root, 'unused-index') };
+    try {
+      for (const override of [...keys.map(key => ({ [key]: overrides[key] })), overrides]) {
+        for (const key of keys) delete process.env[key];
+        Object.assign(process.env, override);
+        assert.throws(() => api.resolvePlanningReference({ worktree: reviewed,
+          graphDir: selected.directory }), /unrelated/);
+        assert.throws(() => api.authenticatedPlanningRoot(reviewed, { ...selected, repo: null }), /unrelated/);
+        assert.deepEqual(api.resolvePlanningReference({ worktree: reviewed,
+          graphDir: linked.directory }), linked);
+        assert.strictEqual(api.authenticatedPlanningRoot(reviewed, linked), coordinator);
+        assert.strictEqual(api.authenticatedPlanningRoot(reviewed, selected), foreign);
+      }
+    } finally {
+      for (const key of keys) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+    fs.renameSync(path.join(coordinator, '.planning'), path.join(coordinator, 'planning'));
+    fs.symlinkSync('planning', path.join(coordinator, '.planning'));
+    assert.throws(() => api.resolvePlanningReference({ worktree: reviewed, graphDir: original.directory }), /real directories/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('explicit bounded semantic reconstruction preserves UTF-8 obligations and legacy defaults', () => {
+  const api = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const legacy = 16 * 1024 * 1024, approved = 32 * 1024 * 1024;
+  const content = '€'.repeat(3 * 1024 * 1024);
+  const ref = { path: 'complete.md', content, bytes: Buffer.byteLength(content), sha256: sha256(content) };
+  const packet = { source_revision: 'a'.repeat(40), refs: [ref, { ...ref, path: 'copy.md' }] };
+  const rawBytes = Buffer.byteLength(JSON.stringify(packet));
+  assert.ok(rawBytes > legacy && rawBytes <= approved);
+  assert.throws(() => api.encodeUniqueContent(packet), /exceeds its bound/);
+  const encoded = api.encodeUniqueContent(packet, approved);
+  assert.equal(encoded.dictionary.length, 1);
+  assert.equal(encoded.accounting.logical_content_bytes, ref.bytes * 2);
+  assert.equal(encoded.obligations.length, 2);
+  assert.deepEqual(api.decodeUniqueContent(encoded, approved), packet);
+  assert.throws(() => api.decodeUniqueContent(encoded), /exceeds its bound/);
+  for (const maximum of [0, Infinity, approved + 1, '33554432', null]) {
+    assert.throws(() => api.encodeUniqueContent(packet, maximum), /unsupported semantic byte bound/);
+    assert.throws(() => api.decodeUniqueContent(encoded, maximum), /unsupported semantic byte bound/);
+  }
+  const expanded = structuredClone(encoded);
+  expanded.body.refs.push(...structuredClone(expanded.body.refs));
+  assert.throws(() => api.decodeUniqueContent(expanded, approved), /exceeds its bound/);
+  const incomplete = structuredClone(encoded); incomplete.obligations.pop();
+  assert.throws(() => api.decodeUniqueContent(incomplete, approved), /logical obligations/);
+  const oversizedEncoding = { ...encoded, padding: 'x'.repeat(approved) };
+  assert.throws(() => api.decodeUniqueContent(oversizedEncoding, approved), /contract exceeds its bound/);
+  for (const maximum of [legacy, approved]) {
+    const boundary = { source_revision: 'a'.repeat(40), refs: [{ content: '' }, { content: '' }], padding: '' };
+    const overhead = Buffer.byteLength(JSON.stringify(boundary));
+    const each = Math.floor((maximum - overhead) / 2);
+    for (const ref of boundary.refs) ref.content = 'é'.repeat(Math.floor(each / 2)) + 'x'.repeat(each % 2);
+    boundary.padding = 'x'.repeat((maximum - overhead) % 2);
+    assert.equal(Buffer.byteLength(JSON.stringify(boundary)), maximum);
+    const accepted = api.encodeUniqueContent(boundary, maximum);
+    assert.deepEqual(api.decodeUniqueContent(accepted, maximum), boundary);
+    boundary.padding += 'x';
+    assert.throws(() => api.encodeUniqueContent(boundary, maximum), /exceeds its bound/);
+  }
+});
+
 done();

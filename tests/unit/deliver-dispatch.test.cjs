@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -39,7 +40,17 @@ else if (args[0] === 'pr' && args[1] === 'view') {
 const targetOldPath = process.env.PATH;
 process.env.PATH = targetBin + path.delimiter + targetOldPath;
 process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
-const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
+const d37Only = process.argv.includes('--code-review-d37-only');
+if (process.argv.slice(2).some(value => value !== '--code-review-d37-only') || process.argv.slice(2).length > 1)
+  throw new Error('Unknown code-review D37 selection');
+let d37Selected = 0;
+function test(name, callback) {
+  const selected = name.startsWith('default hold guards phase architecture builders (');
+  if (selected) d37Selected++;
+  if (d37Only && !selected) return;
+  return runTest(name, callback);
+}
 
 const codexSessionEnv = Object.fromEntries(['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CLAUDE_PLUGIN_ROOT', 'CLAUDE_CODE_ENTRYPOINT', 'SHIPYARD_RUNTIME', 'GSD_RUNTIME', 'SHIPYARD_GRAPH_DIR']
   .map((name) => [name, process.env[name]]));
@@ -65,6 +76,16 @@ const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-polic
 const prHygiene = require('../../plugins/delivery-pipeline/scripts/pr-hygiene.cjs');
 
 suite('deliver-dispatch — front-to-dispatch entry point');
+
+function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
+  return require('../fixtures/code-review/artifact-fixture.cjs').retainPlanningInput(f, input, planningRoot, repo);
+}
+
+function withOriginalPlanning(f) {
+  const input = f.input;
+  f.input = (...args) => retainPlanningInput(f, input(...args));
+  return f;
+}
 
 function git(root, ...args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -803,28 +824,32 @@ test('a Codex request passes the real validateArgs', async () => {
   }
 });
 
-test('the detached child pid is the host process; status/wait report exit and record a dispatch wake', async () => {
-  const fixture = shipyardFixture('T-07-07');
-  const stub = path.join(fixture.root, 'stub-host.cjs');
-  fs.writeFileSync(stub, "process.stdout.write(JSON.stringify({pid: process.pid}) + '\\n');\n");
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-state-'));
-  try {
-    const launched = await deliverDispatch.launch(
-      ['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'],
-      { cwd: fixture.root, stateDir, claudeHostScript: stub },
-    );
-    const waited = await deliverDispatch.waitOnce(launched.dispatch_id, { stateDir, intervalMs: 20, timeoutMs: 5000 });
-    assert.equal(waited.status, 'exited-ok');
-    assert.equal(typeof waited.result.pid, 'number');
-    assert.notEqual(waited.result.pid, process.pid);
-    const status = deliverDispatch.statusOnce(launched.dispatch_id, { stateDir });
-    assert.equal(status.status, 'exited-ok');
-    const events = fs.readFileSync(path.join(fixture.graphDir, 'runs', 'wake-events.jsonl'), 'utf8')
-      .split('\n').filter(Boolean).map((line) => JSON.parse(line));
-    assert.ok(events.some((event) => event.kind === 'dispatch' && event.run_id === launched.dispatch_id));
-  } finally {
-    cleanup(fixture.root, stateDir);
-  }
+let detachedChildRun;
+test('the detached child pid is the host process; status/wait report exit and record a dispatch wake', () => {
+  detachedChildRun = (async () => {
+    const fixture = shipyardFixture('T-07-07');
+    const stub = path.join(fixture.root, 'stub-host.cjs');
+    fs.writeFileSync(stub, "process.stdout.write(JSON.stringify({pid: process.pid}) + '\\n');\n");
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-state-'));
+    try {
+      const launched = await deliverDispatch.launch(
+        ['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'],
+        { cwd: fixture.root, stateDir, claudeHostScript: stub },
+      );
+      const waited = await deliverDispatch.waitOnce(launched.dispatch_id, { stateDir, intervalMs: 20, timeoutMs: 5000 });
+      assert.equal(waited.status, 'exited-ok');
+      assert.equal(typeof waited.result.pid, 'number');
+      assert.notEqual(waited.result.pid, process.pid);
+      const status = deliverDispatch.statusOnce(launched.dispatch_id, { stateDir });
+      assert.equal(status.status, 'exited-ok');
+      const events = fs.readFileSync(path.join(fixture.graphDir, 'runs', 'wake-events.jsonl'), 'utf8')
+        .split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.ok(events.some((event) => event.kind === 'dispatch' && event.run_id === launched.dispatch_id));
+    } finally {
+      cleanup(fixture.root, stateDir);
+    }
+  })();
+  return detachedChildRun;
 });
 
 test('blocking observations are measured once across repeat waits and lost recovery adds no poll', async () => {
@@ -990,36 +1015,41 @@ test('launch hands the spawned host the launchEnvironment output with the preser
   }
 });
 
-test('an unreadable authority namespace does not stop a healthy launch but other findings still refuse', async () => {
-  const fixture = shipyardFixture('T-50-63');
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-eperm-'));
-  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-bundle-'));
-  const original = fs.lstatSync;
-  const injected = mock.method(fs, 'lstatSync', function (target, ...rest) {
-    if (String(target).includes('role-artifact-authority')) {
-      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
-    }
-    return original.call(this, target, ...rest);
-  });
-  const stderr = [];
-  const sink = { write(text) { stderr.push(text); } };
-  try {
-    let spawned = 0;
-    await deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
-      cwd: fixture.root, stateDir, preflightStderr: sink,
-      spawn() { spawned += 1; return { pid: 999999, unref() {}, on() {} }; },
+const authorityLstatSync = fs.lstatSync;
+let unreadableAuthorityRun;
+test('an unreadable authority namespace does not stop a healthy launch but other findings still refuse', () => {
+  unreadableAuthorityRun = (async () => {
+    const fixture = shipyardFixture('T-50-63');
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-eperm-'));
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-bundle-'));
+    const original = fs.lstatSync;
+    const injected = mock.method(fs, 'lstatSync', function (target, ...rest) {
+      if (String(target).includes('role-artifact-authority')) {
+        throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      }
+      return original.call(this, target, ...rest);
     });
-    assert.equal(spawned, 1);
-    assert.equal(/hint\[/.test(stderr.join('')), false);
-    const before = dispatchDirs(stateDir).length;
-    await assert.rejects(deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
-      cwd: fixture.root, stateDir, hostScriptDir: brokenBundle(runtimeRoot), spawn: noSpawn(), preflightStderr: sink,
-    }), (error) => error.code === 'PREFLIGHT_REFUSED');
-    assert.equal(dispatchDirs(stateDir).length, before);
-  } finally {
-    injected.mock.restore();
-    cleanup(fixture.root, stateDir, runtimeRoot);
-  }
+    const stderr = [];
+    const sink = { write(text) { stderr.push(text); } };
+    try {
+      let spawned = 0;
+      await deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
+        cwd: fixture.root, stateDir, preflightStderr: sink,
+        spawn() { spawned += 1; return { pid: 999999, unref() {}, on() {} }; },
+      });
+      assert.equal(spawned, 1);
+      assert.equal(/hint\[/.test(stderr.join('')), false);
+      const before = dispatchDirs(stateDir).length;
+      await assert.rejects(deliverDispatch.launch(['--runtime', 'codex', '--ticket', fixture.id, '--role', 'executor'], {
+        cwd: fixture.root, stateDir, hostScriptDir: brokenBundle(runtimeRoot), spawn: noSpawn(), preflightStderr: sink,
+      }), (error) => error.code === 'PREFLIGHT_REFUSED');
+      assert.equal(dispatchDirs(stateDir).length, before);
+    } finally {
+      injected.mock.restore();
+      cleanup(fixture.root, stateDir, runtimeRoot);
+    }
+  })();
+  return unreadableAuthorityRun;
 });
 
 test('a refused launch names the runtime delivery host in its remedy, never deliver-dispatch', async () => {
@@ -1071,4 +1101,112 @@ test('preflight reads the launch graph directory project, not the worktree proje
   }
 });
 
+for (const jira of [null, 'PRJ-42']) test(`phase code-review builders use graph epic identity (${jira})`, () => {
+  const f = shipyardFixture();
+  try {
+    const branch = jira ? 'feat/PRJ-42-demo' : 'epic/01-demo';
+    git(f.root, 'checkout', '-q', '-b', branch);
+    const graph = { epics: { 1: { branch, phaseDir: '01-demo', repos: [null], jira } },
+      tickets: { [f.id]: { ...ticketRow(), epic: branch, phaseDir: '01-demo', repo: null } } };
+    writeJson(path.join(f.graphDir, 'tickets.json'), graph);
+    writeJson(path.join(f.root, '.planning/config.json'), { git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'hold' } });
+    const live = { number: 801, state: 'OPEN', headRefName: branch, headRefOid: git(f.root, 'rev-parse', 'HEAD'),
+      baseRefName: 'main', baseRefOid: git(f.root, 'rev-parse', 'HEAD') };
+    const options = { cwd: f.root, graphDir: f.graphDir, getPullRequest: () => live };
+    const args = ['code-review', '01-demo', '--phase', '1', '--pr', '801'];
+    for (const runtime of ['claude', 'codex']) {
+      const request = deliverDispatch.build([...args, '--runtime', runtime], options);
+      assert.strictEqual(request.role, 'code-review');
+      if (runtime === 'claude') assert.strictEqual(parseRequest(request).role, 'code-review');
+      else {
+        const { scope, graph_dir, ...launch } = request;
+        assert.strictEqual(validateArgs(launch).request.role, 'code-review');
+        assert.strictEqual(require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs')
+          .parseSubject('architecture-review', scope.ticket).repository,
+        require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').repositoryIdentity(f.root));
+      }
+    }
+    for (const argv of [args.slice(0, 2), args.slice(0, 4), [args[0], args[1], '--pr', '801'],
+      [...args, '--unknown', 'x'], [args[0], args[1], '--repo', 'owner/repo']])
+      assert.throws(() => deliverDispatch.build(argv, options), /requires|unsupported/);
+    for (const patch of [{ baseRefName: 'other' }, { headRefOid: 'a'.repeat(40) }]) {
+      assert.throws(() => deliverDispatch.build(args, { ...options, getPullRequest: () => ({ ...live, ...patch }) }));
+    }
+    for (const unknown of ['unknown', jira ? 'epic/01-demo' : 'feat/PRJ-42-demo', graph.tickets[f.id].branch]) {
+      graph.epics[1].branch = unknown;
+      writeJson(path.join(f.graphDir, 'tickets.json'), graph);
+      assert.throws(() => deliverDispatch.build(args, options), /unmatched|ticket PR/);
+    }
+    graph.epics[1].branch = branch;
+    writeJson(path.join(f.graphDir, 'tickets.json'), graph);
+    const arch = ['arch-review', ...args.slice(1)];
+    assert.throws(() => deliverDispatch.build(arch, options), /phase code review is owed.*delivery_pipeline.code_review.*report/);
+    writeJson(path.join(f.root, '.planning/config.json'), { git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'report' } });
+    assert.strictEqual(deliverDispatch.build(arch, options).role, 'arch-review');
+    graph.tickets[f.id].branch = branch; delete graph.epics[1];
+    writeJson(path.join(f.graphDir, 'tickets.json'), graph);
+    assert.throws(() => deliverDispatch.build(args, options), /ticket PR/);
+    assert.throws(() => deliverDispatch.build(arch, options), /ticket PR/);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('overlapping authority callbacks wait for the unreadable probe to restore lstatSync', async () => {
+  assert.notStrictEqual(fs.lstatSync, authorityLstatSync);
+  await unreadableAuthorityRun;
+  assert.strictEqual(fs.lstatSync, authorityLstatSync);
+});
+
+for (const jira of [null, 'PRJ-42']) test(`default hold guards phase architecture builders (${jira})`, async () => {
+  await unreadableAuthorityRun;
+  await detachedChildRun;
+  assert.strictEqual(fs.lstatSync, authorityLstatSync);
+  const f = withOriginalPlanning(require('../fixtures/code-review/artifact-fixture.cjs').fixture());
+  const artifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  try {
+    const branch = jira ? 'feat/PRJ-42-review' : f.branch;
+    if (jira) f.git(['branch', '-m', branch]);
+    f.graph.epics = { 52: { branch, phaseDir: f.phase, repos: [null], jira } };
+    Object.assign(f.graph.tickets['T-52-01'], { epic: branch, branch: 'feat/review-ticket', repo: null, phaseDir: f.phase });
+    const config = { git: { base_branch: 'main' } };
+    writeJson(path.join(f.root, '.planning/config.json'), config);
+    assert.strictEqual(Object.hasOwn(config.delivery_pipeline || {}, 'code_review'), false);
+    f.writeGraph();
+    const live = () => ({ number: 52, state: 'OPEN', headRefName: branch, headRefOid: f.git(['rev-parse', 'HEAD']),
+      baseRefName: 'main', baseRefOid: f.base });
+    const options = { cwd: f.root, graphDir: f.graphDir, getPullRequest: live };
+    const args = ['arch-review', f.phase, '--phase', '52', '--pr', '52'];
+    for (const runtime of ['claude', 'codex']) {
+      assert.throws(() => deliverDispatch.build([...args, '--runtime', runtime], options),
+        /phase code review is owed.*delivery_pipeline.code_review.*report/);
+    }
+    const advance = round => {
+      fs.writeFileSync(path.join(f.root, 'round.txt'), String(round));
+      f.git(['add', 'round.txt']); f.git(['commit', '--quiet', '-m', 'round ' + round]);
+    };
+    advance(1);
+    const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+    const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
+      repository: target.repositoryIdentity(f.root), branch, pr: 52, head: live().headRefOid, base: f.base });
+    artifact.sealJudgment(f.input(binding, 1, null,
+      { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [] }));
+    for (const runtime of ['claude', 'codex']) {
+      assert.strictEqual(deliverDispatch.build([...args, '--runtime', runtime], options).role, 'arch-review');
+    }
+    const unknownBranch = jira ? 'epic/52-unmatched' : 'feat/PRJ-42-unmatched';
+    f.git(['branch', '-m', unknownBranch]);
+    const unknown = { ...options, getPullRequest: () => ({ ...live(), headRefName: unknownBranch }) };
+    for (const runtime of ['claude', 'codex']) {
+      assert.throws(() => deliverDispatch.build([...args, '--runtime', runtime], unknown),
+        /phase code review is unmatched.*delivery_pipeline.code_review.*report/);
+    }
+    f.git(['branch', '-m', branch]);
+    advance(2);
+    for (const runtime of ['claude', 'codex']) {
+      assert.throws(() => deliverDispatch.build([...args, '--runtime', runtime], options),
+        /phase code review is owed.*delivery_pipeline.code_review.*report/);
+    }
+  } finally { f.cleanup(); }
+});
+
+assert.equal(d37Selected, 2, 'exact dispatch D37 registration');
 done();

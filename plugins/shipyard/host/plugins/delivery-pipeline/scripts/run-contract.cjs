@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const policy = require('./model-policy.cjs');
 const adapters = require('./runtime-adapters.cjs');
+const { PHASE_SUBJECT_ROLES, PHASE_ONLY_ROLES } = require('./architecture-target.cjs');
 
 const SCHEMA = 'shipyard.run.v1';
 const VERSION = 1;
@@ -191,7 +192,7 @@ function normalizeModel(runtime, value, field = 'model', version = policy.POLICY
   const entry = Object.entries(map).find(([key, native]) => (keyOnly ? key === value : concreteOnly ? native === value : key === value || native === value));
   if (entry) return { model_key: entry[0], model: entry[1] };
   const foreign = RUNTIMES.some(candidate => candidate !== runtime && Object.entries(adapters.recordedPalette(version, candidate)).some(([key, native]) => key === value || native === value));
-  const crossed = ['adr-014.v6', 'adr-014.v7'].some(candidate => Object.values(adapters.recordedPalette(candidate, runtime)).includes(value));
+  const crossed = ['adr-014.v6', 'adr-014.v7', 'adr-014.v8'].some(candidate => Object.values(adapters.recordedPalette(candidate, runtime)).includes(value));
   refuse(foreign || crossed ? 'RUNTIME_MODEL_MISMATCH' : 'UNSUPPORTED_MODEL', `${field} is not registered for recorded runtime/policy`);
 }
 
@@ -226,10 +227,10 @@ function normalizeTicketIdentity(input, { role, phase } = {}) {
   const isSubject = typeof ticket === 'string' && ticket.startsWith('phase=');
   const value = isSubject ? safeString(ticket, 'ticket', { whitespace: true }) : safeId(ticket, 'ticket');
   const target = isSubject ? require('./architecture-target.cjs') : null;
-  const ticketId = /^T-[A-Z0-9][A-Z0-9._-]*$/i.test(value);
+  const ticketId = !PHASE_ONLY_ROLES.includes(role) && /^T-[A-Z0-9][A-Z0-9._-]*$/i.test(value);
   const integratorSubject = target && target.parseSubject('integrator', value);
   const subject = integratorSubject && [value, integratorSubject.phase.split('-')[0]];
-  const aggregate = role === 'arch-review' && target && target.PHASE_SUBJECT.exec(value);
+  const aggregate = PHASE_SUBJECT_ROLES.includes(role) && target && target.PHASE_SUBJECT.exec(value);
   const phaseSubject = (role === 'integrator' && subject && Number(subject[1]) === Number(phase))
     || (aggregate && Number(aggregate[1].split('-')[0]) === Number(phase));
   const investigation = /^INV-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(value);
@@ -436,7 +437,7 @@ function normalizeRunContract(input, { requireRunId = true } = {}) {
       refuse('SCOPE_MISMATCH', 'planning subject and repository identities disagree');
     }
   }
-  if (dispatch.role === 'arch-review' && ticket.ticket.startsWith('phase=')) {
+  if (PHASE_SUBJECT_ROLES.includes(dispatch.role) && ticket.ticket.startsWith('phase=')) {
     const subject = require('./architecture-target.cjs').PHASE_SUBJECT.exec(ticket.ticket);
     const hashedRepository = 'git-common:' + require('node:crypto').createHash('sha256').update(subject[2]).digest('hex');
     if (repository.repository_id !== subject[2] && repository.repository_id !== hashedRepository)

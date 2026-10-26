@@ -6,6 +6,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 
+const planning = require('./context-packet.cjs');
+
 const SCHEMA = 'shipyard.phase-integrator-preflight.v1';
 const OUTPUT_MAX_BYTES = 256 * 1024;
 const PROOF_MAX_BYTES = 64 * 1024;
@@ -93,13 +95,15 @@ function phaseRows(graph, phase) {
 }
 
 function assertCompletePlanSet(worktree, planDir, rows) {
+  const directory = planning.planningReferencePath(worktree, planDir);
   let names;
-  try { names = fs.readdirSync(path.join(worktree, planDir)); } catch { refuse(`plan directory ${planDir} is unreadable`); }
+  try { names = fs.readdirSync(directory); } catch { refuse(`plan directory ${planDir} is unreadable`); }
   const plans = names.filter((name) => /^\d+-\d+-PLAN\.md$/.test(name)).map((name) => path.join(planDir, name)).sort();
   const mapped = rows.map(({ row }) => path.normalize(row.plan)).sort();
   if (canonicalJson(plans) !== canonicalJson(mapped)) {
     refuse(`graph ticket set does not match the phase plan set (plans=${plans.length}, tickets=${mapped.length}); re-run decompose`);
   }
+  return plans.map(relative => planning.planningReferencePin(worktree, relative));
 }
 
 function pinEpic(options, worktree, epic) {
@@ -166,13 +170,16 @@ function preflight(input, options = {}) {
   if (!/^[1-9]\d{0,3}$/.test(phase)) refuse('--phase must be a phase number');
   if (!input.graphDir || !input.worktree) refuse('--graph-dir and --worktree are required');
   const worktree = path.resolve(input.worktree);
+  let reference;
+  try { reference = planning.resolvePlanningReference({ worktree, graphDir: input.graphDir }); }
+  catch (error) { refuse(error.message); }
   const graphFile = path.join(input.graphDir, 'tickets.json');
   const graph = readJson(graphFile, 'canonical graph');
   const statePath = path.join(input.graphDir, 'delivery-state.json');
   const stateInput = fs.existsSync(statePath) ? readJson(statePath, 'delivery state') : null;
   const state = stateInput?.value || {};
   const { rows, planDir, epic } = phaseRows(graph.value, phase);
-  assertCompletePlanSet(worktree, planDir, rows);
+  const plans = assertCompletePlanSet(reference.root, planDir, rows);
   const pinned = pinEpic(options, worktree, epic);
   const head = git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']);
   if (head !== pinned.commit) refuse(`integrator worktree HEAD ${head} is not the pinned ${epic} head ${pinned.commit}`);
@@ -187,14 +194,18 @@ function preflight(input, options = {}) {
   if (again.commit !== pinned.commit || again.tree !== pinned.tree) refuse(`${epic} moved during preflight; re-run preflight`);
   if (git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']) !== head)
     refuse('integrator HEAD moved during complete membership preflight');
-  assertCompletePlanSet(worktree, planDir, rows);
   if (readJson(graphFile, 'current graph').text !== graph.text
       || (fs.existsSync(statePath) ? readJson(statePath, 'current delivery state').text : null) !== (stateInput?.text || null))
     refuse('graph or delivery membership changed during complete preflight');
+  planning.authenticatedPlanningRoot(worktree, reference);
+  if (canonicalJson(assertCompletePlanSet(reference.root, planDir, rows)) !== canonicalJson(plans))
+    refuse('complete phase plans changed during preflight');
   const proof = {
     schema: SCHEMA,
     phase,
     plan_dir: planDir,
+    planning_reference: reference,
+    plans,
     graph: { path: 'tickets.json', directory: path.resolve(input.graphDir), digest: sha(graph.text), phase_rows_digest: sha(canonicalJson(rows)) },
     epic: { branch: epic, commit: pinned.commit, tree: pinned.tree },
     ticket_set: ticketSet,

@@ -48,13 +48,152 @@ const CODEx_BASE = {
   integrator: ['sol', 'gpt-6.1-sol', 'high'],
   'drift-check': ['sol', 'gpt-6.1-sol', 'low'],
   'arch-review': ['sol', 'gpt-6.1-sol', 'high'],
+  'code-review': ['sol', 'gpt-6.1-sol', 'high'],
   'ci-fix': ['sol', 'gpt-6.1-sol', 'low'],
   'review-fix': ['sol', 'gpt-6.1-sol', 'low'],
 };
 
+const V7_POLICY_HASH = '3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570';
+
+const V7_POLICY = {
+  id: 'ADR-014',
+  repair_prerequisites: {
+    'ci-fix': {
+      repeat: { effort: 'low', logical_model: 'sol', model: 'gpt-6.1-sol', model_key: 'sol' },
+      repeat_exhausted: { effort: 'high', logical_model: 'sol', model: 'gpt-6.1-sol', model_key: 'sol' },
+    },
+    'review-fix': {
+      repeat: { effort: 'low', logical_model: 'sol', model: 'gpt-6.1-sol', model_key: 'sol' },
+      repeat_exhausted: { effort: 'high', logical_model: 'sol', model: 'gpt-6.1-sol', model_key: 'sol' },
+    },
+  },
+  role_classes: {
+    dynamic: ['executor', 'decomposition'],
+    fixed: ['pr-sentinel', 'drift-check'],
+    judgement: ['integrator', 'arch-review'],
+    repair: ['ci-fix', 'review-fix'],
+  },
+  role_rungs: {
+    claude: {
+      'arch-review': [{ effort: 'xhigh', model_key: 'sonnet', name: 'base' }, { effort: 'high', model_key: 'opus', name: 'critical' }, { effort: 'medium', model_key: 'fable', name: 'ceiling' }],
+      'ci-fix': [{ effort: 'high', model_key: 'sonnet', name: 'base' }, { effort: 'xhigh', model_key: 'sonnet', name: 'repeat' }, { effort: 'high', model_key: 'opus', name: 'repeat_exhausted' }],
+      decomposition: [{ effort: 'xhigh', model_key: 'sonnet', name: 'base' }, { effort: 'high', model_key: 'opus', name: 'critical' }],
+      'drift-check': [{ effort: 'medium', model_key: 'sonnet', name: 'base' }],
+      executor: [{ effort: 'medium', model_key: 'sonnet', name: 'base' }, { effort: 'xhigh', model_key: 'sonnet', name: 'critical' }],
+      integrator: [{ effort: 'xhigh', model_key: 'sonnet', name: 'base' }, { effort: 'high', model_key: 'opus', name: 'critical' }],
+      'pr-sentinel': [{ effort: 'low', model_key: 'sonnet', name: 'base' }],
+      research: [{ effort: 'xhigh', model_key: 'sonnet', name: 'base' }, { effort: 'high', model_key: 'opus', name: 'very-complex' }],
+      'review-fix': [{ effort: 'high', model_key: 'sonnet', name: 'base' }, { effort: 'xhigh', model_key: 'sonnet', name: 'repeat' }, { effort: 'high', model_key: 'opus', name: 'repeat_exhausted' }],
+    },
+    codex: {
+      'arch-review': [{ effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'base' }, { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'critical' }],
+      'ci-fix': [{ effort: 'low', logical_model: 'sol', model_key: 'sol', name: 'base' }, { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'repeat' }, { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'repeat_exhausted' }],
+      decomposition: [{ effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'base' }, { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'critical' }],
+      'drift-check': [{ effort: 'low', logical_model: 'sol', model_key: 'sol', name: 'base' }],
+      executor: [{ effort: 'low', logical_model: 'sol', model_key: 'sol', name: 'base' }, { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'critical' }],
+      integrator: [{ effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'base' }, { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'critical' }],
+      'pr-sentinel': [{ effort: 'medium', logical_model: 'luna', model_key: 'luna', name: 'base' }],
+      research: [{ effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'base' }, { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'very-complex' }],
+      'review-fix': [{ effort: 'low', logical_model: 'sol', model_key: 'sol', name: 'base' }, { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'repeat' }, { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'repeat_exhausted' }],
+    },
+  },
+  roles: {
+    'arch-review': [
+      { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'base' },
+      { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'critical' },
+    ],
+    'ci-fix': [
+      { effort: 'low', logical_model: 'sol', model_key: 'sol', name: 'base' },
+      { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'repeat' },
+      { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'repeat_exhausted' },
+    ],
+    decomposition: [
+      { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'base' },
+      { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'critical' },
+    ],
+    'drift-check': [{ effort: 'low', logical_model: 'sol', model_key: 'sol', name: 'base' }],
+    executor: [
+      { effort: 'low', logical_model: 'sol', model_key: 'sol', name: 'base' },
+      { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'critical' },
+    ],
+    integrator: [
+      { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'base' },
+      { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'critical' },
+    ],
+    'pr-sentinel': [{ effort: 'medium', logical_model: 'luna', model_key: 'luna', name: 'base' }],
+    research: [
+      { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'base' },
+      { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'very-complex' },
+    ],
+    'review-fix': [
+      { effort: 'low', logical_model: 'sol', model_key: 'sol', name: 'base' },
+      { effort: 'high', logical_model: 'sol', model_key: 'sol', name: 'repeat' },
+      { effort: 'xhigh', logical_model: 'sol', model_key: 'sol', name: 'repeat_exhausted' },
+    ],
+  },
+  runtime_repair_prerequisites: {
+    claude: {
+      'ci-fix': { repeat: { effort: 'high', logical_model: 'sonnet', model: 'claude-sonnet-5-5', model_key: 'sonnet' }, repeat_exhausted: { effort: 'xhigh', logical_model: 'sonnet', model: 'claude-sonnet-5-5', model_key: 'sonnet' } },
+      'review-fix': { repeat: { effort: 'high', logical_model: 'sonnet', model: 'claude-sonnet-5-5', model_key: 'sonnet' }, repeat_exhausted: { effort: 'xhigh', logical_model: 'sonnet', model: 'claude-sonnet-5-5', model_key: 'sonnet' } },
+    },
+    codex: {
+      'ci-fix': { repeat: { effort: 'low', logical_model: 'sol', model: 'gpt-6.1-sol', model_key: 'sol' }, repeat_exhausted: { effort: 'high', logical_model: 'sol', model: 'gpt-6.1-sol', model_key: 'sol' } },
+      'review-fix': { repeat: { effort: 'low', logical_model: 'sol', model: 'gpt-6.1-sol', model_key: 'sol' }, repeat_exhausted: { effort: 'high', logical_model: 'sol', model: 'gpt-6.1-sol', model_key: 'sol' } },
+    },
+  },
+  runtime_signal_rules: {
+    claude: {
+      'arch-review': { ceiling: { any: [{ inputTokens: { gt_policy: 'window_threshold_tokens' } }], rung: 'ceiling' }, critical: { any: [{ critical: true }, { checkpoint: true }, { contested: true }], rung: 'critical' } },
+      'ci-fix': { repeat: { any: [{ signatureState: 'repeat' }], rung: 'repeat' }, repeat_exhausted: { any: [{ signatureState: 'repeat_exhausted' }], rung: 'repeat_exhausted' } },
+      decomposition: { critical: { any: [{ critical: true }, { checkpoint: true }], rung: 'critical' } },
+      'drift-check': {  },
+      executor: { critical: { any: [{ critical: true }, { checkpoint: true }], rung: 'critical' } },
+      integrator: { critical: { any: [{ critical: true }, { checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }], rung: 'critical' } },
+      'pr-sentinel': {  },
+      research: { 'very-complex':{ any: [{ complexity: 'very-complex' }], rung: 'very-complex' } },
+      'review-fix': { repeat: { any: [{ signatureState: 'repeat' }], rung: 'repeat' }, repeat_exhausted: { any: [{ signatureState: 'repeat_exhausted' }], rung: 'repeat_exhausted' } },
+    },
+    codex: {
+      'arch-review': { critical: { any: [{ critical: true }, { checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }], rung: 'critical' } },
+      'ci-fix': { repeat: { any: [{ signatureState: 'repeat' }], rung: 'repeat' }, repeat_exhausted: { any: [{ signatureState: 'repeat_exhausted' }], rung: 'repeat_exhausted' } },
+      decomposition: { critical: { any: [{ critical: true }, { checkpoint: true }], rung: 'critical' } },
+      'drift-check': {  },
+      executor: { critical: { any: [{ critical: true }, { checkpoint: true }], rung: 'critical' } },
+      integrator: { critical: { any: [{ critical: true }, { checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }], rung: 'critical' } },
+      'pr-sentinel': {  },
+      research: { 'very-complex':{ any: [{ complexity: 'very-complex' }], rung: 'very-complex' } },
+      'review-fix': { repeat: { any: [{ signatureState: 'repeat' }], rung: 'repeat' }, repeat_exhausted: { any: [{ signatureState: 'repeat_exhausted' }], rung: 'repeat_exhausted' } },
+    },
+  },
+  runtimes: { claude: { adapter: 'claude' }, codex: { adapter: 'codex' } },
+  signal_rules: {
+    'arch-review': {
+      critical: { any: [{ critical: true }, { checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }], rung: 'critical' },
+    },
+    'ci-fix': {
+      repeat: { any: [{ signatureState: 'repeat' }], rung: 'repeat' },
+      repeat_exhausted: { any: [{ signatureState: 'repeat_exhausted' }], rung: 'repeat_exhausted' },
+    },
+    decomposition: { critical: { any: [{ critical: true }, { checkpoint: true }], rung: 'critical' } },
+    'drift-check': {  },
+    executor: { critical: { any: [{ critical: true }, { checkpoint: true }], rung: 'critical' } },
+    integrator: {
+      critical: { any: [{ critical: true }, { checkpoint: true }, { contested: true }, { inputTokens: { gt_policy: 'window_threshold_tokens' } }], rung: 'critical' },
+    },
+    'pr-sentinel': {  },
+    research: { 'very-complex':{ any: [{ complexity: 'very-complex' }], rung: 'very-complex' } },
+    'review-fix': {
+      repeat: { any: [{ signatureState: 'repeat' }], rung: 'repeat' },
+      repeat_exhausted: { any: [{ signatureState: 'repeat_exhausted' }], rung: 'repeat_exhausted' },
+    },
+  },
+  version: 'adr-014.v7',
+  window_threshold_tokens: 250000,
+};
+
 suite('ADR-014 canonical policy');
 
-test('exposes exactly the nine routed roles and the concrete Codex palette', () => {
+test('exposes exactly the ten routed roles and the concrete Codex palette', () => {
   assert.deepStrictEqual([...policy.ROLES], Object.keys(CODEx_BASE));
   assert.deepStrictEqual(policy.CODEX_MODEL_IDS, {
     luna: 'gpt-6-luna',
@@ -69,6 +208,9 @@ test('exposes exactly the nine routed roles and the concrete Codex palette', () 
   assert.equal(policy.POLICY.version, policy.POLICY_VERSION);
   assert.equal(policy.POLICY_HASH, policy.fingerprintPolicy(policy.POLICY));
   assert.match(policy.POLICY_HASH, /^[0-9a-f]{64}$/);
+  assert.equal(policy.POLICY_VERSION, 'adr-014.v8');
+  assert.notEqual(policy.POLICY_HASH, V7_POLICY_HASH);
+  assert.equal([...policy.ROLES].indexOf('code-review'), [...policy.ROLES].indexOf('arch-review') + 1);
 });
 
 test('fingerprint covers escalation rules and repair prerequisites', () => {
@@ -100,7 +242,7 @@ test('ordinary executor requests resolve through the canonical resolver with fre
       [result.runtime, result.logical_rung, result.model, result.requested_model, result.effort, result.requested_effort],
       [runtime, 'base', model, model, effort, effort],
     );
-    assert.equal(result.policy_version, 'adr-014.v7');
+    assert.equal(result.policy_version, 'adr-014.v8');
     assert.equal(result.policy_hash, policy.fingerprintPolicy(policy.POLICY));
     assert.notEqual(result.policy_hash, '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968');
   }
@@ -146,6 +288,9 @@ test('resolves Claude through its pinned native grid while preserving Fable wind
     ['arch-review', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'xhigh'],
     ['arch-review', { contested: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
     ['arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'fable', 'medium'],
+    ['code-review', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'xhigh'],
+    ['code-review', { critical: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
+    ['code-review', { checkpoint: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
     ['ci-fix', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'high'],
     ['review-fix', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'high'],
   ];
@@ -621,6 +766,7 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
       integrator: ['gpt-6.1-sol', 'high'],
       'drift-check': ['gpt-6.1-sol', 'low'],
       'arch-review': ['gpt-6.1-sol', 'high'],
+      'code-review': ['gpt-6.1-sol', 'high'],
       'ci-fix': ['gpt-6.1-sol', 'low'],
       'review-fix': ['gpt-6.1-sol', 'low'],
     },
@@ -632,6 +778,7 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
       integrator: ['claude-sonnet-5-5', 'xhigh'],
       'drift-check': ['claude-sonnet-5-5', 'medium'],
       'arch-review': ['claude-sonnet-5-5', 'xhigh'],
+      'code-review': ['claude-sonnet-5-5', 'xhigh'],
       'ci-fix': ['claude-sonnet-5-5', 'high'],
       'review-fix': ['claude-sonnet-5-5', 'high'],
     },
@@ -651,6 +798,8 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
     ['codex', 'arch-review', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
     ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
     ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'code-review', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'code-review', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
     ['claude', 'research', { type: 'alternatives' }, 'base', 'claude-sonnet-5-5', 'xhigh'],
     ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'claude-opus-5-5', 'high'],
     ['claude', 'decomposition', { critical: true }, 'critical', 'claude-opus-5-5', 'high'],
@@ -665,6 +814,8 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
     ['claude', 'arch-review', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'arch-review', { contested: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'medium'],
+    ['claude', 'code-review', { critical: true }, 'critical', 'claude-opus-5-5', 'high'],
+    ['claude', 'code-review', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
   ];
 
   for (const runtime of policy.SUPPORTED_RUNTIMES) {
@@ -859,6 +1010,89 @@ test('stale policy fingerprints and versions cannot validate an otherwise shaped
       );
     }
   }
+});
+
+test('the recorded v7 literal reproduces the v7 fingerprint and v8 changes no existing cell', () => {
+  assert.equal(policy.fingerprintPolicy(V7_POLICY), V7_POLICY_HASH);
+  for (const runtime of policy.SUPPORTED_RUNTIMES) {
+    for (const role of Object.keys(V7_POLICY.role_rungs[runtime])) {
+      assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role], V7_POLICY.role_rungs[runtime][role], `${runtime}/${role} rungs`);
+      assert.deepStrictEqual(policy.RUNTIME_ROLE_SIGNAL_RULES[runtime][role], V7_POLICY.runtime_signal_rules[runtime][role], `${runtime}/${role} signal rules`);
+    }
+    assert.deepStrictEqual(policy.RUNTIME_REPAIR_PREREQUISITES[runtime], V7_POLICY.runtime_repair_prerequisites[runtime], `${runtime} repair prerequisites`);
+    assert.deepStrictEqual(
+      Object.keys(policy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime]).filter((role) => !(role in V7_POLICY.role_rungs[runtime])),
+      ['code-review'],
+      `${runtime} adds only code-review`,
+    );
+  }
+  assert.deepStrictEqual(policy.POLICY.roles, { ...V7_POLICY.roles, 'code-review': policy.POLICY.roles['code-review'] });
+  assert.deepStrictEqual(policy.POLICY.signal_rules, { ...V7_POLICY.signal_rules, 'code-review': policy.POLICY.signal_rules['code-review'] });
+  assert.deepStrictEqual(policy.POLICY.repair_prerequisites, V7_POLICY.repair_prerequisites);
+  assert.deepStrictEqual(policy.POLICY.runtimes, V7_POLICY.runtimes);
+  assert.equal(policy.POLICY.window_threshold_tokens, V7_POLICY.window_threshold_tokens);
+  assert.deepStrictEqual(
+    Object.fromEntries(Object.entries(policy.ROLE_CLASSES).map(([name, roles]) => [name, roles.filter((role) => role !== 'code-review')])),
+    V7_POLICY.role_classes,
+  );
+  assert.ok(policy.ROLE_CLASSES.judgement.includes('code-review'));
+});
+
+test('code-review resolves Sol/high and Sonnet/xhigh at base and promotes only on critical or checkpoint', () => {
+  const codexBase = codex('code-review');
+  assert.deepStrictEqual([codexBase.logical_rung, codexBase.model, codexBase.effort], ['base', 'gpt-6.1-sol', 'high']);
+  assert.equal(codexBase.agent_file, 'shipyard-code-review.toml');
+  assert.equal(codexBase.backend, 'codex-agent');
+  const claudeBase = claude('code-review');
+  assert.deepStrictEqual([claudeBase.logical_rung, claudeBase.model, claudeBase.effort], ['base', 'claude-sonnet-5-5', 'xhigh']);
+  for (const signals of [{ critical: true }, { checkpoint: true }, { critical: true, checkpoint: true }]) {
+    const high = codex('code-review', signals);
+    assert.deepStrictEqual([high.logical_rung, high.model, high.effort], ['critical', 'gpt-6.1-sol', 'xhigh'], JSON.stringify(signals));
+    assert.equal(high.agent_file, 'shipyard-code-review-critical.toml');
+    const opus = claude('code-review', signals);
+    assert.deepStrictEqual([opus.logical_rung, opus.model, opus.effort], ['critical', 'claude-opus-5-5', 'high'], JSON.stringify(signals));
+  }
+  for (const signals of [
+    { contested: true },
+    { risk: 'high' },
+    { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
+    { risk: 'high', contested: true, inputTokens: policy.WINDOW_THRESHOLD_TOKENS * 4 },
+  ]) {
+    for (const resolve of [codex, claude]) {
+      const result = resolve('code-review', signals);
+      assert.equal(result.logical_rung, 'base', `${result.runtime}/${JSON.stringify(signals)} must not promote`);
+      assert.deepStrictEqual(result.selected_signals, []);
+    }
+  }
+  assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude['code-review'].map((rung) => rung.name), ['base', 'critical']);
+  assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.codex['code-review'].map((rung) => rung.name), ['base', 'critical']);
+  for (const runtime of policy.SUPPORTED_RUNTIMES) {
+    assert.deepStrictEqual(Object.keys(policy.RUNTIME_ROLE_SIGNAL_RULES[runtime]['code-review']), ['critical']);
+    assert.deepStrictEqual(policy.RUNTIME_ROLE_SIGNAL_RULES[runtime]['code-review'].critical, {
+      rung: 'critical',
+      any: [{ critical: true }, { checkpoint: true }],
+    });
+  }
+  assert.ok(policy.CODEX_STATIC_ROLES.includes('code-review'));
+  assert.deepStrictEqual(
+    [policy.codexAgentFile('code-review', 'base'), policy.codexAgentFile('code-review', 'critical')],
+    ['shipyard-code-review.toml', 'shipyard-code-review-critical.toml'],
+  );
+});
+
+test('the recorded policy registry keeps v7 and v6 validating beside the active v8', () => {
+  const v7 = runtimeAdapters.recordedPolicyFor('adr-014.v7', { policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH });
+  assert.equal(v7.policy_hash, V7_POLICY_HASH);
+  assert.equal(v7.policy_version, 'adr-014.v7');
+  assert.deepStrictEqual(v7.palettes.codex, policy.CODEX_MODEL_IDS);
+  assert.deepStrictEqual(v7.palettes.claude, policy.CLAUDE_MODEL_ALIASES);
+  assert.equal(runtimeAdapters.recordedPolicyFor('adr-014.v7').policy_hash, V7_POLICY_HASH);
+  const v8 = runtimeAdapters.recordedPolicyFor('adr-014.v8', { policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH });
+  assert.equal(v8.policy_hash, policy.POLICY_HASH);
+  assert.equal(runtimeAdapters.recordedPolicyFor('adr-014.v8'), undefined);
+  assert.equal(runtimeAdapters.recordedPolicyFor('adr-014.v6').policy_hash, '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968');
+  assert.deepStrictEqual(runtimeAdapters.recordedPalette('adr-014.v8', 'codex'), policy.CODEX_MODEL_IDS);
+  assert.deepStrictEqual(runtimeAdapters.recordedPalette('adr-014.v8', 'claude'), policy.CLAUDE_MODEL_ALIASES);
 });
 
 done();

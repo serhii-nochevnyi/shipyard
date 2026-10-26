@@ -72,7 +72,7 @@ fs.writeFileSync(file,JSON.stringify(s));
   assert.equal(packageFreshnessRequired('epic/43-target-project-delivery-at-scale'),false);
   assert.equal(packageFreshnessRequired('ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and'),false);
   const currentPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-  assert.equal(currentPolicy.POLICY_VERSION, 'adr-014.v7');
+  assert.equal(currentPolicy.POLICY_VERSION, 'adr-014.v8');
   function assertCurrentPackage(dir) {
     assert.deepEqual(snapshot(dir), snapshot(out),
       'Marketplace package is stale: run make package-shipyard-codex');
@@ -98,7 +98,7 @@ fs.writeFileSync(file,JSON.stringify(s));
   const staleMirror = path.join(tmp, 'stale-package');
   fs.cpSync(out, staleMirror, { recursive: true });
   const stalePolicy = path.join(staleMirror, 'host/plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
-  fs.writeFileSync(stalePolicy, fs.readFileSync(stalePolicy, 'utf8').replace('adr-014.v7', 'adr-014.v6'));
+  fs.writeFileSync(stalePolicy, fs.readFileSync(stalePolicy, 'utf8').replace('adr-014.v8', 'adr-014.v6'));
   for (const ref of ['', 'main']) {
     assert.throws(() => assertPackageForBase(staleMirror, ref), /Marketplace package is stale/);
   }

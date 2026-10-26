@@ -370,10 +370,21 @@ if (require.main === module) {
     if (!Number.isSafeInteger(pr) || pr < 1) die('verify needs a positive PR number', 2);
     const flags = parseFlags(2, ['repo', 'graph', 'worktree'], 'gate-trailer.cjs verify <pr> [--repo owner/name] [--graph <dir>] [--worktree <path>]');
     try {
-      const checked = verifyArchitectureTarget({ pr, repo: flags.get('repo') || null,
-        graphDir: flags.get('graph'), worktreePath: flags.get('worktree') || process.cwd() });
-      console.log(JSON.stringify(checked));
-      process.exit(checked.ready ? 0 : 1);
+      const repo = flags.get('repo') || null;
+      const worktreePath = flags.get('worktree') || process.cwd();
+      const resolved = require('./graph-dir.cjs').resolveGraphDir([], worktreePath);
+      const graphDir = flags.get('graph') || (resolved.how === 'none' ? null : resolved.dir);
+      let live;
+      const getPullRequest = () => {
+        live = JSON.parse(require('node:child_process').execFileSync('gh', ['pr', 'view', String(pr),
+          ...(repo ? ['--repo', repo] : []), '--json', 'number,state,headRefName,headRefOid,baseRefName,baseRefOid'],
+        { cwd: worktreePath, encoding: 'utf8', timeout: 30000, maxBuffer: 65536 }));
+        return live;
+      };
+      const checked = verifyArchitectureTarget({ pr, repo, graphDir: flags.get('graph'), worktreePath, getPullRequest });
+      const codeReview = require('./phase-code-review.cjs').verifyCodeReview({ live, repo, worktree: worktreePath, graphDir });
+      console.log(JSON.stringify({ ...checked, code_review: codeReview }));
+      process.exit(checked.ready && (!codeReview || codeReview.ok) ? 0 : 1);
     } catch (error) { die(error.message); }
   }
   if (argv[0] === 'carry') runCarry();

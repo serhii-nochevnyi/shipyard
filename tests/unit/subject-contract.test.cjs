@@ -320,7 +320,7 @@ function architectureFixture(name) {
   graph.tickets[helpers.TICKET].epic = 'epic/38-codex-arch-review';
   helpers.write(root, '.planning/graph/tickets.json', JSON.stringify(graph));
   helpers.write(root, '.planning/phases/38-codex-arch-review/38-01-SUMMARY.md', 'Original acceptance.');
-  helpers.write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'develop' } }));
+  helpers.write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'develop' }, delivery_pipeline: { code_review: 'report' } }));
   helpers.git(root, ['branch', 'develop', f.base]);
   helpers.git(root, ['update-ref', 'refs/remotes/origin/develop', f.base]);
   helpers.git(root, ['switch', '-c', graph.tickets[helpers.TICKET].epic]);
@@ -391,4 +391,54 @@ test('every architecture-review producer refuses a semicolon path with REPOSITOR
   await assert.rejects(roleHost.createClaudeRoleHost({ ...f.options, storageRoot: scratch }).run({
     schema: roleHost.REQUEST_SCHEMA, role: 'arch-review', worktree: f.root, phase: '38-codex-arch-review', pr: 801, repo: null }),
   { code: 'REPOSITORY_IDENTITY_INVALID' });
+});
+
+function codeReviewFixture(name) {
+  const f = architectureFixture(name);
+  const helpers = require('./helpers/codex-arch-review-fixtures.cjs');
+  f.graph.epics = { 38: { branch: f.pr.headRefName, phaseDir: '38-codex-arch-review', repos: [null], jira: null } };
+  writeFile(f.root, '.planning/graph/tickets.json', JSON.stringify(f.graph));
+  writeFile(f.root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'develop' },
+    delivery_pipeline: { code_review: 'report' } }));
+  helpers.git(f.root, ['add', '.']); helpers.git(f.root, ['commit', '-m', 'code review graph']);
+  f.pr = { ...f.pr, headRefOid: helpers.git(f.root, ['rev-parse', 'HEAD']) };
+  f.args[0] = 'code-review';
+  return f;
+}
+
+for (const [label, dirName] of PATH_FORMS) {
+  test(`code-review subject agrees across deliver-dispatch, the Codex context and the Claude role host (${label} path)`, async () => {
+    const { normalizeTicketIdentity } = require(SCRIPTS + 'run-contract.cjs');
+    const builder = require(SCRIPTS + 'deliver-dispatch.cjs');
+    const context = require(SCRIPTS + 'codex-code-review-context.cjs');
+    const f = codeReviewFixture(`code-${dirName}`);
+    const identity = target.repositoryIdentity(f.root);
+    const codexRequest = builder.build([...f.args, '--runtime', 'codex'], f.options);
+    const claudeRequest = builder.build([...f.args, '--runtime', 'claude'], f.options);
+    const captured = await claudeSubject(f, claudeRequest);
+    assert.equal(captured.input.repository, identity);
+    assert.equal(captured.binding.subject, codexRequest.scope.ticket);
+    assert.equal(target.parseSubject('architecture-review', codexRequest.scope.ticket).repository, identity);
+    assert.equal(normalizeTicketIdentity(codexRequest.scope.ticket, { role: 'code-review', phase: 38 }).ticket, codexRequest.scope.ticket);
+    const prepared = context.prepare(codexRequest.scope, { role: 'code-review', signals: {}, context: codexRequest.context }, f.options);
+    assert.equal(prepared.prepared.pr, 801);
+  });
+}
+
+test('every code-review producer refuses a semicolon path with REPOSITORY_IDENTITY_INVALID', async () => {
+  const builder = require(SCRIPTS + 'deliver-dispatch.cjs');
+  const context = require(SCRIPTS + 'codex-code-review-context.cjs');
+  const roleHost = require(SCRIPTS + 'claude-role-host.cjs');
+  const flow = require(SCRIPTS + 'phase-code-review.cjs');
+  const f = codeReviewFixture('code-semi;colon');
+  for (const runtime of ['codex', 'claude'])
+    assert.throws(() => builder.build([...f.args, '--runtime', runtime], f.options), { code: 'REPOSITORY_IDENTITY_INVALID' });
+  const scope = { ticket: 'x', phase: 38, worktree: f.root };
+  assert.throws(() => context.prepare(scope, { role: 'code-review', signals: {}, context: {} }, f.options),
+    { code: 'REPOSITORY_IDENTITY_INVALID' });
+  await assert.rejects(roleHost.createClaudeRoleHost({ ...f.options, storageRoot: scratch }).run({
+    schema: roleHost.REQUEST_SCHEMA, role: 'code-review', worktree: f.root, phase: '38-codex-arch-review', pr: 801, repo: null }),
+  { code: 'REPOSITORY_IDENTITY_INVALID' });
+  assert.throws(() => flow.status({ phase: 38, pr: 801, worktree: f.root, graphDir: f.graphDir }, f.options),
+    { code: 'REPOSITORY_IDENTITY_INVALID' });
 });
