@@ -4415,10 +4415,14 @@ function codexPartitionFixture(f, helper, controls = {}) {
               const call = 'integration-read-' + readRows.length;
               const output = require('node:child_process').execSync(read.command, { maxBuffer: 252 * 1024 });
               assert.deepEqual(output, read.bytes);
-              readRows.push({ type: 'response_item', payload: { type: 'function_call', name: 'exec_command', call_id: call,
-                arguments: JSON.stringify({ cmd: read.command, max_output_tokens: 10000 }) } },
-                { type: 'response_item', payload: { type: 'function_call_output', call_id: call,
-                  output: JSON.stringify({ exit_code: 0, output: output.toString('utf8') }) } });
+              const invocation = helper.template(helper.parent, row => row.payload?.type === 'function_call');
+              Object.assign(invocation.payload, { name: 'exec_command', call_id: call,
+                arguments: JSON.stringify({ cmd: read.command, max_output_tokens: 10000 }) });
+              delete invocation.payload.namespace;
+              const response = helper.template(helper.parent, row => row.payload?.type === 'function_call_output');
+              Object.assign(response.payload, { call_id: call,
+                output: JSON.stringify({ exit_code: 0, output: output.toString('utf8') }) });
+              readRows.push(invocation, response);
             }
             input = Buffer.concat(material).toString('utf8');
           }
