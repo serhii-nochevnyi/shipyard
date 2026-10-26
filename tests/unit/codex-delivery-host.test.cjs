@@ -4409,6 +4409,8 @@ function codexPartitionFixture(f, helper, controls = {}) {
             const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
             const material = manifest.assets.map(asset => fs.readFileSync(asset.path));
             const reads = collector.integrationTextReads(bundle, { manifest, manifest_bytes: fs.readFileSync(manifestPath), material });
+            assert.equal(/^MANIFEST_READ=(.+)$/m.exec(wire)?.[1], reads[0].command,
+              'actual relay and native verifier prescribe the same first manifest command');
             for (const read of reads) {
               const call = 'integration-read-' + readRows.length;
               const output = require('node:child_process').execSync(read.command, { maxBuffer: 252 * 1024 });

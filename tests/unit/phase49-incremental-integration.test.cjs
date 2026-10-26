@@ -1579,6 +1579,7 @@ test('D36 codex ingress actual ASCII unit and fresh final retain original produc
     fs.writeFileSync(file, raw);
     const reads = collector.integrationTextReads({ manifest_path: file, chunk_bytes: 8192 },
       { manifest_bytes: raw, manifest: { assets: [] }, material: [] });
+    assert.match(reads.at(-1).command, / '8192' '16384'$/, 'EOF range keeps nominal arguments; the reader clamps actual bytes');
     assert.deepEqual(Buffer.concat(reads.map(read => read.bytes)), raw);
     assert.deepEqual(Buffer.concat(reads.map(read => require('node:child_process').execSync(read.command))), raw);
   } finally { fs.rmSync(textRoot, { recursive: true, force: true }); }
