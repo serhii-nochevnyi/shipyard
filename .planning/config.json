@@ -221,7 +221,6 @@
             "tests/unit/claude-workflow-host.test.cjs",
             "tests/unit/context-packet.test.cjs",
             "tests/unit/dispatch-record.test.cjs",
-            "tests/unit/effort-experiment.test.cjs",
             "tests/unit/harness.test.cjs",
             "tests/unit/orchestration-overhead.test.cjs",
             "tests/unit/pipeline-stats.test.cjs",
