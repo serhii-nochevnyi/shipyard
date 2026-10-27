@@ -32,7 +32,7 @@ function semanticFixture(f, controls = {}) {
   const launches = [], completed = [];
   const pending = [];
   let barrierTimer;
-  options.spawn = () => {
+  options.spawn = (_executable, runtimeArgs) => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = process.pid;
     let input = '';
@@ -40,7 +40,14 @@ function semanticFixture(f, controls = {}) {
       try {
         input = input.replace(/\n$/, '');
         const payload = JSON.parse(input.match(/<AUTHENTICATED_SEMANTIC_REVIEW>\s*([\s\S]*?)\s*<\/AUTHENTICATED_SEMANTIC_REVIEW>/)[1]);
-        const launch = { input, payload }; launches.push(launch);
+        if (payload.input_transport === 'host-files') {
+          for (const source of payload.material) source.content = fs.readFileSync(path.resolve(f.worktree, source.read_path), 'utf8');
+          payload.originals = payload.originals.map(original => {
+            const original_text = fs.readFileSync(path.resolve(f.worktree, original.read_path), 'utf8');
+            return { reference: original.reference, native: original.native, original_text, result: JSON.parse(original_text) };
+          });
+        }
+        const launch = { input, payload, runtime_args: runtimeArgs }; launches.push(launch);
         if (payload.stage === 'final') {
           assert.equal(payload.originals.length, 2);
           for (const item of payload.originals) {
@@ -300,7 +307,7 @@ for (const field of ['source', 'base', 'membership', 'criteria', 'instructions']
   });
 });
 
-for (const mutation of ['worker-as-final', 'reused-session', 'unread', 'truncation', 'missing-usage']) test('refuses ' + mutation + ' authority', async () => {
+for (const mutation of ['worker-as-final', 'reused-session', 'unread', 'truncation', 'window-overflow']) test('refuses ' + mutation + ' authority', async () => {
   await publicIntegrationFixture(async f => {
     let session;
     const prepared = semanticFixture(f, {
@@ -313,7 +320,7 @@ for (const mutation of ['worker-as-final', 'reused-session', 'unread', 'truncati
       native(rows, payload) {
         if (payload.stage !== 'final') return;
         if (mutation === 'truncation') rows.splice(-2, 0, { type: 'event_msg', payload: { type: 'input_truncated' } });
-        if (mutation === 'missing-usage') rows.splice(rows.findIndex(row => row.payload?.type === 'token_count'), 1);
+        if (mutation === 'window-overflow') rows.find(row => row.payload?.type === 'token_count').payload.info.model_context_window = 1;
       }
     });
     await assert.rejects(supportedPartitionCaller(f, 'codex', prepared.options));
@@ -406,7 +413,10 @@ for (const failure of ['failed', 'unfinished', 'truncated', 'missing-usage']) te
     } });
     await assert.rejects(supportedPartitionCaller(f, 'codex', prepared.options), error => error.code === 'SEMANTIC_REVIEW_INCOMPLETE');
     const original = captureOriginals(f, prepared)[0];
-    if (failure === 'missing-usage') assert.ok(original.native.resource_failure);
+    if (failure === 'missing-usage') {
+      assert.equal(original.native.accounting.status, 'unknown');
+      assert.equal(original.native.resource_failure, null);
+    }
     else assert.equal(original.native.reads.incomplete.length, 1);
     assert.equal(currentPartitionConsumer(f), null);
   });

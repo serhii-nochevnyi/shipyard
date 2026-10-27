@@ -44,6 +44,13 @@ function semanticArchitectureProcesses({ worktree, storage, agentText, artifacts
         try {
           input = input.replace(/\n$/, '');
           const payload = JSON.parse(input.match(/<AUTHENTICATED_SEMANTIC_REVIEW>\s*([\s\S]*?)\s*<\/AUTHENTICATED_SEMANTIC_REVIEW>/)[1]);
+          if (payload.input_transport === 'host-files') {
+            for (const source of payload.material) source.content = fs.readFileSync(path.resolve(worktree, source.read_path), 'utf8');
+            payload.originals = payload.originals.map(original => {
+              const original_text = fs.readFileSync(path.resolve(worktree, original.read_path), 'utf8');
+              return { reference: original.reference, native: original.native, original_text, result: JSON.parse(original_text) };
+            });
+          }
           if (payload.stage === 'final') {
             assert.equal(launches.length, 2);
             assert.equal(payload.originals.length, 2);
@@ -508,7 +515,8 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     if (runtime === 'codex') assert.equal(artifacts.currentArchitectureVerdict(verdictInput),null);
     else assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /phase absent|canonical phase epic|membership|digest|one current phase|independently retained current phase roster/);
     fs.writeFileSync(graphPath,originalGraph);
-    const findingsPin = artifacts.authenticatedArchivePins(f.root).find(pin=>pin.path.endsWith('/findings.json'));
+    const findingsPin = artifacts.authenticatedArchivePins(f.root).find(pin => pin.path.endsWith('/findings.json')
+      && (runtime !== 'codex' || JSON.parse(fs.readFileSync(path.join(f.root, pin.path))).stage === 'final'));
     const findingsPath = path.join(f.root,findingsPin.path);
     const originalFindings = fs.readFileSync(findingsPath);
     fs.chmodSync(findingsPath,0o600);
@@ -516,11 +524,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     if (runtime === 'codex') tamperedFindings.reviewed_identity.repo = 'acme/tampered';
     else tamperedFindings.host_context.phase_repo = 'acme/tampered';
     fs.writeFileSync(findingsPath,JSON.stringify(tamperedFindings));
-    if (runtime === 'codex') {
-      const refusals = [];
-      assert.equal(artifacts.currentArchitectureVerdict({ ...verdictInput, onCandidateRefusal: failure => refusals.push(failure) }), null);
-      assert.ok(refusals.some(failure => /pin|size|changed/.test(failure.message)), JSON.stringify(refusals));
-    } else assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /pin|size|changed/);
+    assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /pin|size|changed/);
     fs.writeFileSync(findingsPath,originalFindings); fs.chmodSync(findingsPath,0o400);
     f.pr.baseRefName = graph.tickets[TICKET].epic;
     assert.throws(()=>builder.build([...args,'--runtime','codex'],options),/skipped-by-target/);
