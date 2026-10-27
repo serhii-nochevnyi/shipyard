@@ -842,7 +842,15 @@ test('bounded focused closeout validates original delivery while empirical and f
     t.skip('HOLD: original external coordinator custody unavailable; no installed or bounded acceptance observed');
     return;
   }
-  const report = acceptance.verifyEvidence(ledger);
+  let report;
+  try { report = acceptance.verifyEvidence(ledger); }
+  catch (error) {
+    const repository = path.resolve(__dirname, '../..');
+    const missing = typeof error.path === 'string' ? path.resolve(error.path) : null;
+    if (error.code !== 'ENOENT' || !missing || missing === repository || missing.startsWith(repository + path.sep)) throw error;
+    t.skip('HOLD: original external coordinator custody unavailable; no installed or bounded acceptance observed');
+    return;
+  }
   assert.equal(report.status, 'hold'); assert.equal(report.empirical_acceptance, false);
   assert.equal(report.bounded_closeout, 'passed');
   assert.equal(report.installed_acceptance, true);
