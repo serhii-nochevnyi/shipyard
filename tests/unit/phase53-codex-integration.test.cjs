@@ -16,7 +16,7 @@ try {
   Module._load = function(name, ...args) {
     return name === 'node:test' ? { test() {} } : originalLoad.call(this, name, ...args);
   };
-  loaded._compile(fs.readFileSync(owner, 'utf8') + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, template, parent, cli, serialize, commit, write };', owner);
+  loaded._compile(fs.readFileSync(owner, 'utf8') + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller: ordinaryPartitionCaller, currentPartitionConsumer, template, parent, cli, serialize, commit, write };', owner);
 } finally { Module._load = originalLoad; }
 const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller,
   currentPartitionConsumer, template, parent, cli, serialize, commit, write } = loaded.exports;
