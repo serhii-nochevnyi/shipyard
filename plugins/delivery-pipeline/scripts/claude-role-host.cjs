@@ -1012,7 +1012,7 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
     reject('integrator worktree is not on the canonical default branch');
   }
   const sources = sourceReferences(canonical.projectRoot, graph, selection.rows);
-  const useNativeProof = native && request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3;
+  const useNativeProof = native && [roleArtifact.INTEGRATION_REVIEW_V3, roleArtifact.SEMANTIC_REVIEW_V1].includes(request.review_contract);
   const nativeMergeProof = useNativeProof ? collectNativeMergeProof({ worktree: canonical.worktree,
     graphDir: graph.directory, phase: String(phaseNumber) }, options) : null;
   const { ticketSet, livePullRequests } = nativeMergeProof
