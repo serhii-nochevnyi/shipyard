@@ -36,14 +36,18 @@ fs.writeFileSync(file,JSON.stringify(s));
     assert.equal(invoke().status, 0);
     let s = JSON.parse(fs.readFileSync(state));
     assert.equal(s.plugins[0].enabled, true);
+    assert.equal(s.calls.filter(a => a.join(' ') === 'plugin list --json').length, 2);
     assert(s.calls.some(a => a.join(' ') === `plugin ${runtime === 'codex' ? 'add' : 'install'} gsd-core@gsd-core`));
     s.calls=[];fs.writeFileSync(state,JSON.stringify(s));
     assert.equal(invoke().status,0);
     s=JSON.parse(fs.readFileSync(state));
     assert(s.calls.every(a=>a.includes('list')), 'idempotent check must not reinstall');
+    assert.equal(s.calls.filter(a => a.join(' ') === 'plugin list --json').length, 1);
     s.plugins[0].enabled=false;s.calls=[];fs.writeFileSync(state,JSON.stringify(s));
     assert.equal(invoke().status,0);
     s=JSON.parse(fs.readFileSync(state));assert.equal(s.plugins[0].enabled,true);
+    assert.equal(s.calls.filter(a => a.join(' ') === 'plugin list --json').length, 2);
+    assert(s.calls.some(a => a.join(' ') === `plugin ${runtime === 'codex' ? 'add' : 'enable'} gsd-core@gsd-core`));
     s.plugins=[];s.fail=true;fs.writeFileSync(state,JSON.stringify(s));
     assert.notEqual(invoke().status,0, 'missing dependency must fail installation');
   }
