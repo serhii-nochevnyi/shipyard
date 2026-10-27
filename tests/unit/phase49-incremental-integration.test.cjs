@@ -776,7 +776,7 @@ async function publicIntegrationFixture(action) {
 }
 
 async function supportedPartitionCaller(f, nativeRuntime, options) {
-  const command = fs.readFileSync(path.resolve(__dirname, '../../plugins/delivery-pipeline/commands/deliver.md'), 'utf8');
+  const command = fs.readFileSync(path.resolve(__dirname, '../fixtures/phase49/integration-v3-caller.md'), 'utf8');
   const section = command.slice(command.indexOf('**Fresh final integration contract.**'));
   const snippet = section.match(/```javascript\n([\s\S]*?)\n\s*```/)[1];
   let preliminary = 0;
@@ -793,7 +793,7 @@ async function supportedPartitionCaller(f, nativeRuntime, options) {
     snippet + '\nreturn result;');
   const result = await run(supportedRequire, path.resolve(__dirname, '../../plugins/delivery-pipeline'),
     options, f.worktree, 49, 'supported-v3-' + ++f.count, 'supported-v3-' + f.count, nativeRuntime);
-  assert.equal(preliminary, 1, 'execute the actual documented caller on each supported branch');
+  assert.equal(preliminary, 1, 'execute the preserved v3 caller on each historical branch');
   return result;
 }
 
