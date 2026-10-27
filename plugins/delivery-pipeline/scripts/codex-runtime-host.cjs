@@ -2636,7 +2636,7 @@ function signerProtectionPaths(env, worktree) {
   return normalizeProtectedPaths(paths);
 }
 
-function staticEvidenceWritePath(worktree, launchOptions, sandbox) {
+function staticEvidenceWritePath(worktree, launchOptions, sandbox, protectedPaths = []) {
   if (sandbox !== 'read-only' || typeof launchOptions.agent_file_content !== 'string') return null;
   const names = {
     'shipyard-drift-check.toml': '.shipyard-drift-evidence.md',
@@ -2648,6 +2648,7 @@ function staticEvidenceWritePath(worktree, launchOptions, sandbox) {
   const name = names[launchOptions.agent_file];
   if (!name) return null;
   const file = path.join(worktree, name);
+  if (normalizeProtectedPaths(protectedPaths).some(directory => file === directory || file.startsWith(directory + path.sep))) return null;
   try {
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) fail('INVALID_INPUT', 'role evidence path must be a regular file');
@@ -2812,7 +2813,7 @@ function createCodexCliLauncher(options = {}) {
     try {
     const protectedPaths = normalizeProtectedPaths([...signerProtectionPaths(env, scope.worktree), ...hostProtectedPaths,
       ...(resumeReview?.progress.original_launch.runtime_launch.sandbox_evidence.protected_paths || [])]);
-    const evidenceWritePath = staticEvidenceWritePath(scope.worktree, launchOptions, sandbox);
+    const evidenceWritePath = staticEvidenceWritePath(scope.worktree, launchOptions, sandbox, protectedPaths);
     for (const key of [
       'CODEX_MODEL', 'CODEX_MODEL_REASONING_EFFORT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID',
       'OPENAI_API_KEY', 'CODEX_API_KEY',

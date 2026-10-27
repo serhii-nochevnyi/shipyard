@@ -30,7 +30,7 @@ const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, 
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
-const { isScratch } = require('./conveyor-scratch.cjs');
+const { isScratch, ARCH_REVIEW_EVIDENCE_NAME, CODE_REVIEW_EVIDENCE_NAME } = require('./conveyor-scratch.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
   assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
 
@@ -1027,6 +1027,8 @@ async function runSemanticReview({ prepared, recorder, launch, worktreePath } = 
 
 async function runCodexSemanticReview(review, runtimeHost, scope, options) {
   const prepared = roleArtifact.prepareSemanticReview({ review });
+  const evidenceName = { 'arch-review': ARCH_REVIEW_EVIDENCE_NAME, 'code-review': CODE_REVIEW_EVIDENCE_NAME }[prepared.role];
+  const protectedEvidence = evidenceName ? [path.join(scope.worktree, evidenceName)] : [];
   const assertWorktree = () => require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
     ...review.prepared, integrationReview: { archivePins: roleArtifact.authenticatedArchivePins(scope.worktree) } });
   const launch = async stage => {
@@ -1050,7 +1052,7 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
         executable: options.executable, probe: options.probe, env: options.env, spawn: options.spawn,
         ephemeral: options.ephemeral, approveForMe: options.approveForMe,
         transcriptDir: path.join(storage, 'transcripts'),
-        additionalProtectedPaths: [hostStateRoot(options, scope), roleArtifact.archiveAuthorityDirectory(scope.worktree)] });
+        additionalProtectedPaths: [hostStateRoot(options, scope), roleArtifact.archiveAuthorityDirectory(scope.worktree), ...protectedEvidence] });
       let heartbeatError;
       const heartbeat = controller ? setInterval(() => {
         try { controller.heartbeat(runId); } catch (error) { heartbeatError = error; }
