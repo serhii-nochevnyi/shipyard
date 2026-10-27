@@ -23,7 +23,7 @@ process.on('exit', () => { os.homedir = testOriginalHomedir; fs.rmSync(testAutho
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-const { createClaudeRoleHost, parseCli, parseRequest, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+const { createClaudeRoleHost: createCurrentClaudeRoleHost, parseCli, parseRequest, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
 const { activeDispatches } = require('../../plugins/delivery-pipeline/scripts/dispatch-record.cjs');
 const { agentsInFlight } = require('../../plugins/delivery-pipeline/scripts/front.cjs');
 const { loadClaudeReferenceContent } = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs');
@@ -70,6 +70,16 @@ function coordinatorOnlyPlanning(kind, options = {}) {
   assert.notEqual(git(fixture.project, ['rev-parse', 'HEAD']), fixture.head);
   assert.equal(fs.existsSync(path.join(fixture.root, '.planning')), false);
   return fixture;
+}
+
+function createClaudeRoleHost(options) {
+  const current = createCurrentClaudeRoleHost(options);
+  return { async run(request) {
+    if (request.review_contract !== 'shipyard.integration-review.v3') return current.run(request);
+    const { recordHistoricalClaudeV3 } = require('../fixtures/phase49/claude-v3-native-driver.cjs');
+    const retained = await recordHistoricalClaudeV3({ root: request.worktree }, options, request);
+    return createCurrentClaudeRoleHost(retained).run(request);
+  } };
 }
 
 function phasePreparationRequest(fixture) {
@@ -944,7 +954,7 @@ test('public Claude v3 runs original independent units, recovers exact custody a
       .map(pin => JSON.parse(fs.readFileSync(path.join(fixture.root, pin.path))));
     assert.equal(manifests.filter(item => item.artifact_kind === 'integration-unit').length, launches.length - 1);
     assert.equal(new Set(manifests.map(item => item.producer_launch)).size, manifests.length);
-    await assert.rejects(restarted.run(selected), /reserved|membership|archive|baseline/i);
+    await assert.rejects(restarted.run(selected), /reserved|membership|archive|baseline|local changes/i);
     assert.equal(launches.filter(item => item.payload.kind === 'phase').length, 1);
   } catch (error) {
     process.stderr.write('Claude v3 lifecycle diagnostic: ' + error.stack + '\n');

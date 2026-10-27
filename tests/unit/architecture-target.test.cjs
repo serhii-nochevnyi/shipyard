@@ -459,7 +459,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
             return child;
           }});
       },
-    }).run(claudeRequest);
+    }).run({ ...claudeRequest, review_contract: 'shipyard.focused-architecture-review.v1' });
     assert.equal(native.result.verdict, 'conform');
     assert.equal(native.result.host_context.phase_repo, repo);
     }

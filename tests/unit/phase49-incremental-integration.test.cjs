@@ -776,6 +776,8 @@ async function publicIntegrationFixture(action) {
 }
 
 async function supportedPartitionCaller(f, nativeRuntime, options) {
+  if (nativeRuntime === 'claude' && !options.integrationCapacity?.plan_sha256)
+    options = await require('../fixtures/phase49/claude-v3-native-driver.cjs').recordHistoricalClaudeV3(f, options);
   const command = fs.readFileSync(path.resolve(__dirname, '../fixtures/phase49/integration-v3-caller.md'), 'utf8');
   return partitionCallerFromDocument(f, nativeRuntime, options, command);
 }
