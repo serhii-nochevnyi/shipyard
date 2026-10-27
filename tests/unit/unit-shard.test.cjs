@@ -57,7 +57,7 @@ test('virtual integration tasks expand before assignment with complete disjoint 
   assert.deepEqual(shards.unitTasks([...files].reverse()), expectedTasks);
   assert.deepEqual(shards.unitTasks(['ordinary.test.cjs']), ['ordinary.test.cjs']);
   for (let count = 1; count <= 8; count++) {
-    const selections = Array.from({ length: count }, (_, index) => shards.selectTaskShard(`${index + 1}/${count}`));
+    const selections = shards.assign(expectedTasks, weights, count).map(shard => shard.files);
     const selected = selections.flat();
     assert.deepEqual([...selected].sort(), expectedTasks, `count ${count}`);
     assert.equal(new Set(selected).size, expectedTasks.length);
@@ -103,28 +103,87 @@ test('the CLI prints one repository-relative path per file of the shard', () => 
   assert.ok(printed.every((file) => fs.existsSync(path.join(root, file))));
 });
 
-test('CI runs as many unit shards as the workflow matrix declares', () => {
+test('frozen shards cover all tasks and preserve existing shards when new tests arrive', () => {
+  const baseline = shards.readManifest();
+  const manifest = shards.appendShard(baseline, expectedTasks);
+  assert.deepEqual(manifest.shards.slice(0, baseline.shards.length), baseline.shards);
+  assert.ok(manifest.shards.length >= 16);
+  const seen = manifest.shards.flat();
+  assert.deepEqual([...seen].sort(), expectedTasks);
+  assert.equal(new Set(seen).size, seen.length);
+  for (let index = 0; index < manifest.shards.length; index++)
+    assert.deepEqual(shards.selectTaskShard(`${index + 1}/${manifest.shards.length}`), manifest.shards[index]);
+  const added = [...expectedTasks, 'brand-new.test.cjs', 'brand-new-two.test.cjs'];
+  assert.throws(() => shards.validateManifest(manifest, added), /unassigned tests/);
+  const extended = shards.appendShard(manifest, added);
+  assert.deepEqual(extended.shards.slice(0, manifest.shards.length), manifest.shards);
+  assert.deepEqual(extended.shards.slice(manifest.shards.length), [['brand-new-two.test.cjs'], ['brand-new.test.cjs']]);
+  assert.deepEqual(shards.appendShard(extended, added), extended);
+  const further = shards.appendShard(extended, [...added, 'another-new.test.cjs']);
+  assert.deepEqual(further.shards.slice(0, extended.shards.length), extended.shards);
+  assert.deepEqual(further.shards[extended.shards.length], ['another-new.test.cjs']);
+  assert.throws(() => shards.validateManifest({ ...manifest, shards: [...manifest.shards, [seen[0]]] }, expectedTasks), /duplicate/);
+  assert.throws(() => shards.validateManifest(manifest, expectedTasks.slice(1)), /stale/);
+  assert.throws(() => shards.selectTaskShard('1/6'), /count must match/);
+});
+
+test('the CLI isolates new tests automatically and can freeze them without moving existing tasks', () => {
+  const directory = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'unit-shard-cli-'));
+  try {
+    const script = path.join(directory, 'shard-files.cjs');
+    fs.copyFileSync(path.join(__dirname, 'shard-files.cjs'), script);
+    const baseline = { version: 1, shards: Array.from({ length: 16 }, (_, i) => [`fixture-${i}.test.cjs`]) };
+    for (const file of baseline.shards.flat()) fs.writeFileSync(path.join(directory, file), '');
+    const manifestPath = path.join(directory, 'shard-manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify(baseline));
+    const run = arg => spawnSync(process.execPath, [script, arg], { encoding: 'utf8' });
+    assert.equal(run('--matrix').status, 0);
+    fs.writeFileSync(path.join(directory, 'new.test.cjs'), '');
+    const automatic = run('--matrix');
+    assert.equal(automatic.status, 0, automatic.stderr);
+    assert.equal(JSON.parse(automatic.stdout).shard.length, 17);
+    assert.deepEqual(JSON.parse(fs.readFileSync(manifestPath, 'utf8')), baseline);
+    fs.writeFileSync(path.join(directory, 'another-new.test.cjs'), '');
+    assert.equal(JSON.parse(run('--matrix').stdout).shard.length, 18);
+    assert.deepEqual(shards.selectTaskShard('17/18', directory, baseline), ['another-new.test.cjs']);
+    assert.deepEqual(shards.selectTaskShard('18/18', directory, baseline), ['new.test.cjs']);
+    const tasks = shards.unitTasks(shards.unitFiles(directory));
+    const selected = Array.from({ length: 18 }, (_, i) => shards.selectTaskShard(`${i + 1}/18`, directory, baseline)).flat();
+    assert.deepEqual(selected.sort(), tasks);
+    assert.equal(new Set(selected).size, tasks.length);
+    assert.throws(() => shards.selectTaskShard('1/16', directory, baseline), /count must match/);
+    assert.equal(run('--append').status, 0);
+    const extended = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.deepEqual(extended.shards, [...baseline.shards, ['another-new.test.cjs'], ['new.test.cjs']]);
+    assert.equal(JSON.parse(run('--matrix').stdout).shard.length, 18);
+    const saved = fs.readFileSync(manifestPath, 'utf8');
+    assert.equal(run('--append').status, 0);
+    assert.equal(fs.readFileSync(manifestPath, 'utf8'), saved);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('CI derives its matrix from the validated manifest', () => {
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'shard-files.cjs'), '--matrix'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = shards.appendShard(shards.readManifest(), expectedTasks);
+  assert.deepEqual(JSON.parse(result.stdout), { shard: manifest.shards.map((_, i) => `${i + 1}/${manifest.shards.length}`) });
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/test.yml'), 'utf8');
-  const matrix = /shard:\s*\[([^\]]+)\]/.exec(workflow);
-  assert.ok(matrix, 'the unit job declares a shard matrix');
-  const declared = matrix[1].split(',').map((item) => Number(item.trim()));
-  assert.deepEqual(declared, [1, 2, 3, 4, 5, 6], 'matrix is exactly six shards');
+  assert.ok(workflow.includes('matrix: ${{ fromJSON(needs.shards.outputs.matrix) }}'));
+  assert.ok(workflow.includes('node tests/unit/shard-files.cjs --matrix'));
+  assert.ok(workflow.includes('UNIT_SHARD: ${{ matrix.shard }}'));
   assert.match(workflow, /fail-fast: false/);
   assert.match(workflow, /timeout-minutes: 90/);
-  for (const pattern of [/UNIT_SHARD:\s*\$\{\{ matrix\.shard \}\}\/(\d+)/, /unit \(shard \$\{\{ matrix\.shard \}\}\/(\d+)\)/, /unit tests, shard \$\{\{ matrix\.shard \}\}\/(\d+)/]) {
-    const found = pattern.exec(workflow);
-    assert.ok(found, `${pattern} is present`);
-    assert.equal(Number(found[1]), declared.length, 'denominator equals the number of matrix shards');
-  }
 });
 
 test('the test-fast job is the single result and waits for every part', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/test.yml'), 'utf8');
-  assert.match(workflow, /\n {2}test-fast:\n {4}needs: \[unit, rest\]\n {4}if: always\(\)/);
+  assert.match(workflow, /\n {2}test-fast:\n {4}needs: \[shards, unit, rest\]\n {4}if: always\(\)/);
   assert.match(workflow, /run: make test-fast-rest/);
   assert.ok(workflow.includes('UNIT: ${{ needs.unit.result }}'));
   assert.ok(workflow.includes('REST: ${{ needs.rest.result }}'));
-  assert.ok(workflow.includes('[ "$UNIT" = "success" ] && [ "$REST" = "success" ]'));
+  assert.ok(workflow.includes('[ "$SHARDS" = "success" ] && [ "$UNIT" = "success" ] && [ "$REST" = "success" ]'));
   const makefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8');
   assert.match(makefile, /^test-fast: test-unit \$\(TEST_FAST_REST\)$/m);
   assert.match(makefile, /^test-fast-rest: \$\(TEST_FAST_REST\)$/m);
