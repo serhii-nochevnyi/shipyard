@@ -2002,7 +2002,7 @@ function finishSemanticArchitecture(value, dispatch, result, recorder) {
     } } };
   const artifact = roleArtifact.sealJudgment(input);
   roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
-  return Object.freeze({ ...dispatch, result, artifact });
+  return Object.freeze({ ...dispatch, subject: prepared.ticket, result, artifact });
 }
 
 function validateSemanticArchitectureFinal(result, snapshot) {

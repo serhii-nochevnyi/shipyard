@@ -236,6 +236,7 @@ test('ordinary architecture overlaps two originals and authenticates a distinct 
     const result = await ordinaryArchitecture(f, prepared);
     assert.equal(result.result.review_contract, contract);
     assert.equal(result.role, 'arch-review');
+    assert.equal(result.subject, phaseBinding(f).subject);
     assert.equal(result.receipt.role, 'arch-review');
     assert.equal(prepared.recorder.getVerifiedRecord(result.dispatch_id).subject_kind, 'phase');
     assert.equal(prepared.recorder.getVerifiedRecord(result.dispatch_id).ticket, phaseBinding(f).subject);

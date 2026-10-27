@@ -373,7 +373,9 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
         } });
     const result = JSON.parse(output);
     assert.equal(result.subject, request.scope.ticket);
-    const codexFindings = JSON.parse(fs.readFileSync(path.join(f.root,artifacts.authenticatedArchivePins(f.root).find(pin=>pin.path.endsWith('/findings.json')).path)));
+    const finalManifest = JSON.parse(fs.readFileSync(result.artifact.artifact_path));
+    const codexFindings = JSON.parse(fs.readFileSync(path.resolve(f.root, finalManifest.files.findings.path)));
+    assert.equal(codexFindings.stage, 'final');
     assert.equal(codexFindings.reviewed_identity.repo,repo);
     assert.deepEqual(codexFindings.ticket_set.map(row => row.id), [TICKET]);
     assert.equal(native.launches.length, 3);
@@ -514,7 +516,11 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     if (runtime === 'codex') tamperedFindings.reviewed_identity.repo = 'acme/tampered';
     else tamperedFindings.host_context.phase_repo = 'acme/tampered';
     fs.writeFileSync(findingsPath,JSON.stringify(tamperedFindings));
-    assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /pin|size|changed/);
+    if (runtime === 'codex') {
+      const refusals = [];
+      assert.equal(artifacts.currentArchitectureVerdict({ ...verdictInput, onCandidateRefusal: failure => refusals.push(failure) }), null);
+      assert.ok(refusals.some(failure => /pin|size|changed/.test(failure.message)), JSON.stringify(refusals));
+    } else assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /pin|size|changed/);
     fs.writeFileSync(findingsPath,originalFindings); fs.chmodSync(findingsPath,0o400);
     f.pr.baseRefName = graph.tickets[TICKET].epic;
     assert.throws(()=>builder.build([...args,'--runtime','codex'],options),/skipped-by-target/);
