@@ -1940,10 +1940,6 @@ function recheckSemanticArchitecture(snapshot, options = {}) {
     fail('architecture integration configuration membership moved', 'STALE_CONTEXT');
   const graph = JSON.parse(file(identity.project, '.planning/graph/tickets.json').content);
   const raw = JSON.parse(file(identity.project, '.planning/graph/delivery-state.json').content);
-  // Cold readers reach this only through the authenticated semantic snapshot. Its
-  // base_name was verified against the host-resolved integration branch during
-  // collection. Retain that selection when no live host resolver is available;
-  // project configuration, current git/source pins and live PR checks still apply.
   const integration = resolveIntegrationBranch({ projectRoot: identity.project, repo: identity.repo,
     defaultBranch: options.defaultBranch ?? (options.execFileSync ? undefined : identity.base_name),
     exec: options.execFileSync || execFileSync });

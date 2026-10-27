@@ -209,7 +209,6 @@ test('ordinary mixed-repository architecture preserves ' + (repo || 'project') +
       snapshot_sha256: original.payload.snapshot_sha256, assignment_id: original.payload.assignment.id });
     assert.equal(retained.original_text, original.text);
     if (repo) {
-      // Fresh host resolution must override the retained cold-reader selection.
       if (adapter === 'defaultBranch') prepared.options.defaultBranch = 'moved-integration';
       else resolvedIntegration = 'moved-integration';
       await assert.rejects(ordinaryArchitecture(f, prepared, { context: { repo } }),
@@ -218,14 +217,12 @@ test('ordinary mixed-repository architecture preserves ' + (repo || 'project') +
       else resolvedIntegration = integration;
       assert.equal(prepared.launches.length, 3);
     }
-    // A live retarget still refuses even when the old base commit remains available.
     f.pr.baseRefName = 'ticket/T-49-01';
     await assert.rejects(ordinaryArchitecture(f, prepared, { context: { repo } }),
       error => error.code === 'ARCH_REVIEW_SKIPPED_BY_TARGET');
     assert.equal(prepared.launches.length, 3);
     f.pr.baseRefName = integration;
     assert.ok(currentArchitecture(f)?.authenticated);
-    // Cold acceptance must also retain governing-source checks for the selected repository.
     fs.appendFileSync(path.join(f.worktree, '.planning/architecture/ADR-014-original.md'), '\nchanged obligation\n');
     assert.equal(currentArchitecture(f), null);
     assert.throws(() => authority.readSemanticOriginal({ worktreePath: f.worktree,
