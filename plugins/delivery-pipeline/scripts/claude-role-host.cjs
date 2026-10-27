@@ -1012,7 +1012,7 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
     reject('integrator worktree is not on the canonical default branch');
   }
   const sources = sourceReferences(canonical.projectRoot, graph, selection.rows);
-  const useNativeProof = native && request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3;
+  const useNativeProof = native && [roleArtifact.INTEGRATION_REVIEW_V3, roleArtifact.SEMANTIC_REVIEW_V1].includes(request.review_contract);
   const nativeMergeProof = useNativeProof ? collectNativeMergeProof({ worktree: canonical.worktree,
     graphDir: graph.directory, phase: String(phaseNumber) }, options) : null;
   const { ticketSet, livePullRequests } = nativeMergeProof
@@ -1600,7 +1600,7 @@ function runtimeFor(options, scope, controller, storage, prepared) {
   const runtimeOptions = { scope, controller, readOnlySmoke: options.readOnlySmoke === true,
     ...(nativeIntegrationStages.has(prepared) ? { recorder: nativeIntegrationStages.get(prepared).recorder } : {}),
     recorderDir: path.join(storage, 'receipts'), transcriptDir: path.join(storage, 'transcripts'),
-    ...(prepared.role === 'code-review' ? { spawn(executable, args, spawnOptions) {
+    ...(prepared.role === 'code-review' && nativeIntegrationStages.get(prepared)?.stage?.schema !== roleArtifact.SEMANTIC_REVIEW_V1 ? { spawn(executable, args, spawnOptions) {
       const settingsIndex = args.indexOf('--settings') + 1;
       if (!settingsIndex) reject('code-review runtime lacks sandbox settings', 'RUNTIME_CAPABILITY_MISSING');
       const settings = JSON.parse(args[settingsIndex]);

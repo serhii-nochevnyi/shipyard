@@ -8,7 +8,7 @@ if (process.argv.slice(2).some(value => value !== '--integrator-caller-only') ||
   throw new Error('Unknown integrator caller selection');
 let integratorCallerSelected = 0;
 function test(name, callback) {
-  const selected = name === 'both supported integrator callers select v3 before legacy full-inline formatting';
+  const selected = name === 'supported integrator callers select explicit runtime contracts before legacy full-inline formatting';
   if (integratorCallerOnly && !selected) return;
   if (selected) integratorCallerSelected++;
   return runTest(name, callback);
@@ -95,29 +95,33 @@ test('review roles use the prepared-context CLI and preserve the integrator in-p
   assert.match(step5, /createCodexDeliveryHost\(\{[\s\S]*?role: 'integrator'/);
 });
 
-test('both supported integrator callers select v3 before legacy full-inline formatting', () => {
+test('supported integrator callers select explicit runtime contracts before legacy full-inline formatting', () => {
   const start = step5.indexOf('**Fresh final integration contract.**');
   const end = step5.indexOf('**Phase 41 prelaunch gate', start);
   assert.ok(start >= 0 && end > start);
   const integration = step5.slice(start, end);
   const caller = integration.match(/```javascript\n([\s\S]*?)\n\s*```/)[1];
-  assert.match(caller, /const current = prepareNativeIntegratorContext\(options, \{\s*worktree, phase: String\(phase\), review_contract: 'shipyard\.integration-review\.v3' \}\)/);
+  assert.match(caller, /const reviewContract = runtime === 'codex'\s*\? 'shipyard\.semantic-review\.v1' : 'shipyard\.integration-review\.v3'/);
+  assert.match(caller, /const current = prepareNativeIntegratorContext\(options, \{\s*worktree, phase: String\(phase\), review_contract: reviewContract \}\)/);
   assert.ok(!caller.includes('prepareIntegratorContext'));
-  assert.strictEqual((caller.match(/review_contract: 'shipyard\.integration-review\.v3'/g) || []).length, 3);
+  assert.strictEqual((caller.match(/review_contract: reviewContract/g) || []).length, 3);
   assert.match(caller, /scope: \{[\s\S]*run_id, worktree, repository: current.canonical.commonPath,[\s\S]*phase: current.phaseNumber, ticket: phaseSubject/);
   assert.match(caller, /schema: 'shipyard.claude-role-request.v1',[\s\S]*role: 'integrator', worktree, phase: String\(phase\)/);
   for (const field of ['dispatch_id', 'stage', 'unit_id', 'index', 'receipt', 'model', 'capacity', 'input_budget'])
     assert.ok(!new RegExp('\\b' + field + '\\s*:').test(caller), `caller must not serialize ${field} authority`);
-  assert.match(integration, /Omit `options\.integrationCapacity` entirely for this production observed\s+default on both runtimes/);
-  assert.match(integration, /Supplied strict capacity resources retain their original exact\/certified/);
-  assert.match(integration, /Malformed supplied resources refuse rather than fall back to observed mode/);
-  assert.match(integration, /original receipt-pinned CLI\/session/);
-  assert.match(integration, /actual per-request usage/);
-  assert.match(integration, /overflow, compaction,[\s\S]*truncation and incomplete answers produce HOLD/);
-  assert.match(integration, /same-plan completed-unit reuse/);
-  assert.match(integration, /separate.*Codex.*Claude/s);
+  assert.match(integration, /Omit `options\.integrationCapacity`, reader profiles and manual read budgets/);
+  assert.match(integration, /Two physical worker sessions start concurrently/);
+  assert.match(integration, /Every obligation has exactly one primary owner/);
+  assert.match(integration, /ordinary source\/diff reads and auxiliary\s+metadata/);
+  assert.match(integration, /blocked\/incomplete originals/);
+  assert.match(integration, /distinct independent final receives full authenticated originals/);
+  assert.match(integration, /currentIntegrationVerdict/);
+  assert.match(integration, /gate-trailer\.verifyCurrentReviews/);
+  assert.match(integration, /unknown outcome[\s\S]*never silently retried/);
+  assert.match(integration, /Existing v3 bytes never become\s+semantic v1 authority/);
+  assert.match(integration, /Codex and Claude remains separate/);
   assert.match(integration, /R8 INCOMPLETE/);
-  assert.match(integration, /human.*merge/s);
+  assert.match(integration, /human[\s\S]*merge/);
 });
 
 test('restore runs after live evidence reads and before every integrator outcome branch', () => {

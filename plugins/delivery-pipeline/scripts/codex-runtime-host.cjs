@@ -868,7 +868,10 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort, live = false
     if (typeof wait.call_id !== 'string' || !outputs.has(wait.call_id)) {
       fail('RUNTIME_EVIDENCE_MISSING', 'native parent has an unfinished child wait');
     }
-    try { return JSON.parse(outputs.get(wait.call_id)); }
+    const reported = outputs.get(wait.call_id);
+    // @invariant: Interrupted waits grant no completion; the separately bound child must complete exactly once.
+    if (reported === 'Wait interrupted by new input.') return { timed_out: false, interrupted: true };
+    try { return JSON.parse(reported); }
     catch (_) { fail('RUNTIME_EVIDENCE_INVALID', 'native wait output is invalid'); }
   });
   if (!waitResults.every((waited) => object(waited) && typeof waited.timed_out === 'boolean')) {
@@ -878,6 +881,7 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort, live = false
     parent_thread_id: parentId, call_id: call.call_id,
     task_name: args.task_name, task_path: output.task_name,
     timed_out: waitResults.some((waited) => waited.timed_out),
+    ...(waitResults.some(waited => waited.interrupted) ? { interrupted: true } : {}),
   });
 }
 
@@ -2244,6 +2248,72 @@ function verifyCompletedReviewConsumption(selectors) {
     semantic_credit: false, current_verdict_authority: false });
 }
 
+function verifySemanticReads(raw) {
+  const rows = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const starts = rows.flatMap((row, index) => row.type === 'event_msg' && row.payload?.type === 'task_started' ? [index] : []);
+  const ends = rows.flatMap((row, index) => row.type === 'event_msg' && row.payload?.type === 'task_complete' ? [index] : []);
+  if (starts.length !== 1 || ends.length !== 1 || starts[0] >= ends[0])
+    fail('RUNTIME_EVIDENCE_INVALID', 'semantic reads require one original completed native turn');
+  const finals = rows.flatMap((row, index) => row.type === 'response_item' && row.payload?.phase === 'final_answer' ? [index] : []);
+  const users = rows.flatMap((row, index) => row.type === 'response_item' && row.payload?.role === 'user' ? [index] : []);
+  if (finals.length !== 1 || users.length !== 1 || users[0] <= starts[0] || users[0] >= finals[0] || finals[0] >= ends[0])
+    fail('RUNTIME_EVIDENCE_INVALID', 'semantic reads require the original ordered input and final');
+  const boundary = finals[0], turn = rows[starts[0]].payload.turn_id;
+  const calls = new Map(), incomplete = [], completed = [];
+  let outputBytes = 0;
+  const unpack = value => {
+    if (Array.isArray(value)) {
+      if (value.some(block => !['text', 'input_text'].includes(block?.type) || typeof block.text !== 'string')) return [];
+      return value.flatMap(block => unpack(block.text));
+    }
+    if (typeof value === 'string') {
+      try { return unpack(JSON.parse(value)); }
+      catch {
+        const completed = /^(?:Chunk ID: [^\n]+\n)?Wall time: [^\n]+\nProcess exited with code (-?\d+)\n(?:Final output|Output):\n([\s\S]*)$/.exec(value);
+        return completed ? [{ exit_code: Number(completed[1]), output: completed[2] }] : [];
+      }
+    }
+    return object(value) && (Object.hasOwn(value, 'exit_code') || Object.hasOwn(value, 'session_id')) ? [value] : [];
+  };
+  for (let index = 0; index < rows.length; index++) {
+    const item = rows[index].type === 'response_item' ? rows[index].payload : null;
+    if (!item) continue;
+    const operations = batchPhysicalArguments(item);
+    const opaque = !operations.length && item.type === 'custom_tool_call'
+      && ['exec', 'functions.exec'].includes(item.name) && /tools\.exec_command\s*\(/.test(item.input || '');
+    if (opaque) operations.push({ cmd: item.input });
+    if (operations.length) {
+      if (index <= users[0] || index >= boundary || !item.call_id || calls.has(item.call_id)
+          || item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
+            && item.internal_chat_message_metadata_passthrough.turn_id !== turn)
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic read has a foreign or duplicate native call');
+      calls.set(item.call_id, { operations, opaque, custom: item.type === 'custom_tool_call', completed: false });
+    }
+    if (!['function_call_output', 'custom_tool_call_output'].includes(item.type) || !calls.has(item.call_id)) continue;
+    const call = calls.get(item.call_id);
+    if (call.completed || index >= boundary || call.custom !== (item.type === 'custom_tool_call_output')
+        || item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
+        && item.internal_chat_message_metadata_passthrough.turn_id !== turn)
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic read output has a foreign or duplicate identity');
+    call.completed = true;
+    const encoded = JSON.stringify(item.output);
+    outputBytes += Buffer.byteLength(encoded);
+    if (outputBytes > NATIVE_SESSION_MAX_BYTES) fail('RUNTIME_EVIDENCE_INVALID', 'semantic read outputs exceed native bound');
+    const results = unpack(item.output);
+    const outer = Array.isArray(item.output) ? item.output[0]?.text : item.output;
+    const truncated = /^Warning: truncated output \(original token count:/i.test(outer || '')
+      || results.some(result => result.truncated === true || /^Warning: truncated output \(original token count:/i.test(result.output || ''));
+    const reason = truncated ? 'truncated' : !results.length || !call.opaque && results.length !== call.operations.length ? 'unread'
+      : results.some(result => result.exit_code !== 0 || result.session_id !== undefined) ? 'unfinished-or-failed' : null;
+    (reason ? incomplete : completed).push({ call_id: item.call_id,
+      commands: call.operations.map(operation => operation.cmd), ...(reason ? { reason } : {}) });
+  }
+  for (const [call_id, call] of calls) if (!call.completed) incomplete.push({ call_id, reason: 'missing-output',
+    commands: call.operations.map(operation => operation.cmd) });
+  return freeze({ schema: 'shipyard.semantic-native-reads.v1', completed, incomplete, output_bytes: outputBytes,
+    semantic_credit: false });
+}
+
 function batchPhysicalArguments(item) {
   if (item.type === 'function_call' && /(?:^|[._])exec_command$/.test(item.name || '')) {
     try { return [JSON.parse(item.arguments)]; } catch { return []; }
@@ -2566,7 +2636,7 @@ function signerProtectionPaths(env, worktree) {
   return normalizeProtectedPaths(paths);
 }
 
-function staticEvidenceWritePath(worktree, launchOptions, sandbox) {
+function staticEvidenceWritePath(worktree, launchOptions, sandbox, protectedPaths = []) {
   if (sandbox !== 'read-only' || typeof launchOptions.agent_file_content !== 'string') return null;
   const names = {
     'shipyard-drift-check.toml': '.shipyard-drift-evidence.md',
@@ -2578,6 +2648,7 @@ function staticEvidenceWritePath(worktree, launchOptions, sandbox) {
   const name = names[launchOptions.agent_file];
   if (!name) return null;
   const file = path.join(worktree, name);
+  if (normalizeProtectedPaths(protectedPaths).some(directory => file === directory || file.startsWith(directory + path.sep))) return null;
   try {
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) fail('INVALID_INPUT', 'role evidence path must be a regular file');
@@ -2742,7 +2813,7 @@ function createCodexCliLauncher(options = {}) {
     try {
     const protectedPaths = normalizeProtectedPaths([...signerProtectionPaths(env, scope.worktree), ...hostProtectedPaths,
       ...(resumeReview?.progress.original_launch.runtime_launch.sandbox_evidence.protected_paths || [])]);
-    const evidenceWritePath = staticEvidenceWritePath(scope.worktree, launchOptions, sandbox);
+    const evidenceWritePath = staticEvidenceWritePath(scope.worktree, launchOptions, sandbox, protectedPaths);
     for (const key of [
       'CODEX_MODEL', 'CODEX_MODEL_REASONING_EFFORT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID',
       'OPENAI_API_KEY', 'CODEX_API_KEY',
@@ -3875,6 +3946,7 @@ module.exports = Object.freeze({
   parseNativeCodexTranscript,
   parseNativeParentSpawn,
   parseNativeChildTranscript,
+  verifySemanticReads,
   installedGsdAgent,
   signerProtectionPaths,
   signerPermissionProfileArgs,

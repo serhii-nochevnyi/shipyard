@@ -670,6 +670,15 @@ test('recorded CLI 0.157.1 parent proves an explicit native typed spawn', () => 
   });
   assert.equal(parseNativeParentSpawn(withWaitOutput('{"message":"Wait timed out.","timed_out":true}'),
     parent, 'gsd-plan-checker', 'gpt-6-luna', 'low').task_name, 'gsd_task');
+  const interruption = parseNativeParentSpawn(withWaitOutput('Wait interrupted by new input.'),
+    parent, 'gsd-plan-checker', 'gpt-6-luna', 'low');
+  assert.equal(interruption.interrupted, true);
+  assert.equal(interruption.timed_out, false);
+  for (const near of ['Wait interrupted by new input', ' Wait interrupted by new input.',
+    'Wait interrupted by new input.\n', 'wait interrupted by new input.']) {
+    assert.throws(() => parseNativeParentSpawn(withWaitOutput(near), parent, 'gsd-plan-checker', 'gpt-6-luna', 'low'),
+      error => error.code === 'RUNTIME_EVIDENCE_INVALID');
+  }
   for (const bad of ['{"message":"Wait completed."}', '{"timed_out":"false"}', 'not json', '[]']) {
     assert.throws(() => parseNativeParentSpawn(withWaitOutput(bad), parent, 'gsd-plan-checker', 'gpt-6-luna', 'low'),
       (error) => error.code === 'RUNTIME_EVIDENCE_INVALID');
@@ -800,7 +809,7 @@ test('typed launch accepts a completed native child after timeout-only parent wa
     return record;
   });
   assert.ok(!timeoutOnly.includes('"timed_out\\":false'));
-  const runLaunch = async (childTranscript) => {
+  const runLaunch = async (childTranscript, parentTranscript = timeoutOnly) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-timeout-'));
     const codeHome = path.join(root, 'codex-home');
     try {
@@ -810,7 +819,7 @@ test('typed launch accepts a completed native child after timeout-only parent wa
       const launch = createCodexCliLauncher({
         scope: { ...SCOPE, worktree: path.join(root, 'worktree') }, capabilities,
         taskDir: path.join(root, 'tasks'), env: { CODEX_HOME: codeHome },
-        spawn: () => relayChild(codeHome, timeoutOnly, childTranscript),
+        spawn: () => relayChild(codeHome, parentTranscript, childTranscript),
       });
       let started;
       const result = await launch(CAPTURED_TASK, {
@@ -829,6 +838,27 @@ test('typed launch accepts a completed native child after timeout-only parent wa
   const completion = lines.find((line) => /task_complete/.test(line));
   assert.ok(completion);
   await assert.rejects(runLaunch(lines.concat(completion).join('\n')));
+  const interrupted = transformJsonl(parentRaw, record => {
+    if (record.payload?.type === 'function_call_output' && /timed_out/.test(String(record.payload.output)))
+      record.payload.output = 'Wait interrupted by new input.';
+    return record;
+  });
+  assert.equal((await runLaunch(childRaw, interrupted)).runtime_evidence.native_child_evidence.session_id, child);
+  await assert.rejects(runLaunch(null, interrupted));
+  await assert.rejects(runLaunch(lines.filter(line => line !== completion).join('\n'), interrupted));
+  await assert.rejects(runLaunch(lines.concat(completion).join('\n'), interrupted));
+  for (const field of ['parent', 'task', 'role', 'model', 'instructions']) {
+    const foreign = transformJsonl(childRaw, record => {
+      if (field === 'parent' && record.type === 'session_meta') record.payload.parent_thread_id = 'foreign';
+      if (field === 'task' && record.type === 'session_meta') record.payload.agent_path = '/root/foreign';
+      if (field === 'role' && record.type === 'session_meta') record.payload.agent_role = 'gsd-planner';
+      if (field === 'model' && record.type === 'turn_context') record.payload.model = 'foreign-model';
+      if (field === 'instructions' && record.payload?.role === 'developer'
+          && record.payload.content[0]?.text === instructions) record.payload.content[0].text += 'changed';
+      return record;
+    });
+    await assert.rejects(runLaunch(foreign, interrupted));
+  }
 });
 
 test('typed launch relays the task by host-owned file path and digest outside the worktree', async () => {
