@@ -41,6 +41,13 @@ function architectureFixture(f, controls = {}) {
       try {
         input = input.replace(/\n$/, '');
         const payload = JSON.parse(input.match(/<AUTHENTICATED_SEMANTIC_REVIEW>\s*([\s\S]*?)\s*<\/AUTHENTICATED_SEMANTIC_REVIEW>/)[1]);
+        if (payload.input_transport === 'host-files') {
+          for (const source of payload.material) source.content = fs.readFileSync(path.resolve(f.worktree, source.read_path), 'utf8');
+          payload.originals = payload.originals.map(original => {
+            const original_text = fs.readFileSync(path.resolve(f.worktree, original.read_path), 'utf8');
+            return { reference: original.reference, native: original.native, original_text, result: JSON.parse(original_text) };
+          });
+        }
         const launch = { input, payload }; launches.push(launch);
         if (payload.stage === 'final') {
           assert.equal(payload.originals.length, 2);
