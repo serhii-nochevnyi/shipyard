@@ -198,6 +198,7 @@ function atomicReplaceJson(file, value) {
     fs.writeFileSync(fd, JSON.stringify(value) + '\n', 'utf8');
     fs.fsyncSync(fd);
     fs.closeSync(fd);
+    fd = undefined;
     fs.renameSync(temp, file);
     fsyncDirectory(path.dirname(file));
   } finally {

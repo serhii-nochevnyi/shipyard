@@ -2423,8 +2423,13 @@ loop:
      derives the graph-bound PR diff and ADR corpus through its architecture
      context after launch preflight. Claude's role host derives those inputs at
      launch and validates the request.
-     The Claude role host's read-only profile grants write access only to
-     `.shipyard-arch-review-evidence.md` for the complete judgment artifact.
+     Ordinary Claude architecture requests select `shipyard.semantic-review.v1`
+     without a mode switch or manual capacity parameters. The shared coordinator
+     overlaps two native workers for architecture boundaries and obligations,
+     then starts one distinct native final after durable original reports. Each
+     session receives its own schema, stdin, transcript and receipt custody.
+     The host writes `.shipyard-arch-review-evidence.md` from the authenticated
+     final; worker sessions use the native read-only tool profile.
      Codex's generated `shipyard-arch-review.toml` and
      `shipyard-arch-review-critical.toml` files do not establish this evidence
      contract.
@@ -2986,17 +2991,15 @@ driving PRs hands the user a half-truth.
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
 
-     **Fresh final integration contract.** Ordinary Codex integration selects
-     `shipyard.semantic-review.v1`. Claude remains explicitly on
-     `shipyard.integration-review.v3` until its native conversion in T-53-03.
+     **Fresh final integration contract.** Ordinary Codex and Claude integration
+     select `shipyard.semantic-review.v1` through the same host coordinator.
      Preliminary subject preparation collects full native facts and merge/ancestry
      proof without formatting a legacy full-inline prompt:
 
      ```javascript
      const { prepareNativeIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
      const { createCodexDeliveryHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs`);
-     const reviewContract = runtime === 'codex'
-       ? 'shipyard.semantic-review.v1' : 'shipyard.integration-review.v3';
+     const reviewContract = 'shipyard.semantic-review.v1';
      const current = prepareNativeIntegratorContext(options, {
        worktree, phase: String(phase), review_contract: reviewContract });
      const phaseSubject = current.ticket;
@@ -3014,7 +3017,7 @@ driving PRs hands the user a half-truth.
      `options` selects the canonical graph and supported installed runtime.
      Omit `options.integrationCapacity`, reader profiles and manual read budgets.
      No assignment, receipt, model or stage authority belongs in the request.
-     The Codex host freezes `shipyard.semantic-review-snapshot.v1` with complete
+     Each host freezes `shipyard.semantic-review-snapshot.v1` with complete
      actual product sources, byte-identical aliases, acceptance/verification,
      governing criteria, current graph/membership and HEAD/base/merge proof,
      policy and installed instruction pins. Product selection uses the shared
@@ -3048,9 +3051,10 @@ driving PRs hands the user a half-truth.
      final model/effort and actual per-request usage/window come from original
      receipt-pinned CLI/session records, never model-authored telemetry.
 
-     Claude's unconverted v3 coordinator and historical/in-flight Codex v3 records
-     retain their original versioned partition, admission, ordered-read and
-     same-plan completed-unit reuse contracts. Existing v3 bytes never become
+     Historical/in-flight v3 records retain their original versioned partition,
+     admission and ordered-read contracts. Claude can finish sealing already
+     recorded native v3 work with its original protected plan and receipt store;
+     it never schedules or renders new v3 sessions. Existing v3 bytes never become
      semantic v1 authority. Supplied strict capacity resources on that historical
      contract retain their original exact/certified admission requirements;
      malformed resources refuse. Legacy v1/v2 remain under their own contracts.

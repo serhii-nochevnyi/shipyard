@@ -74,7 +74,8 @@ function coordinatorOnlyPlanning(kind, options = {}) {
 
 function phasePreparationRequest(fixture) {
   return { schema: REQUEST_SCHEMA, role: fixture.kind, worktree: fixture.root, phase: PHASE,
-    ...(fixture.kind === 'integrator' ? {} : { pr: 101 }) };
+    ...(fixture.kind === 'integrator' ? { review_contract: 'shipyard.integration-review.v1' }
+      : fixture.kind === 'arch-review' ? { review_contract: 'shipyard.focused-architecture-review.v1', pr: 101 } : { pr: 101 }) };
 }
 
 function registerCoordinatorRoster(fixture) {
@@ -1119,12 +1120,13 @@ function cleanupFixture(fixture) {
 
 function request(fixture) {
   return fixture.kind === 'arch-review'
-    ? { schema: REQUEST_SCHEMA, role: 'arch-review', worktree: fixture.root, ticket: TICKET, pr: 101 }
+    ? { schema: REQUEST_SCHEMA, role: 'arch-review', worktree: fixture.root, ticket: TICKET, pr: 101,
+        review_contract: 'shipyard.focused-architecture-review.v1' }
     : fixture.kind === 'pr-sentinel'
       ? { schema: REQUEST_SCHEMA, role: 'pr-sentinel', worktree: fixture.root, phase: fixture.phase }
-    : { schema: REQUEST_SCHEMA, role: 'integrator', worktree: fixture.root, phase: PHASE };
+    : { schema: REQUEST_SCHEMA, role: 'integrator', worktree: fixture.root, phase: PHASE,
+        review_contract: 'shipyard.integration-review.v1' };
 }
-
 test('request contract accepts only host-owned role selectors and capability probe arguments', async () => {
   const fixture = setupRepository('arch-review');
   try {
