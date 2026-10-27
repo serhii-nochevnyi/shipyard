@@ -1024,21 +1024,25 @@ for (const nativeRuntime of ['codex', 'claude']) {
 test('actual final caller and reviewer reference require trusted preparation and fresh complete coverage', () => {
   const command = fs.readFileSync(path.resolve(__dirname, '../../plugins/delivery-pipeline/commands/deliver.md'), 'utf8');
   const reference = fs.readFileSync(path.resolve(__dirname, '../../plugins/delivery-pipeline/references/integrator.md'), 'utf8');
-  for (const text of [command, reference]) {
-    assert.match(text, /shipyard\.integration-review\.v[23]/);
-    assert.match(text, /shipyard\.integration-coverage-result\.v1/);
-    assert.match(text, /reviewed_identity/);
-    assert.match(text, /fresh native/);
-    assert.match(text, /failed.*(?:history|rejected)/s);
-  }
-  assert.match(command, /selectReviewBaseline\(\{currentInput\}\)/);
-  assert.match(command, /buildReviewImpactPacket\(currentInput, selection\)/);
-  assert.match(command, /createCodexDeliveryHost[\s\S]*review_contract: 'shipyard\.integration-review\.v3'/);
+  const historical = fs.readFileSync(path.resolve(__dirname, '../fixtures/phase49/integration-v3-caller.md'), 'utf8');
+  assert.match(command, /shipyard\.semantic-review\.v1/);
+  assert.match(command, /prepareNativeIntegratorContext/);
+  assert.match(command, /createCodexDeliveryHost[\s\S]*context: \{ review_contract: reviewContract \}/);
   assert.match(command, /createClaudeRoleHost\(options\)\.run/);
+  assert.match(command, /shipyard\.semantic-review-snapshot\.v1/);
+  assert.match(reference, /shipyard\.integration-review\.v[23]/);
+  assert.match(reference, /shipyard\.integration-coverage-result\.v1/);
+  assert.match(reference, /reviewed_identity/);
+  assert.match(reference, /fresh native/);
+  assert.match(reference, /failed.*(?:history|rejected)/s);
+  assert.match(historical, /prepareNativeIntegratorContext/);
+  assert.match(historical, /context: \{ review_contract: 'shipyard\.integration-review\.v3' \}/);
+  assert.match(historical, /review_contract: 'shipyard\.integration-review\.v3'/);
   assert.match(reference, /inherited_obligations/);
   assert.match(reference, /newly_reviewed_obligations/);
   assert.match(reference, /input_manifest_sha256/);
 });
+
 async function fixture(action) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-lineage-')));
   const originalHome = os.homedir, originalCodex = process.env.CODEX_HOME;
