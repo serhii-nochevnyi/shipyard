@@ -48,7 +48,6 @@
  "dispatch-boundary.test.cjs": 20,
  "dispatch-record.test.cjs": 18,
  "drift-needed.test.cjs": 26,
- "effort-experiment.test.cjs": 0.6,
  "escalation-record.test.cjs": 6,
  "failure-signature.test.cjs": 9,
  "files-contract.test.cjs": 7,

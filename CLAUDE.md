@@ -79,9 +79,9 @@ The conveyor has three layers:
 Codex artifacts are generated. Edit the Claude command or shared script first,
 then run `make package-shipyard-codex` and inspect the generated result.
 The marketplace package under `plugins/shipyard` is generated; never edit its
-`host/` copy directly. Ticket PRs into an `epic/*` branch, or stacked on a `ticket/*` branch, do not regenerate it and CI
-skips its staleness check for them; regenerate it once on the epic before the
-epic → `main` PR, where the check is enforced. GSD is a required marketplace dependency on both hosts.
+`host/` copy directly. CI skips the staleness check for ticket PRs into an `epic/*` branch, but the package tests compare
+the build with the committed mirror, so a ticket that changes the packaged file set regenerates it;
+the check is enforced on the epic → `main` PR. GSD is a required marketplace dependency on both hosts.
 
 The deterministic scripts own decisions that can be computed: frontmatter
 parsing, graph validation, ticket and PR matching, state synchronization,

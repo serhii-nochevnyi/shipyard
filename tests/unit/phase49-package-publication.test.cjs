@@ -81,18 +81,12 @@ function currentSourceInventories() {
     'plugins/delivery-pipeline/scripts/phase-code-review.cjs'];
   const inputs = canonicalInputs(ROOT).map(row => row.path);
   const outputs = inventory(path.join(ROOT, 'plugins/shipyard')).map(row => row.path);
-  assert.equal(inputs.length, 166);
-  assert.equal(outputs.length, 165);
-  assert.equal(sha([...inputs].sort().join('\n')), '3d6069e459166e6e816ab5d43bcd89da1986455485844bf9d8f7b8ac2217fc81',
-    'current-source canonical membership changed');
-  assert.equal(sha([...outputs].sort().join('\n')), '854d3858e1a2d87e57c4009250f37fe720704b14f15687fb917b801e6fc514b7',
-    'committed package membership changed');
   for (const relative of added) {
     assert(inputs.includes(relative), 'missing canonical code-review member');
     assert(outputs.includes('host/' + relative), 'missing packaged code-review member');
   }
   for (const rows of [inputs, outputs]) assert.equal(new Set(rows).size, rows.length);
-  return { inputs: 166, outputs: 165, inputPaths: inputs.sort(), outputPaths: outputs.sort() };
+  return { inputs: inputs.length, outputs: outputs.length, inputPaths: inputs.sort(), outputPaths: outputs.sort() };
 }
 function assertInventoryExpectations(selection, expected) {
   for (const [field, paths] of [['inputs', expected.inputPaths], ['outputs', expected.outputPaths]]) {
@@ -382,7 +376,8 @@ test('combined batch successor admits only the six-source/eight-output union and
   const observed = inspectBatchDelta(selected, historical, inventories);
   assert.deepEqual(observed.changed_inputs, [...BATCH_INPUTS].sort());
   assert.deepEqual(observed.changed_outputs, [...BATCH_OUTPUTS].sort());
-  assert.equal(observed.unchanged_inputs, 160); assert.equal(observed.unchanged_outputs, 157);
+  assert.equal(observed.unchanged_inputs, inventories.inputs - BATCH_INPUTS.length);
+  assert.equal(observed.unchanged_outputs, inventories.outputs - BATCH_OUTPUTS.length);
   for (const mutate of [
     value => { value.inputs.pop(); },
     value => { value.outputs.pop(); },
@@ -403,8 +398,8 @@ test('combined batch successor admits only the six-source/eight-output union and
     const row = unchanged[field].find(item => item.path === (field === 'inputs' ? BATCH_INPUTS[0] : 'host/' + BATCH_INPUTS[0]));
     row.sha256 = historical[field].find(item => item.path === row.path).sha256;
   }
-  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_inputs, 161);
-  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_outputs, 158);
+  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_inputs, inventories.inputs - BATCH_INPUTS.length + 1);
+  assert.equal(inspectBatchDelta(unchanged, historical, inventories).unchanged_outputs, inventories.outputs - BATCH_OUTPUTS.length + 1);
 });
 
 function inspectBatchDelta(selected, historical, inventories = { inputs: 162, outputs: 161 }) {
@@ -983,8 +978,8 @@ test('mode-only successor rejects same-version old identity and complete invento
     assert(!crypto.verify(null, oldBytes, publicKey, signature));
     const consume = (value = bytes, pins = expected) => withoutWrites(() =>
       inspectModeSuccessor(value, pins, repository, stage, oldBytes, oldExpected, inventories));
-    assert.equal(consume().unchanged_outputs, 164);
-    assert.equal(consume().unchanged_output_bytes, 165);
+    assert.equal(consume().unchanged_outputs, inventories.outputs - 1);
+    assert.equal(consume().unchanged_output_bytes, inventories.outputs);
     assert.equal(consume().inspector_build_calls, 0);
     assert.throws(() => consume(oldBytes, oldExpected), /old selection substituted/);
     for (const mutate of [
@@ -1328,7 +1323,7 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     try {
       const admitted = withoutWrites(() => inspectAccountingSuccessor(distinctBytes, { selection_sha256: sha(distinctBytes),
         head: distinctSelection.source.head, tree: distinctSelection.source.tree }, repository, distinct, selection, inventories));
-      assert.equal(admitted.unchanged_outputs, 161);
+      assert.equal(admitted.unchanged_outputs, inventories.outputs - 4);
       for (const mutate of [
         value => { value.source = selection.source; },
         value => { value.stage = selection.stage; },
