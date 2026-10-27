@@ -977,15 +977,15 @@ function finishIntegrationReview(review, dispatch, recorder) {
   return Object.freeze({ ...dispatch, result: judgment, artifact });
 }
 
-function partitionedCodexResult(dispatch, recorder) {
+function partitionedCodexResult(dispatch, recorder, role = 'integrator') {
   const recorded = recorder?.getVerifiedRecord?.(dispatch?.dispatch_id);
   const receipt = recorded?.receipt;
-  if (!recorded || recorded.role !== 'integrator' || recorded.dispatch_id !== dispatch?.dispatch_id
-      || dispatch.runtime !== 'codex' || dispatch.role !== 'integrator' || receipt?.role !== 'integrator'
+  if (!recorded || recorded.role !== role || recorded.dispatch_id !== dispatch?.dispatch_id
+      || dispatch.runtime !== 'codex' || dispatch.role !== role || receipt?.role !== role
       || receipt.runtime !== 'codex' || receipt.dispatch_id !== dispatch.dispatch_id || receipt.compliance !== 'verified'
       || stableStringify(receipt) !== stableStringify(dispatch.receipt)
       || stableStringify(receipt.runtime_evidence) !== stableStringify(dispatch.application_evidence?.runtime_evidence))
-    fail('MISSING_RECEIPT', 'partition requires its original verified durable integrator receipt');
+    fail('MISSING_RECEIPT', 'partition requires its original verified durable ' + role + ' receipt');
   const pin = receipt.runtime_evidence?.transcript;
   if (!pin || !path.isAbsolute(pin.path || '') || pin.bytes < 1 || pin.bytes > 128 * 1024 * 1024)
     fail('MISSING_RECEIPT', 'partition requires its original complete native stream');
@@ -1026,8 +1026,11 @@ async function runSemanticReview({ prepared, recorder, launch, worktreePath } = 
 }
 
 async function runCodexSemanticReview(review, runtimeHost, scope, options) {
-  const prepared = roleArtifact.prepareSemanticReview({ review });
-  const assertWorktree = () => require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
+  const architecture = review.architecture;
+  const prepared = roleArtifact.prepareSemanticReview(architecture ? { architecture } : { review });
+  const role = prepared.role;
+  const assertWorktree = architecture ? () => archReviewContext.recheckPreparedSemanticArchitecture(architecture)
+    : () => require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
     ...review.prepared, integrationReview: { archivePins: roleArtifact.authenticatedArchivePins(scope.worktree) } });
   const launch = async stage => {
     assertWorktree();
@@ -1035,16 +1038,16 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
     let dispatch;
     if (reservation.state === 'recorded') {
       const original = runtimeHost.recorder.getVerifiedRecord(stage.dispatch_id);
-      dispatch = { runtime: 'codex', role: 'integrator', dispatch_id: stage.dispatch_id,
+      dispatch = { runtime: 'codex', role, dispatch_id: stage.dispatch_id,
         receipt: original.receipt, application_evidence: { runtime_evidence: original.receipt.runtime_evidence } };
     } else {
       const runId = 'semantic-' + crypto.randomUUID(), ownerId = 'semantic-owner-' + crypto.randomUUID();
       const nativeScope = { ...scope, run_id: runId };
       const storage = storageDirectory(options, nativeScope);
       const controller = options.controller === false ? null : createRunController({ storeDir: path.join(storage, 'controller'), ownerId });
-      if (controller) controller.begin(createRunScope({ run_id: runId, repository_id: review.prepared.canonical.commonPath,
+      if (controller) controller.begin(createRunScope({ run_id: runId, repository_id: prepared.identity.repository,
         phase: scope.phase, ticket: scope.ticket, worktree: scope.worktree, runtime: 'codex', owner_id: ownerId,
-        dispatch: { runtime: 'codex', role: 'integrator', dispatch_id: stage.dispatch_id } }));
+        dispatch: { runtime: 'codex', role, dispatch_id: stage.dispatch_id } }));
       const native = createCodexRuntimeHost({ scope: nativeScope, controller, recorder: runtimeHost.recorder,
         capabilities: runtimeHost.capabilities, agentDir: options.agentDir, agentManifest: options.agentManifest,
         executable: options.executable, probe: options.probe, env: options.env, spawn: options.spawn,
@@ -1058,11 +1061,12 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
       heartbeat?.unref();
       try {
         const installed = installedAgentOptions(options, {}, native.capabilities);
-        dispatch = await launchAgent('integrator', { cwd: scope.worktree, flags: new Map(),
+        dispatch = await launchAgent(role, { cwd: scope.worktree, flags: new Map(),
           signals: review.prepared.signals, dispatch_id: stage.dispatch_id, scope: native.scope,
           host: native, recorder: native.recorder, controller, capabilities: native.capabilities,
           agentDir: installed.agentDir, agentManifest: installed.agentManifest, env: options.env || process.env,
           context: { ticket: scope.ticket, phase: scope.phase, worktreePath: scope.worktree,
+            ...(role === 'arch-review' && scope.ticket.startsWith('phase=') ? { subject_kind: 'phase' } : {}),
             runtime: 'codex', provider: 'openai', prompt: Buffer.from(stage.input).subarray(stage.prefix_bytes).toString('utf8') } });
         if (heartbeatError) throw heartbeatError;
         assertWorktree();
@@ -1072,13 +1076,14 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
         throw error;
       } finally { if (heartbeat) clearInterval(heartbeat); }
     }
-    const result = partitionedCodexResult(dispatch, runtimeHost.recorder);
+    const result = partitionedCodexResult(dispatch, runtimeHost.recorder, role);
     if (stage.stage === 'worker') return Object.freeze({ ...dispatch, result });
+    if (architecture) return archReviewContext.finishSemanticArchitecture(architecture, dispatch, result, runtimeHost.recorder);
     const { evidence_markdown, ...judgment } = result;
     const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
-    roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase, evidencePath });
+    roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role, phase: review.prepared.phase, evidencePath });
     fs.writeFileSync(evidencePath, evidence_markdown);
-    const input = { worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase,
+    const input = { worktreePath: scope.worktree, role, phase: review.prepared.phase,
       ticket: scope.ticket, base: review.prepared.base, ticketSet: review.prepared.ticketSet,
       ticketSetDigest: review.prepared.ticketSetDigest, recorder: runtimeHost.recorder, dispatchId: stage.dispatch_id,
       result: judgment, evidencePath };
@@ -1102,6 +1107,18 @@ function prepareCodexSemanticReview(scope, request, options) {
     generatedInstructionBytes: instructions.generated_instruction_bytes,
     instructionBinding: { agent_file: selected.agent_file, agent_path: path.resolve(installed.agentDir, installed.agentFile),
       agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
+}
+
+function prepareCodexSemanticArchitecture(scope, request, options) {
+  const architecture = options.archReviewContext || archReviewContext.prepareSemanticArchitecture(scope, request, {
+    ...options, inflightDispatchId: request.dispatch_id, storageRoot: storageDirectory(options, scope) });
+  if (!archReviewContext.isSemanticArchitecture(architecture) || architecture.prepared.ticket !== scope.ticket
+      || architecture.prepared.phaseNumber !== scope.phase || architecture.prepared.canonical.worktree !== scope.worktree)
+    fail('INVALID_INPUT', 'private semantic architecture context must match the current scope');
+  const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: architecture.prepared.signals });
+  const installed = installedAgentOptions(options, selected, options.host?.capabilities || options.capabilities);
+  archReviewContext.bindSemanticArchitecture(architecture, installed);
+  return { architecture, prepared: architecture.prepared };
 }
 
 async function runCodexIntegrationPartitions(review, runtimeHost, scope, options) {
@@ -3349,6 +3366,15 @@ function createCodexDeliveryHost(options = {}) {
     resumeRepairActions: (dispatchId, liveScope) => resumeRepairActions(options, dispatchId, liveScope),
     async run(rawRequest) {
       const request = requestValue(rawRequest);
+      if (request.role === 'arch-review' && (!options.archReviewContext
+          || archReviewContext.isSemanticArchitecture(options.archReviewContext))) {
+        if (partitionRunning) fail('INVALID_INPUT', 'semantic architecture execution is already active');
+        partitionRunning = true;
+        try {
+          const review = prepareCodexSemanticArchitecture(scope, request, { ...options, host: runtimeHost });
+          return await runCodexSemanticReview(review, runtimeHost, scope, options);
+        } finally { partitionRunning = false; }
+      }
       if (request.context.review_contract === roleArtifact.SEMANTIC_REVIEW_V1) {
         if (partitionRunning) fail('INVALID_INPUT', 'semantic execution is already active');
         partitionRunning = true;
@@ -4006,9 +4032,20 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     graphDir: inflightGraphDir(options, scope.worktree),
     ...stateInputs() });
   if (checkOnly || gate.code !== 0) return gate.result;
-  const archDispatchId = parsed.launch.role === 'arch-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
+  if (parsed.launch.role === 'arch-review' && !options.archReviewContext && options.dispatchId) {
+    const original = archReviewContext.restoreAdmittedArchitecture(options.dispatchId, scope);
+    if (original) options = { ...options, archReviewContext: original };
+  }
+  if (options.archReviewContext && (!archReviewContext.isPreparedContext(options.archReviewContext)
+      || options.archReviewContext.prepared.ticket !== scope.ticket
+      || options.archReviewContext.prepared.phaseNumber !== scope.phase
+      || options.archReviewContext.prepared.canonical.worktree !== scope.worktree))
+    fail('INVALID_INPUT', 'restored architecture preparation differs from the original scope');
+  const archDispatchId = parsed.launch.role === 'arch-review'
+    ? (options.archReviewContext ? archReviewContext.preparedArchitectureDispatch(options.archReviewContext) : null)
+      || parsed.launch.dispatch_id || newDispatchId() : null;
   const preparedArchReview = parsed.launch.role === 'arch-review'
-    ? archReviewContext.prepare(scope, parsed.launch, {
+    ? options.archReviewContext || archReviewContext.prepareSemanticArchitecture(scope, parsed.launch, {
       graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
       execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
       refreshGit: options.refreshGit,
@@ -4028,7 +4065,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   request.dispatch_id = request.dispatch_id || newDispatchId();
   const preparedRepair = request.role === 'review-fix' ? prepareRepair(options, scope, request.context) : null;
   const fileInputContext = preparedReview ? null : prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
-  const archReviewSignals = preparedArchReview ? admitArchitectureInput(preparedArchReview, request, { ...options, automaticReader: !options.readerCapacity },
+  const archReviewSignals = preparedArchReview && !archReviewContext.isSemanticArchitecture(preparedArchReview) ? admitArchitectureInput(preparedArchReview, request, { ...options, automaticReader: !options.readerCapacity },
     options.host?.capabilities || options.capabilities || {}) : null;
   if (archReviewSignals) request.signals = archReviewSignals;
   const codeReviewSignals = preparedCodeReview ? admitCodeReviewInput(preparedCodeReview, options,
@@ -4124,6 +4161,8 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       agentDir: options.agentDir,
       agentManifest: options.agentManifest,
       graphDir: options.graphDir,
+      refreshGit: options.refreshGit,
+      defaultBranch: options.defaultBranch,
       storageRoot: options.storageRoot,
       finalizeCommit: options.finalizeCommit,
       verification: options.verification,

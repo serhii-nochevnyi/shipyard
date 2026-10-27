@@ -1312,7 +1312,7 @@ function collect(scope, options, legacyArchitecture = false) {
   if (refs.length + 2 > FILE_LIMITS.assets) fail('complete context asset inventory exceeds its bound');
   const sourceAuthority = roleArtifact.authenticateArchitectureSources(worktree, project, (legacy ? refs : focused.authorityRefs).filter(ref => /^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(ref.path)));
   const packet = { ...(!legacy
-    ? { review_contract: FOCUSED_CONTRACT } : {}), adr_selection: focused.inventory,
+    ? { review_contract: options.semanticArchitecture ? roleArtifact.SEMANTIC_REVIEW_V1 : FOCUSED_CONTRACT } : {}), adr_selection: focused.inventory,
     change_metadata: { name_status: String(run(options, 'git', ['-C', worktree, 'diff', '--name-status', '-z', '--find-renames', mergeBase + '...' + head], worktree, FILE_LIMITS.material)),
       numstat: String(run(options, 'git', ['-C', worktree, 'diff', '--numstat', '-z', '--find-renames', mergeBase + '...' + head], worktree, FILE_LIMITS.material)) },
     source_authority: sourceAuthority,
@@ -1824,9 +1824,200 @@ function prepare(scope, launch, options = {}) {
   return result;
 }
 
+const semanticArchitectures = new WeakSet();
+const admittedArchitectureDispatches = new Map();
+
+function preparedArchitectureDispatch(value) {
+  if (!isPreparedContext(value)) fail('private architecture preparation required');
+  return preparedOptions.get(value).inflightDispatchId;
+}
+
+function restoreAdmittedArchitecture(dispatchId, scope) {
+  const value = admittedArchitectureDispatches.get(dispatchId)?.deref();
+  if (!value) return null;
+  if (value.prepared.ticket !== scope.ticket || value.prepared.phaseNumber !== scope.phase
+      || value.prepared.canonical.worktree !== scope.worktree) fail('original admitted architecture scope differs');
+  recheckInstalledLaunch(value);
+  return value;
+}
+
+function prepareSemanticArchitecture(scope, launch, options = {}) {
+  if (!object(scope) || !object(launch) || launch.role !== 'arch-review'
+      || Object.keys(launch.signals || {}).length || launch.gsd_role !== undefined
+      || Object.keys(launch.context || {}).some(key => key !== 'repo')
+      || (launch.context?.repo !== undefined && !PHASE_SUBJECT.test(scope.ticket)))
+    fail('semantic architecture accepts only host-derived scope and repository selection');
+  if (options.readerProfile !== undefined || options.readerCapacity !== undefined || options.integrationCapacity !== undefined)
+    fail('semantic architecture resources are host-owned');
+  options = { ...options, semanticArchitecture: true, phaseRepo: launch.context?.repo ?? null,
+    inflightDispatchId: options.inflightDispatchId || launch.dispatch_id || crypto.randomUUID(),
+    archivePins: PHASE_SUBJECT.test(scope.ticket) ? [] : roleArtifact.authenticatedArchivePins(scope.worktree),
+    historicalBookkeepingPins: roleArtifact.historicalBookkeepingPins(scope.worktree) };
+  roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'arch-review' });
+  const collected = collect(scope, options);
+  const signals = { risk: collected.rows.some(({ row }) => row.risk === 'high') ? 'high' : collected.rows[0].row.risk || 'low',
+    critical: collected.rows.some(({ row }) => row.critical === true),
+    checkpoint: collected.rows.some(({ row }) => [true, 'review', 'merge'].includes(row.human_checkpoint)),
+    contested: collected.livePullRequests[0].reviewDecision === 'CHANGES_REQUESTED',
+    inputTokens: Math.ceil(Buffer.byteLength(JSON.stringify(collected.packet)) / 4) };
+  const prepared = deepFreeze({ ...collected, signals });
+  const value = Object.freeze({ schema: SCHEMA, prepared,
+    launch: Object.freeze({ ...launch, signals, context: Object.freeze({ ...(launch.context || {}) }) }) });
+  preparedContexts.add(value); semanticArchitectures.add(value);
+  preparedOptions.set(value, { ...options, scope });
+  return value;
+}
+
+function bindSemanticArchitecture(value, installed) {
+  if (!semanticArchitectures.has(value)) fail('private semantic architecture preparation required');
+  preparedOptions.set(value, { ...preparedOptions.get(value), ...installed });
+}
+
+function semanticArchitectureSource(value) {
+  if (!semanticArchitectures.has(value)) fail('private semantic architecture preparation required');
+  const options = preparedOptions.get(value), prepared = value.prepared;
+  const current = collect(options.scope, { ...options, archivePins: roleArtifact.authenticatedArchivePins(options.scope.worktree) });
+  if (current.packet.digest !== prepared.packet.digest) fail('architecture snapshot changed before launch', 'STALE_CONTEXT');
+  const selection = require('./model-policy.cjs').resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: prepared.signals });
+  const instructions = instructionEvidence(options.agentDir, selection.agent_file, options.agentManifest);
+  const project = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR || path.join(options.scope.worktree, '.planning/graph'), '../..');
+  const packet = JSON.parse(JSON.stringify(prepared.packet));
+  packet.product_sources = [];
+  for (const change of packet.change_metadata.changes) {
+    for (const [relative, revision] of [[change.old_path, packet.diff.merge_base], [change.new_path, prepared.canonical.head]]) {
+      if (!relative || require('./development-artifacts.cjs').isDevelopmentArtifact(relative) || change.binary) continue;
+      const content = String(run(options, 'git', ['-C', prepared.canonical.worktree, 'show', revision + ':' + relative],
+        prepared.canonical.worktree, FILE_LIMITS.material));
+      packet.product_sources.push({ path: relative, revision, content, bytes: Buffer.byteLength(content), sha256: digest(content) });
+    }
+  }
+  const support = new Set(prepared.rows.flatMap(({ row }) => row.files || []));
+  for (const relative of support) {
+    if (typeof relative !== 'string' || /[*?\[]/.test(relative)
+        || require('./development-artifacts.cjs').isDevelopmentArtifact(relative)
+        || packet.product_sources.some(source => source.path === relative && source.revision === prepared.canonical.head)) continue;
+    const listing = String(run(options, 'git', ['-C', prepared.canonical.worktree, 'ls-tree', '-z', prepared.canonical.head, '--', relative],
+      prepared.canonical.worktree, FILE_LIMITS.material));
+    if (!/^100(?:644|755) blob [a-f0-9]{40}\t/.test(listing) || listing.split('\0').filter(Boolean).length !== 1) continue;
+    const content = String(run(options, 'git', ['-C', prepared.canonical.worktree, 'show', prepared.canonical.head + ':' + relative],
+      prepared.canonical.worktree, FILE_LIMITS.material));
+    if (content.includes('\0')) continue;
+    packet.product_sources.push({ path: relative, revision: prepared.canonical.head, content,
+      bytes: Buffer.byteLength(content), sha256: digest(content) });
+  }
+  const identity = { contract: roleArtifact.SEMANTIC_REVIEW_V1, role: 'arch-review', subject: prepared.ticket,
+    repository: repositoryIdentity(prepared.canonical.worktree), worktree: prepared.canonical.worktree,
+    graph_directory: path.join(project, '.planning/graph'), project, phase: prepared.binding?.phase || String(prepared.phaseNumber),
+    repo: prepared.binding?.repo ?? prepared.rows[0].row.repo ?? null, pr: prepared.pr, branch: prepared.canonical.branch,
+    head: prepared.canonical.head, head_tree: git(options, prepared.canonical.worktree, ['rev-parse', 'HEAD^{tree}']),
+    base: prepared.baseCommit, base_ref: prepared.base, base_name: prepared.baseName,
+    base_tree: git(options, prepared.canonical.worktree, ['rev-parse', prepared.baseCommit + '^{tree}']),
+    merge_base: packet.diff.merge_base, merge_base_tree: prepared.mergeBaseTree,
+    ticket_set: prepared.binding?.ticketSet || [], ticket_set_digest: prepared.binding?.membership || null,
+    graph_sha256: packet.graph.sha256, packet_digest: prepared.packet.digest,
+    adr_selection: packet.adr_selection, phase_archive_selection: options.phaseArchiveSelection || null,
+    config_present: fs.existsSync(path.join(project, '.planning/config.json')) };
+  const pins = [...instructions.installed_files];
+  const add = (root, relative) => { const { content, ...pin } = file(root, relative); pins.push({ root, ...pin }); };
+  for (const relative of new Set(['.planning/graph/tickets.json', '.planning/graph/delivery-state.json',
+    ...(identity.config_present ? ['.planning/config.json'] : []), ...prepared.rows.map(({ row }) => row.plan),
+    ...packet.required_refs.map(ref => ref.path), ...packet.adr_selection.map(ref => ref.path)])) add(project, relative);
+  for (const name of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'role-artifact.cjs',
+    'codex-runtime-host.cjs', 'context-packet.cjs', 'dispatch-boundary.cjs', 'architecture-target.cjs',
+    'development-artifacts.cjs', 'model-policy.cjs', 'claude-reference-content.cjs']) add(__dirname, name);
+  add(path.resolve(__dirname, '../references'), 'arch-review.md');
+  return { packet, identity, instructions, selection, pins, options, rows: prepared.rows };
+}
+
+function recheckSemanticArchitecture(snapshot, options = {}) {
+  const { identity, architecture_packet: packet } = snapshot;
+  if (snapshot.role !== 'arch-review' || identity.role !== 'arch-review' || identity.subject !== snapshot.subject
+      || packet.review_contract !== roleArtifact.SEMANTIC_REVIEW_V1
+      || digest(JSON.stringify(canonical(packet))) !== snapshot.original_packet_sha256
+      || snapshot.criteria !== require('./claude-reference-content.cjs').loadClaudeReferenceContent('arch-review'))
+    fail('semantic architecture role or complete criteria changed', 'STALE_CONTEXT');
+  if (fs.existsSync(path.join(identity.project, '.planning/config.json')) !== identity.config_present)
+    fail('architecture integration configuration membership moved', 'STALE_CONTEXT');
+  const graph = JSON.parse(file(identity.project, '.planning/graph/tickets.json').content);
+  const raw = JSON.parse(file(identity.project, '.planning/graph/delivery-state.json').content);
+  const integration = resolveIntegrationBranch({ projectRoot: identity.project, repo: identity.repo,
+    defaultBranch: options.defaultBranch, exec: options.execFileSync || execFileSync });
+  if (!architectureTarget({ base: identity.base_name, integrationBranch: integration }).required)
+    fail('architecture review skipped-by-target', 'ARCH_REVIEW_SKIPPED_BY_TARGET');
+  if (git(options, identity.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== identity.branch)
+    fail('architecture branch moved', 'STALE_CONTEXT');
+  if (PHASE_SUBJECT.test(snapshot.subject)) {
+    const binding = phaseBinding({ graph, state: raw.tickets || raw, phase: Number(identity.phase.split('-')[0]),
+      repository: identity.repository, repo: identity.repo, pr: identity.pr, head: identity.head, base: identity.base, branch: identity.branch });
+    if (binding.subject !== snapshot.subject || JSON.stringify(canonical(binding.ticketSet)) !== JSON.stringify(canonical(identity.ticket_set)))
+      fail('architecture aggregate membership moved', 'STALE_CONTEXT');
+    roleArtifact.selectPhaseArchives(identity.worktree, binding, { graphDir: identity.graph_directory,
+      phaseArchiveSelection: identity.phase_archive_selection });
+  }
+  const plans = (PHASE_SUBJECT.test(snapshot.subject) ? phaseRows(graph, Number(identity.phase.split('-')[0]), identity.repo)
+    : [[snapshot.subject, graph.tickets[snapshot.subject]]]).map(([, row]) => file(identity.project, row.plan));
+  const selected = selectFocusedArchitecture({ root: identity.project,
+    changedPaths: packet.change_metadata.changes.flatMap(change => [change.old_path, change.new_path]).filter(Boolean), plans });
+  const authority = roleArtifact.authenticateArchitectureSources(identity.worktree, identity.project, selected.authorityRefs
+    .filter(ref => /^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(ref.path)));
+  if (JSON.stringify(canonical(authority)) !== JSON.stringify(canonical(packet.source_authority))
+      || JSON.stringify(canonical(selected.inventory)) !== JSON.stringify(canonical(identity.adr_selection)))
+    fail('architecture applicability inventory moved', 'STALE_CONTEXT');
+  if (options.getPullRequest) {
+    const live = options.getPullRequest({ worktree: identity.worktree, pr: identity.pr, repo: identity.repo });
+    if (live.number !== identity.pr || live.state !== 'OPEN' || live.headRefName !== identity.branch
+        || live.headRefOid !== identity.head || live.baseRefName !== identity.base_name || live.baseRefOid !== identity.base)
+      fail('live architecture target, head or base moved', 'STALE_CONTEXT');
+  }
+}
+
+function recheckPreparedSemanticArchitecture(value) {
+  if (!semanticArchitectures.has(value)) fail('private semantic architecture preparation required');
+  const options = preparedOptions.get(value);
+  const current = collect(options.scope, { ...options, archivePins: roleArtifact.authenticatedArchivePins(options.scope.worktree) });
+  if (current.packet.digest !== value.prepared.packet.digest)
+    fail('live architecture PR, governing inputs or source moved', 'STALE_CONTEXT');
+}
+
+function finishSemanticArchitecture(value, dispatch, result, recorder) {
+  recheckPreparedSemanticArchitecture(value);
+  const options = preparedOptions.get(value), prepared = value.prepared;
+  const { evidence_markdown, ...judgment } = result;
+  if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim()
+      || Buffer.byteLength(evidence_markdown) > EVIDENCE_MAX_BYTES) fail('complete semantic architecture evidence is required');
+  const owned = roleArtifact.prepareRoleArtifact({ worktreePath: prepared.canonical.worktree, role: 'arch-review' });
+  fs.writeFileSync(owned.path, evidence_markdown, { flag: 'wx', mode: 0o600 });
+  const evidence = writeEvidence(prepared, evidence_markdown, dispatch.dispatch_id);
+  const input = { worktreePath: prepared.canonical.worktree, role: 'arch-review', ticket: prepared.ticket,
+    pr: prepared.pr, base: prepared.base, recorder, dispatchId: dispatch.dispatch_id,
+    ...(prepared.binding ? { phase: prepared.binding.phase, ticketSet: prepared.binding.ticketSet,
+      ticketSetDigest: prepared.binding.membership } : {}),
+    result: judgment, evidencePath: evidence.path, io: { fs, execFileSync(executable, args, settings) {
+      if (executable === 'gh' && args[0] === 'pr' && args[1] === 'view' && options.getPullRequest)
+        return JSON.stringify(options.getPullRequest({ worktree: prepared.canonical.worktree,
+          pr: prepared.pr, repo: prepared.rows[0].row.repo || null }));
+      if (executable === 'git' && args.includes('fetch') && options.refreshGit === false) return '';
+      return (options.execFileSync || execFileSync)(executable, args, settings);
+    } } };
+  const artifact = roleArtifact.sealJudgment(input);
+  roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
+  return Object.freeze({ ...dispatch, result, artifact });
+}
+
+function validateSemanticArchitectureFinal(result, snapshot) {
+  const { identity } = snapshot;
+  if (result.role !== 'arch-review' || result.stage !== 'final' || result.id !== snapshot.subject
+      || result.pr !== identity.pr || result.repository !== identity.repository || result.base_commit !== identity.base
+      || result.merge_base !== identity.merge_base || result.base_tree !== identity.merge_base_tree
+      || !['conform', 'violation', 'adr-outdated'].includes(result.verdict)
+      || (result.verdict === 'conform') !== (result.outcome === 'passed')
+      || (result.verdict === 'conform' && (result.blocking_count || result.seams.some(seam => seam.disposition !== 'resolved'))))
+    fail('semantic architecture final identity, ADR judgment or verdict differs', 'ARTIFACT_IDENTITY_MISMATCH');
+}
+
 function isFocusedContext(value) {
   const options = preparedOptions.get(value);
-  return isPreparedContext(value) && options?.readerProfile === undefined && options?.readerCapacity === undefined;
+  return isPreparedContext(value) && !semanticArchitectures.has(value) && options?.readerProfile === undefined && options?.readerCapacity === undefined;
 }
 
 function isPreparedContext(value) {
@@ -1923,6 +2114,7 @@ function admitInstalledLaunch(value, options) {
       ...(fileInput ? { accounting: fileInput.manifest.accounting } : {}),
       runtime_capacity_acceptance: 'requires separate installed native acceptance' } });
   installedLaunches.set(value, installation);
+  admittedArchitectureDispatches.set(preparedArchitectureDispatch(value), new WeakRef(value));
   return installation;
 }
 
@@ -2491,6 +2683,9 @@ if (require.main === module) {
 }
 
 module.exports = Object.freeze({ isIntegrationFileInput: value => isPreparedFileInput(value) && roleArtifact.isCodexIntegrationFileInput(value), integrationTextReads, integrationPartitionBinding, restoreMeasuredIntegrationInput, restoreMeasuredSourceInput, restoreInstalledMeasuredInput, createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
+  preparedArchitectureDispatch, restoreAdmittedArchitecture,
+  isSemanticArchitecture: value => semanticArchitectures.has(value), recheckPreparedSemanticArchitecture, finishSemanticArchitecture,
+  prepareSemanticArchitecture, bindSemanticArchitecture, semanticArchitectureSource, recheckSemanticArchitecture, validateSemanticArchitectureFinal,
   FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, codexResultText, boundedBytes, file, validateCodeReviewCoverage,
   isFocusedContext, focusedProducerFiles, focusedChangeInventory, selectFocusedArchitecture, validateFocusedResult, authenticateFocusedLaunch,
   batchCommand, batchFrames, batchOutput, readBatchCli, SCHEMA, FILE_LIMITS, freezeReviewBaseline: deepFreeze, validateOriginalReviewContext, buildReviewImpactPacket, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreCompletedSourceInput, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });
