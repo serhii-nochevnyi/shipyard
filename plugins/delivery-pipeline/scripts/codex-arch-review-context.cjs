@@ -1846,7 +1846,7 @@ function prepareSemanticArchitecture(scope, launch, options = {}) {
       || Object.keys(launch.signals || {}).length || launch.gsd_role !== undefined
       || Object.keys(launch.context || {}).some(key => key !== 'repo')
       || (launch.context?.repo !== undefined && !PHASE_SUBJECT.test(scope.ticket)))
-    fail('semantic architecture accepts only host-derived scope and repository selection');
+    fail('semantic architecture accepts only host-derived scope and repository selection', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   if (options.readerProfile !== undefined || options.readerCapacity !== undefined || options.integrationCapacity !== undefined)
     fail('semantic architecture resources are host-owned');
   options = { ...options, semanticArchitecture: true, phaseRepo: launch.context?.repo ?? null,
@@ -1940,8 +1940,13 @@ function recheckSemanticArchitecture(snapshot, options = {}) {
     fail('architecture integration configuration membership moved', 'STALE_CONTEXT');
   const graph = JSON.parse(file(identity.project, '.planning/graph/tickets.json').content);
   const raw = JSON.parse(file(identity.project, '.planning/graph/delivery-state.json').content);
+  // Cold readers reach this only through the authenticated semantic snapshot. Its
+  // base_name was verified against the host-resolved integration branch during
+  // collection. Retain that selection when no live host resolver is available;
+  // project configuration, current git/source pins and live PR checks still apply.
   const integration = resolveIntegrationBranch({ projectRoot: identity.project, repo: identity.repo,
-    defaultBranch: options.defaultBranch, exec: options.execFileSync || execFileSync });
+    defaultBranch: options.defaultBranch ?? (options.execFileSync ? undefined : identity.base_name),
+    exec: options.execFileSync || execFileSync });
   if (!architectureTarget({ base: identity.base_name, integrationBranch: integration }).required)
     fail('architecture review skipped-by-target', 'ARCH_REVIEW_SKIPPED_BY_TARGET');
   if (git(options, identity.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== identity.branch)

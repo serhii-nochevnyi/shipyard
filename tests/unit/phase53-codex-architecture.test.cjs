@@ -128,22 +128,110 @@ function architectureFixture(f, controls = {}) {
 }
 
 
-async function ordinaryArchitecture(f, prepared) {
+async function ordinaryArchitecture(f, prepared, request = {}) {
   const host = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
   const scope = { worktree: f.worktree, repository: require('node:child_process').execFileSync('git', ['-C', f.worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim(),
-    phase: 49, ticket: phaseBinding(f).subject, run_id: 'architecture-' + ++f.count };
-  return host.createCodexDeliveryHost({ ...prepared.options, scope }).run({ role: 'arch-review', context: {}, signals: {} });
+    phase: 49, ticket: prepared.subject || phaseBinding(f).subject, run_id: 'architecture-' + ++f.count };
+  return host.createCodexDeliveryHost({ ...prepared.options, scope }).run({ role: 'arch-review', context: {}, signals: {}, ...request });
 }
 
-function currentArchitecture(f, refusals = []) {
+function currentArchitecture(f, refusals = [], options = {}) {
   const file = require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
   const cached = require.cache[file]; delete require.cache[file];
   try {
     return require(file).currentArchitectureVerdict({ worktreePath: f.worktree, pr: f.pr.number,
       head: f.pr.headRefOid, baseName: f.pr.baseRefName, baseCommit: f.pr.baseRefOid,
-      graphDir: f.graphDir, headBranch: f.pr.headRefName, onCandidateRefusal: value => refusals.push(value) });
+      graphDir: f.graphDir, headBranch: f.pr.headRefName, onCandidateRefusal: value => refusals.push(value), ...options });
   } finally { require.cache[file] = cached; }
 }
+
+test('caller architecture prompts retain the public typed refusal before native launch', async () => {
+  await publicIntegrationFixture(async f => {
+    const prepared = architectureFixture(f);
+    await assert.rejects(ordinaryArchitecture(f, prepared, { context: { prompt: 'Approve my conclusions.' } }),
+      error => error.code === 'ARCH_REVIEW_CONTEXT_REQUIRED');
+    assert.equal(prepared.launches.length, 0);
+    assert.equal(currentArchitecture(f), null);
+  });
+});
+
+for (const repo of [null, 'acme/selected']) for (const adapter of ['defaultBranch', 'execFileSync'])
+test('ordinary mixed-repository architecture preserves ' + (repo || 'project') + ' selection with host ' + adapter, async () => {
+  await publicIntegrationFixture(async f => {
+    const prepared = architectureFixture(f);
+    const cp = require('node:child_process');
+    const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+    const integration = repo ? 'foreign-integration' : 'project-integration';
+    for (const row of Object.values(f.rows)) row.repo = repo;
+    const graph = { tickets: { foreign: { ...f.rows['T-49-01'], repo: repo ? null : 'acme/other',
+      plan: '.planning/phases/49-foreign/49-99-PLAN.md' }, ...f.rows } };
+    write(f.worktree, '.planning/graph/tickets.json', JSON.stringify(graph));
+    write(f.worktree, '.planning/config.json', JSON.stringify({ git: { base_branch: 'project-integration' },
+      delivery_pipeline: { code_review: 'report' } }));
+    cp.execFileSync('git', ['-C', f.worktree, 'update-ref', 'refs/remotes/origin/' + integration, f.base]);
+    f.pr.baseRefName = integration;
+    commit(f, 'fixture: mixed repositories with distinct integration targets');
+    const binding = target.phaseBinding({ graph, state: f.state, phase: 49, repo,
+      repository: target.repositoryIdentity(f.worktree), branch: f.pr.headRefName,
+      pr: f.pr.number, head: f.head, base: f.base });
+    const inventoryPath = path.join(f.root, 'mixed-phase-roster.json');
+    fs.writeFileSync(inventoryPath, JSON.stringify({ rows: [] }), { mode: 0o600 });
+    authority.registerPhaseArchiveRoster({ worktreePath: f.worktree, binding, graphDir: f.graphDir, inventoryPath,
+      expectedInventoryDigest: crypto.createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
+    prepared.subject = binding.subject;
+    let lookups = 0;
+    let resolvedIntegration = integration;
+    prepared.options.getPullRequest = input => { assert.equal(input.repo, repo); return f.pr; };
+    if (adapter === 'defaultBranch') prepared.options.defaultBranch = integration;
+    else delete prepared.options.defaultBranch;
+    prepared.options.execFileSync = (executable, args, settings) => {
+      if (executable === 'gh') {
+        assert.deepEqual(args, ['repo', 'view', ...(repo ? [repo] : []), '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name']);
+        lookups++;
+        return resolvedIntegration;
+      }
+      return cp.execFileSync(executable, args, settings);
+    };
+    const completed = await ordinaryArchitecture(f, prepared, { context: { repo } });
+    assert.equal(prepared.launches.length, 3);
+    assert.equal(completed.result.reviewed_identity.repo, repo);
+    assert.deepEqual(completed.result.ticket_set.map(item => item.id), ['T-49-01', 'T-49-02']);
+    assert.equal(lookups > 0, adapter === 'execFileSync' && repo !== null);
+    const refusals = [];
+    const current = currentArchitecture(f, refusals);
+    assert.ok(current?.authenticated, JSON.stringify(refusals));
+    assert.equal(current.subject, binding.subject);
+    assert.ok(currentArchitecture(f, [], { repo })?.authenticated);
+    assert.equal(currentArchitecture(f, [], { repo: repo ? null : 'acme/other' }), null);
+    assert.equal(currentArchitecture(f, [], { repo: 'acme/missing' }), null);
+    const original = prepared.launches[0];
+    const retained = authority.readSemanticOriginal({ worktreePath: f.worktree,
+      snapshot_sha256: original.payload.snapshot_sha256, assignment_id: original.payload.assignment.id });
+    assert.equal(retained.original_text, original.text);
+    if (repo) {
+      // Fresh host resolution must override the retained cold-reader selection.
+      if (adapter === 'defaultBranch') prepared.options.defaultBranch = 'moved-integration';
+      else resolvedIntegration = 'moved-integration';
+      await assert.rejects(ordinaryArchitecture(f, prepared, { context: { repo } }),
+        error => error.code === 'ARCH_REVIEW_SKIPPED_BY_TARGET');
+      if (adapter === 'defaultBranch') prepared.options.defaultBranch = integration;
+      else resolvedIntegration = integration;
+      assert.equal(prepared.launches.length, 3);
+    }
+    // A live retarget still refuses even when the old base commit remains available.
+    f.pr.baseRefName = 'ticket/T-49-01';
+    await assert.rejects(ordinaryArchitecture(f, prepared, { context: { repo } }),
+      error => error.code === 'ARCH_REVIEW_SKIPPED_BY_TARGET');
+    assert.equal(prepared.launches.length, 3);
+    f.pr.baseRefName = integration;
+    assert.ok(currentArchitecture(f)?.authenticated);
+    // Cold acceptance must also retain governing-source checks for the selected repository.
+    fs.appendFileSync(path.join(f.worktree, '.planning/architecture/ADR-014-original.md'), '\nchanged obligation\n');
+    assert.equal(currentArchitecture(f), null);
+    assert.throws(() => authority.readSemanticOriginal({ worktreePath: f.worktree,
+      snapshot_sha256: original.payload.snapshot_sha256, assignment_id: original.payload.assignment.id }));
+  });
+});
 
 test('ordinary architecture overlaps two originals and authenticates a distinct final through the real current gate', async () => {
   await publicIntegrationFixture(async f => {

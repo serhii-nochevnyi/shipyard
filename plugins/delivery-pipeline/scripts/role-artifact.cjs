@@ -4030,14 +4030,27 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
       if (manifest.boundary_subject.startsWith('phase=')) {
         if (!manifest.current_review && !object(findings.host_context?.phase_archive_selection))
           fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict lacks its frozen current phase selection');
-        const directory = graphDir || findings.host_context?.graph_dir || path.join(root, '.planning/graph');
+        let semanticIdentity;
+        if (manifest.current_review?.contract === SEMANTIC_REVIEW_V1) {
+          try {
+            const { snapshot } = semanticRecord(worktree, findings.snapshot_sha256);
+            if (snapshot.role !== 'arch-review' || snapshot.subject !== manifest.boundary_subject)
+              fail('ARCHIVE_AUTHORITY_INVALID', 'semantic architecture candidate scope differs');
+            semanticIdentity = snapshot.identity;
+          } catch (error) {
+            if (typeof onCandidateRefusal === 'function') onCandidateRefusal({ dispatch_id: record.dispatch_id,
+              code: error.code || 'ARCHIVE_AUTHORITY_INVALID', message: error.message });
+            continue;
+          }
+        }
+        const directory = graphDir || semanticIdentity?.graph_directory || findings.host_context?.graph_dir || path.join(root, '.planning/graph');
         const graphBytes = readImmutableFile(fs, path.join(directory, 'tickets.json'), 'current complete architecture graph', 8 * 1024 * 1024);
         const graph = JSON.parse(graphBytes);
         const raw = JSON.parse(fs.readFileSync(path.join(directory, 'delivery-state.json'), 'utf8'));
         const aggregate = require('./architecture-target.cjs').PHASE_SUBJECT.exec(manifest.boundary_subject);
         if (!aggregate) continue;
         const branch = headBranch || execFileSync('git', ['-C', worktree, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
-        const repo = requestedRepo ?? findings.host_context?.phase_repo ?? null;
+        const repo = semanticIdentity ? semanticIdentity.repo : requestedRepo ?? findings.host_context?.phase_repo ?? null;
         if (requestedRepo !== undefined && requestedRepo !== repo) continue;
         const phases = new Set(Object.values(graph.tickets || {}).filter(row =>
           (row.repo ?? null) === repo && row.epic === branch).map(row => Number(String(row.phase).match(/^0*(\d+)/)?.[1])));
