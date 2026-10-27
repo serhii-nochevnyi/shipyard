@@ -185,7 +185,6 @@ function unavailableNote(r) {
     || `gh pr checks exited ${r.status}`;
 }
 
-// @contract: Reuse requires complete commit-addressed check-run and status coverage.
 const CI_OBSERVATION_VERSION = 1;
 const SHA = /^[0-9a-f]{40}$/i;
 
