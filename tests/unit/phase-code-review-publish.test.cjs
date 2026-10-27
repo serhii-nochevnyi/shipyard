@@ -434,7 +434,7 @@ const readerSources = () => fs.readdirSync(scripts, { recursive: true }).filter(
 function assertReaderRegistry(sources) {
   const message = 're-audit the check-rollup readers (plan 52-11)';
   assert.deepEqual(sources.filter(([, source]) => importsCheckState(source))
-    .map(([file]) => file).sort(), ['ci-wait.cjs', 'front.cjs', 'sentinel.cjs', 'state-sync.cjs'], message);
+    .map(([file]) => file).sort(), ['ci-wait.cjs', 'front.cjs', 'sentinel.cjs', 'state-sync.cjs', 'wait-events.cjs'], message);
   assert.deepEqual(sources.filter(([, source]) => /['"]pr['"]\s*,\s*['"]checks['"]\s*,\s*String\(/.test(source))
     .map(([file]) => file).sort(), ['ci-wait.cjs', 'sentinel.cjs', 'state-sync.cjs'], message);
 }
