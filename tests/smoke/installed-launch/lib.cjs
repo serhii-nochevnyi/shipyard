@@ -401,6 +401,18 @@ if (group === 'pr' && action === 'view' && /^\\d+$/.test(args[2] || '') && flag(
 if (group === 'pr' && action === 'checks' && /^\\d+$/.test(args[2] || '')) done('[]\\n');
 if (group === 'api') {
   const target = args[1] || '';
+  const prefix = 'repos/' + entry.owner + '/' + entry.name;
+  if (target.startsWith(prefix + '/pulls/') && /^\\d+$/.test(target.slice((prefix + '/pulls/').length))) {
+    const pr = entry.prs.find(item => item.number === Number(target.split('/').pop()));
+    if (!pr) unmodelled();
+    done(JSON.stringify({ number: pr.number, state: pr.state.toLowerCase(), head: { sha: pr.headRefOid },
+      base: { repo: { full_name: entry.owner + '/' + entry.name } } }) + '\\n');
+  }
+  const commit = entry.prs.find(pr => target.startsWith(prefix + '/commits/' + pr.headRefOid + '/'));
+  if (commit && target === prefix + '/commits/' + commit.headRefOid + '/check-runs?per_page=100&filter=latest')
+    done(JSON.stringify([{ total_count: 0, check_runs: [] }]) + '\\n');
+  if (commit && target === prefix + '/commits/' + commit.headRefOid + '/status?per_page=100')
+    done(JSON.stringify([{ sha: commit.headRefOid, total_count: 0, statuses: [] }]) + '\\n');
   if (/^repos\\/[^/]+\\/[^/]+\\/branches$/.test(target)) done(entry.branches.join('\\n') + '\\n');
   if (/^repos\\/[^/]+\\/[^/]+\\/compare\\/[^/]+(\\/[^/]+)*\\.\\.\\.[^/]+(\\/[^/]+)*$/.test(target)) done('0\\n');
   if (/^repos\\/[^/]+\\/[^/]+\\/commits\\/[0-9a-f]+\\/statuses$/.test(target)) done('[]\\n');

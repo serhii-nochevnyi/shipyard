@@ -65,7 +65,7 @@ const {
   activeTrackersForPublishLocked, metadataIdentity,
 } = require(path.join(__dirname, 'tracker-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
-const { classify, isGreen, collectCiObservation } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, isGreen, collectCiObservation, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
@@ -278,6 +278,24 @@ function ghTry(args) {
   if (TIME) process.stderr.write(`  ${Number(process.hrtime.bigint() - t0) / 1e9}s  gh ${args.slice(0, 4).join(' ')}\n`);
   const why = (r.error || r.status !== 0) ? diagnostic(r) : '';
   return { status: r.error ? null : r.status, stdout: (r.stdout || '').trim(), stderr: why };
+}
+
+function ghChecks(prNumber, repo) {
+  const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
+  if (repo) args.push('--repo', repo);
+  const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
+  const stdout = (r.stdout || '').trim();
+  let rows = null;
+  if (stdout) {
+    try {
+      const parsed = JSON.parse(stdout);
+      if (Array.isArray(parsed)) rows = parsed;
+    } catch { rows = null; }
+  } else if (r.status === 0) {
+    rows = [];
+  }
+  if (Array.isArray(rows)) return { rows };
+  return { rows: null, note: unavailableNote(r) };
 }
 
 // `valid` is the field a WRITER checks (ADR-004 D2): this script writes the board
@@ -859,8 +877,10 @@ for (const [id, t] of Object.entries(tickets)) {
       const ciObservation = collectCiObservation({ pr: pr.number, repo, head: entry.head_sha, pollId: CI_POLL_ID },
         args => runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS }));
       entry.ci_observation = ciObservation;
-      const rows = ciObservation.complete ? ciObservation.rows : null;
-      const note = ciObservation.note;
+      const fresh = ciObservation.complete ? { rows: ciObservation.rows }
+        : ciObservation.transport_unavailable ? ghChecks(pr.number, repo)
+          : { rows: null, note: ciObservation.note };
+      const { rows, note } = fresh;
       // check-state.cjs classifies; this file only records. The KEYS are the
       // board's contract — front.cjs's green test, escalation-record's
       // fingerprint and the stop gate all read exactly these — so the tallies

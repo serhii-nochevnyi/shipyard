@@ -190,7 +190,7 @@ for (const [label, patch] of [
   ['status transport outage', { failStatuses: true }],
   ['head moves during collection', { move: true }],
 ]) {
-  test(`${label} is unavailable and the real waiter uses fresh direct fallback`, t => {
+  test(`${label} is not reusable and the real waiter uses fresh direct fallback`, t => {
     const f = fixture(t);
     pendingBoard(f);
     f.update(patch);
@@ -198,14 +198,33 @@ for (const [label, patch] of [
     assert.equal(ci(p).complete, false);
     assert.equal(ci(p).checked_head, null);
     assert.equal(ci(p).rows, null);
-    assert.equal(p.state[TICKET].checks.unavailable, true);
+    assert.equal(p.state[TICKET].checks.unavailable, !(patch.failChecks || patch.failStatuses));
     assert.equal(p.state[TICKET].checks.none_reported, false);
+    if (patch.failChecks || patch.failStatuses) {
+      pendingBoard(f);
+      f.update(patch);
+    }
     const n = f.calls().length;
     const output = wait(f);
     assert.equal(output.watched[0].checks.rows[0].name, 'build');
-    assert.equal(f.calls().slice(n).filter(a => a[0] === 'pr' && a[1] === 'checks').length, 1);
+    assert.equal(f.calls().slice(n).filter(a => a[0] === 'pr' && a[1] === 'checks').length,
+      patch.failChecks || patch.failStatuses ? 2 : 1);
   });
 }
+
+for (const [label, direct, expected] of [
+  ['failure', [{ name: 'build', state: 'FAILURE', bucket: 'fail' }], { failing: 1, pending: 0, unavailable: false }],
+  ['unknown bucket', [{ name: 'build', state: 'FUTURE', bucket: 'future' }], { failing: 0, pending: 1, unavailable: false }],
+  ['unreadable', null, { failing: 0, pending: 0, unavailable: true }],
+]) test(`transport fallback preserves fresh canonical ${label} without publishing reusable rows`, t => {
+  const f = fixture(t, { failChecks: true, direct });
+  const p = publish(f);
+  assert.equal(ci(p).complete, false);
+  assert.equal(ci(p).rows, null);
+  assert.equal(p.ci_observations[TICKET], undefined);
+  for (const [key, value] of Object.entries(expected)) assert.equal(p.state[TICKET].checks[key], value);
+  assert.equal(f.calls().filter(a => a[0] === 'pr' && a[1] === 'checks').length, 1);
+});
 
 test('observed empty is complete and different from an outage', t => {
   const f = fixture(t, { checkPages: [{ total_count: 0, check_runs: [] }] });

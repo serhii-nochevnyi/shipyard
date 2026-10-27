@@ -207,7 +207,8 @@ function collectCiObservation({ pr, repo, head, pollId }, request) {
   };
   function json(args) {
     const r = request(args);
-    if (!r || r.error || r.status !== 0) throw new Error(unavailableNote(r || {}));
+    if (!r || r.error || r.status !== 0)
+      throw Object.assign(new Error(unavailableNote(r || {})), { transportUnavailable: true });
     try { return JSON.parse(r.stdout); } catch { throw new Error('CI transport returned malformed JSON'); }
   }
   try {
@@ -310,6 +311,7 @@ function collectCiObservation({ pr, repo, head, pollId }, request) {
           selected_count: latestStatuses.size } } });
   } catch (error) {
     observation.note = error.message;
+    if (error.transportUnavailable === true) observation.transport_unavailable = true;
   }
   return observation;
 }
