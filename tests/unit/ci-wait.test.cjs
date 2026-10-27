@@ -1348,4 +1348,25 @@ test('a changed head resets accumulated wait time when check tallies are unchang
   assert.equal(json.escalated.length, 0, 'old-head elapsed time cannot park the new head');
 });
 
+test('direct compatibility polls retain status rows, unknown buckets and superseded cancellation identities', () => {
+  const dir = project(ciOnly(), stateWith({ 'T-01-01': {
+    pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD,
+  } }));
+  const rows = [
+    { name: 'build', state: 'CANCELLED', bucket: 'cancel', startedAt: '2020-01-01T00:00:00Z',
+      link: 'https://github.com/acme/widgets/actions/runs/123/job/1', run_id: '123' },
+    { name: 'build', state: 'SUCCESS', bucket: 'pass', startedAt: '2020-01-02T00:00:00Z',
+      link: 'https://github.com/acme/widgets/actions/runs/456/job/1', run_id: '456' },
+    { name: 'external-status', state: 'SUCCESS', bucket: 'pass', source: 'commit-status' },
+    { name: 'new-status', state: 'FUTURE', bucket: 'future' },
+  ];
+  const bin = stubGh(dir, rows);
+  const { code, json } = asJson(null, null, ['--timeout', '1', '--interval', '1'], { dir, bin });
+  assert.equal(code, 0);
+  assert.equal(json.settled, null);
+  assert.equal(json.watched[0].checks.pending, 1);
+  assert.equal(json.watched[0].checks.cancelled, 0);
+  assert.deepStrictEqual(json.watched[0].checks.rows, rows);
+});
+
 done();
