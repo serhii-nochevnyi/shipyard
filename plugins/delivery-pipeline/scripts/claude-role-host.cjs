@@ -98,15 +98,15 @@ function parseRequest(value) {
   const allowed = role === 'arch-review'
     ? new Set(['schema', 'role', 'worktree', 'ticket', 'phase', 'pr', 'signals', 'repo', 'review_contract'])
     : role === 'code-review'
-      ? new Set(['schema', 'role', 'worktree', 'phase', 'pr', 'repo', 'signals'])
+      ? new Set(['schema', 'role', 'worktree', 'phase', 'pr', 'repo', 'signals', 'review_contract'])
     : new Set(['schema', 'role', 'worktree', 'phase', 'signals', ...(role === 'integrator' ? ['review_contract'] : [])]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) reject(`request field ${key} is not permitted`);
-  const contracts = role === 'arch-review'
+  const contracts = role === 'code-review' ? [roleArtifact.SEMANTIC_REVIEW_V1] : role === 'arch-review'
     ? [roleArtifact.SEMANTIC_REVIEW_V1, require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT]
     : ['shipyard.integration-review.v1', 'shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3, roleArtifact.SEMANTIC_REVIEW_V1];
   if (value.review_contract !== undefined && !contracts.includes(value.review_contract))
     reject('unsupported role review contract', 'INVALID_INPUT');
-  const semantic = ['integrator', 'arch-review'].includes(role)
+  const semantic = ['integrator', 'arch-review', 'code-review'].includes(role)
     && (value.review_contract === undefined || value.review_contract === roleArtifact.SEMANTIC_REVIEW_V1);
   if ((semantic && role === 'integrator' || value.review_contract === roleArtifact.INTEGRATION_REVIEW_V3) && Object.keys(value.signals || {}).length)
     reject('review model selection and stage authority are host-owned', 'INVALID_INPUT');
@@ -690,8 +690,9 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
   roleContext.ticket_set_digest = binding.membership;
   roleContext.phase_repo = binding.repo;
   const packet = buildPacket(canonical, 'code-review', binding.subject, sources, plans[0], roleContext);
-  const prompt = makePrompt('code-review', binding.subject, packet, reference);
-  const signals = observedSignals(request, rows, [live], Math.ceil(Buffer.byteLength(prompt) / 4));
+  const semantic = request.review_contract === roleArtifact.SEMANTIC_REVIEW_V1;
+  const prompt = semantic ? undefined : makePrompt('code-review', binding.subject, packet, reference);
+  const signals = observedSignals(request, rows, [live], semantic ? packet.accounting.estimated_tokens : Math.ceil(Buffer.byteLength(prompt) / 4));
   return Object.freeze({ role: 'code-review', ticket: binding.subject, phase: binding.phase,
     phaseNumber: phaseNumberOf(request.phase), binding, pr: live.number, base, baseName, baseCommit: live.baseRefOid,
     mergeBase, mergeBaseTree, ticketSet: binding.ticketSet, ticketSetDigest: binding.membership,
@@ -1679,7 +1680,8 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
           for (const pin of prepared.preflightPins)
             if (sha(fs.readFileSync(pin.path)) !== pin.sha256)
               reject('trusted preflight implementation changed before launch', 'STALE_CONTEXT');
-          if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
+          if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree,
+            nativeIntegrationStages.has(prepared) ? roleArtifact.authenticatedArchivePins(prepared.canonical.worktree) : prepared.archivePins);
           revalidateLiveInputs(options, prepared, dispatchId);
           if (git(options, prepared.canonical.worktree, ['rev-parse', 'HEAD']) !== prepared.canonical.head)
             reject('review HEAD changed before native launch', 'STALE_CONTEXT');
@@ -1790,7 +1792,8 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
     prepared.canonical.planningReference);
   if (!prepared.integrationPartitions) validateContextPacket(prepared.packet, { root: prepared.canonical.projectRoot, role: prepared.role,
     subject: prepared.packet.subject, sourceRevision: prepared.canonical.head, policyHash: policy.POLICY_HASH });
-  if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
+  if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree,
+    nativeIntegrationStages.has(prepared) ? roleArtifact.authenticatedArchivePins(prepared.canonical.worktree) : prepared.archivePins);
 }
 
 function revalidateLiveInputs(options, prepared, currentDispatchId) {
@@ -2137,12 +2140,13 @@ function semanticStageSchema(stage) {
     const identity = payload.reviewed_identity;
     Object.assign(properties, Object.fromEntries(Object.entries({ phase: identity.phase, head: identity.head,
       head_tree: identity.head_tree, base: identity.base_ref,
-      base_tree: stage.role === 'arch-review' ? identity.merge_base_tree : identity.base_tree,
+      base_tree: ['arch-review', 'code-review'].includes(stage.role) ? identity.merge_base_tree : identity.base_tree,
       ticket_set: identity.ticket_set, ticket_set_digest: identity.ticket_set_digest,
-      ...(stage.role === 'arch-review' ? { repository: identity.repository, id: payload.subject,
+      ...(['arch-review', 'code-review'].includes(stage.role) ? { repository: identity.repository, id: payload.subject,
         pr: identity.pr, base_commit: identity.base, merge_base: identity.merge_base } : {}) })
       .map(([key, value]) => [key, { const: value }])));
     properties.summary = { type: 'string' };
+    if (stage.role === 'code-review') properties.dispositions = { type: 'array' };
     if (stage.role === 'arch-review') properties.verdict = { enum: ['conform', 'violation', 'adr-outdated'] };
   }
   return { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
@@ -2177,12 +2181,19 @@ async function runClaudeSemanticReview(options, request) {
     reject('semantic review resources and per-assignment runtime scopes are host-owned', 'INVALID_INPUT');
   const delivery = require('./codex-delivery-host.cjs');
   const collector = require('./codex-arch-review-context.cjs');
-  const original = prepareInvocation(options, request);
+  let original = prepareInvocation(options, request);
   const scope = { worktree: original.canonical.worktree, phase: original.phaseNumber,
     ticket: original.ticket, run_id: newDispatchId() };
   const storage = storageDirectory(options, scope.run_id, scope.worktree);
-  let review, architecture;
-  if (request.role === 'arch-review') {
+  let review, architecture, codeReview;
+  if (request.role === 'code-review') {
+    const code = require('./codex-code-review-context.cjs');
+    codeReview = code.prepareSemantic(scope, { role: 'code-review', signals: {},
+      context: request.repo ? { repo: request.repo } : {} }, { ...options, storageRoot: storage });
+    if (codeReview.prepared.ticket !== original.ticket)
+      reject('native code-review collector differs from the original scope', 'STALE_CONTEXT');
+    original = { ...original, signals: codeReview.prepared.signals };
+  } else if (request.role === 'arch-review') {
     architecture = collector.prepareSemanticArchitecture(scope, { role: 'arch-review', signals: {},
       context: request.repo ? { repo: request.repo } : {} }, { ...options, scope,
       phaseArchiveSelection: original.phaseArchiveSelection, inflightDispatchId: scope.run_id });
@@ -2198,23 +2209,26 @@ async function runClaudeSemanticReview(options, request) {
       instructionBinding: { agent_file: path.basename(referencePath), agent_path: referencePath,
         agent_sha256: sha(reference), installed_files: [], policy_hash: policy.POLICY_HASH } });
   }
-  const snapshot = roleArtifact.prepareSemanticReview(architecture ? { architecture } : { review });
+  const snapshot = roleArtifact.prepareSemanticReview(codeReview ? { codeReview, runtime: 'claude' } : architecture ? { architecture } : { review });
   const recorder = createDurableRecorder(path.join(storageDirectory(options,
     'claude-semantic-' + snapshot.snapshot_sha256, scope.worktree), 'semantic-receipts'));
   const recheck = () => {
-    if (architecture) collector.recheckPreparedSemanticArchitecture(architecture);
+    if (codeReview) require('./codex-code-review-context.cjs').recheckSemantic(snapshot, options);
+    else if (architecture) collector.recheckPreparedSemanticArchitecture(architecture);
     else {
       collector.verifyFileInput(review.currentInput);
       collector.verifyFileInput(review.input);
       assertNativeIntegrationMergeProof(review.proof, { worktree: scope.worktree, graphDir: original.graph.directory }, options);
     }
-    assertEvidenceOnlyChanges(options, { ...original, integrationReview: review
+    assertEvidenceOnlyChanges(options, { ...original,
+      ...(codeReview ? { archivePins: roleArtifact.authenticatedArchivePins(scope.worktree) } : {}), integrationReview: review
       ? { ...review, archivePins: roleArtifact.authenticatedArchivePins(scope.worktree) } : undefined });
   };
   const finish = (stage, record, result) => {
     const dispatch = { runtime: 'claude', role: original.role, dispatch_id: stage.dispatch_id,
       receipt: record.receipt, application_evidence: record.application_evidence, dispatch: record, result };
     if (stage.stage === 'worker') return dispatch;
+    if (codeReview) return require('./codex-code-review-context.cjs').finishSemantic(codeReview, dispatch, result, recorder);
     const { evidence_markdown, ...judgment } = result;
     if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
       reject('semantic final requires the complete original report', 'INVALID_RESULT');

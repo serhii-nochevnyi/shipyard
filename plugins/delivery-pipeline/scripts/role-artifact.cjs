@@ -2334,8 +2334,26 @@ function archiveInventory(worktree) {
   return paths.sort();
 }
 
+function pendingArchivePublicationPaths(worktreePath) {
+  const worktree = fs.realpathSync(worktreePath), root = path.join(worktree, ARTIFACT_ARCHIVE_DIR) + path.sep;
+  const pending = new Set();
+  for (const frame of archivePublicationFrames) {
+    if (frame.worktree !== worktree || !Array.isArray(frame.created)) continue;
+    assertArchiveLock(worktree);
+    for (const member of frame.created) {
+      if (!member.path.startsWith(root)) continue;
+      const stat = fs.lstatSync(member.path);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.dev !== member.dev || stat.ino !== member.ino
+          || fs.realpathSync(member.path) !== member.path)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'pending host publication ownership changed');
+      pending.add(path.relative(worktree, member.path));
+    }
+  }
+  return [...pending].sort();
+}
 function authenticatedArchivePins(worktreePath) {
-  const worktree = fs.realpathSync(worktreePath), inventory = archiveInventory(worktree);
+  const worktree = fs.realpathSync(worktreePath), pending = new Set(pendingArchivePublicationPaths(worktree));
+  const inventory = archiveInventory(worktree);
   if (!inventory.length && !fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) return [];
   let state;
   try { state = authorityState(worktree); }
@@ -2358,9 +2376,11 @@ function authenticatedArchivePins(worktreePath) {
       pins.push(pin);
     }
   }
-  if (stable(inventory) !== stable(pins.map(pin => pin.path).sort()))
+  const unpublished = new Set([...pending].filter(file => !pins.some(pin => pin.path === file)));
+  const complete = inventory.filter(file => !unpublished.has(file));
+  if (stable(complete) !== stable(pins.map(pin => pin.path).sort()))
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive membership differs from authenticated complete inventory');
-  if (stable(archiveInventory(worktree)) !== stable(inventory))
+  if (stable(archiveInventory(worktree).filter(file => !unpublished.has(file))) !== stable(complete))
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive membership changed while authenticating');
   return pins.sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -4153,6 +4173,12 @@ function semanticResponsibilities(inventory, rows, role = 'integrator') {
     assignments[1].id = 'architecture-obligations';
     assignments[1].responsibility = 'Judge the selected governing ADRs and linked decisions against the complete live PR scope and acceptance obligations; retain ambiguous applicability and missing context.';
   }
+  if (role === 'code-review') {
+    assignments[0].id = 'code-correctness';
+    assignments[0].responsibility = 'Review changed product behavior, security, data loss and actual producer/caller contracts.';
+    assignments[1].id = 'code-acceptance';
+    assignments[1].responsibility = 'Review acceptance, tests, failures, carried findings and recorded disagreements against actual consumers.';
+  }
   for (const obligation of inventory.obligations) {
     const consumer = role === 'arch-review'
       ? /(?:\.planning\/architecture\/|\.planning\/investigations\/|\/(?:acceptance|governing|adr_unresolved)\/)/.test(obligation.path + obligation.pointer)
@@ -4189,10 +4215,11 @@ function semanticResponsibilities(inventory, rows, role = 'integrator') {
 function assertSemanticSnapshot(snapshot) {
   const { snapshot_sha256: hash, ...body } = snapshot;
   if (snapshot.schema !== SEMANTIC_SNAPSHOT_V1 || snapshot.review_contract !== SEMANTIC_REVIEW_V1
-      || !['integrator', 'arch-review'].includes(snapshot.role) || snapshot.stage !== 'snapshot' || !['codex', 'claude'].includes(snapshot.runtime)
+      || !['integrator', 'arch-review', 'code-review'].includes(snapshot.role) || snapshot.stage !== 'snapshot' || !['codex', 'claude'].includes(snapshot.runtime)
       || digest(stable(body)) !== hash || snapshot.assignments.length !== 2
       || stable(snapshot.assignments.map(item => item.id)) !== stable(snapshot.role === 'arch-review'
-        ? ['architecture-boundaries', 'architecture-obligations'] : ['producer-contract', 'consumer-acceptance']))
+        ? ['architecture-boundaries', 'architecture-obligations'] : snapshot.role === 'code-review'
+          ? ['code-correctness', 'code-acceptance'] : ['producer-contract', 'consumer-acceptance']))
     semanticError('semantic snapshot identity differs');
   const expected = snapshot.obligations.map(item => item.id).sort();
   const assigned = snapshot.assignments.flatMap(item => item.primary_obligation_ids);
@@ -4222,6 +4249,10 @@ function recheckSemanticSnapshot(record, options = {}) {
     if (current[key] !== identity[key === 'base_commit' ? 'base' : key]) semanticError('semantic source, head or base moved', 'STALE_CONTEXT');
   if (current.repository.identity !== identity.repository) semanticError('semantic repository changed', 'STALE_CONTEXT');
   const collector = require('./codex-arch-review-context.cjs');
+  if (snapshot.role === 'code-review') {
+    require('./codex-code-review-context.cjs').recheckSemantic(snapshot, options);
+    return record;
+  }
   if (snapshot.role === 'arch-review') {
     collector.recheckSemanticArchitecture(snapshot, options);
     return record;
@@ -4237,8 +4268,9 @@ function recheckSemanticSnapshot(record, options = {}) {
     { worktree, graphDir: identity.graph_directory }, options);
   return record;
 }
-function prepareSemanticReview({ review, architecture } = {}) {
-  if (architecture) return prepareSemanticArchitecture(architecture);
+function prepareSemanticReview({ review, architecture, codeReview, runtime: codeRuntime } = {}) {
+  if (codeReview) return prepareSemanticRole(codeReview, codeRuntime || 'codex');
+  if (architecture) return prepareSemanticRole(architecture);
   require('./codex-delivery-host.cjs').recheckIntegrationReview(review);
   if (!['codex', 'claude'].includes(review.options.nativeRuntime) || !review.prepared.nativeMergeProof)
     semanticError('semantic review requires actual same-runtime native merge proof');
@@ -4283,18 +4315,21 @@ function prepareSemanticReview({ review, architecture } = {}) {
   semanticPreparations.set(prepared, { record, options: review.options });
   return prepared;
 }
-function prepareSemanticArchitecture(architecture) {
+function prepareSemanticRole(context, runtime) {
   const collector = require('./codex-arch-review-context.cjs');
-  const source = require('./claude-role-host.cjs').claudeSemanticArchitectureSource(architecture)
-    || collector.semanticArchitectureSource(architecture);
+  const role = runtime ? 'code-review' : 'arch-review';
+  const source = runtime ? require('./codex-code-review-context.cjs').semanticSource(context, runtime)
+    : require('./claude-role-host.cjs').claudeSemanticArchitectureSource(context)
+      || collector.semanticArchitectureSource(context);
   const { packet, identity, instructions, selection, pins, options } = source;
   const inventory = partitionInventory(packet);
   const snapshot = { schema: SEMANTIC_SNAPSHOT_V1, review_contract: SEMANTIC_REVIEW_V1,
-    role: 'arch-review', stage: 'snapshot', runtime: source.runtime || 'codex', subject: identity.subject, identity,
+    role, stage: 'snapshot', runtime: source.runtime || 'codex', subject: identity.subject, identity,
     model: selection.model, effort: selection.effort, policy_hash: selection.policy_hash,
     agent_sha256: instructions.sha256, pins, original_packet_sha256: digest(stable(packet)),
-    criteria: require('./claude-reference-content.cjs').loadClaudeReferenceContent('arch-review'),
-    architecture_packet: packet, ...inventory, ...semanticResponsibilities(inventory, source.rows, 'arch-review') };
+    criteria: require('./claude-reference-content.cjs').loadClaudeReferenceContent(role),
+    ...(runtime ? { code_review_packet: packet } : { architecture_packet: packet }),
+    ...inventory, ...semanticResponsibilities(inventory, source.rows, role) };
   snapshot.snapshot_sha256 = digest(stable(snapshot));
   assertSemanticSnapshot(snapshot);
   const worktree = identity.worktree;
@@ -4320,11 +4355,26 @@ function semanticPreparation(prepared) {
   recheckSemanticSnapshot(state.record, state.options);
   return state;
 }
-function semanticRecord(worktree, hash) {
+function semanticRecord(worktree, hash, historical = false) {
   const record = semanticEnvelope(worktree, 'snapshot', hash);
   if (record.snapshot.snapshot_sha256 !== hash || record.snapshot.identity.worktree !== worktree)
     semanticError('foreign semantic snapshot');
+  if (historical && record.snapshot.role === 'code-review') {
+    assertSemanticSnapshot(record.snapshot);
+    return { ...record, historical: true };
+  }
   return recheckSemanticSnapshot(record);
+}
+function semanticCodeReviewSnapshot({ worktreePath, snapshot_sha256 } = {}) {
+  const { snapshot } = semanticRecord(fs.realpathSync(worktreePath), snapshot_sha256);
+  if (snapshot.role !== 'code-review') semanticError('foreign code-review snapshot');
+  return partitionFreeze(partitionCopy(snapshot));
+}
+function semanticLaunchSnapshot(prepared) {
+  const state = semanticStages.get(prepared);
+  if (!state) semanticError('original private semantic launch is required');
+  recheckSemanticSnapshot(state.record);
+  return partitionFreeze(partitionCopy(state.record.snapshot));
 }
 function semanticOriginalResult(trusted) {
   const pin = currentRuntimeEvidence(trusted).transcript;
@@ -4366,10 +4416,12 @@ function semanticNative(trusted, launch, record, result) {
       || row.message?.model !== trusted.receipt.observed_model || row.effort !== snapshot.effort)))
     semanticError('every original Claude assistant must retain its exact session, model and effort');
   const agent = snapshot.pins.find(item => item.sha256 === snapshot.agent_sha256);
-  const installed = fs.readFileSync(path.resolve(agent.root, agent.path), 'utf8');
-  const instructions = claude ? require('./claude-reference-content.cjs').loadClaudeReferenceContent(snapshot.role)
-    : require('./codex-runtime-host.cjs').generatedInstructions(installed);
-  if (claude && (digest(instructions) !== snapshot.agent_sha256 || installed !== instructions)
+  const installed = record.historical ? null : fs.readFileSync(path.resolve(agent.root, agent.path), 'utf8');
+  const instructions = record.historical
+    ? Buffer.from(launch.input).subarray(0, launch.prefix_bytes).toString('utf8').slice(0, -2)
+    : claude ? require('./claude-reference-content.cjs').loadClaudeReferenceContent(snapshot.role)
+      : require('./codex-runtime-host.cjs').generatedInstructions(installed);
+  if (claude && (digest(instructions) !== snapshot.agent_sha256 || !record.historical && installed !== instructions)
       || !launch.input.startsWith(instructions + '\n\n')) semanticError('semantic original installed instructions differ');
   const { evidence_markdown, ...judgment } = result;
   const original = originalCurrentResponse(trusted, judgment, Buffer.from(evidence_markdown), { native: pin });
@@ -4442,13 +4494,33 @@ function validateSemanticResult(result, launch, record) {
   const expected = assignment ? assignment.primary_obligation_ids : snapshot.obligations.map(item => item.id);
   if (stable(result.coverage) !== stable(expected) || new Set(result.coverage).size !== result.coverage.length
       || result.unread.some(id => !snapshot.obligations.some(item => item.id === id))) semanticError('semantic primary ownership or unread inventory differs');
-  completeFindingIndex(result, snapshot.role);
+  if (snapshot.role === 'code-review') {
+    const core = require('./code-review-core.cjs');
+    const context = snapshot.code_review_packet.role_context;
+    if (result.host_context !== undefined) semanticError('code-review host context is reserved to the host');
+    const readSource = core.createSourceReader({ head: snapshot.identity.head,
+      git: (args, maximum) => execFileSync('git', ['-C', snapshot.identity.worktree, ...args],
+        { encoding: 'utf8', timeout: 30000, maxBuffer: maximum }) });
+    if (launch.stage === 'final') core.projectSemanticResult(result,
+      { packet: snapshot.code_review_packet, identity: snapshot.identity, readSource });
+    else core.normalizeResult({ ...result, review_completeness: result.completeness === 'complete' ? 'complete' : 'incomplete',
+      unresolved_sources: [...result.required_context, ...result.unread] }, { round: context.review_round,
+      scope: context.review_scope, readSource });
+  } else completeFindingIndex(result, snapshot.role);
+  if (!Number.isSafeInteger(result.blocking_count) || result.blocking_count < 0)
+    semanticError('semantic blocking count must be a non-negative integer');
   if (result.outcome === 'passed' && result.blocking_count) semanticError('semantic pass retains blocking findings');
   if (stable(result.originals) !== stable(launch.originals)) semanticError('semantic original references differ');
   if (launch.stage === 'final' && (result.phase !== snapshot.identity.phase || result.head !== snapshot.identity.head
       || result.head_tree !== snapshot.identity.head_tree || result.base !== snapshot.identity.base_ref
-      || result.base_tree !== (snapshot.role === 'arch-review' ? snapshot.identity.merge_base_tree : snapshot.identity.base_tree) || result.ticket_set_digest !== snapshot.identity.ticket_set_digest
+      || result.base_tree !== (['arch-review', 'code-review'].includes(snapshot.role) ? snapshot.identity.merge_base_tree : snapshot.identity.base_tree) || result.ticket_set_digest !== snapshot.identity.ticket_set_digest
       || stable(result.ticket_set) !== stable(snapshot.identity.ticket_set))) semanticError('semantic final whole-phase identity differs');
+  if (snapshot.role === 'code-review' && launch.stage === 'final') {
+    const identity = snapshot.identity;
+    if (result.id !== snapshot.subject || result.pr !== identity.pr || result.repository !== identity.repository
+        || result.base_commit !== identity.base || result.merge_base !== identity.merge_base || !Array.isArray(result.dispositions))
+      semanticError('semantic code-review final identity or dispositions differ');
+  }
   if (snapshot.role === 'arch-review' && launch.stage === 'final')
     require('./codex-arch-review-context.cjs').validateSemanticArchitectureFinal(result, snapshot);
   const seams = result.seams;
@@ -4470,6 +4542,9 @@ function semanticLaunch(prepared, stage, assignment_id, originals = []) {
     ...(record.input_transport === 'host-files'
       ? { input_transport: 'host-files', ...semanticInputFiles(record, originals, stage === 'final') }
       : { material: snapshot.material, originals }), seams: snapshot.seams,
+    ...(snapshot.role === 'code-review' ? { code_review_context: Object.fromEntries(
+      ['review_round', 'review_scope', 'prior_head', 'prior_findings', 'dispositions_digest'].map(key =>
+        [key, snapshot.code_review_packet.role_context[key]])) } : {}),
     ...(snapshot.role === 'arch-review' ? { architecture_context: {
       change_metadata: snapshot.architecture_packet.change_metadata,
       adr_selection: snapshot.architecture_packet.adr_selection,
@@ -4481,7 +4556,9 @@ function semanticLaunch(prepared, stage, assignment_id, originals = []) {
   const prefix = (snapshot.runtime === 'claude'
     ? require('./claude-reference-content.cjs').loadClaudeReferenceContent(snapshot.role)
     : require('./codex-runtime-host.cjs').generatedInstructions(fs.readFileSync(path.resolve(agent.root, agent.path), 'utf8'))) + '\n\n';
-  const input = prefix + (snapshot.runtime === 'claude' ? '' : snapshot.criteria + '\n\n') + 'Evaluate the actual product obligations and dependency seams under the installed ' + snapshot.role + ' criteria. '
+  const criteria = snapshot.runtime === 'claude' || snapshot.role === 'code-review' && prefix.includes(snapshot.criteria)
+    ? '' : snapshot.criteria + '\n\n';
+  const input = prefix + criteria + 'Evaluate the actual product obligations and dependency seams under the installed ' + snapshot.role + ' criteria. '
     + 'Read every required material read_path as an ordinary file; it contains the complete exact source bytes. '
     + 'Read originals read_path as the complete original JSON report, preserving every field and INFO. '
     + 'Use ordinary source/diff and metadata reads as needed. All exact source aliases and support context remain available. '
@@ -4495,9 +4572,13 @@ function semanticLaunch(prepared, stage, assignment_id, originals = []) {
     + 'completeness (complete/incomplete/blocked), outcome, blocking_count, coverage (exact primary ids or all obligation_ids for final), '
     + 'conclusions, findings, limitations, required_context, unread (obligation ids), seams (id/disposition/rationale), originals '
     + '(exact reference objects; empty for workers), evidence_markdown. Final also echoes phase, head, head_tree, base=base_ref, '
-    + 'ticket_set, ticket_set_digest and summary from identity. Architecture final also reports repository, id=subject, pr, '
-    + 'base_commit=identity.base, merge_base, base_tree=merge_base_tree and verdict (conform|violation|adr-outdated); '
-    + 'other finals report base_tree from identity. Never pass with missing context or unresolved seams.\n'
+    + 'ticket_set, ticket_set_digest and summary from identity. '
+    + (snapshot.role === 'code-review'
+      ? 'Code-review final also reports repository, id=subject, pr, base_commit=identity.base, merge_base, '
+        + 'base_tree=merge_base_tree and dispositions for carried BLOCKER refs; findings use severity BLOCKER/WARNING/INFO. '
+      : 'Architecture final also reports repository, id=subject, pr, base_commit=identity.base, merge_base, '
+        + 'base_tree=merge_base_tree and verdict (conform|violation|adr-outdated); other finals report base_tree from identity. ')
+    + 'Never pass with missing context or unresolved seams.\n'
     + '<AUTHENTICATED_SEMANTIC_REVIEW>\n' + stable(payload) + '\n</AUTHENTICATED_SEMANTIC_REVIEW>';
   if (Buffer.byteLength(input) > 1048576) semanticError('complete semantic input exceeds native prompt bound', 'SEMANTIC_REVIEW_INPUT_OVER_BOUND');
   const launch = { schema: SEMANTIC_REVIEW_V1, role: snapshot.role, stage, assignment_id, dispatch_id,
@@ -4601,10 +4682,10 @@ function retainSemanticOriginal({ prepared, recorder } = {}) {
     return partitionFreeze(partitionCopy({ reference, result, original_text: original.text, native }));
   });
 }
-function authenticateSemanticFinal({ trusted, result, evidence, identity, retained }) {
-  if (result.stage !== 'final' || !['integrator', 'arch-review'].includes(trusted.receipt.role) || !['codex', 'claude'].includes(trusted.receipt.runtime))
-    semanticError('only an independent original semantic final grants integration authority');
-  const record = semanticRecord(identity.worktree, result.snapshot_sha256), { snapshot } = record;
+function authenticateSemanticFinal({ trusted, result, evidence, identity, retained, historical = false }) {
+  if (result.stage !== 'final' || !['integrator', 'arch-review', 'code-review'].includes(trusted.receipt.role) || !['codex', 'claude'].includes(trusted.receipt.runtime))
+    semanticError('only an independent original role-specific semantic final grants authority');
+  const record = semanticRecord(identity.worktree, result.snapshot_sha256, historical), { snapshot } = record;
   const retention = retained || authorityState(identity.worktree, false, false).payload.records[trusted.dispatchId]?.review_current;
   if (trusted.receipt.role !== snapshot.role || identity.repository.identity !== snapshot.identity.repository
       || identity.head !== snapshot.identity.head || identity.base_commit !== snapshot.identity.base)
@@ -4623,11 +4704,12 @@ function authenticateSemanticFinal({ trusted, result, evidence, identity, retain
   const native = semanticNative(trusted, launch, record, { ...result, evidence_markdown: evidence.toString('utf8') });
   if (originals.some(item => item.reference.dispatch_id === trusted.dispatchId || item.native.session_id === native.session_id))
     semanticError('semantic final requires a distinct original dispatch and native session');
-  if (originals.some(item => !semanticComplete(item.result) || item.native.resource_failure || item.native.reads.incomplete.length)
-      || !semanticComplete(result) || native.resource_failure || native.reads.incomplete.length)
+  const incomplete = originals.some(item => !semanticComplete(item.result) || item.native.resource_failure || item.native.reads.incomplete.length)
+      || !semanticComplete(result) || native.resource_failure || native.reads.incomplete.length;
+  if (incomplete && (snapshot.role !== 'code-review' || semanticComplete(result) || result.outcome === 'passed'))
     semanticError('incomplete semantic originals or final cannot grant completion credit', 'SEMANTIC_REVIEW_INCOMPLETE');
   if (result.outcome === 'passed' && (result.seams.some(item => item.disposition !== 'resolved')
-      || originals.some(item => item.result.outcome !== 'passed' || item.result.findings.some(finding => finding.blocking))))
+      || snapshot.role !== 'code-review' && originals.some(item => item.result.outcome !== 'passed' || item.result.findings.some(finding => finding.blocking))))
     semanticError('unresolved original findings or dependency seams cannot pass');
   return Object.freeze({ schema: SEMANTIC_REVIEW_V1, role: snapshot.role, stage: 'final', contract: SEMANTIC_REVIEW_V1,
     semantic_review: { stage: 'final', snapshot_sha256: snapshot.snapshot_sha256, originals: launch.originals },
@@ -7532,7 +7614,7 @@ function codeReviewLineageCatalogues(identity, packet, fields, state) {
     if (!state.catalogues.has(key)) {
       const records = (fs.existsSync(path.join(archiveAuthorityDirectory(root), 'catalogue.json'))
         ? Object.values(authorityState(root).payload.records) : []).filter(record => {
-          if (record.receipt?.role !== 'code-review') return false;
+          if (record.receipt?.role !== 'code-review' || record.semantic_review?.stage === 'worker') return false;
           const subject = phaseSubjectFields(authenticatedRecordSubject(record));
           return subject?.repository === fields.repository && subject.phase === fields.phase;
         });
@@ -7585,6 +7667,27 @@ function authenticateCarriedCodeReviewFindings({ trusted, identity, packet, prio
 }
 
 function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, retained }, replay, lineage = codeReviewReplayState()) {
+  if (result.review_contract === SEMANTIC_REVIEW_V1) {
+    const historical = replay === HISTORICAL_CODE_REVIEW_REPLAY;
+    const record = semanticRecord(identity.worktree, result.snapshot_sha256, historical);
+    if (record.snapshot.role !== 'code-review') semanticError('foreign code-review final authority');
+    const original = semanticOriginalResult(trusted).result;
+    const { evidence_markdown, ...judgment } = original;
+    const authenticated = authenticateSemanticFinal({ trusted, result: judgment, evidence, identity, retained, historical });
+    const core = require('./code-review-core.cjs');
+    const readSource = core.createSourceReader({ head: identity.head, git: (args, maximum) =>
+      execFileSync('git', ['-C', identity.worktree, ...args], { encoding: 'utf8', timeout: 30000, maxBuffer: maximum }) });
+    const packet = record.snapshot.code_review_packet;
+    authenticateCarriedCodeReviewFindings({ trusted, identity, packet,
+      prior: packet.role_context.normalization_inputs.prior_findings, readSource, state: lineage });
+    const { evidence_markdown: _markdown, ...expected } = core.projectSemanticResult(original,
+      { packet, identity: record.snapshot.identity, readSource });
+    if (stable(result) !== stable(expected) || !Buffer.from(evidence_markdown).equals(evidence))
+      semanticError('code-review blocking projection differs from the complete native final');
+    if (result.verdict === 'pass' && (original.outcome !== 'passed' || result.review_completeness !== 'complete'))
+      semanticError('code-review pass requires independent complete final acceptance');
+    return authenticated;
+  }
   const core = require('./code-review-core.cjs'), packets = require('./context-packet.cjs');
   const collector = require('./codex-arch-review-context.cjs');
   const retention = retained || currentReviewRetention(identity.worktree, trusted);
@@ -7733,6 +7836,20 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
 }
 
 function codeReviewCoverageRange(trusted, findings, identity) {
+  if (findings.review_contract === SEMANTIC_REVIEW_V1) {
+    try {
+      const { snapshot } = semanticRecord(identity.worktree, findings.snapshot_sha256, true);
+      if (snapshot.role !== 'code-review' || snapshot.subject !== trusted.record.ticket
+          || snapshot.identity.head !== identity.head || snapshot.identity.base !== identity.base_commit) return null;
+      const context = snapshot.code_review_packet.role_context;
+      const from = context.review_scope === 'full' ? identity.merge_base : context.prior_head;
+      const actual = reviewGit(identity.worktree, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
+        from, identity.head, ...require('./development-artifacts.cjs').productPathspec()]);
+      if (context.exact_diff.content.trimEnd() !== actual.trimEnd() || context.review_round !== findings.review_round
+          || context.review_scope !== findings.review_scope || context.prior_head !== findings.prior_head) return null;
+      return { from, to: identity.head, merge_base: identity.merge_base };
+    } catch { return null; }
+  }
   const packets = require('./context-packet.cjs');
   const runtime = trusted.receipt.runtime_evidence;
   let packet;
@@ -7932,7 +8049,7 @@ function priorCodeReviewVerdicts({ worktreePath, repository, phaseDir, graphDir 
   for (const worktree of candidates) {
     if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
     for (const record of Object.values(authorityState(worktree).payload.records)) {
-      if (record.receipt?.role !== 'code-review') continue;
+      if (record.receipt?.role !== 'code-review' || record.semantic_review?.stage === 'worker') continue;
       const fields = phaseSubjectFields(authenticatedRecordSubject(record));
       if (!fields || fields.phase !== phaseDir || fields.repository !== repository) continue;
       const reviewed = authenticatedCodeReviewRecord(worktree, record, repository, lineage);
@@ -8078,7 +8195,17 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
     const record = authorityState(manifest.worktree_realpath).payload.records[manifest.producer_dispatch];
     const trusted = trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: record.receipt_store });
     let originalPacket, originalReference;
-    if (trusted.receipt.runtime === 'claude' && trusted.receipt.selection_evidence?.transcript) {
+    const semantic = findings.review_contract === SEMANTIC_REVIEW_V1;
+    if (semantic) {
+      try {
+        const { snapshot } = semanticRecord(manifest.worktree_realpath, findings.snapshot_sha256);
+        authenticateCodeReviewAnswer({ trusted, result: findings,
+          evidence: readPinnedArchiveFile(manifest.worktree_realpath, manifest.files.evidence, 'current semantic code-review evidence'),
+          identity: { worktree: manifest.worktree_realpath, repository: { identity: repository },
+            head, base_commit: baseCommit }, retained: record.review_current });
+        originalPacket = snapshot.code_review_packet;
+      } catch { current = null; currentPlanning = null; continue; }
+    } else if (trusted.receipt.runtime === 'claude' && trusted.receipt.selection_evidence?.transcript) {
       originalPacket = originalInlinePacket(trusted).packet;
     } else if (trusted.receipt.runtime_evidence?.input_transport === 'host-files') {
       const input = require('./codex-arch-review-context.cjs').verifyFileInput(
@@ -8098,7 +8225,7 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
       originalPacket = packets.decodeUniqueContent(encoded);
     }
     if (originalPacket) {
-      if (trusted.receipt.runtime === 'codex') {
+      if (trusted.receipt.runtime === 'codex' && !semantic) {
         const originalDigest = digest(JSON.stringify(packets.encodeUniqueContent(originalPacket)));
         const originalBinding = trusted.receipt.runtime_evidence?.code_review;
         if (!originalBinding || originalBinding.context_digest !== originalDigest
@@ -8149,6 +8276,9 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
       review_completeness: verdict.review_completeness, round: verdict.review_round, scope: verdict.review_scope,
       prior_head: verdict.prior_head, head, base_commit: baseCommit, subject: binding.subject, dispatch_id: manifest.producer_dispatch,
       artifact_ref: verdict.artifact_ref, artifact_digest: verdict.artifact_digest, findings: verdict.findings,
+      ...(semantic ? { original_reports: { snapshot_sha256: findings.snapshot_sha256,
+        workers: structuredClone(manifest.semantic_review.originals), final: { evidence: structuredClone(manifest.files.evidence),
+          output: structuredClone(currentRuntimeEvidence(trusted).transcript) } } } : {}),
       disagreement_suppressed: verdict.disagreement_suppressed, citations_unresolved: verdict.citations_unresolved,
       partitions_not_reviewed: verdict.partitions_not_reviewed };
   }
@@ -9720,6 +9850,8 @@ function cli(argv) {
 
 module.exports = Object.freeze(Object.assign(Object.create(null), {
   SEMANTIC_REVIEW_V1,
+  semanticCodeReviewSnapshot,
+  semanticLaunchSnapshot,
   SEMANTIC_SNAPSHOT_V1,
   prepareSemanticReview,
   prepareSemanticWorker,
@@ -9792,7 +9924,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   assertArchivePin,
   archiveAuthorityNamespace,
   archiveAuthorityDirectory,
-  authenticatedArchivePins,
+  authenticatedArchivePins, pendingArchivePublicationPaths,
   registerPhaseArchiveRoster,
   readPhaseArchiveRoster,
   selectPhaseArchives,

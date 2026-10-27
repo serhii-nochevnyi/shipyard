@@ -1026,12 +1026,12 @@ async function runSemanticReview({ prepared, recorder, launch, worktreePath } = 
 }
 
 async function runCodexSemanticReview(review, runtimeHost, scope, options) {
-  const architecture = review.architecture;
-  const prepared = roleArtifact.prepareSemanticReview(architecture ? { architecture } : { review });
+  const architecture = review.architecture, codeReview = review.codeReview;
+  const prepared = roleArtifact.prepareSemanticReview(codeReview ? { codeReview } : architecture ? { architecture } : { review });
   const role = prepared.role;
   const evidenceName = { 'arch-review': ARCH_REVIEW_EVIDENCE_NAME, 'code-review': CODE_REVIEW_EVIDENCE_NAME }[role];
   const protectedEvidence = evidenceName ? [path.join(scope.worktree, evidenceName)] : [];
-  const assertWorktree = architecture ? () => archReviewContext.recheckPreparedSemanticArchitecture(architecture)
+  const assertWorktree = codeReview ? () => codeReviewContext.recheckSemantic(prepared, options) : architecture ? () => archReviewContext.recheckPreparedSemanticArchitecture(architecture)
     : () => require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
     ...review.prepared, integrationReview: { archivePins: roleArtifact.authenticatedArchivePins(scope.worktree) } });
   const launch = async stage => {
@@ -1068,7 +1068,8 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
           host: native, recorder: native.recorder, controller, capabilities: native.capabilities,
           agentDir: installed.agentDir, agentManifest: installed.agentManifest, env: options.env || process.env,
           context: { ticket: scope.ticket, phase: scope.phase, worktreePath: scope.worktree,
-            ...(role === 'arch-review' && scope.ticket.startsWith('phase=') ? { subject_kind: 'phase' } : {}),
+            ...(['arch-review', 'code-review'].includes(role) && scope.ticket.startsWith('phase=') ? { subject_kind: 'phase' } : {}),
+            ...(codeReview ? { code_review_prepared: codeReviewContext.prepareSemanticLaunch(codeReview, stage) } : {}),
             runtime: 'codex', provider: 'openai', prompt: Buffer.from(stage.input).subarray(stage.prefix_bytes).toString('utf8') } });
         if (heartbeatError) throw heartbeatError;
         assertWorktree();
@@ -1080,6 +1081,7 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
     }
     const result = partitionedCodexResult(dispatch, runtimeHost.recorder, role);
     if (stage.stage === 'worker') return Object.freeze({ ...dispatch, result });
+    if (codeReview) return codeReviewContext.finishSemantic(codeReview, dispatch, result, runtimeHost.recorder);
     if (architecture) return archReviewContext.finishSemanticArchitecture(architecture, dispatch, result, runtimeHost.recorder);
     const { evidence_markdown, ...judgment } = result;
     const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
@@ -3368,6 +3370,23 @@ function createCodexDeliveryHost(options = {}) {
     resumeRepairActions: (dispatchId, liveScope) => resumeRepairActions(options, dispatchId, liveScope),
     async run(rawRequest) {
       const request = requestValue(rawRequest);
+      if (request.role === 'code-review') {
+        if (options.codeReviewContext && !codeReviewContext.isSemanticContext(options.codeReviewContext))
+          fail('CODE_REVIEW_CONTEXT_REQUIRED', 'ordinary code-review requires semantic preparation; original-version evidence is read through its original finalizer');
+        if (partitionRunning) fail('INVALID_INPUT', 'semantic code-review execution is already active');
+        partitionRunning = true;
+        try {
+          const codeReview = options.codeReviewContext || codeReviewContext.prepareSemantic(scope, request, {
+            ...options, inflightDispatchId: request.dispatch_id, storageRoot: storageDirectory(options, scope) });
+          if (codeReview.prepared.ticket !== scope.ticket || codeReview.prepared.phaseNumber !== scope.phase
+              || codeReview.prepared.canonical.worktree !== scope.worktree
+              || codeReview.prepared.binding.repo !== (request.context.repo ?? null))
+            fail('CODE_REVIEW_CONTEXT_REQUIRED', 'private semantic code-review context must match the current scope');
+          const selected = policy.resolveDispatch({ runtime: 'codex', role: 'code-review', signals: codeReview.prepared.signals });
+          codeReviewContext.bindSemantic(codeReview, installedAgentOptions({ ...options, host: runtimeHost }, selected, runtimeHost.capabilities));
+          return await runCodexSemanticReview({ codeReview, prepared: codeReview.prepared }, runtimeHost, scope, options);
+        } finally { partitionRunning = false; }
+      }
       if (request.role === 'arch-review' && (!options.archReviewContext
           || archReviewContext.isSemanticArchitecture(options.archReviewContext))) {
         if (partitionRunning) fail('INVALID_INPUT', 'semantic architecture execution is already active');
@@ -4055,8 +4074,8 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     }) : null;
   const codeDispatchId = parsed.launch.role === 'code-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
   const preparedCodeReview = parsed.launch.role === 'code-review'
-    ? codeReviewContext.prepare(scope, parsed.launch, {
-      graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
+    ? codeReviewContext.prepareSemantic(scope, parsed.launch, {
+      defaultBranch: options.defaultBranch, graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
       execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
       refreshGit: options.refreshGit,
       inflightDispatchId: codeDispatchId, storageRoot: storageDirectory(options, scope),
@@ -4070,7 +4089,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   const archReviewSignals = preparedArchReview && !archReviewContext.isSemanticArchitecture(preparedArchReview) ? admitArchitectureInput(preparedArchReview, request, { ...options, automaticReader: !options.readerCapacity },
     options.host?.capabilities || options.capabilities || {}) : null;
   if (archReviewSignals) request.signals = archReviewSignals;
-  const codeReviewSignals = preparedCodeReview ? admitCodeReviewInput(preparedCodeReview, options,
+  const codeReviewSignals = preparedCodeReview && !codeReviewContext.isSemanticContext(preparedCodeReview) ? admitCodeReviewInput(preparedCodeReview, options,
     options.host?.capabilities || options.capabilities || {}) : null;
   if (codeReviewSignals) request.signals = codeReviewSignals;
 
