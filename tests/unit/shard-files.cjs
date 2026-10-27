@@ -8,6 +8,7 @@ const path = require('node:path');
 const DIRECTORY = __dirname;
 const WEIGHTS_FILE = path.join(DIRECTORY, 'shard-weights.json');
 const DEFAULT_WEIGHT = 5;
+const MANIFEST_FILE = path.join(DIRECTORY, 'shard-manifest.json');
 const INTEGRATION_OWNER = 'phase49-incremental-integration.test.cjs';
 
 function parseSpec(spec) {
@@ -62,18 +63,60 @@ function selectShard(spec, directory = DIRECTORY, weights = readWeights()) {
   return assign(unitFiles(directory), weights, count)[index - 1].files;
 }
 
-function selectTaskShard(spec, directory = DIRECTORY, weights = readWeights()) {
+function readManifest(file = MANIFEST_FILE) {
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function validateManifest(manifest, tasks) {
+  if (manifest.version !== 1 || !Array.isArray(manifest.shards) || manifest.shards.length < 16)
+    throw new Error('shard manifest must contain at least 16 shards (version 1)');
+  const seen = new Set();
+  const available = new Set(tasks);
+  for (const shard of manifest.shards) {
+    if (!Array.isArray(shard) || shard.length === 0) throw new Error('empty shard in manifest');
+    for (const task of shard) {
+      parseTask(task);
+      if (seen.has(task)) throw new Error(`duplicate shard task: ${task}`);
+      if (!available.has(task)) throw new Error(`stale shard task: ${task}`);
+      seen.add(task);
+    }
+  }
+  const missing = tasks.filter(task => !seen.has(task));
+  if (missing.length) throw new Error(`unassigned tests: ${missing.join(', ')}; run node tests/unit/shard-files.cjs --append`);
+  return manifest;
+}
+
+function selectTaskShard(spec, directory = DIRECTORY, manifest = readManifest()) {
   const { index, count } = parseSpec(spec);
-  return assign(unitTasks(unitFiles(directory)), weights, count)[index - 1].files;
+  manifest = appendShard(manifest, unitTasks(unitFiles(directory)));
+  if (count !== manifest.shards.length) throw new Error(`shard count must match manifest (${manifest.shards.length})`);
+  return [...manifest.shards[index - 1]];
+}
+
+function appendShard(manifest, tasks) {
+  const existing = new Set(manifest.shards.flat());
+  const added = tasks.filter(task => !existing.has(task)).sort();
+  const next = { ...manifest, shards: [...manifest.shards.map(shard => [...shard]), ...added.map(task => [task])] };
+  return validateManifest(next, tasks);
 }
 
 if (require.main === module) {
   try {
-    for (const name of selectShard(process.argv[2])) process.stdout.write(`tests/unit/${name}\n`);
+    if (process.argv[2] === '--append') {
+      const manifest = appendShard(readManifest(), unitTasks(unitFiles()));
+      fs.writeFileSync(MANIFEST_FILE, JSON.stringify(manifest, null, 2) + '\n');
+      process.stdout.write(`Registered ${manifest.shards.length} shards\n`);
+    } else if (process.argv[2] === '--matrix') {
+      const manifest = appendShard(readManifest(), unitTasks(unitFiles()));
+      const count = manifest.shards.length;
+      process.stdout.write(JSON.stringify({ shard: manifest.shards.map((_, index) => `${index + 1}/${count}`) }) + '\n');
+    } else {
+      for (const name of selectShard(process.argv[2])) process.stdout.write(`tests/unit/${name}\n`);
+    }
   } catch (error) {
     process.stderr.write(`shard-files: ${error.message}\n`);
     process.exit(2);
   }
 }
 
-module.exports = { DEFAULT_WEIGHT, assign, parseSpec, parseTask, readWeights, selectShard, selectTaskShard, unitFiles, unitTasks };
+module.exports = { DEFAULT_WEIGHT, appendShard, readManifest, validateManifest, assign, parseSpec, parseTask, readWeights, selectShard, selectTaskShard, unitFiles, unitTasks };
