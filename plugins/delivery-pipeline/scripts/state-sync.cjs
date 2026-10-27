@@ -65,7 +65,7 @@ const {
   activeTrackersForPublishLocked, metadataIdentity,
 } = require(path.join(__dirname, 'tracker-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
-const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, isGreen, collectCiObservation } = require(path.join(__dirname, 'check-state.cjs'));
 const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
@@ -103,6 +103,8 @@ const META = path.join(GRAPH_DIR, 'delivery-state-meta.json');
 const GSD_SYNC = path.join(__dirname, 'gsd-sync.cjs');
 const PUBLISH_SCHEMA_VERSION = 1;
 const FAIL_AFTER_PUBLISH = process.env.SHIPYARD_STATE_SYNC_FAIL_AFTER || null;
+// @contract: The waiter supplies its poll nonce; standalone syncs create their own.
+const CI_POLL_ID = process.env.SHIPYARD_CI_POLL_ID || crypto.randomUUID();
 const CAPACITY_STORE = process.env.SHIPYARD_CAPACITY_STORE || null;
 const CAPACITY_PROVIDER = process.env.SHIPYARD_CAPACITY_PROVIDER || null;
 const CAPACITY_ACCOUNT_SCOPE = process.env.SHIPYARD_CAPACITY_ACCOUNT_SCOPE
@@ -131,9 +133,7 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-// This projection is the observation identity consumed by wait-events.cjs. It
-// intentionally excludes URLs, status clocks, journal timestamps and dispatch
-// overlays: those facts may change without a new CI/review observation.
+// @contract: Bind complete CI payloads alongside the existing semantic state projection.
 function observationProjection(state) {
   const tickets = {};
   for (const id of Object.keys(state).sort()) {
@@ -147,6 +147,7 @@ function observationProjection(state) {
       base: s.pr_base || s.base || null,
       merge_state: s.merge_state || null,
       review_decision: s.review_decision || null,
+      ...(s.ci_observation ? { ci_observation: s.ci_observation } : {}),
       checks: s.checks ? {
         total: Number(s.checks.total || 0),
         pending: Number(s.checks.pending || 0),
@@ -277,72 +278,6 @@ function ghTry(args) {
   if (TIME) process.stderr.write(`  ${Number(process.hrtime.bigint() - t0) / 1e9}s  gh ${args.slice(0, 4).join(' ')}\n`);
   const why = (r.error || r.status !== 0) ? diagnostic(r) : '';
   return { status: r.error ? null : r.status, stdout: (r.stdout || '').trim(), stderr: why };
-}
-
-// `gh pr checks` reports CI state through its EXIT CODE (8 = some checks still
-// pending, 1 = a check failed or the PR has no checks at all) while still
-// printing the requested JSON on stdout. A non-zero exit is therefore DATA, not
-// an error: reading it through the strict helper above made state-sync abort on
-// exactly the red/pending PRs the babysit loop exists to service.
-//
-// But an answer that never arrived is a different fact again: gh itself failed
-// (an old `gh` rejecting `bucket`, a 503, a rate limit, an expired token), and
-// that is not "this PR has no checks" either. Collapsing the two into the same
-// `{ rows: [] }` shape made `classify([])` read `none_reported: true, failing: 0,
-// pending: 0` — the exact tally the merge gate treats as unblocked — off a call
-// that never actually answered.
-//
-// THE SHAPE OF STDOUT DECIDES; the exit code is consulted only when stdout is
-// silent. Three cases, and the middle one is the whole point:
-//
-//   parses to an array   trusted as-is, EMPTY OR NOT and whatever the exit code.
-//                        A non-zero exit with valid JSON is the normal case
-//                        above, not an error.
-//   non-empty, not an    UNREADABLE, whatever the exit code. `gh` answered
-//   array                something else — malformed JSON, an API error object, a
-//                        notice contaminating stdout — and it exits 0 while
-//                        doing so, so a `status === 0` test here reads a
-//                        successful COMMAND as a readable ANSWER. This branch
-//                        used to be a bare `if` after the parse attempt rather
-//                        than an `else if`, so exit 0 manufactured `[]` locally;
-//                        `sentinel.cjs` and `ci-wait.cjs` both had the `else if`
-//                        and called the same `gh` answer unreadable, which left
-//                        the board and the guard disagreeing (ADR-004 F02 names
-//                        this cell "malformed JSON").
-//   empty                only here does the status decide: 0 means gh succeeded
-//                        and reported nothing — genuinely no checks — and
-//                        anything else is unreadable.
-//
-// Unreadable hands `rows: null` to `check-state.cjs`, which reports it as the
-// fourth state, `unavailable`. It used to hand over a synthetic
-// `[{ bucket: 'unreadable' }]` row instead, to borrow `classify`'s fail-closed
-// `pending`. That waited for the right reason and said the wrong thing — one
-// pending check, on a PR where nothing was read — and it put the fact in two
-// places at once: the row here and the flag there. The flag is the fact;
-// `rows: null` is how it is spelled on the way in, and this function returns
-// NOTHING else about it — `none`/`unavailable` were computed here too until the
-// only caller stopped reading them, which is one more second home for a fact
-// `classify` owns.
-function ghChecks(prNumber, repo) {
-  const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
-  if (repo) args.push('--repo', repo);
-  const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
-  const stdout = (r.stdout || '').trim();
-  let rows = null;
-  if (stdout) {
-    try {
-      const parsed = JSON.parse(stdout);
-      if (Array.isArray(parsed)) rows = parsed;
-    } catch { /* not JSON at all — `null` travels on to `classify` */ }
-  } else if (r.status === 0) {
-    rows = []; // gh succeeded and printed nothing — genuinely no checks
-  }
-  if (Array.isArray(rows)) return { rows };
-  // The note is what reaches the board, the front's why-message and the merge
-  // refusal, so it has to name the CAUSE — and it is derived by the module that
-  // owns the provenance order, so the board and the guard cannot describe the
-  // same `gh` answer differently.
-  return { rows: null, note: unavailableNote(r) };
 }
 
 // `valid` is the field a WRITER checks (ADR-004 D2): this script writes the board
@@ -921,7 +856,11 @@ for (const [id, t] of Object.entries(tickets)) {
       }
       const gate = entry.architecture.required ? readGate({ repo, sha: entry.head_sha, body: pr.body }) : require('./gate-trailer.cjs').parseGate(pr.body);
       if (gate) entry.gate = gate;
-      const { rows, note } = ghChecks(pr.number, repo);
+      const ciObservation = collectCiObservation({ pr: pr.number, repo, head: entry.head_sha, pollId: CI_POLL_ID },
+        args => runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS }));
+      entry.ci_observation = ciObservation;
+      const rows = ciObservation.complete ? ciObservation.rows : null;
+      const note = ciObservation.note;
       // check-state.cjs classifies; this file only records. The KEYS are the
       // board's contract — front.cjs's green test, escalation-record's
       // fingerprint and the stop gate all read exactly these — so the tallies
@@ -931,13 +870,7 @@ for (const [id, t] of Object.entries(tickets)) {
         total: c.total,
         failing: c.failing,
         pending: c.pending,
-        // Both flags come from `classify`, not from `ghChecks`: the shape of the
-        // answer (`[]` versus nothing at all) is what decides, and one place
-        // decides it. `none_reported` is a genuine observed empty list — this PR
-        // has no checks configured. `unavailable` is the reading that did not
-        // happen, and it is recorded UNCONDITIONALLY beside it, because a board
-        // where the key is simply missing cannot say whether the last sync found
-        // the checks readable or predates the question.
+        // @contract: classify owns unavailable versus observed-empty flags.
         none_reported: c.none_reported,
         unavailable: c.unavailable,
       };

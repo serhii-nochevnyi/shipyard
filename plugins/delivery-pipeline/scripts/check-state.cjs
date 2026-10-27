@@ -61,6 +61,7 @@ function stateBucket(row) {
 }
 
 function runIdOf(row) {
+  if (typeof row.run_id === 'string' && /^\d+$/.test(row.run_id)) return row.run_id;
   const m = typeof row.link === 'string' ? row.link.match(/\/actions\/runs\/(\d+)(?:\/|$)/) : null;
   return m ? m[1] : null;
 }
@@ -184,4 +185,169 @@ function unavailableNote(r) {
     || `gh pr checks exited ${r.status}`;
 }
 
-module.exports = { classify, stateBucket, isGreen, runIdOf, unavailableNote, CHECK_FIELDS, BUCKETS };
+// @contract: Reuse requires complete commit-addressed check-run and status coverage.
+const CI_OBSERVATION_VERSION = 1;
+const SHA = /^[0-9a-f]{40}$/i;
+
+// @security: Unknown remote states remain pending, as with unknown gh buckets.
+function remoteBucket(state) {
+  switch (state) {
+    case 'SUCCESS': return 'pass';
+    case 'FAILURE': case 'ERROR': case 'TIMED_OUT': case 'ACTION_REQUIRED': return 'fail';
+    case 'NEUTRAL': case 'SKIPPED': return 'skipping';
+    case 'CANCELLED': return 'cancel';
+    default: return 'pending';
+  }
+}
+
+function collectCiObservation({ pr, repo, head, pollId }, request) {
+  const observation = {
+    schema_version: CI_OBSERVATION_VERSION, repository: repo || null,
+    pr: Number(pr), checked_head: null, poll_id: pollId,
+    availability: 'unavailable', complete: false, rows: null, sources: null,
+  };
+  function json(args) {
+    const r = request(args);
+    if (!r || r.error || r.status !== 0) throw new Error(unavailableNote(r || {}));
+    try { return JSON.parse(r.stdout); } catch { throw new Error('CI transport returned malformed JSON'); }
+  }
+  try {
+    if (typeof pollId !== 'string' || !pollId) throw new Error('CI poll identity is missing');
+    if (!SHA.test(head || '')) throw new Error('Expected PR head is unavailable');
+    if (repo && !/^[^/\s]+\/[^/\s]+$/.test(repo)) throw new Error('CI repository identity is invalid');
+    if (!repo) {
+      const resolved = json(['repo', 'view', '--json', 'owner,name']);
+      repo = resolved && resolved.owner && resolved.owner.login && resolved.name
+        ? `${resolved.owner.login}/${resolved.name}` : null;
+      if (!repo || !/^[^/\s]+\/[^/\s]+$/.test(repo)) throw new Error('CI repository identity is unavailable');
+      observation.repository = repo;
+    }
+    const base = `repos/${repo}`;
+    const pull = () => {
+      const p = json(['api', `${base}/pulls/${pr}`]);
+      if (!p || p.number !== Number(pr) || p.state !== 'open'
+          || !p.head || !SHA.test(p.head.sha || '')
+          || !p.base || !p.base.repo || typeof p.base.repo.full_name !== 'string'
+          || p.base.repo.full_name.toLowerCase() !== repo.toLowerCase()) {
+        throw new Error('CI pull request identity is unproven');
+      }
+      return p.head.sha;
+    };
+    const checkedHead = pull();
+    if (checkedHead !== head) throw new Error('PR head moved before CI collection');
+    const pages = (endpoint, field, association) => {
+      const data = json(['api', endpoint, '--paginate', '--slurp']);
+      if (!Array.isArray(data) || !data.length) throw new Error('CI pages are missing');
+      const total = data[0] && data[0].total_count;
+      if (!Number.isSafeInteger(total) || total < 0) throw new Error('CI page total is missing');
+      const rows = [];
+      for (const page of data) {
+        if (!page || page.total_count !== total || !Array.isArray(page[field])
+            || !association(page) || (data.length > 1 && page[field].length === 0)) {
+          throw new Error('CI pages are incomplete or not commit-associated');
+        }
+        rows.push(...page[field]);
+      }
+      if (rows.length !== total || new Set(rows.map(r => r && r.id)).size !== rows.length)
+        throw new Error('CI page coverage is incomplete or duplicated');
+      return { rows, total_count: total, pages: data.length };
+    };
+    const checkRuns = pages(`${base}/commits/${checkedHead}/check-runs?per_page=100&filter=latest`,
+      'check_runs', p => p.check_runs.every(r => r && r.head_sha === checkedHead));
+    const statuses = pages(`${base}/commits/${checkedHead}/status?per_page=100`,
+      'statuses', p => p.sha === checkedHead);
+    const workflows = new Map();
+    const rows = checkRuns.rows.map(r => {
+      if (typeof r.name !== 'string' || !r.name || !Number.isSafeInteger(r.id))
+        throw new Error('CI check identity is incomplete');
+      const state = String(r.status === 'completed' ? r.conclusion || 'unknown' : r.status || 'unknown').toUpperCase();
+      const row = { name: r.name, state, bucket: remoteBucket(state), link: r.details_url || r.html_url || '',
+        startedAt: r.started_at || '', workflow: '', source: 'check-run', id: r.id, head_sha: checkedHead };
+      const runId = runIdOf(row);
+      if (runId) {
+        if (!workflows.has(runId)) {
+          const run = json(['api', `${base}/actions/runs/${runId}`]);
+          if (!run || String(run.id) !== runId || run.head_sha !== checkedHead || typeof run.name !== 'string')
+            throw new Error('CI workflow run association is incomplete');
+          workflows.set(runId, { name: run.name, event: run.event || '',
+            attempt: Number.isSafeInteger(run.run_attempt) ? run.run_attempt : null });
+        }
+        row.workflow = workflows.get(runId).name;
+        row.event = workflows.get(runId).event;
+        row.run_attempt = workflows.get(runId).attempt;
+      }
+      row.run_id = runId;
+      return row;
+    });
+    // @contract: Select latest jobs while retaining cancellation supersession evidence.
+    const latestChecks = new Map();
+    for (const row of rows) {
+      const key = JSON.stringify([row.name, row.workflow, row.event || '']);
+      const prior = latestChecks.get(key);
+      const at = Date.parse(row.startedAt) || 0;
+      const priorAt = prior ? Date.parse(prior.startedAt) || 0 : 0;
+      if (!prior || at > priorAt || (at === priorAt && row.id > prior.id)) latestChecks.set(key, row);
+    }
+    const selectedRows = rows.filter(row => row.bucket === 'cancel'
+      || latestChecks.get(JSON.stringify([row.name, row.workflow, row.event || ''])) === row);
+    const latestStatuses = new Map();
+    for (const r of statuses.rows) {
+      if (!r || typeof r.context !== 'string' || !r.context || !Number.isSafeInteger(r.id))
+        throw new Error('CI status identity is incomplete');
+      const prior = latestStatuses.get(r.context);
+      if (!prior || r.id > prior.id) latestStatuses.set(r.context, r);
+    }
+    for (const r of latestStatuses.values()) {
+      const state = String(r.state || 'unknown').toUpperCase();
+      selectedRows.push({ name: r.context, state, bucket: remoteBucket(state), link: r.target_url || '',
+        startedAt: r.created_at || '', workflow: '', source: 'commit-status', id: r.id,
+        head_sha: checkedHead, run_id: null });
+    }
+    if (pull() !== checkedHead) throw new Error('PR head moved during CI collection');
+    Object.assign(observation, { checked_head: checkedHead, availability: 'available', complete: true, rows: selectedRows,
+      sources: { check_runs: { total_count: checkRuns.total_count, pages: checkRuns.pages,
+          selected_count: selectedRows.filter(r => r.source === 'check-run').length },
+        statuses: { total_count: statuses.total_count, pages: statuses.pages, sha: checkedHead,
+          selected_count: latestStatuses.size } } });
+  } catch (error) {
+    observation.note = error.message;
+  }
+  return observation;
+}
+
+// @security: Publication generation and separately sampled PR head do not prove checked-head coverage.
+function compatibleCiObservation(o, { pr, repo, head, pollId } = {}) {
+  if (!o || o.schema_version !== CI_OBSERVATION_VERSION || o.complete !== true
+      || o.availability !== 'available' || !Array.isArray(o.rows)
+      || typeof o.repository !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(o.repository)
+      || !Number.isSafeInteger(o.pr) || o.pr < 1 || !SHA.test(o.checked_head || '')
+      || typeof o.poll_id !== 'string' || !o.poll_id
+      || (pr !== undefined && o.pr !== Number(pr))
+      || (repo && o.repository.toLowerCase() !== repo.toLowerCase())
+      || (head !== undefined && o.checked_head !== head)
+      || (pollId !== undefined && o.poll_id !== pollId)) return false;
+  const sources = o.sources;
+  if (!sources || !sources.check_runs || !sources.statuses || sources.statuses.sha !== o.checked_head) return false;
+  for (const surface of [sources.check_runs, sources.statuses]) {
+    if (!Number.isSafeInteger(surface.total_count) || surface.total_count < 0
+        || !Number.isSafeInteger(surface.pages) || surface.pages < 1) return false;
+  }
+  if (!o.rows.every(r => r && typeof r.name === 'string' && r.name
+      && typeof r.state === 'string' && r.bucket === remoteBucket(r.state)
+      && typeof r.link === 'string' && typeof r.startedAt === 'string' && typeof r.workflow === 'string'
+      && Number.isSafeInteger(r.id) && r.head_sha === o.checked_head
+      && (r.source === 'check-run' || r.source === 'commit-status')
+      && (r.run_id === null || (typeof r.run_id === 'string' && /^\d+$/.test(r.run_id))))) return false;
+  if (new Set(o.rows.map(r => `${r.source}:${r.id}`)).size !== o.rows.length) return false;
+  const checkRows = o.rows.filter(r => r.source === 'check-run');
+  const statusRows = o.rows.filter(r => r.source === 'commit-status');
+  return checkRows.length === sources.check_runs.selected_count
+    && checkRows.length <= sources.check_runs.total_count
+    && (sources.check_runs.total_count === 0 || checkRows.length > 0)
+    && statusRows.length === sources.statuses.selected_count
+    && statusRows.length <= sources.statuses.total_count
+    && (sources.statuses.total_count === 0 || statusRows.length > 0);
+}
+
+module.exports = { classify, stateBucket, isGreen, runIdOf, unavailableNote, CHECK_FIELDS, BUCKETS,
+  collectCiObservation, compatibleCiObservation, CI_OBSERVATION_VERSION };
