@@ -25,12 +25,11 @@ function ensure(runtime) {
     run(runtime, ['plugin', 'marketplace', 'add', 'open-gsd/gsd-core']);
   }
   let plugin = installed(runtime);
-  if (!plugin) run(runtime, ['plugin', runtime === 'codex' ? 'add' : 'install', 'gsd-core@gsd-core']);
-  else if (!plugin.enabled) {
+  if (!plugin?.enabled) {
     // @contract: Codex add and Claude enable activate installed dependencies.
-    run(runtime, ['plugin', runtime === 'codex' ? 'add' : 'enable', 'gsd-core@gsd-core']);
+    run(runtime, ['plugin', runtime === 'codex' ? 'add' : plugin ? 'enable' : 'install', 'gsd-core@gsd-core']);
+    plugin = installed(runtime);
   }
-  plugin = installed(runtime);
   if (!plugin?.enabled) throw new Error(`gsd-core@gsd-core is not enabled for ${runtime}`);
   console.log(`✓ GSD marketplace plugin ${plugin.version} enabled for ${runtime}`);
   return plugin;
