@@ -14,6 +14,93 @@ process.on('exit', () => {
 const { resolveIntegrationBranch, architectureTarget, phaseBinding, PHASE_SUBJECT, buildSubject, parseSubject,
   repositoryIdentity, acceptedRepositoryValues, PHASE_SUBJECT_ROLES, PHASE_ONLY_ROLES } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 
+function semanticArchitectureProcesses({ worktree, storage, agentText, artifacts }) {
+  const crypto = require('node:crypto');
+  const { EventEmitter } = require('node:events');
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const captureRoot = path.resolve(__dirname, '../fixtures/captured');
+  const registry = JSON.parse(fs.readFileSync(path.join(captureRoot, 'boundaries/codex-agent-stream.json')));
+  const captured = name => {
+    const file = registry.fixtures.find(file => file.endsWith('/codex-agent-stream-' + name + '.jsonl'));
+    assert.ok(file, 'registered original native shapes are required');
+    return fs.readFileSync(path.resolve(__dirname, '../..', file), 'utf8').trim().split('\n')
+      .map(JSON.parse).filter(row => !row.shipyard_fixture);
+  };
+  const parent = captured('parent'), cli = captured('exec');
+  const template = (rows, predicate) => {
+    const row = rows.find(predicate);
+    assert.ok(row, 'registered original native template is required');
+    return structuredClone(row);
+  };
+  const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
+  const launches = [];
+  const codexHome = path.join(storage, 'codex-home');
+  return { launches, codexHome, probe: { status: 'available', executable: 'codex', runtime_version: registry.cli_version },
+    spawn() {
+      const child = new EventEmitter(); child.pid = process.pid;
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+      let input = '';
+      child.stdin = { write(raw) { input += raw; }, end() { process.nextTick(() => {
+        try {
+          input = input.replace(/\n$/, '');
+          const payload = JSON.parse(input.match(/<AUTHENTICATED_SEMANTIC_REVIEW>\s*([\s\S]*?)\s*<\/AUTHENTICATED_SEMANTIC_REVIEW>/)[1]);
+          if (payload.stage === 'final') {
+            assert.equal(launches.length, 2);
+            assert.equal(payload.originals.length, 2);
+            for (const original of payload.originals) assert.deepEqual(artifacts.readSemanticOriginal({ worktreePath: worktree,
+              snapshot_sha256: payload.snapshot_sha256, assignment_id: original.reference.assignment_id }), original);
+          }
+          const identity = payload.reviewed_identity, contract = 'shipyard.semantic-review.v1';
+          const result = { schema: contract, review_contract: contract, role: 'arch-review', stage: payload.stage,
+            runtime: 'codex', subject: payload.subject, snapshot_sha256: payload.snapshot_sha256,
+            assignment_id: payload.assignment?.id || null, binding_sha256: payload.binding_sha256, reviewed_identity: identity,
+            completeness: 'complete', outcome: 'passed', blocking_count: 0, findings: [], limitations: [],
+            required_context: [], unread: [], conclusions: ['Evaluated the actual source change against ADR-014.'],
+            coverage: payload.assignment?.primary_obligation_ids || payload.obligation_ids,
+            seams: payload.seams.map(seam => ({ id: seam.id, disposition: 'resolved', rationale: 'Read the actual source boundary.' })),
+            originals: payload.originals?.map(original => original.reference) || [],
+            evidence_markdown: 'Complete fixture architecture review against the original ADR and aggregate diff.' };
+          if (payload.stage === 'final') Object.assign(result, { phase: identity.phase, id: payload.subject,
+            pr: identity.pr, repository: identity.repository, base_commit: identity.base, merge_base: identity.merge_base,
+            verdict: 'conform', head: identity.head, head_tree: identity.head_tree, base: identity.base_ref,
+            base_tree: identity.merge_base_tree, ticket_set: identity.ticket_set,
+            ticket_set_digest: identity.ticket_set_digest, summary: 'Independent aggregate architecture judgment.' });
+          const session = crypto.randomUUID(), text = JSON.stringify(result);
+          const meta = template(parent, row => row.type === 'session_meta');
+          Object.assign(meta.payload, { id: session, session_id: session, cwd: worktree, runtime_workspace_roots: [worktree] });
+          const context = template(parent, row => row.type === 'turn_context');
+          const model = /^model = "(.+)"$/m.exec(agentText)[1];
+          const effort = /^model_reasoning_effort = "(.+)"$/m.exec(agentText)[1];
+          Object.assign(context.payload, { model, effort, cwd: worktree, workspace_roots: [worktree] });
+          context.payload.sandbox_policy.type = 'read-only';
+          Object.assign(context.payload.collaboration_mode.settings, { model, reasoning_effort: effort });
+          const start = template(parent, row => row.payload?.type === 'task_started');
+          const turn = start.payload.turn_id; context.payload.turn_id = turn;
+          const developer = template(parent, row => row.payload?.role === 'developer');
+          developer.payload.content = [{ type: 'input_text', text: runtime.generatedInstructions(agentText) }];
+          const user = template(parent, row => row.payload?.role === 'user');
+          user.payload.content = [{ type: 'input_text', text: input }];
+          const final = template(parent, row => row.payload?.phase === 'final_answer');
+          final.payload.content.forEach(block => { block.text = text; });
+          final.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+          const complete = template(parent, row => row.payload?.type === 'task_complete');
+          Object.assign(complete.payload, { turn_id: turn, last_agent_message: text });
+          const now = new Date(), directory = path.join(codexHome, 'sessions', String(now.getFullYear()),
+            String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+          fs.mkdirSync(directory, { recursive: true });
+          fs.writeFileSync(path.join(directory, session + '.jsonl'), serialize([meta, context, start, developer, user,
+            template(parent, row => row.payload?.type === 'token_count'), final, complete]));
+          const stream = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
+            .map(type => template(cli, row => row.type === type));
+          stream[0].thread_id = session; stream[2].item.text = text;
+          launches.push({ payload, result, session });
+          child.stdout.emit('data', Buffer.from(serialize(stream))); child.emit('close', 0);
+        } catch (error) { child.emit('error', error); }
+      }); } };
+      return child;
+    } };
+}
+
 test('phase subject roles and phase-only roles are exact frozen shared lists', () => {
   assert.deepEqual(PHASE_SUBJECT_ROLES, ['arch-review', 'code-review']);
   assert.deepEqual(PHASE_ONLY_ROLES, ['code-review']);
@@ -180,7 +267,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
   const builder = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
   const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
   const f = fixture();
-  const originalCodexHome = process.env.CODEX_HOME;
+  const originalCodexHome = process.env.CODEX_HOME, originalPath = process.env.PATH;
   try {
     let graphDir = path.join(f.root,'.planning/graph');
     const graph = JSON.parse(fs.readFileSync(path.join(graphDir,'tickets.json')));
@@ -245,10 +332,8 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     if (runtime === 'codex') {
     const storage = fs.mkdtempSync(path.join(authorityHome,'codex-mixed-'));
     const value = prepared;
-    f.head = f.pr.headRefOid;
     const hostModule = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
     const requestPath = path.join(storage,'request.json');fs.writeFileSync(requestPath,JSON.stringify(request));
-    const parsed = hostModule.readRequestFile(requestPath);
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: value.launch.signals });
     const agentDir = path.join(storage, 'agents'); fs.mkdirSync(agentDir);
@@ -268,56 +353,44 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
       agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: digest(text) } }));
     const capabilities = { supportedModels: [selected.model], supportedEfforts: [selected.effort] };
     const recorder = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs').createDurableRecorder(path.join(storage, 'receipts'));
-    const host = { scope: parsed.scope, capabilities, recorder,
-      launchStatic(selection, context) {
-        const session = require('node:crypto').randomUUID();
-        const judgment = { ...require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs').authenticateFocusedLaunch(context.focused_prepared, context.prompt, { ticket: request.scope.ticket, phase: 38, worktree: f.root, dispatch_id: context.dispatch_id }), review_completeness: 'complete', limitations: [], unresolved_sources: [], id: request.scope.ticket, pr: f.pr.number, head: f.head,
-          base_tree: value.prepared.mergeBaseTree, verdict: 'conform', summary: 'Unit aggregate judgment.',
-          findings: [], blocking_count: 0, ticket_set: value.prepared.binding.ticketSet,
-          ticket_set_digest: value.prepared.binding.membership, context_digest: value.prepared.packet.digest,
-          launch_digest: context.prompt.match(/launch_digest=([a-f0-9]{64})/)[1], evidence_markdown: 'Complete unit aggregate review.' };
-        write(f.root, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
-        const records = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
-          .trim().split('\n').map(line => JSON.parse(line));
-        const streamRecords = ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
-        streamRecords[0].thread_id = session; streamRecords[2].item.text = JSON.stringify(judgment);
-        const stream = streamRecords.map(record => JSON.stringify(record)).join('\n') + '\n';
-        const codexHome = path.join(storage, 'codex-home');
-        process.env.CODEX_HOME = codexHome;
-        const now = new Date();
-        const nativeDir = path.join(codexHome, 'sessions', String(now.getFullYear()),
-          String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
-        fs.mkdirSync(nativeDir, { recursive: true });
-        fs.writeFileSync(path.join(nativeDir, session + '.jsonl'),
-          require('./helpers/codex-arch-review-fixtures.cjs').focusedNativeSession({ session, worktree: f.root,
-            model: selection.model, effort: selection.reasoning_effort, text: JSON.stringify(judgment), prompt: context.prompt }));
-        return require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').createCodexRuntimeHost({
-          scope: parsed.scope, recorder, capabilities, env: { CODEX_HOME: codexHome },
-          transcriptDir: path.join(storage, 'transcripts'),
-          probe: { status: 'available', executable: 'codex', runtime_version: 'fixture', capabilities },
-          spawn() {
-            const { EventEmitter } = require('node:events');
-            const child = new EventEmitter(); child.pid = process.pid;
-            child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
-            child.stdin = { write() {}, end() { process.nextTick(() => {
-              child.stdout.emit('data', Buffer.from(stream)); child.emit('close', 0);
-            }); } };
-            return child;
-          }
-        }).launchStatic({ model: selection.model, effort: selection.reasoning_effort, sandbox_mode: 'read-only',
-          agent_file: selected.agent_file, agent_file_content: text, agent_file_digest: digest(text) }, context);
-      } };
+    const native = semanticArchitectureProcesses({ worktree: f.root, storage, agentText: text, artifacts });
+    process.env.CODEX_HOME = native.codexHome;
+    const expectedRepoArgs = ['repo', 'view', ...(repo ? [repo] : []), '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'];
+    const bin = path.join(storage, 'bin'); fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'gh'), '#!' + process.execPath + '\n' + [
+      "'use strict';", "const assert = require('node:assert/strict');",
+      'assert.deepEqual(process.argv.slice(2), ' + JSON.stringify(expectedRepoArgs) + ');',
+      "process.stdout.write('develop\\n');", '',
+    ].join('\n'), { mode: 0o755 });
+    process.env.PATH = bin + path.delimiter + process.env.PATH;
     let output = '';
     await hostModule.runCli(['--args-file', requestPath], { write: text => { output += text; } },
-      { ...options, host, capabilities, recorder, agentDir, agentManifest, storageRoot: storage,
+      { ...options, capabilities, recorder, agentDir, agentManifest, storageRoot: storage,
+        probe: { ...native.probe, capabilities }, spawn: native.spawn, env: { ...process.env },
         execFileSync(exe,args,opts) {
-          if (exe === 'gh') return args[0] === 'repo' ? 'develop' : JSON.stringify(f.pr);
+          if (exe === 'gh') { assert.deepEqual(args, expectedRepoArgs); return 'develop'; }
           return require('node:child_process').execFileSync(exe,args,opts);
         } });
     const result = JSON.parse(output);
     assert.equal(result.subject, request.scope.ticket);
     const codexFindings = JSON.parse(fs.readFileSync(path.join(f.root,artifacts.authenticatedArchivePins(f.root).find(pin=>pin.path.endsWith('/findings.json')).path)));
-    assert.equal(codexFindings.host_context.phase_repo,repo);
+    assert.equal(codexFindings.reviewed_identity.repo,repo);
+    assert.deepEqual(codexFindings.ticket_set.map(row => row.id), [TICKET]);
+    assert.equal(native.launches.length, 3);
+    assert.deepEqual(native.launches.map(launch => launch.payload.stage), ['worker', 'worker', 'final']);
+    assert.equal(new Set(native.launches.map(launch => launch.session)).size, 3);
+    assert.equal(codexFindings.originals.length, 2);
+    const finalRecord = recorder.getVerifiedRecord(result.dispatch_id);
+    assert.equal(finalRecord.role, 'arch-review');
+    assert.equal(finalRecord.receipt.runtime_evidence.session_id, native.launches[2].session);
+    assert.ok(codexFindings.originals.every(original => original.dispatch_id !== result.dispatch_id));
+    const authorityFile = require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    const cachedAuthority = require.cache[authorityFile]; delete require.cache[authorityFile];
+    try {
+      const coldAuthority = require(authorityFile);
+      assert.equal(coldAuthority.currentArchitectureVerdict({worktreePath:f.root,graphDir,pr:801,head:f.pr.headRefOid,
+        headBranch:f.pr.headRefName,baseName:'develop',baseCommit:f.base,repo}).authenticated,true);
+    } finally { require.cache[authorityFile] = cachedAuthority; }
     assert.equal(artifacts.currentArchitectureVerdict({worktreePath:f.root,graphDir,pr:801,head:f.pr.headRefOid,
       headBranch:f.pr.headRefName,baseName:'develop',baseCommit:f.base}).authenticated,true);
     } else {
@@ -430,13 +503,17 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     const originalGraph = fs.readFileSync(graphPath);
     graph.tickets[TICKET].repo = repo === null ? 'acme/wrong' : null;
     fs.writeFileSync(graphPath,JSON.stringify(graph));
-    assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /phase absent|canonical phase epic|membership|digest|one current phase|independently retained current phase roster/);
+    if (runtime === 'codex') assert.equal(artifacts.currentArchitectureVerdict(verdictInput),null);
+    else assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /phase absent|canonical phase epic|membership|digest|one current phase|independently retained current phase roster/);
     fs.writeFileSync(graphPath,originalGraph);
     const findingsPin = artifacts.authenticatedArchivePins(f.root).find(pin=>pin.path.endsWith('/findings.json'));
     const findingsPath = path.join(f.root,findingsPin.path);
     const originalFindings = fs.readFileSync(findingsPath);
     fs.chmodSync(findingsPath,0o600);
-    fs.writeFileSync(findingsPath,JSON.stringify({...JSON.parse(originalFindings),host_context:{...JSON.parse(originalFindings).host_context,phase_repo:'acme/tampered'}}));
+    const tamperedFindings = JSON.parse(originalFindings);
+    if (runtime === 'codex') tamperedFindings.reviewed_identity.repo = 'acme/tampered';
+    else tamperedFindings.host_context.phase_repo = 'acme/tampered';
+    fs.writeFileSync(findingsPath,JSON.stringify(tamperedFindings));
     assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /pin|size|changed/);
     fs.writeFileSync(findingsPath,originalFindings); fs.chmodSync(findingsPath,0o400);
     f.pr.baseRefName = graph.tickets[TICKET].epic;
@@ -445,6 +522,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     f.pr.baseRefName='develop';f.pr.headRefOid='f'.repeat(40);
     assert.throws(()=>context.prepare(request.scope,{role:'arch-review',signals:{},context:request.context},options),/identity/);
   } finally {
+    process.env.PATH = originalPath;
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome;
     fs.rmSync(f.root,{recursive:true,force:true}); if (f.planningRoot) fs.rmSync(f.planningRoot,{recursive:true,force:true});}
 });
