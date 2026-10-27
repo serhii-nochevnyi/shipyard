@@ -33,7 +33,7 @@ function architectureFixture(f, controls = {}) {
   const launches = [], completed = [];
   const pending = [];
   let barrierTimer;
-  options.spawn = () => {
+  options.spawn = (_executable, runtimeArgs) => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = process.pid;
     let input = '';
@@ -48,7 +48,7 @@ function architectureFixture(f, controls = {}) {
             return { reference: original.reference, native: original.native, original_text, result: JSON.parse(original_text) };
           });
         }
-        const launch = { input, payload }; launches.push(launch);
+        const launch = { input, payload, runtime_args: runtimeArgs }; launches.push(launch);
         if (payload.stage === 'final') {
           assert.equal(payload.originals.length, 2);
           for (const item of payload.originals) {
@@ -248,6 +248,12 @@ test('ordinary architecture overlaps two originals and authenticates a distinct 
     assert.equal(prepared.recorder.getVerifiedRecord(result.dispatch_id).subject_kind, 'phase');
     assert.equal(prepared.recorder.getVerifiedRecord(result.dispatch_id).ticket, phaseBinding(f).subject);
     assert.deepEqual(prepared.completed, ['architecture-obligations', 'architecture-boundaries', 'final']);
+    const evidence = path.join(f.worktree, '.shipyard-arch-review-evidence.md');
+    for (const launch of prepared.launches) {
+      const profile = launch.runtime_args.find(value => value.startsWith('permissions.shipyard-runtime.filesystem='));
+      assert.ok(profile.includes(JSON.stringify(evidence) + '="deny"'));
+      assert.ok(!profile.includes(JSON.stringify(evidence) + '="write"'));
+    }
     assert.equal(new Set(prepared.launches.map(item => item.session)).size, 3);
     assert.ok(currentArchitecture(f)?.authenticated);
     const gate = require('../../plugins/delivery-pipeline/scripts/gate-trailer.cjs').verifyCurrentReviews({
@@ -402,7 +408,10 @@ for (const outcome of ['failed', 'unfinished', 'truncated', 'missing-usage']) te
     const launch = prepared.launches.find(item => item.payload.assignment?.id === 'architecture-boundaries');
     const original = authority.readSemanticOriginal({ worktreePath: f.worktree,
       snapshot_sha256: launch.payload.snapshot_sha256, assignment_id: launch.payload.assignment.id });
-    if (outcome === 'missing-usage') assert.ok(original.native.resource_failure);
+    if (outcome === 'missing-usage') {
+      assert.equal(original.native.accounting.status, 'unknown');
+      assert.equal(original.native.resource_failure, null);
+    }
     else assert.equal(original.native.reads.incomplete.length, 1);
     assert.equal(currentArchitecture(f), null);
   });
