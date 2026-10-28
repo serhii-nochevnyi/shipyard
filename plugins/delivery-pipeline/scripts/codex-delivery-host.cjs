@@ -3378,6 +3378,7 @@ function createCodexDeliveryHost(options = {}) {
         try {
           const codeReview = options.codeReviewContext || codeReviewContext.prepareSemantic(scope, request, {
             ...options, inflightDispatchId: request.dispatch_id, storageRoot: storageDirectory(options, scope) });
+          codeReviewContext.assertSemanticRequest(codeReview, scope, request);
           if (codeReview.prepared.ticket !== scope.ticket || codeReview.prepared.phaseNumber !== scope.phase
               || codeReview.prepared.canonical.worktree !== scope.worktree
               || codeReview.prepared.binding.repo !== (request.context.repo ?? null))
