@@ -1376,15 +1376,11 @@ test('packaged role APIs authenticate full current reviews with original isolate
     assert.equal(typeof exercise, 'function', 'missing original real-role fixture: ' + name);
     await exercise();
   }
-  for (const role of ['arch-review', 'integrator']) await fixtures.fixture(async f => {
-    const original = await fixtures.successfulReview(f, role);
+  await fixtures.fixture(async f => {
+    const original = await fixtures.successfulReview(f, 'arch-review');
     assert.deepEqual(read(original.artifact), original.original);
     assert.equal(original.dispatched.receipt.runtime, 'codex');
-    for (const consume of fixtures.consumers) {
-      const result = consume(fixtures.currentSubject(f));
-      if (role === 'arch-review') assert.equal(result.architecture.ready, true);
-      else assert.equal(result.integration.authenticated, true);
-    }
+    for (const consume of fixtures.consumers) assert.equal(consume(fixtures.currentSubject(f)).architecture.ready, true);
   });
 });
 
@@ -1532,7 +1528,6 @@ test('same-generation packaged fixer authenticates source publication and comple
     ...['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal', 'failed-turn',
       'incomplete-turn', 'foreign-session'].map(mutation =>
       'original focused CLI retains progress and rejects invalid terminal results: ' + mutation),
-    ...[false, true].map(corrupt => 'current integration excludes foreign catalogue before authority reads: ' + corrupt),
     ...['codex', 'claude'].map(runtime => 'aggregate original subject reconciles retained and legacy ' + runtime),
   ];
   const roleObserved = execFileSync(process.execPath,

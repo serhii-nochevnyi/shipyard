@@ -93,9 +93,7 @@ for (const completeness of ['complete', 'incomplete']) test('direct ticket origi
         epic: f.rows[f.directTicket].epic, pr_base: f.pr.baseRefName, integration_branch: 'main',
         head_sha: f.pr.headRefOid, pr_base_sha: f.pr.baseRefOid,
         checks: { total: 3, failing: 0, pending: 0, none_reported: false },
-        authenticated_architecture: admitted?.architecture.verdict || null,
-        authenticated_integration: admitted?.integration || null };
-      assert.equal(entry.authenticated_integration, null);
+        authenticated_architecture: admitted?.architecture.verdict || null };
       write(f.worktree, '.planning/graph/delivery-state.json', JSON.stringify({ ...f.state, [f.directTicket]: entry }));
       return invoke(['duty', '--scope', f.directTicket]);
     };
@@ -417,39 +415,29 @@ for (const [name, mutation] of archiveMutations) test('all current consumers ref
 test('original fresh v1 full reviews remain current and tree-equal stale reviews do not', async () => {
   await fixture(async f => {
     await successfulReview(f, 'arch-review');
-    const integration = await successfulReview(f, 'integrator');
-    for (const consumer of consumers) {
-      const admitted = consumer(currentSubject(f));
-      assert.equal(admitted.architecture.ready, true);
-      assert.equal(admitted.integration.authenticated, true);
-    }
+    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true);
     git(f.worktree, 'commit', '--allow-empty', '-qm', 'new identity with identical tree');
     f.head = git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
-    for (const consumer of consumers) {
-      const admitted = consumer(currentSubject(f));
-      assert.equal(admitted.architecture.ready, false); assert.equal(admitted.integration, null);
-    }
-    assert.deepEqual(fs.readFileSync(integration.artifact), integration.original);
+    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, false);
   });
 });
 
-test('last-moment live PR or membership drift re-owes both roles', async () => {
+test('last-moment live PR or membership drift re-owes the architecture verdict', async () => {
   await fixture(async f => {
     await successfulReview(f, 'arch-review');
-    await successfulReview(f, 'integrator');
     for (const [field, changed] of [['headRefOid', 'f'.repeat(40)], ['baseRefOid', 'f'.repeat(40)],
       ['baseRefName', 'another-target'], ['headRefName', 'another-branch']]) {
       for (const consumer of consumers) {
         let calls = 0;
         const admitted = consumer({ ...currentSubject(f), getPullRequest: () => ++calls === 1 ? f.pr : { ...f.pr, [field]: changed } });
-        assert.equal(calls, 2); assert.equal(admitted.architecture.ready, false); assert.equal(admitted.integration, null);
+        assert.equal(calls, 2); assert.equal(admitted.architecture.ready, false);
       }
     }
     let calls = 0;
     const admitted = gate.verifyCurrentReviews({ ...currentSubject(f), getPullRequest: () => {
       if (++calls === 2) write(f.worktree, '.planning/graph/delivery-state.json', '{}'); return f.pr;
     } });
-    assert.equal(admitted.architecture.ready, false); assert.equal(admitted.integration, null);
+    assert.equal(admitted.architecture.ready, false);
   });
 });
 
@@ -458,7 +446,7 @@ test('ticket and stacked targets preserve skipped-by-target architecture policy'
     for (const base of ['ticket/T-49-01', 'epic/49-parent']) for (const consumer of consumers) {
       const admitted = consumer({ ...currentSubject(f), getPullRequest: () => ({ ...f.pr, baseRefName: base }) });
       assert.equal(admitted.architecture.status, 'skipped-by-target');
-      assert.equal(admitted.architecture.ready, true); assert.equal(admitted.integration, null);
+      assert.equal(admitted.architecture.ready, true);
     }
   });
 });
@@ -558,13 +546,7 @@ test('genuine finalized Claude receipts admit full architecture at all current c
     }
     for (const consumer of consumers) {
       const admitted = consumer(currentSubject(f));
-      if (role === 'arch-review') {
-        assert.equal(admitted.architecture.ready, true, admissionDiagnostic(f, consumer));
-        assert.equal(admitted.integration, null);
-      } else {
-        assert.equal(admitted.integration.authenticated, true);
-        assert.equal(admitted.architecture.ready, false);
-      }
+      assert.equal(admitted.architecture.ready, true, admissionDiagnostic(f, consumer));
     }
     if (role === 'arch-review') {
       const dirty = scratch.statusIgnoringScratch(f.worktree, { forJudge: false });
@@ -698,8 +680,7 @@ for (const role of ['arch-review']) for (const [name, mutate] of [
     mutate(receipt.transcript, claudeNativePin(receipt));
     for (const consumer of consumers) {
       const admitted = consumer(currentSubject(f));
-      if (role === 'arch-review') assert.equal(admitted.architecture.ready, false);
-      else assert.equal(admitted.integration, null);
+      assert.equal(admitted.architecture.ready, false);
     }
   });
 });

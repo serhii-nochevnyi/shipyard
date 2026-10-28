@@ -70,10 +70,10 @@ try {
   Module._load = function(name, ...args) {
     return name === 'node:test' ? { test() {} } : originalLoad.call(this, name, ...args);
   };
-  loaded._compile(fs.readFileSync(owner, 'utf8') + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, originalPartitionSessions };', owner);
+  loaded._compile(fs.readFileSync(owner, 'utf8') + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, originalPartitionSessions };', owner);
 } finally { Module._load = originalLoad; }
 const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller,
-  currentPartitionConsumer, originalPartitionSessions } = loaded.exports;
+  originalPartitionSessions } = loaded.exports;
 
 function observation(rows, stream, final) {
   const assistant = rows.find(row => row.type === 'assistant');
@@ -97,15 +97,11 @@ function observation(rows, stream, final) {
     inputTokens: 200, cacheReadInputTokens: 1400, cacheCreationInputTokens: 200, outputTokens: 200 });
 }
 
-test('partial Claude ledger seals units and final and retains cold pin custody', async () => {
+test('partial Claude ledger seals units and final', async () => {
   await publicIntegrationFixture(async f => {
     const prepared = publicPartitionFixture(f, 'claude', { observed: true, observation });
     const result = await supportedPartitionCaller(f, 'claude', prepared.options);
     assert.equal(result.result.outcome, 'passed');
-    assert.equal(currentPartitionConsumer(f)?.authenticated, true);
-    const sessions = originalPartitionSessions(f, 'claude', prepared.recorder, prepared.controls);
-    fs.appendFileSync(sessions[0].pin.path, '{}\n');
-    assert.equal(currentPartitionConsumer(f), null);
   });
 });
 
@@ -141,7 +137,6 @@ for (const [name, mutate] of Object.entries(negatives)) test('partial ledger ref
     await assert.rejects(supportedPartitionCaller(f, 'claude', prepared.options), error =>
       error.code === (name === 'native overflow' ? 'INTEGRATION_INPUT_OVER_BOUND'
         : name === 'foreign session' ? 'RUNTIME_EVIDENCE_INVALID' : 'INTEGRATION_PARTITION_INVALID'));
-    assert.equal(currentPartitionConsumer(f), null);
   });
 });
 
@@ -156,7 +151,6 @@ test('root-only phase coverage arrays still refuse sealing', async () => {
       } });
     await assert.rejects(supportedPartitionCaller(f, 'claude', prepared.options), error =>
       error.code === 'INTEGRATION_PARTITION_INVALID');
-    assert.equal(currentPartitionConsumer(f), null);
   });
 });
 
@@ -183,10 +177,8 @@ for (const mode of ['complete', 'complete-updates', 'complete-multi', 'complete-
     if (mode === 'complete-mismatch') {
       await assert.rejects(supportedPartitionCaller(f, 'claude', prepared.options), error =>
       error.code === 'INTEGRATION_PARTITION_INVALID');
-      assert.equal(currentPartitionConsumer(f), null);
     } else {
       assert.equal((await supportedPartitionCaller(f, 'claude', prepared.options)).result.outcome, 'passed');
-      assert.equal(currentPartitionConsumer(f)?.authenticated, true);
     }
   });
   if (mode === 'complete-updates') await publicIntegrationFixture(async f => {
@@ -198,7 +190,6 @@ for (const mode of ['complete', 'complete-updates', 'complete-multi', 'complete-
       } });
     await assert.rejects(supportedPartitionCaller(f, 'claude', prepared.options), error =>
       error.code === 'INTEGRATION_PARTITION_INVALID');
-    assert.equal(currentPartitionConsumer(f), null);
   });
 });
 

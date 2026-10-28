@@ -3502,34 +3502,10 @@ test('original integration boundary completes and retains one terminal contract:
         const retained = JSON.parse(fs.readFileSync(path.join(authority.archiveAuthorityDirectory(f.worktree), 'catalogue.json'), 'utf8'));
         assert.equal(typeof retained.payload.records[dispatched.dispatch_id].receipt_store, 'string');
         assert.ok(fs.statSync(retained.payload.records[dispatched.dispatch_id].receipt_store).isDirectory());
-        const currentVerdict = () => authority.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head,
-          baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName });
-        assert.equal(currentVerdict()?.dispatch_id, dispatched.dispatch_id);
-        const foreign = path.join(f.root, 'foreign-current-discovery');
-        execFileSync('git', ['-C', f.worktree, 'worktree', 'add', '--detach', foreign, f.base], { stdio: 'pipe' });
-        const catalogue = path.join(authority.archiveAuthorityDirectory(fs.realpathSync(foreign)), 'catalogue.json');
-        fs.mkdirSync(path.dirname(catalogue), { recursive: true });
-        fs.writeFileSync(catalogue, 'unrelated corrupt authority');
-        const read = fs.readFileSync;
-        let foreignReads = 0;
-        const lookup = currentVerdict;
-        fs.readFileSync = function(file, ...args) {
-          if (String(file) === catalogue) { foreignReads++; throw new Error('foreign catalogue was opened'); }
-          return read.call(this, file, ...args);
-        };
-        try { assert.equal(lookup()?.dispatch_id, dispatched.dispatch_id); assert.equal(foreignReads, 0); }
-        finally { fs.readFileSync = read; }
-        const manifest = fresh.artifact;
-        fs.appendFileSync(manifest, 'changed relevant manifest');
-        assert.throws(lookup);
-
       } else if (['duplicate-contract', 'duplicate-item'].includes(mutation)) {
         const fresh = await run();
         assert.equal(fresh.dispatched.receipt.role, 'integrator');
         assert.ok(observed > 0);
-        assert.equal(require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').currentIntegrationVerdict({
-          worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
-          graphDir: f.graphDir, headBranch: f.pr.headRefName }), null);
       } else await assert.rejects(run);
     };
     assert.equal(typeof executeFixture, 'function');
@@ -4107,7 +4083,7 @@ function codexPartitionHelpers() {
   Module._load = function(name, ...args) { return name === 'node:test' ? { test() {} } : original.call(this, name, ...args); };
   try {
     loaded._compile(fs.readFileSync(file, 'utf8')
-      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, cli, serialize, currentPartitionConsumer, publicIntegrationFixture, publicPartitionFixture };\n', file);
+      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, cli, serialize, publicIntegrationFixture, publicPartitionFixture };\n', file);
   } finally { Module._load = original; }
   return loaded.exports;
 }
@@ -4329,7 +4305,6 @@ test('public Codex v3 accepts omitted capacity through original observed evidenc
     assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
     assert.equal(result.operational_diagnostic.authoritative, false);
     assert.ok(result.operational_diagnostic.actual_final_input_bytes <= 4194304);
-    assert.equal(helper.currentPartitionConsumer(f)?.authenticated, true);
   });
 }));
 

@@ -224,28 +224,6 @@ function retainedLegacyReviewModules(root, revision = 'b3eab6c12ecebed1b14947fe5
     authority: load('role-artifact'), boundary: load('dispatch-boundary'), directory, revision };
 }
 
-async function legacyUnitJudgment(f, afterLaunch) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-legacy-producer-')));
-  f.legacyProducerRoot = root;
-  const revision = 'b3eab6c12ecebed1b14947fe5e037f93b549c524';
-  const repository = path.resolve(__dirname, '../../..');
-  const names = git(repository, ['ls-tree', '-r', '--name-only', revision, '--',
-    'plugins/delivery-pipeline/scripts', 'tests/unit/helpers/codex-arch-review-fixtures.cjs',
-    'tests/fixtures/captured/codex-agent-stream-exec.jsonl']).split('\n');
-  for (const name of names) {
-    const bytes = execFileSync('git', ['-C', repository, 'show', revision + ':' + name], { maxBuffer: 16 * 1024 * 1024 });
-    const target = path.join(root, name); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, bytes);
-  }
-  const original = require(path.join(root, 'tests/unit/helpers/codex-arch-review-fixtures.cjs'));
-  const result = await original.unitJudgment(f, afterLaunch);
-  result.recorder = require('../../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs')
-    .createDurableRecorder(path.join(f.storage, 'receipts'));
-  result.validationInput.recorder = result.recorder;
-  assert.equal(result.result.result.review_contract, undefined);
-  assert.equal(result.result.receipt.runtime_evidence.focused_review, undefined);
-  return result;
-}
-
 function focusedNativeSession({ session, worktree, model, effort, text, prompt }) {
   const capture = fs.readFileSync(path.join(__dirname, '../../fixtures/captured/codex-agent-stream-parent.jsonl'), 'utf8')
     .trim().split('\n').map(JSON.parse);
@@ -279,7 +257,6 @@ function cleanupJudgment(f) {
   if (fs.existsSync(f.root)) fs.rmSync(require('../../../plugins/delivery-pipeline/scripts/role-artifact.cjs')
     .archiveAuthorityDirectory(f.root), { recursive: true, force: true });
   fs.rmSync(f.root, { recursive: true, force: true });
-  if (f.legacyProducerRoot) fs.rmSync(f.legacyProducerRoot, { recursive: true, force: true });
   if (f.storage) fs.rmSync(f.storage, { recursive: true, force: true });
 }
 
@@ -315,4 +292,4 @@ function rewriteInputManifest(input, mutate) {
     manifest_identity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode'].map(key => [key, stat[key]])) };
 }
 
-module.exports = { partitionPacket, rewriteInputManifest, retainedLegacyReviewModules, TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, legacyUnitJudgment, focusedNativeSession, cleanupJudgment };
+module.exports = { partitionPacket, rewriteInputManifest, retainedLegacyReviewModules, TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, focusedNativeSession, cleanupJudgment };

@@ -211,7 +211,7 @@ function verifyCurrentReviews({ pr, repo = null, worktreePath = process.cwd(), g
   const target = require('./architecture-target.cjs');
   const integrationBranch = target.resolveIntegrationBranch({ projectRoot: worktreePath, repo });
   const architecture = target.architectureTarget({ base: live.baseRefName, integrationBranch });
-  if (!architecture.required) return { architecture: { ...architecture, ready: true, pr, head: live.headRefOid }, integration: null };
+  if (!architecture.required) return { architecture: { ...architecture, ready: true, pr, head: live.headRefOid } };
   const directory = graphDir || require('node:path').join(worktreePath, '.planning/graph');
   const fs = require('node:fs'), path = require('node:path');
   const membership = () => ['tickets.json', 'delivery-state.json'].map(name => {
@@ -226,17 +226,16 @@ function verifyCurrentReviews({ pr, repo = null, worktreePath = process.cwd(), g
   const subject = { worktreePath, graphDir, repo, pr, head: live.headRefOid, headBranch: live.headRefName,
     baseName: live.baseRefName, baseCommit: live.baseRefOid };
   const authority = require('./role-artifact.cjs');
-  let verdict = null, integration = null;
+  let verdict = null;
   try { verdict = authority.currentArchitectureVerdict(subject); } catch {}
-  try { integration = authority.currentIntegrationVerdict(subject); } catch {}
   const after = read();
   const fields = ['number', 'state', 'headRefName', 'headRefOid', 'baseRefName', 'baseRefOid'];
   const unchanged = fields.every(field => after[field] === live[field])
     && JSON.stringify(before) === JSON.stringify(membership())
     && integrationBranch === target.resolveIntegrationBranch({ projectRoot: worktreePath, repo });
-  if (!unchanged) { verdict = null; integration = null; }
+  if (!unchanged) verdict = null;
   return { architecture: { ...architecture, ready: !!verdict, pr, head: live.headRefOid,
-    base_commit: live.baseRefOid, verdict }, integration };
+    base_commit: live.baseRefOid, verdict } };
 }
 
 function verifyArchitectureTarget(input) { return verifyCurrentReviews(input).architecture; }

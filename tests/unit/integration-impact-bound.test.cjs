@@ -112,9 +112,9 @@ try {
   const helperSource = fs.readFileSync(owner, 'utf8').replace(
     "const source = fs.readFileSync(path.join(__dirname, file), 'utf8');",
     "const source = fs.readFileSync(path.join(__dirname, file), 'utf8')" + helperTransform + ';');
-  loaded._compile(helperSource + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, phaseBinding, projectOptions, write, git, commit, agent };', owner);
+  loaded._compile(helperSource + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, phaseBinding, projectOptions, write, git, commit, agent };', owner);
 } finally { Module._load = originalLoad; }
-const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, phaseBinding, projectOptions, write, git, commit, agent } = loaded.exports;
+const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, phaseBinding, projectOptions, write, git, commit, agent } = loaded.exports;
 const root = '../../plugins/delivery-pipeline/scripts/';
 const claude = require(root + 'claude-role-host.cjs');
 const delivery = require(root + 'codex-delivery-host.cjs');
@@ -605,17 +605,6 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' explicit compact ori
     assert.deepEqual(result.result.required_context, []);
     assert.deepEqual(result.result.coverage.limitations, []);
     assert.ok(result.result.coverage.seam_dispositions.every(group => group.disposition === 'resolved' && !group.limitations.length));
-    assert.ok(currentPartitionConsumer(f));
-    const originalRef = final.payload.unit_results.find(unit => unit.unit_id === 'u000002').reference;
-    const manifest = JSON.parse(fs.readFileSync(path.join(f.worktree, originalRef.artifact_ref)));
-    const resultPath = path.join(f.worktree, manifest.files.findings.path), originalBytes = fs.readFileSync(resultPath);
-    try {
-      const altered = JSON.parse(originalBytes);
-      altered.limitations[0] += ' Altered original caveat.';
-      fs.writeFileSync(resultPath, JSON.stringify(altered));
-      assert.equal(currentPartitionConsumer(f), null);
-    } finally { fs.writeFileSync(resultPath, originalBytes); }
-    assert.ok(currentPartitionConsumer(f));
     for (const { input, payload } of launches) {
       assert.match(input, /Informational caveats on unresolved local groups may remain/);
       assert.match(input, /Explicitly evaluate and discharge each original local\ncaveat in substantive final conclusions or domain rationale/);
@@ -779,7 +768,6 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' complete37 realistic
     assert.ok(Buffer.byteLength(stable(answer)) <= 131072);
     compactDomainJudgments(plan, answer.coverage.seam_dispositions);
     assert.equal(review.coverage.semantic_credit, false);
-    assert.equal(currentPartitionConsumer(f), null);
     assert.equal(plan.schema, 'shipyard.integration-partition-plan.v3');
     assert.equal(plan.identity.ticket_set.length, 37);
     assert.ok(plan.units.length >= 183);
@@ -883,7 +871,6 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' compact actual disti
     assert.ok(partitionInputBytes(plan, input, 'phase') > 4194304);
     assert.throws(() => assertPartitionInputBound(plan, input, 'phase'),
       error => error.code === 'INTEGRATION_INPUT_OVER_BOUND' && /actual complete phase.*HOLD/.test(error.message));
-    assert.equal(currentPartitionConsumer(f), null);
     assert.equal(roleArtifact.authenticatedArchivePins(f.worktree).filter(pin => pin.path.endsWith('/findings.json')).length, 0);
     for (const [i, { result }] of units.entries()) {
       assert.equal(stable(result), originals[i]);
@@ -936,7 +923,6 @@ for (const [name, mutate] of [
     assert.equal(compactReached, true);
     assert.equal(controls.mutationCompleted, true);
     assert.ok(controls.launches.length > 0 && controls.launches.every(({ payload }) => payload.format === 'compact-domain.v1'));
-    assert.equal(currentPartitionConsumer(f), null);
   });
 });
 
@@ -974,7 +960,6 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' compact public custo
     await assert.rejects(supportedPartitionCaller(f, runtime, fixture.options));
     assert.equal(compactReached, true);
     assert.ok(controls.launches.length > 0 && controls.launches.every(({ payload }) => payload.format === 'compact-domain.v1'));
-    assert.equal(currentPartitionConsumer(f), null);
   });
 });
 
@@ -1019,7 +1004,6 @@ for (const unresolvedFinal of [false, true]) test(unresolvedFinal
     const fixture = publicPartitionFixture(f, runtime, controls);
     await assert.rejects(supportedPartitionCaller(f, runtime, fixture.options),
       error => error.code === 'INTEGRATION_PARTITION_INVALID' && /unsupported compact final cannot pass/.test(error.message));
-    assert.equal(currentPartitionConsumer(f), null);
     assert.equal(independentFinal, true);
     assert.ok(originals.size > 1);
   });

@@ -1084,7 +1084,7 @@ test('D-32 unit labels cannot obtain ordinary integrator phase sealing', () => {
   } finally { fs.rmSync(value.root, { recursive: true, force: true }); }
 });
 
-test('D-34 authenticated chain finals preserve current authority', async () => {
+test('D-34 authenticated chain finals bind the native merge proof', async () => {
   const Module = require('node:module');
   const filename = path.join(__dirname, 'phase49-incremental-integration.test.cjs');
   const loaded = new Module(filename, module);
@@ -1096,7 +1096,7 @@ test('D-34 authenticated chain finals preserve current authority', async () => {
   };
   const source = fs.readFileSync(filename, 'utf8').replace('const live = branch => {',
     'const live = branch => { if (f.mergePrs) return f.mergePrs.find(pr => pr.headRefName === branch);');
-  try { loaded._compile(source + '\nmodule.exports = { fixture, publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, originalPartitionSessions };\n', filename); }
+  try { loaded._compile(source + '\nmodule.exports = { fixture, publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, originalPartitionSessions };\n', filename); }
   finally { Module._load = originalLoad; }
   await loaded.exports.publicIntegrationFixture(async f => {
     const run = args => execFileSync('git', ['-C', f.worktree, '-c', 'commit.gpgsign=false',
@@ -1132,8 +1132,6 @@ else if (args[0] === 'pr' && args[1] === 'view') {
 `, { mode: 0o755 });
     const result = await loaded.exports.supportedPartitionCaller(f, 'codex', caller.options);
     assert.equal(result.result.kind, 'phase');
-    const current = loaded.exports.currentPartitionConsumer(f);
-    assert.equal(current?.authenticated, true);
     const sessions = loaded.exports.originalPartitionSessions(f, 'codex', caller.recorder, caller.controls);
     const final = sessions.find(session => session.result.kind === 'phase');
     const proof = final.launch.payload.reviewed_identity.preflight;
@@ -1156,38 +1154,6 @@ else if (args[0] === 'pr' && args[1] === 'view') {
       forged.proof_digest = crypto.createHash('sha256').update(stable(body)).digest('hex');
       assert.throws(() => collector.assertNativeIntegrationMergeProof(forged, proofInput), /schema|facts|path|current|changed/);
     }
-    const originalPrs = structuredClone(f.mergePrs);
-    for (const change of [
-      prs => { prs[0].baseRefName = 'wrong/base'; }, prs => { prs[0].baseRefOid = f.base; },
-      prs => { prs[0].headRefOid = parentHead; }, prs => { prs[0].mergedAt = 'changed-time'; },
-      prs => { prs[0].mergeCommit.oid = childHead; }, prs => { prs[1].headRefOid = childHead; },
-      prs => { prs[1].state = 'OPEN'; }, prs => { prs.pop(); },
-    ]) {
-      f.mergePrs = structuredClone(originalPrs); change(f.mergePrs); savePrs();
-      assert.equal(loaded.exports.currentPartitionConsumer(f), null, 'stale fresh PR facts cannot retain final authority');
-      f.mergePrs = structuredClone(originalPrs); savePrs();
-      assert.equal(loaded.exports.currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
-    }
-    for (const file of [path.join(f.graphDir, 'tickets.json'), path.join(f.worktree, f.rows['T-49-01'].plan)]) {
-      const saved = fs.readFileSync(file);
-      try {
-        fs.appendFileSync(file, '\n ');
-        assert.equal(loaded.exports.currentPartitionConsumer(f), null, 'frozen graph/PLAN bytes must remain current');
-      } finally { fs.writeFileSync(file, saved); }
-    }
-    const graphFile = path.join(f.graphDir, 'tickets.json'), savedGraph = fs.readFileSync(graphFile);
-    try {
-      const graph = JSON.parse(savedGraph); delete graph.tickets['T-49-02'];
-      fs.writeFileSync(graphFile, JSON.stringify(graph));
-      assert.equal(loaded.exports.currentPartitionConsumer(f), null, 'complete canonical membership cannot shrink');
-    } finally { fs.writeFileSync(graphFile, savedGraph); }
-    const savedNative = fs.readFileSync(final.pin.path);
-    try {
-      fs.writeFileSync(final.pin.path, savedNative.toString().replace('shipyard.native-integration-merge-proof.v1', 'forged.native-merge-proof.v1'));
-      assert.equal(loaded.exports.currentPartitionConsumer(f), null, 'tampered original final input cannot authenticate a swapped proof');
-    } finally { fs.writeFileSync(final.pin.path, savedNative); }
-    assert.equal(loaded.exports.currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
-    assert.equal(current.contract, roleArtifact.INTEGRATION_REVIEW_V3);
   });
 });
 

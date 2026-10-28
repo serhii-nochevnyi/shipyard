@@ -1907,11 +1907,10 @@ driving PRs hands the user a half-truth.
      dispositions. The final reports `shipyard.integration-partition-coverage.v1`
      with authenticated unit references and a fresh index-bound actual-final
      admission. Unit-only success cannot authorize phase evidence. Only the
-     authenticated complete phase final reaches `currentIntegrationVerdict` and
-     the normal gate caller, with exact current canonical plans, producer pins,
-     membership, source/head/base and live PR checks. A planted mismatch must be
-     reported as needs-fix/unresolved or remain incomplete; integrity/read counts
-     never supply semantic credit. The legacy full-input `v1` path below
+     authenticated complete phase final is phase evidence, with exact current
+     canonical plans, producer pins, membership, source/head/base and live PR
+     checks. A planted mismatch must be reported as needs-fix/unresolved or
+     remain incomplete; integrity/read counts never supply semantic credit. The legacy full-input `v1` path below
      remains independent. Unknown versions refuse.
      Repaired finals always owe a fresh native verdict and original application
      receipt. Premature or incomplete output stays rejected and failed originals
