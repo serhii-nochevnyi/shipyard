@@ -181,7 +181,6 @@ const unitTests = (profile, entry, ...names) => ({ profile, entry,
 // @contract: one row per distinct `## Verification commands` bullet of plans 52-01 to 52-12.
 const PHASE52_COMMANDS = [
   unitTests('sandbox', 'existing', 'phase47-host-assignment', 'host-verification'),
-  unitTests('host', 'new', 'phase52-diff-sizes'),
   unitTests('sandbox', 'existing', 'model-policy', 'model-capability', 'codex-agent', 'codex-dispatch-adapter', 'gen-codex-shipyard'),
   unitTests('host', 'existing', 'gen-codex-shipyard', 'gsd-tune', 'marketplace-install'),
   unitTests('host', 'existing', 'codex-decompose-host', 'codex-runtime-host', 'codex-delivery-host', 'dispatch-boundary', 'pipeline-config'),
@@ -220,10 +219,10 @@ const sameArgv = (left, right) => left.length === right.length && left.every((pa
 const newRows = PHASE52_COMMANDS.filter((row) => row.entry === 'new');
 const appendedEntries = newRows.map((row) => configured.filter((entry) => Array.isArray(entry.argv) && sameArgv(entry.argv, row.argv)));
 
-test('the phase-52 command table is 33 distinct commands: 13 admitted today and 20 appended', () => {
-  assert.equal(PHASE52_COMMANDS.length, 33);
-  assert.equal(new Set(PHASE52_COMMANDS.map((row) => row.command)).size, 33);
-  assert.equal(newRows.length, 20);
+test('the phase-52 command table is 32 distinct commands: 13 admitted today and 19 appended', () => {
+  assert.equal(PHASE52_COMMANDS.length, 32);
+  assert.equal(new Set(PHASE52_COMMANDS.map((row) => row.command)).size, 32);
+  assert.equal(newRows.length, 19);
   assert.equal(PHASE52_COMMANDS.filter((row) => row.entry === 'existing').length, 13);
 });
 
