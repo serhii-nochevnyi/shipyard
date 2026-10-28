@@ -104,40 +104,6 @@ test('only an admitted command with a clean, completed nonzero exit is retryable
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('real scoped source mutation fails admission, skips later commands and retains independent observations', () => {
-  const { execFileSync } = require('node:child_process');
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'host-command-mutation-')));
-  const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
-  try {
-    git('init', '-q');
-    git('config', 'user.name', 'Verification Fixture');
-    git('config', 'user.email', 'verification@example.test');
-    const source = path.join(root, 'source.cjs');
-    fs.writeFileSync(source, 'module.exports = 1;\n');
-    git('add', 'source.cjs');
-    git('-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture');
-    const head = git('rev-parse', 'HEAD'), calls = [];
-    const commands = [['node', 'first.cjs'], ['node', 'second.cjs']];
-    const results = run(admit(commands, commands.map(argv => ({ argv, profile: 'host' }))), {
-      worktree: root, expectedHead: head, files_modified: ['source.cjs'],
-      hostRunner: { run(spec) {
-        calls.push(spec.argv);
-        fs.writeFileSync(source, 'module.exports = 2;\n');
-        return { status: 0 };
-      } },
-    });
-    assert.deepEqual(calls, [['first.cjs']]);
-    assert.equal(results[0].outcome, 'failed');
-    assert.notEqual(results[0].tree_before, results[0].tree_after);
-    assert.equal(results[1].outcome, 'skipped');
-    const sealed = evidence(results, { stateRoot: path.join(root, 'state'), ticket: 'T-53-07' });
-    const retained = readEvidence(sealed.path, sealed.digest);
-    assert.equal(sealed.outcome, 'failed');
-    assert.deepEqual(retained.results, results);
-    assert.equal(git('rev-parse', 'HEAD'), head);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
 test('pre-dispatch assignment reuses exact admission and refuses missing or unknown approval', () => {
   const plan = '## Verification commands\n- `node check.cjs`';
   const entries = [{ argv: ['node', 'check.cjs'], profile: 'host', timeout_s: 5 }];

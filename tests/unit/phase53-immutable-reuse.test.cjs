@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
 const crypto = require('node:crypto');
+const { admit, run, evidence, readEvidence } = require('../../plugins/delivery-pipeline/scripts/host-verification.cjs');
 
 function fixtures(name, names, end) {
   const filename = path.join(__dirname, name), loaded = new Module(filename, module);
@@ -171,7 +172,6 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' original consumer sh
     const finalReceipt = prepared.recorder.getLatestReceipt(runtime, 'integrator');
     const finalRuntime = runtime === 'codex' ? finalReceipt.receipt.runtime_evidence : finalReceipt.receipt;
     const finalOutput = finalRuntime.transcript.path;
-    // Claude cold consumers authenticate the retained project/session copy.
     const finalNative = runtime === 'codex' ? prepared.launches.at(-1).nativePath
       : path.join(path.dirname(finalOutput), 'projects', finalRuntime.selection_evidence.transcript.path);
     const finalNativePin = runtime === 'codex' ? finalRuntime.native_session_evidence
@@ -218,6 +218,40 @@ test('retention publication re-reads the archive and refuses changed manifest by
       assert.equal(codex.coldCurrent(f), null);
     } finally { fs.linkSync = link; }
   });
+});
+
+test('real scoped source mutation fails admission, skips later commands and retains independent observations', () => {
+  const { execFileSync } = require('node:child_process');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'host-command-mutation-')));
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
+  try {
+    git('init', '-q');
+    git('config', 'user.name', 'Verification Fixture');
+    git('config', 'user.email', 'verification@example.test');
+    const source = path.join(root, 'source.cjs');
+    fs.writeFileSync(source, 'module.exports = 1;\n');
+    git('add', 'source.cjs');
+    git('-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture');
+    const head = git('rev-parse', 'HEAD'), calls = [];
+    const commands = [['node', 'first.cjs'], ['node', 'second.cjs']];
+    const results = run(admit(commands, commands.map(argv => ({ argv, profile: 'host' }))), {
+      worktree: root, expectedHead: head, files_modified: ['source.cjs'],
+      hostRunner: { run(spec) {
+        calls.push(spec.argv);
+        fs.writeFileSync(source, 'module.exports = 2;\n');
+        return { status: 0 };
+      } },
+    });
+    assert.deepEqual(calls, [['first.cjs']]);
+    assert.equal(results[0].outcome, 'failed');
+    assert.notEqual(results[0].tree_before, results[0].tree_after);
+    assert.equal(results[1].outcome, 'skipped');
+    const sealed = evidence(results, { stateRoot: path.join(root, 'state'), ticket: 'T-53-07' });
+    const retained = readEvidence(sealed.path, sealed.digest);
+    assert.equal(sealed.outcome, 'failed');
+    assert.deepEqual(retained.results, results);
+    assert.equal(git('rev-parse', 'HEAD'), head);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 const finalizerFile = path.join(__dirname, 'delivery-commit-finalizer.test.cjs');
