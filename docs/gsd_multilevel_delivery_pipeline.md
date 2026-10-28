@@ -738,7 +738,7 @@ scope is driven to green or blocked:
 1. reads graph/tickets.yaml + graph/delivery-state.yaml (just resynced)
 2. advances states within the scope: launches ready tickets, runs the babysit loop
    for open PRs
-3. after each state change — commits delivery-state.yaml (audit trail in git)
+3. after each state change — rewrites delivery-state.yaml (local runtime state, not committed)
 4. blocks only on human gates (human_checkpoint, attempts escalations,
    needs-replan after the drift gate)
 5. when the entire scope is green/merged — if this was the last batch of the phase,

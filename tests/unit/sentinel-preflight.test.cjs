@@ -17,7 +17,7 @@ function git(cwd, ...args) {
 
 let counter = 0;
 
-function fixture({ trackGraph = true } = {}) {
+function fixture({ trackGraph = false } = {}) {
   counter += 1;
   const dir = path.join(ROOT, `f${counter}`);
   const origin = path.join(dir, 'origin.git');
@@ -77,7 +77,6 @@ test('a behind local base is fast-forwarded to the fetched origin tip', () => {
   assert.strictEqual(result.base_oid, advanced);
   assert.strictEqual(git(f.wt, 'rev-parse', 'refs/heads/main'), advanced);
   assert.strictEqual(result.synced, true);
-  assert.strictEqual(result.committed, null);
 });
 
 test('a diverged local base refuses, naming branch -f and the rebase alternative', () => {
@@ -101,33 +100,30 @@ test('a diverged local base refuses, naming branch -f and the rebase alternative
   );
 });
 
-test('a tracked graph change is committed with the conventional subject', () => {
+test('state-sync output in untracked .planning/ passes and commits nothing', () => {
   const f = fixture();
   const run = () => {
     fs.writeFileSync(path.join(f.graphDir, 'delivery-state.json'), JSON.stringify({ synced: true }));
   };
   const before = git(f.wt, 'rev-parse', 'HEAD');
-  const result = pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run });
-  assert.notStrictEqual(result.committed, null);
-  assert.notStrictEqual(git(f.wt, 'rev-parse', 'HEAD'), before);
-  assert.strictEqual(git(f.wt, 'log', '-1', '--format=%s'), 'chore: sync delivery state');
-  assert.deepStrictEqual(git(f.wt, 'diff', '--name-only', before, 'HEAD').split('\n'),
-    ['.planning/graph/delivery-state.json']);
-  assert.strictEqual(git(f.wt, 'status', '--porcelain'), '');
+  pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run });
+  assert.strictEqual(git(f.wt, 'rev-parse', 'HEAD'), before);
 });
 
-test('untracked .planning/ commits nothing and passes', () => {
-  const f = fixture({ trackGraph: false });
+test('a tracked state file dirtied by state-sync refuses and is not committed', () => {
+  const f = fixture({ trackGraph: true });
   const run = () => {
     fs.writeFileSync(path.join(f.graphDir, 'delivery-state.json'), JSON.stringify({ synced: true }));
   };
   const before = git(f.wt, 'rev-parse', 'HEAD');
-  const result = pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run });
-  assert.strictEqual(result.committed, null);
+  assert.throws(
+    () => pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run }),
+    (error) => error.code === 'WORKTREE_DIRTY' && error.message.includes('.planning/graph/delivery-state.json'),
+  );
   assert.strictEqual(git(f.wt, 'rev-parse', 'HEAD'), before);
 });
 
-test('a dirty tracked source file outside .planning/graph/ refuses, naming status', () => {
+test('a dirty tracked source file refuses, naming status', () => {
   const f = fixture();
   fs.writeFileSync(path.join(f.wt, 'src.txt'), 'dirty\n');
   assert.throws(

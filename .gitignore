@@ -6,12 +6,11 @@
 
 # Local workspaces and build staging
 workspace/
-# Per-session state of the stop-gate hook: how many rounds of THIS run it has
-# already refused. `.planning/graph/` is otherwise tracked, and a session id
-# belongs in no commit.
-.planning/graph/stop-gate-ledger.json
-.planning/graph/stop-gate-armed/
-.planning/graph/session-observations.jsonl
+# Runtime state of the delivery conveyor (board, journal, dispatch and escalation
+# records, per-session stop-gate state). Only the ticket graph is a tracked input.
+.planning/graph/*
+!.planning/graph/tickets.json
+!.planning/graph/tickets.yaml
 /.planning/.adr-ingest/
 .copilot-mcp-oauth/
 
