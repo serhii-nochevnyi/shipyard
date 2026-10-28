@@ -80,10 +80,10 @@ function currentReviewAdmission(input) {
 module.exports = Object.freeze({ currentReviewAdmission });
 
 if (require.main === module) {
-const ROOT = process.cwd();
 const GH_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GH_TIMEOUT_MS', 60_000, 5 * 60_000);
 const PROJECTION_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GSD_SYNC_TIMEOUT_MS', 120_000, 10 * 60_000);
-const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
+const GRAPH_DIR = require('./graph-dir.cjs').resolveGraphDir().dir;
+const ROOT = path.resolve(GRAPH_DIR, '..', '..');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const STATE = path.join(GRAPH_DIR, 'delivery-state.json');
 const FRONT = path.join(GRAPH_DIR, 'delivery-front.json');

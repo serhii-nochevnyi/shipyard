@@ -1711,8 +1711,8 @@ module.exports = {
 if (require.main === module) {
   const fs = require('fs');
   const path = require('path');
-  const root = process.cwd();
-  const dir = path.join(root, '.planning', 'graph');
+  const dir = require(path.join(__dirname, 'graph-dir.cjs')).resolveGraphDir().dir;
+  const root = path.resolve(dir, '..', '..');
   const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
   const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
   const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));

@@ -165,7 +165,7 @@ function resolveGraphDir() {
     return path.resolve(v);
   }
   if (process.env.SHIPYARD_GRAPH_DIR) return path.resolve(process.env.SHIPYARD_GRAPH_DIR);
-  return path.join(process.cwd(), '.planning', 'graph');
+  return require('./graph-dir.cjs').resolveGraphDir().dir;
 }
 
 let GRAPH = resolveGraphDir();

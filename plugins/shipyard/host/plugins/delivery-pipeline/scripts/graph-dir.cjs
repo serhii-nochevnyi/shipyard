@@ -11,12 +11,7 @@
 // the one place those files put the agent, and it said "run validate-graph first",
 // sending it to a command that cannot help and naming the wrong cause.
 //
-// Resolution order, and the reason for each step:
-//   1. --graph <dir> / SHIPYARD_GRAPH_DIR — an explicit answer always wins. This
-//      is the ONLY thing that works for a cross-repo ticket, where the worktree
-//      lives in a sibling repository and the graph does not.
-// @invariant: after an explicit answer, the main checkout's .planning/graph wins over cwd.
-// @invariant: cwd's .planning/graph is used only outside any git repository.
+// @invariant: an explicit graph wins, then the main checkout's graph, then cwd's; nothing is guessed past that.
 //
 // Nothing is guessed past that: a caller who lands here with no graph gets told
 // the actual cause and the flag that fixes it, because a misdirecting error costs
