@@ -2307,7 +2307,7 @@ test('deliver.md\'s ladder query runs, and UNCONFIRMED is a bucket rather than a
     `and the Agent row reads UNCONFIRMED rather than a guess: ${r.stdout}`);
 });
 
-test('dispatch records run scope and telemetry treatment metadata', () => {
+test('dispatch records run scope metadata', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const result = run([
     'mark', 'T-01-01', 'executor',
@@ -2321,11 +2321,7 @@ test('dispatch records run scope and telemetry treatment metadata', () => {
   const event = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).find((item) => item.event === 'dispatch');
   assert.equal(record.run_id, 'run-dispatch-1');
   assert.equal(record.account_scope, 'anthropic-max');
-  assert.equal(record.telemetry.schema_version, 'shipyard.run-telemetry.v1');
-  assert.equal(record.telemetry.requested_model, 'opus');
-  assert.equal(record.telemetry.treatment_fingerprint !== null, true);
-  assert.equal(event.telemetry.dispatch_id, record.dispatch_id);
-  assert.equal(event.telemetry.provider, 'anthropic');
+  assert.equal(event.dispatch_id, record.dispatch_id);
 });
 
 test('fresh linked-worker provenance remains authenticated when the next host runs at the project root', () => {

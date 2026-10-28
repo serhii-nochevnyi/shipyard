@@ -131,7 +131,6 @@
  "run-reachability.test.cjs": 5,
  "run-scope.test.cjs": 1,
  "run-store.test.cjs": 1,
- "run-telemetry.test.cjs": 1,
  "run-waker.test.cjs": 1,
  "runtime-context.test.cjs": 1,
  "runtime-digests.test.cjs": 3,

@@ -27,7 +27,6 @@ const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { readLedger } = require(path.join(__dirname, 'pr-ledger.cjs'));
 const { loadConfig, ROLES, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const usageAttribution = require(path.join(__dirname, 'usage-attribution.cjs'));
-const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
@@ -401,20 +400,6 @@ const ladderFacts = ladderEvents.map((event) => {
 });
 const reconciliation = usageAttribution.summarizeTelemetry(ladderFacts);
 const attributionReconciliation = usageAttribution.summarizeTelemetry(attributionRecords);
-const telemetryInputs = [
-  ...ladderEvents.map((event) => ({ ...event, event: 'dispatch', phase: 'launch' })),
-  ...attributionRecords.map((record) => ({ ...record, event: 'usage', phase: 'usage' })),
-  ...journal.filter((event) => ['receipt', 'quality', 'recovery', 'outcome'].includes(event.event)),
-];
-const runTelemetryReport = runTelemetry.joinTelemetry(telemetryInputs);
-const runTelemetrySummary = {
-  schema_version: runTelemetryReport.schema_version,
-  coverage: runTelemetryReport.coverage,
-  policy_fingerprints: runTelemetryReport.policy_fingerprints,
-  treatment_fingerprints: runTelemetryReport.treatment_fingerprints,
-  duplicate_observations: runTelemetryReport.duplicate_observations,
-  savings: runTelemetryReport.savings,
-};
 const telemetry = Object.fromEntries(
   Object.entries(reconciliation).filter(([key]) => key !== 'records')
 );
@@ -473,7 +458,6 @@ const ladder = {
   by_finding: reconciliation.findings,
   reconciliation,
   telemetry,
-  run_telemetry: runTelemetrySummary,
   policy_resolution: reconciliation.coverage.policy_resolution,
   runtime_application: reconciliation.coverage.runtime_application,
   provider_observation: reconciliation.coverage.provider_observation,
@@ -591,7 +575,6 @@ if (asJson) {
     // automation can treat incomplete GitHub data as a clean pending board.
     unreachable_repos: unreachableRepos,
     ladder,
-    run_telemetry: runTelemetrySummary,
     // The detailed per-dispatch facts live under ladder.reconciliation. Keep
     // the top-level alias summary-only so JSON consumers get the same coverage
     // without serializing every fact twice.

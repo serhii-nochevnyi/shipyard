@@ -86,7 +86,6 @@ const {
   CODEX_STATIC_ROLES, CODEX_ROLE_RUNG_DEFINITIONS, codexAgentFile, variantSuffix,
 } = require(path.join(__dirname, 'model-policy.cjs'));
 const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
-const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 const hostProvenance = require(path.join(__dirname, 'host-provenance.cjs'));
 const { normalizeTicketIdentity, normalizePhaseIdentity } = require('./run-contract.cjs');
 const { PHASE_SUBJECT, PHASE_SUBJECT_ROLES, PHASE_ONLY_ROLES } = require('./architecture-target.cjs');
@@ -1268,23 +1267,6 @@ function withDispatchId(decided, store, cwd) {
   return { ...decided, dispatch_id: id };
 }
 
-function telemetryFor(recorded, ticket, role) {
-  return runTelemetry.dispatchProjection({
-    ...recorded,
-    event: 'dispatch',
-    phase: 'launch',
-    ticket,
-    role,
-    requested_model: recorded.requested_model || recorded.model,
-    requested_effort: recorded.requested_effort || recorded.effort,
-    applied_model: recorded.applied_model,
-    applied_effort: recorded.applied_effort || recorded.effort_applied,
-    observed_model: recorded.observed_model,
-    observed_effort: recorded.observed_effort,
-    route: recorded.route || recorded.reason,
-  });
-}
-
 // Read-modify-write plus the journal line, under ONE lock and written atomically —
 // drift-record's rule for the same reason: the main loop dispatches a whole wave
 // at once, and an unsynchronized load→save loses records (six concurrent marks
@@ -1775,7 +1757,6 @@ function recordRound(cwd, input) {
       expired_tickets: expiredTickets,
       at,
     };
-    recorded.telemetry = telemetryFor(recorded, subject, 'pr-sentinel');
     let outcome;
     withReconciliationClaims([decided], () => mutate(cwd, (store) => {
       store.rounds = roundObject(store.rounds) ? store.rounds : {};
@@ -2019,7 +2000,6 @@ if (require.main === module) {
         // holding it now.
         const recorded = withDispatchId(decided, store, cwd);
         dispatchId = recorded.dispatch_id;
-        const telemetry = telemetryFor(recorded, ticket, role);
         store.tickets[ticket] = {
           role,
           at,
@@ -2031,7 +2011,6 @@ if (require.main === module) {
           // store compares each record with the rule it was written under.
           fingerprint_kind: 'role',
           pr: s.pr || null,
-          telemetry,
         };
         // Journalled because nothing else records WHEN work was handed over, nor
         // WHAT it was handed to. The TTL above had to be inferred from PR
@@ -2039,7 +2018,7 @@ if (require.main === module) {
         // of the fields; the next one of each can be measured. The ticket's next
         // `status_change` closes the interval, so a `clear` needs no event of its
         // own.
-        return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, telemetry, by: 'dispatch-record' };
+        return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, by: 'dispatch-record' };
       }, (commit) => withReconciliationClaims([decided], commit));
     } catch (e) {
       try { releaseReconciliationClaim(decided); } catch (_) { /* keep the write failure */ }
@@ -2109,7 +2088,6 @@ if (require.main === module) {
           for (const entry of entries) {
             const s = current[entry.ticket];
             const recorded = withDispatchId(entry.decided, store, cwd);
-            const telemetry = telemetryFor(recorded, entry.ticket, entry.role);
             if ([...dispatchIds.values()].includes(recorded.dispatch_id)) {
               throw new Error(`mark-many contains duplicate dispatch id "${recorded.dispatch_id}"`);
             }
@@ -2121,7 +2099,6 @@ if (require.main === module) {
               fingerprint: dispatchFingerprint(entry.role, s),
               fingerprint_kind: 'role',
               pr: s.pr || null,
-              telemetry,
             };
             events.push({
               ts: at,
@@ -2130,7 +2107,6 @@ if (require.main === module) {
               role: entry.role,
               pr: s.pr || null,
               ...recorded,
-              telemetry,
               by: 'dispatch-record',
             });
           }
