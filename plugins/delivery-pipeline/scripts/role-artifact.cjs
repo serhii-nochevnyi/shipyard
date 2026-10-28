@@ -965,7 +965,7 @@ function producerEvidenceName(role) {
 // evidence under the new authenticated receipt.
 const HISTORICAL_ARCHIVE_MAX_BYTES = 4 * 1024 * 1024;
 
-function readPinnedArchiveFile(worktree, pin, label) {
+function readPinnedArchiveFile(worktree, pin, label, facts, binding) {
   if (!object(pin) || !Number.isSafeInteger(pin.bytes) || pin.bytes < 0
       || pin.bytes > HISTORICAL_ARCHIVE_MAX_BYTES || !/^[a-f0-9]{64}$/.test(pin.sha256 || ''))
     fail('ARCHIVE_AUTHORITY_INVALID', 'historical archive pin exceeds its complete-byte bound');
@@ -985,7 +985,8 @@ function readPinnedArchiveFile(worktree, pin, label) {
     }
     if (fs.readSync(fd, Buffer.alloc(1), 0, 1, offset) !== 0
         || !same(fs.fstatSync(fd)) || !same(fs.lstatSync(absolute))
-        || fs.realpathSync(absolute) !== absolute || digest(content) !== pin.sha256)
+        || fs.realpathSync(absolute) !== absolute
+        || immutableFileFact(facts, 'sha256', absolute, content, [binding, pin], () => digest(content)) !== pin.sha256)
       fail('ARCHIVE_AUTHORITY_INVALID', label + ' changed during bounded reading');
     return content;
   } finally { fs.closeSync(fd); }
@@ -2883,7 +2884,7 @@ function endpointChanges(root, baseline, head) {
   return entries.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId) {
+function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId, verifiedPacket) {
   const context = require('./codex-arch-review-context.cjs');
   const SCHEMA = context.SCHEMA;
   const isPreparedFileInput = value => admissionReviewInputs.has(value);
@@ -2996,7 +2997,7 @@ function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId) {
   if (uncertainty.length) { mode = 'full'; limitations.push({ reason: 'uncertain-dependency-closure', boundaries: uncertainty }); }
   const encoded = checked.material.length === 1 ? JSON.parse(checked.material[0]) : null;
   if (encoded?.schema !== 'shipyard.semantic-content.v1') fail('REVIEW_BASELINE_UNSUPPORTED', 'complete current semantic packet is required');
-  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded, maximumBytes);
+  const originalPacket = verifiedPacket || require('./context-packet.cjs').decodeUniqueContent(encoded, maximumBytes);
   const members = originalPacket.ticket_set || originalPacket.role_context?.ticket_set;
   if (!Array.isArray(members) || JSON.stringify(members.map(item => typeof item === 'string' ? item : item.id).sort()) !== JSON.stringify([...current.ticket_set].sort())
       || (originalPacket.ticket_set_digest || originalPacket.role_context?.ticket_set_digest) !== current.ticket_set_digest)
@@ -3188,23 +3189,26 @@ function completedCurrentContract(parsed, allowContinuation = false) {
   return { text, result };
 }
 
-function originalCurrentResponse(trusted, result, evidence, retained) {
+function originalCurrentResponse(trusted, result, evidence, retained, facts, binding = trusted.receipt) {
   const receipt = trusted.receipt, runtime = currentRuntimeEvidence(trusted);
   const pin = runtime?.transcript;
   if (!object(pin) || !path.isAbsolute(pin.path || '') || !Number.isSafeInteger(pin.bytes)
       || pin.bytes < 1 || pin.bytes > 128 * 1024 * 1024)
     fail('REVIEW_NATIVE_REQUIRED', 'complete original current native stream is required');
   const raw = readImmutableFile(fs, pin.path, 'current native stream', 128 * 1024 * 1024);
-  if (raw.length !== pin.bytes || digest(raw) !== pin.sha256)
+  if (raw.length !== pin.bytes || immutableFileFact(facts, 'sha256', pin.path, raw, binding, () => digest(raw)) !== pin.sha256)
     fail('REVIEW_NATIVE_INVALID', 'original current native stream changed');
   if (receipt.role === 'code-review' && (!raw.toString('utf8').endsWith('\n') || runtime.completed_source || runtime.review_continuation))
     fail('REVIEW_NATIVE_INVALID', 'one complete original code-review turn is required');
   let original, text;
   if (receipt.runtime === 'codex') {
-    const parsed = require('./codex-runtime-host.cjs').parseCodexStream(raw.toString('utf8'));
+    const parsed = immutableFileFact(facts, 'codex-stream', pin.path, raw, binding,
+      () => require('./codex-runtime-host.cjs').parseCodexStream(raw.toString('utf8')));
     if (parsed.session_id !== runtime.session_id)
       fail('REVIEW_NATIVE_INVALID', 'original current session differs');
-    ({ text, result: original } = completedCurrentContract(parsed, !!(runtime.completed_source || runtime.review_continuation)));
+    const continuation = !!(runtime.completed_source || runtime.review_continuation);
+    ({ text, result: original } = immutableFileFact(facts, 'codex-result', pin.path, raw, [binding, continuation],
+      () => completedCurrentContract(parsed, continuation)));
     const nativePin = retained?.native;
     if (!object(nativePin) || nativePin.sha256 !== runtime.native_session_evidence?.sha256
         || (!(receipt.role === 'arch-review' && runtime.focused_review?.review_contract === require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT)
@@ -3213,9 +3217,10 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
         || runtime.native_session_evidence?.session_id !== runtime.session_id)
       fail('REVIEW_NATIVE_REQUIRED', 'original current semantic consumption authority is required');
     const native = readImmutableFile(fs, nativePin.path, 'current native transcript', 128 * 1024 * 1024);
-    if (native.length !== nativePin.bytes || digest(native) !== nativePin.sha256)
+    if (native.length !== nativePin.bytes || immutableFileFact(facts, 'sha256', nativePin.path, native, binding, () => digest(native)) !== nativePin.sha256)
       fail('REVIEW_NATIVE_INVALID', 'original current native transcript changed');
-    const parsedNative = require('./codex-runtime-host.cjs').parseNativeCodexTranscript(native.toString('utf8'), runtime.session_id);
+    const parsedNative = immutableFileFact(facts, 'codex-native', nativePin.path, native, binding,
+      () => require('./codex-runtime-host.cjs').parseNativeCodexTranscript(native.toString('utf8'), runtime.session_id));
     if (parsedNative.selections.some(value => value.model !== receipt.observed_model || value.effort !== receipt.observed_effort))
       fail('REVIEW_NATIVE_INVALID', 'current native role policy differs');
     const rows = native.toString('utf8').split('\n').filter(Boolean).map(JSON.parse);
@@ -3233,7 +3238,8 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
     } else validateReviewContinuationEvidence(runtime);
   } else if (receipt.runtime === 'claude') {
     const claudeRuntime = require('./claude-runtime-host.cjs');
-    const parsed = claudeRuntime.parseClaudeStream(raw.toString('utf8'));
+    const parsed = immutableFileFact(facts, 'claude-stream', pin.path, raw, binding,
+      () => claudeRuntime.parseClaudeStream(raw.toString('utf8')));
     if (!raw.toString('utf8').endsWith('\n') || parsed.session_id !== runtime.session_id
         || parsed.result?.type !== 'result' || parsed.records.at(-1) !== parsed.result || parsed.result.is_error === true)
       fail('REVIEW_NATIVE_INVALID', 'original second-runtime completion differs');
@@ -3243,7 +3249,8 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
     }
     if (!object(original) || Buffer.byteLength(JSON.stringify(original)) > 128 * 1024)
       fail('REVIEW_NATIVE_INVALID', 'original second-runtime complete bounded JSON is required');
-    if (original.review_contract === SEMANTIC_REVIEW_V1) original = claudeRuntime.semanticResult(parsed).result;
+    if (original.review_contract === SEMANTIC_REVIEW_V1) original = immutableFileFact(facts, 'claude-result',
+      pin.path, raw, binding, () => claudeRuntime.semanticResult(parsed)).result;
     if (receipt.role === 'code-review') {
       if (parsed.result.subtype !== 'success') fail('REVIEW_NATIVE_INVALID', 'original code-review turn did not complete');
       if (parsed.result.structured_output !== undefined && typeof parsed.result.result === 'string') {
@@ -3261,7 +3268,7 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
         || nativePin.bytes < 1 || nativePin.bytes > 128 * 1024 * 1024)
       fail('REVIEW_NATIVE_REQUIRED', 'original second-runtime semantic transcript is required');
     const native = readImmutableFile(fs, nativePin.path, 'original second-runtime semantic transcript', 128 * 1024 * 1024);
-    if (native.length !== nativePin.bytes || digest(native) !== nativePin.sha256 || !native.toString('utf8').endsWith('\n'))
+    if (native.length !== nativePin.bytes || immutableFileFact(facts, 'sha256', nativePin.path, native, binding, () => digest(native)) !== nativePin.sha256 || !native.toString('utf8').endsWith('\n'))
       fail('REVIEW_NATIVE_INVALID', 'original second-runtime semantic transcript changed or is incomplete');
     const rows = [];
     for (const line of native.toString('utf8').split(/\r?\n/)) {
@@ -3303,8 +3310,8 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
   return original;
 }
 
-function authenticateCurrentCoverage({ trusted, result, evidence, identity, retained, selectionWorktrees, integrationReview }) {
-  if (result.review_contract === SEMANTIC_REVIEW_V1) return authenticateSemanticFinal({ trusted, result, evidence, identity, retained });
+function authenticateCurrentCoverage({ trusted, result, evidence, identity, retained, selectionWorktrees, integrationReview, facts }) {
+  if (result.review_contract === SEMANTIC_REVIEW_V1) return authenticateSemanticFinal({ trusted, result, evidence, identity, retained, facts });
   if (result.review_contract === INTEGRATION_REVIEW_V3 || result.kind === 'unit' || result.schema === 'shipyard.integration-unit-result.v1')
     return authenticatePartitionFinal({ trusted, result, evidence, identity, integrationReview });
   const runtime = trusted.receipt.runtime_evidence;
@@ -3779,7 +3786,7 @@ function originalArchitectureTicketSet(trusted, manifest, findings, evidence, id
   return binding.ticketSet;
 }
 
-function authenticatedCurrentArchive(worktree, record, manifest, findings, identity, currentBinding, selectionWorktrees, integrationReview) {
+function authenticatedCurrentArchive(worktree, record, manifest, findings, identity, currentBinding, selectionWorktrees, integrationReview, facts) {
   const retention = record.review_current || record.review_baseline;
   const trusted = retention?.receipt_store
     ? trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: retention.receipt_store })
@@ -3808,7 +3815,7 @@ function authenticatedCurrentArchive(worktree, record, manifest, findings, ident
         evidence: { relative: manifest.files.evidence.path, content: evidence },
         findings: { relative: manifest.files.findings.path, content: findingBytes } })))
     fail('REVIEW_COVERAGE_INVALID', 'original complete current judgment envelope differs');
-  const contract = authenticateCurrentCoverage({ trusted, result: findings, evidence, identity, retained: retention, selectionWorktrees, integrationReview });
+  const contract = authenticateCurrentCoverage({ trusted, result: findings, evidence, identity, retained: retention, selectionWorktrees, integrationReview, facts });
   if (stable(manifest.semantic_review || null) !== stable(contract?.semantic_review || null))
     semanticError('current phase manifest semantic authority differs');
   if (stable(manifest.integration_partition || null) !== stable(contract?.integration_partition || null))
@@ -3852,6 +3859,7 @@ function exactCurrentGitSubject(root, branch, head, baseName, baseCommit) {
 }
 
 function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, graphDir, headBranch, repo = null, integrationReview }) {
+  const facts = immutableVerificationFacts();
   const root = fs.realpathSync(worktreePath);
   const common = fs.realpathSync(reviewGit(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
   const directory = graphDir || path.join(root, '.planning/graph');
@@ -3921,10 +3929,10 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
           base_tree: reviewGit(root, ['rev-parse', baseCommit + '^{tree}']),
           merge_base: reviewGit(root, ['merge-base', baseCommit, head]), merge_base_tree: manifest.merge_base_tree };
         if (reviewGit(root, ['rev-parse', identity.merge_base + '^{tree}']) !== identity.merge_base_tree) continue;
-        const contract = authenticatedCurrentArchive(worktree, record, manifest, findings, identity, undefined, [...candidates], integrationReview);
+        const contract = authenticatedCurrentArchive(worktree, record, manifest, findings, identity, undefined, [...candidates], integrationReview, facts);
         if ([INTEGRATION_REVIEW_V3, SEMANTIC_REVIEW_V1].includes(contract?.contract)) {
           const frozen = contract.contract === SEMANTIC_REVIEW_V1
-            ? semanticRecord(worktree, contract.semantic_review.snapshot_sha256).snapshot
+            ? semanticRecord(worktree, contract.semantic_review.snapshot_sha256, false, facts).snapshot
             : partitionPlanRecord(worktree, contract.integration_partition.plan_sha256).plan;
           if (stable(frozen.identity.ticket_set) !== stable(findings.ticket_set)
               || frozen.identity.head !== head || frozen.identity.base !== baseCommit)
@@ -4115,6 +4123,25 @@ const SEMANTIC_SNAPSHOT_V1 = 'shipyard.semantic-review-snapshot.v1';
 const semanticPreparations = new WeakMap();
 const semanticStages = new WeakMap();
 
+// @security: Private facts end at publication or operation exit; independent consumers start fresh.
+function immutableVerificationFacts() {
+  const facts = new Map();
+  return (kind, identity, raw, reconstruct) => {
+    const key = stable([kind, identity]);
+    let entries = facts.get(key);
+    if (!entries) { entries = new Map(); facts.set(key, entries); }
+    const exact = Buffer.isBuffer(raw) ? 'bytes:' + raw.toString('base64') : 'text:' + raw;
+    if (!entries.has(exact)) entries.set(exact, partitionFreeze(reconstruct()));
+    return entries.get(exact);
+  };
+}
+function immutableFileFact(facts, kind, file, raw, binding, reconstruct) {
+  if (!facts) return reconstruct();
+  const stat = fs.lstatSync(file, { bigint: true });
+  const identity = [file, ...['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].map(field => String(stat[field])), binding];
+  return facts(kind, identity, raw, reconstruct);
+}
+
 function semanticError(message, code = 'SEMANTIC_REVIEW_INCOMPATIBLE') { fail(code, message); }
 function semanticKey(snapshot, stage, assignment) { return digest(stable([snapshot, stage, assignment || null])); }
 function semanticEnvelope(worktree, kind, hash) {
@@ -4235,7 +4262,7 @@ function assertSemanticSnapshot(snapshot) {
   }
   if (new Set(snapshot.seams.map(item => item.id)).size !== snapshot.seams.length) semanticError('duplicate dependency seam');
 }
-function recheckSemanticSnapshot(record, options = {}) {
+function recheckSemanticSnapshot(record, options = {}, facts) {
   const { snapshot } = record, { identity } = snapshot, worktree = identity.worktree;
   assertSemanticSnapshot(snapshot);
   if (record.input_transport !== undefined && record.input_transport !== 'host-files')
@@ -4258,9 +4285,16 @@ function recheckSemanticSnapshot(record, options = {}) {
     return record;
   }
   const checked = collector.verifyFileInput(record.original_input_bundle, { sealed: true });
-  const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]), 32 * 1024 * 1024);
-  const inventory = partitionInventory(partitionFullPacket(packet, record.original_input_bundle, checked));
-  if (digest(stable(packet)) !== snapshot.original_packet_sha256
+  const binding = [record.original_input_bundle, checked.manifest, checked.manifest_bytes.toString('base64')];
+  const { packet, packet_sha256 } = immutableFileFact(facts, 'semantic-packet',
+    record.original_input_bundle.manifest_path, checked.material[0], binding, () => {
+      const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]), 32 * 1024 * 1024);
+      return { packet, packet_sha256: digest(stable(packet)) };
+    });
+  const full = partitionFullPacket(packet, record.original_input_bundle, checked, facts);
+  const inventory = immutableFileFact(facts, 'semantic-inventory', record.original_input_bundle.manifest_path,
+    stable(full), binding, () => partitionInventory(full));
+  if (packet_sha256 !== snapshot.original_packet_sha256
       || stable(inventory) !== stable({ material: snapshot.material, obligations: snapshot.obligations })
       || stable(checked.manifest.binding.preflight) !== stable(identity.preflight))
     semanticError('semantic complete current factual inventory changed', 'STALE_CONTEXT');
@@ -4349,13 +4383,13 @@ function prepareSemanticRole(context, runtime) {
   semanticPreparations.set(prepared, { record, options });
   return prepared;
 }
-function semanticPreparation(prepared) {
+function semanticPreparation(prepared, facts) {
   const state = semanticPreparations.get(prepared);
   if (!state) semanticError('original private semantic preparation is required');
-  recheckSemanticSnapshot(state.record, state.options);
+  recheckSemanticSnapshot(state.record, state.options, facts);
   return state;
 }
-function semanticRecord(worktree, hash, historical = false) {
+function semanticRecord(worktree, hash, historical = false, facts) {
   const record = semanticEnvelope(worktree, 'snapshot', hash);
   if (record.snapshot.snapshot_sha256 !== hash || record.snapshot.identity.worktree !== worktree)
     semanticError('foreign semantic snapshot');
@@ -4363,7 +4397,7 @@ function semanticRecord(worktree, hash, historical = false) {
     assertSemanticSnapshot(record.snapshot);
     return { ...record, historical: true };
   }
-  return recheckSemanticSnapshot(record);
+  return recheckSemanticSnapshot(record, {}, facts);
 }
 function semanticCodeReviewSnapshot({ worktreePath, snapshot_sha256 } = {}) {
   const { snapshot } = semanticRecord(fs.realpathSync(worktreePath), snapshot_sha256);
@@ -4376,27 +4410,29 @@ function semanticLaunchSnapshot(prepared) {
   recheckSemanticSnapshot(state.record);
   return partitionFreeze(partitionCopy(state.record.snapshot));
 }
-function semanticOriginalResult(trusted) {
+function semanticOriginalResult(trusted, facts, binding = trusted.receipt) {
   const pin = currentRuntimeEvidence(trusted).transcript;
   const raw = readImmutableFile(fs, pin.path, 'semantic original stream', PARTITION_LIMIT, pin.bytes);
-  if (digest(raw) !== pin.sha256) semanticError('semantic original stream changed');
+  if (immutableFileFact(facts, 'sha256', pin.path, raw, binding, () => digest(raw)) !== pin.sha256) semanticError('semantic original stream changed');
   if (trusted.receipt.runtime === 'claude') {
     const native = require('./claude-runtime-host.cjs');
-    const parsed = native.parseClaudeStream(raw.toString('utf8'));
+    const parsed = immutableFileFact(facts, 'claude-stream', pin.path, raw, binding,
+      () => native.parseClaudeStream(raw.toString('utf8')));
     if (!raw.toString('utf8').endsWith('\n') || parsed.session_id !== currentRuntimeEvidence(trusted).session_id)
       semanticError('semantic original Claude session differs');
-    return native.semanticResult(parsed);
+    return immutableFileFact(facts, 'claude-result', pin.path, raw, binding, () => native.semanticResult(parsed));
   }
-  const parsed = require('./codex-runtime-host.cjs').parseCodexStream(raw.toString('utf8'));
+  const parsed = immutableFileFact(facts, 'codex-stream', pin.path, raw, binding,
+    () => require('./codex-runtime-host.cjs').parseCodexStream(raw.toString('utf8')));
   if (parsed.session_id !== currentRuntimeEvidence(trusted).session_id) semanticError('semantic original session differs');
-  return completedCurrentContract(parsed);
+  return immutableFileFact(facts, 'codex-result', pin.path, raw, [binding, false], () => completedCurrentContract(parsed));
 }
-function semanticNative(trusted, launch, record, result) {
+function semanticNative(trusted, launch, record, result, facts, binding = [record.snapshot.snapshot_sha256, record.snapshot.pins, record.historical, trusted.receipt, launch]) {
   const { snapshot } = record, runtime = currentRuntimeEvidence(trusted);
   const pin = partitionNativePin(trusted);
   const raw = readImmutableFile(fs, pin.path, 'semantic original native input', PARTITION_LIMIT, pin.bytes);
-  if (digest(raw) !== pin.sha256) semanticError('semantic original native pin changed');
-  const rows = partitionNativeRows(raw);
+  if (immutableFileFact(facts, 'sha256', pin.path, raw, binding, () => digest(raw)) !== pin.sha256) semanticError('semantic original native pin changed');
+  const rows = immutableFileFact(facts, 'native-rows', pin.path, raw, binding, () => partitionNativeRows(raw));
   const claude = snapshot.runtime === 'claude';
   const users = claude ? rows.filter(row => row.type === 'user' && row.sessionId === runtime.session_id
     && (typeof row.message?.content === 'string' || row.message?.content?.some(block => block.text?.includes('<AUTHENTICATED_SEMANTIC_REVIEW>'))))
@@ -4424,11 +4460,13 @@ function semanticNative(trusted, launch, record, result) {
   if (claude && (digest(instructions) !== snapshot.agent_sha256 || !record.historical && installed !== instructions)
       || !launch.input.startsWith(instructions + '\n\n')) semanticError('semantic original installed instructions differ');
   const { evidence_markdown, ...judgment } = result;
-  const original = originalCurrentResponse(trusted, judgment, Buffer.from(evidence_markdown), { native: pin });
+  const original = originalCurrentResponse(trusted, judgment, Buffer.from(evidence_markdown), { native: pin }, facts, binding);
   if (stable(original) !== stable(result))
     semanticError('semantic original complete answer differs');
   const cliPin = runtime.transcript;
-  const stream = partitionNativeRows(readImmutableFile(fs, cliPin.path, 'semantic observation stream', PARTITION_LIMIT, cliPin.bytes));
+  const streamBytes = readImmutableFile(fs, cliPin.path, 'semantic observation stream', PARTITION_LIMIT, cliPin.bytes);
+  const stream = immutableFileFact(facts, 'native-rows', cliPin.path, streamBytes, binding,
+    () => partitionNativeRows(streamBytes));
   let observation = [], resource_failure = null, accounting;
   if (claude) {
     // @contract: Optional usage stays unknown; explicit native failures still block semantic completion.
@@ -4473,9 +4511,9 @@ function semanticNative(trusted, launch, record, result) {
     .verifySemanticReads(raw.toString('utf8'), runtime.session_id);
   return { native_pin: pin, output_pin: runtime.transcript, observation, accounting, resource_failure, reads, session_id: runtime.session_id };
 }
-function validateSemanticResult(result, launch, record) {
+function validateSemanticResult(result, launch, record, facts) {
   if (record.input_transport === 'host-files') {
-    const originals = launch.stage === 'final' ? launch.originals.map(reference => validateSemanticOriginal(record, reference.assignment_id)) : [];
+    const originals = launch.stage === 'final' ? launch.originals.map(reference => validateSemanticOriginal(record, reference.assignment_id, facts)) : [];
     semanticInputFiles(record, originals);
   }
   const { snapshot } = record;
@@ -4530,8 +4568,8 @@ function validateSemanticResult(result, launch, record) {
     semanticError('semantic result must retain every actual dependency seam');
   return result;
 }
-function semanticLaunch(prepared, stage, assignment_id, originals = []) {
-  const { record } = semanticPreparation(prepared), { snapshot } = record;
+function semanticLaunch(prepared, stage, assignment_id, originals = [], facts) {
+  const { record } = semanticPreparation(prepared, facts), { snapshot } = record;
   const assignment = snapshot.assignments.find(item => item.id === assignment_id);
   if (stage === 'worker' && !assignment || stage === 'final' && assignment_id !== null) semanticError('foreign semantic assignment');
   const dispatch_id = 'semantic-' + stage + '-' + semanticKey(snapshot.snapshot_sha256, stage, assignment_id);
@@ -4590,10 +4628,11 @@ function semanticLaunch(prepared, stage, assignment_id, originals = []) {
 }
 function prepareSemanticWorker({ prepared, assignment_id } = {}) { return semanticLaunch(prepared, 'worker', assignment_id); }
 function readSemanticOriginal({ worktreePath, snapshot_sha256, assignment_id } = {}) {
-  const worktree = fs.realpathSync(worktreePath), record = semanticRecord(worktree, snapshot_sha256);
-  return partitionFreeze(partitionCopy(validateSemanticOriginal(record, assignment_id)));
+  const facts = immutableVerificationFacts();
+  const worktree = fs.realpathSync(worktreePath), record = semanticRecord(worktree, snapshot_sha256, false, facts);
+  return partitionFreeze(partitionCopy(validateSemanticOriginal(record, assignment_id, facts)));
 }
-function validateSemanticOriginal(record, assignment_id) {
+function validateSemanticOriginal(record, assignment_id, facts) {
   const { snapshot } = record, worktree = snapshot.identity.worktree;
   if (!snapshot.assignments.some(item => item.id === assignment_id)) semanticError('foreign original assignment');
   const key = semanticKey(snapshot.snapshot_sha256, 'worker', assignment_id);
@@ -4605,23 +4644,32 @@ function validateSemanticOriginal(record, assignment_id) {
   if (!retained || stable(retained.receipt) !== stable(trusted.receipt)
       || retained.semantic_review?.snapshot_sha256 !== snapshot.snapshot_sha256 || retained.semantic_review.stage !== 'worker')
     semanticError('original semantic archive custody missing', 'SEMANTIC_REVIEW_MISSING_ORIGINAL');
-  for (const pin of retained.pins) readPinnedArchiveFile(worktree, pin, 'complete semantic original');
-  const manifest = JSON.parse(readPinnedArchiveFile(worktree, retained.pins.find(pin => pin.path === saved.reference.artifact_ref), 'semantic original manifest'));
-  const result = JSON.parse(readPinnedArchiveFile(worktree, manifest.files.findings, 'semantic original result'));
-  const evidence = readPinnedArchiveFile(worktree, manifest.files.evidence, 'semantic original report');
-  if (digest(readPinnedArchiveFile(worktree, retained.pins[0], 'semantic manifest')) !== saved.reference.artifact_sha256
+  const binding = [snapshot.snapshot_sha256, snapshot.pins, record.historical, trusted.receipt, launch, saved.reference];
+  const read = (pin, label) => readPinnedArchiveFile(worktree, pin, label, facts, binding);
+  const parse = (pin, label) => {
+    const raw = read(pin, label);
+    return immutableFileFact(facts, 'json', path.resolve(worktree, pin.path), raw, [binding, pin], () => JSON.parse(raw));
+  };
+  for (const pin of retained.pins) read(pin, 'complete semantic original');
+  const manifest = parse(retained.pins.find(pin => pin.path === saved.reference.artifact_ref), 'semantic original manifest');
+  const result = parse(manifest.files.findings, 'semantic original result');
+  const evidence = read(manifest.files.evidence, 'semantic original report');
+  const manifestRaw = read(retained.pins[0], 'semantic manifest');
+  if (immutableFileFact(facts, 'sha256', path.resolve(worktree, retained.pins[0].path), manifestRaw, [binding, retained.pins[0]],
+    () => digest(manifestRaw)) !== saved.reference.artifact_sha256
       || evidence.toString('utf8') !== result.evidence_markdown) semanticError('semantic original artifact differs');
-  validateSemanticResult(result, launch, record);
-  const original = semanticOriginalResult(trusted);
-  const native = semanticNative(trusted, launch, record, result);
+  validateSemanticResult(result, launch, record, facts);
+  const original = semanticOriginalResult(trusted, facts, binding);
+  const native = semanticNative(trusted, launch, record, result, facts, binding);
   if (stable(native) !== stable(saved.native)) semanticError('semantic original native evidence changed');
   return { reference: saved.reference, result, original_text: original.text, native };
 }
 function prepareSemanticFinal({ prepared } = {}) {
-  const { record } = semanticPreparation(prepared), { snapshot } = record;
-  const originals = snapshot.assignments.map(item => validateSemanticOriginal(record, item.id));
+  const facts = immutableVerificationFacts();
+  const { record } = semanticPreparation(prepared, facts), { snapshot } = record;
+  const originals = snapshot.assignments.map(item => validateSemanticOriginal(record, item.id, facts));
   if (new Set(originals.map(item => item.native.session_id)).size !== originals.length) semanticError('original worker sessions must be distinct');
-  return semanticLaunch(prepared, 'final', null, originals);
+  return semanticLaunch(prepared, 'final', null, originals, facts);
 }
 function semanticComplete(result) {
   return result.completeness === 'complete' && !result.required_context.length && !result.unread.length && !result.limitations.length;
@@ -4649,11 +4697,13 @@ function retainSemanticOriginal({ prepared, recorder } = {}) {
   const state = semanticStages.get(prepared);
   if (!state || state.launch.stage !== 'worker') semanticError('only an original worker can be retained');
   const { record, launch } = state, { snapshot } = record, worktree = snapshot.identity.worktree;
-  recheckSemanticSnapshot(record);
+  const facts = immutableVerificationFacts();
+  recheckSemanticSnapshot(record, {}, facts);
   const trusted = trustedRecord({ recorder, dispatchId: launch.dispatch_id });
-  const original = semanticOriginalResult(trusted), result = original.result;
-  validateSemanticResult(result, launch, record);
-  const native = semanticNative(trusted, launch, record, result);
+  const binding = [snapshot.snapshot_sha256, snapshot.pins, record.historical, trusted.receipt, launch];
+  const original = semanticOriginalResult(trusted, facts, binding), result = original.result;
+  validateSemanticResult(result, launch, record, facts);
+  const native = semanticNative(trusted, launch, record, result, facts, binding);
   const key = semanticKey(snapshot.snapshot_sha256, 'worker', launch.assignment_id);
   return withArchivePublication(worktree, () => {
     const evidenceFile = archivePath(worktree, trusted.dispatchId, 'SEMANTIC-ORIGINAL.md', 'semantic report');
@@ -4682,10 +4732,10 @@ function retainSemanticOriginal({ prepared, recorder } = {}) {
     return partitionFreeze(partitionCopy({ reference, result, original_text: original.text, native }));
   });
 }
-function authenticateSemanticFinal({ trusted, result, evidence, identity, retained, historical = false }) {
+function authenticateSemanticFinal({ trusted, result, evidence, identity, retained, historical = false, facts = immutableVerificationFacts() }) {
   if (result.stage !== 'final' || !['integrator', 'arch-review', 'code-review'].includes(trusted.receipt.role) || !['codex', 'claude'].includes(trusted.receipt.runtime))
     semanticError('only an independent original role-specific semantic final grants authority');
-  const record = semanticRecord(identity.worktree, result.snapshot_sha256, historical), { snapshot } = record;
+  const record = semanticRecord(identity.worktree, result.snapshot_sha256, historical, facts), { snapshot } = record;
   const retention = retained || authorityState(identity.worktree, false, false).payload.records[trusted.dispatchId]?.review_current;
   if (trusted.receipt.role !== snapshot.role || identity.repository.identity !== snapshot.identity.repository
       || identity.head !== snapshot.identity.head || identity.base_commit !== snapshot.identity.base)
@@ -4696,12 +4746,12 @@ function authenticateSemanticFinal({ trusted, result, evidence, identity, retain
     semanticError('retained semantic final authority differs from original native custody');
   const key = semanticKey(snapshot.snapshot_sha256, 'final', null);
   const launch = semanticEnvelope(identity.worktree, 'launch', key);
-  const originals = snapshot.assignments.map(item => validateSemanticOriginal(record, item.id));
-  validateSemanticResult({ ...result, evidence_markdown: evidence.toString('utf8') }, launch, record);
+  const originals = snapshot.assignments.map(item => validateSemanticOriginal(record, item.id, facts));
+  validateSemanticResult({ ...result, evidence_markdown: evidence.toString('utf8') }, launch, record, facts);
   if (launch.receipt_store !== trusted.recorder.storeDir || launch.dispatch_id !== trusted.dispatchId
       || stable(launch.originals) !== stable(originals.map(item => item.reference))
       || stable(result.originals) !== stable(launch.originals)) semanticError('semantic final exact original references differ');
-  const native = semanticNative(trusted, launch, record, { ...result, evidence_markdown: evidence.toString('utf8') });
+  const native = semanticNative(trusted, launch, record, { ...result, evidence_markdown: evidence.toString('utf8') }, facts);
   if (originals.some(item => item.reference.dispatch_id === trusted.dispatchId || item.native.session_id === native.session_id))
     semanticError('semantic final requires a distinct original dispatch and native session');
   const incomplete = originals.some(item => !semanticComplete(item.result) || item.native.resource_failure || item.native.reads.incomplete.length)
@@ -5067,13 +5117,13 @@ function checkPartitionPins(pins) {
     if (digest(content) !== pin.sha256) partitionError('frozen source, plan, producer or instructions changed', 'STALE_CONTEXT');
   }
 }
-function partitionFullPacket(packet, bundle, checked) {
+function partitionFullPacket(packet, bundle, checked, facts) {
   const identity = reviewIdentityFromChecked(bundle, checked), input = { input_bundle: bundle };
   admissionReviewInputs.set(input, { checked, identity });
   let full;
   try { full = rebuildReviewImpactPacket(input, { schema: 'shipyard.review-baseline-selection.v1',
     mode: 'full', role: 'integrator', current: identity, baseline: null,
-    reason: 'frozen-complete-current-material', rejected: [] }); }
+    reason: 'frozen-complete-current-material', rejected: [] }, undefined, facts ? packet : undefined); }
   finally { admissionReviewInputs.delete(input); }
   if (packet.role_context?.adr_unresolved?.length) partitionError('applicable governing references are unresolved');
   if (full.newly_reviewed.some(source => source.content === null))
