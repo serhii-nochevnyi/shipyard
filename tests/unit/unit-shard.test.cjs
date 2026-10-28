@@ -46,7 +46,7 @@ test('the weight table names only existing ordinary owners or the six integratio
   const stale = Object.keys(weights).filter((name) => !expectedTasks.includes(name));
   assert.deepEqual(stale, [], 'remove stale entries from tests/unit/shard-weights.json');
   assert.ok(!Object.hasOwn(weights, integrationOwner));
-  assert.deepEqual(integrationTasks.map(task => weights[task]), [1597.8, 1318.2, 1369.2, 1368, 1368, 1368.6]);
+  assert.ok(integrationTasks.every(task => Object.hasOwn(weights, task)), 'every integration task has a recorded weight');
   for (const [name, seconds] of Object.entries(weights)) {
     assert.ok(Number.isFinite(seconds) && seconds > 0, `${name} weight must be a positive number`);
   }
@@ -108,14 +108,18 @@ test('CI runs as many unit shards as the workflow matrix declares', () => {
   const matrix = /shard:\s*\[([^\]]+)\]/.exec(workflow);
   assert.ok(matrix, 'the unit job declares a shard matrix');
   const declared = matrix[1].split(',').map((item) => Number(item.trim()));
-  assert.deepEqual(declared, [1, 2, 3, 4, 5, 6], 'matrix is exactly six shards');
+  assert.deepEqual(declared, declared.map((_, index) => index + 1), 'matrix is the contiguous list 1..n');
+  assert.ok(declared.length > 6, 'matrix keeps the unit suite split into small shards');
   assert.match(workflow, /fail-fast: false/);
   assert.match(workflow, /timeout-minutes: 90/);
-  for (const pattern of [/UNIT_SHARD:\s*\$\{\{ matrix\.shard \}\}\/(\d+)/, /unit \(shard \$\{\{ matrix\.shard \}\}\/(\d+)\)/, /unit tests, shard \$\{\{ matrix\.shard \}\}\/(\d+)/]) {
-    const found = pattern.exec(workflow);
-    assert.ok(found, `${pattern} is present`);
-    assert.equal(Number(found[1]), declared.length, 'denominator equals the number of matrix shards');
+  assert.doesNotMatch(workflow, /matrix\.shard \}\}\/\d/, 'no hard-coded shard count outside the matrix');
+  for (const pattern of [/UNIT_SHARD:\s*\$\{\{ matrix\.shard \}\}\/\$\{\{ strategy\.job-total \}\}/, /unit \(shard \$\{\{ matrix\.shard \}\}\/\$\{\{ strategy\.job-total \}\}\)/, /unit tests, shard \$\{\{ matrix\.shard \}\}\/\$\{\{ strategy\.job-total \}\}/]) {
+    assert.match(workflow, pattern);
   }
+  const count = declared.length;
+  const selections = declared.map((index) => shards.selectTaskShard(`${index}/${count}`));
+  assert.ok(selections.every((selection) => selection.length > 0), 'every CI shard selects work');
+  assert.deepEqual(selections.flat().sort(), expectedTasks, 'the CI shards together are the whole suite, once');
 });
 
 test('the test-fast job is the single result and waits for every part', () => {

@@ -35,7 +35,7 @@ decomposition skills.
 ```bash
 make test-fast          # deterministic local checks
 make test-unit          # parser, policy, attribution and matching tests
-make test-fast-rest     # test-fast without the unit suite; CI runs the unit suite as UNIT_SHARD=<i>/4 ./tests/unit/run.sh
+make test-fast-rest     # test-fast without the unit suite; CI runs the unit suite as UNIT_SHARD=<i>/<n> ./tests/unit/run.sh (n = the matrix size in test.yml)
 UNIT_WORKERS=auto make test-unit  # run unit-test files on every core (default 4)
 make test-graph         # graph and plan:post gate fixtures
 make test-worktree      # local git worktree lifecycle
