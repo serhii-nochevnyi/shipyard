@@ -258,9 +258,19 @@ test('codex ordinary CLI restart consumes the accepted original final without a 
     assert.equal(prepared.launches.length, 3);
     assert.ok(current(f, 'code-review')?.authenticated);
     const file = path.join(path.dirname(f.worktree), 'fresh-code-review-cli.json');
-    fs.writeFileSync(file, JSON.stringify({ scope: { worktree: f.worktree, phase: 49,
-      ticket: original.subject, run_id: 'fresh-code-review-cli' }, role: 'code-review', context: {} }));
+    const request = { scope: { worktree: f.worktree, phase: 49,
+      ticket: original.subject, run_id: 'fresh-code-review-cli' }, role: 'code-review', context: {} };
     try {
+      for (const role of [' code-review ', '\tcode-review\n']) for (const patch of [
+        { context: { prompt: 'caller' } }, { signals: { critical: true } }]) {
+        fs.writeFileSync(file, JSON.stringify({ ...request, ...patch, role }));
+        await assert.rejects(delivery.runCli(['--args-file', file], { write() {} }, prepared.options), {
+          code: 'INVALID_CODE_REVIEW_CONTEXT', message: 'codex-code-review-context: '
+            + (patch.context ? 'caller prompts or selectors are refused' : 'caller signals are refused'),
+        });
+        assert.equal(prepared.launches.length, 3);
+      }
+      fs.writeFileSync(file, JSON.stringify(request));
       const result = await delivery.runCli(['--args-file', file], { write() {} }, prepared.options);
       assert.equal(result.subject, original.subject);
       assert.equal(prepared.launches.length, 3);

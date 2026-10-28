@@ -1027,8 +1027,10 @@ async function runSemanticReview({ prepared, recorder, launch, worktreePath } = 
 
 function recoverCodexCodeReview(scope, request, options) {
   if (Object.keys(request.context).some(key => key !== 'repo') || Object.keys(request.signals).length
-      || request.gsd_role !== undefined)
+      || request.gsd_role !== undefined) {
+    codeReviewContext.prepareSemantic(scope, request, options);
     fail('CODE_REVIEW_CONTEXT_REQUIRED', 'semantic code-review requires host-built context and signals');
+  }
   const pr = Number(require('./architecture-target.cjs').PHASE_SUBJECT.exec(scope.ticket)?.[4]);
   return roleArtifact.recoverAcceptedSemanticCodeReview({ worktreePath: scope.worktree,
     graphDir: options.graphDir, phase: scope.phase, pr, runtime: 'codex', repo: request.context.repo ?? null,
