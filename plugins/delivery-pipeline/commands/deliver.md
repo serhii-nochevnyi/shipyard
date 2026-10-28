@@ -399,14 +399,12 @@ path is under …, which does not exist in this repo" warning as a plan bug.
 
 ## Telemetry (pipeline log)
 
-The log `.planning/graph/delivery-log.jsonl` — an append-only input for
-`pipeline-stats.cjs`; from it we tune the model ladder and the fix-role prompts.
-Status transitions are logged by `state-sync.cjs` itself — you do NOT write them
-by hand. Through `log-event.cjs` you log ONLY what is visible only within the
-session:
+`.planning/graph/delivery-log.jsonl` is the append-only input of
+`pipeline-stats.cjs`. `state-sync.cjs` logs status transitions itself; through
+`log-event.cjs` you log ONLY what is visible within the session:
 
 ```text
-attempt    — each babysit round on a PR:
+attempt    — each babysit round on a PR (full key set in step d of Step 4):
              log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<ci-fix|review-fix> model=<tier> \
                effort_applied=<level|unsupported|unknown> \
                outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha> hypothesis="<the fixer's own>" \
@@ -414,225 +412,88 @@ attempt    — each babysit round on a PR:
                artifact_role=<ci-fix|review-fix> artifact_base=<base> artifact_worktree=<worktree> boundary_store=<path>
 base_merge — a mechanical base merge that landed in a round (NOT an attempt):
              log-event.cjs base_merge ticket=<T> pr=<N> base=<base ref> head=<full 40-char sha>
-fix_round  — for EACH item from a fix-round Workflow result:
+fix_round  — for EACH item from a fix-round result:
              log-event.cjs fix_round ticket=<T> pr=<N> outcome=<fixed|no-op|escalate> pushed=<true|false> \
                artifact_ref=<validated path> artifact_digest=<sha256> dispatch_id=<id> \
                artifact_role=<ci-fix|review-fix> artifact_base=<base> artifact_worktree=<worktree> boundary_store=<path>
-escalation — any escalation to a human — NOT through log-event:
-             escalation-record.cjs mark <T> <reason...>
 ```
 
-`signature`, `head` and `hypothesis` are what make an attempt READABLE by the
-round after it, and they are new: `failure-signature.cjs verdict` compares
-`signature` against `head` to tell repetition from progress and instability from a
-defect, and `attempt-history.cjs <T>` renders the record — hypotheses included —
-into the next fixer's input. An attempt logged without them still counts toward
-the backstop and buys the next round nothing. `outcome=flake` is logged at an
-UNCHANGED `n`: a quarantined failure is not charged.
+`signature`, `head` and `hypothesis` make an attempt READABLE by the next round:
+`failure-signature.cjs verdict` compares `signature` against `head`, and
+`attempt-history.cjs <T>` hands the hypotheses to the next fixer. `outcome=flake`
+is logged at an UNCHANGED `n` — a quarantined failure is not charged.
+`artifact_ref`/`artifact_digest` are written only after the trusted boundary has
+sealed and read the role artifact (with the authenticated `dispatch_id`,
+`artifact_role`, `artifact_base`, `artifact_worktree`, `boundary_store`); a digest
+is an integrity check, never permission to skip the live receipt, PR/head, base or
+D-02 gate. `attempt-history.cjs <T> --details --graph <project>/.planning/graph`
+resolves a referenced hypothesis and labels it historical; a missing, stale or
+unauthenticated reference fails closed.
 
-`artifact_ref` and `artifact_digest` are key=value fields on these existing
-events, not a new event kind or journal schema. Write them only after the
-trusted boundary has sealed and read the role artifact, along with the
-authenticated `dispatch_id`, `artifact_role`, `artifact_base`,
-`artifact_worktree`, and `boundary_store` when a later details read must resolve
-it. A digest is an integrity check, never permission to skip the live receipt,
-PR/head, integration-base, or D-02 gate. `attempt-history.cjs <T> --details
---graph <project>/.planning/graph` resolves a referenced hypothesis through the
-same validator and labels it historical; a missing, stale, escaped, or
-unauthenticated reference fails closed. Bounded notes do not reset `attempts` or
-fabricate a new `n`.
+**Telemetry belongs to the PROJECT.** Name the project's graph explicitly when you
+stand in a ticket worktree or a cross-repo checkout: `--graph
+<project>/.planning/graph` or `SHIPYARD_GRAPH_DIR`. `log-event.cjs`,
+`failure-signature.cjs verdict|rerun|lift`, `attempt-history.cjs` and
+`escalation-record.cjs mark`/`mark-plan-defect` refuse without it ("no prior
+attempts" read from the wrong directory looks like a fresh ticket);
+`failure-signature.cjs compute` touches no journal and runs in a worktree.
 
-`merge` and `status_change` are written by `sentinel.cjs merge` and
-`state-sync.cjs` themselves — do NOT log them by hand; log-event refuses.
+Some events have exactly one writer and `log-event.cjs` refuses them by hand:
+`merge`/`status_change` (`sentinel.cjs merge`, `state-sync.cjs`), `plan_defect`
+(`escalation-record.cjs mark-plan-defect <T> <plan-path> <reason...> [--signature <sig>]…`),
+`flake`/`flake_rerun` (`failure-signature.cjs rerun <T> --signature <sig> --head <sha> --outcome green|red`),
+`flake_lift` (`failure-signature.cjs lift <T> --signature <sig>`), and `escalation`
+(`escalation-record.cjs mark <T> <reason...>` — it both journals and PARKS, durably;
+write what a human must decide, it is all the next session inherits).
 
-Logging is not syncing: an `attempt … outcome=pushed` or a `fix_round …
-pushed=true` records a write that moved GitHub, and the cached state the board is
-computed from knows nothing about it. Re-run `state-sync.cjs` before the next
-board read (see Step 4's cycle).
-
-Four more events are refused there, and for a sharper reason than duplication —
-they are not a metric ABOUT a state, they ARE the state, so a hand-written one is
-a verdict the loop reads back and believes. Each has exactly one writer:
-
-```text
-plan_defect — escalation-record.cjs mark-plan-defect <T> <plan-path> <reason...> [--signature <sig>]…
-flake       — failure-signature.cjs rerun <T> --signature <sig> --head <sha> --outcome green
-flake_rerun — failure-signature.cjs rerun <T> --signature <sig> --head <sha> --outcome red
-flake_lift  — failure-signature.cjs lift  <T> --signature <sig>
-```
-
-The quarantine keeps no store beside the journal: those three lines ARE what
-`failure-signature.cjs verdict` reads back, written under its lock and with the
-`(ticket, signature, head)` bookkeeping the rules match on. `plan_defect` is
-refused for the `escalation` reason instead — journalling it does not PARK the
-ticket, and `mark-plan-defect` does both in one act.
-
-`escalation` is refused there too, for a different reason: journalling it does
-not PARK the ticket, and the two used to be separate acts, so one always got
-done without the other. `escalation-record.cjs mark` writes both — and the park
-is DURABLE, which `--parked` never was. That matters most at the moment you are
-escalating: `--parked` dies with the session, so the next run offered the ticket
-straight back and re-dispatched review-fix and arch-review at a PR a human had
-already been asked to resolve, with your reason gone. The reason you type is the
-only thing that session inherits, so write what a human must decide.
-It lifts itself once the PR moves (a push, a review answer, undrafting), or with
-`escalation-record.cjs clear <T>`.
-
-## Phase 33 treatment measurements
-
-Phase 33 measures orchestration treatments independently. Every wait or child
-launch carries both dimensions, defaulting to `{wait_events: "baseline",
-bounded_context: "baseline"}`:
-
-```text
-baseline  → wait_events=baseline, bounded_context=baseline
-OPT-06    → wait_events=opt-06, bounded_context=baseline
-OPT-07    → wait_events=baseline, bounded_context=opt-07
-combined  → wait_events=opt-06, bounded_context=opt-07
-```
-
-The combined arm is used only after the two individual arms have usable
-evidence. Pass the selection to `wait-events.cjs` callers as `treatments` (the
-CLI equivalents are `--wait-treatment` and `--context-treatment`); pass
-the same selection to the trusted context-packet builder. A persisted wait
-record keeps the selection while pending actions remain durable. Changing an
-arm never acknowledges, drops or recreates pending work, and it never disables
-the live sentinel, review, architecture, human or integration gates.
-
-The metadata-only collector writes the append-only
-`.planning/graph/orchestration-overhead.jsonl` stream. Packet creation records
-`startup` bytes and estimated tokens. A validated `role-artifact.cjs read` with
-an evidence range records the bytes actually returned as `parent_reingestion`,
-so a large referenced file is not charged as if its complete body were
-re-ingested. Source paths and digests are retained; prompt bodies, transcripts,
-credentials and synthetic provider tokens are refused. Provider token counts
-remain unknown until supported usage evidence is joined from
-`usage-attribution.cjs`.
-
-Wait polling records `polls` separately. An unchanged poll, elapsed interval or
-wait event is never a model turn. Model responses and tool calls are counted
-only from supported usage or transcript evidence; missing evidence is unknown,
-not zero. Generate a report at an experiment boundary with the collector's
-`report()` API, then preserve the JSON beside the experiment record. The report
-must show startup, parent re-ingestion, polls, observed turns, tools, cache and
-advisor coverage, failed/interrupted work and attribution gaps. See
-`docs/audits/optimization/phase-33-protocol.md` for the fixed cohort, quality,
-rollback and seven-day defect-window gates. A fixture report cannot promote a
-treatment or claim quota savings.
-
-## Phase 34 convergence and cost measurement
-
-Phase 34 keeps review progress, escalation, capacity and optimization evidence
-separate so a cheaper path cannot silently weaken delivery gates.
-
-Before a model-axis escalation, the dispatch boundary records the host capability
-snapshot for the exact runtime, model and effort. An unsupported or unknown pair
-falls back to the preceding rung within that runtime. A repair escalation also
-requires the immediately preceding completed boundary receipt; missing evidence
-  does not earn a deeper model. The Claude runtime uses only the Anthropic palette and
-Codex uses only the OpenAI palette.
-
-When participating projects share an account, inject one capacity coordinator
-into every runtime adapter with the same `provider`, `accountScope` and durable
-store. Set `SHIPYARD_CAPACITY_STORE`, `SHIPYARD_CAPACITY_PROVIDER` and
-`SHIPYARD_CAPACITY_ACCOUNT_SCOPE` for the state projection. Leases identify the
-owner, project and agent, heartbeat during a launch, expire after a crash and
-release after the receipt. Missing scope or a store failure is reported as
-degraded and uses a bounded local fallback; it is never treated as unlimited.
+Logging is not syncing: an `attempt … outcome=pushed` or `fix_round … pushed=true`
+records a write that moved GitHub; re-run `state-sync.cjs` before the next board
+read. The log call goes in the SAME step where the fact occurred — a missed event
+is lost for good.
 
 ## Durable session handoff and cold-start recovery
 
-The delivery session may be stopped and resumed, but a checkpoint is evidence,
-not launch authority. The handoff store is derived from the real path returned by
-`git rev-parse --git-common-dir` and lives at
-`<git-common-dir>/shipyard/ownership`, so two worktrees of one repository share
-one fence. A different repository has a different store. Inspect it before
-starting work:
+The session may be stopped and resumed, but a checkpoint is evidence, not launch
+authority. The handoff store lives at `<git-common-dir>/shipyard/ownership` (the
+real path of `git rev-parse --git-common-dir`), so worktrees of one repository
+share one fence. Inspect it before starting work:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs inspect \
-  --cwd <project> --json
-```
-
-The same status surface is the delivery consumer for rotation advice. Give it
-the append-only overhead observations and, when applicable, the completed
-phase-boundary marker:
-
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs status \
-  --cwd <project> --scope-id <scope> \
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs inspect --cwd <project> --json
+node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs status --cwd <project> --scope-id <scope> \
   --overhead-file <project>/.planning/graph/orchestration-overhead.jsonl \
   --phase-boundary <phase-boundary.json> --runtime <active-runtime>
 ```
 
-`rotation_recommendation.state` is `recommend`, `not-recommended` or
-`unknown`. A recommendation contains the sample IDs, metric/unit, startup
-median, threshold and per-sample comparison. It is advisory: it never starts a
-timer, kills a process, forks or resumes a session, launches a successor,
-acknowledges ownership or dispatches work. Safe-boundary blockers remain in
-`rotation_recommendation.safety.blockers`, and the explicit manual
-checkpoint/resume/acknowledge sequence remains available.
+`rotation_recommendation.state` (`recommend`, `not-recommended`, `unknown`) is
+advisory: it never starts a timer, kills a process, forks or resumes a session or
+dispatches work. `automatic_transfer.allowed` stays false: Automatic context transfer is unavailable
+until a runtime-specific path is proven — never infer it from CLI help or a fixture. Record `checkpoint_collection`, `successor_startup` and
+`cache_warmup` as separate metadata-only overhead stages.
 
-`transfer_capability` is tied to the strict active runtime context, host
-version and the required proving-ground evidence. Until a separately reviewed
-runtime-specific path supplies fresh bounded context, a supported launch API,
-active-child enumeration, durable owner acknowledgement, application-evidence
-continuity and crash recovery, it reports `unsupported`/`unproven` with
-`automatic_transfer.allowed: false`. CLI flags, resume/fork help, a synthetic
-acknowledgement or a caller boolean cannot change that result.
-
-Record checkpoint collection, successor startup and cache warm-up as separate
-metadata-only overhead stages (`checkpoint_collection`, `successor_startup`,
-`cache_warmup`). Keep runtime, backend, policy and treatment dimensions on each
-row; missing or mixed evidence remains unknown and is excluded from savings
-claims.
-
-The current owner first writes a complete checkpoint at a safe boundary. The
-checkpoint names the repository, run/session, epoch, phase/ticket scope,
-plan/policy digests, head/base, worktrees, snapshot, pending waits/actions,
-dispatch reservations, artifact references, treatment, budgets and exact next
-action. It contains references and digests, never prompts, transcripts,
-credentials or raw artifact bodies. A dirty owned worktree, active child,
-changed head/base, missing reference, unreadable state or unresolved external
-launch blocks the transfer; an expired PID or dispatch TTL is not proof that a
-child stopped.
-
-The manual sequence is explicit and compare-and-swap fenced:
+The owner writes a complete checkpoint (references and digests, never prompts,
+transcripts or credentials) at a safe boundary. A dirty owned worktree, active
+child, changed head/base, missing reference, unreadable state or
+unresolved external launch blocks the transfer; an expired PID or dispatch TTL is
+not proof that a child stopped. The manual sequence is explicit and fenced:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs checkpoint \
-  --cwd <project> --scope-id <scope> --token <owner-token> \
-  --checkpoint-file <checkpoint.json>
+  --cwd <project> --scope-id <scope> --token <owner-token> --checkpoint-file <checkpoint.json>
 node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs resume \
-  --cwd <project> --scope-id <scope> --run-id <successor-run> \
-  --session-id <successor-session>
+  --cwd <project> --scope-id <scope> --run-id <successor-run> --session-id <successor-session>
 node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs acknowledge \
   --cwd <project> --scope-id <scope> --candidate-id <candidate> \
   --token <successor-token> --validation-file <live-validation.json>
 ```
 
-`acknowledge` requires a fresh live validation of the PR/head/base, reviews,
-checks, owned worktrees and children. Competing successors may prepare, but the
-first valid acknowledgement atomically increments the epoch and becomes the
-only owner; the predecessor is fenced and cannot return through rollback.
-`cancel-before-ack` removes a preparing successor without changing the current
-owner. Automatic context transfer is unavailable until a runtime-specific
-fresh-context launch, child enumeration and application-evidence continuity
-are proven; do not infer that capability from CLI help or a synthetic fixture.
-
-The host-held owner capability is passed through the Anthropic runtime host and Codex
-adapter closures into the same ADR-014 `resolve → validate → reserve → launch →
-application evidence → record` boundary. It is never placed in serializable
-workflow arguments, launch context, prompts or child arguments. The boundary
-also checks the canonical ownership store when a legacy-shaped caller omits the
-capability, so an existing owner cannot be bypassed by dropping the new context.
-reserves an in-flight launch under the owner epoch immediately before adapter
-invocation. A recorded receipt clears that reservation; a launch followed by a
-recording failure remains ambiguous and requires reconciliation before any
-takeover or retry.
-
-A missed event is lost forever (GitHub won't recover it), so the log call goes IN
-THE SAME step where the fact occurred, not "at the end."
+`acknowledge` needs a fresh live validation of PR/head/base, reviews, checks,
+owned worktrees and children; the first valid acknowledgement becomes the only
+owner and fences the predecessor. `cancel-before-ack` removes a preparing
+successor without touching the owner. The host-held owner capability is
+never placed in serializable workflow arguments, launch context, prompts or child
+arguments. A launch followed by a recording failure stays ambiguous: reconcile
+before any takeover or retry.
 
 ## Tracker projection — the acting half (ADR-008 D4)
 
