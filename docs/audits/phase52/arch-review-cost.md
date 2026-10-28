@@ -24,7 +24,6 @@ Digests were taken with `shasum -a 256 <path>` in the worktree.
 | `.planning/architecture/ADR-021-subscription-efficiency-per-runtime.md` | `fc64afb80278a3c9c16b3b7ceea456527c60baa5e8c6a7ea4e7bd86fc948f220` |
 | `plugins/delivery-pipeline/scripts/usage-report.cjs` | `751a4fa13e8a762bd5547502eea2bc8ee8fd0f1b326615e3e0198f2b53f232ea` |
 | `plugins/delivery-pipeline/scripts/claude-role-host.cjs` | `6a7c5283d6f85a4f01389567620ef4700c2639efd3af6382027b3cea4f366744` |
-| `docs/audits/phase52/diff-sizes.json` | `5dcd42d7f12854ce4101c3ca1906c2170260ee39980040dbd8da067d679dd55b` |
 
 ## 1. Baseline figures
 
