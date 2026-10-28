@@ -495,31 +495,46 @@ async function readSessionEvidence(startEvidence, sessionId, expectedModel, expe
   const poll = Number.isSafeInteger(options.transcriptPollMs)
     ? Math.max(1, options.transcriptPollMs) : TRANSCRIPT_POLL_MS;
   let priorStamp = '';
-  let stablePolls = 0;
-  while (now() <= deadline) {
+  let stableSince;
+  // @invariant: Inspect the terminal wake once; stability never authorizes a sleep at or beyond the deadline.
+  while (true) {
+    const sampledAt = now();
     {
       const file = transcriptPath;
       let before;
-      try { before = fs.statSync(file); }
+      try {
+        const physical = transcriptPathForEvidence(root, startEvidence.transcript_path, sessionId);
+        if (physical && physical !== file) {
+          fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript physical path changed during observation');
+        }
+        if (physical) before = fs.statSync(file);
+      }
       catch (error) {
+        if (error && error.name === 'ClaudeRuntimeHostError') throw error;
         if (!error || error.code !== 'ENOENT') fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript metadata cannot be read: ${error.message}`);
       }
+      let stamp = '';
       if (before) {
         if (before.size > TRANSCRIPT_MAX_BYTES) fail('RUNTIME_EVIDENCE_INVALID', 'Claude session transcript exceeds the evidence size limit');
-        const stamp = `${before.size}:${before.mtimeMs}`;
-        stablePolls = stamp === priorStamp ? stablePolls + 1 : 0;
-        priorStamp = stamp;
-        if (stablePolls >= 2) {
-          let bytes;
-          let after;
-          try {
-            bytes = fs.readFileSync(file);
-            after = fs.statSync(file);
-          } catch (error) {
-            if (!error || error.code !== 'ENOENT') fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript cannot be read: ${error.message}`);
+        let bytes;
+        let after;
+        try {
+          bytes = fs.readFileSync(file);
+          const physical = transcriptPathForEvidence(root, startEvidence.transcript_path, sessionId);
+          if (physical && physical !== file) {
+            fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript physical path changed during reading');
           }
-          if (bytes && after && before.size === after.size && before.mtimeMs === after.mtimeMs
-              && bytes.length === after.size) {
+          if (physical) after = fs.statSync(file);
+        } catch (error) {
+          if (error && error.name === 'ClaudeRuntimeHostError') throw error;
+          if (!error || error.code !== 'ENOENT') fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript cannot be read: ${error.message}`);
+        }
+        if (bytes && after && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(key => before[key] === after[key])
+            && bytes.length === after.size) {
+          const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+          stamp = `${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}:${after.ctimeMs}:${sha256}`;
+          if (stamp !== priorStamp) stableSince = sampledAt;
+          if (sampledAt - stableSince >= 2 * poll) {
             const selection = parseAssistantTranscript(bytes.toString('utf8'), sessionId, expectedModel, expectedEffort, expectedGsdRole);
             if (selection) {
               return Object.freeze({
@@ -527,16 +542,15 @@ async function readSessionEvidence(startEvidence, sessionId, expectedModel, expe
                 transcript: Object.freeze({
                   path: path.relative(transcriptRoot, file).split(path.sep).join('/'),
                   bytes: bytes.length,
-                  sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+                  sha256,
                 }),
               });
             }
-          } else {
-            priorStamp = '';
-            stablePolls = 0;
           }
         }
       }
+      priorStamp = stamp;
+      if (!stamp) stableSince = undefined;
     }
     if (now() >= deadline) break;
     await sleep(Math.min(poll, Math.max(1, deadline - now())));
