@@ -544,6 +544,15 @@ function bindSemantic(value, installed) {
   preparedOptions.set(value, { ...preparedOptions.get(value), ...installed });
 }
 
+function assertSemanticRequest(value, scope, request) {
+  requirePrepared(value);
+  const original = preparedOptions.get(value);
+  if (!original.semanticReview || ['ticket', 'phase', 'worktree'].some(key => scope[key] !== original.scope[key])
+      || stable(request.context) !== stable(value.launch.context) || Object.keys(request.signals).length
+      || request.gsd_role !== undefined || request.dispatch_id !== undefined && request.dispatch_id !== original.inflightDispatchId)
+    fail('semantic request differs from its private preparation', 'CODE_REVIEW_CONTEXT_REQUIRED');
+}
+
 function semanticSource(value, runtime = 'codex') {
   requirePrepared(value);
   const options = preparedOptions.get(value), prepared = value.prepared;
@@ -691,5 +700,5 @@ function finishSemantic(value, dispatch, result, recorder) {
 }
 
 module.exports = Object.freeze({ prepare, isPreparedContext, admitInstalledLaunch, recheckInstalledLaunch,
-  admittedPrompt, admittedFileInput, admitBookkeeping, authenticateLaunch, launchDigest, finish, prepareSemantic, bindSemantic, semanticSource, recheckSemantic, finishSemantic, prepareSemanticLaunch,
+  admittedPrompt, admittedFileInput, admitBookkeeping, authenticateLaunch, launchDigest, finish, prepareSemantic, bindSemantic, assertSemanticRequest, semanticSource, recheckSemantic, finishSemantic, prepareSemanticLaunch,
   isSemanticContext: value => preparedOptions.get(value)?.semanticReview === true });
