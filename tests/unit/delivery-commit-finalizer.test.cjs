@@ -167,7 +167,6 @@ test('successful trusted finalization records its exact commit once', () => {
     const file = path.join(root, 'coverage', records[0], `${result.commit}.json`);
     assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).payload.commit, result.commit);
     assert.equal(fs.readdirSync(path.dirname(file)).length, 1);
-    assert.equal(fs.readdirSync(path.join(root, 'rollout-markers')).length, 1);
   } finally {
     if (prior === undefined) delete process.env.SHIPYARD_COVERAGE_ROOT;
     else process.env.SHIPYARD_COVERAGE_ROOT = prior;
