@@ -1113,7 +1113,7 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
         || !crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex')))
       fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue authentication failed');
     payload = envelope.payload;
-  } else if (!create && requireCatalogue && readCatalogue) fail('ARCHIVE_AUTHORITY_REQUIRED', 'archive catalogue is missing; explicit trusted legacy admission is required');
+  } else if (!create && requireCatalogue && readCatalogue) fail('ARCHIVE_AUTHORITY_REQUIRED', 'archive catalogue is missing; rerun the review to seal a fresh archive');
   if (payload.schema !== 'shipyard.role-archive-catalogue.v1' || payload.worktree !== worktree || !object(payload.records))
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue identity is invalid');
   return { directory, file, key, payload };
@@ -2707,7 +2707,7 @@ function selectReviewBaseline({ currentInput, excludeDispatchId } = {}) {
   const rows = require('./architecture-target.cjs').phaseRows(JSON.parse(graphBytes), Number(current.phase), repo);
   if (stable(rows.map(([id]) => id)) !== stable([...current.ticket_set].sort()))
     return fallback('incomplete-current-phase-membership');
-  const worktrees = admissionReviewInputs.get(currentInput)?.selectionWorktrees || registeredPhaseWorktrees(current.worktree);
+  const worktrees = registeredPhaseWorktrees(current.worktree);
   if (worktrees.length > 1000) return fallback('baseline-discovery-over-bound');
   const verification = phaseSelectionVerification();
   const eligible = [], rejected = [], unresolved = [];
@@ -3285,7 +3285,7 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
   return original;
 }
 
-function authenticateCurrentCoverage({ trusted, result, evidence, identity, retained, selectionWorktrees, integrationReview }) {
+function authenticateCurrentCoverage({ trusted, result, evidence, identity, retained, integrationReview }) {
   if (result.review_contract === INTEGRATION_REVIEW_V3 || result.kind === 'unit' || result.schema === 'shipyard.integration-unit-result.v1')
     return authenticatePartitionFinal({ trusted, result, evidence, identity, integrationReview });
   const runtime = trusted.receipt.runtime_evidence;
@@ -3428,7 +3428,7 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
     authenticateArchitectureSources(subject.worktree, path.resolve(directory, '../..'), originalPacket.refs.filter(ref =>
       /^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(ref.path)));
   }
-  admissionReviewInputs.set(input, { checked: source, identity: subject, selectionWorktrees });
+  admissionReviewInputs.set(input, { checked: source, identity: subject });
   let expected;
   try {
     const selection = selectReviewBaseline({ currentInput: input, excludeDispatchId: trusted.dispatchId });
@@ -3714,7 +3714,7 @@ function originalArchitectureTicketSet(trusted, manifest, findings, evidence, id
   return binding.ticketSet;
 }
 
-function authenticatedCurrentArchive(worktree, record, manifest, findings, identity, currentBinding, selectionWorktrees, integrationReview) {
+function authenticatedCurrentArchive(worktree, record, manifest, findings, identity, currentBinding) {
   const retention = record.review_current || record.review_baseline;
   const trusted = retention?.receipt_store
     ? trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: retention.receipt_store })
@@ -3733,8 +3733,7 @@ function authenticatedCurrentArchive(worktree, record, manifest, findings, ident
   const ticketSet = originalArchitectureTicketSet(trusted, manifest, findings, evidence, identity, retention, currentBinding);
   const metadata = { ...trustedMetadata({ role: manifest.role }, trusted, identity), trusted };
   const data = judgmentResultData(findings, metadata, { phase: manifest.phase || findings.phase,
-    ticketSet: manifest.current_review && manifest.role === 'integrator'
-      ? canonicalTicketSet(findings.ticket_set, 'original current integration records') : ticketSet,
+    ticketSet,
     ticketSetDigest: manifest.ticket_set_digest, pr: manifest.pr, base: manifest.base }, identity);
   const findingBytes = readPinnedArchiveFile(worktree, manifest.files.findings, 'complete original current findings');
   if (manifest.subject !== data.subject || manifest.boundary_subject !== metadata.ticket
@@ -3743,31 +3742,9 @@ function authenticatedCurrentArchive(worktree, record, manifest, findings, ident
         evidence: { relative: manifest.files.evidence.path, content: evidence },
         findings: { relative: manifest.files.findings.path, content: findingBytes } })))
     fail('REVIEW_COVERAGE_INVALID', 'original complete current judgment envelope differs');
-  const contract = authenticateCurrentCoverage({ trusted, result: findings, evidence, identity, retained: retention, selectionWorktrees, integrationReview });
-  if (stable(manifest.integration_partition || null) !== stable(contract?.integration_partition || null))
-    partitionError('current phase manifest partition authority differs');
+  const contract = authenticateCurrentCoverage({ trusted, result: findings, evidence, identity, retained: retention });
   if (stable(contract) !== stable(manifest.current_review || null))
     fail('REVIEW_COVERAGE_INVALID', 'declared original current contract differs');
-  if (!contract && manifest.role === 'integrator' && record.receipt.runtime === 'codex') {
-    if (record.receipt.runtime_evidence?.input_transport === 'host-files' && retention?.native)
-      require('./codex-arch-review-context.cjs').validateOriginalReviewContext({ receipt: record.receipt,
-        dispatchId: record.dispatch_id, result: findings, evidence, nativePin: retention.native });
-    else {
-      const pin = record.receipt.runtime_evidence?.transcript;
-      if (!pin) fail('REVIEW_NATIVE_REQUIRED', 'original full integration evidence is missing');
-      const bytes = readImmutableFile(fs, pin.path, 'original full integration result', 128 * 1024 * 1024);
-      if (bytes.length !== pin.bytes || digest(bytes) !== pin.sha256) fail('REVIEW_NATIVE_INVALID', 'original integration stream changed');
-      const parsed = require('./codex-runtime-host.cjs').parseCodexStream(bytes.toString('utf8'));
-      if (parsed.session_id !== record.receipt.runtime_evidence.session_id)
-        fail('REVIEW_NATIVE_INVALID', 'original full integration completion differs');
-      const { result } = completedCurrentContract(parsed,
-        !!(record.receipt.runtime_evidence.completed_source || record.receipt.runtime_evidence.review_continuation));
-      const { evidence_markdown: markdown, host_context: _context, ...original } = result;
-      const { host_context: _sealed, ...sealed } = findings;
-      if (stable(original) !== stable(sealed) || markdown?.trim() !== evidence.toString('utf8').trim())
-        fail('REVIEW_NATIVE_INVALID', 'original full integration contract differs');
-    }
-  }
   if (!contract && record.receipt.runtime === 'claude') originalCurrentResponse(trusted, findings, evidence);
   return contract;
 }
@@ -3782,115 +3759,6 @@ function exactCurrentGitSubject(root, branch, head, baseName, baseCommit) {
     return (local || remote) === head && (!local || local === head) && (!remote || remote === head)
       && gitCommitIfPresent({}, root, 'refs/remotes/origin/' + baseName) === baseCommit;
   } catch { return false; }
-}
-
-function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, graphDir, headBranch, repo = null, integrationReview }) {
-  const root = fs.realpathSync(worktreePath);
-  const common = fs.realpathSync(reviewGit(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
-  const directory = graphDir || path.join(root, '.planning/graph');
-  if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning'
-      || fs.realpathSync(directory) !== path.resolve(directory)
-      || fs.realpathSync(reviewGit(path.resolve(directory, '../..'), ['rev-parse', '--path-format=absolute', '--git-common-dir'])) !== common)
-    fail('REVIEW_COVERAGE_INVALID', 'current integration graph belongs to another repository');
-  const graph = JSON.parse(readImmutableFile(fs, path.join(directory, 'tickets.json'), 'current complete graph', 8 * 1024 * 1024));
-  const phases = new Set(Object.values(graph.tickets || {}).filter(row => row.epic === headBranch && (row.repo ?? null) === repo)
-    .map(row => Number(String(row.phase).split('-')[0])));
-  if (phases.size !== 1) return null;
-  if (!exactCurrentGitSubject(root, headBranch, head, baseName, baseCommit)) return null;
-  const phase = [...phases][0], rows = require('./architecture-target.cjs').phaseRows(graph, phase, repo);
-  const ids = rows.map(([id]) => id);
-  let current = null, count = 0, catalogueBytes = 0;
-  const project = fs.realpathSync(path.resolve(directory, '../..'));
-  const phaseNames = new Set(rows.map(([, row]) => path.posix.basename(path.posix.dirname(row.plan || ''))));
-  if (phaseNames.size !== 1 || !/^\d+-[A-Za-z0-9._-]+$/.test([...phaseNames][0]))
-    fail('REVIEW_COVERAGE_INVALID', 'current integration requires one canonical phase');
-  const currentEpics = reviewGit(root, ['worktree', 'list', '--porcelain']).split('\n\n')
-    .map(block => Object.fromEntries(block.split('\n').map(line => {
-      const at = line.indexOf(' '); return at < 0 ? [line, true] : [line.slice(0, at), line.slice(at + 1)];
-    }))).filter(row => row.branch === 'refs/heads/' + headBranch && row.HEAD === head && !row.prunable);
-  if (currentEpics.length > 1000) fail('REVIEW_COVERAGE_INVALID', 'current integration worktrees exceed their bound');
-  const candidates = new Set([root, project]);
-  for (const row of currentEpics) {
-    const checkout = fs.realpathSync(row.worktree);
-    if (checkout !== path.resolve(row.worktree)
-        || fs.realpathSync(reviewGit(checkout, ['rev-parse', '--path-format=absolute', '--git-common-dir'])) !== common
-        || reviewGit(checkout, ['rev-parse', 'HEAD']) !== head
-        || reviewGit(checkout, ['symbolic-ref', '--quiet', 'HEAD']) !== 'refs/heads/' + headBranch)
-      fail('REVIEW_COVERAGE_INVALID', 'current integration checkout identity changed');
-    candidates.add(checkout);
-  }
-  for (const candidate of candidates) {
-    const worktree = fs.realpathSync(candidate);
-    if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
-    catalogueBytes += fs.lstatSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json')).size;
-    if (catalogueBytes > 16 * 1024 * 1024) fail('REVIEW_COVERAGE_INVALID', 'current integration catalogues exceed their bound');
-    const state = authorityState(worktree);
-    for (const record of Object.values(state.payload.records)) {
-      if (record.receipt?.role !== 'integrator' || record.integration_partition?.kind === 'unit') continue;
-      const recordSubject = authenticatedRecordSubject(record);
-      const subject = require('./architecture-target.cjs').parseSubject('integrator', recordSubject);
-      if (!subject || subject.phase !== [...phaseNames][0] || subject.repository !== common) continue;
-      const runtime = record.receipt.runtime_evidence;
-      const checkedInput = runtime?.input_bundle
-        ? require('./codex-arch-review-context.cjs').verifyFileInput(runtime.input_bundle, { sealed: true, historical: true }) : null;
-      if (checkedInput && (checkedInput.manifest.snapshot.repository !== common
-          || checkedInput.manifest.snapshot.head !== head || checkedInput.manifest.binding?.base !== baseCommit
-          || checkedInput.manifest.ticket !== recordSubject
-          || checkedInput.manifest.binding.ticket_set_digest !== subject.tickets
-          || stable(checkedInput.manifest.binding.ticket_set) !== stable(ids))) continue;
-
-      if (++count > 1000) fail('REVIEW_COVERAGE_INVALID', 'current integration discovery exceeds its bound');
-      const pin = record.pins.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
-      const manifest = JSON.parse(readPinnedArchiveFile(worktree, pin, 'current integration manifest'));
-      if (manifest.artifact_kind !== 'judgment' || manifest.boundary_subject !== recordSubject || manifest.subject !== recordSubject
-          || manifest.ticket_set_digest !== subject.tickets || manifest.role !== 'integrator' || manifest.head !== head || manifest.base_commit !== baseCommit
-          || manifest.repository_identity !== common || manifest.envelope?.outcome !== 'passed'
-          || manifest.base.replace(/^(?:refs\/remotes\/origin\/|origin\/)/, '') !== baseName) continue;
-      try {
-        const findings = JSON.parse(readPinnedArchiveFile(worktree, manifest.files.findings, 'current integration findings'));
-        if (stable(canonicalTicketSet(findings.ticket_set, 'complete integration membership').map(member => member.id)) !== stable(ids)) continue;
-        const identity = { worktree, repository: { root: manifest.repository_realpath, identity: common },
-          head, head_tree: reviewGit(root, ['rev-parse', head + '^{tree}']), base: manifest.base, base_commit: baseCommit,
-          base_tree: reviewGit(root, ['rev-parse', baseCommit + '^{tree}']),
-          merge_base: reviewGit(root, ['merge-base', baseCommit, head]), merge_base_tree: manifest.merge_base_tree };
-        if (reviewGit(root, ['rev-parse', identity.merge_base + '^{tree}']) !== identity.merge_base_tree) continue;
-        const contract = authenticatedCurrentArchive(worktree, record, manifest, findings, identity, undefined, [...candidates], integrationReview);
-        if (contract?.contract === INTEGRATION_REVIEW_V3) {
-          const frozen = partitionPlanRecord(worktree, contract.integration_partition.plan_sha256).plan;
-          if (stable(frozen.identity.ticket_set) !== stable(findings.ticket_set)
-              || frozen.identity.head !== head || frozen.identity.base !== baseCommit)
-            partitionError('current final differs from its original frozen subject');
-        } else if (runtime?.input_bundle) {
-          const checked = checkedInput;
-          for (const graphPin of checked.manifest.snapshot.graph) {
-            const live = path.join(directory, path.basename(graphPin.path));
-            if (digest(readImmutableFile(fs, live, 'current whole-phase membership', 8 * 1024 * 1024)) !== graphPin.sha256)
-              fail('REVIEW_COVERAGE_INVALID', 'complete current membership differs from original review');
-          }
-          const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]), verifiedReviewMaterialLimit(checked));
-          const proof = packet.role_context?.review_coverage?.complete_preflight || checked.manifest.binding?.preflight;
-          if (proof?.schema === 'shipyard.native-integration-merge-proof.v1') {
-            if (stable(checked.manifest.binding?.preflight) !== stable(proof)
-                || proof.epic.commit !== head || proof.epic.branch !== headBranch
-                || proof.repository !== common || proof.integration_base.commit !== baseCommit
-                || proof.ticket_set_digest !== subject.tickets
-                || stable(proof.ticket_set) !== stable(findings.ticket_set))
-              fail('REVIEW_COVERAGE_INVALID', 'original native merge proof association differs');
-            require('./claude-role-host.cjs').assertNativeIntegrationMergeProof(proof,
-              { worktree, graphDir: directory });
-          } else {
-            if (packet.role_context?.native_merge_proof) fail('REVIEW_COVERAGE_INVALID', 'native merge proof authority is missing');
-            for (const member of findings.ticket_set) reviewGit(root, ['merge-base', '--is-ancestor', member.head, head]);
-          }
-        } else for (const member of findings.ticket_set) reviewGit(root, ['merge-base', '--is-ancestor', member.head, head]);
-        if (reviewGit(root, ['rev-parse', 'refs/remotes/origin/' + baseName + '^{commit}']) !== baseCommit) continue;
-        current = Object.freeze({ authenticated: true, role: 'integrator', outcome: 'passed', head, base: baseName,
-          base_commit: baseCommit, subject: manifest.subject, ticket_set_digest: manifest.ticket_set_digest,
-          dispatch_id: record.dispatch_id, contract: contract?.contract || 'shipyard.integration-review.v1' });
-      } catch { return null; }
-    }
-  }
-  return exactCurrentGitSubject(root, headBranch, head, baseName, baseCommit) ? current : null;
 }
 
 function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseCommit, graphDir, headBranch, repo: requestedRepo, onCandidateRefusal }) {
@@ -6282,107 +6150,6 @@ function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest)
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive retention cannot replace authenticated historical bytes');
   state.payload.records[trusted.dispatchId] = record;
   writeArchiveCatalogue(state);
-  });
-}
-
-function validateHistoricalArchive(input, defer = false) {
-  if (!object(input) || !/^[a-f0-9]{64}$/.test(input.expectedManifestDigest || '')
-      || !/^[a-f0-9]{64}$/.test(input.expectedReceiptDigest || '')
-      || !Array.isArray(input.expectedArchivePins) || input.expectedArchivePins.length !== 3)
-    fail('ARCHIVE_ADMISSION_REQUIRED', 'trusted legacy admission requires retained manifest, receipt and all three archive identities');
-  const worktree = fs.realpathSync(input.worktreePath), trusted = trustedRecord(input);
-  if (!['codex', 'claude'].includes(trusted.receipt.runtime) || digest(Buffer.from(stable(trusted.receipt))) !== input.expectedReceiptDigest)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'retained original runtime receipt identity differs from authenticated record');
-  const manifestPath = archivePath(worktree, trusted.dispatchId, MANIFEST_NAME, 'historical manifest');
-  const manifestPin = input.expectedArchivePins.find(pin => pin.path === path.relative(worktree, manifestPath));
-  if (!manifestPin || manifestPin.sha256 !== input.expectedManifestDigest)
-    fail('ARCHIVE_ADMISSION_REQUIRED', 'independently retained complete manifest pin is required');
-  const manifestBytes = readPinnedArchiveFile(worktree, manifestPin, 'historical manifest');
-  if (digest(manifestBytes) !== input.expectedManifestDigest)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'historical manifest differs from independently retained digest');
-  const manifest = JSON.parse(manifestBytes);
-  if (manifest.schema !== ROLE_ARTIFACT_SCHEMA || manifest.version !== ENVELOPE_VERSION)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'historical manifest schema is invalid');
-  for (const [field, expected] of [
-    ['producer_dispatch', trusted.dispatchId], ['producer_dispatch_id', trusted.dispatchId],
-    ['dispatch_id', trusted.dispatchId], ['producer_launch', trusted.receipt.launch_id],
-    ['runtime', trusted.receipt.runtime], ['role', trusted.receipt.role],
-    ['worktree', worktree], ['worktree_realpath', worktree], ['policy_hash', trusted.receipt.policy_hash],
-  ]) manifestValue(manifest, field, expected);
-  verifyDispatchContext(manifest, trusted);
-  const ticket = trusted.record.ticket || trusted.record.trace?.ticket;
-  manifestValue(manifest, manifest.artifact_kind === 'judgment' ? 'boundary_subject' : 'ticket', ticket);
-  const role = trusted.receipt.role;
-  const evidenceName = JUDGMENT_ROLES.has(role) ? JUDGMENT_EVIDENCE_NAMES[role] : producerEvidenceName(role);
-  const reference = (name, declared, label) => {
-    const expected = archiveRelative(trusted.dispatchId, name);
-    const pin = input.expectedArchivePins.find(candidate => candidate.path === expected);
-    if (!pin || !object(declared) || declared.path !== expected || declared.sha256 !== pin.sha256 || declared.bytes !== pin.bytes)
-      fail('ARCHIVE_ADMISSION_REQUIRED', 'independently retained complete ' + label + ' pin is required');
-    const content = readPinnedArchiveFile(worktree, pin, label);
-    return { ...pin, content };
-  };
-  const evidence = reference(evidenceName, manifest.files?.evidence, 'historical evidence');
-  const findings = reference(FINDINGS_NAME, manifest.files?.findings, 'historical findings');
-  for (const [commit, tree, label] of [
-    [manifest.head, manifest.head_tree, 'historical head'],
-    [manifest.base_commit, manifest.base_tree, 'historical base'],
-  ]) if (gitObjectIdentity(input, worktree, sha(commit, label), label).tree !== tree)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'historical git object differs from retained manifest');
-  const pins = [
-    { path: path.relative(worktree, manifestPath), sha256: input.expectedManifestDigest, bytes: manifestBytes.length },
-    { path: manifest.files.evidence.path, sha256: evidence.sha256, bytes: evidence.bytes },
-    { path: manifest.files.findings.path, sha256: findings.sha256, bytes: findings.bytes },
-  ];
-  const ordered = values => values.map(pin => ({ path: pin.path, sha256: pin.sha256, bytes: pin.bytes }))
-    .sort((a, b) => a.path.localeCompare(b.path));
-  if (stable(ordered(pins)) !== stable(ordered(input.expectedArchivePins)))
-    fail('ARCHIVE_AUTHORITY_INVALID', 'historical complete bytes differ from independently retained pins');
-  let previous = [];
-  if (fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) {
-    const { payload } = authorityState(worktree);
-    previous = Object.values(payload.records).flatMap(record => record.pins);
-    for (const pin of previous) readPinnedArchiveFile(worktree, pin, 'existing authenticated historical archive');
-  }
-  const expectedInventory = [...new Set([...previous, ...pins].map(pin => pin.path))].sort();
-  if (!defer && stable(archiveInventory(worktree)) !== stable(expectedInventory))
-    fail('ARCHIVE_AUTHORITY_INVALID', 'trusted historical admission refuses unknown archive membership');
-  if (trusted.receipt.role === 'arch-review' && trusted.receipt.runtime === 'codex')
-    require('./codex-arch-review-context.cjs').validateHistoricalContext({ result: JSON.parse(findings.content),
-      receipt: trusted.receipt, dispatchId: trusted.dispatchId, evidence: evidence.content });
-  if (defer) return { worktree, trusted, manifestPath, pins, digest: input.expectedManifestDigest };
-  retainArchiveAuthority(worktree, trusted, manifestPath, input.expectedManifestDigest);
-  authenticatedArchivePins(worktree);
-  return Object.freeze({ worktree, dispatch_id: trusted.dispatchId,
-    manifest_digest: input.expectedManifestDigest, admitted_paths: pins.map(pin => pin.path) });
-}
-
-function admitHistoricalArchive(input) {
-  const worktree = fs.realpathSync(input.worktreePath);
-  return withArchiveAuthorityLock(worktree, () => {
-    if (!Array.isArray(input.archives)) return validateHistoricalArchive(input);
-    if (!input.archives.length || input.archives.length > 1000)
-      fail('ARCHIVE_ADMISSION_REQUIRED', 'bounded complete historical archive inventory is required');
-    const admissions = input.archives.map(archive => validateHistoricalArchive({ ...input, ...archive, worktreePath: worktree }, true));
-    if (new Set(admissions.map(item => item.trusted.dispatchId)).size !== admissions.length)
-      fail('ARCHIVE_AUTHORITY_INVALID', 'historical batch has duplicate dispatch identities');
-    const state = authorityState(worktree, true);
-    const prior = Object.values(state.payload.records).flatMap(record => record.pins);
-    const expected = [...new Set([...prior, ...admissions.flatMap(item => item.pins)].map(pin => pin.path))].sort();
-    if (stable(archiveInventory(worktree)) !== stable(expected))
-      fail('ARCHIVE_AUTHORITY_INVALID', 'trusted historical admission refuses unknown archive membership');
-    for (const item of admissions) {
-      const findings = JSON.parse(readPinnedArchiveFile(worktree, item.pins.find(pin => pin.path.endsWith('/' + FINDINGS_NAME)), 'historical batch findings'));
-      const bookkeeping = item.trusted.receipt.role === 'arch-review' ? findings.host_context?.bookkeeping || [] : [];
-      const record = { dispatch_id: item.trusted.dispatchId, receipt: item.trusted.receipt, pins: item.pins, bookkeeping };
-      if (state.payload.records[item.trusted.dispatchId] && stable(state.payload.records[item.trusted.dispatchId]) !== stable(record))
-        fail('ARCHIVE_AUTHORITY_INVALID', 'historical batch cannot replace authenticated original bytes');
-      state.payload.records[item.trusted.dispatchId] = record;
-      if (bookkeeping.length) state.payload.latest_bookkeeping = bookkeeping;
-    }
-    writeArchiveCatalogue(state);
-    authenticatedArchivePins(worktree);
-    return Object.freeze({ worktree, admitted_paths: expected });
   });
 }
 
@@ -9098,11 +8865,6 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   REPAIR_EVIDENCE_NAME,
   DRIFT_EVIDENCE_NAME,
   ARTIFACT_ARCHIVE_DIR,
-  FINDINGS_NAME,
-  REPAIR_ENVELOPE_SCHEMA,
-  DRIFT_ENVELOPE_SCHEMA,
-  JUDGMENT_ENVELOPE_SCHEMA,
-  JUDGMENT_EVIDENCE_NAMES,
   isAuthenticatedCompletedSource,
   recordReviewSourceAttempt,
   readReviewSourceAttempts,
@@ -9149,7 +8911,6 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   currentCodeReviewVerdict,
   codeReviewPlanningReference,
   priorCodeReviewVerdicts,
-  currentIntegrationVerdict,
   prepareCurrentReviewInput,
   phaseArchitectureEvidence,
   phaseArchitectureEvidenceDigest,
@@ -9163,19 +8924,14 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   LEGACY_BOOKKEEPING_VERSION,
   LEGACY_STATUS,
   trustedBookkeepingMutation,
-  admitHistoricalArchive,
   prepareRoleArtifact,
   sealRole,
   sealJudgment,
   validateJudgmentManifest,
   validateRole,
-  readRole: readRole,
   seal,
   validate,
   read,
-  sealRoleArtifact: seal,
-  validateRoleArtifact: validate,
-  readRoleArtifact: read,
 }));
 
 if (require.main === module) {

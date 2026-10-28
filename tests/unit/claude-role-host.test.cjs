@@ -221,8 +221,7 @@ test(`${kind} coordinator input seals captured native bytes and reads its curren
         artifactDigest: result.artifact.digest }).envelope.outcome, 'passed');
       return;
     }
-    const current = kind === 'code-review' ? reviewArtifacts.currentCodeReviewVerdict(input)
-      : reviewArtifacts.currentIntegrationVerdict(input);
+    const current = reviewArtifacts.currentCodeReviewVerdict(input);
     assert.equal(current?.dispatch_id, result.dispatch.receipt.dispatch_id);
   } catch (error) { console.error(error.stack); throw error; }
   finally { cleanupFixture(f); }

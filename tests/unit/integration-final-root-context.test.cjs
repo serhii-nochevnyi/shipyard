@@ -16,10 +16,10 @@ try {
     return name === 'node:test' ? { test() {} } : originalLoad.call(this, name, ...args);
   };
   loaded._compile(fs.readFileSync(owner, 'utf8')
-    + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, originalPartitionSessions };', owner);
+    + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, originalPartitionSessions };', owner);
 } finally { Module._load = originalLoad; }
 const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller,
-  currentPartitionConsumer, originalPartitionSessions } = loaded.exports;
+  originalPartitionSessions } = loaded.exports;
 const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
 const runtimeHost = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -127,17 +127,13 @@ async function rootCase(nativeRuntime, fields, refusal) {
       return unit.session;
     });
     assert.equal(new Set([...sessions, final.session]).size, sessions.length + 1);
-    const current = currentPartitionConsumer(f);
     if (refusal) {
-      assert.equal(current, null);
       const manifests = authority.authenticatedArchivePins(f.worktree)
         .filter(pin => pin.path.endsWith('/.shipyard-role-artifact.json'))
         .map(pin => JSON.parse(fs.readFileSync(path.join(f.worktree, pin.path))));
       assert.equal(manifests.filter(manifest => manifest.integration_partition?.kind === 'phase').length, 0);
       assert.equal(manifests.filter(manifest => manifest.artifact_kind === 'integration-unit').length, index.entries.length);
     } else {
-      assert.equal(current?.authenticated, true);
-      assert.equal(current.dispatch_id, final.receipt.dispatch_id);
       for (const field of ['limitations', 'required_context']) {
         assert.equal(Object.hasOwn(final.result, field), Object.hasOwn(fields, field));
         if (Object.hasOwn(fields, field)) assert.deepEqual(final.result[field], fields[field]);

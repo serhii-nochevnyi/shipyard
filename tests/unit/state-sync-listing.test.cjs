@@ -637,18 +637,16 @@ test('foreign ticket and epic architecture consumers use planning root and refus
     const frontModule = path.join(path.dirname(SCRIPT),'front.cjs');
     fs.writeFileSync(preload, `const fs=require('fs'),target=${JSON.stringify(artifactModule)};
 const original=require(target);
-const observe=(role,input)=>{fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({role,input})+'\\n');return role==='integration'&&input.pr===401&&process.env.STATE_SYNC_INTEGRATION_MISSING==='1'?null:{authenticated:true,verdict:'conform',pr:input.pr,head:input.head,fixture_role:role};};
-require.cache[require.resolve(target)].exports={...original,currentArchitectureVerdict:input=>observe('architecture',input),currentIntegrationVerdict:input=>observe('integration',input)};
+const observe=(role,input)=>{fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({role,input})+'\\n');return {authenticated:true,verdict:'conform',pr:input.pr,head:input.head,fixture_role:role};};
+require.cache[require.resolve(target)].exports={...original,currentArchitectureVerdict:input=>observe('architecture',input)};
 const frontTarget=${JSON.stringify(frontModule)},front=require(frontTarget);
 require.cache[require.resolve(frontTarget)].exports={...front,computeFront:(...args)=>{fs.writeFileSync(${JSON.stringify(epicObserved)},JSON.stringify(args[2].epics));return front.computeFront(...args);}};`);
-    const env = {NODE_OPTIONS:'--require='+preload,STATE_SYNC_INTEGRATION_MISSING:'0'};
+    const env = {NODE_OPTIONS:'--require='+preload};
     const result = run(f,[],env);
     assert.equal(result.status,0,result.stderr);
     const observations = () => fs.readFileSync(observed,'utf8').trim().split('\n').map(JSON.parse);
     const inputs = observations();
-    for (const role of ['architecture','integration']) {
-      assert.deepEqual(inputs.filter(call=>call.role===role).map(({input})=>input.pr).sort(),[399,401]);
-    }
+    assert.deepEqual(inputs.map(({input})=>input.pr).sort(),[399,401]);
     for (const {input} of inputs) {
       assert.equal(input.worktreePath,fs.realpathSync(f.root));
       assert.equal(input.graphDir,fs.realpathSync(f.graphDir));
@@ -660,10 +658,7 @@ require.cache[require.resolve(frontTarget)].exports={...front,computeFront:(...a
     }
     const epicObservation = () => Object.values(JSON.parse(fs.readFileSync(epicObserved)))[0];
     const assertRoles = (entry,number) => {
-      for (const role of ['architecture','integration']) {
-        assert.deepEqual(entry['authenticated_'+role],{authenticated:true,verdict:'conform',pr:number,head:'b'.repeat(40),fixture_role:role});
-      }
-      assert.deepEqual(entry.review_owed,{architecture:false,integration:false});
+      assert.deepEqual(entry.authenticated_architecture,{authenticated:true,verdict:'conform',pr:number,head:'b'.repeat(40),fixture_role:'architecture'});
     };
     assertRoles(state(f)[TICKET],401);
     assertRoles(epicObservation(),399);
@@ -675,27 +670,15 @@ require.cache[require.resolve(frontTarget)].exports={...front,computeFront:(...a
       assert.equal(views.filter(args=>args[2]===number).length,2);
     }
     fs.unlinkSync(observed);
-    const unavailableRole = run(f,[],{...env,STATE_SYNC_INTEGRATION_MISSING:'1'});
-    assert.equal(unavailableRole.status,0,unavailableRole.stderr);
-    for (const role of ['architecture','integration']) {
-      assert.deepEqual(observations().filter(call=>call.role===role).map(({input})=>input.pr).sort(),[399,401]);
-    }
-    assert.equal(state(f)[TICKET].authenticated_architecture.authenticated,true);
-    assert.equal(state(f)[TICKET].authenticated_integration,null);
-    assert.deepEqual(state(f)[TICKET].review_owed,{architecture:false,integration:true});
-    assertRoles(epicObservation(),399);
-    fs.unlinkSync(observed);
     const responses = JSON.parse(fs.readFileSync(f.responseFile));
     responses.view['401'] = {...ticketPr,headRefOid:'d'.repeat(40)};
     fs.writeFileSync(f.responseFile,JSON.stringify(responses));
     const moved = run(f,[],env);
     assert.equal(moved.status,0,moved.stderr);
     const movedInputs = observations().filter(({input})=>input.pr===401);
-    assert.deepEqual(movedInputs.map(({role})=>role),['architecture','integration']);
+    assert.deepEqual(movedInputs.map(({role})=>role),['architecture']);
     for (const {input} of movedInputs) assert.equal(input.head,'d'.repeat(40));
     assert.equal(state(f)[TICKET].authenticated_architecture,null);
-    assert.equal(state(f)[TICKET].authenticated_integration,null);
-    assert.deepEqual(state(f)[TICKET].review_owed,{architecture:true,integration:true});
     assertRoles(epicObservation(),399);
     responses.view['401'] = ticketPr;
     fs.writeFileSync(f.responseFile,JSON.stringify(responses));
@@ -725,11 +708,7 @@ require.cache[require.resolve(frontTarget)].exports={...front,computeFront:(...a
     assert.equal(missing.status,0,missing.stderr);
     assert.equal(fs.existsSync(observed),false);
     assert.equal(state(f)[TICKET].authenticated_architecture,null);
-    assert.equal(state(f)[TICKET].authenticated_integration,null);
-    assert.deepEqual(state(f)[TICKET].review_owed,{architecture:true,integration:true});
     assert.equal(epicObservation().authenticated_architecture,null);
-    assert.equal(epicObservation().authenticated_integration,null);
-    assert.deepEqual(epicObservation().review_owed,{architecture:true,integration:true});
     assert.match(missing.stdout,/track-only/);
   } finally {
     fs.rmSync(foreign,{recursive:true,force:true});

@@ -13,10 +13,10 @@ try {
   Module._load = function(name, ...args) {
     return name === 'node:test' ? { test() {} } : originalLoad.call(this, name, ...args);
   };
-  loaded._compile(fs.readFileSync(owner, 'utf8') + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, originalPartitionSessions, projectOptions, write, commit, codexIngressGeometry };', owner);
+  loaded._compile(fs.readFileSync(owner, 'utf8') + '\nmodule.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, originalPartitionSessions, projectOptions, write, commit, codexIngressGeometry };', owner);
 } finally { Module._load = originalLoad; }
 const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller,
-  currentPartitionConsumer, originalPartitionSessions, projectOptions, write, commit, codexIngressGeometry } = loaded.exports;
+  originalPartitionSessions, projectOptions, write, commit, codexIngressGeometry } = loaded.exports;
 const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
 const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
 
@@ -246,35 +246,6 @@ test('pure legacy fallback preserves list and detail refusal and independent-pas
 });
 
 for (const runtime of ['codex', 'claude']) {
-  test('behavior ' + runtime + ' default cold consumer authenticates with unchanged legacy gh fixture', async () => {
-    await publicIntegrationFixture(async f => {
-      const prepared = publicPartitionFixture(f, runtime, { observed: true });
-      assert.equal((await supportedPartitionCaller(f, runtime, prepared.options)).result.outcome, 'passed');
-      const verify = host.assertNativeIntegrationMergeProof;
-      const originalProofLoad = Module._load;
-      let defaultChecks = 0;
-      try {
-        const observedHost = { ...host, assertNativeIntegrationMergeProof(proof, input, ...options) {
-          assert.ok(options.length <= 1);
-          assert.deepEqual(options[0] || {}, {});
-          defaultChecks++;
-          return verify(proof, input, ...options);
-        } };
-        Module._load = function(...args) {
-          const value = originalProofLoad.apply(this, args);
-          return value === host ? observedHost : value;
-        };
-        const current = currentPartitionConsumer(f);
-        assert.equal(current?.authenticated, true);
-        assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
-      } finally { Module._load = originalProofLoad; }
-      assert.ok(defaultChecks >= 2);
-      const sessions = originalPartitionSessions(f, runtime, prepared.recorder, prepared.controls);
-      assert.equal(sessions.filter(session => session.result.kind === 'phase').length, 1);
-      fs.appendFileSync(sessions[0].pin.path, '{}\n');
-      assert.equal(currentPartitionConsumer(f), null);
-    });
-  });
   for (const mode of ['strict', 'observed', 'compact']) test('behavior ' + runtime + ' ordered ' + mode + ' original custody and independent final', async () => {
     await publicIntegrationFixture(async f => {
       const observed = mode !== 'strict';
@@ -283,7 +254,6 @@ for (const runtime of ['codex', 'claude']) {
       const events = [];
       prepared.controls.onLaunch = (_input, payload) => {
         events.push({ kind: payload.kind, unit: payload.unit_id });
-        assert.equal(currentPartitionConsumer(f), null);
         const envelopes = fs.readdirSync(authority.archiveAuthorityDirectory(f.worktree))
           .filter(name => name.startsWith('integration-launch-'))
           .map(name => JSON.parse(fs.readFileSync(path.join(authority.archiveAuthorityDirectory(f.worktree), name))).payload)
@@ -311,9 +281,6 @@ for (const runtime of ['codex', 'claude']) {
       assert.equal((await supportedPartitionCaller(f, runtime, prepared.options)).result.outcome, 'passed');
       const sessions = originalPartitionSessions(f, runtime, prepared.recorder, prepared.controls);
       assert.equal(sessions.filter(session => session.result.kind === 'phase').length, 1);
-      assert.equal(currentPartitionConsumer(f)?.authenticated, true);
-      fs.appendFileSync(sessions[0].pin.path, '{}\n');
-      assert.equal(currentPartitionConsumer(f), null);
     });
   });
   for (const outcome of ['failed', 'incomplete', 'context']) test('behavior ' + runtime + ' late ' + outcome + ' prevents final', async () => {
@@ -330,7 +297,6 @@ for (const runtime of ['codex', 'claude']) {
       await assert.rejects(supportedPartitionCaller(f, runtime, prepared.options));
       assert.equal(units, 2);
       assert.equal(prepared.controls.launches.some(launch => launch.payload.kind === 'phase'), false);
-      assert.equal(currentPartitionConsumer(f), null);
     });
   });
   for (const boundary of ['source', 'graph', 'PLAN', 'metadata', 'head']) test('behavior ' + runtime + ' fresh post-unit ' + boundary + ' drift refuses final', async () => {
@@ -352,7 +318,6 @@ for (const runtime of ['codex', 'claude']) {
       await assert.rejects(supportedPartitionCaller(f, runtime, prepared.options));
       assert.equal(changed, true);
       assert.equal(prepared.controls.launches.some(launch => launch.payload.kind === 'phase'), false);
-      assert.equal(currentPartitionConsumer(f), null);
     });
   });
 }

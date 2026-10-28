@@ -18,7 +18,7 @@ const shards = require('./shard-files.cjs');
 const counts = [1, 1, 19, 19, 24, 21];
 const taskKeys = [1, 2, 3, 4, 5, 6].map(number => ownerName + '#integration-partition=' + number);
 const suffixAnchor = "const assert = require('node:assert/strict');";
-const suffixDigest = 'cb5dfeae2cefef24904aec36b41eaa544524d40fe062fe180d9bc59de21aae55';
+const suffixDigest = '74e568cb47742eb297bb49ba093880f457f54f1e335642cd37a4dc9f161aac3d';
 assert.equal(crypto.createHash('sha256').update(source.slice(source.indexOf(suffixAnchor))).digest('hex'), suffixDigest);
 function discover(args = []) {
   const result = spawnSync(process.execPath, [owner, '--list-integration-tests', ...args], {
@@ -130,10 +130,10 @@ test('imported fixture-source extraction ignores the importing process applicati
   };
   try {
     process.argv = [process.execPath, 'importing-owner.cjs', '--unknown', '--integration-partition=99'];
-    loaded._compile(source + '\nmodule.exports = { fixture, publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, originalPartitionSessions };\n', owner);
+    loaded._compile(source + '\nmodule.exports = { fixture, publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, originalPartitionSessions };\n', owner);
   } finally { Module._load = originalLoad; process.argv = originalArgv; }
   assert.deepEqual(registered.map(item => item.name), discover());
-  assert.equal(Object.keys(loaded.exports).length, 6);
+  assert.equal(Object.keys(loaded.exports).length, 5);
   for (const helper of Object.values(loaded.exports)) assert.equal(typeof helper, 'function');
   const original = capture();
   for (const item of registered)

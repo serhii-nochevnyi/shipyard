@@ -1086,38 +1086,6 @@ test('trusted bookkeeping updates remain mutable while changed bytes and unknown
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('complete multi-archive Claude legacy admission is atomic and rejects unknown physical members', () => {
-  const crypto = require('node:crypto');
-  const stable = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
-    : Array.isArray(value) ? '[' + value.map(stable).join(',') + ']'
-    : '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}';
-  const sha = content => crypto.createHash('sha256').update(content).digest('hex');
-  const value = judgmentFixture('T-47-14-multi-archive');
-  try {
-    const first = sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 }));
-    const firstId = value.dispatch.receipt.dispatch_id;
-    const firstReceipt = value.recorder.getVerifiedRecord(firstId).receipt;
-    const boundary = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } }, recorder: value.recorder });
-    value.dispatch = boundary.dispatch({ runtime: 'claude', role: 'arch-review', signals: {} }, { ticket: value.ticket });
-    const second = sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 }));
-    const pins = roleArtifact.authenticatedArchivePins(value.root);
-    const archives = [[first, firstId, firstReceipt], [second, value.dispatch.receipt.dispatch_id, value.dispatch.receipt]].map(([sealed, dispatchId, receipt]) => ({
-      dispatchId, recorder: value.recorder, expectedManifestDigest: sealed.artifact_digest,
-      expectedReceiptDigest: sha(stable(receipt)), expectedArchivePins: pins.filter(pin => pin.path.startsWith(path.relative(fs.realpathSync(value.root), path.dirname(sealed.artifact_ref)) + '/')),
-    }));
-    assert.deepEqual(archives.map(archive => archive.expectedArchivePins.length), [3, 3]);
-    fs.rmSync(roleArtifact.archiveAuthorityDirectory(value.root), { recursive: true, force: true });
-    const unknown = path.join(value.root, '.shipyard-role-artifacts', 'unknown.log');
-    fs.writeFileSync(unknown, 'unknown');
-    assert.throws(() => roleArtifact.admitHistoricalArchive({ worktreePath: value.root, archives }), /unknown archive membership/);
-    const catalogue = path.join(roleArtifact.archiveAuthorityDirectory(value.root), 'catalogue.json');
-    assert.equal(fs.existsSync(catalogue), false);
-    fs.unlinkSync(unknown);
-    roleArtifact.admitHistoricalArchive({ worktreePath: value.root, archives });
-    assert.deepEqual(roleArtifact.authenticatedArchivePins(value.root), pins);
-  } finally { clean(value); }
-});
-
 test('live catalogue lock timeout never invokes a writer or changes retained bytes', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-live-archive-lock-'));
   const store = path.join(root, '.planning/graph/dispatches.json');
@@ -2236,25 +2204,6 @@ test('focused completeness and subject declarations fail closed without consumpt
 });
 
 
-for (const corrupt of [false, true]) test('current integration excludes foreign catalogue before authority reads: ' + corrupt, () => {
-  const value = phaseScopeFixture({ second: true });
-  const read = fs.readFileSync;
-  try {
-    const foreign = path.join(roleArtifact.archiveAuthorityDirectory(fs.realpathSync(value.second)), 'catalogue.json');
-    if (corrupt) fs.writeFileSync(foreign, 'corrupt foreign catalogue'.repeat(800000));
-    let opened = 0;
-    fs.readFileSync = function(file, ...args) {
-      if (String(file) === foreign) { opened++; throw new Error('foreign catalogue must not be opened'); }
-      return read.call(this, file, ...args);
-    };
-    const head = git(value.root, ['rev-parse', 'HEAD']);
-    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: value.root, head,
-      baseName: 'main', baseCommit: git(value.root, ['rev-parse', 'main']),
-      graphDir: value.input.graphDir, headBranch: 'epic/47-scope' }), null);
-    assert.equal(opened, 0);
-  } finally { fs.readFileSync = read; cleanPhaseScope(value); }
-});
-
 for (const runtime of ['codex', 'claude']) test('aggregate original subject reconciles retained and legacy ' + runtime, () => {
   const value = judgmentFixture();
   try {
@@ -2399,7 +2348,7 @@ test('role-artifact holds no private subject grammar or home expression', () => 
   assert.ok(!/process\.env\.CLAUDE_CONFIG_DIR/.test(source), 'the Claude home has one resolver');
   assert.ok(!/'\.codex'/.test(source) && !/'\.claude'/.test(source), 'no private home fallback');
   assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 8, 'definition plus the architecture and code-review phase-record sites and authenticated lineage readers');
-  assert.equal((source.match(/parseSubject\('integrator'/g) || []).length >= 3, true);
+  assert.equal((source.match(/parseSubject\('integrator'/g) || []).length >= 2, true);
   assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 3);
   assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 3,
     'all three Codex session sites follow the executing bundle like every converted site');
@@ -3444,8 +3393,6 @@ test('D-32 frozen full inventory, protected unit custody, restart and independen
     const priorBytes = fs.readFileSync(prior.artifact); fs.appendFileSync(prior.artifact, ' ');
     assert.throws(() => roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'changed-history' }), /archive|bytes|digest|pin/i);
     fs.writeFileSync(prior.artifact, priorBytes);
-    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
-      graphDir: f.graphDir, headBranch: f.pr.headRefName, integrationReview: review }), null, 'indexed units cannot become a current phase verdict');
     const aggregate = roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'partition-final-' + ++f.count });
     assert.throws(() => roleArtifact.assertIntegrationAdmission({ prepared: aggregate }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
     assert.ok(!aggregate.input.includes(longSource), 'final carries bounded conclusions and governing/acceptance, not whole raw product sources');
@@ -3477,25 +3424,6 @@ test('D-32 frozen full inventory, protected unit custody, restart and independen
     const sealedFinal = roleArtifact.sealJudgment(finalArgs);
     const validated = roleArtifact.validateJudgmentManifest({ ...finalArgs, artifactPath: sealedFinal.artifact_ref, artifactDigest: sealedFinal.artifact_digest });
     assert.equal(validated.manifest.integration_partition.kind, 'phase');
-    const currentArgs = { worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
-      graphDir: f.graphDir, headBranch: f.pr.headRefName, integrationReview: review };
-    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs)?.authenticated, true);
-    const installed = path.join(original.a.dir, original.a.selection.agent_file), installedBytes = fs.readFileSync(installed);
-    fs.appendFileSync(installed, '\n# changed after final\n');
-    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs), null);
-    fs.writeFileSync(installed, installedBytes);
-    const planPath = path.join(f.worktree, f.rows['T-49-01'].plan), acceptedBytes = fs.readFileSync(planPath);
-    fs.appendFileSync(planPath, '\n- Changed acceptance without moving source HEAD.\n');
-    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs), null);
-    fs.writeFileSync(planPath, acceptedBytes);
-    const graphFile = path.join(f.graphDir, 'tickets.json'), graphBytes = fs.readFileSync(graphFile);
-    const movedGraph = JSON.parse(graphBytes); delete movedGraph.tickets['T-49-02'];
-    fs.writeFileSync(graphFile, JSON.stringify(movedGraph));
-    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs), null);
-    fs.writeFileSync(graphFile, graphBytes);
-    git(f.worktree, ['update-ref', 'refs/remotes/origin/main', f.head]);
-    assert.equal(roleArtifact.currentIntegrationVerdict(currentArgs), null);
-    git(f.worktree, ['update-ref', 'refs/remotes/origin/main', f.base]);
     assert.deepEqual(fs.readFileSync(planFile), originalPlanBytes);
   });
 });
@@ -3633,8 +3561,6 @@ test('D-32 Claude admits independent behavior-only non-model evidence and retain
     const sealed = roleArtifact.sealJudgment(args);
     assert.equal(roleArtifact.validateJudgmentManifest({ ...args, artifactPath: sealed.artifact_ref,
       artifactDigest: sealed.artifact_digest }).manifest.integration_partition.kind, 'phase');
-    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
-      graphDir: f.graphDir, headBranch: f.pr.headRefName, integrationReview: original.review })?.authenticated, true);
   });
 });
 

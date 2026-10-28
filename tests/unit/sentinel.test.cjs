@@ -679,15 +679,15 @@ test('foreign integration lookup uses planning Git identity and keeps checkout a
   const artifactModule = path.join(path.dirname(SENTINEL),'role-artifact.cjs');
   fs.writeFileSync(preload, `const fs=require('fs'),target=${JSON.stringify(artifactModule)};
 const original=require(target);
-const observe=(role,input)=>{fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({role,input})+'\\n');return role==='integration'||process.env.STUB_ARCHITECTURE_MISSING==='1'?null:{authenticated:true,verdict:'conform'};};
-require.cache[require.resolve(target)].exports={...original,currentArchitectureVerdict:input=>observe('architecture',input),currentIntegrationVerdict:input=>observe('integration',input)};`);
+const observe=(role,input)=>{fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({role,input})+'\\n');return process.env.STUB_ARCHITECTURE_MISSING==='1'?null:{authenticated:true,verdict:'conform'};};
+require.cache[require.resolve(target)].exports={...original,currentArchitectureVerdict:input=>observe('architecture',input)};`);
   const env = onPath(stubGh(), {STUB_BASE:'main',STUB_BASE_OID:'c'.repeat(40),STUB_HEAD:'ticket/T-FR',STUB_PR:'9',STUB_HEAD_OID:'a'.repeat(40),STUB_ARCHITECTURE_MISSING:'0',NODE_OPTIONS:'--require=' + preload});
   const result = run(root,['merge','T-FR','--json','--dry-run'],{env});
   assert.strictEqual(result.status,0,result.stderr);
   assert.ok(fs.existsSync(observed),result.stdout);
   const observations = () => fs.readFileSync(observed,'utf8').trim().split('\n').map(JSON.parse);
   const inputs = observations();
-  assert.deepStrictEqual(inputs.map(({role})=>role),['architecture','integration']);
+  assert.deepStrictEqual(inputs.map(({role})=>role),['architecture']);
   for (const {input} of inputs) {
     assert.strictEqual(input.worktreePath,fs.realpathSync(root));
     assert.strictEqual(input.repo,repo);
@@ -705,7 +705,7 @@ require.cache[require.resolve(target)].exports={...original,currentArchitectureV
   fs.unlinkSync(observed);
   const unavailableRole = run(root,['merge','T-FR','--json','--dry-run'],{env:{...env,STUB_ARCHITECTURE_MISSING:'1'}});
   assert.strictEqual(unavailableRole.status,0,unavailableRole.stderr);
-  assert.deepStrictEqual(observations().map(({role})=>role),['architecture','integration']);
+  assert.deepStrictEqual(observations().map(({role})=>role),['architecture']);
   const roleRow = JSON.parse(unavailableRole.stdout).results[0];
   assert.strictEqual(roleRow.merged,false);
   assert.strictEqual(roleRow.would_merge,undefined);

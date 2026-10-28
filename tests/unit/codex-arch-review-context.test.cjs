@@ -1310,62 +1310,6 @@ test('a linked canonical graph preserves default board refresh during architectu
   }
 });
 
-function stableReceiptDigest(receipt) {
-  const canonical = value => Array.isArray(value) ? value.map(canonical)
-    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-  return require('node:crypto').createHash('sha256').update(JSON.stringify(canonical(receipt))).digest('hex');
-}
-
-async function legacyAdmissionFixture(f) {
-  const first = await require('./helpers/codex-arch-review-fixtures.cjs').legacyUnitJudgment(f);
-  const artifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-  const admission = { worktreePath: f.root, recorder: first.recorder, dispatchId: first.result.receipt.dispatch_id,
-    expectedManifestDigest: first.result.artifact.digest,
-    expectedReceiptDigest: stableReceiptDigest(first.result.receipt),
-    expectedArchivePins: structuredClone(artifacts.authenticatedArchivePins(f.root)) };
-  const preserved = admission.expectedArchivePins.map(pin => ({ ...pin, content: fs.readFileSync(path.join(f.root, pin.path)) }));
-  fs.rmSync(artifacts.archiveAuthorityDirectory(f.root), { recursive: true, force: true });
-  return { first, artifacts, admission, preserved };
-}
-
-test('explicit trusted legacy admission preserves original complete bytes and receipt while permitting later source review', async () => {
-  const f = fixture(), stores = [];
-  try {
-    const { first, artifacts, admission, preserved } = await legacyAdmissionFixture(f); stores.push(f.storage);
-    assert.throws(() => artifacts.authenticatedArchivePins(f.root), /lack valid host authority/);
-    write(f.root, 'src/reviewed.txt', 'A later source revision requiring a fresh review.');
-    git(f.root, ['add', 'src/reviewed.txt']); git(f.root, ['commit', '-m', 'Advance source after historical review']);
-    f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
-    const admitted = artifacts.admitHistoricalArchive(admission);
-    assert.equal(admitted.manifest_digest, first.result.artifact.digest);
-    for (const pin of preserved) assert.deepEqual(fs.readFileSync(path.join(f.root, pin.path)), pin.content);
-    assert.equal(stableReceiptDigest(first.recorder.getVerifiedRecord(admission.dispatchId).receipt), admission.expectedReceiptDigest);
-    const second = await unitJudgment(f); stores.push(f.storage);
-    assert.equal(second.result.artifact.outcome, 'conform');
-    artifacts.validateJudgmentManifest(second.validationInput);
-  } finally { cleanupJudgment(f); for (const store of stores) fs.rmSync(store, { recursive: true, force: true }); }
-});
-
-for (const [name, mutate] of [
-  ['wrong retained manifest digest', (_, x) => { x.admission.expectedManifestDigest = '0'.repeat(64); }],
-  ['wrong retained receipt digest', (_, x) => { x.admission.expectedReceiptDigest = '0'.repeat(64); }],
-  ['missing original authenticated receipt', (_, x) => { x.admission.dispatchId = 'missing-original-dispatch'; }],
-  ['missing complete pin', (_, x) => { x.admission.expectedArchivePins.pop(); }],
-  ['unknown archive member', f => write(f.root, '.shipyard-role-artifacts/unknown.json', '{}')],
-  ['changed historical complete evidence', (f, x) => {
-    const pin = x.admission.expectedArchivePins.find(pin => pin.path.endsWith('.shipyard-arch-review-evidence.md'));
-    fs.appendFileSync(path.join(f.root, pin.path), 'Changed old complete bytes');
-  }],
-]) test('trusted legacy admission refuses ' + name, async () => {
-  const f = fixture();
-  try {
-    const x = await legacyAdmissionFixture(f); mutate(f, x);
-    assert.throws(() => x.artifacts.admitHistoricalArchive(x.admission), /archive|historical|retained|receipt|record|pin|manifest/i);
-    assert.equal(fs.existsSync(path.join(x.artifacts.archiveAuthorityDirectory(f.root), 'catalogue.json')), false);
-    assert(fs.existsSync(x.first.result.artifact.ref));
-  } finally { cleanupJudgment(f); }
-});
-
 test('historical archive size mismatch refuses before opening or allocating its complete content', async () => {
   const f = fixture();
   const lstat = fs.lstatSync, open = fs.openSync;

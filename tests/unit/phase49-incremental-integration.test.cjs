@@ -343,17 +343,6 @@ async function supportedPartitionCaller(f, nativeRuntime, options) {
   return result;
 }
 
-function currentPartitionConsumer(f) {
-  const input = { worktreePath: f.worktree, head: f.head, baseName: 'main', baseCommit: f.base,
-    graphDir: f.graphDir, headBranch: f.pr.headRefName };
-  const current = authority.currentIntegrationVerdict(input);
-  const gate = require('../../plugins/delivery-pipeline/scripts/gate-trailer.cjs').verifyCurrentReviews({
-    ...input, pr: f.pr.number, getPullRequest: () => ({ ...f.pr }) });
-  assert.deepEqual(gate.integration, current, 'normal gate must consume the same authenticated current final');
-  assert.equal(gate.architecture.ready, false, 'integration fixtures cannot satisfy fresh architecture');
-  return current;
-}
-
 function partitionManifests(f) {
   return authority.authenticatedArchivePins(f.worktree).filter(pin => pin.path.endsWith('/.shipyard-role-artifact.json'))
     .map(pin => JSON.parse(fs.readFileSync(path.join(f.worktree, pin.path))));
@@ -426,20 +415,15 @@ for (const nativeRuntime of ['codex', 'claude']) {
       f.graphDir = path.join(planning, '.planning/graph');
       const prepared = publicPartitionFixture(f, nativeRuntime);
       prepared.controls.onLaunch = (_input, payload) => {
-        assert.equal(currentPartitionConsumer(f), null, 'even all passing units cannot open the current gate before final');
         assert.equal(fs.existsSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md')), false);
         assert.equal(payload.reviewed_identity.planning_root, planning);
       };
       const result = await supportedPartitionCaller(f, nativeRuntime, prepared.options);
       assert.equal(result.result.kind, 'phase'); assert.equal(result.result.outcome, 'passed');
-      const current = currentPartitionConsumer(f);
-      assert.equal(current?.authenticated, true);
-      assert.equal(current.contract, authority.INTEGRATION_REVIEW_V3);
       const sessions = originalPartitionSessions(f, nativeRuntime, prepared.recorder, prepared.controls);
       const units = sessions.filter(item => item.result.kind === 'unit');
       const finals = sessions.filter(item => item.result.kind === 'phase');
       assert.ok(units.length > 1); assert.equal(finals.length, 1);
-      assert.equal(current.dispatch_id, finals[0].receipt.dispatch_id);
       assert.equal(finals[0].launch.payload.primary_segments, undefined);
       assert.equal(finals[0].launch.input.includes(fs.readFileSync(path.join(f.worktree, 'src/unchanged.cjs'), 'utf8')), false,
         'actual final receives bounded conclusions and acceptance rather than the full raw unit sources');
@@ -449,48 +433,6 @@ for (const nativeRuntime of ['codex', 'claude']) {
       assert.ok(finals[0].result.coverage.seam_dispositions.every(seam => seam.disposition === 'resolved'));
       assert.equal(prepared.controls.measured.at(-1).kind, 'phase');
       assert.notEqual(prepared.controls.measured.at(-1).verified_index_sha256, '0'.repeat(64));
-
-      const canonicalPlan = path.join(planning, f.rows['T-49-01'].plan);
-      const unit = units[0], memberFile = path.join(f.graphDir, 'tickets.json');
-      const mutations = [
-        [canonicalPlan, bytes => bytes.replace('## Verification commands',
-          '- New canonical acceptance at unchanged source HEAD.\n## Verification commands')],
-        [path.join(planning, '.planning/architecture/ADR-014-original.md'), bytes => bytes + '\nChanged governing obligation.\n'],
-        [memberFile, bytes => { const graph = JSON.parse(bytes); delete graph.tickets['T-49-02']; return JSON.stringify(graph); }],
-        [path.join(f.worktree, 'src/provider.cjs'), bytes => bytes + '\nexports.changedAfterFinal = true;\n'],
-        [path.join(f.worktree, unit.manifest.files.findings.path), bytes => bytes + ' '],
-        [path.join(f.worktree, unit.manifest.files.findings.path), bytes => {
-          const foreign = JSON.parse(bytes); foreign.runtime = nativeRuntime === 'codex' ? 'claude' : 'codex'; return JSON.stringify(foreign);
-        }],
-        [path.join(f.worktree, unit.manifest.files.findings.path), () =>
-          fs.readFileSync(path.join(f.worktree, units[1].manifest.files.findings.path))],
-        [unit.pin.path, bytes => bytes + ' '],
-      ];
-      if (nativeRuntime === 'codex') mutations.push([path.join(f.agents.integrator.dir, f.agents.integrator.selection.agent_file),
-        bytes => bytes + '\n# installed producer instructions changed after final\n']);
-      for (const [file, mutate] of mutations) {
-        const saved = fs.readFileSync(file);
-        try {
-          fs.writeFileSync(file, mutate(saved.toString('utf8')));
-          assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), f.head);
-          assert.equal(currentPartitionConsumer(f), null, 'changed current canonical/producer/member/source/original evidence refuses: ' + file);
-        } finally { fs.writeFileSync(file, saved); }
-        assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
-      }
-      const artifact = path.join(f.worktree, unit.manifest.files.findings.path), saved = fs.readFileSync(artifact);
-      try {
-        fs.unlinkSync(artifact);
-        assert.equal(currentPartitionConsumer(f), null, 'missing original unit cannot authorize final');
-      } finally { fs.writeFileSync(artifact, saved); }
-      git(f.worktree, 'update-ref', 'refs/remotes/origin/main', f.head);
-      assert.equal(currentPartitionConsumer(f), null, 'live default base moved');
-      git(f.worktree, 'update-ref', 'refs/remotes/origin/main', f.base);
-      assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
-      git(f.worktree, 'update-ref', 'refs/heads/' + f.pr.headRefName, f.base);
-      assert.equal(currentPartitionConsumer(f), null, 'current source HEAD moved');
-      git(f.worktree, 'update-ref', 'refs/heads/' + f.pr.headRefName, f.head);
-      assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
-      assert.equal(fs.readFileSync(path.join(f.worktree, f.rows['T-49-01'].plan), 'utf8').includes('New canonical acceptance'), false);
     });
   });
 
@@ -553,7 +495,6 @@ for (const nativeRuntime of ['codex', 'claude']) {
             'contradictory or incomplete original final cannot be projected as passing authority');
         }
         assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
-        assert.equal(currentPartitionConsumer(f), null);
       });
     });
 }
@@ -836,7 +777,6 @@ for (const nativeRuntime of ['codex', 'claude']) {
       const prepared = publicPartitionFixture(f, nativeRuntime, { observed: true });
       assert.equal(Object.hasOwn(prepared.options, 'integrationCapacity'), false);
       prepared.controls.onLaunch = (_input, payload) => {
-        assert.equal(currentPartitionConsumer(f), null);
         if (payload.kind === 'unit') {
           assert.ok(payload.assignment.primary_segments.length <= 3);
           assert.ok(payload.assignment.primary_segments.every(part => part.end_byte - part.start_byte <= 65536));
@@ -852,36 +792,6 @@ for (const nativeRuntime of ['codex', 'claude']) {
       const sessions = originalPartitionSessions(f, nativeRuntime, prepared.recorder, prepared.controls);
       assert.ok(sessions.filter(item => item.result.kind === 'unit').length > 1);
       assert.equal(sessions.filter(item => item.result.kind === 'phase').length, 1);
-      const current = currentPartitionConsumer(f);
-      assert.equal(current?.authenticated, true);
-      const protectedDirectory = authority.archiveAuthorityDirectory(f.worktree);
-      for (const name of fs.readdirSync(protectedDirectory).filter(name => /^integration-(?:plan|observation|capacity)-/.test(name))) {
-        const file = path.join(protectedDirectory, name), saved = fs.readFileSync(file);
-        try {
-          const envelope = JSON.parse(saved);
-          if (name.startsWith('integration-plan-')) envelope.payload.plan.capacity.unit_input_bytes++;
-          else if (name.startsWith('integration-observation-')) delete envelope.payload.samples;
-          else envelope.payload.schema = 'shipyard.integration-partition-capacity.v1';
-          fs.writeFileSync(file, JSON.stringify(envelope), { mode: 0o600 });
-          assert.equal(currentPartitionConsumer(f), null, 'protected mode/budget/observation swaps refuse');
-        } finally { fs.writeFileSync(file, saved, { mode: 0o600 }); }
-      }
-      const modulePath = require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-      delete require.cache[modulePath];
-      authority = require(modulePath);
-      assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
-      for (const session of [sessions.find(item => item.result.kind === 'unit'), sessions.find(item => item.result.kind === 'phase')]) {
-        const saved = fs.readFileSync(session.pin.path);
-        try {
-          const rows = saved.toString('utf8').trim().split('\n').map(JSON.parse);
-          if (nativeRuntime === 'codex') rows.find(row => row.payload?.type === 'token_count').payload.info.model_context_window = 0;
-          else delete rows.find(row => row.type === 'assistant').message.usage;
-          fs.writeFileSync(session.pin.path, serialize(rows));
-          delete require.cache[modulePath]; authority = require(modulePath);
-          assert.equal(currentPartitionConsumer(f), null, 'changed original telemetry refuses cold current authority');
-        } finally { fs.writeFileSync(session.pin.path, saved); }
-        assert.equal(currentPartitionConsumer(f)?.dispatch_id, current.dispatch_id);
-      }
     });
   });
 
@@ -909,7 +819,6 @@ for (const nativeRuntime of ['codex', 'claude']) {
       const prepared = publicPartitionFixture(f, nativeRuntime, controls);
       const result = await supportedPartitionCaller(f, nativeRuntime, prepared.options);
       assert.equal(result.result.outcome, 'passed');
-      assert.equal(currentPartitionConsumer(f)?.authenticated, true);
     });
   });
 
@@ -1037,7 +946,6 @@ for (const nativeRuntime of ['codex', 'claude']) {
       const prepared = publicPartitionFixture(f, nativeRuntime, controls);
       await assert.rejects(supportedPartitionCaller(f, nativeRuntime, prepared.options));
       assert.ok(controls.launches.length > 0, 'refusal follows an ordinary original native attempt');
-      assert.equal(currentPartitionConsumer(f), null);
       if (scenario.startsWith('final-')) assert.ok(partitionManifests(f).some(manifest => manifest.artifact_kind === 'integration-unit'));
     });
   });
@@ -1123,7 +1031,6 @@ test('D36 codex ingress actual ASCII unit and fresh final retain original produc
         assert.ok(base.length > 1048576, 'stripped actual ASCII input exceeds the legacy character guard');
         assert.equal(input, prefix + base);
         assert.ok(Buffer.byteLength(input) <= (payload.kind === 'unit' ? 2097152 : 4194304));
-        assert.equal(currentPartitionConsumer(f), null);
         if (payload.kind !== 'unit') return;
         assert.ok(payload.assignment.primary_segments.length <= 3);
         for (const relative of [ ...Object.values(f.rows).map(row => row.plan),
@@ -1142,7 +1049,6 @@ test('D36 codex ingress actual ASCII unit and fresh final retain original produc
       assert.equal(resources, sessions.length, 'only oversized actual native stages consult the resource');
       assert.ok(sessions.filter(item => item.result.kind === 'unit').length > 1);
       assert.equal(sessions.filter(item => item.result.kind === 'phase').length, 1);
-      assert.equal(currentPartitionConsumer(f)?.authenticated, true);
       assert.ok(result.operational_diagnostic.actual_final_input_bytes <= 4194304);
     });
   });
@@ -1158,7 +1064,6 @@ test('D36 codex ingress actual public stage rejects changed or unowned oversized
       else rows[index].payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign-turn';
     } });
     await assert.rejects(supportedPartitionCaller(f, 'codex', prepared.options), /read|consumption|foreign/i);
-    assert.equal(currentPartitionConsumer(f), null);
   });
   await publicIntegrationFixture(async f => {
     f.integratorSandbox = 'workspace-write';
@@ -1231,7 +1136,6 @@ test('D36 codex ingress actual public stage rejects changed or unowned oversized
           fs.writeFileSync(admissionPath, JSON.stringify(envelope), { mode: 0o600 });
           await deny('changed local protected admission');
         } finally { fs.writeFileSync(admissionPath, saved, { mode: 0o600 }); }
-        assert.equal(currentPartitionConsumer(f), null);
         let ordinarySpawns = 0, ordinaryResourceCalls = 0;
         const ordinary = createHost({ ...options, controller: undefined,
           integrationIngress() { ordinaryResourceCalls++; throw new Error('ordinary resource must stay lazy'); },
@@ -1247,7 +1151,6 @@ test('D36 codex ingress actual public stage rejects changed or unowned oversized
         await assert.rejects(admitted.launchStatic(selection, context),
           error => error.code === 'RUNTIME_UNAVAILABLE' && /workspace integration reached controlled spawn/.test(error.message));
         assert.equal(admittedSpawns, 1, 'workspace-write oversized input reaches the existing native launch boundary');
-        assert.equal(currentPartitionConsumer(f), null);
         throw stop;
       } };
     }, async () => {
@@ -1280,7 +1183,6 @@ test('D36 codex ingress supplied strict public caller retains the legacy static 
     });
     assert.equal(stages, 1);
     assert.equal(processes, 0);
-    assert.equal(currentPartitionConsumer(f), null);
   });
 });
 
@@ -1316,7 +1218,6 @@ test('D36 ' + nativeRuntime + ' geometry phase-shaped complete governing floor f
     assert.ok(diagnostic.actual_final_input_bytes <= 4194304);
     const allMaximaTemplateBytes = diagnostic.unit_count * 6 * (8192 + 4096 + 98304);
     assert.ok(allMaximaTemplateBytes > 4194304, 'strict hypothetical reservation would refuse before this fitting actual final');
-    assert.equal(currentPartitionConsumer(f)?.authenticated, true);
   });
 });
 
@@ -1345,7 +1246,6 @@ test('D36 ' + nativeRuntime + ' aggregate refuses the complete actual final over
     const manifests = partitionManifests(f);
     assert.equal(manifests.length, prepared.controls.launches.length);
     assert.ok(manifests.every(manifest => manifest.artifact_kind === 'integration-unit'));
-    assert.equal(currentPartitionConsumer(f), null);
     for (const manifest of manifests) {
       const original = JSON.parse(fs.readFileSync(path.join(f.worktree, manifest.files.findings.path)));
       assert.equal(original.conclusions[0].length, 16370);

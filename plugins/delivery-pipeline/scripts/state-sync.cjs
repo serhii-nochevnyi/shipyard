@@ -876,14 +876,11 @@ for (const [id, t] of Object.entries(tickets)) {
           if (admitted && (admitted.architecture.head !== pr.headRefOid || admitted.architecture.base_commit !== pr.baseRefOid))
             throw new Error('current review subject differs from the synchronization observation');
           entry.authenticated_architecture = admitted?.architecture.verdict || null;
-          entry.authenticated_integration = admitted?.integration || null;
-          entry.review_owed = { architecture: !entry.authenticated_architecture, integration: !entry.authenticated_integration };
         } catch {
-          entry.authenticated_architecture = null; entry.authenticated_integration = null;
-          entry.review_owed = { architecture: true, integration: true };
+          entry.authenticated_architecture = null;
         }
       } else {
-        delete entry.authenticated_architecture; delete entry.authenticated_integration; delete entry.review_owed;
+        delete entry.authenticated_architecture;
       }
       if (t.human_checkpoint === true && t.checkpoint === 'review') {
         Object.assign(entry, reviewCheckpointObservation(pr, repo));
@@ -1039,8 +1036,7 @@ if (mode === 'epic-stacked') {
       }
       epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed, landed_reason: landedReason,
         architecture: architectureTarget({ base: pr?.baseRefName || base, integrationBranch: base }),
-        authenticated_architecture: admitted?.architecture.verdict || null, authenticated_integration: admitted?.integration || null,
-        review_owed: { architecture: !admitted?.architecture.ready, integration: !admitted?.integration } };
+        authenticated_architecture: admitted?.architecture.verdict || null };
     }
   }
 }

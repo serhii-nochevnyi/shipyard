@@ -1214,7 +1214,7 @@ for (const jira of [null, 'PRJ-42']) test(`verify prints code_review and follows
       if (parent?.filename === ${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/gate-trailer.cjs'))}
           && request === './role-artifact.cjs') {
         Module._load = originalLoad;
-        return { ...loaded, currentArchitectureVerdict: () => ({verdict:'conform'}), currentIntegrationVerdict: () => null };
+        return { ...loaded, currentArchitectureVerdict: () => ({verdict:'conform'}) };
       }
       return loaded;
     };
