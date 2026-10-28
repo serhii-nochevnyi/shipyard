@@ -1687,41 +1687,59 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
     getGraphBaseline: () => graphBaseline };
 }
 
-// @invariant: telemetry, caches and hook state rewritten by concurrent conveyor processes are not role-owned evidence.
-const GRAPH_VOLATILE = /^(delivery-state[^/]*|delivery-front\.json|delivery-log\.jsonl|session-observations\.jsonl|stop-gate-[^/]*|\.locks|runs)$/;
+// @invariant: only graph files no concurrent conveyor process rewrites are role-run baseline state.
+const GRAPH_PROTECTED = ['tickets.json', 'tickets.yaml'];
+const GRAPH_HOOK_STATE = /^(session-observations\.jsonl|stop-gate-.*)$/;
+const PROVENANCE_SIDECAR = /^[A-Za-z0-9_.-]+\.json$/;
+
+function fingerprint(file) {
+  try {
+    const stat = fs.lstatSync(file);
+    return stat.isFile() ? sha(fs.readFileSync(file)) : `non-regular:${stat.isSymbolicLink() ? fs.readlinkSync(file) : stat.mode}`;
+  } catch { return null; }
+}
 
 function graphStateSnapshot(prepared) {
   const shared = path.resolve(prepared.graph.directory);
+  const local = path.resolve(prepared.canonical.worktree, '.planning', 'graph');
   const snapshot = new Map();
+  const add = (file) => { const digest = fingerprint(file); if (digest !== null) snapshot.set(file, digest); };
   const walk = (dir, top) => {
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
-      if (top && dir === shared && GRAPH_VOLATILE.test(entry.name)) continue;
-      const file = path.join(dir, entry.name);
-      if (entry.isDirectory()) { walk(file, false); continue; }
-      let digest;
-      try { digest = entry.isFile() ? sha(fs.readFileSync(file)) : `non-regular:${fs.readlinkSync(file)}`; }
-      catch { digest = 'unreadable'; }
-      snapshot.set(file, digest);
+      if (top && GRAPH_HOOK_STATE.test(entry.name)) continue;
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), false);
+      else add(path.join(dir, entry.name));
     }
   };
-  for (const dir of new Set([shared, path.resolve(prepared.canonical.worktree, '.planning', 'graph')])) walk(dir, true);
+  if (local !== shared) walk(local, true);
+  for (const name of GRAPH_PROTECTED) add(path.join(shared, name));
+  try { for (const name of fs.readdirSync(path.join(shared, 'provenance'))) add(path.join(shared, 'provenance', name)); } catch {}
   return snapshot;
 }
 
 function graphStateChanges(prepared, baseline) {
   const current = graphStateSnapshot(prepared);
+  const sidecars = path.join(path.resolve(prepared.graph.directory), 'provenance');
   const label = (file) => path.relative(prepared.canonical.projectRoot, file) || file;
   const changed = [];
   for (const [file, digest] of baseline) if (current.get(file) !== digest) changed.push(label(file));
-  for (const file of current.keys())
-    if (!baseline.has(file) && !file.includes(`${path.sep}.planning${path.sep}graph${path.sep}provenance${path.sep}`))
-      changed.push(label(file));
+  for (const [file, digest] of current)
+    if (!baseline.has(file) && !(path.dirname(file) === sidecars && PROVENANCE_SIDECAR.test(path.basename(file))
+        && !digest.startsWith('non-regular:'))) changed.push(label(file));
   return changed;
 }
 
-function assertEvidenceOnlyChanges(options, prepared, graphBaseline = null) {
+async function withStateGuard(options, prepared, run) {
+  const baseline = graphStateSnapshot(prepared);
+  const result = await run();
+  assertEvidenceOnlyChanges(options, prepared, baseline);
+  return result;
+}
+
+function assertEvidenceOnlyChanges(options, prepared, graphBaseline) {
+  if (!(graphBaseline instanceof Map)) reject('role state baseline is required', 'USAGE');
   let integrationPins;
   if (prepared.integrationPartitions) {
     roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.integrationReview.archivePins,
@@ -1754,9 +1772,9 @@ function assertEvidenceOnlyChanges(options, prepared, graphBaseline = null) {
           || sha(fs.readFileSync(path.join(prepared.canonical.worktree, file))) !== scratchDigest;
       } catch { return true; }
     }
-    return !(graphBaseline && graphBaseline.has(path.resolve(prepared.canonical.worktree, file)));
+    return !graphBaseline.has(path.resolve(prepared.canonical.worktree, file));
   });
-  if (graphBaseline) unexpected.push(...graphStateChanges(prepared, graphBaseline));
+  unexpected.push(...graphStateChanges(prepared, graphBaseline));
   if (unexpected.length) reject(`role changed paths outside its evidence file: ${unexpected.slice(0, 8).join(', ')}`, 'WORKTREE_MUTATED');
   if (git(options, prepared.canonical.worktree, ['rev-parse', '--verify', 'HEAD^{commit}']) !== prepared.canonical.head
       || git(options, prepared.canonical.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== prepared.canonical.branch) {
@@ -2154,7 +2172,7 @@ async function runClaudeIntegrationPartitions(options, execution) {
     const prepared = Object.freeze({ ...original, prompt: stage.input,
       integrationReview: review, integrationPartitions: partitions });
     nativeIntegrationStages.set(prepared, { stage, recorder });
-    assertEvidenceOnlyChanges(options, prepared);
+    assertEvidenceOnlyChanges(options, prepared, graphStateSnapshot(prepared));
     const runId = 'claude-integration-' + crypto.randomUUID(), ownerId = 'claude-integration-owner-' + crypto.randomUUID();
     const scope = makeRuntimeScope(prepared, runId, stage.dispatch_id, ownerId);
     const storage = storageDirectory(options, runId, prepared.canonical.worktree);
@@ -2481,6 +2499,7 @@ module.exports = Object.freeze({
   integrationStageSchema,
   assertEvidenceOnlyChanges,
   graphStateSnapshot,
+  withStateGuard,
   createClaudeRoleHost,
   runClaudeRoleCli,
 });
