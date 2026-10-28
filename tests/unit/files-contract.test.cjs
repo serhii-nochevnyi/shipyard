@@ -512,7 +512,7 @@ test('the plugin and its capability carry the same version', () => {
 
 test('delivery docs name the generated Codex variants and no retired recovery targets', () => {
   const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
-  const source = readRepo(DELIVER_MD) + '\n' + readRepo(SENTINEL_MD);
+  const source = readRepo(DELIVER_MD) + '\n' + readRepo(SENTINEL_MD) + '\n' + readRepo('docs/gsd_multilevel_delivery_pipeline.md');
   const variants = codexStaticVariants(2);
   assert.ok(variants.length > 0, 'the generator must expose phase-2 Codex variants');
   for (const variant of variants) {
