@@ -28,7 +28,7 @@ const { readLedger } = require(path.join(__dirname, 'pr-ledger.cjs'));
 const { loadConfig, ROLES, EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const usageAttribution = require(path.join(__dirname, 'usage-attribution.cjs'));
 
-const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
+const GRAPH_DIR = require('./graph-dir.cjs').resolveGraphDir().dir;
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
 const SESSION_OBSERVATIONS = path.join(GRAPH_DIR, 'session-observations.jsonl');

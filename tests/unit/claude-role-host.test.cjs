@@ -134,26 +134,69 @@ test(`${kind} completes preparation from coordinator-only planning without movin
   finally { cleanupFixture(fixture); }
 });
 
-test('a role that rewrites an ignored host-owned state file is refused after the run', () => {
+function ignoredStateFixture() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'role-host-ignored-state-')));
+  const run = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+  run(root, 'init', '-q'); run(root, 'config', 'user.email', 'a@b.c'); run(root, 'config', 'user.name', 'n');
+  fs.writeFileSync(path.join(root, '.gitignore'), '.planning/graph/*\n!.planning/graph/tickets.json\n');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'a\n');
+  const graph = path.join(root, '.planning', 'graph');
+  fs.mkdirSync(path.join(graph, 'provenance'), { recursive: true });
+  for (const name of ['tickets.json', 'dispatches.json', 'escalations.json', 'drift.json', 'pr-ledger.json', 'ci-waits.json',
+    'delivery-state.yaml', 'delivery-log.jsonl', 'provenance/d1.json']) fs.writeFileSync(path.join(graph, name), `{"${name}":1}\n`);
+  run(root, 'add', '.'); run(root, 'commit', '-q', '-m', 'seed');
+  const linked = path.join(root, '..', `${path.basename(root)}-linked`);
+  run(root, 'worktree', 'add', '-q', '-b', 'ticket/x', linked);
+  const host = preparationOnlyHost();
+  const prepared = (worktree) => ({ evidencePath: '.evidence', role: 'arch-review', canonical: { worktree, projectRoot: root, scratchDigests: new Map() },
+    graph: { directory: graph } });
+  return { root, graph, linked, host, prepared,
+    cleanup: () => { try { run(root, 'worktree', 'remove', '--force', linked); } catch {} fs.rmSync(root, { recursive: true, force: true }); } };
+}
+
+const ignoredStateScenarios = {
+  'escalations.json rewritten': (g) => fs.writeFileSync(path.join(g, 'escalations.json'), '{"forged":true}\n'),
+  'escalations.json deleted': (g) => fs.rmSync(path.join(g, 'escalations.json')),
+  'drift.json rewritten': (g) => fs.writeFileSync(path.join(g, 'drift.json'), '{}\n'),
+  'pr-ledger.json rewritten': (g) => fs.writeFileSync(path.join(g, 'pr-ledger.json'), '{}\n'),
+  'ci-waits.json rewritten': (g) => fs.writeFileSync(path.join(g, 'ci-waits.json'), '{}\n'),
+  'dispatches.json rewritten': (g) => fs.writeFileSync(path.join(g, 'dispatches.json'), '{"inflight":{"x":1}}\n'),
+  'tickets.json rewritten': (g) => fs.writeFileSync(path.join(g, 'tickets.json'), '{}\n'),
+  'another dispatch provenance rewritten': (g) => fs.writeFileSync(path.join(g, 'provenance', 'd1.json'), '{}\n'),
+  'another dispatch provenance deleted': (g) => fs.rmSync(path.join(g, 'provenance', 'd1.json')),
+  'a new ignored state file created': (g) => fs.writeFileSync(path.join(g, 'human-gate.json'), '{}\n'),
+  'a state file replaced by a symlink': (g) => { fs.rmSync(path.join(g, 'drift.json')); fs.symlinkSync('/etc/hosts', path.join(g, 'drift.json')); },
+};
+
+for (const [name, mutate] of Object.entries(ignoredStateScenarios))
+test(`a role run that leaves the conveyor state changed is refused: ${name}`, () => {
+  const f = ignoredStateFixture();
   try {
-    const run = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
-    run('init', '-q'); run('config', 'user.email', 'a@b.c'); run('config', 'user.name', 'n');
-    fs.writeFileSync(path.join(root, '.gitignore'), '.planning/graph/*\n');
-    fs.writeFileSync(path.join(root, 'a.txt'), 'a\n');
-    run('add', '.'); run('commit', '-q', '-m', 'seed');
-    const state = path.join(root, '.planning', 'graph', 'dispatches.json');
-    fs.mkdirSync(path.dirname(state), { recursive: true });
-    fs.writeFileSync(state, '{"inflight":{}}\n');
-    const digest = crypto.createHash('sha256').update(fs.readFileSync(state)).digest('hex');
-    const prepared = { evidencePath: '.evidence', role: 'arch-review', canonical: { worktree: root, scratchDigests: new Map() },
-      graph: { directory: path.join(root, '.planning', 'graph') } };
-    const owned = new Map([['.planning/graph/dispatches.json', digest]]);
-    const host = preparationOnlyHost();
-    assert.throws(() => host.assertEvidenceOnlyChanges({}, prepared, owned), error => error.code === 'STALE_CONTEXT');
-    fs.writeFileSync(state, '{"inflight":{"x":1}}\n');
-    assert.throws(() => host.assertEvidenceOnlyChanges({}, prepared, owned), error => error.code === 'WORKTREE_MUTATED');
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    const prepared = f.prepared(f.root), baseline = f.host.graphStateSnapshot(prepared);
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline), error => error.code === 'STALE_CONTEXT');
+    mutate(f.graph);
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline), error => error.code === 'WORKTREE_MUTATED');
+  } finally { f.cleanup(); }
+});
+
+test('a role run may leave concurrent caches, telemetry and new write-once provenance sidecars', () => {
+  const f = ignoredStateFixture();
+  try {
+    const prepared = f.prepared(f.root), baseline = f.host.graphStateSnapshot(prepared);
+    fs.writeFileSync(path.join(f.graph, 'delivery-state.yaml'), 'rebuilt: true\n');
+    fs.appendFileSync(path.join(f.graph, 'delivery-log.jsonl'), '{"event":1}\n');
+    fs.writeFileSync(path.join(f.graph, 'provenance', 'd2.json'), '{}\n');
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline), error => error.code === 'STALE_CONTEXT');
+  } finally { f.cleanup(); }
+});
+
+test('a role in a linked worktree cannot create state in its own graph directory', () => {
+  const f = ignoredStateFixture();
+  try {
+    const prepared = f.prepared(f.linked), baseline = f.host.graphStateSnapshot(prepared);
+    fs.writeFileSync(path.join(f.linked, '.planning', 'graph', 'escalations.json'), '{"forged":true}\n');
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline), error => error.code === 'WORKTREE_MUTATED');
+  } finally { f.cleanup(); }
 });
 
 for (const kind of ['arch-review', 'integrator', 'code-review'])

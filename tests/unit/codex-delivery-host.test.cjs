@@ -4361,6 +4361,14 @@ test('public Codex v3 rejects caller prompt, stage, receipt, capacity and produc
     assert.throws(() => requestValue({ ...selected, ...extra }), /host-owned/);
 });
 
+test('the Codex integration partition snapshots the conveyor state before launch and verifies it after the run', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs'), 'utf8');
+  const snapshot = source.indexOf('graphStateSnapshot(review.prepared)');
+  const launch = source.indexOf("launchAgent('integrator'", snapshot);
+  assert.ok(snapshot > 0 && launch > snapshot, 'the baseline is taken before the native launch');
+  assert.match(source.slice(launch), /assertEvidenceOnlyChanges\(options, \{\s*\.\.\.review\.prepared, integrationReview: review, integrationPartitions: partitions \}, graphBaseline\)/);
+});
+
 assert.equal(entrySelected, 44, 'exact code-review entry registration');
 assert.equal(entryVariants, 8, 'all original CLI variants');
 assert.equal(integratorDefaultSelected, 1, 'exact integrator default registration');

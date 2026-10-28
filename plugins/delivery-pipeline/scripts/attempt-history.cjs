@@ -76,7 +76,7 @@ const explicitGraph = graphFlagAt !== -1 ? argvAll[graphFlagAt + 1] : process.en
 const GRAPH_EXPLICIT = !!explicitGraph;
 const GRAPH_DIR = GRAPH_EXPLICIT
   ? path.resolve(explicitGraph)
-  : path.join(process.cwd(), '.planning', 'graph');
+  : require('./graph-dir.cjs').resolveGraphDir().dir;
 
 // Both value-taking flags are stripped wherever they sit: a flag only tolerated
 // at the end is a trap for the caller who puts it first, and here it would be

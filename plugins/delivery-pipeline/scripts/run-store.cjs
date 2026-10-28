@@ -283,7 +283,7 @@ function normalizeStore(input) {
 
 function createRunStore(options = {}) {
   if (!object(options)) refuse('INVALID_INPUT', 'run store options must be an object');
-  const storeDir = path.resolve(options.storeDir || (options.storeFile ? path.dirname(options.storeFile) : path.join(process.cwd(), '.planning', 'graph', 'runs')));
+  const storeDir = path.resolve(options.storeDir || (options.storeFile ? path.dirname(options.storeFile) : path.join(require('./graph-dir.cjs').resolveGraphDir().dir, 'runs')));
   const storeFile = path.resolve(options.storeFile || path.join(storeDir, 'runs.json'));
   const lockDir = path.resolve(options.lockDir || path.join(storeDir, '.locks'));
   const clock = options.now || options.clock || (() => Date.now());

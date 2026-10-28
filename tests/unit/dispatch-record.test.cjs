@@ -232,6 +232,23 @@ function takeoverBeforeWrite(command) {
   return { dir, graph, result, recorder, base };
 }
 
+test('mark from a linked worktree records in the main checkout graph, which holds the board', () => {
+  const { dir, project, graph } = scratch({ 'T-01-01': READY });
+  const git = (...args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' });
+  const linked = path.join(dir, 'linked');
+  try {
+    git('init', '-q'); git('config', 'user.email', 'a@b.c'); git('config', 'user.name', 'n');
+    fs.writeFileSync(path.join(project, '.gitignore'), '.planning/graph/*\n!.planning/graph/tickets.json\n');
+    git('add', '.'); git('commit', '-q', '-m', 'seed');
+    git('worktree', 'add', '-q', '-b', 'ticket/T-01-01-x', linked);
+    assert.deepEqual(fs.readdirSync(path.join(linked, '.planning', 'graph')), ['tickets.json']);
+    const result = run(['mark', 'T-01-01', 'executor'], linked);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(store(graph)['T-01-01'], 'the dispatch is recorded beside the board it refers to');
+    assert.deepEqual(fs.readdirSync(path.join(linked, '.planning', 'graph')), ['tickets.json']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('boundary receipts reconcile into the existing store and journal without rewriting legacy rows', () => {
   const { dir, project, graph } = scratch({ 'T-01-01': READY, 'T-01-02': READY });
   try {

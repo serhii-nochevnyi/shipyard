@@ -1628,7 +1628,7 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
   if (!runtime.scope || path.resolve(runtime.scope.worktree || '') !== prepared.canonical.worktree) reject('runtime scope differs from the authenticated worktree');
   let launched = null;
   let launchCount = 0;
-  let hostOwnedFiles = new Map();
+  let graphBaseline = null;
   const adapter = createClaudeDispatchAdapter({
     capabilities: runtime.capabilities,
     host: {
@@ -1668,7 +1668,7 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
               ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest, agentId: ownerId },
           );
         }
-        hostOwnedFiles = roundOwnedFileDigests(prepared, dispatchId);
+        graphBaseline = graphStateSnapshot(prepared);
         if (prepared.focusedInput) require('./codex-arch-review-context.cjs').verifyFileInput(prepared.focusedInput, {
           association: { role: prepared.role, dispatch_id: dispatchId } });
         const child = await runtime.agent(prepared.prompt, {
@@ -1684,23 +1684,44 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
   });
   return { boundary: createDispatchBoundary({ adapters: { claude: adapter }, recorder: runtime.recorder, cwd: prepared.canonical.worktree }),
     getLaunched: () => launched, getLaunchCount: () => launchCount,
-    getHostOwnedFiles: () => hostOwnedFiles };
+    getGraphBaseline: () => graphBaseline };
 }
 
-function roundOwnedFileDigests(prepared, dispatchId) {
-  const graphRoot = path.resolve(prepared.graph.directory);
-  const digests = new Map();
-  for (const relative of ['dispatches.json', 'delivery-front.json', `provenance/${dispatchId}.json`]) {
-    const file = path.join(graphRoot, relative);
-    let stat;
-    try { stat = fs.lstatSync(file); } catch { continue; }
-    if (!stat.isFile() || stat.isSymbolicLink()) reject(`host-owned graph file is not regular: ${relative}`);
-    digests.set(`.planning/graph/${relative}`, sha(fs.readFileSync(file)));
-  }
-  return digests;
+// @invariant: telemetry, caches and hook state rewritten by concurrent conveyor processes are not role-owned evidence.
+const GRAPH_VOLATILE = /^(delivery-state[^/]*|delivery-front\.json|delivery-log\.jsonl|session-observations\.jsonl|stop-gate-[^/]*|\.locks|runs)$/;
+
+function graphStateSnapshot(prepared) {
+  const shared = path.resolve(prepared.graph.directory);
+  const snapshot = new Map();
+  const walk = (dir, top) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (top && dir === shared && GRAPH_VOLATILE.test(entry.name)) continue;
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(file, false); continue; }
+      let digest;
+      try { digest = entry.isFile() ? sha(fs.readFileSync(file)) : `non-regular:${fs.readlinkSync(file)}`; }
+      catch { digest = 'unreadable'; }
+      snapshot.set(file, digest);
+    }
+  };
+  for (const dir of new Set([shared, path.resolve(prepared.canonical.worktree, '.planning', 'graph')])) walk(dir, true);
+  return snapshot;
 }
 
-function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()) {
+function graphStateChanges(prepared, baseline) {
+  const current = graphStateSnapshot(prepared);
+  const label = (file) => path.relative(prepared.canonical.projectRoot, file) || file;
+  const changed = [];
+  for (const [file, digest] of baseline) if (current.get(file) !== digest) changed.push(label(file));
+  for (const file of current.keys())
+    if (!baseline.has(file) && !file.includes(`${path.sep}.planning${path.sep}graph${path.sep}provenance${path.sep}`))
+      changed.push(label(file));
+  return changed;
+}
+
+function assertEvidenceOnlyChanges(options, prepared, graphBaseline = null) {
   let integrationPins;
   if (prepared.integrationPartitions) {
     roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.integrationReview.archivePins,
@@ -1733,15 +1754,9 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
           || sha(fs.readFileSync(path.join(prepared.canonical.worktree, file))) !== scratchDigest;
       } catch { return true; }
     }
-    return !hostOwnedFiles.has(file);
+    return !(graphBaseline && graphBaseline.has(path.resolve(prepared.canonical.worktree, file)));
   });
-  for (const [file, digest] of hostOwnedFiles) {
-    try {
-      const absolute = path.join(prepared.graph.directory, '../..', file);
-      const stat = fs.lstatSync(absolute);
-      if (!stat.isFile() || stat.isSymbolicLink() || sha(fs.readFileSync(absolute)) !== digest) unexpected.push(file);
-    } catch { unexpected.push(file); }
-  }
+  if (graphBaseline) unexpected.push(...graphStateChanges(prepared, graphBaseline));
   if (unexpected.length) reject(`role changed paths outside its evidence file: ${unexpected.slice(0, 8).join(', ')}`, 'WORKTREE_MUTATED');
   if (git(options, prepared.canonical.worktree, ['rev-parse', '--verify', 'HEAD^{commit}']) !== prepared.canonical.head
       || git(options, prepared.canonical.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== prepared.canonical.branch) {
@@ -2154,7 +2169,7 @@ async function runClaudeIntegrationPartitions(options, execution) {
       const runtime = runtimeFor(options, scope, controller, storage, prepared);
       if (runtime.recorder !== recorder || controller && runtime.controller !== controller)
         reject('partition runtime differs from its original recorder/controller', 'MISSING_RECEIPT');
-      const { boundary, getLaunched, getLaunchCount, getHostOwnedFiles } = buildBoundary(prepared, runtime, stage.dispatch_id, ownerId, options);
+      const { boundary, getLaunched, getLaunchCount, getGraphBaseline } = buildBoundary(prepared, runtime, stage.dispatch_id, ownerId, options);
       roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: stage, host: capacityHost });
       const record = await boundary.dispatch({ runtime: 'claude', role: 'integrator',
         signals: original.signals, dispatch_id: stage.dispatch_id }, {
@@ -2163,7 +2178,7 @@ async function runClaudeIntegrationPartitions(options, execution) {
       if (getLaunchCount() !== 1 || !getLaunched()) reject('partition requires one original native launch', 'MISSING_RECEIPT');
       if (heartbeatError) throw heartbeatError;
       delivery.recheckIntegrationReview(review, partitions);
-      assertEvidenceOnlyChanges(options, prepared, getHostOwnedFiles());
+      assertEvidenceOnlyChanges(options, prepared, getGraphBaseline());
       const result = resultFrom(getLaunched().output);
       if (stage.kind === 'unit') {
         const artifact = roleArtifact.sealIntegrationUnit({ prepared: stage, recorder, dispatchId: stage.dispatch_id, result });
@@ -2284,7 +2299,7 @@ function createClaudeRoleHost(options = {}) {
         if (controller && runtime.controller !== controller) reject('runtime host is not bound to the active run controller');
         roleArtifact.prepareRoleArtifact({ worktreePath: prepared.canonical.worktree, role: prepared.role,
           ...(prepared.role !== 'arch-review' ? { phase: prepared.phase } : {}), evidencePath: prepared.evidencePath });
-        const { boundary, getLaunched, getLaunchCount, getHostOwnedFiles } = buildBoundary(prepared, runtime, dispatchId, ownerId, options);
+        const { boundary, getLaunched, getLaunchCount, getGraphBaseline } = buildBoundary(prepared, runtime, dispatchId, ownerId, options);
         const subject = prepared.role === 'arch-review' ? prepared.ticket : prepared.ticket;
         const record = await boundary.dispatch({ runtime: 'claude', role: prepared.role,
           signals: prepared.signals, dispatch_id: dispatchId }, {
@@ -2299,7 +2314,7 @@ function createClaudeRoleHost(options = {}) {
         });
         if (getLaunchCount() !== 1 || !getLaunched()) reject('boundary did not perform exactly one authenticated model launch', 'MISSING_RECEIPT');
         if (heartbeatError) throw heartbeatError;
-        assertEvidenceOnlyChanges(options, prepared, getHostOwnedFiles());
+        assertEvidenceOnlyChanges(options, prepared, getGraphBaseline());
         const expiredTickets = revalidateLiveInputs(options, prepared, record.receipt.dispatch_id) || [];
         if (prepared.focusedInput) require('./codex-arch-review-context.cjs').verifyFileInput(prepared.focusedInput, {
           association: { role: prepared.role, dispatch_id: dispatchId } });
@@ -2465,6 +2480,7 @@ module.exports = Object.freeze({
   integrationPacketWithCoverage,
   integrationStageSchema,
   assertEvidenceOnlyChanges,
+  graphStateSnapshot,
   createClaudeRoleHost,
   runClaudeRoleCli,
 });

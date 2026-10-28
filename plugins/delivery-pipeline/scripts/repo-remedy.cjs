@@ -33,7 +33,7 @@ function inputDigest(inputs = {}) {
   return crypto.createHash('sha256').update(JSON.stringify(pairs)).digest('hex');
 }
 function graphDir(flags = {}) {
-  return path.resolve(flags.graph || process.env.SHIPYARD_GRAPH_DIR || path.join(process.cwd(), '.planning', 'graph'));
+  return path.resolve(flags.graph || process.env.SHIPYARD_GRAPH_DIR || require('./graph-dir.cjs').resolveGraphDir().dir);
 }
 function project(graph) { return path.resolve(graph, '..', '..'); }
 function projectRepository(graph) {

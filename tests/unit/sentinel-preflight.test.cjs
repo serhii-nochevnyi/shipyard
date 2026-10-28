@@ -27,6 +27,7 @@ function fixture({ trackGraph = false } = {}) {
   git(dir, 'clone', '--quiet', origin, wt);
   fs.mkdirSync(path.join(wt, '.planning', 'graph'), { recursive: true });
   fs.writeFileSync(path.join(wt, '.planning', 'graph', 'delivery-state.json'), '{}');
+  fs.writeFileSync(path.join(wt, '.planning', 'graph', 'tickets.json'), '{}');
   fs.writeFileSync(path.join(wt, 'src.txt'), 'base\n');
   git(wt, 'add', trackGraph ? '.' : 'src.txt');
   git(wt, 'commit', '--quiet', '-m', 'seed');
@@ -119,9 +120,19 @@ test('a tracked state file dirtied by state-sync refuses and is not committed', 
   assert.throws(
     () => pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run }),
     (error) => error.code === 'WORKTREE_DIRTY' && error.message.includes('.planning/graph/delivery-state.json')
-      && error.message.includes('git rm -r --cached .planning/graph'),
+      && error.message.includes("git rm -r --cached -- .planning/graph ':!.planning/graph/tickets.json' ':!.planning/graph/tickets.yaml'"),
   );
   assert.strictEqual(git(f.wt, 'rev-parse', 'HEAD'), before);
+});
+
+test('a dirty tracked tickets.json is the operator\'s own edit: the hint never untracks it', () => {
+  const f = fixture({ trackGraph: true });
+  fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), '{"edited":1}');
+  assert.throws(
+    () => pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run: noopRun }),
+    (error) => error.code === 'WORKTREE_DIRTY' && error.message.includes('.planning/graph/tickets.json')
+      && error.message.includes('commit or discard') && !error.message.includes('git rm'),
+  );
 });
 
 test('a dirty tracked source file refuses, naming status', () => {

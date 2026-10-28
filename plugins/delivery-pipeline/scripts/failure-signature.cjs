@@ -231,7 +231,7 @@ const GRAPH_DIR = GRAPH_FLAG_AT !== -1
   ? path.resolve(ARGV_ALL[GRAPH_FLAG_AT + 1])
   : (process.env.SHIPYARD_GRAPH_DIR
     ? path.resolve(process.env.SHIPYARD_GRAPH_DIR)
-    : path.join(process.cwd(), '.planning', 'graph'));
+    : require('./graph-dir.cjs').resolveGraphDir().dir);
 // Guarded on the -1 case deliberately: `i !== GRAPH_FLAG_AT + 1` with no flag
 // present reads as `i !== 0` and eats the SUBCOMMAND.
 const ARGV = GRAPH_FLAG_AT === -1

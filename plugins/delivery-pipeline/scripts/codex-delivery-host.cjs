@@ -936,6 +936,7 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
       const fileInput = stage.mode === 'native-observed' && Buffer.byteLength(stage.input) > 1048576
         ? roleArtifact.prepareCodexIntegrationFileInput({ prepared: stage, host: execution.capacityHost,
           scope: native.scope, storageRoot: storage, graphDir: review.prepared.graph.directory }) : null;
+      const graphBaseline = require('./claude-role-host.cjs').graphStateSnapshot(review.prepared);
       const dispatch = await launchAgent('integrator', { cwd: scope.worktree, flags: new Map(),
         signals: review.prepared.signals, dispatch_id: stage.dispatch_id, scope: native.scope,
         host: native, recorder: native.recorder, controller, capabilities: native.capabilities,
@@ -946,7 +947,7 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
       if (heartbeatError) throw heartbeatError;
       recheckIntegrationReview(review, partitions);
       require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
-        ...review.prepared, integrationReview: review, integrationPartitions: partitions });
+        ...review.prepared, integrationReview: review, integrationPartitions: partitions }, graphBaseline);
       const result = partitionedCodexResult(dispatch, native.recorder);
       let artifact;
       if (stage.kind === 'unit') artifact = roleArtifact.sealIntegrationUnit({ prepared: stage,

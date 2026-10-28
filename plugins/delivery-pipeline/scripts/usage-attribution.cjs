@@ -272,7 +272,7 @@ function graphFromArgs(argv) {
   if (process.env.SHIPYARD_GRAPH_DIR) {
     return { args, dir: path.resolve(process.env.SHIPYARD_GRAPH_DIR), explicit: true };
   }
-  return { args, dir: path.join(process.cwd(), '.planning', 'graph'), explicit: false };
+  return { args, dir: require('./graph-dir.cjs').resolveGraphDir().dir, explicit: false };
 }
 
 function graphGuard(dir, explicit) {

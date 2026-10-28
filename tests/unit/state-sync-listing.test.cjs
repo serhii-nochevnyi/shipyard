@@ -179,6 +179,26 @@ test('skips per-ticket GitHub lookups for a ledgered merge into a landed epic', 
   assert.deepEqual(state(f)[TICKET], previous);
 });
 
+test('run from a linked worktree it rebuilds the main checkout board, not a copy beside the worktree', () => {
+  const f = fixture({ ledger: 301, previousState: { [TICKET]: priorMergedRow(301) } });
+  const git = (...args) => spawnSync('git', args, { cwd: f.root, encoding: 'utf8' });
+  const linked = path.join(f.root, '..', `${path.basename(f.root)}-linked`);
+  try {
+    git('init', '-q'); git('config', 'user.email', 'a@b.c'); git('config', 'user.name', 'n');
+    fs.writeFileSync(path.join(f.root, '.gitignore'), '.planning/graph/*\n!.planning/graph/tickets.json\nbin/\ngh-*\nhome/\n');
+    git('add', '.'); git('commit', '-q', '-m', 'seed');
+    assert.equal(git('worktree', 'add', '-q', '-b', 'ticket/x', linked).status, 0);
+    fs.rmSync(path.join(f.graphDir, 'delivery-state-meta.json'), { force: true });
+    const result = run({ ...f, root: linked });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(fs.existsSync(path.join(f.graphDir, 'delivery-state-meta.json')), 'the main checkout board was rebuilt');
+    assert.deepEqual(fs.readdirSync(path.join(linked, '.planning', 'graph')).sort(), ['tickets.json']);
+  } finally {
+    git('worktree', 'remove', '--force', linked);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test('revalidates and records a prior landed PR after a plan rename changes its canonical branch', () => {
   const renamedBranch = 'ticket/T-43-01-renamed-plan-title';
   const previous = priorMergedRow(301);
