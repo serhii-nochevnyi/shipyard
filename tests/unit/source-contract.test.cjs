@@ -77,7 +77,6 @@ const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-ev
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const pipelineConfig = require('../../plugins/delivery-pipeline/scripts/pipeline-config.cjs');
-const rollout = require('../../plugins/delivery-pipeline/scripts/run-rollout.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createDurableRecorder } = boundaryModule;
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
@@ -2063,41 +2062,6 @@ test('investigate emits flat machine-readable decision lists', () => {
   assert.ok(investigate.includes('scope fences use\n     `## Out of scope`'));
 });
 
-test('autonomous rollout source keeps the gate versioned, provider-pure, and fail-closed', () => {
-  const source = readRepo('plugins/delivery-pipeline/scripts/run-rollout.cjs');
-  assert.ok(source.includes("SCHEMA = 'shipyard.autonomous-rollout.v2'"));
-  assert.ok(source.includes("ROLLOUT_VERSION = 'v2'"));
-  assert.ok(source.includes("LEGACY_SCHEMA = 'shipyard.autonomous-rollout.v1'"));
-  assert.ok(source.includes("LEGACY_ROLLOUT_VERSION = 'v1'"));
-  assert.ok(source.includes("source !== 'live'"));
-  assert.ok(source.includes('launches_enabled'));
-  assert.ok(source.includes('readCredentialStatus'));
-  assert.ok(source.includes("providerFor(runtime)"));
-  assert.ok(source.includes("--capability-only"));
-  for (const file of ['run-contract.cjs', 'run-store.cjs', 'run-controller.cjs', 'run-waker.cjs', 'run-telemetry.cjs', 'usage-attribution.cjs', 'pipeline-stats.cjs']) {
-    assert.ok(source.includes(file), `rollout gate must name ${file}`);
-  }
-  assert.deepStrictEqual(rollout.RUNTIMES, ['claude', 'codex']);
-  assert.deepStrictEqual(rollout.PROVIDERS, { claude: 'anthropic', codex: 'openai' });
-});
-
-test('delivery documents rollout status, technical waits, rollback, and human-only gates', () => {
-  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
-  const docs = readRepo('docs/gsd_multilevel_delivery_pipeline.md');
-  for (const source of [deliver, docs]) {
-    assert.ok(source.includes('run-rollout.cjs'));
-    assert.ok(source.includes('unavailable'));
-    assert.ok(source.includes('refused'));
-    const lower = source.toLowerCase();
-    assert.ok(lower.includes('technical waits') && ['ci', 'review', 'quota', 'lease', 'host'].every((kind) => lower.includes(kind)));
-    assert.ok(lower.includes('historical records') || lower.includes('historical receipts'));
-    assert.ok(lower.includes('inherited model'));
-  }
-  assert.ok(deliver.includes('Claude uses Anthropic and\nCodex uses OpenAI'));
-  assert.ok(docs.includes('do not disable explicit user-issued command runs'));
-  assert.ok(deliver.includes('protected default-branch merge'));
-});
-
 test('delivery routes model-bearing roles through one provider-specific shipped host', () => {
   const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
   const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
@@ -2131,16 +2095,6 @@ test('GSD sync projects controller state without volatile owner or store fields'
   assert.ok(source.includes('wait_kind'));
   assert.ok(source.includes('receipt_status'));
   assert.ok(source.includes('usage_status'));
-});
-
-test('runtime smoke uses live capability-only probing and has no synthetic enable path', () => {
-  const smoke = readRepo('tests/smoke/runtime-control-plane-smoke.sh');
-  assert.ok(smoke.includes('--capability-only'));
-  assert.ok(smoke.includes('run-rollout.cjs'));
-  assert.ok(smoke.includes('status'));
-  assert.ok(smoke.includes('unavailable'));
-  assert.ok(smoke.includes('refused'));
-  assert.doesNotMatch(smoke, /synthetic|fixture|fake|mock/i);
 });
 
 test('Codex live smoke refuses the source checkout before probing or launching a model', () => {

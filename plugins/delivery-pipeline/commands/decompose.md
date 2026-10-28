@@ -52,12 +52,8 @@ generates or validates the dispatch id, builds `createDispatchBoundary`, calls
 not pass caller-selected model/effort fields or invoke GSD callbacks outside
 that host.
 
-Use `run-rollout.cjs status --json` to read the selected provider's controller
-status at `runtimes.<runtime>.launches_enabled`. This flag gates autonomous
-controller launches; it does not disable a command-issued decomposition.
-Controller opt-in does not change host selection. An unavailable or refused
-host cannot switch to the other provider; stop its launch before planning
-output is accepted.
+An unavailable or refused host cannot switch to the other provider; stop its
+launch before planning output is accepted.
 
 ## Host evidence directory
 

@@ -130,7 +130,6 @@
  "run-contract.test.cjs": 1,
  "run-controller.test.cjs": 1,
  "run-reachability.test.cjs": 5,
- "run-rollout.test.cjs": 1,
  "run-scope.test.cjs": 1,
  "run-store.test.cjs": 1,
  "run-telemetry.test.cjs": 1,
