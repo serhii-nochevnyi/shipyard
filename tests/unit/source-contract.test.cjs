@@ -982,14 +982,14 @@ test('delivery launch docs route every role through the boundary and the generat
     assert.ok(compact.includes(normalized(role)), `delivery docs must name routed role ${role}`);
   }
 
+  const guide = readRepo('docs/gsd_multilevel_delivery_pipeline.md');
   for (const pair of [
     'Luna/medium', 'Sol/low', 'Sol/high', 'Sol/xhigh',
     'Sonnet/low', 'Sonnet/medium', 'Sonnet/high', 'Sonnet/xhigh', 'Opus/high',
     'Fable/medium',
   ]) {
-    assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
+    assert.ok(`${source}\n${guide}`.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
   }
-  const guide = readRepo('docs/gsd_multilevel_delivery_pipeline.md');
   const sectionStart = guide.indexOf('### 7.5.1. Runtime-native model grids');
   const assertionStart = guide.indexOf('\n**Canonical-table assertion.**', sectionStart);
   assert.ok(sectionStart >= 0 && assertionStart > sectionStart,
@@ -1028,7 +1028,7 @@ test('delivery launch docs route every role through the boundary and the generat
   assert.ok(sentinel.includes('Workflow runtime'), 'the sentinel reference must name its Workflow runtime mechanism');
 
   for (const variant of codexStaticVariants(2)) {
-    assert.ok(source.includes(variant.file), `delivery docs must name generated Codex variant ${variant.file}`);
+    assert.ok(`${source}\n${guide}`.includes(variant.file), `delivery docs must name generated Codex variant ${variant.file}`);
   }
   for (const retired of ['pr-sentinel-deep', 'arch-review-deep']) {
     assert.ok(!source.includes(retired), `delivery docs must not reintroduce retired variant ${retired}`);

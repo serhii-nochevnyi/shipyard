@@ -252,191 +252,81 @@ directory); never hand-edit state files while a guard runs.
 
 ## Agent models and the mandatory dispatch boundary
 
-Every Shipyard launch in this command — executor, drift-check, PR sentinel,
-CI fix, review fix, architecture review, and integrator — MUST cross one
-`resolve → validate → launch → receipt` boundary. The boundary's trace also
-records the requested, applied, and observed selection. There is no direct
-model call beside it, no inline launch, and no inherited guard or session.
+Every Shipyard launch in this command — executor, drift-check, PR sentinel, CI
+fix, review fix, architecture review and integrator — MUST cross one
+`resolve → validate → launch → receipt` boundary, which also records the
+requested, applied and observed selection. There is no direct model call beside
+it, no inline launch, and no inherited guard or session. Use the scripts named
+below instead of improvising git/gh by hand.
 
-**Cardinality is per work item.** For executors, decomposition, drift-check,
-integrator, architecture review, and each CI/review fix, resolve and launch
-separately for every ticket or PR, and keep that item's receipt and dispatch
-record with its own result. Build batch arguments from those per-item
-selections; never reuse one ticket's model, effort, signals, or receipt for
-another. The only intentional shared dispatch is a round-scoped `pr-sentinel`
-guard over its guarded PR batch.
+**Cardinality is per work item.** Resolve and launch separately for every ticket
+or PR and keep that item's receipt and dispatch record with its own result; never
+reuse one item's model, effort, signals or receipt for another. The only
+intentional shared dispatch is a round-scoped `pr-sentinel` guard.
 
-The following call shapes describe the selected host's internal boundary
-contract. The command sends the equivalent scoped role request to that host;
-it does not construct a boundary or dispatch directly. The selected runtime
-host creates one `createDispatchBoundary` and `createDurableRecorder` for each
-run. Codex validates the generated role file;
-Claude's host adapter applies the selected Anthropic alias and effort. The host
-calls `boundary.dispatch({ runtime, role, signals, dispatch_id }, context)` with
-the runtime and role explicit. The boundary resolves the canonical policy,
-validates its fingerprint and concrete selection, launches through the runtime
-adapter, verifies application evidence, and records the receipt before the
-launch is considered successful. Commands pass bounded role inputs to the
-host; they do not call the boundary or native Agent/Workflow surfaces directly.
-A missing adapter, recorder, effort, receipt, or typed launch capability is a
-refusal, never a lower-model or parent-session fallback. A process exit or
-self-asserted model is not a receipt.
+The command sends a scoped role request to the selected host and never constructs
+a boundary or calls native Agent/Workflow itself. The host creates one
+`createDispatchBoundary` and `createDurableRecorder` per run and calls
+`boundary.dispatch({ runtime, role, signals, dispatch_id }, context)`; the
+boundary resolves the canonical policy, validates its fingerprint and the
+concrete selection, launches through the runtime adapter, verifies application
+evidence and records the receipt. A missing adapter, recorder, effort, receipt or
+typed launch capability is a refusal, never a lower-model or parent-session
+fallback; a process exit or self-asserted model is not a receipt.
 
-The resolver is the only selection authority. A launch site MUST NOT contain a
-literal model string or a literal fallback effort, and MUST NOT omit effort.
-Pass every signal that the role owns: ticket `risk` and declared-file
-evidence in context, plus `checkpoint`/`critical` evidence for executors; signed failure `signatureState`
-for repairs; measured `inputTokens` plus `contested`/checkpoint evidence for
-judgement; and the sentinel's explicit mechanical signals. The ticket's `type`
-is never a `signals` field — the resolver accepts only `facts`/`alternatives`
-there for research, so a D-27 ticket type belongs to branch and PR-title
-conventions instead, mapped by the dispatch entry point (Step 3) or by
-`pr-hygiene.cjs`, never forwarded as `signals.type`. For a repair
-escalation also pass the immediately preceding `previous_dispatch_id` and its
-boundary-verified `signals.priorApplied` receipt. The boundary refuses an
-omitted, copied, phantom, stale, or unverified receipt and refuses
-undocumented escalation.
+The resolver is the only selection authority: no literal model string, no literal
+fallback effort, no omitted effort. Pass every signal the role owns — `risk` and
+declared-file evidence plus `checkpoint`/`critical` for executors, signed
+`signatureState` for repairs, measured `inputTokens` plus `contested`/checkpoint
+evidence for judgement, the sentinel's mechanical signals. The ticket's `type` is
+never forwarded as `signals.type` (it belongs to branch and PR-title conventions
+via the entry point or `pr-hygiene.cjs`). A repair escalation also passes the
+immediately preceding `previous_dispatch_id` and its boundary-verified
+`signals.priorApplied` receipt. `flake` and `plan_defect` are terminal gate
+outcomes, not promotions. Keep the boundary's `route`, `signals_fired`, reasons,
+`rung`, model, effort and receipt verbatim.
+
+Refuse before launch when the runtime is missing or ambiguous, a model or effort
+is literal/omitted/conflicting, the selected Codex file is missing or stale, a
+native pair is unsupported, a guard or session is inherited, the launch is inline,
+an escalation signal is absent or undocumented, the prior receipt is missing,
+copied, phantom or stale, the recorder cannot acknowledge, or the host omits
+applied/observed receipt evidence. Never create a dispatch record before a launch
+returns its identity — that records a phantom agent.
 
 ### Codex policy and generated files
 
-Codex uses the logical model ladder below: Sol is `gpt-6.1-sol` and Luna is
-`gpt-6-luna`. Claude Sonnet is `claude-sonnet-5-5` and Opus is
-`claude-opus-5-5`. The concrete model and effort come
-from the selector; do not paste fallback values into a launch. `codex-agent.cjs
-select <role> --json --capabilities-file <current-host-capabilities.json>
---project-dir <project>` requires current host capabilities and returns the
-canonical `route`, concrete `model`, `model_key`, `effort`/`requested_effort`,
-and, for static roles, `agent_file`. Validate that exact file and its manifest
-through the boundary before `launchStatic`. A generated file is not permission
-to bypass the boundary or to launch a different file.
+The grids are independent and authoritative in `model-policy.cjs` (see also
+CLAUDE.md and the operator guide §7.5.1): Codex Sol is `gpt-6.1-sol` and Luna
+`gpt-6-luna`; Claude Sonnet is `claude-sonnet-5-5` and Opus `claude-opus-5-5`.
+Never translate one grid into the other or restate it in a launch. Codex uses
+`--capabilities-file <current-host-capabilities.json>`; the host (not the caller)
+runs the selector:
 
-| Role | Base | Evidence-based escalation | Codex launch form |
-| --- | --- | --- | --- |
-| `research` | Sol/high | `complexity: very-complex` → Sol/xhigh; `type: alternatives` alone stays at base | generated `shipyard-inv-research.toml`, `shipyard-inv-research-critical.toml` |
-| `decomposition` | Sol/high | `critical` or `checkpoint` → Sol/xhigh | explicit model + `reasoning_effort` |
-| `executor` | Sol/low | `critical` or `checkpoint` → Sol/high | explicit model + `reasoning_effort` |
-| `pr-sentinel` | Luna/medium | none; gate strategy only | generated `shipyard-pr-sentinel.toml` |
-| `drift-check` | Sol/low | none; gate strategy only | generated `shipyard-drift-check.toml` |
-| `integrator` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-integrator.toml` or `shipyard-integrator-critical.toml` |
-| `arch-review` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml` |
-| `code-review` | Sol/high | `critical` or `checkpoint` → Sol/xhigh; `contested` and the measured window never promote | generated `shipyard-code-review.toml` or `shipyard-code-review-critical.toml` |
-| `ci-fix` | Sol/low | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
-| `review-fix` | Sol/low | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
+```text
+node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json" [--project-dir <project>]
+```
 
-The Codex dynamic roles are `decomposition` and `executor`; both have
-`agent_file: null` and receive their selected concrete `model` and `effort`
-explicitly from the host. Every other delivery role in this table is static and
-MUST use the generated file named by the selector.
-Codex research has no alternatives rung; its `very-complex` rung uses the
-emitted `-critical` suffix. The generator emits `-repeat` for a repair repeat
-rung and `-deep` only for `ci-fix`/`review-fix` `repeat_exhausted`. No sentinel
-recovery variant or additional architecture-review `repeat_exhausted` variant is
-generated; neither role accepts an invented target.
+It returns the canonical `route`,
+concrete `model`, `model_key`, `effort`/`requested_effort` and, for static roles,
+`agent_file`; the boundary validates that exact file and its manifest before
+`launchStatic`. The Codex dynamic roles are `decomposition` and `executor`
+(`agent_file: null`; the host applies the selected model and effort explicitly);
+every other role is static and MUST use the generated `shipyard-<role>[-critical|-repeat|-deep].toml`
+the selector names. Codex research has no alternatives rung:
+`type: alternatives` is inert and `very-complex` uses `shipyard-inv-research-critical.toml`.
+`-repeat` and `-deep` exist only for `ci-fix`/`review-fix`; no sentinel recovery
+variant or extra `arch-review` `repeat_exhausted` variant exists.
 
 ### Claude host-owned workflow aliases and launch arguments
 
-The Claude host-owned Workflow has an independent model grid; never translate
-Codex logical names into its launch arguments. Its registered Workflow adapter
-receives the selected native alias and explicit effort from
-`resolution.launch_arguments`, and the host must return application evidence
-for that exact pair:
-
-| Role | Base | Evidence-based escalation |
-| --- | --- | --- |
-| `research` | Sonnet/xhigh | `very-complex` → Opus/high; `alternatives` is inert |
-| `decomposition` | Sonnet/xhigh | `critical` or `checkpoint` → Opus/high |
-| `executor` | Sonnet/medium | `critical` or `checkpoint` → Sonnet/xhigh |
-| `pr-sentinel` | Sonnet/low | none |
-| `drift-check` | Sonnet/medium | none |
-| `integrator` | Sonnet/xhigh | measured window, `contested`, `critical`, or `checkpoint` → Opus/high |
-| `arch-review` | Sonnet/xhigh | critical/contested/checkpoint → Opus/high; measured window → Fable/medium |
-| `ci-fix` / `review-fix` | Sonnet/high | verified `repeat` → Sonnet/xhigh → verified `repeat_exhausted` → Opus/high |
-
-Only the selected runtime host may launch a model. Claude's host applies its
-resolved Anthropic alias and effort; Codex's host applies the generated static
-role file or the explicit dynamic model/effort pair. Do not turn a selection
-into prompt text, call a native Agent or Workflow directly, or rely on the
-active session. A missing host or boundary-verified receipt is a failed
-dispatch, not a fallback.
-
-### Boundary inputs and refusal rules
-
-The boundary receives the full ticket/PR evidence, not a summary invented by
-the caller. Keep its `route`, `signals_fired`, signal reasons, `rung`, model,
-effort, and receipt verbatim. `strategy` is caller-owned fixer context, not a
-field returned by the boundary or `failure-signature.cjs verdict`: derive it
-from that verdict as `first` → `fix`, `progress` → `continue`, and
-`repeat`/`repeat_exhausted` → `rethink` before constructing the fixer prompt.
-`risk`,
-`type`, available `complexity`,
-and checkpoint signals are passed on every executor, while declared files and
-changed-file evidence remain in context; `inputTokens` is measured for both
-integrator and arch-review; `contested` is passed when the journal proves a
-prior judgement fault; and repair `signatureState` is passed on every CI or
-review fix. A repeat may be dispatched only after the prior rung's receipt is
-verified and consumed by the boundary. `flake` and `plan_defect` are terminal
-gate outcomes, not model promotions.
-
-Refuse before launch when runtime is missing or ambiguous, a model or effort is
-literal/omitted/conflicting, the selected Codex file is missing or stale, a
-Workflow-runtime native pair is unsupported, a guard/session is inherited, a launch is
-inline, an escalation signal is absent or undocumented, the prior applied
-receipt is missing or phantom, the recorder cannot acknowledge the record, or
-the host omits applied/observed receipt evidence. Never create a dispatch
-record before a launch returns its identity; doing so creates a phantom record
-for an agent that does not exist.
-
-Configuration and GSD model profiles are inputs to runtime context only. They
-cannot override the canonical boundary, supply effort, or authorize a fallback.
-The config-aware routed resolver must decide Fable consent before a Workflow
-boundary launch: `pipeline.fable: auto` is required for a Fable result; with the
-default `off`, refuse the unconsented selection before launch rather than asking
-the config-blind boundary to authorize it. Unknown or misspelled keys remain
-`⚠ config:` warnings; they do not become launch authority.
-
-Scripts (the deterministic layer — do NOT improvise git/gh by hand where a script
-exists):
-
-```text
-node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs
-node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs [--parked <T,T>]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/front.cjs [--json] [--parked <T,T>]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs <duty|merge <T|--all>|report> [--json] [--dry-run]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve [flags]  # compatibility/config diagnostics only; launches use the boundary
-node ${CLAUDE_PLUGIN_ROOT}/scripts/reviewers.cjs <reinit|unresolved|feedback|status> <pr> [--json] [--repo owner/name]
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|root|list [--json]> ...
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|refresh|pr|status|retarget> ...
-node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <p> --base <ref> [--json]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/comment-policy.cjs <check|clean> <T> --worktree <p> --base <ref> [--json] [--apply]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/publish-gate.cjs --worktree <p> --base <ref> [--json]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <ref> [--json]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--graph <dir>]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs <mark|clear|list> …
-node ${CLAUDE_PLUGIN_ROOT}/scripts/escalation-record.cjs <mark|mark-plan-defect|clear|list> …
-node ${CLAUDE_PLUGIN_ROOT}/scripts/failure-signature.cjs <compute|verdict|rerun|lift> …
-node ${CLAUDE_PLUGIN_ROOT}/scripts/attempt-history.cjs <T> [--json] [--details] [--limit <n>]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs <seal|validate|read> --worktree <p> --role <role> --base <ref> --boundary-store <p> --dispatch-id <id> …
-node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs [--json] [--since 14d|all]
-```
-
-**Telemetry belongs to the PROJECT, wherever the agent happens to stand.** The
-journal is only readable beside its graph — `pipeline-stats` needs `tickets.json`
-next to it — so an event logged from a ticket worktree or a cross-repo checkout
-must name the project's graph explicitly: `--graph <project>/.planning/graph`, or
-`SHIPYARD_GRAPH_DIR` in the agent's environment. Logging without it from such a
-checkout now refuses instead of quietly starting a second journal there; one
-`attempt` for a cross-repo ticket did exactly that, landing an untracked
-`.planning/` in a borrowed repository where nothing would ever read it.
-The same flag and the same spelling reach everything else that touches that
-journal: `failure-signature.cjs verdict|rerun|lift`, `attempt-history.cjs` and
-`escalation-record.cjs mark`/`mark-plan-defect` — all four refuse outright
-without it (escalation-record gained the same fail-closed `tickets.json` guard
-this same phase; `clear`/`list` stay permissive since they read or no-op rather
-than park a verdict nowhere). The refusal matters most on the READING side: "no
-prior attempts" answered from the wrong directory is indistinguishable from a
-fresh ticket, which is exactly how a fixer re-proposes a fix that already failed.
-`failure-signature.cjs compute` is the one exception, by design: it reads a log
-and prints a hash, touches no journal, and is meant to run in a worktree.
+Claude's host-owned Workflow adapter receives the native alias and explicit effort
+from `resolution.launch_arguments` and must return application evidence for that
+exact pair. Fable needs `pipeline.fable: auto`: the config-aware resolver decides
+consent before a Workflow launch, and with the default `off` the unconsented
+selection is refused before launch. Configuration and GSD model profiles are
+inputs to runtime context only; they cannot override the boundary, supply effort
+or authorize a fallback, and unknown keys stay `⚠ config:` warnings.
 
 ## Integration model — epic-stacked (default)
 
