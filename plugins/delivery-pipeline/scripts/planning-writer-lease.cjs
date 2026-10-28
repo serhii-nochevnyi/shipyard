@@ -160,8 +160,7 @@ function sealOutputPaths(role, phaseDir) {
 function captureSealManifest({ role, phaseDir, snapshot, changed }) {
   const paths = sealOutputPaths(role, phaseDir);
   const sortedChanged = [...changed].sort();
-  // @invariant: an existing CONTEXT.md holds the locked decisions the planner reads; it is a sealed
-  // input, so a host-computed change to it is refused. Creating one where none existed stays allowed.
+  // @invariant: the planner may not change an existing CONTEXT.md (locked decisions); creating one is allowed.
   if (role === 'gsd-planner' && Object.hasOwn(snapshot.digests, 'CONTEXT.md') && sortedChanged.includes('CONTEXT.md')) {
     fail('FOREIGN_EDIT', 'phase delta modifies the frozen planner CONTEXT.md input');
   }
