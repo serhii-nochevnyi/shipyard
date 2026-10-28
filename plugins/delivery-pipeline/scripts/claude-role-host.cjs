@@ -1772,7 +1772,8 @@ function assertEvidenceOnlyChanges(options, prepared, graphBaseline) {
           || sha(fs.readFileSync(path.join(prepared.canonical.worktree, file))) !== scratchDigest;
       } catch { return true; }
     }
-    return !graphBaseline.has(path.resolve(prepared.canonical.worktree, file));
+    const absolute = path.resolve(prepared.canonical.worktree, file);
+    return !graphBaseline.has(absolute) && !absolute.startsWith(path.resolve(prepared.graph.directory) + path.sep);
   });
   unexpected.push(...graphStateChanges(prepared, graphBaseline));
   if (unexpected.length) reject(`role changed paths outside its evidence file: ${unexpected.slice(0, 8).join(', ')}`, 'WORKTREE_MUTATED');
