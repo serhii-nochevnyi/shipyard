@@ -734,6 +734,9 @@ function createClaudeCliLauncher(options = {}) {
       try { schemaJson = JSON.stringify(schema); } catch { schemaJson = undefined; }
       if (typeof schemaJson !== 'string') fail('INVALID_INPUT', 'schema must be serializable JSON');
     }
+    const semanticReview = schema?.properties?.review_contract?.const === 'shipyard.semantic-review.v1';
+    if (semanticReview && launchOptions.readOnly !== true)
+      fail('INVALID_INPUT', 'semantic review requires the native read-only profile');
     const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot, schema) : null;
     const persistentEvidence = typeof options.startEvidenceFile === 'string';
     const evidenceDirectory = persistentEvidence ? path.dirname(path.resolve(options.startEvidenceFile))
@@ -753,7 +756,8 @@ function createClaudeCliLauncher(options = {}) {
           failIfUnavailable: true,
           allowUnsandboxedCommands: false,
           autoAllowBashIfSandboxed: true,
-          filesystem: { allowWrite: [path.resolve(scope.worktree)], denyRead: [archiveAuthority], denyWrite: [archiveAuthority] },
+          filesystem: { allowWrite: semanticReview ? [] : [path.resolve(scope.worktree)], denyRead: [archiveAuthority],
+            denyWrite: [archiveAuthority, ...(semanticReview ? [path.resolve(scope.worktree)] : [])] },
           credentials: { envVars: SENSITIVE_SUBPROCESS_ENV.map((name) => ({ name, mode: 'deny' })) },
         },
         permissions: {
@@ -778,7 +782,7 @@ function createClaudeCliLauncher(options = {}) {
           }],
         },
       });
-      const tools = launchOptions.readOnly === true ? READ_ONLY_TOOLS
+      const tools = semanticReview ? 'Read,Glob,Grep' : launchOptions.readOnly === true ? READ_ONLY_TOOLS
         : agentDefinition ? agentDefinition.tools : ALLOWED_TOOLS;
       const args = [
       '--print', '--input-format', STREAM_FORMAT, '--output-format', STREAM_FORMAT,
@@ -1004,6 +1008,87 @@ function createClaudeRuntimeHost(options = {}) {
   return Object.freeze(host);
 }
 
+// @contract: Semantic review authenticates Claude carriers and tool identities under their native schema.
+function semanticResult(parsed) {
+  const terminal = parsed.result;
+  if (!terminal || parsed.records.at(-1) !== terminal || terminal.subtype !== 'success'
+      || terminal.is_error !== false || parsed.records.filter(row => row.type === 'result').length !== 1
+      || terminal.session_id !== parsed.session_id)
+    fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude output requires one original successful terminal result');
+  let textual;
+  const text = typeof terminal.result === 'string' ? terminal.result : null;
+  if (text !== null) {
+    try { textual = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
+    catch { fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude terminal text is not complete JSON'); }
+  }
+  const result = terminal.structured_output ?? textual;
+  if (!object(result) || result.review_contract !== 'shipyard.semantic-review.v1'
+      || text !== null && Buffer.byteLength(text) > 128 * 1024
+      || Buffer.byteLength(JSON.stringify(result)) > 128 * 1024
+      || textual !== undefined && !require('node:util').isDeepStrictEqual(textual, result))
+    fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude terminal carriers differ or exceed their contract');
+  return { result, text: text ?? JSON.stringify(result) };
+}
+
+function verifySemanticReads(raw, sessionId) {
+  const rows = raw.split('\n').filter(Boolean).map(JSON.parse);
+  const calls = new Map(), completed = [], incomplete = [], outputCalls = new Set();
+  let outputBytes = 0, input = false, final = false;
+  for (const row of rows) {
+    if (!object(row) || row.type === 'response_item' || row.type === 'event_msg')
+      fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude transcript contains foreign native records');
+    if (!['user', 'assistant'].includes(row.type)) continue;
+    if (row.sessionId !== sessionId || row.session_id !== undefined && row.session_id !== sessionId)
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic Claude read belongs to a foreign session');
+    const content = row.message?.content;
+    if (row.type === 'user' && (typeof content === 'string'
+        || Array.isArray(content) && content.some(block => block.type === 'text' && block.text?.includes('<AUTHENTICATED_SEMANTIC_REVIEW>')))) {
+      if (input || final) fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude input must be unique and precede all reads');
+      input = true;
+    }
+    for (const block of Array.isArray(content) ? content : []) {
+      let answer;
+      if (row.type === 'assistant' && block.type === 'text') {
+        try { answer = JSON.parse(block.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
+      }
+      if (row.type === 'assistant' && (block.name === 'StructuredOutput' && block.type === 'tool_use'
+          || answer?.review_contract === 'shipyard.semantic-review.v1')) {
+        if (!input || final) fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude final must follow its unique input and tools');
+        final = true;
+        if (block.type === 'tool_use') {
+          if (typeof block.id !== 'string' || !block.id || calls.has(block.id))
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic Claude final tool identity differs from original read calls');
+          outputCalls.add(block.id);
+        }
+      } else if (row.type === 'assistant' && block.type === 'tool_use') {
+        if (!input || final || typeof block.id !== 'string' || !block.id || calls.has(block.id)
+            || !['Read', 'Glob', 'Grep'].includes(block.name))
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic Claude tool call has a duplicate or foreign identity');
+        calls.set(block.id, { name: block.name, input: block.input, completed: false });
+      } else if (row.type === 'user' && block.type === 'tool_result') {
+        if (outputCalls.delete(block.tool_use_id)) continue;
+        const call = calls.get(block.tool_use_id);
+        if (!call || call.completed || final)
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic Claude tool output has a duplicate or foreign identity');
+        call.completed = true;
+        const encoded = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
+        if (typeof encoded !== 'string') fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude tool output is missing');
+        outputBytes += Buffer.byteLength(encoded);
+        if (outputBytes > TRANSCRIPT_MAX_BYTES) fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude tool outputs exceed their bound');
+        const reason = block.truncated === true || row.toolUseResult?.truncated === true
+          || /(?:^|\n)(?:Warning: truncated output|\[(?:output|file) truncated\]|Output (?:was )?truncated|<persisted-output>)/i.test(encoded)
+          ? 'truncated' : block.is_error === true || row.toolUseResult?.is_error === true ? 'failed' : null;
+        (reason ? incomplete : completed).push({ call_id: block.tool_use_id, tool: call.name,
+          ...(reason ? { reason } : {}) });
+      }
+    }
+  }
+  if (!input || !final) fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude input or final is missing');
+  for (const [call_id, call] of calls) if (!call.completed) incomplete.push({ call_id, tool: call.name, reason: 'missing-output' });
+  return freeze({ schema: 'shipyard.semantic-native-reads.v1', completed, incomplete,
+    output_bytes: outputBytes, semantic_credit: false });
+}
+
 function parseCliArguments(argv) {
   if (!Array.isArray(argv)) fail('INVALID_INPUT', 'CLI arguments must be an array');
   const values = { capabilityOnly: false };
@@ -1045,6 +1130,8 @@ module.exports = Object.freeze({
   probeClaudeRuntime,
   parseClaudeStream,
   observedSelection,
+  semanticResult,
+  verifySemanticReads,
   writeTranscript,
   verifyCompletedClaudeLaunch,
   createClaudeCliLauncher,

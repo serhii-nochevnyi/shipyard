@@ -1003,7 +1003,9 @@ async function runClaudeCurrentReview(f, role, edit = {}) {
   if (role === 'integrator') options.getPullRequest = projectOptions(f).getPullRequest;
   return secondRuntime.createClaudeRoleHost(options).run({ schema: secondRuntime.REQUEST_SCHEMA,
     role, worktree: f.worktree, phase: f.phase,
-    ...(role === 'arch-review' ? { pr: f.pr.number } : { review_contract: 'shipyard.integration-review.v2' }) });
+    ...(role === 'arch-review' ? { pr: f.pr.number,
+      ...(typeof secondRuntime.claudeSemanticArchitectureSource === 'function'
+        ? { review_contract: 'shipyard.focused-architecture-review.v1' } : {}) } : { review_contract: 'shipyard.integration-review.v2' }) });
 }
 
 async function fixture(action) {
