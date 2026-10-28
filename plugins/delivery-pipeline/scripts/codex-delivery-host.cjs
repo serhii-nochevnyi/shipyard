@@ -1025,6 +1025,16 @@ async function runSemanticReview({ prepared, recorder, launch, worktreePath } = 
   return launch(final);
 }
 
+function recoverCodexCodeReview(scope, request, options) {
+  if (Object.keys(request.context).some(key => key !== 'repo') || Object.keys(request.signals).length
+      || request.gsd_role !== undefined)
+    fail('CODE_REVIEW_CONTEXT_REQUIRED', 'semantic code-review requires host-built context and signals');
+  const pr = Number(require('./architecture-target.cjs').PHASE_SUBJECT.exec(scope.ticket)?.[4]);
+  return roleArtifact.recoverAcceptedSemanticCodeReview({ worktreePath: scope.worktree,
+    graphDir: options.graphDir, phase: scope.phase, pr, runtime: 'codex', repo: request.context.repo ?? null,
+    subject: scope.ticket, options });
+}
+
 async function runCodexSemanticReview(review, runtimeHost, scope, options) {
   const architecture = review.architecture, codeReview = review.codeReview;
   const prepared = roleArtifact.prepareSemanticReview(codeReview ? { codeReview } : architecture ? { architecture } : { review });
@@ -1037,9 +1047,10 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
   const launch = async stage => {
     assertWorktree();
     const reservation = roleArtifact.reserveSemanticLaunch({ prepared: stage, recorder: runtimeHost.recorder });
+    const recorder = reservation.recorder;
     let dispatch;
     if (reservation.state === 'recorded') {
-      const original = runtimeHost.recorder.getVerifiedRecord(stage.dispatch_id);
+      const original = recorder.getVerifiedRecord(stage.dispatch_id);
       dispatch = { runtime: 'codex', role, dispatch_id: stage.dispatch_id,
         receipt: original.receipt, application_evidence: { runtime_evidence: original.receipt.runtime_evidence } };
     } else {
@@ -1050,7 +1061,7 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
       if (controller) controller.begin(createRunScope({ run_id: runId, repository_id: prepared.identity.repository,
         phase: scope.phase, ticket: scope.ticket, worktree: scope.worktree, runtime: 'codex', owner_id: ownerId,
         dispatch: { runtime: 'codex', role, dispatch_id: stage.dispatch_id } }));
-      const native = createCodexRuntimeHost({ scope: nativeScope, controller, recorder: runtimeHost.recorder,
+      const native = createCodexRuntimeHost({ scope: nativeScope, controller, recorder,
         capabilities: runtimeHost.capabilities, agentDir: options.agentDir, agentManifest: options.agentManifest,
         executable: options.executable, probe: options.probe, env: options.env, spawn: options.spawn,
         ephemeral: options.ephemeral, approveForMe: options.approveForMe,
@@ -1075,25 +1086,27 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
         assertWorktree();
         if (controller) controller.complete(runId);
       } catch (error) {
-        if (controller) controller.fail(runId, { reason: String(error.message).slice(0, 500) });
+        if (controller) controller.fail(runId, { reason: historyReason(error.message) });
         throw error;
       } finally { if (heartbeat) clearInterval(heartbeat); }
     }
-    const result = partitionedCodexResult(dispatch, runtimeHost.recorder, role);
+    const result = partitionedCodexResult(dispatch, recorder, role);
     if (stage.stage === 'worker') return Object.freeze({ ...dispatch, result });
-    if (codeReview) return codeReviewContext.finishSemantic(codeReview, dispatch, result, runtimeHost.recorder);
-    if (architecture) return archReviewContext.finishSemanticArchitecture(architecture, dispatch, result, runtimeHost.recorder);
-    const { evidence_markdown, ...judgment } = result;
-    const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
-    roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role, phase: review.prepared.phase, evidencePath });
-    fs.writeFileSync(evidencePath, evidence_markdown);
-    const input = { worktreePath: scope.worktree, role, phase: review.prepared.phase,
-      ticket: scope.ticket, base: review.prepared.base, ticketSet: review.prepared.ticketSet,
-      ticketSetDigest: review.prepared.ticketSetDigest, recorder: runtimeHost.recorder, dispatchId: stage.dispatch_id,
-      result: judgment, evidencePath };
-    const artifact = roleArtifact.sealJudgment(input);
-    roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
-    return Object.freeze({ ...dispatch, result, artifact });
+    return roleArtifact.publishSemanticFinal({ prepared: stage, recorder, publish: () => {
+      if (codeReview) return codeReviewContext.finishSemantic(codeReview, dispatch, result, recorder);
+      if (architecture) return archReviewContext.finishSemanticArchitecture(architecture, dispatch, result, recorder);
+      const { evidence_markdown, ...judgment } = result;
+      const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
+      roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role, phase: review.prepared.phase, evidencePath });
+      fs.writeFileSync(evidencePath, evidence_markdown);
+      const input = { worktreePath: scope.worktree, role, phase: review.prepared.phase,
+        ticket: scope.ticket, base: review.prepared.base, ticketSet: review.prepared.ticketSet,
+        ticketSetDigest: review.prepared.ticketSetDigest, recorder, dispatchId: stage.dispatch_id,
+        result: judgment, evidencePath };
+      const artifact = roleArtifact.sealJudgment(input);
+      roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
+      return Object.freeze({ ...dispatch, result, artifact });
+    } });
   };
   return runSemanticReview({ prepared, recorder: runtimeHost.recorder, launch, worktreePath: scope.worktree });
 }
@@ -3376,6 +3389,10 @@ function createCodexDeliveryHost(options = {}) {
         if (partitionRunning) fail('INVALID_INPUT', 'semantic code-review execution is already active');
         partitionRunning = true;
         try {
+          if (!options.codeReviewContext) {
+            const accepted = recoverCodexCodeReview(scope, request, options);
+            if (accepted) return accepted;
+          }
           const codeReview = options.codeReviewContext || codeReviewContext.prepareSemantic(scope, request, {
             ...options, inflightDispatchId: request.dispatch_id, storageRoot: storageDirectory(options, scope) });
           codeReviewContext.assertSemanticRequest(codeReview, scope, request);
@@ -4057,6 +4074,10 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     graphDir: inflightGraphDir(options, scope.worktree),
     ...stateInputs() });
   if (checkOnly || gate.code !== 0) return gate.result;
+  if (parsed.launch.role === 'code-review' && !options.codeReviewContext) {
+    const accepted = recoverCodexCodeReview(scope, parsed.launch, options);
+    if (accepted) { stdout.write(JSON.stringify(accepted) + '\n'); return accepted; }
+  }
   if (parsed.launch.role === 'arch-review' && !options.archReviewContext && options.dispatchId) {
     const original = archReviewContext.restoreAdmittedArchitecture(options.dispatchId, scope);
     if (original) options = handoffLaunchPreparation(options, { ...options, archReviewContext: original });

@@ -932,7 +932,7 @@ function createClaudeRuntimeHost(options = {}) {
   if (!object(probe) || !['available', 'unavailable'].includes(probe.status)) fail('INVALID_INPUT', 'runtime probe has an invalid status');
   if (probe.status !== 'available') {
     if (controller && typeof controller.markUnavailable === 'function') {
-      controller.markUnavailable(runId, { reason: bounded(probe.reason, 2048) || 'Claude runtime unavailable' });
+      controller.markUnavailable(runId, { reason: bounded(probe.reason, 400) || 'Claude runtime unavailable' });
     }
     fail('RUNTIME_UNAVAILABLE', probe.detail || `Claude runtime unavailable: ${probe.reason || 'unknown'}`, { probe });
   }
@@ -979,7 +979,7 @@ function createClaudeRuntimeHost(options = {}) {
       return result;
     } catch (error) {
       if (controller && UNAVAILABLE_CODES.has(error && error.code) && typeof controller.markUnavailable === 'function') {
-        controller.markUnavailable(runId, { reason: bounded(error.message, 2048) || 'Claude runtime unavailable' });
+        controller.markUnavailable(runId, { reason: bounded(error.message, 400) || 'Claude runtime unavailable' });
       }
       throw error;
     }

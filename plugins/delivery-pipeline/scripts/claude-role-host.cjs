@@ -27,7 +27,7 @@ const {
 const { preflightRound } = require('./sentinel-preflight.cjs');
 const { repositoryIdentity, buildSubject } = require('./architecture-target.cjs');
 const { preflight, emitPreflight, probeReasonToCode, handoffLaunchPreparation } = require('./runtime-context.cjs');
-const { formatHint, hintForError } = require('./refusal-hints.cjs');
+const { formatHint, hintForError, stripControl } = require('./refusal-hints.cjs');
 
 const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
 const REQUEST_MAX_BYTES = 32768;
@@ -202,7 +202,7 @@ function canonicalWorktree(options, value, aggregate = false, sealedArchives = f
       if (raw.length !== pin.bytes || sha(raw) !== pin.sha256)
         reject('authenticated semantic manifest changed during preparation', 'RUNTIME_EVIDENCE_MISMATCH');
       const manifest = JSON.parse(raw);
-      if (manifest.artifact_kind !== 'judgment' || manifest.role !== 'integrator' || manifest.runtime !== 'claude'
+      if (manifest.artifact_kind !== 'judgment' || manifest.role !== 'integrator' || !['codex', 'claude'].includes(manifest.runtime)
           || manifest.current_review?.contract !== roleArtifact.SEMANTIC_REVIEW_V1
           || manifest.semantic_review?.stage !== 'final'
           || entry.path !== `.planning/phases/${manifest.phase}/INTEGRATION.md`
@@ -2182,6 +2182,11 @@ async function runClaudeSemanticReview(options, request) {
   if (options.integrationCapacity !== undefined || options.readerCapacity !== undefined || options.readerProfile !== undefined
       || options.runtimeHost !== undefined)
     reject('semantic review resources and per-assignment runtime scopes are host-owned', 'INVALID_INPUT');
+  if (request.role === 'code-review') {
+    const accepted = roleArtifact.recoverAcceptedSemanticCodeReview({ worktreePath: request.worktree,
+      graphDir: options.graphDir, phase: request.phase, pr: request.pr, runtime: 'claude', repo: request.repo ?? null, options });
+    if (accepted) return accepted;
+  }
   const delivery = require('./codex-delivery-host.cjs');
   const collector = require('./codex-arch-review-context.cjs');
   let original = prepareInvocation(options, request);
@@ -2231,28 +2236,30 @@ async function runClaudeSemanticReview(options, request) {
     const dispatch = { runtime: 'claude', role: original.role, dispatch_id: stage.dispatch_id,
       receipt: record.receipt, application_evidence: record.application_evidence, dispatch: record, result };
     if (stage.stage === 'worker') return dispatch;
-    if (codeReview) return require('./codex-code-review-context.cjs').finishSemantic(codeReview, dispatch, result, recorder);
-    const { evidence_markdown, ...judgment } = result;
-    if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
-      reject('semantic final requires the complete original report', 'INVALID_RESULT');
-    roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: original.role,
-      phase: original.phase, evidencePath: original.evidencePath });
-    fs.writeFileSync(path.join(scope.worktree, original.evidencePath), evidence_markdown);
-    const input = { worktreePath: scope.worktree, role: original.role, ticket: original.ticket,
-      phase: original.binding?.phase || original.phase, pr: original.pr, base: original.base, ticketSet: original.ticketSet,
-      ticketSetDigest: original.ticketSetDigest, recorder, dispatchId: stage.dispatch_id,
-      result: judgment, evidencePath: original.evidencePath, io: { fs, execFileSync(executable, args, settings) {
-        if (executable === 'gh' && args[0] === 'pr' && args[1] === 'view' && options.getPullRequest)
-          return JSON.stringify(options.getPullRequest({ worktree: scope.worktree, pr: original.pr, repo: request.repo ?? null }));
-        if (executable === 'git' && args.includes('fetch') && options.refreshGit === false) return '';
-        return (options.execFileSync || execFileSync)(executable, args, settings);
-      } } };
-    const artifact = roleArtifact.sealJudgment(input);
-    const validated = roleArtifact.validateJudgmentManifest({ ...input,
-      artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
-    return Object.freeze({ ...dispatch, schema: 'shipyard.claude-role-result.v1', result: judgment,
-      subject: original.ticket, artifact: { ...artifact, ref: validated.artifact_ref,
-        digest: validated.artifact_digest, outcome: validated.envelope.outcome || validated.envelope.verdict } });
+    return roleArtifact.publishSemanticFinal({ prepared: stage, recorder, publish: () => {
+      if (codeReview) return require('./codex-code-review-context.cjs').finishSemantic(codeReview, dispatch, result, recorder);
+      const { evidence_markdown, ...judgment } = result;
+      if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
+        reject('semantic final requires the complete original report', 'INVALID_RESULT');
+      roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: original.role,
+        phase: original.phase, evidencePath: original.evidencePath });
+      fs.writeFileSync(path.join(scope.worktree, original.evidencePath), evidence_markdown);
+      const input = { worktreePath: scope.worktree, role: original.role, ticket: original.ticket,
+        phase: original.binding?.phase || original.phase, pr: original.pr, base: original.base, ticketSet: original.ticketSet,
+        ticketSetDigest: original.ticketSetDigest, recorder, dispatchId: stage.dispatch_id,
+        result: judgment, evidencePath: original.evidencePath, io: { fs, execFileSync(executable, args, settings) {
+          if (executable === 'gh' && args[0] === 'pr' && args[1] === 'view' && options.getPullRequest)
+            return JSON.stringify(options.getPullRequest({ worktree: scope.worktree, pr: original.pr, repo: request.repo ?? null }));
+          if (executable === 'git' && args.includes('fetch') && options.refreshGit === false) return '';
+          return (options.execFileSync || execFileSync)(executable, args, settings);
+        } } };
+      const artifact = roleArtifact.sealJudgment(input);
+      const validated = roleArtifact.validateJudgmentManifest({ ...input,
+        artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
+      return Object.freeze({ ...dispatch, schema: 'shipyard.claude-role-result.v1', result: judgment,
+        subject: original.ticket, artifact: { ...artifact, ref: validated.artifact_ref,
+          digest: validated.artifact_digest, outcome: validated.envelope.outcome || validated.envelope.verdict } });
+    } });
   };
   const launch = async stage => {
     recheck();
@@ -2292,7 +2299,7 @@ async function runClaudeSemanticReview(options, request) {
       if (controller) controller.complete(runId);
       return completed;
     } catch (error) {
-      if (controller) controller.fail(runId, { reason: String(error.message).slice(0, 500) });
+      if (controller) controller.fail(runId, { reason: stripControl(String(error.message)).slice(0, 400) });
       throw error;
     } finally { if (heartbeat) clearInterval(heartbeat); }
   };
