@@ -555,14 +555,15 @@ loop:
                 adr-outdated→ escalation to a human: either the decision changes
                               (update DECISIONS/ADR and revalidate the graph),
                               or the code is brought in line with the ADR
-              runs when the PR is opened and after each push that changes code
+              required at the integration target, on the exact current head;
+              stacked ticket/epic targets retain their existing skip rule
 
   3. The green state is reached if:
               - all checks passed
               - no unresolved actionable comments
               - CodeRabbit: last review without blocking issues
               - Copilot: review comments addressed
-              - arch-review: verdict conform
+              - arch-review: current authenticated verdict conform when required
               - approvals per branch protection (a human — for human_checkpoint)
               → status: green, exit the loop
 
@@ -603,7 +604,88 @@ Notes on the reviewers' mechanics:
 - all changes in the PR belong to the ticket's scope (diff check against `files_modified`);
 - the strict pre-push `comment-policy.cjs` gate passed for the resolved base;
 - the ticket's verification commands are green locally and in CI;
-- for `human_checkpoint: true` — explicit human approval.
+- for `human_checkpoint: review` — a human APPROVED review on the current PR head
+  before the conveyor merges; `merge` and legacy `true` wait for a human merge.
+
+#### Ordinary review, launch and verification
+
+Codex and Claude use `shipyard.semantic-review.v1` for ordinary integration,
+architecture review and phase code review. Each role starts two semantic workers
+concurrently, with separate primary responsibilities and overlapping support
+reads. Integration covers producer/contracts and consumer/acceptance;
+architecture covers governing obligations and boundaries; code review covers
+correctness and caller behavior. All use complete actual product sources,
+acceptance and verification criteria, governing references and current
+source/base/membership identity. The shared `development-artifacts.cjs`
+classifier excludes development artifacts from product findings; plans still
+select scope and supply execution criteria.
+
+The host retains full originals, including JSON, evidence, INFO, limitations,
+read failures and native input/output/session receipts. A distinct independent
+final session receives both originals and evaluates the role's own criteria,
+dependency seams and disagreements. Only its authenticated sealed artifact and
+original receipt reach the normal current consumer and gate. Worker completion,
+counts, a process exit or an integrity digest do not grant final review credit.
+The operator invokes the existing role builder/host; no worker assignments,
+reader profiles, fragment/range commands, pair registries or manual resource
+budgets belong in an ordinary request.
+
+Native model and effort come from current policy, observed scope and supported
+runtime capabilities. Generated Codex instructions and their manifest, or the
+Claude role reference, remain pinned with the original dispatch. Host preparation
+may reuse one compatible successful availability observation privately for its
+launch. A later launch obtains its own observation; serialized availability or
+reuse flags grant no authority. Config, executable resolution/bytes, environment,
+authentication mode, policy or instruction movement invalidates preparation.
+Immutable parsing/digest facts are likewise private to their authenticated
+operation and original bytes; they are not durable approval records.
+
+Incomplete context, unread or truncated sources, compaction, resource failure,
+missing completion and actual blockers keep their typed outcomes and HOLD
+behavior. Complete input that exceeds a supported bound is refused without
+clipping sources or substituting summaries. Optional native usage/accounting
+stays unknown when absent; healthy counters cannot turn incomplete semantics
+into a pass. Verification still runs the ticket's named commands under the
+assigned sandbox or trusted-host profile and preserves the original stage,
+runtime, model, effort and instruction evidence.
+
+CI observations retain complete named check and status rows, pagination,
+latest-run/attempt identities and exact checked head. A compatible published
+observation can serve the existing waiter; stale, incomplete, inconsistent or
+unavailable evidence uses the fresh direct fallback and retains pending,
+failure, cancellation, skipped and unknown states. A digest or equal aggregate
+count cannot replace those rows. Eligible CI/LIVE evidence retains its original
+identity: distribution changes alone do not force CI/LIVE reruns. Existing
+current-head and eligibility gates still govern its use.
+
+Compatible restart performs original-stage recovery. It reconciles retained
+native completion, recording, archive publication and final acknowledgement
+under the original dispatch/session. Unknown reserved or started work remains
+unknown until its original evidence resolves it; restart does not launch a
+competing worker or silently count a new review round. Source/head/base,
+criteria, graph membership, policy, instructions or original receipt movement
+refuses reuse and current authority. Remote publication reconciles its exact
+owned status/comment; ambiguous writes and human edits remain unresolved.
+
+Historical and in-flight generations remain readable only under their original
+contract, pins and receipts. Existing reserved work may reconcile those original
+stages. This bounded compatibility is not a second ordinary mode: a manual old
+contract, copied native proof or relabelled receipt cannot create a fresh old
+scheduler or authorize a different runtime/generation.
+
+The source-owned package builder copies canonical source into the shipped host
+and generates its content-suffixed version and complete package digest. Do not
+edit mirrors, historical package selections or pins by hand. The focused
+`tests/unit/phase53-shipping.test.cjs` suite makes a nonmutating temporary build
+comparison, including file modes and the declared changed output inventory,
+and validates actual generated instruction/bundle identities and substitution
+refusals. `tests/smoke/phase53-review-acceptance.cjs` labels its ordinary caller
+results `source-fixture` or `staged-package-fixture`, with the actual payload
+root and runtime/role. Its native and remote transports are fixture seams.
+These results establish fixture compatibility only: installed native acceptance,
+production resource fit, rollout and release remain separate observations from
+the separately authorized real delivery stage. They imply no numerical savings
+or release readiness and do not replace the declared human checkpoint.
 
 ### 6.4. Gate 4 — Integration (per milestone/phase)
 
