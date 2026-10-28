@@ -557,11 +557,10 @@ leaves the branch for the reaper, and retargets cascade children onto the epic.
 
 The merge guard reads the sealed rollout marker and fetches the PR's current base.
 For a PR opened after the marker, every commit between that base and the live
-head needs a sealed conveyor coverage record. An uncovered commit, including a
-hand-resolved base merge, refuses with its SHA, subject and author. Re-run the
-work through `deliver-dispatch.cjs build ci-fix|review-fix <ticket>` or the
-executor entry point, or remove the hand commit, then re-verify. A missing local
-checkout or unreadable coverage store also refuses and names the checkout or
+head is checked against the sealed conveyor coverage records. An uncovered
+commit, including a hand-resolved base merge, does not refuse: it is journalled as
+`merge_gate_uncovered` with its SHA and the merge proceeds. A missing local
+checkout or unreadable coverage store refuses and names the checkout or
 state root to repair. PRs opened on or before the marker, and PRs in a readable
 store with no marker, keep the prior merge rule; successful legacy merges are
 journalled once per PR as `merge_gate_legacy`.

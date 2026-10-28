@@ -28,6 +28,11 @@ test('mixed changes and moves out of process directories retain product coverage
   git(['add', '-A']); git(['-c', 'commit.gpgsign=false', 'commit', '-qm', 'move to product']);
   assert.deepEqual(changedProductPaths(base, 'HEAD', cwd), ['product.cjs']);
   const diff = git(['diff', base, 'HEAD', ...productPathspec()]);
+  fs.mkdirSync(path.join(cwd, 'plugins', 'shipyard'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, 'plugins', 'shipyard', 'mirror.cjs'), 'generated');
+  git(['add', '-A']); git(['-c', 'commit.gpgsign=false', 'commit', '-qm', 'generated mirror']);
+  const withMirror = git(['diff', base, 'HEAD', ...productPathspec()]);
+  assert.doesNotMatch(withMirror, /plugins\/shipyard/);
   assert.match(diff, /product.cjs/); assert.doesNotMatch(diff, /notes.json|\.planning\/source/);
 });
 

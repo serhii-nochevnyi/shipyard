@@ -4,6 +4,7 @@ const { execFileSync } = require('node:child_process');
 
 const PREFIXES = Object.freeze(['.planning/', '.shipyard/', '.shipyard-', 'docs/audits/']);
 const FILES = Object.freeze(['AGENTS.md', 'CLAUDE.md']);
+const GENERATED_MIRROR = 'plugins/shipyard';
 
 function isDevelopmentArtifact(file) {
   let relative = String(file).replaceAll('\\', '/');
@@ -15,7 +16,7 @@ function isDevelopmentArtifact(file) {
 
 function productPathspec() {
   return ['--', '.', ...PREFIXES.map(prefix => `:(exclude)${prefix.endsWith('/') ? prefix.slice(0, -1) : prefix + '*'}`),
-    ...FILES.map(file => `:(exclude)${file}`)];
+    ...FILES.map(file => `:(exclude)${file}`), `:(exclude)${GENERATED_MIRROR}`];
 }
 
 function changedProductPaths(base, head = 'HEAD', cwd = process.cwd()) {
