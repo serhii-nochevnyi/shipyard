@@ -15,7 +15,7 @@ const PUBLIC_SHA = 'a2831936134d378395058b84e81ae9411c4da03800933700f1d995ebd51f
 const FINGERPRINT = '2F485C0A455BA33463F66332900FCE87BD1BFF0D';
 const HEAD = 'bd18893c69484c47db9b6d1b0613b4bac962b237';
 const OWNED = ['codex-arch-review-context', 'codex-runtime-host', 'codex-delivery-host',
-  'context-packet', 'role-artifact', 'claude-role-host', 'phase-integrator-preflight', 'base-merge']
+  'context-packet', 'role-artifact', 'claude-role-host', 'base-merge']
   .map(name => 'host/plugins/delivery-pipeline/scripts/' + name + '.cjs');
 const CURRENT_SHA = '92270f73cc794f9e3d121767c186330e4d50f8fa44a91750da8f50a3a438be36';
 const CURRENT_HEAD = '6325fd1c268d82eb62c8a9c5749d4eb7a2ce50b6';
@@ -1184,13 +1184,13 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
       assert(!crypto.verify(null, altered, publicKey, signature));
       assert.throws(() => inspect(altered, { ...expected, selection_sha256: sha(altered) }, repository, stage));
     }
-    for (const relative of COMPLETE_OWNED.slice(8)) {
+    for (const relative of COMPLETE_OWNED.slice(7)) {
       const altered = Buffer.from(JSON.stringify({ ...selection,
         outputs: outputs.filter(row => row.path !== relative) }));
       assert.throws(() => inspect(altered, { ...expected, selection_sha256: sha(altered) }, repository, stage),
         /candidate inventory drift/);
     }
-    const member = path.join(stage, OWNED[7]), originalBytes = read(member), mode = physical(member).mode & 0o777;
+    const member = path.join(stage, OWNED[6]), originalBytes = read(member), mode = physical(member).mode & 0o777;
     fs.chmodSync(member, 0o600); fs.writeFileSync(member, 'tampered'); fs.chmodSync(member, mode);
     assert.throws(consume);
     fs.chmodSync(member, 0o600); fs.writeFileSync(member, originalBytes); fs.chmodSync(member, mode);
@@ -1208,7 +1208,7 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     fs.symlinkSync(stage, alias);
     assert.throws(() => inventory(alias, '', true));
     fs.unlinkSync(alias);
-    const mirror = path.join(repository, 'plugins/shipyard', OWNED[7]);
+    const mirror = path.join(repository, 'plugins/shipyard', OWNED[6]);
     fs.chmodSync(mirror, 0o644); assert.throws(consume); fs.chmodSync(mirror, 0o755);
     const canonical = path.join(repository, OWNED[0].slice(5));
     const canonicalMode = physical(canonical).mode & 0o777;
@@ -1239,14 +1239,14 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     }
     const extra = path.join(packageRoot, 'foreign');
     fs.writeFileSync(extra, 'foreign'); assert.throws(consume); fs.unlinkSync(extra);
-    const publishedMember = path.join(packageRoot, COMPLETE_OWNED[8]);
+    const publishedMember = path.join(packageRoot, COMPLETE_OWNED[7]);
     fs.renameSync(publishedMember, publishedMember + '.original');
     fs.symlinkSync(publishedMember + '.original', publishedMember); assert.throws(consume);
     fs.unlinkSync(publishedMember); fs.renameSync(publishedMember + '.original', publishedMember);
-    assert.equal(consume().scoped_outputs, 15);
+    assert.equal(consume().scoped_outputs, 14);
     assert.equal(consume().complete_publication, true);
     const publicationRoot = path.join(repository, 'plugins/shipyard');
-    for (const relative of [...COMPLETE_OWNED.slice(8), 'hooks/hooks.json']) {
+    for (const relative of [...COMPLETE_OWNED.slice(7), 'hooks/hooks.json']) {
       const file = path.join(publicationRoot, relative), original = read(file);
       const publicationMode = physical(file).mode & 0o7777;
       fs.writeFileSync(file, Buffer.concat([original, Buffer.from('mixed generation')]));
@@ -1259,7 +1259,7 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
       assert.throws(consume);
       fs.renameSync(file + '.missing', file);
     }
-    for (const relative of COMPLETE_OWNED.slice(8, 11)) {
+    for (const relative of COMPLETE_OWNED.slice(7, 10)) {
       const source = path.join(repository, relative.slice('host/'.length)), original = read(source);
       fs.writeFileSync(source, Buffer.concat([original, Buffer.from('stale canonical input')]));
       assert.throws(consume, /complete canonical inputs changed/);
@@ -1269,20 +1269,17 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     fs.writeFileSync(unselectedOutput, 'not part of the candidate');
     assert.throws(consume, /incomplete or mixed publication/);
     fs.unlinkSync(unselectedOutput);
-    const gate = require(path.join(publicationRoot, COMPLETE_OWNED[8]));
+    const gate = require(path.join(publicationRoot, COMPLETE_OWNED[7]));
     for (const consumer of [gate.verifyCurrentReviews,
-      require(path.join(publicationRoot, COMPLETE_OWNED[9])).currentReviewAdmission,
-      require(path.join(publicationRoot, COMPLETE_OWNED[10])).currentReviewAdmission]) {
+      require(path.join(publicationRoot, COMPLETE_OWNED[8])).currentReviewAdmission,
+      require(path.join(publicationRoot, COMPLETE_OWNED[9])).currentReviewAdmission]) {
       assert.throws(() => consumer({ pr: 1, getPullRequest: () => ({ number: 1, state: 'OPEN' }) }),
         /live current review PR identity is incomplete/);
     }
-    const codex = require(path.join(publicationRoot, OWNED[2]));
-    assert.throws(() => codex.validateIntegrationCoverage({ input: {} }, {}),
-      error => error.code === 'INVALID_INPUT');
     const claude = require(path.join(publicationRoot, OWNED[5]));
     const request = { schema: claude.REQUEST_SCHEMA, role: 'integrator', worktree: repository, phase: '49' };
-    for (const review_contract of ['shipyard.integration-review.v1', 'shipyard.integration-review.v2'])
-      assert.equal(claude.parseRequest({ ...request, review_contract }).review_contract, review_contract);
+    assert.equal(claude.parseRequest({ ...request, review_contract: 'shipyard.integration-review.v1' }).review_contract,
+      'shipyard.integration-review.v1');
     assert.throws(() => claude.parseRequest({ ...request, review_contract: 'shipyard.integration-review.v999' }),
       error => error.code === 'INVALID_INPUT');
     assert.equal(claude.isPreparedIntegratorContext({}), false);
@@ -1375,12 +1372,11 @@ function packagedRoleFixtures(repository, hostRoot = path.join(repository, 'plug
   return { registered, ...fixtureModule.exports };
 }
 
-test('packaged role APIs authenticate full and v2 current reviews with original isolated authority', async () => {
+test('packaged role APIs authenticate full current reviews with original isolated authority', async () => {
   const fixtures = packagedRoleFixtures(ROOT);
   for (const name of [
     'fresh native architecture delta reaches sealer, exact-current lookup and all consumers',
-    'fresh integration admission retains its independent role authority',
-    'genuine finalized Claude receipts admit full architecture and inline integration at all current consumers',
+    'genuine finalized Claude receipts admit full architecture at all current consumers',
   ]) {
     const exercise = fixtures.registered.get(name);
     assert.equal(typeof exercise, 'function', 'missing original real-role fixture: ' + name);
@@ -1494,9 +1490,9 @@ test('same-generation packaged fixer authenticates source publication and comple
     'original feedback action recovers resolve-response-loss without reply replay',
     ...['issue-repost', 'issue-oscillation', 'issue-unknown', 'issue-ambiguous', 'issue-shift'].map(mutation =>
       'known issue history uses the original applied predecessor across reposts: ' + mutation),
-    ...[false, true].flatMap(full => ['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal',
+    ...['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal',
       'incomplete-turn', 'failed-turn', 'foreign-session'].map(mutation =>
-      'original integration boundary completes and retains one terminal contract: ' + mutation + ' full=' + full)),
+      'original integration boundary completes and retains one terminal contract: ' + mutation),
   ];
   const exercise = `
     const fs = require('node:fs'), path = require('node:path'), Module = require('node:module');
@@ -1630,7 +1626,6 @@ async function inspectFocusedConsumers(hostRoot) {
     'Claude original incomplete focused judgment is archived without granting conformance',
     ...['forged contract', 'wrong repository', 'wrong membership', 'wrong base', 'wrong launch',
       'malformed completeness', 'contradictory complete'].map(name => 'focused original completion refuses ' + name),
-    'fresh integration admission retains its independent role authority',
   ];
   for (const name of names) {
     const exercise = fixtures.registered.get(name);

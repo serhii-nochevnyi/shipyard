@@ -3533,29 +3533,6 @@ function createCodexRuntimeHost(options = {}) {
     authority.authenticateOptionalCompletedSourceRecord(source);
     return source;
   };
-  const restoreIntegrationSourceInput = (prepared) => {
-    assertOwner();
-    const collector = require('./codex-arch-review-context.cjs');
-    const identity = collector.reviewProgressIdentity(prepared);
-    if (!collector.isPreparedFileInput(prepared) || prepared.manifest.schema !== 'shipyard.host-file-input.v1'
-        || identity.role !== 'integrator' || prepared.manifest.binding?.review_contract !== 'shipyard.integration-review.v2'
-        || ['worktree', 'run_id', 'ticket', 'phase'].some(key => identity[key] !== scope[key])
-        || !require('./dispatch-boundary.cjs').isDurableRecorder(recorder))
-      fail('REVIEW_SOURCE_REQUIRED', 'integration input restoration requires original private scope and recorder');
-    const reservation = recorder.getReservation(identity.dispatch_id);
-    if (!reservation) return prepared;
-    if (reservation.recorded) {
-      const source = pendingRecordedSource(identity);
-      validateCompletedSourceReconciliation(source, collector.restoreCompletedSourceInput(source));
-      return collector.restoreMeasuredIntegrationInput(source, prepared);
-    }
-    const measurement = require('./role-artifact.cjs').readCompletedSourceMeasurement(reviewObservation({ identity,
-      final_reservation: reservation, receipt_store: recorder.storeDir, allow_unmeasured: true }, () => { collector.verifyFileInput(prepared); }));
-    if (!measurement) return prepared;
-    if (measurement.receipt_store !== recorder.storeDir)
-      fail('REVIEW_SOURCE_INVALID', 'integration measurement belongs to another original recorder');
-    return collector.restoreMeasuredIntegrationInput(measurement, prepared);
-  };
   const reserveCompletedSourceCandidate = (prepared) => {
     assertOwner();
     const collector = require('./codex-arch-review-context.cjs');
@@ -3804,7 +3781,6 @@ function createCodexRuntimeHost(options = {}) {
       if (!recorded) finishRecording(reference, 'failed', error);
     },
     reserveCompletedSourceCandidate,
-    restoreIntegrationSourceInput,
     measureBatchReaderCapacity,
     launchTypedGsd: (selection, context) => launch(selection, context),
   };

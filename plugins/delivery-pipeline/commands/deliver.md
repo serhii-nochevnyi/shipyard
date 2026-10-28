@@ -2978,7 +2978,7 @@ driving PRs hands the user a half-truth.
      ```
 
      A non-zero exit parks the phase with the refusal verbatim and does not fall
-     through to the integrator boundary, as with the phase 41 prelaunch gate.
+     through to the integrator boundary.
    - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md` — the
      epic diff against the default branch, not the individual ticket-PRs →
      `.planning/phases/<phase>/INTEGRATION.md`. Record descriptive epic size
@@ -3084,9 +3084,8 @@ driving PRs hands the user a half-truth.
      the normal gate caller, with exact current canonical plans, producer pins,
      membership, source/head/base and live PR checks. A planted mismatch must be
      reported as needs-fix/unresolved or remain incomplete; integrity/read counts
-     never supply semantic credit. Legacy v1/v2 remain independently eligible
-     under their original contracts, including v2's
-     `shipyard.integration-coverage-result.v1`. Unknown versions refuse.
+     never supply semantic credit. The legacy full-input `v1` path below
+     remains independent. Unknown versions refuse.
      Repaired finals always owe a fresh native verdict and original application
      receipt. Premature or incomplete output stays rejected and failed originals
      remain failed history. Generated publication is a separate downstream gate.
@@ -3120,41 +3119,6 @@ driving PRs hands the user a half-truth.
      fresh architecture on the final current subject, preserving code-review →
      integration → architecture order, report mode, all original failures and
      receipts, R8 INCOMPLETE/zero semantic credit and human epic-to-main merge.
-
-     **Phase 41 prelaunch gate (both runtimes).** For phase 41, immediately
-     before the integrator boundary on either runtime (`runtime: "claude"` or
-     `runtime: "codex"`), run the merged-parent preflight in the integration
-     worktree and then verify it against the exact integrator input:
-
-     ```text
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-integrator-preflight.cjs --phase 41 \
-       --graph-dir <project>/.planning/graph --worktree <epic-worktree> \
-       --proof-file <proof.json> --ticket-set-file <ticket-set.json> --json
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-integrator-preflight.cjs --verify \
-       --worktree <epic-worktree> --proof-file <proof.json> \
-       --ticket-set-file <ticket-set.json> --ticket-set-digest <ticket-set-digest> --json
-     ```
-
-     The preflight derives the complete phase ticket set only from the canonical
-     graph, requires exactly one live merged PR per ticket targeting the epic,
-     and proves each merge SHA with `git merge-base --is-ancestor` against the
-     pinned epic commit/tree. The `<ticket-set.json>` it writes IS the runtime
-     ticket-set file: `phaseSubject`, `role-artifact.cjs seal/validate` and the
-     integrator input use that file and its `ticket_set_digest` unchanged, and
-     the launch worktree and integrator source revision must equal the proof's
-     `epic.commit`/`epic.tree`. A non-zero exit or `"ok": false` from either
-     command — missing, open, duplicate, stale or mismatched PR, non-ancestor
-     merge, moved epic head, or ticket-set/digest mismatch — parks the phase
-     with the refusal verbatim and does NOT fall through to `boundary.dispatch`;
-     no model is launched. If the epic moves after the proof, re-run the
-     preflight; never reuse a stale proof. Attach only the bounded proof fields
-     (`proof_digest`, `ticket_set_digest`, `epic`, per-ticket `merges`) to the
-     integrator context, and record the proof digest and every per-ticket merge
-     SHA in the integration evidence beside the integrator receipt for the
-     human checkpoint. Claude's native merged-PR checks in its role host still
-     run as defense in depth. The preflight never writes
-     `.planning/phases/<phase>/INTEGRATION.md`; the standard sealer below
-     remains its only author. Other phases skip this gate.
 
      **Legacy full-input compatibility.** Existing v1 full-input callers and
      direct-to-main phases retain the complete review path below. They grant no

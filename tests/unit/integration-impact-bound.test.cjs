@@ -142,7 +142,7 @@ function endpoints(f, sources, provider = 'exports.value = 2;\n') {
 }
 function prepare(f, runtime) {
   const options = projectOptions(f);
-  const context = claude.prepareNativeIntegratorContext(options, { worktree: f.worktree, phase: '49' });
+  const context = claude.prepareNativeIntegratorContext(options, { worktree: f.worktree, phase: '49', review_contract: 'shipyard.integration-review.v3' });
   let instructionBinding, generatedInstructionBytes;
   if (runtime === 'codex') {
     const installed = agent(f, 'integrator', context.signals);
@@ -476,7 +476,7 @@ function addCompactPressure(f, members = 2, stress = false, semanticPressure = f
     f.state[id] = { status: 'merged', pr: 100 + i, branch: f.rows[id].branch };
   }
   for (const [id, row] of Object.entries(f.rows)) {
-    const clauses = Array.from({ length: stress ? 14 : 1100 }, (_, i) =>
+    const clauses = Array.from({ length: stress ? 13 : 1100 }, (_, i) =>
       '- ' + id + ' contract ' + i + (stress
         ? ': provider value must retain tenant identity, transaction ordering, cancellation ownership and exact consumer acceptance; missing source context requires an incomplete judgment.'
         : ': preserve tenant value, ordered delivery and cancellation owner; missing context is incomplete.')).join('\n');

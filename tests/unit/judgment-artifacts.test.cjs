@@ -1084,7 +1084,7 @@ test('D-32 unit labels cannot obtain ordinary integrator phase sealing', () => {
   } finally { fs.rmSync(value.root, { recursive: true, force: true }); }
 });
 
-test('D-32 legacy v2 and D-34 authenticated chain finals preserve separate current authority', async () => {
+test('D-34 authenticated chain finals preserve current authority', async () => {
   const Module = require('node:module');
   const filename = path.join(__dirname, 'phase49-incremental-integration.test.cjs');
   const loaded = new Module(filename, module);
@@ -1096,19 +1096,8 @@ test('D-32 legacy v2 and D-34 authenticated chain finals preserve separate curre
   };
   const source = fs.readFileSync(filename, 'utf8').replace('const live = branch => {',
     'const live = branch => { if (f.mergePrs) return f.mergePrs.find(pr => pr.headRefName === branch);');
-  try { loaded._compile(source + '\nmodule.exports = { fixture, runIntegration, publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, originalPartitionSessions };\n', filename); }
+  try { loaded._compile(source + '\nmodule.exports = { fixture, publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, currentPartitionConsumer, originalPartitionSessions };\n', filename); }
   finally { Module._load = originalLoad; }
-  await loaded.exports.fixture(async f => {
-    const current = await loaded.exports.runIntegration(f);
-    const artifact = JSON.parse(fs.readFileSync(current.result.artifact.artifact_path, 'utf8'));
-    assert.equal(artifact.artifact_kind, 'judgment');
-    assert.equal(artifact.current_review.contract, 'shipyard.integration-review.v2');
-    assert.equal(artifact.integration_partition, undefined);
-    assert.equal(artifact.current_review.integration_partition, undefined);
-    assert.equal(roleArtifact.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head,
-      baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName })?.authenticated, true);
-    assert.throws(() => roleArtifact.prepareIntegrationPartitions({ review: current, capacity: {} }), /private/);
-  });
   await loaded.exports.publicIntegrationFixture(async f => {
     const run = args => execFileSync('git', ['-C', f.worktree, '-c', 'commit.gpgsign=false',
       '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', ...args],

@@ -3359,7 +3359,7 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
   }
   if (trusted.receipt.runtime !== 'codex' || runtime?.input_transport !== 'host-files') {
     if (result.coverage !== undefined || result.reviewed_identity !== undefined)
-      return authenticateInlineCoverage({ trusted, result, evidence, identity });
+      fail('REVIEW_COVERAGE_INVALID', 'unsupported inline current review contract');
     return null;
   }
   const checked = context.verifyFileInput(runtime.input_bundle, { sealed: true, historical: true,
@@ -3371,14 +3371,14 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
   const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]), verifiedReviewMaterialLimit(checked));
   const coverage = packet.review_coverage || packet.role_context?.review_coverage;
   const contract = checked.manifest.binding?.review_contract;
-  const expectedContract = trusted.receipt.role === 'arch-review' ? 'shipyard.architecture-review.v2' : 'shipyard.integration-review.v2';
   if (!coverage) {
     const legacyContract = trusted.receipt.role === 'arch-review' ? 'shipyard.architecture-review.v1' : 'shipyard.integration-review.v1';
     if (result.coverage !== undefined || result.reviewed_identity !== undefined || contract !== undefined && contract !== legacyContract)
       fail('REVIEW_COVERAGE_INVALID', 'declared current contract lacks complete coverage');
     return null;
   }
-  if (contract !== expectedContract || coverage.schema !== 'shipyard.review-coverage-lineage.v1'
+  if (trusted.receipt.role !== 'arch-review' || contract !== 'shipyard.architecture-review.v2'
+      || coverage.schema !== 'shipyard.review-coverage-lineage.v1'
       || (packet.review_coverage !== undefined && packet.role_context?.review_coverage !== undefined))
     fail('REVIEW_COVERAGE_INVALID', 'unsupported declared current coverage contract');
   context.verifyFileInput(runtime.input_bundle, { sealed: true });
@@ -3398,7 +3398,6 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
   const input = { input_bundle: sourceBundle };
   const subject = reviewIdentityFromChecked(sourceBundle, source);
   if (source.manifest.role !== checked.manifest.role
-      || contract === 'shipyard.integration-review.v2' && source.manifest.binding?.review_contract !== contract
       || stable(subject) !== stable(coverage.current) || subject.repository !== identity.repository.identity
       || subject.worktree !== identity.worktree || subject.head !== identity.head || subject.head_tree !== identity.head_tree
       || subject.base !== identity.base_commit || subject.merge_base !== identity.merge_base
@@ -3450,7 +3449,7 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
       || stable(reviewed.ticket_set) !== stable(result.ticket_set)
       || stable(checked.manifest.binding.reviewed_identity) !== stable(reviewed))
     fail('REVIEW_COVERAGE_INVALID', 'complete original baseline-to-current lineage differs');
-  validateCoverageResult(result.coverage, coverage, trusted.receipt.role);
+  validateCoverageResult(result.coverage, coverage);
   context.verifyFileInput(sourceBundle, { sealed: true });
   context.verifyFileInput(runtime.input_bundle, { sealed: true });
   return Object.freeze({ schema: 'shipyard.current-review-contract.v2', role: trusted.receipt.role,
@@ -3458,8 +3457,8 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
     original_manifest_sha256: sourceBundle.manifest_sha256, current_manifest_sha256: runtime.input_bundle.manifest_sha256 });
 }
 
-function validateCoverageResult(result, coverage, role) {
-  const expected = { schema: role === 'arch-review' ? 'shipyard.architecture-coverage-result.v1' : 'shipyard.integration-coverage-result.v1',
+function validateCoverageResult(result, coverage) {
+  const expected = { schema: 'shipyard.architecture-coverage-result.v1',
     mode: coverage.mode, lineage_digest: coverage.digest,
     inherited_obligations: coverage.current_logical_obligations.filter(item => item.coverage === 'inherited').map(item => item.identity),
     newly_reviewed_obligations: coverage.current_logical_obligations.filter(item => item.coverage !== 'inherited').map(item => item.identity),
@@ -3560,40 +3559,6 @@ function authenticateSelectedReferences(trusted, findings, worktree, evidence) {
   } else if (architectureRefs.length) {
     authenticateArchitectureSources(worktree, root, originalPacket?.role_context?.adr_selection || architectureRefs);
   }
-}
-
-function authenticateInlineCoverage({ trusted, result, evidence, identity }) {
-  if (trusted.receipt.runtime !== 'claude' || trusted.receipt.role !== 'integrator')
-    fail('REVIEW_COVERAGE_INVALID', 'unsupported inline current review contract');
-  originalCurrentResponse(trusted, result, evidence);
-  const { packet, pin } = originalInlinePacket(trusted);
-  const coverage = packet.role_context?.review_coverage, reviewed = coverage?.reviewed_identity;
-  if (coverage?.schema !== 'shipyard.review-coverage-lineage.v1' || coverage.mode !== 'full' || coverage.baseline !== null
-      || coverage.inherited.length !== 0 || coverage.current_logical_obligations.some(item => item.coverage === 'inherited')
-      || packet.role !== trusted.receipt.role || packet.source_revision !== identity.head
-      || reviewed?.head !== identity.head || reviewed.head_tree !== identity.head_tree || reviewed.base !== identity.base_commit
-      || reviewed.merge_base !== identity.merge_base || reviewed.policy_hash !== trusted.receipt.policy_hash
-      || reviewed.contract !== 'shipyard.integration-review.v2' || reviewed.repository !== identity.repository.identity
-      || reviewed.worktree !== identity.worktree || stable(reviewed) !== stable(result.reviewed_identity)
-      || stable(packet.role_context.ticket_set) !== stable(result.ticket_set)
-      || result.ticket_set_digest !== coverage.current.ticket_set_digest)
-    fail('REVIEW_COVERAGE_INVALID', 'inline full current contract cannot inherit another runtime or role authority');
-  require('./context-packet.cjs').validateContextPacket(packet, { root: originalPacketRoot(identity.worktree, packet), role: 'integrator',
-    sourceRevision: identity.head, policyHash: trusted.receipt.policy_hash, subject: packet.subject });
-  if (stable(coverage.source_inventories.current) !== stable(endpointInventory(identity.worktree, identity.head))
-      || stable(coverage.source_inventories.baseline) !== stable(endpointInventory(identity.worktree, identity.merge_base))
-      || stable(coverage.endpoint_delta) !== stable(endpointChanges(identity.worktree, identity.merge_base, identity.head))
-      || coverage.current.head !== identity.head || coverage.current.base !== identity.base_commit
-      || coverage.current.role !== 'integrator' || coverage.current.repository !== identity.repository.identity
-      || stable(coverage.current_membership.ticket_set) !== stable(result.ticket_set))
-    fail('REVIEW_COVERAGE_INVALID', 'complete inline current endpoint coverage differs');
-  const required = packet.required_refs;
-  if (!Array.isArray(required) || required.some(ref => !coverage.newly_reviewed.some(item => item.path === ref.path
-      && item.sha256 === ref.sha256 && item.bytes === ref.bytes && item.content === ref.content)))
-    fail('REVIEW_COVERAGE_INVALID', 'complete inline full material is missing from newly reviewed coverage');
-  validateCoverageResult(result.coverage, coverage, 'integrator');
-  return Object.freeze({ schema: 'shipyard.current-review-contract.v2', role: 'integrator',
-    contract: reviewed.contract, lineage_digest: coverage.digest, mode: 'full', inline_native_sha256: pin.sha256 });
 }
 
 function currentReviewRetention(worktree, trusted) {
@@ -3895,8 +3860,6 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
           if (stable(frozen.identity.ticket_set) !== stable(findings.ticket_set)
               || frozen.identity.head !== head || frozen.identity.base !== baseCommit)
             partitionError('current final differs from its original frozen subject');
-          if (frozen.identity.preflight.schema !== 'shipyard.native-integration-merge-proof.v1')
-            for (const member of findings.ticket_set) reviewGit(root, ['merge-base', '--is-ancestor', member.head, head]);
         } else if (runtime?.input_bundle) {
           const checked = checkedInput;
           for (const graphPin of checked.manifest.snapshot.graph) {
@@ -3915,15 +3878,6 @@ function currentIntegrationVerdict({ worktreePath, head, baseName, baseCommit, g
               fail('REVIEW_COVERAGE_INVALID', 'original native merge proof association differs');
             require('./claude-role-host.cjs').assertNativeIntegrationMergeProof(proof,
               { worktree, graphDir: directory });
-          } else if (proof) {
-            if (proof.schema !== 'shipyard.phase-integrator-preflight.v1')
-              fail('REVIEW_COVERAGE_INVALID', 'unknown integration merge proof schema');
-            if (require('./phase-integrator-preflight.cjs').proofDigest(proof) !== proof.proof_digest
-                || proof.epic.commit !== head || proof.epic.branch !== headBranch
-                || proof.graph.digest !== digest(readImmutableFile(fs, path.join(directory, 'tickets.json'), 'current graph', 8 * 1024 * 1024))
-                || stable(proof.merges.map(member => member.id).sort()) !== stable(ids))
-              fail('REVIEW_COVERAGE_INVALID', 'complete original merge ancestry differs');
-            for (const member of proof.merges) reviewGit(root, ['merge-base', '--is-ancestor', member.merge_commit, head]);
           } else {
             if (packet.role_context?.native_merge_proof) fail('REVIEW_COVERAGE_INVALID', 'native merge proof authority is missing');
             for (const member of findings.ticket_set) reviewGit(root, ['merge-base', '--is-ancestor', member.head, head]);
@@ -4886,30 +4840,18 @@ function recheckPartitionRecord(record, review, finalTrusted) {
       || stable(partitionInventory(partitionFullPacket(original, record.original_input_bundle, checked))) !== stable({ material: plan.material, obligations: plan.obligations }))
     partitionError('complete frozen byte/obligation inventory differs from original packet');
   const proof = plan.identity.preflight;
-  if (proof?.schema === 'shipyard.native-integration-merge-proof.v1') {
-    if (proof.proof_digest !== plan.identity.preflight_digest
-        || stable(checked.manifest.binding?.preflight) !== stable(proof)
-        || stable(original.role_context?.native_merge_proof) !== stable(proof)
-        || proof.repository !== plan.identity.repository || proof.epic.commit !== identity.head
-        || proof.integration_base.commit !== identity.base_commit)
-      partitionError('original native merge proof producer association differs');
-    require('./claude-role-host.cjs').assertNativeIntegrationMergeProof(proof,
-      { worktree, graphDir: plan.identity.graph_directory }, review?.options || {});
-  } else if (!proof || proof.schema !== 'shipyard.phase-integrator-preflight.v1') {
+  if (proof?.schema !== 'shipyard.native-integration-merge-proof.v1')
     partitionError('unknown original complete preflight proof schema');
-  }
+  if (proof.proof_digest !== plan.identity.preflight_digest
+      || stable(checked.manifest.binding?.preflight) !== stable(proof)
+      || stable(original.role_context?.native_merge_proof) !== stable(proof)
+      || proof.repository !== plan.identity.repository || proof.epic.commit !== identity.head
+      || proof.integration_base.commit !== identity.base_commit)
+    partitionError('original native merge proof producer association differs');
+  require('./claude-role-host.cjs').assertNativeIntegrationMergeProof(proof,
+    { worktree, graphDir: plan.identity.graph_directory }, review?.options || {});
   if (review) withPartitionArchiveScope(record, () => require('./codex-delivery-host.cjs').recheckIntegrationReview(review), finalTrusted);
-  else {
-    if (proof.schema === 'shipyard.phase-integrator-preflight.v1') {
-      if (require('./phase-integrator-preflight.cjs').proofDigest(proof) !== plan.identity.preflight_digest)
-        partitionError('original complete preflight proof differs');
-      for (const member of proof.merges) reviewGit(worktree, ['merge-base', '--is-ancestor', member.merge_commit, identity.head]);
-      const proofNow = require('./phase-integrator-preflight.cjs').preflight({ phase: Number(plan.identity.phase.split('-')[0]),
-        graphDir: plan.identity.graph_directory, worktree });
-      if (stable(proofNow) !== stable(proof)) partitionError('complete current integration preflight changed', 'STALE_CONTEXT');
-    }
-    assertArchiveInventory(worktree, partitionCurrentArchivePins(record, finalTrusted));
-  }
+  else assertArchiveInventory(worktree, partitionCurrentArchivePins(record, finalTrusted));
 }
 function prepareIntegrationPartitions({ review, capacity, plan_sha256: previous } = {}) {
   const host = require('./codex-delivery-host.cjs');
@@ -4935,7 +4877,7 @@ function prepareIntegrationPartitions({ review, capacity, plan_sha256: previous 
   const selection = selections.find(selected => review.options.nativeRuntime !== 'codex' || selected.agent_file === binding.agent_file);
   if (!selection) partitionError('selected installed integrator instructions differ from original role/model selection');
   const producerPins = ['role-artifact.cjs', 'codex-delivery-host.cjs', 'claude-role-host.cjs', 'context-packet.cjs',
-    'phase-integrator-preflight.cjs', 'dispatch-boundary.cjs'].map(name => partitionPin(__dirname, name));
+    'dispatch-boundary.cjs'].map(name => partitionPin(__dirname, name));
   const instructionPins = binding.installed_files?.filter(pin => !producerPins.some(producer => producer.root === pin.root && producer.path === pin.path));
   if (!instructionPins?.length || !binding.agent_sha256 || !instructionPins.some(pin => pin.sha256 === binding.agent_sha256)
       || !instructionPins.some(pin => pin.path === path.basename(require('./claude-reference-content.cjs').REFERENCE_PATHS.integrator)))
