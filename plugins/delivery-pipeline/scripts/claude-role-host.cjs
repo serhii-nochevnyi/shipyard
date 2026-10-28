@@ -26,7 +26,7 @@ const {
 } = require('./conveyor-scratch.cjs');
 const { preflightRound } = require('./sentinel-preflight.cjs');
 const { repositoryIdentity, buildSubject } = require('./architecture-target.cjs');
-const { preflight, emitPreflight, probeReasonToCode } = require('./runtime-context.cjs');
+const { preflight, emitPreflight, probeReasonToCode, handoffLaunchPreparation } = require('./runtime-context.cjs');
 const { formatHint, hintForError } = require('./refusal-hints.cjs');
 
 const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
@@ -1627,6 +1627,8 @@ function storageDirectory(options, runId, worktree) {
 
 function runtimeFor(options, scope, controller, storage, prepared) {
   const runtimeOptions = { scope, controller, readOnlySmoke: options.readOnlySmoke === true,
+    executable: options.executable, checkAuth: options.checkAuth, env: options.env,
+    probe: options.probe, spawn: options.spawn, gsdAgentRoot: options.gsdAgentRoot,
     ...(nativeIntegrationStages.has(prepared) ? { recorder: nativeIntegrationStages.get(prepared).recorder } : {}),
     recorderDir: path.join(storage, 'receipts'), transcriptDir: path.join(storage, 'transcripts'),
     ...(prepared.role === 'code-review' && nativeIntegrationStages.get(prepared)?.stage?.schema !== roleArtifact.SEMANTIC_REVIEW_V1 ? { spawn(executable, args, spawnOptions) {
@@ -1651,6 +1653,7 @@ function runtimeFor(options, scope, controller, storage, prepared) {
       return require('node:child_process').spawn(executable, restricted, spawnOptions);
     } } : {}),
   };
+  handoffLaunchPreparation(options, runtimeOptions);
   return typeof options.createRuntimeHost === 'function'
     ? options.createRuntimeHost(runtimeOptions) : createClaudeRuntimeHost(runtimeOptions);
 }
@@ -2595,7 +2598,7 @@ function parseCli(argv) {
   return Object.freeze(values);
 }
 
-function launchPreflight(worktree, hostOptions, output) {
+function launchPreflight(worktree, hostOptions, output, prepareLaunch = false) {
   const stderr = hostOptions.stderr || process.stderr;
   const graphDir = hostOptions.graphDir ? path.resolve(hostOptions.graphDir) : path.join(worktree, '.planning', 'graph');
   const result = preflight({
@@ -2607,15 +2610,18 @@ function launchPreflight(worktree, hostOptions, output) {
     // @contract: every Claude role launch derives the canonical worktree identity, so preflight always checks it.
     needsRepositoryIdentity: true,
     host: 'claude-role-host.cjs',
-    env: hostOptions.preflightEnv || process.env,
+    env: hostOptions.preflightEnv || { ...process.env, ...hostOptions.env },
+    launchOptions: prepareLaunch ? hostOptions : undefined,
     probe: () => (typeof hostOptions.probe === 'function' ? hostOptions.probe()
-      : hostOptions.probe || probeClaudeRuntime(hostOptions)),
+      : hostOptions.probe || probeClaudeRuntime({ ...hostOptions, env: { ...process.env, ...hostOptions.env } })),
   });
   emitPreflight(result, { stdout: output, stderr });
+  if (result.ok) handoffLaunchPreparation(result, hostOptions);
   return result;
 }
 
 function runClaudeRoleCli(argv = process.argv.slice(2), output = process.stdout, hostOptions = {}) {
+  hostOptions = { ...hostOptions };
   const args = parseCli(argv);
   if (args.capabilityOnly) {
     const probe = probeClaudeRuntime(hostOptions);
@@ -2632,7 +2638,7 @@ function runClaudeRoleCli(argv = process.argv.slice(2), output = process.stdout,
     request = parseRequest(readJsonFile(args.argsFile, 'args file', REQUEST_MAX_BYTES));
   }
   const checked = launchPreflight(request ? fs.realpathSync(request.worktree) : fs.realpathSync(process.cwd()), hostOptions,
-    args.preflight ? output : { write() {} });
+    args.preflight ? output : { write() {} }, !args.preflight);
   if (args.preflight) return checked;
   if (!checked.ok) {
     const error = new Error(`claude-role-host: preflight found ${checked.findings.length} incompatibilities: ${checked.findings.map((item) => item.code).join(', ')}`);

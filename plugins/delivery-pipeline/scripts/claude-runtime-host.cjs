@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { claudeGsdAgentDirectory } = require('./gsd-agent-root.cjs');
-const { resolveClaudeHome } = require('./runtime-context.cjs');
+const { resolveClaudeHome, acquireRuntimeProbe } = require('./runtime-context.cjs');
 const { spawn, spawnSync } = require('node:child_process');
 const { CLAUDE_MODEL_ALIASES } = require('./runtime-adapters.cjs');
 const { createDurableRecorder } = require('./dispatch-boundary.cjs');
@@ -926,9 +926,9 @@ function createClaudeRuntimeHost(options = {}) {
   const scope = normalizeScope(options.scope || options.runScope || {});
   const controller = options.controller;
   const runId = options.run_id || options.runId || scope.run_id;
-  const probe = options.probe || probeClaudeRuntime({
-    executable: options.executable, checkAuth: options.checkAuth, env: options.env,
-  });
+  const probe = acquireRuntimeProbe(options, 'claude', () => probeClaudeRuntime({
+    executable: options.executable, checkAuth: options.checkAuth, env: { ...process.env, ...options.env },
+  }));
   if (!object(probe) || !['available', 'unavailable'].includes(probe.status)) fail('INVALID_INPUT', 'runtime probe has an invalid status');
   if (probe.status !== 'available') {
     if (controller && typeof controller.markUnavailable === 'function') {

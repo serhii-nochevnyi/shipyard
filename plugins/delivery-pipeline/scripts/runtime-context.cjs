@@ -22,6 +22,131 @@ const TRANSFER_PROOF_CATEGORIES = Object.freeze([
 const TRANSFER_REFUSAL = 'automatic transfer is unsupported and unproven until a reviewed runtime-specific proving ground supplies every required evidence category';
 const CODEX_CAPABILITIES_BUNDLE_FILE = 'codex-capabilities.json';
 
+const launchPreparations = new WeakMap();
+const preparationIdentityKey = require('crypto').randomBytes(32);
+
+function handoffLaunchPreparation(source, target) {
+  const preparation = launchPreparations.get(source);
+  if (preparation) launchPreparations.set(target, preparation);
+  else launchPreparations.delete(target);
+  return target;
+}
+
+function preparationFile(file, metadataOnly = false) {
+  try {
+    fs.lstatSync(file);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [path.resolve(file), 'absent'];
+    throw error;
+  }
+  const stat = fs.statSync(file);
+  if (!stat.isFile()) throw new Error('preparation input is not a file');
+  return [path.resolve(file), fs.realpathSync(file), stat.dev, stat.ino, stat.mode,
+    stat.size, stat.mtimeMs, stat.ctimeMs,
+    metadataOnly ? null : require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex')];
+}
+
+function preparationDirectory(directory, seen = new Set()) {
+  try {
+    fs.lstatSync(directory);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [[path.resolve(directory), 'absent']];
+    throw error;
+  }
+  const real = fs.realpathSync(directory);
+  if (seen.has(real) || seen.size >= 1024) throw new Error('unbounded preparation directory');
+  seen.add(real);
+  return fs.readdirSync(directory).sort().flatMap(name => {
+    const file = path.join(directory, name);
+    return fs.statSync(file).isDirectory() ? preparationDirectory(file, seen) : [preparationFile(file)];
+  });
+}
+
+function launchPreparationIdentity(runtime, worktree, scriptDir, options) {
+  try {
+    const env = { ...process.env, ...options.env };
+    const executable = nonEmpty(options.executable) || runtime;
+    const candidates = executable.includes(path.sep) ? [path.resolve(executable)]
+      : String(env.PATH || '').split(path.delimiter).map(dir => path.resolve(dir || '.', executable));
+    const resolvedExecutable = candidates.find(file => {
+      try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile(); } catch { return false; }
+    });
+    if (!resolvedExecutable) return null;
+    const resolved = resolveHostEnvironment({ scriptDir, runtime, env,
+      flags: { capabilitiesFile: options.capabilitiesFile } });
+    resolveDispatchContext(worktree, { runtime, env, scriptPath: scriptDir });
+    const home = runtime === 'codex' ? resolveCodexHome({ scriptDir, env }) : resolveClaudeHome({ env });
+    const files = [];
+    const add = (file, metadataOnly = false) => files.push(preparationFile(file, metadataOnly));
+    for (const name of runtime === 'codex' ? ['config.toml', 'managed_config.toml', 'AGENTS.md', 'AGENTS.override.md']
+      : ['settings.json', 'settings.local.json', 'CLAUDE.md']) add(path.join(home, name));
+    add(path.join(home, runtime === 'codex' ? 'auth.json' : '.credentials.json'), true);
+    if (runtime === 'claude') add(path.join(env.HOME || require('os').homedir(), '.claude.json'), true);
+    for (let dir = path.resolve(worktree); ; dir = path.dirname(dir)) {
+      for (const name of ['AGENTS.md', 'AGENTS.override.md', 'CLAUDE.md', 'CLAUDE.local.md',
+        '.claude/CLAUDE.md', '.claude/settings.json', '.claude/settings.local.json', '.codex/config.toml']) add(path.join(dir, name));
+      if (dir === path.dirname(dir)) break;
+    }
+    add(path.join(worktree, '.planning', 'config.json'));
+    add(path.join(scriptDir, 'model-policy.cjs'));
+    add(path.join(env.GSD_HOME || env.HOME || require('os').homedir(), '.gsd', 'defaults.json'));
+    if (options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE)
+      add(options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE);
+    if (resolved.manifestFile) add(resolved.manifestFile);
+    if (resolved.capabilitiesFile) add(resolved.capabilitiesFile);
+    files.push(...preparationDirectory(options.agentDir || resolved.agentsDir || path.join(home, 'agents')));
+    if (options.agentManifest) add(options.agentManifest);
+    if (runtime === 'claude') {
+      files.push(...preparationDirectory(path.join(scriptDir, '..', 'references')));
+      add(path.join(home, 'plugins', 'installed_plugins.json'));
+      const { claudeGsdAgentDirectory } = require('./gsd-agent-root.cjs');
+      for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker'])
+        add(path.join(options.gsdAgentRoot || claudeGsdAgentDirectory(home, role), `${role}.md`));
+    }
+    const environment = Object.keys(env).sort().filter(key => key === 'PATH' || key === 'HOME'
+      || /^(?:CODEX|CLAUDE|SHIPYARD|GSD|ANTHROPIC|OPENAI|AWS|XDG)_/.test(key))
+      .map(key => [key, env[key]]);
+    const { POLICY_HASH } = require('./model-policy.cjs');
+    return require('crypto').createHmac('sha256', preparationIdentityKey).update(JSON.stringify({ runtime,
+      worktree: fs.realpathSync(worktree), executable: preparationFile(resolvedExecutable),
+      cwd: process.cwd(), home, environment, files, checkAuth: runtime === 'claude' ? options.checkAuth !== false : null,
+      capabilities: options.capabilities, policy: POLICY_HASH })).digest('hex');
+  } catch { return null; }
+}
+
+function reusableProbe(probe, runtime) {
+  return probe && probe.schema === `shipyard.${runtime}-runtime-probe.v1`
+    && probe.version === 1 && probe.status === 'available'
+    && nonEmpty(probe.executable) && nonEmpty(probe.runtime_version)
+    && Array.isArray(probe.capabilities?.supportedModels) && probe.capabilities.supportedModels.length > 0
+    && probe.capabilities.supportedModels.every(nonEmpty)
+    && Array.isArray(probe.capabilities?.supportedEfforts) && probe.capabilities.supportedEfforts.length > 0
+    && probe.capabilities.supportedEfforts.every(nonEmpty)
+    && probe.capabilities.observedModel === true && probe.capabilities.observedEffort === true;
+}
+
+function acquireRuntimeProbe(options, runtime, acquire) {
+  const preparation = launchPreparations.get(options);
+  if (!preparation) return (typeof options.probe === 'function' ? options.probe() : options.probe) || acquire();
+  const used = preparation.used;
+  preparation.used = true;
+  const scope = options.scope || options.runScope || {};
+  const worktree = typeof scope.worktree === 'object' ? scope.worktree?.path : scope.worktree;
+  if (!used && preparation.runtime === runtime && preparation.identity && preparation.probe
+      && worktree === preparation.worktree
+      && launchPreparationIdentity(runtime, preparation.worktree, preparation.scriptDir, options) === preparation.identity)
+    return preparation.probe;
+  let probe;
+  const refreshed = preflight({ runtime, worktree, scriptDir: preparation.scriptDir,
+    scope: 'environment', env: { ...process.env, ...options.env },
+    probe: () => { probe = acquire(); return probe; } });
+  if (!refreshed.ok) {
+    const finding = refreshed.findings[0];
+    throw runtimeError(finding.code, 'runtime preparation', finding.detail);
+  }
+  return probe;
+}
+
 function normalizeRuntime(value) {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLowerCase().replace(/[\s_]+/g, '-');
@@ -571,6 +696,9 @@ function roleNeedsRepositoryIdentity(role) {
 function preflight(options = {}) {
   const opts = options && typeof options === 'object' ? options : {};
   const env = opts.env || process.env;
+  let launchProbe = null;
+  const preparationIdentity = opts.launchOptions
+    ? launchPreparationIdentity(opts.runtime, opts.worktree, opts.scriptDir, opts.launchOptions) : null;
   const scope = opts.scope === 'environment' ? 'environment' : 'launch';
   // @contract: the default host is the delivery host that implements --preflight for the runtime.
   const DELIVERY_HOSTS = { codex: 'codex-delivery-host.cjs', claude: 'claude-delivery-host.cjs' };
@@ -635,9 +763,12 @@ function preflight(options = {}) {
     if (typeof opts.probe !== 'function') return;
     if (!resolved) { note('not-evaluated', 'runtime probe: not evaluated, no resolved environment'); return; }
     const result = opts.probe();
+    launchProbe = result;
     if (result && result.status === 'unavailable') {
       const reason = String(result.reason || 'unknown');
       find(probeReasonToCode(reason), `${reason}${result.detail ? ': ' + result.detail : ''}`, withBundle({}));
+    } else if (!result || result.status !== 'available') {
+      find('RUNTIME_UNAVAILABLE', 'runtime probe returned no valid availability observation', withBundle({}));
     }
   });
 
@@ -691,7 +822,19 @@ function preflight(options = {}) {
     }
   }
   for (const finding of findings) finding.vars = withBundle(finding.vars);
-  return { schema: 'shipyard.host-preflight.v1', ok: findings.length === 0, scope, findings, warnings, notes };
+  const result = { schema: 'shipyard.host-preflight.v1', ok: findings.length === 0, scope, findings, warnings, notes };
+  if (result.ok && scope === 'launch' && opts.launchOptions) {
+    const identity = preparationIdentity && launchPreparationIdentity(opts.runtime, opts.worktree, opts.scriptDir, opts.launchOptions);
+    let probe = null;
+    try {
+      if (reusableProbe(launchProbe, opts.runtime)
+          && launchProbe.executable === (nonEmpty(opts.launchOptions.executable) || opts.runtime))
+        probe = JSON.parse(JSON.stringify(launchProbe));
+    } catch {}
+    launchPreparations.set(result, { runtime: opts.runtime, worktree: opts.worktree, scriptDir: opts.scriptDir,
+      identity: identity === preparationIdentity ? identity : null, probe, used: false });
+  }
+  return result;
 }
 
 function emitPreflight(result, streams = {}) {
@@ -728,6 +871,8 @@ module.exports = {
   RESOLVER_CODES,
   PREFLIGHT_CODES,
   preflight,
+  handoffLaunchPreparation,
+  acquireRuntimeProbe,
   probeReasonToCode,
   roleNeedsRepositoryIdentity,
   stateRefusalOf,
