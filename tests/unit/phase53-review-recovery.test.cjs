@@ -278,7 +278,7 @@ for (const runtime of ['codex', 'claude']) test(`${runtime}: unavailable multili
     const scope = { run_id: 'unavailable', repository_id: root, phase: 53, ticket: 'T-53-09', worktree: root,
       runtime, owner_id: 'fixture-owner', dispatch: { runtime, role: 'arch-review', dispatch_id: 'fixture' } };
     controller.begin(createRunScope(scope));
-    const probe = { status: 'unavailable', reason: 'native unavailable\noriginal diagnostic', detail: 'full\nprobe error' };
+    const probe = { status: 'unavailable', reason: 'native unavailable\noriginal diagnostic' + 'x'.repeat(3000), detail: 'full\nprobe error' };
     let launches = 0;
     const host = require(path.join(scripts, runtime + '-runtime-host.cjs'));
     assert.throws(() => host[runtime === 'codex' ? 'createCodexRuntimeHost' : 'createClaudeRuntimeHost']({
@@ -286,6 +286,7 @@ for (const runtime of ['codex', 'claude']) test(`${runtime}: unavailable multili
       probe, spawn() { launches++; } }), error => error.code === 'RUNTIME_UNAVAILABLE'
         && error.details?.probe?.detail === probe.detail);
     assert.equal(controller.status(scope.run_id).state, 'runtime_unavailable');
+    assert.equal(controller.status(scope.run_id).retry.last_reason.length, 2048);
     assert.equal(launches, 0);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
