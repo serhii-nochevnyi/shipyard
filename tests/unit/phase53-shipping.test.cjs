@@ -118,18 +118,20 @@ test('real temporary build matches complete shipped bytes, modes, version, diges
 });
 
 for (const identity of ['source-fixture', 'staged-package-fixture'])
-  test(identity + ': ordinary six-role acceptance, current gates, restart, stale pins and retired dispatch refusal', async t => {
+  for (const runtime of ['codex', 'claude']) for (const role of ['integrator', 'arch-review', 'code-review'])
+  test(identity + ': ordinary ' + runtime + '/' + role + ' acceptance, current gates, restart, stale pins and retired dispatch refusal', async t => {
     const directory = temporary(t);
     const plugin = identity === 'source-fixture' ? SOURCE
       : path.join(build(path.join(directory, 'candidate')), 'host/plugins/delivery-pipeline');
     const env = fixtureEnvironment(path.join(directory, 'home'));
-    const result = await runSmoke([path.join(ROOT, 'tests/smoke/phase53-review-acceptance.cjs'), identity, plugin], env);
+    const result = await runSmoke([path.join(ROOT, 'tests/smoke/phase53-review-acceptance.cjs'), identity, plugin,
+      'ordinary:' + runtime + ':' + role], env);
     assert.equal(result.status, 0, result.stderr || String(result.error));
     const observed = JSON.parse(result.stdout);
     assert.equal(observed.identity, identity);
     assert.equal(observed.payload_root, fs.realpathSync(plugin));
     assert.deepEqual(observed.roles.map(row => row.runtime + '/' + row.role),
-      ['codex', 'claude'].flatMap(runtime => ['integrator', 'arch-review', 'code-review'].map(role => runtime + '/' + role)));
+      [runtime + '/' + role]);
     for (const role of observed.roles) {
       assert.ok(role.dispatch_id);
       assert.match(role.instruction.sha256, /^[a-f0-9]{64}$/);

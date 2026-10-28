@@ -386,13 +386,15 @@ async function runRegressions(plugin, group, onlyTitle) {
 async function runAcceptance(plugin, kind, group = 'ordinary', onlyTitle) {
   assert.ok(['source-fixture', 'staged-package-fixture'].includes(kind));
   plugin = fs.realpathSync(plugin);
+  const ordinaryRole = /^ordinary:(codex|claude):(integrator|arch-review|code-review)$/.exec(group);
   const restore = routePayload(plugin);
   try {
-    if (group !== 'ordinary') return { identity: kind, payload_root: plugin,
+    if (group !== 'ordinary' && !ordinaryRole) return { identity: kind, payload_root: plugin,
       group, completed: await runRegressions(plugin, group, onlyTitle), installed_native_acceptance: false,
       production_resource_fit: 'unknown', rollout: false, release: false };
-    const subjects = ['codex', 'claude'].flatMap(runtime =>
-      ['integrator', 'arch-review', 'code-review'].map(role => ({ runtime, role })));
+    const subjects = ordinaryRole ? [{ runtime: ordinaryRole[1], role: ordinaryRole[2] }]
+      : ['codex', 'claude'].flatMap(runtime =>
+        ['integrator', 'arch-review', 'code-review'].map(role => ({ runtime, role })));
     const roles = new Array(subjects.length);
     let next = 0;
     await Promise.all(Array.from({ length: 3 }, async () => {
@@ -437,7 +439,7 @@ module.exports = { generateFixture, fixtureEnvironment, runAcceptance, runOrdina
 if (require.main === module) {
   const [kind, plugin, group] = process.argv.slice(2);
   if (!plugin || !['source-fixture', 'staged-package-fixture'].includes(kind)) {
-    process.stderr.write('Usage: node tests/smoke/phase53-review-acceptance.cjs <source-fixture|staged-package-fixture> <delivery-pipeline-root> [ordinary|historical|recovery|outcomes|ci|launch]\nFixture transports only; installed native acceptance and production resource fit remain unknown.\n');
+    process.stderr.write('Usage: node tests/smoke/phase53-review-acceptance.cjs <source-fixture|staged-package-fixture> <delivery-pipeline-root> [ordinary|ordinary:<codex|claude>:<integrator|arch-review|code-review>|historical|recovery|outcomes|ci|launch]\nFixture transports only; installed native acceptance and production resource fit remain unknown.\n');
     process.exitCode = 2;
   } else runAcceptance(plugin, kind, group).then(result => process.stdout.write(JSON.stringify(result) + '\n'))
     .catch(error => { process.stderr.write(error.stack + '\n'); process.exitCode = 1; });
