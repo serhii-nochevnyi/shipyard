@@ -127,20 +127,28 @@ for (const runtime of ['codex', 'claude']) {
       assert.equal(require('node:crypto').createHash('sha256').update(bytes).digest('hex'), output.sha256);
       assert.ok(bytes.toString('utf8').includes('Caller boundary was inspected.'));
       assert.equal(flow.evaluateGate(status).ok, true);
-      const writes = [];
+      const requests = [];
       options.gh = args => {
-        writes.push(args);
-        if (args[1].includes('/statuses/')) return {};
+        requests.push(args);
+        if (args[1] === 'repos/{owner}/{repo}') return { id: 1, full_name: 'fixture/repository' };
+        if (args[1] === 'user') return { id: 1 };
+        if (args[1].includes('/statuses/')) {
+          const fields = Object.fromEntries(args.filter((_, index) => args[index - 1] === '-f').map(value => {
+            const split = value.indexOf('='); return [value.slice(0, split), value.slice(split + 1)];
+          }));
+          return { id: 1, ...fields, creator: { id: 1 } };
+        }
         throw Error('fixture comment unavailable');
       };
       const published = flow.publish(input(f), options);
-      assert.equal(published.status.ok, true); assert.equal(published.comment.ok, false);
+      assert.equal(published.status.ok, true, JSON.stringify(published)); assert.equal(published.comment.ok, false);
       assert.ok(current(f)?.authenticated);
       assert.equal(prepared.launches.length, 3);
       f.pr.headRefOid = f.base;
       assert.throws(() => flow.publish(input(f), options));
       assert.equal(prepared.launches.length, 3);
-      assert.equal(writes.length, 2);
+      assert.equal(requests.filter(args => args.includes('-f')).length, 1);
+      assert.equal(requests.filter(args => args[1].endsWith('/comments')).length, 1);
       f.pr.headRefOid = f.head;
       const source = path.join(f.worktree, 'src/provider.cjs'), originalSource = fs.readFileSync(source);
       fs.appendFileSync(source, '\nchanged source\n');

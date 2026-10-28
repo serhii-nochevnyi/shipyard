@@ -677,7 +677,46 @@ function createDurableRecorder(storeDir) {
         throw boundaryError('RECORD_FAILED', `durable dispatch reservation failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
-    record(recordInput, authority, claimAuthority) {
+    markOriginalStarted(dispatchId, authority) {
+      if (authority !== RECORDER_AUTHORITY) return { started: false };
+      return withReceiptMutationLock(() => {
+        const stored = readStored(reservationFile(dispatchId));
+        if (!stored?.payload || stored.payload.dispatch_id !== dispatchId) return { started: false };
+        if (stored.payload.original_stage) return { started: false };
+        atomicReplaceJson(reservationFile(dispatchId), seal({ ...stored.payload, original_stage: 'started' }));
+        return { started: true };
+      });
+    },
+    retainOriginalCompletion(recordInput, authority) {
+      if (authority !== RECORDER_AUTHORITY) return { retained: false };
+      return withReceiptMutationLock(() => {
+        const dispatchId = recordInput.dispatch_id;
+        const stored = readStored(reservationFile(dispatchId));
+        if (!stored?.authenticated || stored.payload.dispatch_id !== dispatchId
+            || !['started', 'native-completed'].includes(stored.payload.original_stage)
+            || recordInput.predecessor_dispatch_id !== undefined) return { retained: false };
+        if (stored.payload.original_record && !sameRecord(stored.payload.original_record, recordInput))
+          return { retained: false };
+        atomicReplaceJson(reservationFile(dispatchId), seal({ ...stored.payload,
+          original_stage: 'native-completed', original_record: recordInput }));
+        return { retained: true };
+      });
+    },
+    getOriginalDispatch(dispatchId) {
+      const stored = readStored(reservationFile(dispatchId));
+      if (!stored?.payload || stored.payload.dispatch_id !== dispatchId)
+        return Object.freeze({ state: 'missing', reason: 'ORIGINAL_RESERVATION_MISSING' });
+      const record = readAuthenticated(recordFile(dispatchId));
+      if (record?.trace?.some(item => item.stage === 'receipt' && item.status === 'passed'))
+        return deepFreeze(snapshot({ state: 'recorded', reason: 'ORIGINAL_RECORDED', record }));
+      if (stored.authenticated && stored.payload.original_stage === 'native-completed'
+          && stored.payload.original_record?.dispatch_id === dispatchId)
+        return deepFreeze(snapshot({ state: 'native-completed', reason: 'ORIGINAL_NATIVE_COMPLETED',
+          record: stored.payload.original_record }));
+      return Object.freeze({ state: stored.authenticated && stored.payload.original_stage === 'started'
+        ? 'started' : 'reserved', reason: 'ORIGINAL_OUTCOME_UNKNOWN' });
+    },
+    record(recordInput, authority, claimAuthority, originalRecovery = false) {
       if (authority !== RECORDER_AUTHORITY) return { recorded: false };
       const receipt = recordInput && recordInput.receipt;
       const dispatchId = recordInput && recordInput.dispatch_id;
@@ -687,6 +726,10 @@ function createDurableRecorder(storeDir) {
       if (!fs.existsSync(reservationFile(dispatchId))) return { recorded: false };
       const predecessorDispatchId = recordInput.predecessor_dispatch_id;
       const predecessorConsumerId = recordInput.predecessor_consumer_id;
+      const completion = originalRecovery ? readAuthenticated(reservationFile(dispatchId)) : null;
+      const recoveringOriginal = originalRecovery && predecessorDispatchId === undefined
+        && completion?.original_stage === 'native-completed' && sameRecord(completion.original_record, recordInput);
+      if (originalRecovery && !recoveringOriginal) return { recorded: false };
       try {
         return withReceiptMutationLock(() => {
           const priorLatest = readStored(latestFile(receipt.runtime, receipt.role));
@@ -701,7 +744,7 @@ function createDurableRecorder(storeDir) {
                 || (existingHistory.previous_dispatch_id !== null
                   && (typeof existingHistory.previous_dispatch_id !== 'string'
                     || existingHistory.previous_dispatch_id === dispatchId))
-                || (!ownsLatest && !sameRecord(existingHistory, history))) return { recorded: false };
+                || (!ownsLatest && !recoveringOriginal && !sameRecord(existingHistory, history))) return { recorded: false };
           }
           if (predecessorDispatchId !== undefined || predecessorConsumerId !== undefined) {
             if (typeof predecessorDispatchId !== 'string' || typeof predecessorConsumerId !== 'string') return { recorded: false };
@@ -821,7 +864,7 @@ function createDurableRecorder(storeDir) {
     },
     getReservation(dispatchId) {
       if (typeof dispatchId !== 'string' || dispatchId.trim() === '') return null;
-      const stored = readJsonFile(reservationFile(dispatchId));
+      const stored = readStored(reservationFile(dispatchId))?.payload;
       if (!isObject(stored) || stored.dispatch_id !== dispatchId) return null;
       return Object.freeze({
         dispatch_id: dispatchId,
@@ -2391,6 +2434,33 @@ function createDispatchBoundary(options = {}) {
     }));
   }
 
+  function reconcileOriginal(dispatchId, context = {}) {
+    const recorder = options.recorder;
+    if (!DURABLE_RECORDERS.has(recorder)) refuse('RECORD_UNAVAILABLE', 'original recovery requires a durable recorder');
+    const original = recorder.getOriginalDispatch(dispatchId);
+    if (!['native-completed', 'recorded'].includes(original.state)) return original;
+    const record = original.record;
+    if (record.ticket !== ticketFromContext(context)
+        || (record.subject_kind || 'ticket') !== subjectKindFromContext(context, record.role, record.ticket)
+        || !['integrator', 'arch-review', 'code-review'].includes(record.role)
+        || !dispatchId.startsWith('semantic-') || record.predecessor_dispatch_id !== undefined)
+      refuse('NONCOMPLIANT_RECEIPT', 'original recovery subject or role differs');
+    if (original.state === 'native-completed') {
+      const finalized = deepFreeze(snapshot({ ...record, trace: [...record.trace,
+        { stage: 'record', status: 'passed' },
+        { stage: 'receipt', status: 'passed', launch_id: record.receipt.launch_id }] }));
+      const existing = recorder.getVerifiedRecord(dispatchId);
+      if (existing && canonicalStableStringify(existing) !== canonicalStableStringify(record)
+          && canonicalStableStringify(existing) !== canonicalStableStringify(finalized))
+        refuse('RECORD_FAILED', 'original recovery conflicts with its durable record');
+      if (!existing && !affirmative(recorder.record(record, RECORDER_AUTHORITY, undefined, true), 'recorded'))
+        refuse('RECORD_FAILED', 'original recording was not acknowledged');
+      recorderFinalize(recorder, finalized);
+    }
+    reconcile(dispatchId, context);
+    return recorder.getOriginalDispatch(dispatchId);
+  }
+
   function dispatch(input, context = {}) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
     for (const source of [context, context && context.launch_arguments, context && context.selection, context && context.session]) {
@@ -2588,6 +2658,10 @@ function createDispatchBoundary(options = {}) {
       };
       let finalizedRecord;
       const recordAfterValidation = () => {
+        if (DURABLE_RECORDERS.has(record) && validatedResolution.dispatch_id.startsWith('semantic-')
+            && ['integrator', 'arch-review', 'code-review'].includes(validatedResolution.role) && !prior
+            && !affirmative(record.retainOriginalCompletion(recordInput, RECORDER_AUTHORITY), 'retained'))
+          refuse('RECORD_FAILED', 'original native completion could not be retained');
         const recordResult = recorderRecord(record, recordInput, priorClaim);
         if (!affirmative(recordResult, 'recorded')) {
           refuse('RECORD_FAILED', 'durable dispatch recording did not return affirmative acknowledgement; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
@@ -2641,6 +2715,10 @@ function createDispatchBoundary(options = {}) {
         handoffController.markLaunchStarted(handoffReservation);
         launchStarted = true;
       }
+      if (DURABLE_RECORDERS.has(record) && validatedResolution.dispatch_id.startsWith('semantic-')
+          && ['integrator', 'arch-review', 'code-review'].includes(validatedResolution.role) && !prior
+          && !affirmative(record.markOriginalStarted(validatedResolution.dispatch_id, RECORDER_AUTHORITY), 'started'))
+        refuse('DUPLICATE_DISPATCH_ID', 'original dispatch was already started; reconcile its outcome');
       const launchResult = invokeLaunch(
         fn,
         adapter,
@@ -2669,7 +2747,7 @@ function createDispatchBoundary(options = {}) {
     }
   }
 
-  return Object.freeze({ resolve, validate, receipt, reconcile, dispatch });
+  return Object.freeze({ resolve, validate, receipt, reconcile, reconcileOriginal, dispatch });
 }
 
 function resolveDispatch(input) {

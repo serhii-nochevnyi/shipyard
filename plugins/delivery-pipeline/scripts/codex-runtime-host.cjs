@@ -3354,7 +3354,7 @@ function createCodexRuntimeHost(options = {}) {
   }
   if (probe.status !== 'available') {
     if (controller && typeof controller.markUnavailable === 'function') {
-      controller.markUnavailable(runId, { reason: probe.reason || 'Codex runtime unavailable' });
+      controller.markUnavailable(runId, { reason: bounded(probe.reason, 2048) || 'Codex runtime unavailable' });
     }
     fail('RUNTIME_UNAVAILABLE', probe.detail || 'Codex runtime unavailable: ' + (probe.reason || 'unknown'), { probe });
   }
@@ -3446,7 +3446,7 @@ function createCodexRuntimeHost(options = {}) {
       }
       if (!completedNative && controller && UNAVAILABLE_CODES.has(error && error.code)
           && typeof controller.markUnavailable === 'function') {
-        controller.markUnavailable(runId, { reason: error.message });
+        controller.markUnavailable(runId, { reason: bounded(error.message, 2048) || 'Codex runtime unavailable' });
       }
       throw error;
     }
