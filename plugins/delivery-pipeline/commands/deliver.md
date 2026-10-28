@@ -870,16 +870,6 @@ owner, project and agent, heartbeat during a launch, expire after a crash and
 release after the receipt. Missing scope or a store failure is reported as
 degraded and uses a bounded local fallback; it is never treated as unlimited.
 
-At a declared experiment boundary, collect `pipeline-stats.cjs --json` and use
-its `optimization_input` as the metadata-only input to
-`optimization-report.cjs`. The report must name versioned baseline and treatment
-arms, provider/account scope, coverage, failed/parked/interrupted runs, quality,
-rollback owner and comparison metric. Evaluate one treatment at a time. Persist
-the report with `optimization-report.cjs create`, then register its decision with
-`backlog-index.cjs candidate --root <project> --report <report.json>`. A candidate
-is linked evidence with `auto_launch: false`; it never rewrites model policy or
-starts work from a stats run.
-
 ## Durable session handoff and cold-start recovery
 
 The delivery session may be stopped and resumed, but a checkpoint is evidence,
