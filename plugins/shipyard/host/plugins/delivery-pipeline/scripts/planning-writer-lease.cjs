@@ -157,48 +157,48 @@ function sealOutputPaths(role, phaseDir) {
   return [...(fs.existsSync(path.join(phaseDir, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...plans].sort();
 }
 
-function captureSealManifest({ role, phaseDir, snapshot, declared, changed }) {
+function captureSealManifest({ role, phaseDir, snapshot, changed }) {
   const paths = sealOutputPaths(role, phaseDir);
-  const sortedDeclared = [...declared].sort();
   const sortedChanged = [...changed].sort();
-  if (new Set(sortedDeclared).size !== sortedDeclared.length || JSON.stringify(sortedDeclared) !== JSON.stringify(sortedChanged)) {
-    fail('ARTIFACT_DECLARATION_INVALID', 'native declaration differs from independent phase delta');
+  // @invariant: an existing CONTEXT.md holds the locked decisions the planner reads; it is a sealed
+  // input, so a host-computed change to it is refused. Creating one where none existed stays allowed.
+  if (role === 'gsd-planner' && Object.hasOwn(snapshot.digests, 'CONTEXT.md') && sortedChanged.includes('CONTEXT.md')) {
+    fail('FOREIGN_EDIT', 'phase delta modifies the frozen planner CONTEXT.md input');
   }
   const outputs = {};
   for (const rel of paths) {
     const full = path.join(phaseDir, rel);
     let stat;
     try { stat = fs.lstatSync(full); }
-    catch { fail('ARTIFACT_DECLARATION_INVALID', `sealed output is missing: ${rel}`); }
+    catch { fail('MISSING_ARTIFACT', `sealed output is missing: ${rel}`); }
     if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(full) !== path.join(fs.realpathSync(phaseDir), rel)) {
-      fail('ARTIFACT_DECLARATION_INVALID', 'sealed output is not a contained regular file');
+      fail('FOREIGN_EDIT', 'sealed output is not a contained regular file');
     }
     const sha256 = digestFile(full);
     const changedOutput = sortedChanged.includes(rel);
     if (!changedOutput && snapshot.digests[rel] !== sha256) {
-      fail('ARTIFACT_DECLARATION_INVALID', 'unchanged sealed output has no matching baseline');
+      fail('FOREIGN_EDIT', 'unchanged sealed output has no matching baseline');
     }
     outputs[rel] = { sha256, origin: changedOutput ? 'child-change' : 'unchanged-baseline' };
   }
   if (sortedChanged.some((rel) => !Object.hasOwn(outputs, rel))) {
-    fail('ARTIFACT_DECLARATION_INVALID', 'native change is outside the role seal outputs');
+    fail('FOREIGN_EDIT', 'phase change is outside the role seal outputs');
   }
   return outputs;
 }
 
-function assertSealManifest({ role, phaseDir, snapshot, declared, changed, outputs, lease }) {
+function assertSealManifest({ role, phaseDir, snapshot, changed, outputs, lease }) {
   if (!object(outputs) || JSON.stringify(Object.keys(outputs).sort()) !== JSON.stringify(sealOutputPaths(role, phaseDir))) {
     fail('RECOVERY_EVIDENCE_INCOMPLETE', 'original full seal-output manifest is missing or incomplete');
   }
   const current = lease.changedSince(snapshot).changed;
-  if (JSON.stringify(current) !== JSON.stringify([...changed].sort())
-      || JSON.stringify([...declared].sort()) !== JSON.stringify([...changed].sort())) {
-    fail('FOREIGN_EDIT', 'phase delta differs from original native change declaration');
+  if (JSON.stringify(current) !== JSON.stringify([...changed].sort())) {
+    fail('FOREIGN_EDIT', 'phase delta differs from the original completion');
   }
   let actual;
-  try { actual = captureSealManifest({ role, phaseDir, snapshot, declared, changed }); }
+  try { actual = captureSealManifest({ role, phaseDir, snapshot, changed }); }
   catch (error) {
-    if (error.code === 'ARTIFACT_DECLARATION_INVALID' || error.code === 'MISSING_ARTIFACT') {
+    if (error.code === 'FOREIGN_EDIT' || error.code === 'MISSING_ARTIFACT') {
       fail('RECOVERY_ARTIFACT_ALTERED', 'current seal outputs differ from original completion');
     }
     throw error;

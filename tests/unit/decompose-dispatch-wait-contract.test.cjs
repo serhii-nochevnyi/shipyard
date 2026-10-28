@@ -58,12 +58,7 @@ function fixtureData(gsdRole) {
       record.payload.source.subagent.thread_spawn.agent_role = gsdRole;
     }
     if (record.type === 'event_msg' && record.payload.type === 'task_complete') {
-      const artifactPaths = gsdRole === 'gsd-phase-researcher'
-        ? ['.planning/phases/45-detached-contract/45-RESEARCH.md']
-        : gsdRole === 'gsd-planner' ? ['.planning/phases/45-detached-contract/45-01-PLAN.md'] : [];
-      record.payload.last_agent_message = JSON.stringify({
-        schema: 'shipyard.codex-decompose-output.v1', artifact_paths: artifactPaths,
-      });
+      record.payload.last_agent_message = 'Work completed.';
     }
     return JSON.stringify(record);
   }).join('\n') + '\n';
