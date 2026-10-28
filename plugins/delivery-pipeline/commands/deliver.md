@@ -990,8 +990,9 @@ prints `0 agents` the project config does not parse: fix the file.
    ```
 
    `--graph-dir` is required whenever this worktree does not itself track
-   `.planning/graph/tickets.json` at HEAD, and when the project coordinator's
-   fresh `state-sync` board is newer than the graph tracked by a ticket branch.
+   `.planning/graph/tickets.json` at HEAD. Pass it for a tracking worktree as
+   well: the board and the dispatch and escalation records are runtime state
+   that git never carries, so they live only in the project's `.planning/graph`.
    An explicit graph takes precedence only after the canonical-graph check;
    untracked copies in linked worktrees still refuse. `launch` returns
    immediately with `{dispatch_id, ticket, role, runtime, log, result}`; the
