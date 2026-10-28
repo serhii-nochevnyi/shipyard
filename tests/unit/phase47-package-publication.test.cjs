@@ -528,8 +528,6 @@ function authenticateT16Successor(common, root = REPOSITORY, generation = 8) {
   assert.equal(finalization.committed.commit, source.head);
   assert.equal(finalization.committed.tree, source.tree);
   assert.equal(finalization.committed.signer, '2F485C0A455BA33463F66332900FCE87BD1BFF0D');
-  assert.equal(finalization.coverage.covered, true);
-  reauthenticateRepairCoverage({current_head: source.head, coverage: finalization.coverage}, root);
   assert.equal(finalization.verification.digest, binding.source_finalization.verification.digest);
   if (generation >= 4) {
     const sourceNative = JSON.parse(read(generation === 4 ? '/private/tmp/phase47-16-copilot-ci-repair-result.json' : generation === 5 ? '/private/tmp/phase47-16-bounded-verdict-lookup-result.json' : generation === 6 ? '/private/tmp/phase47-16-shared-epic-repo-fix-result.json' : generation === 7 ? '/private/tmp/phase47-16-planning-artifact-root-result.json' : '/private/tmp/phase47-16-pr452-review-fix-result.json', generation === 4 ? 'dfdbc82033718d11dfd2b8a83f13518cde566d206ee6649698592d890c5e72ae' : generation === 5 ? 'cf09547bcd4bd5b419e43b3284042bd7a13407071256d00fd916e6f3d2b171f9' : generation === 6 ? '8e6b32a17a71eb72f0fece5350629500fb40ee21dfec34a342c981d32ee96843' : generation === 7 ? 'c462cc116e905a500792522c86bc8b3b2be6f3aa6b51e5414fc6e436b3a2326f' : '90c94c82cbeb98954044f4ce4c71f221f738f22c2dc23c62a2d946a6d308c85f'));
@@ -568,7 +566,6 @@ function authenticateT16Successor(common, root = REPOSITORY, generation = 8) {
     assert(proof && proof.ticket === 'T-47-16' && proof.results.length === 2);
     assert(proof.results.every(row => row.status === 0 && row.outcome === 'passed'
       && row.tree_before === publication.committed.tree && row.tree_after === publication.committed.tree));
-    reauthenticateRepairCoverage({current_head: publication.committed.commit, coverage: publication.coverage}, root);
     const native = JSON.parse(read(fs.realpathSync(publication.fixer_result_path), publication.fixer_result_sha256));
     assert.equal(native.role, 'ci-fix'); assert.equal(native.ticket, 'T-47-16');
     reference(native.receipt.runtime_evidence.transcript);
@@ -862,16 +859,6 @@ function historicalVolumeEntry(indexRef, indexed, entry, resultRef) {
     resultRef || (row ? row.native_result : {}), indexRef, indexed, entry);
 }
 
-function reauthenticateRepairCoverage(repair, worktree = REPOSITORY, verify = null) {
-  const cv = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
-  const root = path.resolve(HOST, '../../coverage');
-  const coverage = (verify || cv.verify)({ commit: repair.current_head, repo: repair.coverage.record.repo,
-    worktree, root, keyPath: path.join(root, 'coverage.key') });
-  assert.equal(coverage.covered, true, coverage.reason);
-  assert.deepEqual(coverage, repair.coverage);
-  return coverage;
-}
-
 function authenticateRepairSuccessor(common, root = REPOSITORY, historical = false, historicalContract = null) {
   assert([false, true, 'F1', 'R2-history'].includes(historical), 'unknown repair historical selector');
   if (historical === 'R2-history') assert.equal(historicalContract, R2_HISTORY_ADMISSION, 'signed pinned R2 historical admission required');
@@ -1034,8 +1021,6 @@ function authenticateRepairSuccessor(common, root = REPOSITORY, historical = fal
     assert(verification.results.every(row => row.outcome === 'passed'
       && row.tree_before === repair.finalization.tree && row.tree_after === repair.finalization.tree));
     assert.deepEqual(verification, repair.host_verification);
-    assert.equal(repair.coverage.covered, true);
-    reauthenticateRepairCoverage(repair, root);
   }
   assert.equal(source.head, source.parent_commits['T-47-26'].merge);
   assert.deepEqual(selected.binding.outputs.map(row => row.path), prior.selected.binding.outputs.map(row => row.path));
@@ -2618,7 +2603,7 @@ function privateFixtures(authenticatedSignatureFixture = false) {
   }
 }
 
-module.exports = { R8_STAGE, R8_HANDOFF_SHA, R8_CORRECTIVE, validateR8Contract, R7_STAGE, R7_HANDOFF_SHA, R7_CORRECTIVE, validateR7Contract, validateSquashPublication, R6_STAGE, R6_HANDOFF_SHA, R6_CORRECTIVE, validateR6Contract, R5_STAGE, R5_HANDOFF_SHA, R5_CORRECTIVE, validateR5Contract, R3_STAGE, R3_HANDOFF_SHA, R4_STAGE, R4_HANDOFF_SHA, R4_CORRECTIVE, validateR4Contract, R2_HISTORY_CONTRACT, validateR2HistoricalAdmission, authenticateR2History, T16_STAGE, T16_HANDOFF, T16_HANDOFF_SHA, T16_CORRECTIVE, validateT16Contract, authenticateT16Successor, recheckT16Successor, R2_HANDOFF, R2_HANDOFF_SHA, F1_HISTORICAL_CONTRACT, validateR2Scope, validatePreviousCurrentPublication, validatePinnedHistoricalIdentity, validateSignedHistoricalParents, authenticatePinnedHistoricalContract, F1_HANDOFF, F1_HANDOFF_SHA, F1_CORRECTIVE, validateF1Scope, validateFreshMaterializations, validatePreviousRepairPublication, REPAIR_OWNERS, reauthenticateRepairCoverage, validateOriginalMaterialization, ORIGINAL_ENTRIES, MATERIALIZATION_V2, MATERIALIZATION_V2_SHA, validateOperatorSignature, validateVolumeMaterialization, historicalVolumeEntry, MATERIALIZATION, MATERIALIZATION_SHA, validateRepairContract, authenticateRepairSuccessor, recheckRepairSuccessor, REPAIR_HANDOFF, REPAIR_HANDOFF_SHA, REPAIR_CORRECTIVE, REPAIR_PLANS, SOURCE39_SHA, COORDINATOR48_SHA, HISTORICAL43_SHA, validatePublication, authenticateVolumeSuccessor, recheckVolumeSuccessor, validateVolumeContract, VOLUME_CORRECTIVE, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
+module.exports = { R8_STAGE, R8_HANDOFF_SHA, R8_CORRECTIVE, validateR8Contract, R7_STAGE, R7_HANDOFF_SHA, R7_CORRECTIVE, validateR7Contract, validateSquashPublication, R6_STAGE, R6_HANDOFF_SHA, R6_CORRECTIVE, validateR6Contract, R5_STAGE, R5_HANDOFF_SHA, R5_CORRECTIVE, validateR5Contract, R3_STAGE, R3_HANDOFF_SHA, R4_STAGE, R4_HANDOFF_SHA, R4_CORRECTIVE, validateR4Contract, R2_HISTORY_CONTRACT, validateR2HistoricalAdmission, authenticateR2History, T16_STAGE, T16_HANDOFF, T16_HANDOFF_SHA, T16_CORRECTIVE, validateT16Contract, authenticateT16Successor, recheckT16Successor, R2_HANDOFF, R2_HANDOFF_SHA, F1_HISTORICAL_CONTRACT, validateR2Scope, validatePreviousCurrentPublication, validatePinnedHistoricalIdentity, validateSignedHistoricalParents, authenticatePinnedHistoricalContract, F1_HANDOFF, F1_HANDOFF_SHA, F1_CORRECTIVE, validateF1Scope, validateFreshMaterializations, validatePreviousRepairPublication, REPAIR_OWNERS, validateOriginalMaterialization, ORIGINAL_ENTRIES, MATERIALIZATION_V2, MATERIALIZATION_V2_SHA, validateOperatorSignature, validateVolumeMaterialization, historicalVolumeEntry, MATERIALIZATION, MATERIALIZATION_SHA, validateRepairContract, authenticateRepairSuccessor, recheckRepairSuccessor, REPAIR_HANDOFF, REPAIR_HANDOFF_SHA, REPAIR_CORRECTIVE, REPAIR_PLANS, SOURCE39_SHA, COORDINATOR48_SHA, HISTORICAL43_SHA, validatePublication, authenticateVolumeSuccessor, recheckVolumeSuccessor, validateVolumeContract, VOLUME_CORRECTIVE, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
   validateDescendant, validateConfigurations, CORRECTIVE, FINAL_HANDOFF, FINAL_HANDOFF_SHA };
 
 if (require.main === module) {

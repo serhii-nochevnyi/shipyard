@@ -106,7 +106,7 @@ function carry(fx, { badBase = false, viaMerge = false } = {}) {
     fs.writeFileSync(fx.prView, JSON.stringify(view));
   }
   const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-    CARRY_STATUS_DIR: fx.statuses, CARRY_PR_VIEW: fx.prView, SHIPYARD_COVERAGE_ROOT: path.join(fx.repo, 'coverage') };
+    CARRY_STATUS_DIR: fx.statuses, CARRY_PR_VIEW: fx.prView };
   const args = viaMerge
     ? [BASE_MERGE, 'T-01-01', '--worktree', fx.repo, '--base', 'base', '--graph', fx.graph, '--no-fetch', '--json']
     : [CARRY, 'carry', 'T-01-01', '--pr', '9', '--from', fx.from, '--to', fx.to,

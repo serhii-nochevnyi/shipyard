@@ -68,13 +68,11 @@ const previousEnv = {
   GNUPGHOME: process.env.GNUPGHOME,
   GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
   GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
-  SHIPYARD_COVERAGE_ROOT: process.env.SHIPYARD_COVERAGE_ROOT,
 };
 const disposableGpgHome = path.join(temporary, 'gnupg');
 process.env.GNUPGHOME = disposableGpgHome;
 process.env.GIT_CONFIG_GLOBAL = path.join(temporary, 'empty-gitconfig');
 process.env.GIT_CONFIG_NOSYSTEM = '1';
-process.env.SHIPYARD_COVERAGE_ROOT = path.join(temporary, 'coverage');
 fs.mkdirSync(process.env.GNUPGHOME, { mode: 0o700 });
 process.on('exit', () => {
   try {
@@ -1144,21 +1142,15 @@ test('Codex host verification refuses an admitted failure without finalizing', a
 test('Codex host verification passes sealed evidence digest to trusted finalizer', async () => {
   const f = fixture();
   let digest;
-  let coverage;
   try {
     approvedPlan(f, ['node check.cjs']);
     await assert.rejects(() => delivery(f, { verification: undefined,
       verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
       hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '', backend: { kind: 'host' } }; } },
-      finalizeCommit(input) { digest = input.verificationEvidenceDigest; coverage = input.coverage;
+      finalizeCommit(input) { digest = input.verificationEvidenceDigest;
         throw new Error('stop after evidence'); },
     }).run({ role: 'executor', context: { prompt: 'Implement.' } }), /stop after evidence/);
     assert.match(digest, /^[0-9a-f]{64}$/);
-    assert.equal(coverage.kind, 'executor');
-    assert.match(coverage.dispatch_id, /^dispatch-/);
-    assert.match(coverage.receipt_digest, /^[0-9a-f]{64}$/);
-    assert.equal(coverage.verification_digest, digest);
-    assert.equal(coverage.receipt_store, f.host.recorder.storeDir);
   } finally { clean(f); }
 });
 
@@ -1270,14 +1262,10 @@ test('tampered candidate and wrong scope refuse; commit without a finalization r
     await assert.rejects(() => recovery(f).resumeFinalization('f'.repeat(64), liveScope(f)),
       (refusal) => refusal.code === 'CANDIDATE_MISSING');
     const candidate = JSON.parse(original).payload;
-    const receiptStore = f.host.recorder.storeDir;
     finalizeCommit({ ticket: candidate.ticket, worktree: candidate.worktree, expectedBranch: candidate.branch,
       expectedBase: candidate.expected_base, expectedHead: candidate.expected_head, expectedSigner: signer,
       files_modified: candidate.files_modified, expectedTree: candidate.scoped_tree,
-      verificationEvidenceDigest: candidate.verification.evidence_digest,
-      coverage: { kind: 'executor', repo: candidate.repo, dispatch_id: candidate.dispatch_id,
-        receipt_digest: candidate.receipt_sha256, verification_digest: candidate.verification.evidence_digest,
-        receipt_store: receiptStore } });
+      verificationEvidenceDigest: candidate.verification.evidence_digest });
     const head = git(f.root, 'rev-parse', 'HEAD');
     await assert.rejects(() => recovery(f).resumeFinalization(id, liveScope(f)),
       (refusal) => refusal.code === 'RECONCILIATION_REQUIRED');
@@ -2766,15 +2754,18 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         assert.equal(sourceResult.receipt.agent_file, undefined);
         assert.equal(sourceResult.receipt.agent_file_digest, undefined);
         assert.ok(sourceResult.receipt.runtime_evidence.native_session_evidence);
-        const authority = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
-        const covered = authority.verify({ worktree: f.root, repo: authority.repoSlug(f.root), commit: currentHead });
-        assert.equal(covered.covered, true); assert.equal(covered.record.kind, 'executor');
-        assert.equal(covered.record.dispatch_id, sourceResult.dispatch_id);
+        const sealedDirectory = name => path.join(stateRoot(f), name);
+        const finalized = fs.readdirSync(sealedDirectory('finalized')).map(name =>
+          JSON.parse(fs.readFileSync(path.join(sealedDirectory('finalized'), name))).payload).find(item => item.commit === currentHead);
+        assert.ok(finalized); assert.equal(finalized.parent, firstHead);
+        const candidateRecord = path.join(sealedDirectory('candidates'), finalized.candidate_id + '.json');
+        const sealedCandidate = JSON.parse(fs.readFileSync(candidateRecord));
+        assert.equal(sealedCandidate.payload.expected_role, 'executor');
+        assert.equal(sealedCandidate.payload.dispatch_id, sourceResult.dispatch_id);
         graph.synchronized_head = currentHead; fs.writeFileSync(graphFile, JSON.stringify(graph));
         if (mutation.endsWith('-forged')) {
-          const file = path.join(authority.coverageRoot(), 'coverage', encodeURIComponent(covered.record.repo), currentHead + '.json');
-          const bytes = JSON.parse(fs.readFileSync(file)); bytes.payload.ticket = 'T-38-99';
-          fs.writeFileSync(file, JSON.stringify(bytes));
+          sealedCandidate.payload.ticket = 'T-38-99';
+          fs.writeFileSync(candidateRecord, JSON.stringify(sealedCandidate));
         }
         if (mutation.endsWith('-plan')) fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
         if (mutation.endsWith('-owners')) { graph.tickets[f.scope.ticket].files.push('outside.txt'); fs.writeFileSync(graphFile, JSON.stringify(graph)); }
@@ -2818,7 +2809,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       }
       if (mutation?.startsWith('normalized-uncovered-source')) {
         fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'uncovered external source\n');
-        git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'uncovered external source');
+        git(f.root, 'add', 'src/owned.txt');
+        git(f.root, ...(mutation.endsWith('-signed') ? ['commit', '-qS'] : ['-c', 'commit.gpgsign=false', 'commit', '-q']), '-m', 'uncovered external source');
         publishedHead = git(f.root, 'rev-parse', 'HEAD');
       }
       if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) assert.equal(firstHead, first.artifact.commit);
@@ -2872,6 +2864,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         'normalized-covered-source-location-body': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-covered-source-location-author': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-covered-source-forged': 'REPAIR_SUBJECT_CHANGED', 'normalized-uncovered-source': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-uncovered-source-signed': 'REPAIR_SUBJECT_CHANGED',
         'normalized-covered-source-plan': 'PLAN_DIGEST_MISMATCH', 'normalized-covered-source-owners': 'REPAIR_SUBJECT_CHANGED',
         'normalized-covered-source-reply-body': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-covered-source-reply-author': 'REPAIR_PREDECESSOR_INVALID',
@@ -3111,7 +3104,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
           if (evolution === 'base-merge') {
             for (const item of historicalCoverage) {
               const records = item.source_transition.records;
-              assert.equal(records.filter(pin => pin.coverage_sha256).length, 1);
+              assert.equal(records.filter(pin => pin.candidate_id).length, 1);
               assert.equal(records.filter(pin => pin.base_import && pin.semantic_credit === false).length, 1);
               const merge = records.find(pin => pin.base_merge);
               assert.equal(merge.commit, currentHead); assert.equal(merge.semantic_credit, false);
@@ -3244,9 +3237,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       assert.equal(result.actions.status, 'confirmed');
       assert.equal(publishedHead, result.artifact.commit);
       assert.ok(git(f.root, 'show', '-s', '--format=%B', 'HEAD').includes('Shipyard-Verification-Evidence:'));
-      const signedCoverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs').verify({ worktree: f.root, repo: require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs').repoSlug(f.root), commit: result.artifact.commit });
-      assert.equal(signedCoverage.covered, true);
-      assert.equal(signedCoverage.record.kind, 'fixer');
+      const signedCandidate = JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'candidates', result.artifact.candidate_id + '.json'))).payload;
+      assert.equal(signedCandidate.expected_role, 'review-fix');
       const recoveryHost = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport,
         verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() });
       await assert.rejects(() => recoveryHost.resumeFinalization(result.artifact.candidate_id, { ...f.scope, role: 'executor' }),
@@ -3318,7 +3310,7 @@ for (const mutation of ['normalized-source-repeat', 'normalized-cli-source-repea
     () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
 
 for (const mutation of ['normalized-covered-source', 'normalized-covered-source-forged', 'normalized-covered-source-plan',
-  'normalized-covered-source-owners', 'normalized-uncovered-source', 'normalized-covered-source-reply-body',
+  'normalized-covered-source-owners', 'normalized-uncovered-source', 'normalized-uncovered-source-signed', 'normalized-covered-source-reply-body',
   'normalized-covered-source-reply-author', 'normalized-covered-source-reply-id', 'normalized-covered-source-reply-target',
   'normalized-covered-source-companion-link', 'normalized-covered-source-location-shift', 'normalized-covered-source-location-null',
   'normalized-covered-source-location-path', 'normalized-covered-source-location-original-line',
@@ -3358,7 +3350,7 @@ function sharedRepairTransitionRegression() {
   const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
   const oid = index => index.toString(16).padStart(40, '0');
   const source_transition = { from: oid(1), to: oid(97), records: Array.from({ length: 96 }, (_, i) => ({
-    commit: oid(i + 2), coverage_sha256: digest({ commit: oid(i + 2), original_receipt: i }),
+    commit: oid(i + 2), candidate_id: digest({ commit: oid(i + 2), original_receipt: i }),
   })) };
   const owners = Array.from({ length: 14 }, (_, i) => 'plugins/delivery-pipeline/scripts/original-source-owner-' + i + '.cjs');
   const scope_transition = { from: { base: oid(200), base_ref: 'epic/phase49',

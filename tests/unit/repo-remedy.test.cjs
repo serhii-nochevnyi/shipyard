@@ -7,7 +7,6 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 const { computeSignature } = require('../../plugins/delivery-pipeline/scripts/failure-signature.cjs');
-const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
 
 const SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/repo-remedy.cjs');
 const LOG_EVENT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/log-event.cjs');
@@ -67,7 +66,7 @@ else if (args[0] === 'api' && args[1].includes('/commits/')) console.log(JSON.st
 else process.exit(1);
 `, { mode: 0o755 });
   const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
-    GH_STATE: stateFile, GH_CALLS: callsFile, SHIPYARD_COVERAGE_ROOT: path.join(root, 'coverage') };
+    GH_STATE: stateFile, GH_CALLS: callsFile };
   const invoke = (...args) => spawnSync(process.execPath, [SCRIPT, ...args, '--graph', graph, '--json'],
     { cwd: root, env, encoding: 'utf8' });
   const calls = () => fs.existsSync(callsFile) ? fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse) : [];
@@ -235,11 +234,8 @@ test('run attribution requires unique matching workflow metadata, parent and bot
   f.writeConfig([{ signature: f.signature, workflow: 'repair.yml', inputs: { a: 'changed' } }]);
   assert.equal(JSON.parse(check().stdout).result, 'unattributed');
   f.writeConfig();
-  assert.equal(coverage.verify({ commit: next, repo: REPO, worktree: f.root,
-    root: path.join(f.root, 'coverage') }).covered, false);
   const result = check();
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).result, 'attributed');
-  assert.equal(coverage.verify({ commit: next, repo: REPO, worktree: f.root,
-    root: path.join(f.root, 'coverage') }).covered, true);
+  assert.equal(JSON.parse(result.stdout).commit, next);
 });

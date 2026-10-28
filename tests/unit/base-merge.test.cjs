@@ -19,7 +19,7 @@ for (const base of ['epic/47-policy', 'develop']) test(`public base-merge preser
     fs.writeFileSync(path.join(graph,'tickets.json'),JSON.stringify({tickets:{'T-47-01':{phase:47,files:['owned.txt'],epic:'epic/47-policy',branch:'ticket/T-47-01'}}}));
     fs.writeFileSync(path.join(graph,'delivery-state.json'),JSON.stringify({'T-47-01':{pr:9}}));
     const result=JSON.parse(execFileSync(process.execPath,[script,'T-47-01','--worktree',root,'--base',base,'--graph',graph,'--no-fetch','--json'],
-      {encoding:'utf8',env:{...process.env,SHIPYARD_COVERAGE_ROOT:path.join(root,'coverage')}}));
+      {encoding:'utf8'}));
     assert.equal(result.carry.carried,false);assert.equal(result.carry.architecture,base === 'develop' ? 'required' : 'skipped-by-target');
     assert.equal(result.carry.carry,base === 'develop' ? 're-owed' : 'skipped-by-target');
     assert.equal(fs.readFileSync(path.join(root,'owned.txt'),'utf8'),'owned');
@@ -45,7 +45,7 @@ test('failed default fetch refuses cached refs before changing the ticket HEAD',
     } }));
     const result = require('node:child_process').spawnSync(process.execPath,
       [script, 'T-47-01', '--worktree', root, '--base', 'origin/epic/47-policy', '--graph', graph, '--json'],
-      { encoding: 'utf8', env: { ...process.env, SHIPYARD_COVERAGE_ROOT: path.join(root, 'coverage') } });
+      { encoding: 'utf8' });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /fetch failed; refusing cached origin refs/);
     assert.equal(git(['rev-parse', 'HEAD']), before);
@@ -79,19 +79,18 @@ function squashFixture({ resolution = 'child\n', foreign = false, filename = 'ow
     'T-49-02': { phase: 49, files: declared, branch: 'ticket/T-49-02', epic: 'epic/49-policy' },
   } }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({ 'T-49-02': { pr: 9 } }));
-  const coverageRoot = path.join(root, 'coverage');
   function run(injection = '') {
     const preload = path.join(root, 'inject.cjs');
     if (injection) fs.writeFileSync(preload, `const cp=require('node:child_process');const original=cp.spawnSync;cp.spawnSync=function(command,args,options){${injection}};`);
     return require('node:child_process').spawnSync(process.execPath,
       [...(injection ? ['--require', preload] : []), script, 'T-49-02', '--worktree', root,
         '--base', 'epic/49-policy', '--graph', graph, '--no-fetch', '--json'],
-      { encoding: 'utf8', env: { ...process.env, SHIPYARD_COVERAGE_ROOT: coverageRoot } });
+      { encoding: 'utf8' });
   }
-  return { root, git, head, tree, base, coverageRoot, run, write };
+  return { root, git, head, tree, base, run, write };
 }
 
-for (const filename of ['owned.txt', 'owned\nline.txt', 'owned\ttab.txt']) test(`fresh owned squash resolution preserves full tree and genuine coverage: ${JSON.stringify(filename)}`, () => {
+for (const filename of ['owned.txt', 'owned\nline.txt', 'owned\ttab.txt']) test(`fresh owned squash resolution preserves its full tree: ${JSON.stringify(filename)}`, () => {
   const f = squashFixture({ filename });
   try {
     const result = f.run(); assert.equal(result.status, 0, result.stderr);
@@ -99,9 +98,6 @@ for (const filename of ['owned.txt', 'owned\nline.txt', 'owned\ttab.txt']) test(
     assert.equal(payload.result, 'resolved without content changes'); assert.equal(payload.carry.carried, false);
     assert.equal(f.git(['show', '-s', '--format=%P', 'HEAD']), `${f.head} ${f.base}`);
     assert.equal(f.git(['rev-parse', 'HEAD^{tree}']), f.tree);
-    const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
-    const verified = coverage.verify({ commit: f.git(['rev-parse', 'HEAD']), repo: coverage.repoSlug(f.root), worktree: f.root, root: f.coverageRoot });
-    assert.equal(verified.covered, true, verified.reason); assert.equal(verified.record.kind, 'base-merge');
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -111,7 +107,7 @@ for (const [name, options] of [
 ]) test(`squash refuses ${name}`, () => {
   const f = squashFixture(options);
   try { const r = f.run(); assert.notEqual(r.status, 0); assert.match(r.stderr, /not guessing/);
-    assert.equal(f.git(['rev-parse', 'HEAD']), f.head); assert.equal(fs.existsSync(f.coverageRoot), false);
+    assert.equal(f.git(['rev-parse', 'HEAD']), f.head);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -131,14 +127,14 @@ for (const ref of ['MERGE_HEAD', 'AUTO_MERGE']) test(`preexisting ${ref} refuses
       f.git(['update-ref', ref, f.tree]);
     }
     const r = f.run(); assert.notEqual(r.status, 0); assert.match(r.stderr, /absent/);
-    assert.equal(f.git(['rev-parse', 'HEAD']), f.head); assert.equal(fs.existsSync(f.coverageRoot), false);
+    assert.equal(f.git(['rev-parse', 'HEAD']), f.head);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
 test('dirty tracked start refuses before merge', () => {
   const f = squashFixture();
   try { f.write('dirty\n'); const r = f.run(); assert.notEqual(r.status, 0); assert.match(r.stderr, /uncommitted/);
-    assert.equal(f.git(['rev-parse', 'HEAD']), f.head); assert.equal(fs.existsSync(f.coverageRoot), false);
+    assert.equal(f.git(['rev-parse', 'HEAD']), f.head);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -157,25 +153,16 @@ for (const [name, injection] of [
   ['failed diff', "if(command==='git'&&args[2]==='diff'&&args.includes('--no-renames'))return {status:128,stdout:'',stderr:'injected failure'};return original(command,args,options);"],
   ['failed ancestry', "if(command==='git'&&args[2]==='log')return {status:128,stdout:'',stderr:'injected failure'};return original(command,args,options);"],
   ['postcommit parent mismatch', "const r=original(command,args,options);if(command==='git'&&args[2]==='show'&&args.includes('--format=%P'))r.stdout='0'.repeat(40)+'\\n';return r;"],
-]) test(`injected ${name} cannot record coverage`, () => {
+]) test(`injected ${name} refuses`, () => {
   const f = squashFixture();
-  try { const r = f.run(injection); assert.notEqual(r.status, 0, r.stdout); assert.equal(fs.existsSync(f.coverageRoot), false);
+  try { const r = f.run(injection); assert.notEqual(r.status, 0, r.stdout);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test('trusted writer refusal retains actual merge and refuses success', () => {
-  const f = squashFixture();
-  try { fs.writeFileSync(f.coverageRoot, 'blocked'); const r = f.run(); assert.notEqual(r.status, 0);
-    assert.match(r.stderr, /coverage recording failed/);
-    assert.equal(f.git(['show', '-s', '--format=%P', 'HEAD']), `${f.head} ${f.base}`);
-    assert.equal(f.git(['rev-parse', 'HEAD^{tree}']), f.tree);
-  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
-});
-
- test('unstaged rerere result retains owned conflict without coverage', () => {
+test('unstaged rerere result retains owned conflict', () => {
   const f = squashFixture();
   try { f.git(['config', 'rerere.autoupdate', 'false']); const r = f.run();
     assert.equal(r.status, 1, r.stderr); assert.equal(JSON.parse(r.stdout).result, 'conflicts remain');
-    assert.equal(f.git(['rev-parse', 'HEAD']), f.head); assert.equal(fs.existsSync(f.coverageRoot), false);
+    assert.equal(f.git(['rev-parse', 'HEAD']), f.head);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });

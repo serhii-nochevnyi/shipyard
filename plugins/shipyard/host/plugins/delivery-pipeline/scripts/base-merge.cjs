@@ -41,7 +41,6 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { statusIgnoringScratch } = require('./conveyor-scratch.cjs');
-const { createCoverageWriter, repoSlug } = require('./conveyor-coverage.cjs');
 
 const argv = process.argv.slice(2);
 const asJson = argv.includes('--json');
@@ -210,23 +209,9 @@ const carryLine = (c) => (c.carried
     + 'CI still re-runs — a green is measured against a base.'
   : `No verdict carried — ${c.reason}. Architecture review: ${c.architecture}.`);
 
-// @security: a merge is covered only when this script committed it itself.
-function recordMerge(taken) {
-  const commit = git(['rev-parse', 'HEAD']).out;
-  const parents = git(['show', '-s', '--format=%P', commit]).out.split(' ').filter(Boolean);
-  const tree = git(['show', '-s', '--format=%T', commit]).out;
-  if (parents.length < 2) return;
-  try {
-    createCoverageWriter().record({ commit, parents, tree, ticket, repo: repoSlug(worktree, t.repo),
-      worktree, kind: 'base-merge',
-      base_merge: { base: baseRef, requested_base: base, taken_from_base: taken } });
-  } catch (error) { fail(`merge commit ${commit} exists but coverage recording failed: ${error.message}`); }
-}
-
 const merge = git(['merge', '--no-edit', baseRef], { tolerate: true });
 if (merge.status === 0) {
   const msg = /Already up to date/i.test(merge.out) ? 'already up to date' : 'merged cleanly';
-  if (git(['rev-parse', 'HEAD']).out !== preMergeHead) recordMerge([]);
   const carry = carryVerdict();
   if (asJson) console.log(JSON.stringify({ ticket, base: baseRef, requested_base: base, result: msg, taken_from_base: [], unresolved: [], contested: [], carry }, null, 2));
   else {
@@ -274,12 +259,11 @@ if (!conflicted.length) {
   const actual = git(['rev-parse', '--verify', 'HEAD^{commit}']).out;
   if (git(['show', '-s', '--format=%P', actual]).out !== `${preMergeHead} ${preMergeBase}`
       || git(['show', '-s', '--format=%T', actual]).out !== preMergeTree)
-    fail(`merge commit ${actual} exists but its tree or parents differ; coverage refused`);
+    fail(`merge commit ${actual} exists but its tree or parents differ; refused`);
   let clean;
   try { clean = statusIgnoringScratch(worktree, { untracked: 'no' }); }
-  catch { fail(`merge commit ${actual} exists but tracked cleanliness failed; coverage refused`); }
-  if (!clean.ok || clean.entries.length) fail(`merge commit ${actual} exists but tracked changes remain; coverage refused`);
-  recordMerge([]);
+  catch { fail(`merge commit ${actual} exists but tracked cleanliness failed; refused`); }
+  if (!clean.ok || clean.entries.length) fail(`merge commit ${actual} exists but tracked changes remain; refused`);
   const carry = carryVerdict();
   const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved without content changes',
     taken_from_base: [], unresolved: [], contested: [], carry };
@@ -333,7 +317,6 @@ if (real.length) {
 }
 
 git(['commit', '--no-edit']);
-recordMerge(taken);
 const carry = carryVerdict();
 const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved mechanically', taken_from_base: taken, unresolved: [], contested: [], carry };
 if (asJson) console.log(JSON.stringify(payload, null, 2));
