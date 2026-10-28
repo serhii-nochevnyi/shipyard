@@ -920,15 +920,6 @@
           "argv": [
             "node",
             "--test",
-            "tests/unit/phase52-diff-sizes.test.cjs"
-          ],
-          "profile": "host",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
-            "node",
-            "--test",
             "tests/unit/context-packet.test.cjs",
             "tests/unit/dispatch-record.test.cjs",
             "tests/unit/conveyor-scratch.test.cjs",

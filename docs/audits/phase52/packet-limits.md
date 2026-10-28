@@ -8,7 +8,7 @@ Section status:
 
 | Section | Status | Why |
 |---|---|---|
-| 1. Landing diff sizes | measured | produced by the tool in this ticket, 30 landing commits |
+| 1. Landing diff sizes | measured | produced by a throwaway measuring tool (removed in HS-12; the table below is the retained record), 30 landing commits |
 | 2. Which bound refuses a large review | verified | read from the symbols named below at the input digests below; no model run was needed |
 | 3. Model context windows | measured (runtime-reported) | read from the model-usage and token-count records of existing Claude Code and Codex sessions on this host; not from vendor documentation |
 | 4. Chosen values | proposals, for the operator to accept | rows 1 to 6 and C1 to C3 are derived from sections 1 to 3 and the R-30 figures in `arch-review-cost.md`; they are decisions, not measurements |
@@ -25,35 +25,13 @@ Digests were taken with `shasum -a 256 <path>` in the worktree.
 | `plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs` | `43063b60822acfa43449279ce21e13f30b3ead17bd504cf9be3a317a117d9f50` |
 | `plugins/delivery-pipeline/scripts/context-packet.cjs` | `e2969388009c91796a3e8db3ee3de34ab67558e3b4fd0f89665158c7b43e520a` |
 | `plugins/delivery-pipeline/scripts/development-artifacts.cjs` | `36b097bbb3cd95e6ee1b8941e2326e015c5c66f22a561083d6c81b8880521530` |
-| `tests/smoke/phase52-diff-sizes.cjs` (the tool) | `5bb626c80a450cbc04d87d58c62885426932d82c467224a7f8c67c6c1de406cd` |
-| `docs/audits/phase52/diff-sizes.json` (tool output) | `5dcd42d7f12854ce4101c3ca1906c2170260ee39980040dbd8da067d679dd55b` |
 | `docs/audits/phase49-final-review-acceptance.json` | `248be462e93724d150d513726628243307251262b31e867026d8e8880424c699` |
 
 ## 1. Landing diff sizes (measured)
 
-Command, run from the worktree (`--repo .` is the checkout at the HEAD above; the output lists the absolute path of that checkout in its `repo` field):
+The measuring tool (`tests/smoke/phase52-diff-sizes.cjs`, with its unit test and the raw `diff-sizes.json` output) was removed in HS-12 because nothing in the product or CI used it; it remains in git history before that change. It was run from the worktree over the 30 landing commits listed in the table below.
 
-```
-node tests/smoke/phase52-diff-sizes.cjs --repo . --json \
-  --commit 21f94c5d74a6a2f31bf0742a137597a2a4185295 --commit df42e66091e91ea9ccf782470b4ac4403c0a6ea9 \
-  --commit eb9476c6f7ac9ff2f094e98d26235c8eacb41970 --commit 618352420f725fde569cd0844b40809727d79fea \
-  --commit 295b5c1ad21698e5ced5070cab99574a7eb5f6dc --commit 9614c09c7b6853b6b70f805cb8eb698735622900 \
-  --commit 339b2ebfb2b9f4cf31be5faf10904b10687e0154 --commit 191137ae9d5305c4f9a82ce2248845b4b768d452 \
-  --commit c68562f1dcf1fc323029169c99140cb50bf98d36 --commit 9b01aa4cef70b1fc5f7da8bd8fc8122062d28fae \
-  --commit ba2a0674303c2ee1b66e35efb095cb237de8c8cc --commit 931f87fee808881361b7cc6fc1879dbb56978ae5 \
-  --commit 843f6ec8f00b55ff80b696340fe819cba354b590 --commit d0f6cf34089bd1c566214ebcfb4659bd8ea23fc9 \
-  --commit 0b211b1acd4a58db3ef2c88316a82b5d445e7da6 --commit c527efeaf11384ac385d9baec9fb3bb727c9739c \
-  --commit f4ff8cb9a2da06d50d627fbd9d0b8e94e734a1c9 --commit 54b87dd3e33d165cfeb4b6fedb8f2c6c323c1b1d \
-  --commit 76d0a33ef82938023ffd723f0d67d147b0f582c9 --commit 20228321168c54a7fd55818612a926b52833ffb0 \
-  --commit d60b742ea150e6c061bf7d2f810a56d31e215e52 --commit 5d3b7328be0a6b6e63641be92bb9737fd3c8f332 \
-  --commit 9021fb6ed9520c02d5fd7503ec509aa7de25b7f5 --commit a4e2267652ad57e07a8d9a7bea897ce92e71fef6 \
-  --commit a18293a8b5c884910279839f382c1a181f3da287 --commit 845fd6d7f22aac05f96288e80604ac48c394ae49 \
-  --commit 7eebae4812b3c67ccdbbb63c8c1603f7767b1466 --commit d8a70decb32e5420fb69f8eebc17be08e82d6d86 \
-  --commit c7633d9e109fa863ef8741cdfffbf88fd7e49235 --commit 924531939c8b259279aa1101b738c426e6ca9628 \
-  > docs/audits/phase52/diff-sizes.json
-```
-
-Exit status 0. The tool measures `git diff --no-ext-diff --no-textconv --unified=50 <sha>^ <sha>` limited to `productPathspec()` (everything except `.planning/`, `.shipyard/`, `.shipyard-*`, `docs/audits/`, `AGENTS.md` and `CLAUDE.md`), and reports estimated tokens as `ceil(bytes / 4)`, the same estimate `context-packet.cjs` `estimateTokens` uses.
+The tool measured `git diff --no-ext-diff --no-textconv --unified=50 <sha>^ <sha>` limited to `productPathspec()` (everything except `.planning/`, `.shipyard/`, `.shipyard-*`, `docs/audits/`, `AGENTS.md` and `CLAUDE.md`), and reports estimated tokens as `ceil(bytes / 4)`, the same estimate `context-packet.cjs` `estimateTokens` uses.
 
 How the commits were identified: `git log --first-parent -i -E --grep=<patterns>` over subjects, because `.planning/graph/delivery-state.json` has no epic records (its top-level keys are ticket ids; reading `.epics` and `.epic` gave `{}`). Identification is by subject and can be wrong for any single row; the table lists the subject kind so a reader can check it with `git show -s --format=%s <sha>`.
 
@@ -102,21 +80,7 @@ Summary statistics (30 rows). A `node -e` one-liner to compute them was refused 
 
 Threshold counts: 4 of 30 landings exceed 2 MiB (phases 40, 43, 47, 49); 9 of 30 exceed 1 MiB (those four plus 33, 36 `54b87dd3`, 45, 46, 50); 25 of 30 exceed 60,000 estimated tokens (all except 22, 23, 29, 36 `f4ff8cb9` and 42 `9021fb6e`); 2 of 30 exceed 750,000 estimated tokens (47 and 49). Landings at or under 1 MiB: 21 of 30.
 
-Operator check for the table and statistics (run in the worktree; read-only):
-
-```
-node -e '
-const rows = JSON.parse(require("fs").readFileSync("docs/audits/phase52/diff-sizes.json", "utf8")).rows;
-const rank = (a, p) => [...a].sort((x, y) => x - y)[Math.ceil(p * a.length) - 1];
-const median = a => { const s = [...a].sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
-for (const key of ["product_files", "product_diff_bytes", "estimated_tokens"]) {
-  const v = rows.map(r => r[key]);
-  console.log(key, "count", v.length, "min", Math.min(...v), "median", median(v), "p90", rank(v, 0.9), "max", Math.max(...v));
-}
-console.log("over 2 MiB", rows.filter(r => r.over_diff_max_bytes).length, "over 1 MiB", rows.filter(r => r.over_legacy_diff_max_bytes).length, "over 60k tokens", rows.filter(r => r.over_arch_review_tokens).length);'
-```
-
-Expected output if the hand computation is right: product_files `min 5 median 32 p90 109 max 166`; product_diff_bytes `min 32117 median 573226.5 p90 2442219 max 3598345`; estimated_tokens `min 8030 median 143307 p90 610555 max 899587`; `over 2 MiB 4 over 1 MiB 9 over 60k tokens 25`.
+Statistics of the table (as recorded by the original ticket): product_files `min 5 median 32 p90 109 max 166`; product_diff_bytes `min 32117 median 573226.5 p90 2442219 max 3598345`; estimated_tokens `min 8030 median 143307 p90 610555 max 899587`; `over 2 MiB 4 over 1 MiB 9 over 60k tokens 25`.
 
 ### The phase-49 row does not reproduce 6,530,992, and the method differs
 
@@ -127,7 +91,7 @@ The figure 6,530,992 is not a diff size. It is `material_bytes` in `tests/smoke/
 - material bytes are about `2 x (diff + references) + metadata`, so the largest landing here (3,598,345 B) needs about 7.2 MB of material plus references; and
 - 6,530,992 B of material corresponds to a diff-plus-references of about 3.27 MB, which is less than the final landing's 3.60 MB. This is consistent with the benchmark having been taken at an earlier epic head than the squash. The benchmark head is recorded only in a private ledger (`~/.local/state/shipyard/phase49-focused-review-T49-11-original-pre-focused-ledger/phase49-final-review-acceptance.json`, sha256 `f461880d2719d951df4e7381f450fa3fa24770a0494cadae0b055fdbd3640ef8`, per the `historical_ledger` field of `docs/audits/phase49-final-review-acceptance.json`), which the executor cannot read.
 
-Assumption, with the next check: the earlier-head explanation is an inference. The operator can confirm it by running the tool on the epic head named in the private ledger.
+Assumption, with the next check: the earlier-head explanation is an inference. The operator can confirm it by measuring the product diff at the epic head named in the private ledger.
 
 ### Limits of this measurement
 
@@ -237,7 +201,7 @@ A diff under 6291456 bytes can still exceed the complete-material ceiling after 
 All from the worktree; each result is quoted above.
 
 - `shasum -a 256 <each path in the Inputs table>`
-- `node tests/smoke/phase52-diff-sizes.cjs --repo . --json --commit <sha> ... > docs/audits/phase52/diff-sizes.json` (the command in section 1; exit 0)
+- the measuring tool over the 30 commits of section 1 (exit 0; the tool was removed in HS-12)
 - `git log --first-parent --format='%H %ad %s' --date=short -i -E --grep=<pattern>` (three patterns, quoted in section 1)
 - `git rev-parse <short sha> ...` to expand the 30 commit ids
 - `git diff --no-ext-diff --no-textconv --unified=50 c7633d9e^ c7633d9e | wc -c` (3,604,512) and the same with `-- .planning docs/audits CLAUDE.md AGENTS.md` (6,167)
