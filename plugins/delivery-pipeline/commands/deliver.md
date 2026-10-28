@@ -129,7 +129,7 @@ expect to still be true tomorrow is recorded and the front reads it back itself:
   Lifts when the plan is re-planned.
 - `dispatch-record.cjs mark <T> <role> --boundary-store <receipt store> --dispatch-id <dispatch id> --task-level <task-level> --graph <project>/.planning/graph` — an agent
   is working on it RIGHT NOW. It lifts by itself when the ticket moves or the
-  dispatch times out. Reference: `docs/dispatch-record.md`. Rules:
+  dispatch times out. Rules:
   - `boundary.dispatch` returns the canonical policy route (`role=… rung=…
     model=… signals=…`); the recorder takes the compatibility recorder route
     (`tier=…(<alias>) effort=…(<level>)`) from the adapter's recorder projection.
