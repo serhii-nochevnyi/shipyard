@@ -2403,11 +2403,11 @@ function completeRecordedClaudeIntegration(options, execution) {
   const { validated } = sealResult(prepared, judgment, recorder, stage.dispatch_id, evidence_markdown);
   return Object.freeze({ schema: 'shipyard.claude-role-result.v1', role: 'integrator', subject: original.ticket,
     phase: original.phase, ticket_set_digest: original.ticketSetDigest, result: judgment, dispatch: record,
-    ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
-      actual_final_input_bytes: Buffer.byteLength(JSON.stringify({ type: 'user', message: { role: 'user', content: stage.input } }) + '\n')
-        + Buffer.byteLength(JSON.stringify(integrationStageSchema(stage))) } } : {}),
     artifact: { ref: validated.artifact_ref, digest: validated.artifact_digest, outcome: validated.envelope.outcome },
     context: { run_id: stage.dispatch_id, source_revision: original.canonical.head, policy_hash: record.policy_hash,
+      ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
+        actual_final_input_bytes: Buffer.byteLength(JSON.stringify({ type: 'user', message: { role: 'user', content: stage.input } }) + '\n')
+          + Buffer.byteLength(JSON.stringify(integrationStageSchema(stage))) } } : {}),
       host_identity: HOST_IDENTITY, packet_digest: original.packet.digest || original.packet.sha256 || sha(canonicalJson(original.packet)),
       selected_refs: original.packet.required_refs.map(ref => ({ path: ref.path, sha256: ref.sha256, bytes: ref.bytes })),
       selected_backlog_ids: original.packet.backlog.selected_ids,

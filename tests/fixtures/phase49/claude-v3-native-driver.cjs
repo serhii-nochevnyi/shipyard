@@ -26,6 +26,9 @@ async function recordHistoricalClaudeV3(f, options, request) {
     instructionBinding: { agent_file: path.basename(referencePath), agent_path: referencePath,
       agent_sha256: crypto.createHash('sha256').update(reference).digest('hex'), installed_files: [],
       policy_hash: require(path.join(scripts, 'model-policy.cjs')).POLICY_HASH } });
+  if (options.integrationCapacity !== undefined && !options.integrationCapacity?.plan_sha256
+      && (!options.integrationCapacity || typeof options.integrationCapacity !== 'object' || !options.integrationCapacity.capacity))
+    throw Object.assign(new Error('supplied strict capacity resources are malformed'), { code: 'INTEGRATION_CAPACITY_UNPROVEN' });
   const resources = options.integrationCapacity ||= {};
   const recorder = resources.recorder || createDurableRecorder(path.join(storageRoot, 'claude-public-receipts'));
   const resumed = Boolean(resources.plan_sha256);
