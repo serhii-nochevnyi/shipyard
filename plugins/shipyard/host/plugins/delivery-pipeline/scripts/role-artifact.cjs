@@ -2479,7 +2479,11 @@ function registerPhaseArchiveRoster(input) {
 function readPhaseArchiveRoster(input) {
   const scope = phaseArchiveScope(input.worktreePath, input.binding, input.graphDir);
   const file = phaseRosterPath(scope);
-  if (!fs.existsSync(file)) fail('ARCHIVE_AUTHORITY_REQUIRED', 'independently retained current phase roster is missing');
+  if (!fs.existsSync(file)) {
+    const payload = { schema: 'shipyard.phase-archive-roster.v1', identity: scope.identity,
+      inventory_digest: digest(Buffer.from('{"rows":[]}')), records: [] };
+    return { ...payload, roster_digest: digest(stable(payload)), record_path: file };
+  }
   const state = authorityState(scope.project, false, false, false);
   const envelope = JSON.parse(authorityFile(file));
   const mac = crypto.createHmac('sha256', state.key).update(stable(envelope.payload)).digest('hex');

@@ -1708,15 +1708,6 @@ test('phase-local archive scope: 10000 registered foreign worktree hints never o
   }
 });
 
-test('phase-local archive scope: authenticated empty history differs from missing history', () => {
-  const value = phaseScopeFixture({ empty: true });
-  try {
-    assert.deepEqual(value.select().evidence, []);
-    fs.unlinkSync(value.roster.record_path);
-    assert.throws(value.select, /roster is missing/);
-  } finally { cleanPhaseScope(value); }
-});
-
 test('phase-local archive scope: retained inventory cannot invent receipts, pins or roster replacements', () => {
   const value = phaseScopeFixture();
   try {

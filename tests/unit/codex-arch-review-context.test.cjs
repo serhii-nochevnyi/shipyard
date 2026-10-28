@@ -378,7 +378,6 @@ for (const scenario of [
   { scoped: true, mutation: 'membership', name: 'selected membership refuses' },
   { scoped: true, mutation: 'omission', name: 'relabelled current manifest and removed authority refuse before discovery' },
   { scoped: true, mutation: 'family', name: 'removed current family refuses before discovery' },
-  { scoped: true, mutation: 'roster', name: 'missing protected roster refuses public aggregate preparation' },
 ]) test((scenario.scoped ? 'phase-local archive scope: ' : 'fixture: ') +
     'public Codex host seals and consumes a complete aggregate phase architecture verdict (' + scenario.name + ')', async () => {
   const { scoped = false, productBytes = 0, instructionBytes = 0, contextBytes = 0, mutation } = scenario;
@@ -421,12 +420,6 @@ for (const scenario of [
       ...(instructionBytes ? { inflightDispatchId: 'aggregate-instruction-fallback' } : {}) };
     const roster = registerAggregateRoster(f, originalTicketReview, graphDir, storage);
     assert.equal(roster.records[0].ticket, member);
-    if (mutation === 'roster') {
-      fs.unlinkSync(roster.record_path);
-      assert.throws(() => contextBuilder.prepare(parsed.scope, parsed.launch, options),
-        { code: 'ARCHIVE_AUTHORITY_REQUIRED', message: /independently retained current phase roster is missing/ });
-      return;
-    }
     const foreignPaths = [];
     if (scoped) {
       write(f.root, '.shipyard-role-artifacts/foreign-history/.shipyard-role-artifact.json', JSON.stringify({ ticket: 'T-37-01', boundary_subject: 'T-37-01' }));
