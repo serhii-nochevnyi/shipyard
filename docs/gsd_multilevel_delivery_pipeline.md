@@ -995,49 +995,6 @@ dispatches are not relabeled as having used ADR-014. The task-level experiment
 in ADR-012 may remain historical context or telemetry, but it is not a second
 launch authority.
 
-## Autonomous controller rollout
-
-The `run-rollout.cjs` autonomous controller is disabled by default. Version `v2`
-opts each provider in independently:
-
-```json
-{
-  "delivery_pipeline": {
-    "autonomous_control_plane": {
-      "version": "v2",
-      "runtimes": { "claude": true, "codex": false }
-    }
-  }
-}
-```
-
-An opted-in runtime launches only after its own live capability evidence passes
-the shared run contract. These flags gate autonomous controller launches only;
-they do not disable explicit user-issued command runs or change runtime
-selection. `run-rollout.cjs status --json` reports each runtime's
-opt-in, credential status, capability status, and launch decision separately;
-an unavailable peer does not block a healthy provider. Claude credentials are
-read from `claude auth status --json`, and Codex credentials from `codex login
-status`. The status reader retains only sanitized status fields and never logs
-the CLI's raw output. API-key environment variables are not required for
-authenticated subscription sessions. Claude remains Anthropic-backed and
-Codex remains OpenAI-backed; models, credentials, receipts, and usage evidence
-stay runtime-specific. Technical waits are `ci`, `review`, `quota`, `lease`,
-and `host`.
-
-Legacy `v1` configuration is read as a two-provider opt-in when its old global
-flag and both runtime flags are true; it is otherwise read as disabled. Reading
-does not rewrite project configuration. `run-rollout.cjs rollback --runtime
-claude|codex` migrates the selected flag to `v2` and disables only that runtime,
-preserving the peer's setting and all historical receipts and usage. Missing
-hosts or credentials are `unavailable`; stale agents, wrong runtime/provider,
-inherited models, wrong scope, stale bases, or incomplete usage are `refused`.
-Synthetic evidence and a successful process exit cannot enable a runtime.
-Capability-only probes check installed hosts and native authentication status
-without making model calls. Run state, receipts, usage facts, and technical
-waits are projected into GSD; heartbeat, lease expiry, store generation, event
-timestamps, and wake due times are excluded from semantic fingerprints.
-
 ## 8. Gates (summary table)
 
 ```text

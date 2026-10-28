@@ -383,7 +383,6 @@ test('manual session observations expose unbound model and token usage', () => {
   assert.strictEqual(json.session_observations.unbound_observations, 1);
   assert.deepStrictEqual(json.session_observations.by_model, { 'claude-opus-5': 1 });
   assert.strictEqual(json.session_observations.usage_by_model[0].totals.input_tokens, 100);
-  assert.strictEqual(json.optimization_input.usage.session_observations.observations, 1);
 });
 
 test('dispatch routing fields are grouped without turning missing observations into zeroes', () => {
@@ -690,37 +689,6 @@ test('serialized usage-ledger fact claims are reconciled before pipeline stats c
   assert.equal(json.usage_reconciliation.comparison_ready, 0);
   assert.equal(json.usage_reconciliation.records[0].application_status, 'missing_receipt');
   assert.equal(json.usage_reconciliation.findings.missing_receipt, 1);
-});
-
-test('json exposes metadata-only optimization input with provider and account boundaries', () => {
-  const dispatch = adrDispatch({
-    runtime: 'claude', role: 'executor', dispatch_id: 'optimization-input',
-    treatment_id: 'phase-34-fable-medium', arm: 'treatment', account_scope: 'anthropic-max',
-  });
-  const { code, json } = asJson({
-    tickets: {},
-    journal: [JSON.stringify(dispatch)],
-    attributions: [{
-      observation_id: 'optimization-observation',
-      dispatch_id: dispatch.dispatch_id,
-      runtime: 'claude', provider: 'anthropic', account_scope: 'anthropic-max',
-      treatment_id: 'phase-34-fable-medium', arm: 'treatment', session_id: 'session-optimization',
-      observed_model: dispatch.requested_model, observed_effort: dispatch.requested_effort,
-    }],
-    prs: [],
-  });
-  assert.equal(code, 0);
-  assert.equal(json.optimization_input.schema_version, 'shipyard.optimization-input.v1');
-  assert.deepEqual(json.optimization_input.provider_scopes, [{
-    provider: 'anthropic', account_scope: 'anthropic-max',
-  }]);
-  const item = json.optimization_input.dispatches.find((row) => row.dispatch_id === dispatch.dispatch_id);
-  assert.equal(item.treatment_id, 'phase-34-fable-medium');
-  assert.equal(item.arm, 'treatment');
-  assert.equal(item.account_scope, 'anthropic-max');
-  assert.equal(json.optimization_input.usage.attribution_records[0].dispatch_id, dispatch.dispatch_id);
-  assert.equal(json.optimization_input.usage.attribution_records[0].session_id, 'session-optimization');
-  assert.equal(json.optimization_input.usage.attribution_records[0].account_scope, 'anthropic-max');
 });
 
 done();

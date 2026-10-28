@@ -564,7 +564,6 @@ exists):
 ```text
 node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs
 node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs [--parked <T,T>]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/run-rollout.cjs <status|probe|rollback> --json [--capability-only]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/front.cjs [--json] [--parked <T,T>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs <duty|merge <T|--all>|report> [--json] [--dry-run]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve [flags]  # compatibility/config diagnostics only; launches use the boundary
@@ -602,34 +601,6 @@ prior attempts" answered from the wrong directory is indistinguishable from a
 fresh ticket, which is exactly how a fixer re-proposes a fix that already failed.
 `failure-signature.cjs compute` is the one exception, by design: it reads a log
 and prints a hash, touches no journal, and is meant to run in a worktree.
-
-## Autonomous controller rollout
-
-The controller is a versioned, project-local gate. With no
-`delivery_pipeline.autonomous_control_plane` flag, rollout is `disabled` and
-delivery keeps its existing control flow. Version `v2` opts Claude and Codex in
-independently. A selected runtime needs its own `shipyard.run.v1` contract,
-provider-specific model, fresh agent and base evidence, verified application
-receipts, complete usage, and complete telemetry. Claude uses Anthropic and
-Codex uses OpenAI; one provider's evidence cannot satisfy or enable the other.
-Legacy `v1` flags are read as the old two-runtime opt-in and are not rewritten
-by status checks.
-
-The controller records `run_id`, `dispatch_id`, state revision, runtime, receipt
-status, usage status, and technical waits (`ci`, `review`, `quota`, `lease`,
-`host`). Heartbeat, lease expiry, store generation, event timestamps, and wake
-due times stay out of the semantic GSD fingerprint. A rollback stops new
-controller launches and keeps historical records, receipts, usage facts, and
-labels intact. Roll back one provider with
-`run-rollout.cjs rollback --runtime claude|codex`; the peer's opt-in is preserved.
-
-Capability failures are classified separately: missing host or credentials is
-`unavailable`; stale agent, wrong runtime/provider, inherited model, wrong
-scope, stale base, or incomplete usage is `refused`. A synthetic fixture,
-successful process exit, or inherited session never enables rollout. Human
-decisions remain limited to credentials or authorization, protected integration
-or production rollout, unresolved business or security policy, and the
-protected default-branch merge.
 
 ## Integration model — epic-stacked (default)
 
@@ -898,16 +869,6 @@ store. Set `SHIPYARD_CAPACITY_STORE`, `SHIPYARD_CAPACITY_PROVIDER` and
 owner, project and agent, heartbeat during a launch, expire after a crash and
 release after the receipt. Missing scope or a store failure is reported as
 degraded and uses a bounded local fallback; it is never treated as unlimited.
-
-At a declared experiment boundary, collect `pipeline-stats.cjs --json` and use
-its `optimization_input` as the metadata-only input to
-`optimization-report.cjs`. The report must name versioned baseline and treatment
-arms, provider/account scope, coverage, failed/parked/interrupted runs, quality,
-rollback owner and comparison metric. Evaluate one treatment at a time. Persist
-the report with `optimization-report.cjs create`, then register its decision with
-`backlog-index.cjs candidate --root <project> --report <report.json>`. A candidate
-is linked evidence with `auto_launch: false`; it never rewrites model policy or
-starts work from a stats run.
 
 ## Durable session handoff and cold-start recovery
 
@@ -1242,9 +1203,7 @@ host resolves model and effort; callers must not add selector output or
 provider-specific credentials to the request. Keep the selected runtime fixed
 for the run and never retry a refused request through its peer.
 
-The autonomous rollout flag gates controller-initiated launches only; it does
-not disable a command-issued delivery run. The Claude host supplies its Workflow
-binding and owns launch evidence; never invoke the native Workflow directly.
+The Claude host supplies its Workflow binding and owns launch evidence; never invoke the native Workflow directly.
 The Codex host receives the scoped serializable request and owns its runtime and
 receipt. Require the selected host's verified application receipt before
 accepting output. An unavailable host or runtime is `unavailable`; a mismatch
@@ -1334,13 +1293,6 @@ itself a STOP signal, not a reason to improvise.
    every manual delivery round and every babysit round closes the projection
    boundary before the board is shown. It honors `delivery_pipeline.gsd_sync: false`;
    otherwise a projection refusal is a delivery error.
-   Then run `run-rollout.cjs status --json` and read the selected runtime's
-   `runtimes.<runtime>.launches_enabled` field. Rollout `v2` is opt-in per
-   provider and needs that provider's own live capability evidence. `unavailable`
-   and `refused` prevent that runtime's autonomous-controller launch; they do
-   not authorize a provider fallback. Continue only through the same provider's
-   shipped host. `rollback --runtime <claude|codex>` disables only the selected
-   runtime and preserves run records, receipts, usage facts, and historical labels.
 2a. **`epic-branch.sh refresh <epic>` — let each LIVE epic learn what landed
    under it.** Nothing in delivery used to merge the base INTO an epic at all:
    two epics were measured 27 then 31 commits behind, each containing zero

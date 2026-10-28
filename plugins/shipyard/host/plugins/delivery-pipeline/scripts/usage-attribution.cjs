@@ -22,7 +22,6 @@ const crypto = require('node:crypto');
 const { withLock } = require('./lock.cjs');
 const pipeline = require('./pipeline-config.cjs');
 const policy = require('./model-policy.cjs');
-const runTelemetry = require('./run-telemetry.cjs');
 
 const LEDGER_NAME = 'usage-attribution.jsonl';
 const MAX_TEXT = 1000;
@@ -469,7 +468,6 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
     if (!Number.isSafeInteger(raw.revision) || raw.revision < 1) fail('revision must be a positive safe integer');
     record.revision = raw.revision;
   }
-  runTelemetry.normalizeEnvelope({ ...record, event: 'usage', phase: 'usage' });
   return record;
 }
 
@@ -1766,10 +1764,7 @@ module.exports = {
   graphGuard,
   normalizeRecord,
   reconcileTelemetry,
-  reconcileRecord: reconcileTelemetry,
-  reconcileAttribution: reconcileTelemetry,
   summarizeTelemetry,
-  aggregateTelemetry: summarizeTelemetry,
   parseLedger,
   readLedger,
   latestRecords,

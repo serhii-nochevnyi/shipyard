@@ -52,12 +52,8 @@ generates or validates the dispatch id, builds `createDispatchBoundary`, calls
 not pass caller-selected model/effort fields or invoke GSD callbacks outside
 that host.
 
-Use `run-rollout.cjs status --json` to read the selected provider's controller
-status at `runtimes.<runtime>.launches_enabled`. This flag gates autonomous
-controller launches; it does not disable a command-issued decomposition.
-Controller opt-in does not change host selection. An unavailable or refused
-host cannot switch to the other provider; stop its launch before planning
-output is accepted.
+An unavailable or refused host cannot switch to the other provider; stop its
+launch before planning output is accepted.
 
 ## Host evidence directory
 
@@ -741,20 +737,6 @@ per run:
 4. Re-run `validate-graph.cjs` so `tickets.json` carries the `jira` field.
 5. Report a compact map to the user (ticket-id → Jira key, epic key) in the
    user's language.
-
-## Phase 34 experiment intake
-
-When a phase evaluates an optimization treatment, keep the baseline and
-treatment versions, runtime provider, declared account scope, cohort arm and
-policy revision in the plan metadata. Use one treatment per experiment and keep
-failed, parked and interrupted runs in the denominator. Missing attribution or
-quality evidence produces an inconclusive result and does not authorize a model
-ladder or orchestration change.
-
-At the experiment boundary, save the versioned report and register its linked
-candidate through `backlog-index.cjs candidate`. Candidate creation is a triage
-write with `auto_launch: false`; a later plan and review are required before any
-candidate becomes executable work.
 
 ## Rules
 

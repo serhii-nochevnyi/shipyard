@@ -81,7 +81,7 @@ test('Step 3 treats an ordering-only relation as distinct from a real depends_on
 });
 
 test('Step 5 exports Jira by running and verbatim-executing the script-built plan', () => {
-  const step5 = between(doc(), '## Step 5 — Export tickets to Jira (English)', '## Phase 34 experiment intake');
+  const step5 = between(doc(), '## Step 5 — Export tickets to Jira (English)', '## Rules');
   assert.ok(has(step5, 'jira-export.cjs plan --repo'));
   assert.ok(has(step5, '--project <KEY>'));
   assert.ok(has(step5, 'jira-export.cjs record <T-NN-MM> <KEY>'));
