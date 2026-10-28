@@ -27,7 +27,6 @@ const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { readLedger } = require(path.join(__dirname, 'pr-ledger.cjs'));
 const { loadConfig, ROLES, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const usageAttribution = require(path.join(__dirname, 'usage-attribution.cjs'));
-const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
@@ -401,20 +400,6 @@ const ladderFacts = ladderEvents.map((event) => {
 });
 const reconciliation = usageAttribution.summarizeTelemetry(ladderFacts);
 const attributionReconciliation = usageAttribution.summarizeTelemetry(attributionRecords);
-const telemetryInputs = [
-  ...ladderEvents.map((event) => ({ ...event, event: 'dispatch', phase: 'launch' })),
-  ...attributionRecords.map((record) => ({ ...record, event: 'usage', phase: 'usage' })),
-  ...journal.filter((event) => ['receipt', 'quality', 'recovery', 'outcome'].includes(event.event)),
-];
-const runTelemetryReport = runTelemetry.joinTelemetry(telemetryInputs);
-const runTelemetrySummary = {
-  schema_version: runTelemetryReport.schema_version,
-  coverage: runTelemetryReport.coverage,
-  policy_fingerprints: runTelemetryReport.policy_fingerprints,
-  treatment_fingerprints: runTelemetryReport.treatment_fingerprints,
-  duplicate_observations: runTelemetryReport.duplicate_observations,
-  savings: runTelemetryReport.savings,
-};
 const telemetry = Object.fromEntries(
   Object.entries(reconciliation).filter(([key]) => key !== 'records')
 );
@@ -473,7 +458,6 @@ const ladder = {
   by_finding: reconciliation.findings,
   reconciliation,
   telemetry,
-  run_telemetry: runTelemetrySummary,
   policy_resolution: reconciliation.coverage.policy_resolution,
   runtime_application: reconciliation.coverage.runtime_application,
   provider_observation: reconciliation.coverage.provider_observation,
@@ -571,134 +555,6 @@ const newestLandedPhase = rows
 const stranded = rows.filter((r) =>
   r.status === 'pending' && !r.pr && !r.attempts && (phaseNum(r.phase) || 0) < newestLandedPhase);
 
-const runtimeProvider = { claude: 'anthropic', codex: 'openai' };
-const configuredAccountScope = process.env.SHIPYARD_CAPACITY_ACCOUNT_SCOPE
-  || process.env.SHIPYARD_ACCOUNT_SCOPE || null;
-const textValue = (value) => typeof value === 'string' && value.trim() ? value.trim() : null;
-const treatmentValue = (value) => {
-  if (!value || typeof value !== 'object') return textValue(value);
-  if (typeof value.treatment_id === 'string') return textValue(value.treatment_id);
-  if (typeof value.treatment === 'string') return textValue(value.treatment);
-  if (value.treatment && typeof value.treatment === 'object') {
-    return textValue(value.treatment.id || value.treatment.name || value.treatment_id);
-  }
-  return null;
-};
-const armValue = (value) => textValue(value && (value.arm || value.cohort_arm));
-const providerValue = (value, runtime) => textValue(value && value.provider) || runtimeProvider[runtime] || null;
-const explicitAccountValue = (value) => textValue(value && (value.account_scope || value.accountScope
-  || value.provider_account_scope));
-const dispatchMatches = new Map();
-for (const record of attributionRecords) {
-  if (record && present(record, 'dispatch_id')) {
-    const list = dispatchMatches.get(record.dispatch_id) || [];
-    list.push(record);
-    dispatchMatches.set(record.dispatch_id, list);
-  }
-}
-const optimizationDispatches = ladderFacts.map((fact, index) => {
-  const event = ladderEvents[index] || {};
-  const usage = dispatchMatches.get(fact.dispatch_id || event.dispatch_id) || [];
-  const usageRecord = usage.length === 1 ? usage[0] : null;
-  const runtime = fact.runtime || event.runtime || (usageRecord && usageRecord.runtime) || null;
-  return {
-    dispatch_id: fact.dispatch_id || textValue(event.dispatch_id),
-    ticket: textValue(event.ticket),
-    runtime,
-    provider: providerValue(event, runtime) || providerValue(usageRecord, runtime),
-    account_scope: explicitAccountValue(event) || explicitAccountValue(usageRecord) || configuredAccountScope,
-    role: fact.role || textValue(event.role),
-    task_level: textValue(event.task_level),
-    treatment_id: treatmentValue(event) || treatmentValue(usageRecord),
-    arm: armValue(event) || armValue(usageRecord),
-    requested: { model: fact.requested_model || null, effort: fact.requested_effort || null },
-    applied: { model: fact.applied_model || null, effort: fact.applied_effort || null },
-    observed: { model: fact.observed_model || null, effort: fact.observed_effort || null },
-    usage: {
-      join_status: fact.usage_join_status || 'unknown',
-      matches: usage.length,
-      comparison_ready: fact.comparison_ready === true,
-    },
-  };
-});
-const optimizationScopes = new Map();
-const addOptimizationScope = (provider, accountScope) => {
-  const p = textValue(provider);
-  const a = textValue(accountScope);
-  if (!p && !a) return;
-  const key = `${p || ''}\u0000${a || ''}`;
-  optimizationScopes.set(key, { provider: p, account_scope: a });
-};
-for (const item of optimizationDispatches) addOptimizationScope(item.provider, item.account_scope);
-for (const record of attributionRecords) addOptimizationScope(record.provider,
-  explicitAccountValue(record) || configuredAccountScope);
-if (configuredAccountScope) {
-  addOptimizationScope(process.env.SHIPYARD_CAPACITY_PROVIDER, configuredAccountScope);
-}
-const optimizationInput = {
-  schema_version: 'shipyard.optimization-input.v1',
-  collector: 'pipeline-stats.cjs',
-  window: {
-    label: windowLabel,
-    from: sinceTs === null ? null : new Date(sinceTs).toISOString(),
-    to: new Date(now).toISOString(),
-  },
-  policy: {
-    model_ladder: cfg.model_ladder,
-    valid: loadedConfig.valid,
-    policy_error: loadedConfig.valid ? null : loadedConfig.error,
-  },
-  provider_scopes: [...optimizationScopes.values()].sort((a, b) =>
-    `${a.provider || ''}\u0000${a.account_scope || ''}`.localeCompare(`${b.provider || ''}\u0000${b.account_scope || ''}`)),
-  tickets: rows.map((row) => ({
-    ticket: row.ticket,
-    phase: row.phase,
-    status: row.status,
-    pr: row.pr,
-    attempts: row.attempts,
-    fix_fixed: row.fix_fixed,
-    fix_noop: row.fix_noop,
-    escalations: row.escalations,
-    quality: {
-      unguarded_merge: row.unguarded_merge ? 1 : 0,
-      checkpoint_unauthorized_merge: row.checkpoint_unauthorized_merge ? 1 : 0,
-    },
-  })),
-  dispatches: optimizationDispatches,
-  usage: {
-    attribution_records: attributionRecords.map((record) => ({
-      observation_id: textValue(record.observation_id),
-      dispatch_id: textValue(record.dispatch_id),
-      session_id: textValue(record.session_id),
-      request_id: textValue(record.request_id),
-      message_id: textValue(record.message_id),
-      runtime: textValue(record.runtime),
-      provider: providerValue(record, record.runtime),
-      account_scope: explicitAccountValue(record) || configuredAccountScope,
-      treatment_id: treatmentValue(record),
-      arm: armValue(record),
-      kind: textValue(record.kind),
-      model: textValue(record.model),
-      effort: textValue(record.effort),
-      observed_model: textValue(record.observed_model),
-      observed_effort: textValue(record.observed_effort),
-      completion_status: textValue(record.completion_status),
-    })),
-    coverage: reconciliation.coverage,
-    warnings: usageLedger.warnings,
-    session_observations: sessionObservationSummary,
-  },
-  run_telemetry: runTelemetrySummary,
-  quality: {
-    unguarded_merges: unguarded.length,
-    checkpoint_unauthorized_merges: rows.filter((row) => row.checkpoint_unauthorized_merge).length,
-    unknown_roles: unknownRoles.length,
-    stranded_tickets: stranded.length,
-    telemetry_findings: reconciliation.findings,
-    run_telemetry_savings: runTelemetryReport.savings,
-  },
-};
-
 if (asJson) {
   console.log(JSON.stringify({
     tickets: rows,
@@ -719,8 +575,6 @@ if (asJson) {
     // automation can treat incomplete GitHub data as a clean pending board.
     unreachable_repos: unreachableRepos,
     ladder,
-    optimization_input: optimizationInput,
-    run_telemetry: runTelemetrySummary,
     // The detailed per-dispatch facts live under ladder.reconciliation. Keep
     // the top-level alias summary-only so JSON consumers get the same coverage
     // without serializing every fact twice.

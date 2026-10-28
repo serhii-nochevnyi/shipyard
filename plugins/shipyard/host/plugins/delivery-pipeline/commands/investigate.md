@@ -40,10 +40,6 @@ lines, and its host resolves each line's selection. Each host builds `createDisp
 calls `boundary.dispatch`, and returns the durable application receipt; accept
 research output only after that receipt is verified.
 
-Use `run-rollout.cjs status --json` to read the selected provider's controller
-status at `runtimes.<runtime>.launches_enabled`. This flag gates autonomous
-controller launches; it does not disable a command-issued research run.
-Controller rollout is provider-specific and does not change host selection.
 An unavailable or refused host cannot switch to the peer. Never invoke the
 native Workflow or Agent surface outside its shipped host; if the selected host
 is unavailable, stop that research line and report the runtime status.
