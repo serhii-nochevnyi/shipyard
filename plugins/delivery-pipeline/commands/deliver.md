@@ -1363,13 +1363,18 @@ loop:
        application receipt. Otherwise hard-refuse
        before constructing a prompt, spawning, or recording. The released Claude
        fix-round retains its named host-contract refusal. The Codex review-fix host
-       authenticates the review evidence file by path and SHA-256 before static
-       launch and leaves source uncommitted (pushed=false); source changes get host
-       verification and a signed fixer commit through the resumable finalizer before
-       host publication, feedback-only results need no commit (the host
-       replies/resolves and confirms the actual IDs), and escalated findings stay
-       unresolved. Continue at step d after confirmed source publication, or b
-       after confirmed feedback-only actions.
+       builds its prompt from the canonical graph, PLAN, ownership, live OPEN PR and complete paginated feedback,
+       and authenticates the review evidence file by its original path and SHA-256
+       immediately before static launch; the producer leaves source uncommitted
+       (pushed=false). Exactly one original native completion and its durable
+       current-policy receipt are required for the sealed repair result and complete
+       dispositions. Source changes receive the assigned host verification and a
+       signed fixer commit through the existing resumable finalizer before host
+       publication. Feedback-only results require no commit: the host rechecks full
+       feedback, performs replies/resolutions and independently confirms their
+       actual IDs. Escalated findings remain unresolved; uncertain actions retain
+       pending recovery. Continue at step d after confirmed source publication, or
+       b after confirmed feedback-only actions.
 
   c. arch-review agent — host-bound judgment, required only for a live integration-branch target. Skip this step for epic/stacked targets. Read the canonical
      `references/pr-sentinel.md` procedure: MEASURE the complete judged input
