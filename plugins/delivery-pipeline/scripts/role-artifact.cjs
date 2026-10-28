@@ -1113,7 +1113,7 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
         || !crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex')))
       fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue authentication failed');
     payload = envelope.payload;
-  } else if (!create && requireCatalogue && readCatalogue) fail('ARCHIVE_AUTHORITY_REQUIRED', 'archive catalogue is missing; explicit trusted legacy admission is required');
+  } else if (!create && requireCatalogue && readCatalogue) fail('ARCHIVE_AUTHORITY_REQUIRED', 'archive catalogue is missing; rerun the review to seal a fresh archive');
   if (payload.schema !== 'shipyard.role-archive-catalogue.v1' || payload.worktree !== worktree || !object(payload.records))
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue identity is invalid');
   return { directory, file, key, payload };
@@ -2209,6 +2209,50 @@ function architectureSourcePins(pins) {
   return pins.map(pin => ({ path: pin.path, bytes: pin.bytes, sha256: pin.sha256 })).sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function architectureAuthorityPath(project, source, pins) {
+  return path.join(archiveAuthorityDirectory(project), 'architecture-sources-' + digest(stable({ source, pins: architectureSourcePins(pins) })) + '.json');
+}
+
+function registerArchitectureAuthority(input) {
+  if (!object(input) || !/^[a-f0-9]{64}$/.test(input.expectedApprovalDigest || ''))
+    fail('SOURCE_AUTHORITY_REQUIRED', 'independently retained approval digest is required');
+  const source = architectureSourceIdentity(input.projectPath);
+  const approvedBytes = authorityFile(path.resolve(input.approvalTablePath));
+  if (digest(approvedBytes) !== input.expectedApprovalDigest)
+    fail('SOURCE_AUTHORITY_INVALID', 'original approval table differs from independently retained digest');
+  const approved = JSON.parse(approvedBytes);
+  if (approved.schema !== 'shipyard.architecture-source-approval.v1' || typeof approved.approval_id !== 'string' || !approved.approval_id.trim()
+      || stable(approved.source) !== stable(source))
+    fail('SOURCE_AUTHORITY_INVALID', 'approved source root, common directory or head differs');
+  const pins = architectureSourcePins(approved.pins);
+  if (!Array.isArray(approved.exceptional_paths) || new Set(approved.exceptional_paths).size !== approved.exceptional_paths.length
+      || approved.exceptional_paths.some(relative => !pins.some(pin => pin.path === relative)))
+    fail('SOURCE_AUTHORITY_INVALID', 'explicit independently approved exceptional source membership is required');
+  const exceptional = [...approved.exceptional_paths].sort();
+  assertCommittedArchitectureSources(source, pins, exceptional);
+  for (const pin of pins) readPinnedArchiveFile(source.root, pin, 'approved source');
+  assertArchitectureSourceStable(source, pins);
+  const state = authorityState(source.root, true);
+  const payload = { schema: approved.schema, approval_id: approved.approval_id, source, pins, exceptional_paths: exceptional, approval_digest: input.expectedApprovalDigest };
+  const file = architectureAuthorityPath(source.root, source, pins);
+  const serialized = JSON.stringify({ payload, mac: crypto.createHmac('sha256', state.key).update(stable(payload)).digest('hex') }) + '\n';
+  if (Buffer.byteLength(serialized) > HISTORICAL_ARCHIVE_MAX_BYTES)
+    fail('SOURCE_AUTHORITY_INVALID', 'complete serialized source approval exceeds its authority byte bound');
+  const temporary = file + '.' + crypto.randomUUID() + '.tmp';
+  try {
+    fs.writeFileSync(temporary, serialized, { flag: 'wx', mode: 0o600 });
+    try { fs.linkSync(temporary, file); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (!authorityFile(file).equals(Buffer.from(serialized)))
+        fail('SOURCE_AUTHORITY_INVALID', 'same source inventory cannot replace its original independently approved payload');
+    }
+  }
+  finally { try { fs.unlinkSync(temporary); } catch {} }
+  assertArchitectureSourceStable(source, pins);
+  return { approvalDigest: input.expectedApprovalDigest, source, pins, recordPath: file };
+}
+
 function assertArchitectureSourceStable(source, pins) {
   if (stable(architectureSourceIdentity(source.root)) !== stable(source))
     fail('SOURCE_AUTHORITY_INVALID', 'canonical source identity changed during assembly');
@@ -2233,19 +2277,39 @@ function assertArchitectureSourceStable(source, pins) {
 
 function authenticateArchitectureSources(worktree, project, refs) {
   const source = architectureSourceIdentity(project), pins = architectureSourcePins(refs);
-  assertCommittedArchitectureSources(source, pins);
+  const file = architectureAuthorityPath(source.root, source, pins);
+  if (fs.existsSync(file)) {
+    const state = authorityState(source.root, false, false), envelope = JSON.parse(authorityFile(file));
+    const mac = crypto.createHmac('sha256', state.key).update(stable(envelope.payload)).digest('hex');
+    if (!/^[a-f0-9]{64}$/.test(envelope.mac || '')
+        || !crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex'))
+        || envelope.payload.schema !== 'shipyard.architecture-source-approval.v1'
+        || typeof envelope.payload.approval_id !== 'string' || !envelope.payload.approval_id.trim()
+        || stable(envelope.payload.source) !== stable(source)
+        || stable(envelope.payload.pins) !== stable(pins))
+      fail('SOURCE_AUTHORITY_INVALID', 'protected source approval identity or complete corpus differs');
+    if (!Array.isArray(envelope.payload.exceptional_paths)
+        || envelope.payload.exceptional_paths.some(relative => !pins.some(pin => pin.path === relative)))
+      fail('SOURCE_AUTHORITY_INVALID', 'protected exceptional source membership is invalid');
+    assertCommittedArchitectureSources(source, pins, envelope.payload.exceptional_paths);
+    for (const pin of pins) readPinnedArchiveFile(source.root, pin, 'authenticated source');
+    assertArchitectureSourceStable(source, pins);
+    return { source, pins, exceptional_paths: envelope.payload.exceptional_paths, approval_id: envelope.payload.approval_id, approval_digest: envelope.payload.approval_digest };
+  }
+  assertCommittedArchitectureSources(source, pins, []);
   assertArchitectureSourceStable(source, pins);
   return { source, pins, exceptional_paths: [], approval_id: null, approval_digest: null };
 }
 
-function assertCommittedArchitectureSources(source, pins) {
+function assertCommittedArchitectureSources(source, pins, exceptional) {
   for (const pin of pins) {
+    if (exceptional.includes(pin.path)) continue;
     let committed;
     try { committed = execFileSync('git', ['-C', source.root, 'show', source.head + ':' + pin.path],
       { maxBuffer: HISTORICAL_ARCHIVE_MAX_BYTES, stdio: ['ignore', 'pipe', 'ignore'] }); }
-    catch { fail('SOURCE_AUTHORITY_REQUIRED', 'uncommitted architecture source must be committed before review: ' + pin.path); }
+    catch { fail('SOURCE_AUTHORITY_REQUIRED', 'uncommitted architecture source requires independent protected approval: ' + pin.path); }
     if (committed.length !== pin.bytes || digest(committed) !== pin.sha256)
-      fail('SOURCE_AUTHORITY_REQUIRED', 'dirty architecture source must be committed before review: ' + pin.path);
+      fail('SOURCE_AUTHORITY_REQUIRED', 'dirty architecture source requires independent protected approval: ' + pin.path);
     readPinnedArchiveFile(source.root, pin, 'committed source');
   }
 }
@@ -8830,6 +8894,8 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   validateReviewContinuationEvidence,
   registerPlanningContainmentBaseline,
   readPlanningContainmentBaseline,
+  architectureAuthorityPath,
+  registerArchitectureAuthority,
   authenticateArchitectureSources,
   architectureSourceIdentity,
   assertArchivePin,
