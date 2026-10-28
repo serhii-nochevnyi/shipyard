@@ -1213,8 +1213,8 @@ point reads the WHOLE round from the front, one repository at a time. Before
 launching it runs the sentinel preflight (`sentinel-preflight.cjs`'s
 `preflightRound`, never invoked by hand) over every guarded PR: fetch and
 fast-forward each PR's base in the checkout that owns it, then re-run
-`state-sync.cjs`. A failed fetch, a diverged base or a worktree left dirty
-outside `.planning/graph/` is a REFUSAL from `launch` itself, reported VERBATIM
+`state-sync.cjs`. A failed fetch, a diverged base or a worktree with tracked changes
+(`state-sync.cjs` output is untracked runtime state and commits nothing) is a REFUSAL from `launch` itself, reported VERBATIM
 with the exact command it names; nothing is launched over it. On success `launch`
 returns `{dispatch_id, ticket, role, runtime, log, result}` and the guard runs
 DETACHED: do not `wait` on it (`status --dispatch <dispatch_id>` checks without
