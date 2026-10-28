@@ -1853,9 +1853,8 @@ function repairRevisionSigner(root, commit, expectedSigner = null) {
 // @security: a source revision is trusted only when this host finalized it under a verified receipt.
 function repairSourceCommits(prepared) {
   const directory = privateDirectory(prepared.stateRoot, 'finalized'), finalizations = new Map();
-  for (const name of fs.readdirSync(directory)) {
-    let finalized;
-    try { finalized = readSealed(path.join(directory, name), prepared.key); } catch { continue; }
+  for (const name of fs.readdirSync(directory).filter(entry => entry.endsWith('.json'))) {
+    const finalized = readSealed(path.join(directory, name), prepared.key);
     if (finalized?.schema === FINALIZATION_SCHEMA) finalizations.set(finalized.commit, finalized);
   }
   return (commit, sourceParent) => {
