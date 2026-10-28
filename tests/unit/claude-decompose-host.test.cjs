@@ -574,7 +574,7 @@ function recoveryFixture(role, { cli = false, extraPlannerBaseline = false } = {
   fs.writeFileSync(streamFile, [
     { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
     { type: 'result', session_id: sessionId, result: 'completed',
-      structured_output: { changed_paths: changedPaths } },
+      structured_output: { summary: 'Completed fixture' } },
   ].map((item) => JSON.stringify(item)).join('\n') + '\n', { mode: 0o600 });
   const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   const record = { dispatch_id: dispatchId, run_id: runId, session_id: sessionId,
@@ -592,10 +592,10 @@ function recoveryFixture(role, { cli = false, extraPlannerBaseline = false } = {
       policy_version: resolution.policy_version ?? null, policy_id: resolution.policy_id ?? null,
       policy_rung: resolution.rung ?? null },
     completed: { stream_sha256: digest(streamFile), selection_sha256: digest(savedNativeFile),
-      start_sha256: digest(startFile), declared_paths: changedPaths, changed_paths: changedPaths,
+      start_sha256: digest(startFile), changed_paths: changedPaths,
       artifact_digests: Object.fromEntries(changedPaths.map((name) => [name, digest(path.join(f.phaseDir, name))])),
       full_output_manifest: captureSealManifest({ role, phaseDir: f.phaseDir, snapshot,
-        declared: changedPaths, changed: changedPaths }) } };
+        changed: changedPaths }) } };
   const launchFile = path.join(store, 'launches', `${digestValue(dispatchId)}.launch.json`);
   fs.mkdirSync(path.dirname(launchFile), { recursive: true, mode: 0o700 });
   const save = () => fs.writeFileSync(launchFile, `${JSON.stringify(record)}\n`, { mode: 0o600 });
@@ -646,7 +646,7 @@ test('a live Claude launcher saves evidence that verifies identically after the 
     const stream = [
       { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
       { type: 'result', session_id: sessionId, result: 'completed',
-        structured_output: { changed_paths: ['38-01-PLAN.md'] } },
+        structured_output: { summary: 'Completed fixture' } },
     ].map(JSON.stringify).join('\n') + '\n';
     let spawned = 0;
     let completed = 0;
@@ -709,10 +709,10 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
         spawn: (_executable, args) => {
           launches++;
           const schemaIndex = args.indexOf('--json-schema');
-          assert.ok(schemaIndex >= 0, 'native completion must declare its changed paths');
+          assert.ok(schemaIndex >= 0, 'native completion must carry the summary schema');
           const outputSchema = JSON.parse(args[schemaIndex + 1]);
-          assert.deepEqual(outputSchema.required, ['changed_paths']);
-          assert.equal(outputSchema.properties.changed_paths.type, 'array');
+          assert.equal(outputSchema.required, undefined, 'the child is not asked to declare changed paths');
+          assert.equal(outputSchema.properties.changed_paths, undefined);
           assert.equal(outputSchema.properties.summary.maxLength, 500);
           assert.ok(args[args.indexOf('--tools') + 1].split(',').includes('StructuredOutput'));
           assert.ok(args[args.indexOf('--allowedTools') + 1].split(',').includes('StructuredOutput'));
@@ -738,7 +738,7 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
           const stream = [
             { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
             { type: 'result', session_id: sessionId, result: 'Long native narrative. '.repeat(100),
-              structured_output: { changed_paths: ['038-01-PLAN.md'], summary: 'Completed padded plan' } },
+              structured_output: { summary: 'Completed padded plan' } },
           ].map(JSON.stringify).join('\n') + '\n';
           const child = new EventEmitter();
           child.pid = 99999999;
@@ -846,8 +846,7 @@ test('a completed saved Claude launch recovers one receipt per judgment role wit
       assert.equal(output.receipt.dispatch_id, f.dispatchId);
       assert.equal(output.receipt.compliance, 'verified');
       assert.equal(output.receipt.gsd_role, role);
-      assert.deepEqual(output.result.output.changed_paths,
-        role === 'gsd-plan-checker' ? [] : [role === 'gsd-phase-researcher' ? '38-RESEARCH.md' : '38-01-PLAN.md']);
+      assert.equal(output.result.output.summary, 'Completed fixture');
       assert.equal(f.recorder.getReservation(f.dispatchId).recorded, true);
       assert.equal(ROLES[role] === 'decomposition', Boolean(output.envelope));
       await assert.rejects(recoverDecomposition(f.dispatchId, f.deps), { code: 'RECOVERY_ALREADY_RECORDED' });
@@ -961,7 +960,7 @@ test('recovery refuses missing reservations, incomplete transcripts, mismatched 
     { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { f.record.lease_epoch++; f.save(); } },
     { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => { f.record.saved_native_transcript_bytes++; f.save(); } },
     { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { f.record.saved_native_transcript = f.streamFile; f.save(); } },
-    { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => { f.record.completed.declared_paths = []; f.save(); } },
+    { code: 'FOREIGN_EDIT', mutate: (f) => { f.record.completed.changed_paths = []; f.save(); } },
   ];
   for (const { code, mutate } of cases) {
     const f = recoveryFixture('gsd-planner');

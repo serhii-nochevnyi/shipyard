@@ -299,35 +299,34 @@ function receiptCompliant(output, scope, resolution) {
     && output.receipt.selection_evidence?.session_id === output.receipt.session_id;
 }
 
-function foreignPhaseEdits(directory, declaredAbsolutePaths, writerLease, snapshot) {
-  const declared = new Set(declaredAbsolutePaths.map((full) => path.relative(directory, full).split(path.sep).join('/')));
+function foreignPhaseEdits(directory, ownedAbsolutePaths, writerLease, snapshot) {
+  const owned = new Set(ownedAbsolutePaths.map((full) => path.relative(directory, full).split(path.sep).join('/')));
   const { changed, lease: currentLease } = writerLease.changedSince(snapshot);
-  return { foreign: changed.filter((relPath) => !declared.has(relPath)), currentLease };
+  return { foreign: changed.filter((relPath) => !owned.has(relPath)), currentLease };
 }
 
 function validateJudgmentWriter(scope, directory, writerLease, leaseHandle, snapshot, launch) {
   writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
     base_revision: git(scope.worktree, 'rev-parse', 'HEAD') });
   const completed = launch.completed;
-  if (!object(completed) || !Array.isArray(completed.declared_paths)
-      || !Array.isArray(completed.changed_paths) || !object(completed.artifact_digests)
+  if (!object(completed) || !Array.isArray(completed.changed_paths) || !object(completed.artifact_digests)
       || !object(completed.full_output_manifest)) {
     refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'typed Claude dispatch lacks its original completed checkpoint');
   }
-  const declared = completed.declared_paths;
+  const recorded = completed.changed_paths;
   const { changed, lease } = writerLease.changedSince(snapshot);
-  const foreign = changed.filter((item) => !declared.includes(item));
+  const foreign = changed.filter((item) => !recorded.includes(item));
   if (foreign.length) {
     refuse('FOREIGN_EDIT', `phase directory path(s) changed outside this run's own paths: ${foreign.join(', ')} `
       + `(lease owner ${lease.owner}, epoch ${lease.epoch})`);
   }
-  if (!sameValue(changed, declared) || !sameValue(completed.changed_paths, declared)
-      || !sameValue(Object.keys(completed.artifact_digests).sort(), declared)
-      || declared.some((item) => fileDigest(path.join(directory, item)) !== completed.artifact_digests[item])) {
+  if (!sameValue(changed, recorded)
+      || !sameValue(Object.keys(completed.artifact_digests).sort(), recorded)
+      || recorded.some((item) => fileDigest(path.join(directory, item)) !== completed.artifact_digests[item])) {
     refuse('RECOVERY_ARTIFACT_ALTERED', 'completed Claude artifact bytes changed before recorder mutation');
   }
   assertSealManifest({ role: scope.role, phaseDir: directory, snapshot,
-    declared, changed: completed.changed_paths, outputs: completed.full_output_manifest,
+    changed: completed.changed_paths, outputs: completed.full_output_manifest,
     lease: writerLease });
 }
 
@@ -414,14 +413,12 @@ async function runDecomposition(request, dependencies = {}) {
           onCompleted: (completed) => {
             if (scope.role === 'gsd-planner') decompositionPlans(phaseDir);
             const changed = writerLease.changedSince(preLaunchSnapshot).changed;
-            const declared = declaredChanges({ output: completed.output }, phaseDir);
-            if (!sameValue(changed, declared)) refuse('RECOVERY_ARTIFACT_ALTERED', 'final assistant declaration differs from completed phase changes');
             const artifactDigests = Object.fromEntries(changed.map((rel) => [rel, fileDigest(path.join(phaseDir, rel))]));
             if (Object.values(artifactDigests).some((digest) => digest === null)) {
               refuse('RECOVERY_ARTIFACT_ALTERED', 'completed artifact is missing');
             }
             const fullOutputManifest = captureSealManifest({ role: scope.role, phaseDir,
-              snapshot: preLaunchSnapshot, declared, changed });
+              snapshot: preLaunchSnapshot, changed });
             const reservation = recorder.getReservation(dispatchId);
             if (!reservation || reservation.recorded || !reservation.reserved_at) {
               refuse('RECOVERY_NO_RESERVATION', 'completed Claude launch has no original reservation');
@@ -433,7 +430,7 @@ async function runDecomposition(request, dependencies = {}) {
               stream_sha256: completed.applicationEvidence.transcript.sha256,
               selection_sha256: completed.applicationEvidence.selection_evidence.transcript.sha256,
               start_sha256: fileDigest(startEvidenceFile),
-              declared_paths: declared, changed_paths: changed, artifact_digests: artifactDigests,
+              changed_paths: changed, artifact_digests: artifactDigests,
               full_output_manifest: fullOutputManifest,
             };
             launchRecord.saved_native_transcript = selectionPath;
@@ -449,12 +446,8 @@ async function runDecomposition(request, dependencies = {}) {
           model: resolution.model, effort: resolution.effort, signals: scope.signals,
           dispatchId, requireGsdRole: true,
           agentOptions: { session_id: sessionId, schema: {
-            type: 'object', additionalProperties: false, required: ['changed_paths'],
-            properties: {
-              changed_paths: { type: 'array', items: { type: 'string', minLength: 1 },
-                description: 'Every file changed by this run, relative to the phase directory. Use an empty array when no files changed.' },
-              summary: { type: 'string', maxLength: 500 },
-            },
+            type: 'object', additionalProperties: false,
+            properties: { summary: { type: 'string', maxLength: 500 } },
           } },
           context: { ticket: scope.ticket, phase: scope.phase, run_id: runId,
             worktreePath: scope.worktree, runtime: 'claude', provider: 'anthropic',
@@ -521,24 +514,6 @@ function recoveryStore(dispatchId, dependencies) {
   return path.join(root, stores[0].name);
 }
 
-function declaredChanges(result, phaseDir) {
-  const output = result && result.output;
-  const paths = object(output) ? output.changed_paths ?? output.files_modified : undefined;
-  if (!Array.isArray(paths) || paths.some((item) => typeof item !== 'string' || !item.trim())) {
-    refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'final assistant result has no declared changed paths');
-  }
-  const relative = paths.map((item) => {
-    const absolute = path.resolve(phaseDir, item);
-    const rel = path.relative(phaseDir, absolute).split(path.sep).join('/');
-    if (!rel || rel.startsWith('../') || rel === '..' || path.isAbsolute(rel)) {
-      refuse('RECOVERY_EVIDENCE_INCOMPLETE', `declared path escaped the phase directory: ${item}`);
-    }
-    return rel;
-  });
-  if (new Set(relative).size !== relative.length) refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'final assistant result repeats a changed path');
-  return relative.sort();
-}
-
 async function recoverDecomposition(dispatchId, dependencies = {}) {
   safeText(dispatchId, 'dispatch id', 128);
   const store = recoveryStore(dispatchId, dependencies);
@@ -586,8 +561,7 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
         || !object(launch.completed) || typeof launch.completed.stream_sha256 !== 'string'
         || typeof launch.completed.selection_sha256 !== 'string'
         || typeof launch.completed.start_sha256 !== 'string'
-        || !object(launch.completed.artifact_digests) || !Array.isArray(launch.completed.declared_paths)
-        || !Array.isArray(launch.completed.changed_paths)
+        || !object(launch.completed.artifact_digests) || !Array.isArray(launch.completed.changed_paths)
         || !object(launch.completed.full_output_manifest)
         || typeof launch.saved_native_transcript !== 'string'
         || !Number.isSafeInteger(launch.saved_native_transcript_bytes)
@@ -631,16 +605,13 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
       refuse('RECOVERY_ARTIFACT_ALTERED', 'saved Claude transcripts differ from the completed launch');
     }
     const changed = writerLease.changedSince(launch.tree_snapshot).changed;
-    const declared = declaredChanges(verified.result, phaseDir);
-    const foreign = changed.filter((item) => !declared.includes(item));
-    if (foreign.length) refuse('FOREIGN_EDIT', `phase directory path(s) changed outside the original Claude declaration: ${foreign.join(', ')}`);
-    const savedPaths = Object.keys(launch.completed.artifact_digests).sort();
-    if (changed.length !== declared.length || changed.some((item, index) => item !== declared[index])
-        || !sameValue(launch.completed.declared_paths, declared)
-        || !sameValue(launch.completed.changed_paths, changed)
-        || savedPaths.length !== declared.length || savedPaths.some((item, index) => item !== declared[index])
-        || declared.some((item) => fileDigest(path.join(phaseDir, item)) !== launch.completed.artifact_digests[item])) {
-      refuse('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the final assistant result');
+    const recorded = launch.completed.changed_paths;
+    const foreign = changed.filter((item) => !recorded.includes(item));
+    if (foreign.length) refuse('FOREIGN_EDIT', `phase directory path(s) changed outside the original completion: ${foreign.join(', ')}`);
+    if (!sameValue(changed, recorded)
+        || !sameValue(Object.keys(launch.completed.artifact_digests).sort(), changed)
+        || changed.some((item) => fileDigest(path.join(phaseDir, item)) !== launch.completed.artifact_digests[item])) {
+      refuse('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the original completion');
     }
     writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
       base_revision: git(scope.worktree, 'rev-parse', 'HEAD') });

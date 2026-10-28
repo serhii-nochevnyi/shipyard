@@ -3061,32 +3061,10 @@ function createCodexDeliveryHost(options = {}) {
         || completed.session_id !== receipt.runtime_evidence?.native_session_evidence?.session_id) {
       fail('WRITER_FENCED', 'typed completion is not bound to the application receipt');
     }
-    let output;
-    try { output = JSON.parse(completed.last_agent_message); }
-    catch (_) { fail('WRITER_FENCED', 'typed completion has no artifact declaration'); }
-    if (!object(output) || output.schema !== 'shipyard.codex-decompose-output.v1'
-        || !Array.isArray(output.artifact_paths)) {
-      fail('WRITER_FENCED', 'typed completion has no artifact declaration');
-    }
-    const outputPaths = output.artifact_paths.map((item) => {
-      if (typeof item !== 'string' || !item || path.isAbsolute(item) || item.includes('\\')
-          || path.posix.normalize(item) !== item || item.split('/').includes('..')) {
-        fail('WRITER_FENCED', 'typed completion declared an invalid path');
-      }
-      const relative = path.relative(expectedPhase, path.resolve(worktree, item)).split(path.sep).join('/');
-      if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) {
-        fail('WRITER_FENCED', 'typed completion declared a path outside the scoped phase');
-      }
-      return relative;
-    }).sort();
-    if (new Set(outputPaths).size !== outputPaths.length
-        || JSON.stringify(outputPaths) !== JSON.stringify(completed.declared_paths)) {
-      fail('FOREIGN_EDIT', 'host declaration differs from authenticated typed output');
-    }
     lease.assertFence({ token: handle.token, epoch: handle.epoch,
       base_revision: git(worktree, ['rev-parse', 'HEAD']) });
     assertSealManifest({ role: gsdRole, phaseDir: expectedPhase, snapshot,
-      declared: completed.declared_paths, changed: completed.changed_paths,
+      changed: completed.changed_paths,
       outputs: completed.full_output_manifest, lease });
   };
   if (!runtimeHost || !object(runtimeHost.capabilities) || !runtimeHost.recorder) {
@@ -3361,32 +3339,12 @@ function createCodexDeliveryHost(options = {}) {
                   fail('RUNTIME_EVIDENCE_MISMATCH', 'typed delivery has no bound native completion');
                 }
                 const phaseDir = typedPhaseDirectory(scope.worktree, scope.phase);
-                let declaration;
-                try { declaration = JSON.parse(completed.last_agent_message); }
-                catch { fail('ARTIFACT_DECLARATION_INVALID', 'native typed completion has invalid JSON'); }
-                if (!object(declaration) || declaration.schema !== 'shipyard.codex-decompose-output.v1'
-                    || !Array.isArray(declaration.artifact_paths)) {
-                  fail('ARTIFACT_DECLARATION_INVALID', 'native typed completion has no artifact declaration');
-                }
-                const declared = declaration.artifact_paths.map((item) => {
-                  if (typeof item !== 'string' || !item || path.isAbsolute(item) || item.includes('\\')
-                      || path.posix.normalize(item) !== item || item.split('/').includes('..')) {
-                    fail('ARTIFACT_DECLARATION_INVALID', 'native typed completion declared an invalid path');
-                  }
-                  const rel = path.relative(phaseDir, path.resolve(fs.realpathSync(scope.worktree), item))
-                    .split(path.sep).join('/');
-                  if (!rel || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
-                    fail('ARTIFACT_DECLARATION_INVALID', 'native typed completion declared a foreign phase path');
-                  }
-                  return rel;
-                }).sort();
                 const changed = writerSession.lease.changedSince(writerSession.snapshot).changed;
                 const fullOutputManifest = captureSealManifest({ role: launchContext.gsd_role,
-                  phaseDir, snapshot: writerSession.snapshot, declared, changed });
+                  phaseDir, snapshot: writerSession.snapshot, changed });
                 completedTyped.set(launchContext.dispatch_id, {
                   ...completed, gsd_role: launchContext.gsd_role,
-                  raw_child_paths: [...declaration.artifact_paths],
-                  declared_paths: declared, changed_paths: changed,
+                  changed_paths: changed,
                   full_output_manifest: fullOutputManifest,
                   completion_message_sha256: crypto.createHash('sha256')
                     .update(completed.last_agent_message).digest('hex'),

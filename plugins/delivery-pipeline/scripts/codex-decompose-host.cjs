@@ -28,7 +28,6 @@ const orchestrationOverhead = require('./orchestration-overhead.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const LAUNCH_SCHEMA = 'shipyard.codex-decompose-launch.v1';
-const OUTPUT_SCHEMA = 'shipyard.codex-decompose-output.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
 const ROLES = Object.freeze({
   'gsd-phase-researcher': Object.freeze({ role: 'research', sandbox: 'workspace-write' }),
@@ -336,64 +335,13 @@ function validTaskRelay(value) {
     && /^[a-f0-9]{64}$/.test(value.sha256 || '');
 }
 
-function completionInstructions(prompt, gsdRole) {
-  const artifactRule = gsdRole === 'gsd-plan-checker'
-    ? 'Use an empty artifact_paths array.'
-    : 'List every worktree-relative file you created or changed inside the current phase directory.';
-  return prompt + '\n\nShipyard recovery completion format: finish with exactly one JSON object as your final message, '
-    + 'using schema "' + OUTPUT_SCHEMA + '" and an artifact_paths array. ' + artifactRule;
-}
-
-function declaredArtifactPaths(message, scope, gsdRole, code = 'RECOVERY_EVIDENCE_INCOMPLETE') {
-  let output;
-  try { output = JSON.parse(message); }
-  catch (_) { fail(code, 'authenticated child completion does not contain the required artifact declaration'); }
-  if (!object(output) || output.schema !== OUTPUT_SCHEMA || !Array.isArray(output.artifact_paths)
-      || output.artifact_paths.length > 256) {
-    fail(code, 'authenticated child completion has an invalid artifact declaration');
-  }
-  const directory = phaseDirectory(scope.worktree, scope.phase);
-  const declared = output.artifact_paths.map((value) => {
-    if (typeof value !== 'string' || !value || path.isAbsolute(value) || value.includes('\\')
-        || path.posix.normalize(value) !== value || value.split('/').includes('..')) {
-      fail(code, 'authenticated child declared an invalid artifact path');
-    }
-    const full = path.resolve(scope.worktree, ...value.split('/'));
-    const relativeToWorktree = path.relative(scope.worktree, full);
-    const relativeToPhase = path.relative(directory, full);
-    if (!relativeToWorktree || relativeToWorktree.startsWith('..') || path.isAbsolute(relativeToWorktree)
-        || relativeToPhase.startsWith('..') || path.isAbsolute(relativeToPhase)) {
-      fail(code, 'authenticated child declared an artifact outside the current phase directory');
-    }
-    const phaseRelative = relativeToPhase.split(path.sep).join('/');
-    if (gsdRole === 'gsd-planner' && phaseRelative !== 'CONTEXT.md' && !/^\d+-\d+-PLAN\.md$/.test(phaseRelative)) {
-      fail(code, 'planner declared a path that the decomposition sealer will not seal');
-    }
-    return phaseRelative;
-  }).sort();
-  if (new Set(declared).size !== declared.length) fail(code, 'authenticated child declared duplicate artifact paths');
-  if (gsdRole === 'gsd-phase-researcher') {
-    const expected = path.relative(directory, researchArtifact(scope.worktree, scope.phase)).split(path.sep).join('/');
-    if (declared.length > 1 || (declared.length === 1 && declared[0] !== expected)) {
-      fail(code, 'researcher may declare only the phase research artifact it wrote');
-    }
-  }
-  if (gsdRole === 'gsd-plan-checker' && declared.length !== 0) {
-    fail(code, 'read-only plan checker cannot declare modified artifacts');
-  }
-  return declared;
-}
-
-function artifactDigests(scope, writerLease, snapshot, declared, code, containmentBaseline) {
+function artifactDigests(scope, writerLease, snapshot, code, containmentBaseline) {
   const changed = writerLease.changedSince(snapshot).changed;
-  if (changed.length !== declared.length || changed.some((relPath, index) => relPath !== declared[index])) {
-    fail(code, 'planning tree delta differs from the authenticated child artifact declaration');
-  }
   const directory = phaseDirectory(scope.worktree, scope.phase);
   try {
     assertContained({ worktree: scope.worktree,
       allowed: containmentBaseline === undefined ? [path.relative(scope.worktree, directory)]
-        : declared.map((relative) => path.relative(scope.worktree, path.join(directory, relative))),
+        : changed.map((relative) => path.relative(scope.worktree, path.join(directory, relative))),
       baseline: containmentBaseline });
   } catch (error) {
     fail(code, 'planning tree containment refused: ' + error.message);
@@ -412,26 +360,26 @@ function artifactDigests(scope, writerLease, snapshot, declared, code, containme
     fail(code, 'planning phase directory resolves outside the current worktree');
   }
   const digests = {};
-  for (const relative of declared) {
+  for (const relative of changed) {
     const full = path.join(directory, ...relative.split('/'));
     let stat;
     try { stat = fs.lstatSync(full); }
-    catch (_) { fail(code, 'declared artifact is missing: ' + relative); }
-    if (stat.isSymbolicLink() || !stat.isFile()) fail(code, 'declared artifact is not a regular file: ' + relative);
+    catch (_) { fail(code, 'changed artifact is missing: ' + relative); }
+    if (stat.isSymbolicLink() || !stat.isFile()) fail(code, 'changed artifact is not a regular file: ' + relative);
     let real;
     try {
       real = fs.realpathSync(full);
-    } catch (_) { fail(code, 'declared artifact cannot be resolved within the current worktree: ' + relative); }
+    } catch (_) { fail(code, 'changed artifact cannot be resolved within the current worktree: ' + relative); }
     const artifactFromWorktree = path.relative(worktreeReal, real);
     const artifactFromDirectory = path.relative(directoryReal, real);
     if (artifactFromWorktree === '..' || artifactFromWorktree.startsWith('..' + path.sep)
         || path.isAbsolute(artifactFromWorktree)
         || artifactFromDirectory === '..' || artifactFromDirectory.startsWith('..' + path.sep)
         || path.isAbsolute(artifactFromDirectory)) {
-      fail(code, 'declared artifact resolves outside the current worktree phase: ' + relative);
+      fail(code, 'changed artifact resolves outside the current worktree phase: ' + relative);
     }
     const digest = sha256File(full);
-    if (!digest) fail(code, 'declared artifact cannot be digested: ' + relative);
+    if (!digest) fail(code, 'changed artifact cannot be digested: ' + relative);
     digests[relative] = digest;
   }
   return digests;
@@ -713,13 +661,11 @@ function createCodexDecomposeHost(options = {}) {
                 || typeof completed.spawn_evidence.timed_out !== 'boolean') {
               fail('RUNTIME_EVIDENCE_MISMATCH', 'completed native launch does not match its durable session start');
             }
-            const declared = declaredArtifactPaths(completed.last_agent_message, scope, request.gsd_role,
-              'ARTIFACT_DECLARATION_INVALID');
-            const digests = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot, declared,
-              'ARTIFACT_DECLARATION_INVALID', leaseCtx.containmentBaseline);
+            const digests = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot,
+              'FOREIGN_EDIT', leaseCtx.containmentBaseline);
             const fullOutputManifest = captureSealManifest({ role: request.gsd_role,
               phaseDir: phaseDirectory(scope.worktree, scope.phase), snapshot: leaseCtx.snapshot,
-              declared, changed: Object.keys(digests).sort() });
+              changed: Object.keys(digests).sort() });
             const completedRecord = {
               launch_id: completed.launch_id,
               parent_session_id: completed.session_id,
@@ -729,7 +675,6 @@ function createCodexDecomposeHost(options = {}) {
               child_sha256: runtimeEvidence.native_child_evidence.sha256,
               completion_message_sha256: sha256Text(completed.last_agent_message),
               parent_wait_timed_out: completed.spawn_evidence.timed_out,
-              declared_paths: declared,
               changed_paths: Object.keys(digests).sort(),
               artifact_digests: digests,
               full_output_manifest: fullOutputManifest,
@@ -776,7 +721,7 @@ function createCodexDecomposeHost(options = {}) {
             ? runOptions.recovered.applied
             : await runtimeHost.launchTypedGsd(selected, {
               ...context,
-              prompt: launchRecord ? completionInstructions(prompt, request.gsd_role) : prompt,
+              prompt,
               ...(captureProcessSpawned ? { onProcessSpawned: captureProcessSpawned } : {}),
               ...(captureSessionStarted ? { onSessionStarted: captureSessionStarted } : {}),
               ...(captureNativeCompleted ? { onNativeCompleted: captureNativeCompleted } : {}),
@@ -844,27 +789,26 @@ function createCodexDecomposeHost(options = {}) {
             const completed = durable.completed;
             if (!object(completed) || !object(completed.artifact_digests)
                 || !object(completed.full_output_manifest)
-                || !Array.isArray(completed.declared_paths) || !Array.isArray(completed.changed_paths)
+                || !Array.isArray(completed.changed_paths)
                 || !object(durable.process_spawned)
                 || durable.process_spawned.pid !== durable.session_started?.process_id
                 || completed.pid !== durable.process_spawned.pid) {
               fail('RECOVERY_EVIDENCE_INCOMPLETE', 'typed dispatch lacks its original process and completion checkpoint');
             }
             const directory = phaseDirectory(scope.worktree, scope.phase);
-            const declared = Object.keys(completed.artifact_digests).sort();
-            if (canonicalJson(declared) !== canonicalJson(completed.declared_paths)
-                || canonicalJson(declared) !== canonicalJson(completed.changed_paths)) {
+            const changed = Object.keys(completed.artifact_digests).sort();
+            if (canonicalJson(changed) !== canonicalJson(completed.changed_paths)) {
               fail('RECOVERY_EVIDENCE_INCOMPLETE', 'typed dispatch completion path sets disagree');
             }
             assertNoForeignEdit(leaseCtx, scope, directory,
-              declared.map((item) => path.join(directory, item)));
+              changed.map((item) => path.join(directory, item)));
             const current = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot,
-              declared, 'RECOVERY_ARTIFACT_ALTERED', leaseCtx.containmentBaseline);
+              'RECOVERY_ARTIFACT_ALTERED', leaseCtx.containmentBaseline);
             if (canonicalJson(current) !== canonicalJson(completed.artifact_digests)) {
               fail('RECOVERY_ARTIFACT_ALTERED', 'completed artifact bytes changed before recorder mutation');
             }
             assertSealManifest({ role: request.gsd_role, phaseDir: directory,
-              snapshot: leaseCtx.snapshot, declared: completed.declared_paths,
+              snapshot: leaseCtx.snapshot,
               changed: completed.changed_paths, outputs: completed.full_output_manifest,
               lease: leaseCtx.writerLease });
           },
@@ -875,7 +819,7 @@ function createCodexDecomposeHost(options = {}) {
         const completed = readLaunchRecord(options.launchDir, output.receipt.dispatch_id).completed;
         assertSealManifest({ role: request.gsd_role,
           phaseDir: phaseDirectory(scope.worktree, scope.phase), snapshot: leaseCtx.snapshot,
-          declared: completed.declared_paths, changed: completed.changed_paths,
+          changed: completed.changed_paths,
           outputs: completed.full_output_manifest, lease: leaseCtx.writerLease });
       }
       if (request.gsd_role === 'gsd-phase-researcher') {
@@ -1219,7 +1163,7 @@ async function recoverCli(argv, stdout, options) {
     if (!object(completed) || typeof completed.parent_session_id !== 'string'
         || !object(completed.runtime_evidence) || !object(completed.artifact_digests)
         || !object(completed.full_output_manifest)
-        || !Array.isArray(completed.declared_paths) || !Array.isArray(completed.changed_paths)) {
+        || !Array.isArray(completed.changed_paths)) {
       fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has no original completed checkpoint');
     }
     if (!Number.isSafeInteger(record.process_spawned?.pid) || record.process_spawned.pid <= 0
@@ -1254,25 +1198,23 @@ async function recoverCli(argv, stdout, options) {
         || verified.spawn_evidence.timed_out !== completed.parent_wait_timed_out) {
       fail('RECOVERY_ARTIFACT_ALTERED', 'native transcripts differ from the digests recorded at launch');
     }
-    const declared = declaredArtifactPaths(output, scope, request.gsd_role);
-    if (canonicalJson(declared) !== canonicalJson(completed.declared_paths)
-        || canonicalJson(declared) !== canonicalJson(completed.changed_paths)
-        || canonicalJson(declared) !== canonicalJson(Object.keys(completed.artifact_digests).sort())) {
+    const changed = [...completed.changed_paths].sort();
+    if (canonicalJson(changed) !== canonicalJson(Object.keys(completed.artifact_digests).sort())) {
       fail('RECOVERY_EVIDENCE_INCOMPLETE', 'original completion changed-path sets disagree');
     }
-    const declaredSet = new Set(declared);
-    const foreign = writerLease.changedSince(record.tree_snapshot).changed.filter((item) => !declaredSet.has(item));
-    if (foreign.length) fail('FOREIGN_EDIT', 'phase directory path(s) changed outside the authenticated child declaration: ' + foreign.join(', '));
+    const changedSet = new Set(changed);
+    const foreign = writerLease.changedSince(record.tree_snapshot).changed.filter((item) => !changedSet.has(item));
+    if (foreign.length) fail('FOREIGN_EDIT', 'phase directory path(s) changed outside the original completion: ' + foreign.join(', '));
     const containmentBaseline = restoreContainmentBaseline({ worktree: scope.worktree,
       binding: containmentBinding(record, scope.worktree), reference: record.containment_baseline,
       recoveredEpoch: leaseHandle.epoch });
-    const currentDigests = artifactDigests(scope, writerLease, record.tree_snapshot, declared,
+    const currentDigests = artifactDigests(scope, writerLease, record.tree_snapshot,
       'RECOVERY_ARTIFACT_ALTERED', containmentBaseline);
     if (canonicalJson(currentDigests) !== canonicalJson(completed.artifact_digests)) {
       fail('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the digests recorded when the child completed');
     }
     assertSealManifest({ role: request.gsd_role, phaseDir: phaseDirectory(scope.worktree, scope.phase),
-      snapshot: record.tree_snapshot, declared: completed.declared_paths,
+      snapshot: record.tree_snapshot,
       changed: completed.changed_paths, outputs: completed.full_output_manifest, lease: writerLease });
     controller.begin(createRunScope({
       run_id: scope.run_id,

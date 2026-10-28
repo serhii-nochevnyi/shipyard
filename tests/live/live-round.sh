@@ -198,8 +198,6 @@ host_request() {
       + ". Each verification command bullet must be an entire bare line containing only a dash, a space and the exact command in backticks: - `node --test tests/greeting.test.cjs`. Put explanations outside command bullets."
       + " Put all acceptance assertions in that owned test file. The fixture approves only node --test and node -e sandbox prefixes;"
       + " no git, npm, shell pipelines or shell expansion."
-      + " Return changed_paths relative to the phase directory: 01-01-PLAN.md and 01-02-PLAN.md, without a .planning/phases/ prefix."
-      + " List every file actually changed, and do not list unchanged files."
       + " Research findings: " + path.relative(project, artifactRoot) + "/*.md.";
     const sourceRevision = git("rev-parse", "HEAD");
     const repository = fs.realpathSync(git("rev-parse", "--path-format=absolute", "--git-common-dir"));
