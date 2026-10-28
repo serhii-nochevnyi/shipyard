@@ -989,11 +989,12 @@ prints `0 agents` the project config does not parse: fix the file.
    node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role executor [--graph-dir <project>/.planning/graph]
    ```
 
-   `--graph-dir` is required whenever this worktree does not itself track
-   `.planning/graph/tickets.json` at HEAD. Pass it for a tracking worktree as
-   well: the board and the dispatch and escalation records are runtime state
-   that git never carries, so they live only in the project's `.planning/graph`.
-   An explicit graph takes precedence only after the canonical-graph check;
+   `--graph-dir` is optional: `launch` reads the board and the dispatch and
+   escalation records, which git never carries, from the main checkout's
+   `.planning/graph` of this worktree's repository, never from the worktree's
+   own copy. Pass it only for a graph outside that repository, as for a
+   cross-repo ticket. An explicit graph takes precedence only after the
+   canonical-graph check;
    untracked copies in linked worktrees still refuse. `launch` returns
    immediately with `{dispatch_id, ticket, role, runtime, log, result}`; the
    selected host runs DETACHED, never in the foreground. Collect the result with:

@@ -165,19 +165,7 @@ function git(worktree, args) {
   }
 }
 
-function trackedAtHead(worktree, relPath) {
-  try {
-    execFileSync('git', ['-C', worktree, 'cat-file', '-e', 'HEAD:' + relPath], {
-      stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function defaultGraphDir(worktree) {
-  if (trackedAtHead(worktree, '.planning/graph/tickets.json')) return path.join(worktree, '.planning', 'graph');
   return path.join(repoRootOf(worktree) || worktree, '.planning', 'graph');
 }
 

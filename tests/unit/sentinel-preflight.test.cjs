@@ -118,7 +118,8 @@ test('a tracked state file dirtied by state-sync refuses and is not committed', 
   const before = git(f.wt, 'rev-parse', 'HEAD');
   assert.throws(
     () => pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run }),
-    (error) => error.code === 'WORKTREE_DIRTY' && error.message.includes('.planning/graph/delivery-state.json'),
+    (error) => error.code === 'WORKTREE_DIRTY' && error.message.includes('.planning/graph/delivery-state.json')
+      && error.message.includes('git rm -r --cached .planning/graph'),
   );
   assert.strictEqual(git(f.wt, 'rev-parse', 'HEAD'), before);
 });
@@ -143,6 +144,16 @@ test('a state-sync failure refuses, naming the command to run', () => {
     (error) => error.code === 'STATE_SYNC_FAILED' && error.message.includes('boom')
       && error.message.includes(`cd ${f.wt} && node`) && error.message.includes('state-sync.cjs'),
   );
+});
+
+test('this repository ignores conveyor runtime state but tracks the ticket graph', () => {
+  const ignored = (file) => {
+    try { git(path.resolve(__dirname, '../..'), 'check-ignore', '-q', file); return true; } catch { return false; }
+  };
+  assert.strictEqual(ignored('.planning/graph/dispatches.json'), true);
+  assert.strictEqual(ignored('.planning/graph/delivery-state.json'), true);
+  assert.strictEqual(ignored('.planning/graph/tickets.json'), false);
+  assert.strictEqual(ignored('.planning/graph/tickets.yaml'), false);
 });
 
 suite('sentinel-preflight: multi-repository round (D-44)');

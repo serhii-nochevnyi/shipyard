@@ -103,7 +103,8 @@ function assertNotDirty(worktree) {
   const dirty = statusEntries(worktree).filter((entry) => entry.status !== '??');
   if (dirty.length) {
     refuse(`tracked files are dirty: ${dirty.map((entry) => entry.path).join(', ')}; `
-      + `run: git -C ${worktree} status`, 'WORKTREE_DIRTY');
+      + `run: git -C ${worktree} status; if they are .planning/ state files, stop tracking them: `
+      + 'git rm -r --cached .planning/graph (or make untrack-planning)', 'WORKTREE_DIRTY');
   }
 }
 

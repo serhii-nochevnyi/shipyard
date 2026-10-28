@@ -1733,16 +1733,15 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
           || sha(fs.readFileSync(path.join(prepared.canonical.worktree, file))) !== scratchDigest;
       } catch { return true; }
     }
-    const digest = hostOwnedFiles.get(file);
-    if (digest === undefined) return true;
-    const absolute = path.join(prepared.canonical.worktree, file);
-    try {
-      const stat = fs.lstatSync(absolute);
-      return !stat.isFile() || stat.isSymbolicLink() || sha(fs.readFileSync(absolute)) !== digest;
-    } catch {
-      return true;
-    }
+    return !hostOwnedFiles.has(file);
   });
+  for (const [file, digest] of hostOwnedFiles) {
+    try {
+      const absolute = path.join(prepared.graph.directory, '../..', file);
+      const stat = fs.lstatSync(absolute);
+      if (!stat.isFile() || stat.isSymbolicLink() || sha(fs.readFileSync(absolute)) !== digest) unexpected.push(file);
+    } catch { unexpected.push(file); }
+  }
   if (unexpected.length) reject(`role changed paths outside its evidence file: ${unexpected.slice(0, 8).join(', ')}`, 'WORKTREE_MUTATED');
   if (git(options, prepared.canonical.worktree, ['rev-parse', '--verify', 'HEAD^{commit}']) !== prepared.canonical.head
       || git(options, prepared.canonical.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== prepared.canonical.branch) {

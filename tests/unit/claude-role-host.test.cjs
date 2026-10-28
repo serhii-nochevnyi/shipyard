@@ -134,6 +134,28 @@ test(`${kind} completes preparation from coordinator-only planning without movin
   finally { cleanupFixture(fixture); }
 });
 
+test('a role that rewrites an ignored host-owned state file is refused after the run', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'role-host-ignored-state-')));
+  try {
+    const run = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+    run('init', '-q'); run('config', 'user.email', 'a@b.c'); run('config', 'user.name', 'n');
+    fs.writeFileSync(path.join(root, '.gitignore'), '.planning/graph/*\n');
+    fs.writeFileSync(path.join(root, 'a.txt'), 'a\n');
+    run('add', '.'); run('commit', '-q', '-m', 'seed');
+    const state = path.join(root, '.planning', 'graph', 'dispatches.json');
+    fs.mkdirSync(path.dirname(state), { recursive: true });
+    fs.writeFileSync(state, '{"inflight":{}}\n');
+    const digest = crypto.createHash('sha256').update(fs.readFileSync(state)).digest('hex');
+    const prepared = { evidencePath: '.evidence', role: 'arch-review', canonical: { worktree: root, scratchDigests: new Map() },
+      graph: { directory: path.join(root, '.planning', 'graph') } };
+    const owned = new Map([['.planning/graph/dispatches.json', digest]]);
+    const host = preparationOnlyHost();
+    assert.throws(() => host.assertEvidenceOnlyChanges({}, prepared, owned), error => error.code === 'STALE_CONTEXT');
+    fs.writeFileSync(state, '{"inflight":{"x":1}}\n');
+    assert.throws(() => host.assertEvidenceOnlyChanges({}, prepared, owned), error => error.code === 'WORKTREE_MUTATED');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 for (const kind of ['arch-review', 'integrator', 'code-review'])
 test(`${kind} coordinator packet survives real file transport and serialized consumption`, () => {
   const f = coordinatorOnlyPlanning(kind);
