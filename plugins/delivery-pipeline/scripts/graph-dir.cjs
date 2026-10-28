@@ -15,12 +15,8 @@
 //   1. --graph <dir> / SHIPYARD_GRAPH_DIR — an explicit answer always wins. This
 //      is the ONLY thing that works for a cross-repo ticket, where the worktree
 //      lives in a sibling repository and the graph does not.
-//   2. the main checkout of the repository owning the worktree, then cwd, via
-//      `git rev-parse --git-common-dir`, which reports the main repo's .git even from a
-//      linked worktree. The board and the dispatch and escalation records are
-//      runtime state that git never carries, so they live only there; a linked
-//      worktree's own .planning/graph holds the tracked ticket graph alone.
-//   3. <cwd>/.planning/graph — only when cwd is not inside a git repository.
+// @invariant: after an explicit answer, the main checkout's .planning/graph wins over cwd.
+// @invariant: cwd's .planning/graph is used only outside any git repository.
 //
 // Nothing is guessed past that: a caller who lands here with no graph gets told
 // the actual cause and the flag that fixes it, because a misdirecting error costs
@@ -43,7 +39,7 @@ function repoRootOf(worktree) {
 /**
  * @param {string[]} argv   process.argv.slice(2) — read for `--graph <dir>`
  * @param {string|null} worktree  the resolved --worktree path, when the caller has one
- * @returns {{dir: string|null, how: 'flag'|'env'|'repo'|'cwd'|'none'}}
+ * @returns {{dir: string|null, how: 'flag'|'env'|'cwd'|'worktree-repo'|'none'}}
  */
 function resolveGraphDir(argv = [], worktree = null) {
   const at = argv.indexOf('--graph');
@@ -54,7 +50,7 @@ function resolveGraphDir(argv = [], worktree = null) {
   for (const origin of [worktree, process.cwd()]) {
     const root = origin && repoRootOf(origin);
     const fromRepo = root && path.join(root, '.planning', 'graph');
-    if (hasGraph(fromRepo)) return { dir: fromRepo, how: 'repo' };
+    if (hasGraph(fromRepo)) return { dir: fromRepo, how: 'worktree-repo' };
   }
   if (hasGraph(fromCwd)) return { dir: fromCwd, how: 'cwd' };
   // Report the cwd candidate so the error can name what was actually looked at.

@@ -196,8 +196,6 @@ test('documented review argv selects project hold policy over a linked epic repo
             '<codex|claude>': 'codex', '<project-root>/.planning/graph': graphDir };
           const argv = documented.map(arg => substitutions[arg] || arg);
           const implicit = argv.slice(0, argv.indexOf('--graph'));
-          // The board and policy are runtime state of the main checkout: an implicit graph from a linked worktree
-          // resolves there too, so it can no longer pick the linked checkout's committed report policy.
           for (const request of [implicit, argv]) {
             if (argv[0] === 'code-review') assert.strictEqual(dispatcher.build(request, options).graph_dir, graphDir);
             else assert.throws(() => dispatcher.build(request, options), /phase code review is owed.*delivery_pipeline.code_review.*report/);
