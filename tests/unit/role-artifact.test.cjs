@@ -3014,7 +3014,6 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
     const claude = loadFixture('claude-role-host.test.cjs',
       'coordinatorOnlyPlanning, hostOptions, livePr, phasePreparationRequest, cleanupFixture, PHASE');
     const context = require('../../plugins/delivery-pipeline/scripts/codex-code-review-context.cjs');
-    const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
     const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
     const flow = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
     const originalCarrier = Buffer.from(JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [] }) + '\n');
@@ -3050,7 +3049,8 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
           const factory = options.createRuntimeHost;
           options.createRuntimeHost = input => { const runtimeHost = factory(input); recorder = runtimeHost.recorder; return runtimeHost; };
           options.getPullRequest = () => ({ ...claude.livePr(f), baseRefName: 'integration' });
-          result = await host.createClaudeRoleHost(options).run(claude.phasePreparationRequest(f));
+          result = await require('../fixtures/phase53/code-review-native-driver.cjs')
+            .produceHistoricalClaudeReview(options, claude.phasePreparationRequest(f));
           dispatchId = result.dispatch.receipt.dispatch_id;
         }
         const pr = runtime === 'codex' ? f.pr : { ...claude.livePr(f), baseRefName: 'integration' };

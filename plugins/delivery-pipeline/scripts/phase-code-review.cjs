@@ -168,7 +168,8 @@ function status(input, options = {}) {
       review_completeness: current.review_completeness, reuse: true,
       repair: current.verdict === 'needs-fix' ? (core.repairAllowed(current.round) ? 'tickets' : 'human') : 'none',
       disagreement_suppressed: current.disagreement_suppressed, partitions_not_reviewed: current.partitions_not_reviewed,
-      artifact_ref: current.artifact_ref, reason: current.verdict === 'pass' ? 'the complete verdict is current'
+      artifact_ref: current.artifact_ref,
+      ...(current.original_reports ? { original_reports: current.original_reports } : {}), reason: current.verdict === 'pass' ? 'the complete verdict is current'
         : `the current verdict is ${current.verdict} with ${current.blocking_count} BLOCKERs` });
     details.set(result, { mode, current, ctx, prior: countable });
     return Object.freeze(result);
@@ -177,7 +178,8 @@ function status(input, options = {}) {
     && !countable.includes(entry)).at(-1);
   Object.assign(result, { state: next.state === 'limit' ? 'limit' : 'owed', round: next.round, scope: next.scope || null,
     retry: !!incomplete, review_completeness: incomplete?.review_completeness || null,
-    partitions_not_reviewed: incomplete?.partitions_not_reviewed ?? 0, reason: next.state === 'limit'
+    partitions_not_reviewed: incomplete?.partitions_not_reviewed ?? 0,
+    ...(current?.original_reports ? { original_reports: current.original_reports } : {}), reason: next.state === 'limit'
       ? refusal('limit', 'three rounds are spent; no further review can launch', mode)
       : `${incomplete ? (incomplete.review_completeness !== 'complete' ? 'the sealed review is incomplete'
         : 'the sealed delta has no complete full-scope lineage') + '; ' : ''}run deliver-dispatch.cjs build code-review first` });

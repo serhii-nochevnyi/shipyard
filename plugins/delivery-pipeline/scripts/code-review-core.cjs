@@ -193,6 +193,21 @@ function normalizeResult(result, { round, scope, priorFindings = [], readSource 
     review_round: round, review_scope: scope, review_completeness: complete ? 'complete' : 'incomplete',
     limitations, unresolved_sources: unresolvedSources, ...stats };
 }
+function projectSemanticResult(result, { packet, identity, readSource } = {}) {
+  if (result?.review_contract !== 'shipyard.semantic-review.v1' || result.role !== 'code-review')
+    fail('INVALID_RESULT', 'code-review projection requires its explicit semantic contract');
+  const context = packet.role_context;
+  const unresolved = [...result.required_context, ...result.unread];
+  const normalized = normalizeResult({ ...result, coverage: [], semantic_coverage: result.coverage,
+    review_completeness: result.completeness === 'complete' ? 'complete' : 'incomplete',
+    unresolved_sources: unresolved }, { round: context.review_round, scope: context.review_scope,
+    priorFindings: context.normalization_inputs.prior_findings, readSource });
+  return { ...normalized, prior_head: context.prior_head, contract_digest: context.contract_digest,
+    dispositions_digest: context.dispositions_digest,
+    reuse_key: reuseKey({ head: identity.head, baseCommit: identity.base, contractDigest: context.contract_digest }),
+    host_context: { planning_reference: context.planning_reference,
+      selected_refs: packet.required_refs.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 })) } };
+}
 function countableVerdicts({ priorVerdicts, head, isAncestor }) {
   const countable = [], heads = new Set();
   const ordered = priorVerdicts.map((verdict, index) => ({ verdict, index })).sort((a, b) =>
@@ -422,7 +437,7 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
     change_metadata: changeMetadata, contract_digest: contractDigest(referenceDigest) };
 }
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
-module.exports = { CONTRACT_ID, ROUND_CAP, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
+module.exports = { CONTRACT_ID, ROUND_CAP, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult, projectSemanticResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
   lineageComplete, coverageComplete, nextRound, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };
