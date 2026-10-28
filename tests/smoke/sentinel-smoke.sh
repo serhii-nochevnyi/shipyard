@@ -17,10 +17,6 @@ SCRIPTS="$ROOT/plugins/delivery-pipeline/scripts"
 W="$(mktemp -d "${TMPDIR:-/tmp}/sentinel-smoke.XXXXXX")"
 trap 'rm -rf "$W"' EXIT
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
-export SHIPYARD_COVERAGE_ROOT="$W/coverage-state"
-mkdir -m 700 "$SHIPYARD_COVERAGE_ROOT"
-node -e 'require("fs").writeFileSync(process.argv[1], require("crypto").randomBytes(32), { mode: 0o600 })' \
-  "$SHIPYARD_COVERAGE_ROOT/coverage.key"
 
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); echo "  ✓ $1"; }

@@ -268,7 +268,7 @@ For a matching declaration within the attempt budget, run the returned
 `entry_index` with `repo-remedy.cjs run <ticket> --repo <owner/repo> --pr <number> --entry <index> --signature-file <current-signature-evidence.json>`.
 The command rechecks both the selected signature and current PR head before dispatch.
 Then use `repo-remedy.cjs attribute <ticket> --repo <owner/repo> --run <id>` on
-the successful run. That commit is a coverage link and still needs architecture review when targeting the integration branch
+the successful run. That commit still needs architecture review when targeting the integration branch
 and CI before merge. If there is no declared match, include the candidate
 workflow name in the escalation reason; no discovered workflow may run.
 Pass the same signature file to `escalation-record.cjs mark` when repository
@@ -554,16 +554,6 @@ The script re-verifies everything against live GitHub and refuses on anything
 unproven; a refusal is data, not an error — read the reason, fix that, come back.
 It squashes into the ticket's base (the phase epic, or its parent's branch),
 leaves the branch for the reaper, and retargets cascade children onto the epic.
-
-The merge guard reads the sealed rollout marker and fetches the PR's current base.
-For a PR opened after the marker, every commit between that base and the live
-head is checked against the sealed conveyor coverage records. An uncovered
-commit, including a hand-resolved base merge, does not refuse: it is journalled as
-`merge_gate_uncovered` with its SHA and the merge proceeds. A missing local
-checkout or unreadable coverage store refuses and names the checkout or
-state root to repair. PRs opened on or before the marker, and PRs in a readable
-store with no marker, keep the prior merge rule; successful legacy merges are
-journalled once per PR as `merge_gate_legacy`.
 
 Two refusals you must NOT retry in a loop, because no amount of work by you will
 clear them: `BLOCKED` (branch protection wants a human review or a check that
