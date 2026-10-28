@@ -7,7 +7,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
 const { createDurableRecorder } = require('./dispatch-boundary.cjs');
-const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, probeReasonToCode } = require('./runtime-context.cjs');
+const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, probeReasonToCode, acquireRuntimeProbe } = require('./runtime-context.cjs');
 
 const SCHEMA = 'shipyard.codex-runtime-host.v1';
 const VERSION = 1;
@@ -168,24 +168,26 @@ function codexHomeOf(env) {
 }
 
 function capabilitiesFrom(options = {}) {
+  const env = { ...process.env, ...options.env };
   if (Object.prototype.hasOwnProperty.call(options, 'capabilities')
       && options.capabilities !== undefined) {
     if (!object(options.capabilities)) fail('RUNTIME_CAPABILITY_MISSING', 'Codex capabilities must be an object');
     return clone(options.capabilities);
   }
-  const explicit = options.capabilitiesFile || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE;
+  const explicit = options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE;
   const installed = resolveHostEnvironment({
-    scriptDir: __dirname, runtime: 'codex', env: process.env,
+    scriptDir: __dirname, runtime: 'codex', env,
     flags: { capabilitiesFile: options.capabilitiesFile },
   });
   if (installed.mode === 'installed') return clone(installed.capabilities);
   const file = explicit
-    || (process.env.CODEX_HOME && path.join(process.env.CODEX_HOME, 'shipyard', 'codex-capabilities.json'));
+    || (env.CODEX_HOME && path.join(env.CODEX_HOME, 'shipyard', 'codex-capabilities.json'));
   if (!file) fail('RUNTIME_CAPABILITY_MISSING', 'explicit Codex capability evidence is required');
   return readCapabilities(file);
 }
 
 function probeCodexRuntime(options = {}) {
+  const env = { ...process.env, ...options.env };
   const executable = typeof options.executable === 'string' && options.executable.trim()
     ? options.executable.trim() : 'codex';
   const runner = options.spawnSync || spawnSync;
@@ -199,7 +201,7 @@ function probeCodexRuntime(options = {}) {
   }
   let version;
   try {
-    version = runner(executable, ['--version'], { encoding: 'utf8', timeout: options.timeoutMs || 10000 });
+    version = runner(executable, ['--version'], { encoding: 'utf8', timeout: options.timeoutMs || 10000, env });
   } catch (error) {
     return unavailableProbe(executable, 'runtime_missing', { detail: bounded(error.message) });
   }
@@ -210,7 +212,7 @@ function probeCodexRuntime(options = {}) {
   }
   let help;
   try {
-    help = runner(executable, ['exec', '--help'], { encoding: 'utf8', timeout: options.timeoutMs || 10000 });
+    help = runner(executable, ['exec', '--help'], { encoding: 'utf8', timeout: options.timeoutMs || 10000, env });
   } catch (error) {
     return unavailableProbe(executable, 'capability_help_unavailable', { detail: bounded(error.message) });
   }
@@ -3341,11 +3343,12 @@ function createCodexRuntimeHost(options = {}) {
   const scope = normalizeScope(options.scope || options.runScope || {});
   const controller = options.controller;
   const runId = options.run_id || options.runId || scope.run_id;
-  const probe = options.probe || probeCodexRuntime({
+  const probe = acquireRuntimeProbe(options, 'codex', () => probeCodexRuntime({
     executable: options.executable,
     capabilities: options.capabilities,
     capabilitiesFile: options.capabilitiesFile,
-  });
+    env: options.env,
+  }));
   if (!object(probe) || !['available', 'unavailable'].includes(probe.status)) {
     fail('INVALID_INPUT', 'runtime probe has an invalid status');
   }

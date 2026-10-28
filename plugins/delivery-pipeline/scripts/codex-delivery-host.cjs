@@ -26,7 +26,7 @@ const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { hintForError, stripControl } = require('./refusal-hints.cjs');
 const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, emitPreflight,
-  roleNeedsRepositoryIdentity, stateRefusalOf } = require('./runtime-context.cjs');
+  roleNeedsRepositoryIdentity, stateRefusalOf, handoffLaunchPreparation } = require('./runtime-context.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
@@ -3268,7 +3268,7 @@ function createCodexDeliveryHost(options = {}) {
   if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
   const storage = storageDirectory(options, scope);
   const stateRoot = hostStateRoot(options, scope);
-  const runtimeHost = options.host || createCodexRuntimeHost({
+  const runtimeHost = options.host || createCodexRuntimeHost(handoffLaunchPreparation(options, {
     scope,
     agentDir: options.agentDir, agentManifest: options.agentManifest,
     controller: options.controller,
@@ -3284,7 +3284,7 @@ function createCodexDeliveryHost(options = {}) {
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
     additionalProtectedPaths: [stateRoot, roleArtifact.archiveAuthorityDirectory(scope.worktree)],
-  });
+  }));
   const writerSession = options.writerSession;
   if (writerSession && (typeof writerSession.lease?.snapshotTree !== 'function'
       || writerSession.snapshot?.schema !== 'shipyard.planning-writer-lease.snapshot.v1'
@@ -3893,18 +3893,20 @@ function parsePreflightArguments(argv) {
 function hostProbe(options) {
   if (!options.probe && options.host) return undefined;
   return () => (typeof options.probe === 'function' ? options.probe() : options.probe || probeCodexRuntime({
-    executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile }));
+    executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile,
+    env: options.env }));
 }
 
 function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
   const result = preflight({ host: 'codex-delivery-host.cjs', runtime: 'codex', scriptDir: __dirname,
-    worktree: scope.worktree, env: options.env || process.env, ...extra });
+    worktree: scope.worktree, env: options.env || process.env, launchOptions: report ? undefined : options, ...extra });
   const stderr = options.preflightStderr || process.stderr;
   if (report) {
     const code = emitPreflight(result, { stdout: options.preflightStdout || process.stdout, stderr });
     return { result, code };
   }
   if (result.ok) {
+    handoffLaunchPreparation(result, options);
     if (result.warnings.length) {
       stderr.write(result.warnings.map((warning) =>
         `preflight: warning[${stripControl(warning.code)}] ${stripControl(warning.detail)}\n`).join(''));
@@ -4003,6 +4005,7 @@ function finishDeliveryRun(controller, runId, failure) {
 
 async function runCli(argv = process.argv.slice(2), stdout = process.stdout, options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
+  options = { ...options };
   if (Array.isArray(argv) && argv[0] === '--resume-finalization') return runResumeCli(argv, stdout, options);
   if (Array.isArray(argv) && argv[0] === '--resume-repair-actions') {
     const parsed = parseRepairActionResumeArguments(argv);
@@ -4056,7 +4059,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   if (checkOnly || gate.code !== 0) return gate.result;
   if (parsed.launch.role === 'arch-review' && !options.archReviewContext && options.dispatchId) {
     const original = archReviewContext.restoreAdmittedArchitecture(options.dispatchId, scope);
-    if (original) options = { ...options, archReviewContext: original };
+    if (original) options = handoffLaunchPreparation(options, { ...options, archReviewContext: original });
   }
   if (options.archReviewContext && (!archReviewContext.isPreparedContext(options.archReviewContext)
       || options.archReviewContext.prepared.ticket !== scope.ticket
@@ -4166,7 +4169,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       if (preparedArchReview) archReviewContext.admitBookkeeping(preparedArchReview);
       if (preparedCodeReview) codeReviewContext.admitBookkeeping(preparedCodeReview);
     }
-    const host = createCodexDeliveryHost({
+    const host = createCodexDeliveryHost(handoffLaunchPreparation(options, {
       scope,
       controller,
       capabilities: options.capabilities,
@@ -4197,7 +4200,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       archReviewContext: preparedArchReview, archReviewSignals, fileInputContext,
       codeReviewContext: preparedCodeReview, codeReviewSignals,
       repairContext: preparedRepair, getPullRequest: options.getPullRequest, execFileSync: options.execFileSync,
-    });
+    }));
     result = await host.run({ ...request, dispatch_id: dispatchId });
     clearInterval(heartbeat);
     if (result.status === 'blocked') {

@@ -3685,7 +3685,7 @@ test('a refused launch keeps stdout free of preflight JSON, throws the first fin
   const out = [];
   const err = [];
   let refusal;
-  await assert.rejects(runCli(['--args-file', requestFor(f)], { write() {} }, {
+  await assert.rejects(require(f.host).runCli(['--args-file', requestFor(f)], { write() {} }, {
     env: f.env, preflightStdout: { write: (text) => out.push(text) }, preflightStderr: { write: (text) => err.push(text) },
   }), (error) => { refusal = error; return error.hintPrinted === true && /^preflight found/.test(error.message); });
   assert.deepEqual(out, []);
