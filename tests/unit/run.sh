@@ -48,6 +48,7 @@ unit_files=()
 unit_partitions=()
 unit_queue_count=0
 unit_progress=0
+if [[ -n "${UNIT_SHARD:-}" ]]; then unit_progress=1; fi
 for unit_task in "${unit_tasks[@]}"; do
   unit_file="${unit_task%%#*}"
   unit_partition=''

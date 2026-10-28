@@ -15,7 +15,7 @@
 # reported", and `state-sync` had to warn on each one that "green" meant
 # "nothing ran". See .planning/backlog/no-ci-in-the-conveyors-own-repo.md.
 
-# @contract: unit runs as 6 shards and the rest as make test-fast-rest; the test-fast job is the one result.
+# @contract: unit runs as one job per matrix shard (the matrix is the only shard count) and the rest as make test-fast-rest; the test-fast job is the one result.
 
 name: test
 
@@ -35,13 +35,13 @@ concurrency:
 
 jobs:
   unit:
-    name: unit (shard ${{ matrix.shard }}/6)
+    name: unit (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,11 +66,11 @@ jobs:
           fi
           bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true
 
-      - name: unit tests, shard ${{ matrix.shard }}/6
+      - name: unit tests, shard ${{ matrix.shard }}/${{ strategy.job-total }}
         if: steps.scope.outputs.product_changes == 'true'
         env:
           SHIPYARD_REQUIRE_OS_SANDBOX: "1"
-          UNIT_SHARD: ${{ matrix.shard }}/6
+          UNIT_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           COMMENT_POLICY_BASE: origin/${{ github.base_ref || 'main' }}
         run: ./tests/unit/run.sh
 
