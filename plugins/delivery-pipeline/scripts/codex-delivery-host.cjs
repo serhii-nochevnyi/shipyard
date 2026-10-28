@@ -901,8 +901,9 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
   }
   const launch = async stage => {
     recheckIntegrationReview(review, partitions);
-    require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
-      ...review.prepared, integrationReview: review, integrationPartitions: partitions });
+    const prelaunch = { ...review.prepared, integrationReview: review, integrationPartitions: partitions };
+    const roleHostModule = require('./claude-role-host.cjs');
+    roleHostModule.assertEvidenceOnlyChanges(options, prelaunch, roleHostModule.graphStateSnapshot(prelaunch));
     const runId = 'integration-' + crypto.randomUUID(), ownerId = 'integration-owner-' + crypto.randomUUID();
     const runScope = createRunScope({ run_id: runId, repository_id: review.prepared.canonical.commonPath,
       phase: scope.phase, ticket: scope.ticket, worktree: scope.worktree, runtime: 'codex', owner_id: ownerId,
@@ -936,18 +937,17 @@ async function runCodexIntegrationPartitions(review, runtimeHost, scope, options
       const fileInput = stage.mode === 'native-observed' && Buffer.byteLength(stage.input) > 1048576
         ? roleArtifact.prepareCodexIntegrationFileInput({ prepared: stage, host: execution.capacityHost,
           scope: native.scope, storageRoot: storage, graphDir: review.prepared.graph.directory }) : null;
-      const graphBaseline = require('./claude-role-host.cjs').graphStateSnapshot(review.prepared);
-      const dispatch = await launchAgent('integrator', { cwd: scope.worktree, flags: new Map(),
+      const roleHost = require('./claude-role-host.cjs');
+      const guarded = { ...review.prepared, integrationReview: review, integrationPartitions: partitions };
+      const dispatch = await roleHost.withStateGuard(options, guarded, () => launchAgent('integrator', { cwd: scope.worktree, flags: new Map(),
         signals: review.prepared.signals, dispatch_id: stage.dispatch_id, scope: native.scope,
         host: native, recorder: native.recorder, controller, capabilities: native.capabilities,
         agentDir: installed.agentDir, agentManifest: installed.agentManifest, env: options.env || process.env,
         context: { ticket: scope.ticket, phase: scope.phase, worktreePath: scope.worktree,
           runtime: 'codex', provider: 'openai', prompt: fileInput ? fileInput.prompt : stage.input.slice(prefix.length),
-          ...(fileInput ? { input_transport: 'host-files', input_prepared: fileInput, input_bundle: fileInput.input_bundle } : {}) } });
+          ...(fileInput ? { input_transport: 'host-files', input_prepared: fileInput, input_bundle: fileInput.input_bundle } : {}) } }));
       if (heartbeatError) throw heartbeatError;
       recheckIntegrationReview(review, partitions);
-      require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
-        ...review.prepared, integrationReview: review, integrationPartitions: partitions }, graphBaseline);
       const result = partitionedCodexResult(dispatch, native.recorder);
       let artifact;
       if (stage.kind === 'unit') artifact = roleArtifact.sealIntegrationUnit({ prepared: stage,

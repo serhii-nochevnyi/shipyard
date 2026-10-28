@@ -120,7 +120,7 @@ test('a tracked state file dirtied by state-sync refuses and is not committed', 
   assert.throws(
     () => pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run }),
     (error) => error.code === 'WORKTREE_DIRTY' && error.message.includes('.planning/graph/delivery-state.json')
-      && error.message.includes("git rm -r --cached -- .planning/graph ':!.planning/graph/tickets.json' ':!.planning/graph/tickets.yaml'"),
+      && error.message.includes("git rm -r --cached -- .planning/graph ':!.planning/graph/tickets.json' ':!.planning/graph/tickets.yaml', then commit the removal"),
   );
   assert.strictEqual(git(f.wt, 'rev-parse', 'HEAD'), before);
 });

@@ -105,7 +105,7 @@ function assertNotDirty(worktree) {
     const graph = dirty.filter((entry) => entry.path.startsWith('.planning/graph/'));
     const state = graph.filter((entry) => !/^\.planning\/graph\/tickets\.(json|yaml)$/.test(entry.path));
     const hint = state.length
-      ? "stop tracking the runtime state, keeping tickets.*: git rm -r --cached -- .planning/graph ':!.planning/graph/tickets.json' ':!.planning/graph/tickets.yaml'"
+      ? "stop tracking the runtime state, keeping tickets.*: git rm -r --cached -- .planning/graph ':!.planning/graph/tickets.json' ':!.planning/graph/tickets.yaml', then commit the removal"
       : graph.length ? 'tickets.json|yaml are your own edits (the sync no longer commits them): commit or discard them' : 'commit, stash or discard them';
     refuse(`tracked files are dirty: ${dirty.map((entry) => entry.path).join(', ')}; `
       + `run: git -C ${worktree} status; ${hint}`, 'WORKTREE_DIRTY');
