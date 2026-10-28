@@ -2094,58 +2094,41 @@ driving PRs hands the user a half-truth.
 ## Rules
 
 - **Ticket PRs land automatically, the phase does not.** epic-stacked with
-  `auto_merge: epic` (default): the sentinel squashes each green ticket PR with resolved feedback
-  into its base (epic/parent branch) through `sentinel.cjs merge` — never by a raw
+  `auto_merge: epic` (default): the sentinel squashes each green ticket PR with
+  resolved feedback into its base through `sentinel.cjs merge` — never a raw
   `gh pr merge`, because the gate lives in the script. The phase reaches the
-  default branch as ONE epic-PR, merged by a human, always. `auto_merge: off` or
+  default branch as ONE epic PR, merged by a human, always. `auto_merge: off` or
   `direct-to-main` → every merge is a human's and you only drive to green.
-- **Native GSD state is a projection, not a second execution loop.** Shipyard
-  owns ticket execution; after planning, delivery, verification, and phase
-  integration the capability runs `gsd-sync.cjs`. Do not invoke
-  `/gsd-execute-phase` for ticket delivery and do not hand-edit generated
-  `STATE.md`, `REQUIREMENTS.md`, `*-SUMMARY.md`, `*-UAT.md`, or
-  `*-VERIFICATION.md` files. Use `--check` to diagnose drift and rerun the
-  write command to repair it.
+- **Native GSD state is a projection, not a second execution loop.** Shipyard owns
+  ticket execution; the capability runs `gsd-sync.cjs` after planning, delivery,
+  verification and phase integration. Do not invoke `/gsd-execute-phase` for
+  ticket delivery, and do not hand-edit generated `STATE.md`, `REQUIREMENTS.md`,
+  `*-SUMMARY.md`, `*-UAT.md` or `*-VERIFICATION.md`; diagnose drift with `--check`
+  and repair by rerunning the write command.
 - A `human_checkpoint: review` ticket may be merged by the guard only after a fresh human approval on the current head, which the guard rechecks live. `merge` and legacy `true` remain human-merged, however green they are.
-- Never force-push. Never commit directly into the default branch/epic (only
-  via a ticket-PR into the base). The epic branch is moved only by ticket-PR merges.
+- Never force-push. Never commit directly into the default branch/epic (only via
+  a ticket PR into the base); the epic moves only by ticket-PR merges.
 - **When the base moves under an OPEN PR, merge it in — never rebase.**
   `git fetch origin && git merge origin/<base>` in the ticket's worktree, resolve,
-  commit, push. Rebasing a branch that already has a PR is a force-push by
-  definition, and this is a cascade: bases move constantly as parents squash into
-  the epic, so that would not be one force-push but one per parent that lands.
-  Each of them dismisses a human approval and re-anchors the reviewer threads the
-  guard just drove to zero — paying, in review work, for a history nobody keeps.
-  Nobody keeps it because ticket PRs land with `--squash`: the epic receives one
-  commit per ticket no matter how the branch got there, so the only thing a rebase
-  buys is a tidier view of commits that are about to be collapsed anyway.
-  The merge is also incremental — resolve a conflict once and the next base move
-  merges on top of that resolution, where a rebase replays the same conflict from
-  scratch every time.
-  Rebase is legitimate in exactly one window: a branch that has never been pushed,
-  before its PR exists. After that, merge.
+  commit, push. A rebase of a pushed branch is a force-push, and in a cascade
+  that would be one per landing parent, each dismissing human approvals and
+  re-anchoring threads — for a history that `--squash` collapses anyway. Rebase is
+  legitimate in exactly one window: a branch never pushed, before its PR exists.
 
   | branch state | action |
   |---|---|
   | not pushed yet | `rebase` — clean history, merge base correct immediately |
   | already pushed | merge the base in — a rebase would be a force-push |
 
-  `base-merge.cjs <T> --worktree <p> --base <ref>` does it and resolves the
-  mechanical half: a conflict in a file the ticket does NOT declare takes the
-  base's edition (the ticket does not own it, so its side is a stale snapshot); a
-  conflict in a file it DOES declare is real work and is left for an agent or a
-  human, with the merge in progress and nothing committed. Keying on
-  `files_modified` rather than on "not my file" is what protects a child that
-  legitimately edits a file its parent also touched — it declared that file, so
-  the conflict lands in the second branch instead of being silently overwritten.
+  `base-merge.cjs <T> --worktree <p> --base <ref>` does the mechanical half: a
+  conflict in a file the ticket does NOT declare takes the base's edition; a
+  conflict in a file it DOES declare (`files_modified`) is real work, left for an
+  agent or a human with the merge in progress and nothing committed.
 - **Never hand execution to GSD's wave parallelism.** No `/gsd-execute-phase`, no
-  `/gsd-autonomous`: this loop fans out its own executors, one per ticket, each in a
-  worktree the main loop created and verifies. GSD's `dispatch.isolation` would have
-  IT create worktrees too (on Codex it runs `git worktree` itself), and two
-  orchestrators isolating the same plans is exactly the collision that loses commits.
-  Read-only GSD review commands stay available in 4b. GSD's fixer is never run
-  anywhere in the conveyor; repair work follows scoped tickets through this
-  delivery loop. Worktree ownership stays with the coordinator.
-- Every state change — via state-sync, not by hand-editing state files.
+  `/gsd-autonomous`: this loop fans out its own executors, one per ticket, each in
+  a worktree the main loop created (two orchestrators isolating the same plans
+  loses commits). Read-only GSD review commands stay available in 4b; GSD's fixer
+  never runs in the conveyor.
+- Every state change goes through state-sync, never hand-edited state files.
 - Bot reviewers can be wrong: disagreement with justification is a legal
   review-fix result, blind execution is not.
