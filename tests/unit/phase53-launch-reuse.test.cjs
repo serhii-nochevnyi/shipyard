@@ -259,6 +259,16 @@ for (const [runtime, entry] of [['codex', 'delivery'], ['claude', 'delivery'], [
     assert.equal(f.count(), 0);
     assert.equal(f.launches.length, 0);
   });
+  test(`${label}: explicit trusted probe retains the original constructor contract`, async t => {
+    const f = fixture(t, runtime, entry);
+    const probe = { status: 'available', executable: f.executable, runtime_version: 'trusted-fixture-version',
+      capabilities: { supportedModels: Object.values(runtime === 'codex' ? adapters.CODEX_MODEL_IDS : adapters.CLAUDE_MODEL_ALIASES),
+        supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], observedModel: true, observedEffort: true } };
+    assert.equal(await f.run({ probe }), constructed);
+    assert.deepEqual(f.versions, ['trusted-fixture-version']);
+    assert.equal(f.count(), 0);
+    assert.equal(f.launches.length, 1);
+  });
   test(`${label}: missing private observation reacquires through the native constructor`, async t => {
     const f = fixture(t, runtime, entry);
     assert.equal(await f.run({ probe: () => ({ status: 'available' }) }), constructed);

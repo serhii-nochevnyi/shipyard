@@ -823,7 +823,8 @@ function preflight(options = {}) {
   }
   for (const finding of findings) finding.vars = withBundle(finding.vars);
   const result = { schema: 'shipyard.host-preflight.v1', ok: findings.length === 0, scope, findings, warnings, notes };
-  if (result.ok && scope === 'launch' && opts.launchOptions) {
+  if (result.ok && scope === 'launch' && opts.launchOptions
+      && (!opts.launchOptions.probe || typeof opts.launchOptions.probe === 'function')) {
     const identity = preparationIdentity && launchPreparationIdentity(opts.runtime, opts.worktree, opts.scriptDir, opts.launchOptions);
     let probe = null;
     try {
