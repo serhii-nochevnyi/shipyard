@@ -286,6 +286,11 @@ immediately preceding `previous_dispatch_id` and its boundary-verified
 outcomes, not promotions. Keep the boundary's `route`, `signals_fired`, reasons,
 `rung`, model, effort and receipt verbatim.
 
+When projects share an account, set `SHIPYARD_CAPACITY_STORE`,
+`SHIPYARD_CAPACITY_PROVIDER` and `SHIPYARD_CAPACITY_ACCOUNT_SCOPE` so every adapter
+uses one capacity coordinator; a missing scope or a store failure is reported as
+degraded with a bounded local fallback, never as unlimited.
+
 Refuse before launch when the runtime is missing or ambiguous, a model or effort
 is literal/omitted/conflicting, the selected Codex file is missing or stale, a
 native pair is unsupported, a guard or session is inherited, the launch is inline,
@@ -598,12 +603,11 @@ ${CLAUDE_PLUGIN_ROOT}/workflows/fix-round.mjs    # Step 4 — one parallel fix p
 ```
 
 Claude: call `claude-delivery-host.cjs` with the fixed workflow name and a bounded
-request file; the host owns capabilities, recorder, application evidence,
-reference loading and result sealing, and request files carry serializable task
-data only (never callbacks, host modules or plugin-root paths). Codex: call
-`codex-delivery-host.cjs` once per typed role request. The fix-round adapter
-receives one already-validated boundary selection per PR; its argument shape
-stays explicit so the base-merge and evidence contract cannot disappear:
+request file of serializable task data only (never callbacks, host modules or
+plugin-root paths); Codex: call `codex-delivery-host.cjs` once per typed role
+request. The fix-round adapter receives one already-validated boundary selection
+per PR; its argument shape stays explicit so the base-merge and evidence contract
+cannot disappear:
 
 ```text
    args: {prs: [{id, pr, branch, worktreePath, planPath, needsCiFix,
@@ -620,21 +624,18 @@ Rules:
   A nonzero exit, missing host, or invalid receipt is a refusal; do not switch
   providers or use a session, inline, or generic-Agent fallback. A failed
   `ci-fix` or `review-fix` returns `repair blocked`.
-- **Create worktrees serially** with `ticket-worktree.sh create` before dispatch;
-  each Claude host call is scoped to one ticket or PR, Codex gets one typed role
-  request per call. Worktrees are durable and base-specific, never a native
-  isolation worktree.
+- **Create worktrees serially** with `ticket-worktree.sh create` before dispatch
+  (durable, base-specific; never a native isolation worktree); each Claude host
+  call is scoped to one ticket or PR, Codex gets one typed role request per call.
 - **Publishing stays with the main loop.** Workers edit and verify, they do not
   commit or push; the host validates scope and finalizes the signed commit. The
-  main loop gates the result (`git log <base>..HEAD`), pushes and opens the PR
-  through the trusted `role-artifact.cjs validate` → `read` procedure (Step 3) —
-  `prBodyPath`/`evidencePath` are diagnostic references only: never `cat` them or
-  pass an unvalidated body to `gh pr create`; use the validated `--pr-body-out` file.
-- Gates stay with the main loop: attempts, waiting for CI, arch-review, the
-  conform gate, human checkpoints, escalations. The host performs only the
-  dispatched role.
-- Submit each role's scope, complete signals and task context to the host; it
-  resolves and validates the selection and injects model, effort and receipt. The
+  main loop gates, pushes and opens the PR through the trusted
+  `role-artifact.cjs validate` → `read` procedure (Step 3): `prBodyPath` and
+  `evidencePath` are diagnostic references only — never `cat` them or pass an
+  unvalidated body to `gh pr create`.
+- Gates stay with the main loop (attempts, waiting for CI, arch-review, the
+  conform gate, human checkpoints, escalations); the host performs only the role.
+- Submit each role's scope, complete signals and task context to the host; the
   command must not resolve a model, call `boundary.dispatch` or pass
   caller-selected model/effort fields.
 
@@ -652,11 +653,11 @@ and route every model-bearing role through its shipped host:
 | Architecture review and integration | `claude-role-host.cjs --args-file <json>` | `codex-delivery-host.cjs --args-file <json>` with the typed role |
 | PR sentinel | `deliver-dispatch.cjs launch --runtime claude --ticket <T> --role pr-sentinel` (internally `claude-role-host.cjs`, one authenticated round) | `deliver-dispatch.cjs launch --runtime codex --ticket <T> --role pr-sentinel` (internally `codex-delivery-host.cjs`, once per ticket) |
 
-Requests carry only bounded scope, role signals and task context; callers add no
-selector output or credentials. Never retry a refused request through the other
-runtime. Require the host's verified application receipt before accepting
-output: an unavailable host is `unavailable`, a mismatch or invalid receipt is
-`refused`, and neither permits a launch through the other provider.
+Requests carry only bounded scope, role signals and task context. Never retry a
+refused request through the other runtime. Require the host's verified application
+receipt before accepting output: an unavailable host is `unavailable`, a mismatch
+or invalid receipt is `refused`, and neither permits a launch through the other
+provider.
 The `pipeline.use_workflow` setting cannot select an unbound native Workflow or an
 untyped Agent fallback; the obsolete instruction to use the native Agent fallback
 is retired and this setting never authorizes a native Agent fallback. Mechanical
@@ -856,14 +857,12 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-needed.cjs <T> --json   # → {needed, 
 ```
 
 Run it for every ticket in scope and dispatch a drift-check judge only for
-`needed: true`. It exits 0 with a verdict (the payload is the answer) and says
-`needed` for anything it cannot measure (no base, missing plan, cross-repo ticket
-with no checkout), so an unknown is never mistaken for clean. Non-zero (1 unknown
-ticket or bad usage, 2 no ticket graph) is a failure to ANSWER. Carry its `reason`
-into your progress note for the tickets it skips: a scan not run must be a stated
-verdict. It measures the ticket's OWN base from `state-sync.cjs` (the epic for a
-root, the primary parent's branch for a cascade child) after fetching — never
-`main` by name, which in a long-lived-branch project never moves.
+`needed: true`. Exit 0 carries a verdict (it says `needed` for anything it cannot
+measure, so an unknown is never mistaken for clean); non-zero (1 unknown ticket or
+bad usage, 2 no ticket graph) is a failure to ANSWER. Carry its `reason` into your
+progress note for the tickets it skips. It measures the ticket's OWN base from
+`state-sync.cjs` (the epic for a root, the primary parent's branch for a cascade
+child), never `main` by name.
 
 Claude invokes the drift workflow through the production host, which creates its
 typed binding and crosses the one dispatch boundary:
@@ -873,23 +872,19 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-delivery-host.cjs \
   --workflow drift-gate --request-file /absolute/path/drift-request.json
 ```
 
-The request holds the scoped ticket, worktree, plan, base and drift reference;
-capabilities, recorder, application evidence and callbacks stay host-owned. Codex
-uses `codex-delivery-host.cjs --args-file` with role `drift-check` (generated
-`shipyard-drift-check.toml`, validated by the same boundary via `launchStatic`).
-`drift-check` is fixed at Codex Sol/low and Claude Sonnet/medium; risk,
-checkpoint and window size cannot promote it. The receipt must be `verified`
-before the result is accepted; if the host cannot apply the selection or return
-the receipt, refuse the judge and treat the ticket as needing drift handling — no
-generic or inherited Agent. A crashed judge is a failed dispatch to retry, never
-an unsealed `drifted` verdict.
+The request holds the scoped ticket, worktree, plan, base and drift reference.
+Codex uses `codex-delivery-host.cjs --args-file` with role `drift-check` (generated
+`shipyard-drift-check.toml`). `drift-check` is fixed (Codex Sol/low, Claude
+Sonnet/medium): risk, checkpoint and window size cannot promote it. The receipt
+must be `verified` before the result is accepted; if the host cannot apply the
+selection or return it, refuse the judge and treat the ticket as needing drift
+handling — no generic or inherited Agent. A crashed judge is a failed dispatch to
+retry, never an unsealed `drifted` verdict.
 
 **Always pass the base ref, and PER TICKET:** `tickets[].baseRef` =
-`origin/<state[T].base>` from `delivery-state.json`, read exactly as
-`worktreePath`/`prBase` are for executors. Without it the judge reads the working
-tree (whatever branch the session is on); one round-wide value misjudges a
-mixed-base round, because each judge would read a diff dominated by the work its
-own ticket is stacked on. The round-level `baseRef` is only the fallback. The
+`origin/<state[T].base>` from `delivery-state.json`, as for executors' `prBase`;
+without it the judge reads the working tree, and one round-wide value misjudges a
+mixed-base round. The round-level `baseRef` is only the fallback. The
 common resolver contract is `tickets: [{ id, planPath, baseRef, model, effort, signals }]`;
 artifact-bound drift execution additionally requires the per-ticket `worktreePath`.
 
@@ -901,12 +896,11 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs mark <T> <plan-path> "<what 
 ```
 
 The judge never persists a verdict from its own reply: first seal and read the
-receipt-bound `shipyard.drift-result.v1` artifact, verify its integration-base
-identity, then run `drift-record.cjs mark`, and **verify that it landed**
-(`drift-record.cjs list` must name every ticket you judged `drifted`; mark any it
-does not before the run ends). A missing, stale, duplicate, escaped or malformed
-artifact is a failed gate, not a `fresh` verdict or a blind retry. The record
-binds to the plan's content hash, parks the ticket on every later run and lifts
+receipt-bound `shipyard.drift-result.v1` artifact and verify its integration-base
+identity, then run `drift-record.cjs mark` and **verify that it landed**
+(`drift-record.cjs list` must name every ticket you judged `drifted`). A missing,
+stale, duplicate, escaped or malformed artifact is a failed gate, not a `fresh`
+verdict or a blind retry. The record binds to the plan's content hash and lifts
 itself when the plan is re-planned. Do NOT execute a drifted ticket.
 
 Log one `reuse_scan` event per drift-checked ticket, including `hits=0`:
@@ -1315,9 +1309,9 @@ loop:
          request only when the selected host authenticates that evidence at launch.
          Exit 2 prints a named host-contract refusal and no request: preserve it,
          never hand-build a boundary input.
-         `failure-signature.cjs verdict` supplies only verdict/history facts. Derive the caller-owned fixer strategy as `first`
-         → `fix`, `progress` → `continue`, and
-         `repeat`/`repeat_exhausted` → `rethink`; strategy and receipt-chain facts
+         `failure-signature.cjs verdict` supplies only verdict/history facts.
+         Derive the caller-owned fixer strategy as `first` → `fix`, `progress` →
+         `continue`, and `repeat`/`repeat_exhausted` → `rethink`; strategy and receipt-chain facts
          remain host inputs, never boundary results. The boundary validates the
          ordered receipt chain (Codex `shipyard-ci-fix.toml` →
          `shipyard-ci-fix-repeat.toml` → `shipyard-ci-fix-deep.toml`; Claude
@@ -1368,14 +1362,14 @@ loop:
        explicitly applies the resolved model and effort and returns a concrete
        application receipt. Otherwise hard-refuse
        before constructing a prompt, spawning, or recording. The released Claude
-       fix-round retains its named host-contract refusal. The Codex review-fix host authenticates the review
-       evidence file by path and SHA-256 before static launch and leaves source
-       uncommitted (pushed=false); source changes get host verification and a
-       signed fixer commit through the resumable finalizer before host
-       publication, feedback-only results need no commit (the host replies/resolves
-       and confirms the actual IDs), and escalated findings stay unresolved.
-       Continue at step d after confirmed source publication, or b after
-       confirmed feedback-only actions.
+       fix-round retains its named host-contract refusal. The Codex review-fix host
+       authenticates the review evidence file by path and SHA-256 before static
+       launch and leaves source uncommitted (pushed=false); source changes get host
+       verification and a signed fixer commit through the resumable finalizer before
+       host publication, feedback-only results need no commit (the host
+       replies/resolves and confirms the actual IDs), and escalated findings stay
+       unresolved. Continue at step d after confirmed source publication, or b
+       after confirmed feedback-only actions.
 
   c. arch-review agent — host-bound judgment, required only for a live integration-branch target. Skip this step for epic/stacked targets. Read the canonical
      `references/pr-sentinel.md` procedure: MEASURE the complete judged input
