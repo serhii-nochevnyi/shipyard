@@ -9,7 +9,6 @@ const { computeSignature } = require('./failure-signature.cjs');
 const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 const { runBounded, diagnostic } = require('./command-runner.cjs');
 const { withLock, lockDirFor } = require('./lock.cjs');
-const coverage = require('./conveyor-coverage.cjs');
 const { normalizeOrigin } = require('./repo-resolve.cjs');
 
 const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -199,10 +198,8 @@ function attribute({ ticket, repo, runId, graph = graphDir(), worktree = process
         || commit.parents[0].sha !== dispatch.head) return unattributed('commit parent or bot mismatch');
     const meta = command('git', ['-C', worktree, 'show', '-s', '--format=%P%n%T', view.headRefOid]).split('\n');
     if (meta[0] !== dispatch.head || !OID.test(meta[1] || '')) return unattributed('local commit metadata mismatch');
-    const record = coverage.createCoverageWriter().record({ kind: 'remedy', ticket, repo,
-      commit: view.headRefOid, parents: [dispatch.head], tree: meta[1], worktree,
-      remedy: { workflow: entry.workflow, run_id: String(runId), dispatch_head: dispatch.head } });
-    return { result: 'attributed', record };
+    return { result: 'attributed', commit: view.headRefOid,
+      remedy: { workflow: entry.workflow, run_id: String(runId), dispatch_head: dispatch.head } };
   } catch (error) { return unattributed(error.message); }
 }
 function parse(args) {
