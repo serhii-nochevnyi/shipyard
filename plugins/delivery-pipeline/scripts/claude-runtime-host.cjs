@@ -552,8 +552,9 @@ async function readSessionEvidence(startEvidence, sessionId, expectedModel, expe
       priorStamp = stamp;
       if (!stamp) stableSince = undefined;
     }
-    if (now() >= deadline) break;
-    await sleep(Math.min(poll, Math.max(1, deadline - now())));
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(poll, remaining));
   }
   fail('RUNTIME_EVIDENCE_MISSING', 'Claude assistant transcript was not flushed for the launched session');
 }

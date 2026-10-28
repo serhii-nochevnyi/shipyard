@@ -210,6 +210,36 @@ for (const mode of ['launch', 'saved launch']) {
     } finally { f.close(); }
   });
 
+  cases.set(`${mode} uses one remaining budget when the clock reaches the deadline`, async () => {
+    const { f, file, run } = prepare();
+    const originalRead = fs.readFileSync;
+    let observed = false, time = 0;
+    const sleeps = [];
+    const timer = {
+      now() {
+        if (observed) time = time < deadline - 1 ? deadline - 1 : deadline;
+        return time;
+      },
+      sleep(ms) {
+        assert.ok(time < deadline, 'no sleep starts at or beyond the original deadline');
+        assert.equal(ms, deadline - time, 'the remaining millisecond is the entire wait budget');
+        sleeps.push(ms);
+        time = deadline;
+        return Promise.resolve();
+      },
+    };
+    try {
+      fs.readFileSync = function(target, ...args) {
+        const bytes = originalRead.call(fs, target, ...args);
+        if (target === file) observed = true;
+        return bytes;
+      };
+      assertCompleted(f, await run(timer), file);
+      assert.deepEqual(sleeps, [1]);
+      assert.equal(time, deadline);
+    } finally { fs.readFileSync = originalRead; f.close(); }
+  });
+
   for (const terminal of [deadline, delayed]) {
     for (const initial of ['complete', 'absent', 'partial'])
       cases.set(`${mode} refuses ${initial} evidence changed at ${terminal} ms`, async () => {
