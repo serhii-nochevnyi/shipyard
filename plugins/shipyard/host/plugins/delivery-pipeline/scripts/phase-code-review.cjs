@@ -168,7 +168,8 @@ function status(input, options = {}) {
       review_completeness: current.review_completeness, reuse: true,
       repair: current.verdict === 'needs-fix' ? (core.repairAllowed(current.round) ? 'tickets' : 'human') : 'none',
       disagreement_suppressed: current.disagreement_suppressed, partitions_not_reviewed: current.partitions_not_reviewed,
-      artifact_ref: current.artifact_ref, reason: current.verdict === 'pass' ? 'the complete verdict is current'
+      artifact_ref: current.artifact_ref,
+      ...(current.original_reports ? { original_reports: current.original_reports } : {}), reason: current.verdict === 'pass' ? 'the complete verdict is current'
         : `the current verdict is ${current.verdict} with ${current.blocking_count} BLOCKERs` });
     details.set(result, { mode, current, ctx, prior: countable });
     return Object.freeze(result);
@@ -177,7 +178,8 @@ function status(input, options = {}) {
     && !countable.includes(entry)).at(-1);
   Object.assign(result, { state: next.state === 'limit' ? 'limit' : 'owed', round: next.round, scope: next.scope || null,
     retry: !!incomplete, review_completeness: incomplete?.review_completeness || null,
-    partitions_not_reviewed: incomplete?.partitions_not_reviewed ?? 0, reason: next.state === 'limit'
+    partitions_not_reviewed: incomplete?.partitions_not_reviewed ?? 0,
+    ...(current?.original_reports ? { original_reports: current.original_reports } : {}), reason: next.state === 'limit'
       ? refusal('limit', 'three rounds are spent; no further review can launch', mode)
       : `${incomplete ? (incomplete.review_completeness !== 'complete' ? 'the sealed review is incomplete'
         : 'the sealed delta has no complete full-scope lineage') + '; ' : ''}run deliver-dispatch.cjs build code-review first` });
@@ -335,7 +337,7 @@ function publicationNamespace(ctx) {
   return { directory, file: path.join(directory, `${ctx.pr}.json`), identity, validate };
 }
 
-function readPublication(state) {
+function readPublicationJson(state) {
   let stat;
   try { stat = fs.lstatSync(state.file); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -359,6 +361,12 @@ function readPublication(state) {
         || !same(fs.lstatSync(state.file))) throw new Error('publication record changed');
     record = JSON.parse(bytes.toString('utf8'));
   } finally { fs.closeSync(fd); }
+  return record;
+}
+
+function readPublication(state) {
+  const record = readPublicationJson(state);
+  if (record === null) return null;
   if (!object(record) || Object.keys(record).sort().join(',') !== 'body_hash,comment_id,pr,repository,schema,selector'
       || Object.entries(state.identity).some(([key, value]) => record[key] !== value)
       || !positiveId(record.comment_id) || typeof record.body_hash !== 'string'
@@ -367,10 +375,10 @@ function readPublication(state) {
   return record;
 }
 
-function persistPublication(ctx, state, record) {
+function persistPublication(ctx, state, record, read = readPublication) {
   assertPublicationConfig(ctx.mode);
   state.validate();
-  readPublication(state);
+  read(state);
   const temporary = path.join(state.directory, `.${path.basename(state.file)}.tmp-${process.pid}`);
   assertPublicationConfig(ctx.mode);
   const fd = fs.openSync(temporary, 'wx', 0o600);
@@ -385,9 +393,51 @@ function persistPublication(ctx, state, record) {
     const directory = fs.openSync(state.directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
     state.validate();
-    if (JSON.stringify(readPublication(state)) !== JSON.stringify(record))
+    if (JSON.stringify(read(state)) !== JSON.stringify(record))
       throw new Error('publication record persistence failed');
   } finally { try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+}
+
+function publicationOperation(state, kind) {
+  return { ...state, file: path.join(state.directory, `.${state.identity.pr}.${kind}.json`) };
+}
+
+function readPublicationOperation(state) {
+  const record = readPublicationJson(state);
+  if (record === null) return null;
+  if (!object(record) || record.schema !== 'shipyard.code-review-publication-operation.v1'
+      || !['pending', 'published'].includes(record.stage)
+      || !/^[a-f0-9]{64}$/.test(record.identity || '') || !/^[a-f0-9]{64}$/.test(record.body_hash || '')
+      || !/^[a-f0-9]{64}$/.test(record.nonce || '') || !positiveId(record.actor)
+      || !positiveId(record.repository_id)
+      || typeof record.repository !== 'string' || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(record.repository)
+      || typeof record.target_url !== 'string') throw new Error('publication operation identity or schema mismatch');
+  return record;
+}
+
+function remotePages(request, endpoint, label) {
+  const pages = request(['api', endpoint, '--paginate', '--slurp']);
+  if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page)))
+    throw new Error(label + ' lookup is unavailable');
+  const rows = pages.flat();
+  if (rows.some(row => !object(row) || !positiveId(row.id)) || new Set(rows.map(row => row.id)).size !== rows.length)
+    throw new Error(label + ' lookup contains invalid or duplicate identities');
+  return rows;
+}
+
+function newPublicationOperation(request, api, identity, body_hash, ctx) {
+  const repository = request(['api', api]), actor = request(['api', 'user']);
+  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repository?.full_name || '') || !positiveId(repository?.id) || !positiveId(actor?.id)
+      || ctx.repo && repository.full_name.toLowerCase() !== ctx.repo.toLowerCase())
+    throw new Error('actual publication repository or actor is unavailable');
+  const nonce = crypto.randomBytes(32).toString('hex');
+  return { schema: 'shipyard.code-review-publication-operation.v1', stage: 'pending', identity, body_hash,
+    nonce, actor: actor.id, repository: repository.full_name, repository_id: repository.id,
+    target_url: `https://github.com/${repository.full_name}/pull/${ctx.pr}#code-review-${nonce}` };
+}
+
+function unknownPublication(error, reason = 'PUBLICATION_OUTCOME_UNKNOWN') {
+  return { ok: false, action: 'unknown', stage: 'unknown', reason_code: reason, reason: error.message };
 }
 
 function publish(input, options = {}) {
@@ -431,14 +481,67 @@ function publish(input, options = {}) {
   const api = ctx.repo ? `repos/${ctx.repo}` : 'repos/{owner}/{repo}';
   const result = { schema: 'shipyard.phase-code-review-publish.v1',
     status: { ok: false, action: 'failed', head: current.head, ...summary }, comment: { ok: false }, rules: [] };
-  assertPublicationConfig(ctx.mode);
+  const configIdentity = () => {
+    try { return publicationHash(fs.readFileSync(ctx.mode.config_path)); }
+    catch (error) { if (error.code === 'ENOENT') return 'absent'; throw error; }
+  };
+  const config = configIdentity();
+  const finalIdentity = { dispatch_id: sealed?.dispatch_id || null, artifact_digest: sealed?.artifact_digest || null };
+  const identity = content => publicationHash(JSON.stringify({ repository: ctx.repository, selector: ctx.repo,
+    pr: ctx.pr, head: current.head, base: ctx.live.baseRefOid, branch: ctx.live.baseRefName,
+    final: finalIdentity, config, content }));
+  const assertLive = () => {
+    const latest = readPR(ctx.pr);
+    assertPublicationConfig(ctx.mode);
+    if (configIdentity() !== config) throw new Error('publication configuration changed');
+    if (['number', 'state', 'headRefName', 'headRefOid', 'baseRefName', 'baseRefOid']
+      .some(key => latest[key] !== ctx.live[key]) || git(ctx.worktree, ['rev-parse', 'HEAD']) !== current.head)
+      throw new Error('live phase PR identity changed before publication');
+  };
+  const assertRemoteOwner = operation => {
+    const repository = request(['api', api]), actor = request(['api', 'user']);
+    if (repository?.full_name !== operation.repository || repository?.id !== operation.repository_id || actor?.id !== operation.actor)
+      throw new Error('original remote publication owner or repository is unknown');
+  };
+  let state;
   try {
-    request(['api', `${api}/statuses/${current.head}`, '-f', `state=${summary.state}`,
-      '-f', 'context=code-review', '-f', `description=${summary.description}`]);
-    result.status.ok = true; result.status.action = 'posted';
+    state = publicationNamespace(ctx);
+    assertPublicationConfig(ctx.mode);
+    const statusState = publicationOperation(state, 'status');
+    withLock(state.directory, `status-pr-${ctx.pr}`, () => {
+      const expected = identity(summary), contentHash = publicationHash(JSON.stringify(summary));
+      let operation = readPublicationOperation(statusState);
+      if (operation && operation.identity !== expected && operation.stage === 'pending')
+        throw new Error('another original status publication has an unknown outcome');
+      if (operation?.identity === expected) {
+        if (operation.body_hash !== contentHash) throw new Error('original status publication content differs');
+        assertRemoteOwner(operation);
+        const statuses = remotePages(request, `${api}/commits/${current.head}/statuses`, 'status');
+        const matches = statuses.filter(row => row.context === 'code-review' && row.state === summary.state
+          && row.description === summary.description && row.target_url === operation.target_url
+          && row.creator?.id === operation.actor);
+        if (matches.length !== 1) throw new Error('original remote status completion is unknown');
+        assertLive();
+        persistPublication(ctx, statusState, { ...operation, stage: 'published' }, readPublicationOperation);
+        Object.assign(result.status, { ok: true, action: 'reconciled', stage: 'published', reason_code: 'ORIGINAL_STATUS_RECONCILED' });
+        return;
+      }
+      operation = newPublicationOperation(request, api, expected, contentHash, ctx);
+      assertLive();
+      persistPublication(ctx, statusState, operation, readPublicationOperation);
+      assertLive();
+      const posted = request(['api', `${api}/statuses/${current.head}`, '-f', `state=${summary.state}`,
+        '-f', 'context=code-review', '-f', `description=${summary.description}`, '-f', `target_url=${operation.target_url}`]);
+      if (!object(posted) || !positiveId(posted.id) || posted.context !== 'code-review'
+          || posted.state !== summary.state || posted.description !== summary.description
+          || posted.target_url !== operation.target_url || posted.creator?.id !== operation.actor)
+        throw new Error('status publication response is invalid');
+      persistPublication(ctx, statusState, { ...operation, stage: 'published' }, readPublicationOperation);
+      Object.assign(result.status, { ok: true, action: 'posted', stage: 'published' });
+    }, { label: 'code review status publication', waitMs: 10000 });
   } catch (error) {
     if (error.code === 'CONFIG_INVALID') throw error;
-    result.status.reason = error.message;
+    Object.assign(result.status, unknownPublication(error));
   }
   if (current.state === 'limit') {
     result.comment = { ok: true, action: 'skipped', reason: 'limit publishes status only' };
@@ -450,39 +553,62 @@ function publish(input, options = {}) {
     const violations = hygiene.applies({ root: ctx.worktree }) ? hygiene.internalLeakViolations('comment', body) : [];
     result.rules = [...new Set(violations.map(violation => violation.rule))];
     if (result.rules.length) {
-      result.comment = { ok: false, action: 'refused', reason: 'PR hygiene refused comment' };
+      result.comment = { ok: false, action: 'refused', stage: 'refused', reason_code: 'PUBLICATION_HYGIENE_REFUSED', reason: 'PR hygiene refused comment' };
       return result;
     }
-    const state = publicationNamespace(ctx);
+    const publicationBody = operation => {
+      const exact = body + `\n<!-- code-review-publication:${operation.nonce} -->`;
+      if (hygiene.applies({ root: ctx.worktree }) && hygiene.internalLeakViolations('comment', exact).length)
+        throw new Error('PR hygiene refused complete publication body');
+      return exact;
+    };
+    state ||= publicationNamespace(ctx);
     assertPublicationConfig(ctx.mode);
     withLock(state.directory, `pr-${ctx.pr}`, () => {
       state.validate();
-      const binding = readPublication(state);
-      const pages = request(['api', `${api}/issues/${ctx.pr}/comments`, '--paginate', '--slurp']);
-      if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page)
-          || page.some(comment => !object(comment) || !positiveId(comment.id) || typeof comment.body !== 'string')))
-        throw new Error('comment lookup is unavailable');
-      const comments = pages.flat();
-      if (new Set(comments.map(comment => comment.id)).size !== comments.length)
-        throw new Error('comment lookup contains duplicate identities');
+      const binding = readPublication(state), commentState = publicationOperation(state, 'comment');
+      let operation = readPublicationOperation(commentState);
+      const comments = remotePages(request, `${api}/issues/${ctx.pr}/comments`, 'comment');
+      if (comments.some(comment => typeof comment.body !== 'string')) throw new Error('comment lookup is unavailable');
+      const expected = identity(body), contentHash = publicationHash(body);
+      if (operation && operation.stage === 'pending' && operation.identity !== expected)
+        throw new Error('another original comment publication has an unknown outcome');
+      if (operation?.identity === expected) {
+        if (operation.body_hash !== contentHash) throw new Error('original comment publication content differs');
+        assertRemoteOwner(operation);
+        const exact = publicationBody(operation);
+        const matches = comments.filter(comment => comment.body === exact && comment.user?.id === operation.actor);
+        if (matches.length > 1) throw new Error('original remote comment completion is ambiguous');
+        if (matches.length === 1) {
+          if (operation.stage === 'published' && (!binding || binding.comment_id !== matches[0].id
+              || binding.body_hash !== publicationHash(exact))) throw new Error('original comment binding differs');
+          assertLive();
+          persistPublication(ctx, state, { ...state.identity, comment_id: matches[0].id, body_hash: publicationHash(exact) });
+          persistPublication(ctx, commentState, { ...operation, stage: 'published' }, readPublicationOperation);
+          result.comment = { ok: true, action: 'reconciled', stage: 'published', reason_code: 'ORIGINAL_COMMENT_RECONCILED', id: matches[0].id };
+          return;
+        }
+        if (operation.stage === 'pending') throw new Error('original remote comment completion is unknown');
+      }
       const candidate = binding && comments.find(comment => comment.id === binding.comment_id);
       const existing = candidate && publicationHash(candidate.body) === binding.body_hash ? candidate : null;
-      const latest = readPR(ctx.pr);
-      if (['number', 'state', 'headRefName', 'headRefOid', 'baseRefName', 'baseRefOid']
-        .some(key => latest[key] !== ctx.live[key]) || git(ctx.worktree, ['rev-parse', 'HEAD']) !== current.head)
-        throw new Error('live phase PR identity changed before comment publication');
+      operation = newPublicationOperation(request, api, expected, contentHash, ctx);
+      const exact = publicationBody(operation);
+      assertLive();
+      persistPublication(ctx, commentState, operation, readPublicationOperation);
       state.validate();
-      assertPublicationConfig(ctx.mode);
+      assertLive();
       const posted = request(['api', existing ? `${api}/issues/comments/${existing.id}` : `${api}/issues/${ctx.pr}/comments`,
-        '--method', existing ? 'PATCH' : 'POST', '-f', `body=${body}`]);
-      if (!object(posted) || !positiveId(posted.id) || posted.body !== body
+        '--method', existing ? 'PATCH' : 'POST', '-f', `body=${exact}`]);
+      if (!object(posted) || !positiveId(posted.id) || posted.body !== exact || posted.user?.id !== operation.actor
           || (existing && posted.id !== existing.id)) throw new Error('comment publication response is invalid');
-      persistPublication(ctx, state, { ...state.identity, comment_id: posted.id, body_hash: publicationHash(body) });
-      result.comment = { ok: true, action: existing ? 'edited' : 'created', id: posted.id };
+      persistPublication(ctx, state, { ...state.identity, comment_id: posted.id, body_hash: publicationHash(exact) });
+      persistPublication(ctx, commentState, { ...operation, stage: 'published' }, readPublicationOperation);
+      result.comment = { ok: true, action: existing ? 'edited' : 'created', stage: 'published', id: posted.id };
     }, { label: 'code review publication', waitMs: 10000 });
   } catch (error) {
     if (error.code === 'CONFIG_INVALID') throw error;
-    result.comment = { ok: false, action: 'failed', reason: error.message };
+    result.comment = unknownPublication(error);
   }
   return result;
 }

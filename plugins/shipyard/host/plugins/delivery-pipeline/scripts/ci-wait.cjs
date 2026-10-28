@@ -81,6 +81,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
 let activeSharedLockDeadline = Number.POSITIVE_INFINITY;
@@ -101,7 +102,7 @@ lockModule.withLock = (dir, name, fn, options = {}) => {
 // reimplemented: two stores that expire against the same subject must not come to
 // disagree about what "the PR moved" means.
 const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
-const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, CHECK_FIELDS, compatibleCiObservation } = require(path.join(__dirname, 'check-state.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const waitEvents = require(path.join(__dirname, 'wait-events.cjs'));
 const runWaker = require(path.join(__dirname, 'run-waker.cjs'));
@@ -425,6 +426,10 @@ function checksOf({ pr, repo }) {
   // list, and it was the only one of three that called ACTION_REQUIRED failing —
   // three copies, three answers. The SHAPE stays {total, pending, failing}: it is
   // what `--json` reports and what the settle test below reads. Keep the raw
+  return checksResult(rows);
+}
+
+function checksResult(rows) {
   const c = classify(rows);
   return { total: c.total, pending: c.pending, failing: c.failing, cancelled: c.cancelled,
     cancelled_runs: c.cancelled_runs, rows };
@@ -1007,13 +1012,16 @@ let publisherHealthy = !publisherEnabled;
 
 function refreshPublishedState() {
   if (!publisherEnabled) return { enabled: false, ok: true };
+  publisherHealthy = false;
   const current = readJson(path.join(GRAPH, 'delivery-front.json')) || {};
   const parked = Array.isArray(current.parked_by_run) ? current.parked_by_run : [];
   const args = parked.length ? [STATE_SYNC, '--parked', parked.join(',')] : [STATE_SYNC];
   const timeoutMs = remainingTimeoutMs(60000, deadline);
   if (timeoutMs <= 0) return { enabled: true, ok: false, reason: 'wait call deadline reached before state refresh' };
+  const pollId = crypto.randomUUID();
   const sync = runBounded(process.execPath, args, {
     cwd: LOCK_ROOT,
+    env: { ...process.env, SHIPYARD_CI_POLL_ID: pollId },
     timeoutMs,
   });
   if (sync.error || sync.status !== 0) {
@@ -1029,13 +1037,10 @@ function refreshPublishedState() {
   front = readJson(path.join(GRAPH, 'delivery-front.json')) || front;
   const previousWatch = watch;
   const rebuiltWatch = buildWatch();
-  // A settled PR disappears from `waiting` during this refresh. Keep its last
-  // target for one final `gh pr checks` read so the waiter can return the
-  // settlement that caused the board to change; when the board still has a wait,
-  // the rebuilt list (including a changed parent target) fully replaces it.
+  // @contract: Retain a settled target for its final observation when refresh empties the watch list.
   watch = rebuiltWatch.length ? rebuiltWatch : previousWatch;
   publisherHealthy = true;
-  return { enabled: true, ok: true };
+  return { enabled: true, ok: true, pollId, published };
 }
 
 // Publish the live check/review fact to the durable event inbox without making
@@ -1129,7 +1134,12 @@ for (;;) {
   const seen = [];
   const refresh = refreshPublishedState();
   for (const w of watch) {
-    const c = checksOf(w);
+    // @security: Only the current complete poll is reusable, including after same-head reruns.
+    const ci = refresh.ok && refresh.published && !refresh.published.overlay_changed
+      ? refresh.published.ci_observations[w.id] : null;
+    const c = compatibleCiObservation(ci, { pr: w.pr, repo: w.repo,
+      head: (state[w.id] || {}).head_sha, pollId: refresh.pollId })
+      ? checksResult(ci.rows) : checksOf(w);
     if (c) goodEver.add(w.id);
     const rerun = handleCancelled(w, c);
     if (rerun && c) c.rerun = rerun;
