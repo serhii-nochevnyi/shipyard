@@ -48,7 +48,6 @@ process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin
 const contextBuilder = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
 const { TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, cleanupJudgment } = require('./helpers/codex-arch-review-fixtures.cjs');
 
-
 test('focused selector includes uncited governing modules and companions, excluding unrelated bodies', () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'focused-selection-')));
   try {
@@ -75,6 +74,26 @@ test('focused change inventory preserves binary, deletion and exact rename paths
   assert.equal(inventory[2].binary, true);
   assert.equal(inventory[2].old_path, null);
   assert.throws(() => contextBuilder.focusedChangeInventory('M\0src/missing.cjs\0', ''), /lacks statistics/);
+});
+
+test('ordinary semantic architecture preserves complete diff and ADR criteria without focused transport choreography', () => {
+  const f = fixture();
+  try {
+    const scope = { ticket: TICKET, phase: 38, worktree: f.root };
+    const launch = { role: 'arch-review', context: {}, signals: {} };
+    const options = { graphDir: path.join(f.root, '.planning/graph'), refreshGit: false, getPullRequest: () => f.pr };
+    const value = contextBuilder.prepareSemanticArchitecture(scope, launch, options);
+    assert.equal(contextBuilder.isSemanticArchitecture(value), true);
+    assert.equal(contextBuilder.isFocusedContext(value), false);
+    assert.equal(value.prepared.packet.review_contract, 'shipyard.semantic-review.v1');
+    assert.match(value.prepared.packet.diff.content, /reviewed implementation change/);
+    assert.ok(value.prepared.packet.refs.some(ref => ref.path.endsWith('ADR-014-host-bound-review.md')));
+    assert.equal(value.launch.context.prompt, undefined);
+    contextBuilder.recheckPreparedSemanticArchitecture(value);
+    assert.throws(() => contextBuilder.prepareSemanticArchitecture(scope, launch, { ...options, readerCapacity: {} }), /host-owned/);
+    assert.throws(() => contextBuilder.semanticArchitectureSource({ ...value }), /private/);
+    assert.throws(() => contextBuilder.authenticateFocusedLaunch(value, ''), /focused/);
+  } finally { cleanupJudgment(f); }
 });
 
 test('Codex arch-review builds and binds a complete graph- and PR-authenticated packet', () => {
@@ -566,7 +585,7 @@ for (const scenario of [
       } });
     let output = '';
     await hostModule.runCli(['--args-file', requestPath], { write: text => { output += text; } },
-      { ...options, host, capabilities, recorder, agentDir, agentManifest, storageRoot: storage });
+      { ...options, archReviewContext: value, host, capabilities, recorder, agentDir, agentManifest, storageRoot: storage });
     const result = JSON.parse(output);
     assert.equal(result.subject, request.scope.ticket);
     assert(value.prepared.packet.retained_evidence.some(item => item.dispatch_id === originalTicketReview.result.receipt.dispatch_id));
@@ -879,6 +898,10 @@ test('unit adapter judgment seals through the actual authenticated recorder and 
     const { result, recorder } = await unitJudgment(f);
     assert.equal(result.receipt.compliance, 'verified');
     assert.equal(result.artifact.outcome, 'conform');
+    assert.equal(result.result.review_contract, contextBuilder.FOCUSED_CONTRACT);
+    const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
+    assert.equal(manifest.current_review.contract, contextBuilder.FOCUSED_CONTRACT);
+    assert.equal(manifest.semantic_review, undefined);
     assert.equal(result.result.findings.length, 0);
     assert(recorder.getVerifiedRecord(result.receipt.dispatch_id));
     assert(fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), 'utf8')
@@ -1345,6 +1368,8 @@ test('explicit trusted legacy admission preserves original complete bytes and re
     f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
     const admitted = artifacts.admitHistoricalArchive(admission);
     assert.equal(admitted.manifest_digest, first.result.artifact.digest);
+    assert.equal(first.result.result.review_contract, undefined);
+    assert.equal(JSON.parse(preserved.find(pin => pin.path.endsWith('/.shipyard-role-artifact.json')).content).semantic_review, undefined);
     for (const pin of preserved) assert.deepEqual(fs.readFileSync(path.join(f.root, pin.path)), pin.content);
     assert.equal(stableReceiptDigest(first.recorder.getVerifiedRecord(admission.dispatchId).receipt), admission.expectedReceiptDigest);
     const second = await unitJudgment(f); stores.push(f.storage);

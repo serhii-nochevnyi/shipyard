@@ -67,7 +67,66 @@ command-backed evidence is not verification.
   DATA-MODEL.md, ROLLOUT.md (whatever exists).
 - Relevant `.planning/investigations/*/DECISIONS.md` if referenced by the ADR.
 
-## Focused original judgment
+## Ordinary Codex semantic architecture review
+
+Ordinary Codex architecture review uses `shipyard.semantic-review.v1`, role
+`arch-review`, through the same `runSemanticReview` coordinator as integration.
+The host derives two distinct primary responsibilities from the actual product
+boundaries and governing ADR/acceptance obligations. Both originals run in flight
+together. Shared governing and support reads are permitted; primary ownership is
+unique and exhaustive. Neither original grants a whole-PR architecture verdict.
+
+Judge the complete aggregate PR diff and change metadata, including renames,
+deletions and binary changes, against the selected ADRs and linked decisions.
+Inspect applicability metadata and expand genuinely ambiguous governing context.
+Review actual producer/consumer seams, compatibility, configuration and removals.
+Do not invent theoretical all-pairs obligations. Use ordinary supported source,
+diff and read-only metadata commands as needed. No ordered range grammar, fragment
+profile, capacity probe or caller-selected resource budget is required. Report
+failed, unfinished, truncated or unread context explicitly; hashes and structural
+coverage alone do not establish a semantic judgment.
+
+Each worker returns the exact supplied schema, review contract, role, runtime,
+stage, subject, snapshot/binding hashes, assignment id and reviewed identity.
+Retain the exact primary `coverage`, complete `conclusions`, `findings` (including
+INFO), `limitations`, `required_context`, `unread`, seam dispositions and
+`evidence_markdown`; worker `originals` is empty. Declare `completeness` as
+`complete`, `incomplete` or `blocked`, and `outcome` as `passed`, `needs-fix` or
+`human-review-required`. Preserve uncertainty and disagreements in the originals.
+Development artifacts supply governing execution context; apply the shared
+`development-artifacts.cjs` classification when judging product behavior.
+
+After both original reports are durably authenticated, a distinct native
+architecture final reads their full original text, findings, uncertainty and
+provenance. It independently judges every actual seam and governing obligation,
+returns all supplied obligation ids as `coverage`, and echoes the exact original
+reference objects. It also reports `phase`, `repository`, `id=subject`, `pr`,
+`head`, `head_tree`, `base=base_ref`, `base_commit`, `merge_base`,
+`base_tree=merge_base_tree`, the complete `ticket_set` and `ticket_set_digest`,
+`summary` and `verdict: conform|violation|adr-outdated`. A conform final requires
+`outcome: passed`, zero blocking findings, complete originals and final, and no
+unresolved seams, unread sources, limitations or required context. Informational
+findings remain in the complete report. Violations retain ADR, section, source
+hunk and remediation; outdated decisions retain the human decision required.
+
+The trusted host writes the final's complete evidence to the role-owned file,
+seals it against the original receipt, and validates current architecture
+acceptance. Semantic workers and final return evidence in their JSON; they do
+not write files or follow the focused artifact choreography below. A moved head
+or base (including equal-tree movement), changed membership, ADR, criteria or
+installed instructions refuses current authority. Resume recomputes the live
+target and snapshot and can reuse only compatible authenticated originals.
+Unknown native outcomes require reconciliation; they are never silently retried.
+
+## Focused and historical original judgment
+
+The following focused contract applies to the Claude path and genuine retained
+or in-flight Codex focused generations. Ordinary Codex dispatch uses the semantic
+contract above. Historical results keep their original schemas, bytes and
+provenance; a marker, worker result or rewritten old answer cannot acquire
+semantic architecture authority. A warm in-flight continuation requires its
+original private installed preparation and matching dispatch/scope; serialized
+selectors cannot reconstruct that custody.
 
 The host selects `shipyard.focused-architecture-review.v1` through private prepared
 launch custody. A result marker alone cannot select this contract. Judge the full
@@ -139,7 +198,7 @@ Neither the declarations nor an empty finding list prove source consumption.
    that would prove the claim>`; a general assertion that something was tested
    is not evidence.
 
-## Output (final message, structured)
+## Focused output (final message, structured)
 - `verdict: conform | violation | adr-outdated`
 - `base_tree: <40 hex characters>` — **the tree of the merge base you judged
   against**, for a `conform` verdict. Measure it, do not guess it. From the PR
@@ -167,7 +226,7 @@ Neither the declarations nor an empty finding list prove source consumption.
 - for `adr-outdated`: which decision, what reality contradicts it, and what
   the human must decide
 
-## Complete judgment artifact
+## Focused and historical judgment artifact
 
 The final message is a bounded synopsis. Before returning it, write the complete
 review evidence to a regular file inside the reviewed worktree. The file must
