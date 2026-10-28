@@ -1206,146 +1206,102 @@ File conflicts between parallel tickets are ruled out by Gate 2.
 
 ## Step 4 — Post the sentinel; the babysit loop is ITS contract
 
-As soon as Phase C has opened PRs, launch the guard and return to Step 3 for
-the cascade (see "The PR sentinel" above). Claude's `pr-sentinel` request is
-host-owned: `claude-role-host.cjs` derives the phase's exact open PR set, creates
-the `round:<digest>` subject, resolves the fixed Sonnet/low selection, and
-crosses resolve → validate → launch → receipt. It reserves one shared identity
-before launch so `front` and the stop gate see the guard while it runs. On
-successful completion the host replaces that reservation with one authenticated
-round row and one journal event; `activeDispatches` projects it only to unchanged
-members, and the front counts it once. A merge, head change, or base move expires
-that member without releasing the others.
-
-Launch it through the dispatch entry point, standing in the project's own
-worktree (a clean phase worktree, never a ticket worktree):
+As soon as Phase C has opened PRs, launch the guard through the dispatch entry
+point, standing in the project's own clean phase worktree (never a ticket
+worktree), and return to Step 3 for the cascade:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role pr-sentinel
 ```
 
-`<T>` is any one ticket the front already lists under `fix`/`finalize`/`merge` —
-the entry point reads the WHOLE round from the front itself, one repository at a
-time, not just that ticket. Before it launches anything it runs the sentinel
-preflight (`sentinel-preflight.cjs`'s `preflightRound`, via the entry point —
-never invoked by hand) over every guarded PR: fetch and fast-forward each PR's
-base in the checkout of the repository that owns it, then re-run and commit
-`state-sync.cjs`.
-A failed fetch, a diverged base, or a worktree left dirty outside
-`.planning/graph/` is a REFUSAL from `launch` itself, reported VERBATIM with the
-exact command it names — no separate manual fetch or sync step is ever needed,
-and nothing is launched over a refused preflight. `launch` still returns
-`{dispatch_id, ticket, role, runtime, log, result}` on success; the guard itself
-now runs DETACHED, exactly like the executor path, but — "post the guard, then
-keep moving; never wait for it" (above) — do not `wait` on it. `status
---dispatch <dispatch_id>` checks it later without blocking, if you ever need to.
+`<T>` is any one ticket the front lists under `fix`/`finalize`/`merge`; the entry
+point reads the WHOLE round from the front, one repository at a time. Before
+launching it runs the sentinel preflight (`sentinel-preflight.cjs`'s
+`preflightRound`, never invoked by hand) over every guarded PR: fetch and
+fast-forward each PR's base in the checkout that owns it, then re-run
+`state-sync.cjs`. A failed fetch, a diverged base or a worktree left dirty
+outside `.planning/graph/` is a REFUSAL from `launch` itself, reported VERBATIM
+with the exact command it names; nothing is launched over it. On success `launch`
+returns `{dispatch_id, ticket, role, runtime, log, result}` and the guard runs
+DETACHED: do not `wait` on it (`status --dispatch <dispatch_id>` checks without
+blocking).
 
-Internally, for Claude, the entry point sends `claude-role-host.cjs` this
-mode-0600 request:
-
-```json
-{"schema":"shipyard.claude-role-request.v1","role":"pr-sentinel","worktree":"<absolute project worktree>","phase":"<phase directory>"}
-```
-
-Do not pass a caller-owned member list, invoke native Workflow, or call
-`dispatch-record.cjs mark`/`mark-many` for this shared Claude round receipt. When the
-guard reports, clear only its returned id with
-`dispatch-record.cjs clear-round <round_dispatch_id> --graph
-<project>/.planning/graph`. A stale clear leaves newer ownership intact. A PR
-opened after launch belongs to a fresh round; the host refuses a result if the
-round's membership changed before it was reconciled.
+On Claude the request is host-owned: `claude-role-host.cjs` derives the phase's
+exact open PR set, creates the `round:<digest>` subject and reserves one shared
+identity (Sonnet/low) before launch, so `front` and the stop gate see the guard
+while it runs; a merge, head change or base move expires that member alone. Do not
+pass a caller-owned member list, invoke native Workflow, or call
+`dispatch-record.cjs mark`/`mark-many` for this shared round receipt. When the guard
+reports, clear only its returned id with `dispatch-record.cjs
+clear-round <round_dispatch_id> --graph <project>/.planning/graph` (a stale clear
+leaves newer ownership intact). Round membership is immutable: a PR opened after
+launch belongs to a fresh round, started only after that exact id was cleared.
 
 Codex uses `codex-delivery-host.cjs`, the host that
-`deliver-dispatch.cjs launch --runtime codex --ticket <T> --role pr-sentinel`
-runs once per guarded ticket after the same preflight, with `role: "pr-sentinel"`;
-the host requires explicit Luna/medium selection evidence and a
-concrete application receipt. Do not substitute `unsupported`, `unknown`, or
-an omitted effort when the selected host cannot apply the configured level;
-refuse that launch before recording it. Record each returned dispatch id through the
-validated ticket-mark path; do not create a shared round row or clear-round
-receipt for Codex. Refuse
-when the host, effort, or receipt is missing, or if an inherited Agent, prompt,
-or session would be used. If the selected host is unavailable, run the
-documented mechanical sentinel duty pass and leave model-backed work blocked.
-Claude round membership is immutable: after its report returns, clear that
-exact round id before launching a fresh guard for new PRs.
+`deliver-dispatch.cjs launch --runtime codex --ticket <T> --role pr-sentinel` runs
+once per guarded ticket after the same preflight, with `role: "pr-sentinel"`; it
+requires explicit Luna/medium selection evidence and a
+concrete application receipt. Do not substitute `unsupported`, `unknown`, or an
+omitted effort when the host cannot apply the configured level; refuse that launch
+before recording it. Record each returned dispatch id through the validated
+ticket-mark path (no shared round row or clear-round for Codex). Refuse when the
+host, effort or receipt is missing or an inherited Agent, prompt or session would
+be used; if the host is unavailable, run the mechanical duty pass and leave
+model-backed work blocked.
 
-Then **return to Step 3 immediately.** Do not wait for the guard, do not watch
-CI, do not re-read the PR yourself. New PRs opened later either go to a fresh
-guard or remain on the main loop's next duty pass until the current guard clears.
+Then **return to Step 3 immediately.** Do not wait for the guard, watch CI or
+re-read the PR yourself; new PRs go to a fresh guard or the next duty pass.
 
 The loop below IS the sentinel's contract (`references/pr-sentinel.md` states the
-same rules for the agent). You run it YOURSELF only on the fallback path — no
-background agents, or `pipeline.sentinel: off` — and there it is a duty pass at
-the top of each round, before you take new work, never a place to camp.
+same rules for the agent); you run it YOURSELF only on the fallback path, as a
+duty pass at the top of each round, never as a place to camp.
 
-Attempt number per PR: **read it, never keep it.**
-`attempt-history.cjs <T> --json` → `next_n` is the number this round logs as
-`n=`, and `attempts` is how many rounds are already charged. Both are derived
-from the journal, so a resumed session continues at N+1 instead of restarting at
-1 — which is what a session-held counter did, handing a ticket that had already
-burned four rounds five more. MAX = `pipeline.max_attempts` (default 5 —
-state-sync prints the effective value on every run). **The number no longer
-routes anything** — the failure signature's verdict does — but it stays, as
-telemetry and as the backstop in step d. A round logged `outcome=flake` is not
-charged, and the derived number reflects that by itself.
-
-When the next fixer needs the complete prior hypothesis rather than only the
-bounded journal row, request `attempt-history.cjs <T> --details --graph
-<project>/.planning/graph`. The reader authenticates each `artifact_ref` and
-`artifact_digest` against its recorded dispatch, role, worktree, base, and
-durable receipt, then labels the recovered fields historical. Historical notes
-explain an earlier HEAD; they are never a fresh passing verdict for the current
-HEAD and cannot authorize a push, merge, drift lift, or retry. Missing metadata or
-validation failure stops the repair decision instead of returning an empty
-history.
+Attempt number per PR: **read it, never keep it.** `attempt-history.cjs <T> --json`
+→ `next_n` is the number this round logs as `n=`, `attempts` the rounds already
+charged; both derive from the journal, so a resumed session continues at N+1.
+MAX = `pipeline.max_attempts` (default 5). The number no longer routes anything
+(the failure signature's verdict does) but stays as telemetry and as the backstop
+in step d; a round logged `outcome=flake` is not charged. For the complete prior
+hypothesis use `attempt-history.cjs <T> --details --graph <project>/.planning/graph`:
+it authenticates each `artifact_ref`/`artifact_digest` and labels the result
+historical (never a fresh passing verdict for the current HEAD, never authority
+to push, merge, lift a drift or retry); missing metadata or a validation failure
+stops the repair decision.
 
 ```text
 loop:
   a. state-sync.cjs → this PR's checks
      failing → SIGN THE FAILURE FIRST; the verdict decides whether a fixer is even
-       the right move. Never dispatch straight off a red check — that is what
-       charged four attempts and three escalations to ONE deterministic failure.
+       the right move. Never dispatch straight off a red check.
        a1. gh run view <run-id> --log-failed
              | failure-signature.cjs compute --job <check name> --json
-           → {signature, error_class, test_id, file}. It never fails: an
-             unreadable or empty log signs as `unknown` rather than stopping the
-             round, and it needs no ticket graph, so it runs in the worktree.
+           → {signature, error_class, test_id, file}. It never fails (an
+             unreadable log signs as `unknown`) and runs in the worktree.
        a2. failure-signature.cjs verdict <T> --signature <sig> --head <head sha>
              --k <pipeline.plan_defect_signatures> --json
            → one of: first | progress | repeat | repeat_exhausted |
              flake_candidate | flake | plan_defect
        a3. branch on it. The last three do NOT dispatch a fixer:
 
-       flake — already quarantined. Do NOT dispatch a fixer and do NOT CHARGE THE
-         ATTEMPT: the round is logged as `log-event.cjs attempt … n=<next_n>
-         outcome=flake signature=<sig> head=<full 40-char sha>`, and `outcome=flake` is the
-         reason `next_n` does not move — `attempt-history.cjs` skips a quarantined
-         round when it counts, so the next real round reuses this number.
-         Re-run the job (`gh run rerun <run-id> --failed`) or leave it
-         for the next round, and CONTINUE the front. If the signature turns out to
-         be real work after all, `failure-signature.cjs lift <T> --signature <sig>`
-         makes it count again.
+       flake — already quarantined. No fixer and do NOT CHARGE THE ATTEMPT: log
+         `log-event.cjs attempt … n=<next_n> outcome=flake signature=<sig>
+         head=<full 40-char sha>` (`next_n` does not move), re-run the job
+         (`gh run rerun <run-id> --failed`) or leave it for the next round, and
+         CONTINUE the front. If it turns out to be real,
+         `failure-signature.cjs lift <T> --signature <sig>` makes it count again.
 
-       flake_candidate — the same signature at the same head: the tree did not
-         move, so this may be instability rather than a defect. Re-run the failed
-         job ONCE before any dispatch, then record what the re-run proved:
+       flake_candidate — same signature at the same head: possible instability.
+         Re-run the failed job ONCE before any dispatch, then record the proof:
          `failure-signature.cjs rerun <T> --signature <sig> --head <sha>
-          --outcome green|red`. Green → quarantined as a flake, nothing charged,
-         continue the front. Red → deterministic, and the next verdict reads it as
-         `repeat`; proceed down that branch.
+          --outcome green|red`. Green → quarantined, nothing charged, continue the
+         front. Red → deterministic; the next verdict reads `repeat`.
 
-       plan_defect — K distinct signatures with no green: the PLAN is wrong, not
-         the fix, and no further fixer can pass.
-         `escalation-record.cjs mark-plan-defect <T> <plan-path> "<what the plan
-          got wrong>" --signature <s1> --signature <s2> …` — the distinct
-         signatures the verdict rested on; the flag repeats and is accepted in any
-         position, and the reason is the ONLY thing whoever picks this up inherits,
-         so say what the plan got wrong, never just "plan defect". Then CONTINUE
-         the front: this ticket needs a person in the morning, not now, and the
-         cascade does not wait for one. The park is durable and is bound to the
-         PLAN — a push or an answered review does NOT lift it; re-decomposing the
-         plan file does.
+       plan_defect — K distinct signatures with no green: the PLAN is wrong, no
+         fixer can pass. `escalation-record.cjs mark-plan-defect <T> <plan-path>
+          "<what the plan got wrong>" --signature <s1> --signature <s2> …` (the
+         reason is all the next person inherits — never just "plan defect"). Then
+         CONTINUE the front: the park is bound to the PLAN — only re-decomposing
+         the plan file lifts it, not a push or an answered review.
 
        first | progress | repeat | repeat_exhausted — build the role request
          from the canonical ticket graph and failure evidence file:
@@ -1355,51 +1311,43 @@ loop:
            --runtime <r> --pr <p.pr> --failure-file <failure-evidence-path>
          ```
 
-         The builder accepts the evidence path and computes its SHA-256 without
-         inlining file content. It prints a request only when the selected host
-         authenticates that evidence at launch. Exit 2 prints a named host-contract refusal and
-         produces no request; preserve it and do not hand-build a boundary input.
-         `failure-signature.cjs verdict` supplies only verdict/history facts.
-         Derive the caller-owned fixer strategy as `first` → `fix`, `progress`
-         → `continue`, and `repeat`/`repeat_exhausted` → `rethink`; strategy and
-         receipt-chain facts remain host inputs, never claimed boundary results.
-         The boundary validates the ordered receipt chain. Codex uses the generated
-         `shipyard-ci-fix.toml` → `shipyard-ci-fix-repeat.toml` →
-         `shipyard-ci-fix-deep.toml` files for base → verified `repeat` →
-         verified `repeat_exhausted`; Claude uses Sonnet/high → Sonnet/xhigh → Opus/high with
-         explicit native effort. A repeat is refused without the prior receipt,
-         and another failure after the ceiling is a human escalation, not an
-         undocumented third launch. The host must carry the resolved selection;
-         an inline, inherited, or effort-omitting Agent fallback is refused.
+         The builder takes the evidence path, computes its SHA-256 and prints a
+         request only when the selected host authenticates that evidence at launch.
+         Exit 2 prints a named host-contract refusal and no request: preserve it,
+         never hand-build a boundary input.
+         `failure-signature.cjs verdict` supplies only verdict/history facts. Derive the caller-owned fixer strategy as `first`
+         → `fix`, `progress` → `continue`, and
+         `repeat`/`repeat_exhausted` → `rethink`; strategy and receipt-chain facts
+         remain host inputs, never boundary results. The boundary validates the
+         ordered receipt chain (Codex `shipyard-ci-fix.toml` →
+         `shipyard-ci-fix-repeat.toml` → `shipyard-ci-fix-deep.toml`; Claude
+         Sonnet/high → Sonnet/xhigh → Opus/high); a repeat is refused without the
+         prior receipt, and another failure after the ceiling is a human
+         escalation, not a third launch.
 
          Require a typed boundary adapter that explicitly applies the resolved
-         model and effort and returns a concrete application receipt. Otherwise hard-refuse
-         before constructing a prompt, spawning, or recording. Absent, `unsupported`, or `unknown` evidence
-         cannot authorize ci-fix. The released Claude fix-round and Codex delivery
-         paths do not authenticate the builder's supplied failure-file digest, so
-         they return the named refusal until that host contract exists. On rethink,
-         re-read the plan and use a different
-         hypothesis; provide references/ci-fix.md and the full ticket contract.
-         The full hypothesis, notes, and command evidence are read from the
-         validated repair artifact before `log-event.cjs attempt`; a bounded
-         result or notes string alone is not evidence. Missing or stale evidence
-         is `repair blocked`, not `no-op` or blind redispatch.
+         model and effort and returns a concrete application receipt. Otherwise
+         hard-refuse
+         before constructing a prompt, spawning, or recording. Absent,
+         `unsupported`, or `unknown` evidence cannot authorize ci-fix. The released
+         Claude fix-round and Codex delivery paths do not authenticate the
+         builder's failure-file digest, so they return the named refusal until that
+         host contract exists. On rethink, re-read the plan and use a different
+         hypothesis; give the fixer references/ci-fix.md and the full ticket
+         contract. Read the full hypothesis, notes and command evidence from the
+         validated repair artifact before `log-event.cjs attempt`; missing or stale
+         evidence is `repair blocked`, not `no-op` or a blind redispatch.
          'escalate' from the agent → `escalation-record.cjs mark <T> <reason>`, continue the front
        a push happened → step d
      pending → nobody watches this PR: leave it in `waiting: ci`, EXIT this PR's
-       cycle, serve the rest of the front, and pick it up next round. The guard
-       does the same — it holds every guarded PR, so a wait on one is a wait on
-       all of them, and its step 4 hands them back instead. The ONE legitimate
-       wait is `ci-wait.cjs` (loop-back item 6), which refuses unless the board
-       has no other move. Serializing the whole run behind one CI queue is the
-       single most expensive stall this pipeline has produced.
+       cycle, serve the rest of the front and pick it up next round. The ONE
+       legitimate wait is `ci-wait.cjs` (loop-back item 6).
      no checks reported at all → state-sync flags it; treat "green" as "nothing ran"
        and say so to the human rather than reporting the PR as verified
 
   b. reviewers.cjs feedback <pr>   (threads + the bots' PR-level comments +
      verdicts + engagement — `unresolved` alone is only half of what CodeRabbit
-     and Copilot actually said, and the half they file as issue comments is the
-     half that silently went unaddressed)
+     and Copilot said)
      there is feedback → submit `review-fix` by building the role request from
        the canonical ticket graph and review evidence file:
 
@@ -1408,37 +1356,26 @@ loop:
          --runtime <r> --pr <p.pr> --review-file <review-evidence-path>
        ```
 
-       The builder accepts the evidence path and computes its SHA-256 without
-       inlining file content. It prints a request only when the selected host
-       authenticates that evidence at launch. Exit 2 prints a named host-contract refusal and
-       produces no request; preserve it and do not hand-build a boundary input.
-       `code-change`/`no-code-change`, every thread and bot comment, the
-       prior-attempt record, signed `signatureState`, and a verified prior
-       receipt are all evidence that the selected host must bind before launch.
-
-       Codex uses `shipyard-review-fix.toml` →
-       `shipyard-review-fix-repeat.toml` → `shipyard-review-fix-deep.toml`
-       for the verified repair chain; Claude uses Sonnet/high → Sonnet/xhigh → Opus/high with
-       explicit native effort. The boundary receipt is required before the
-       fixer may push or the attempt may be recorded. An inline, inherited,
-       literal-model, or omitted-effort fallback is refused. Require a typed
-       boundary adapter that explicitly applies the resolved model and effort
-       and returns a concrete application receipt. Otherwise hard-refuse
-       before constructing a prompt, spawning, or recording. The released
-       Claude fix-round retains its named host-contract refusal. The Codex
-       review-fix host builds its prompt from the canonical graph, PLAN, ownership,
-       live OPEN PR and complete paginated feedback, and authenticates the regular
-       review evidence file by its original path and SHA-256 immediately before
-       static launch. The producer leaves source uncommitted and pushed=false.
-       Exactly one original native completion and its durable current-policy
-       receipt are required for the sealed repair result and complete dispositions.
-       Source changes receive the assigned host verification and a signed fixer
-       commit through the existing resumable finalizer before host publication.
-       Feedback-only results require no commit: the host rechecks full feedback,
-       performs replies/resolutions and independently confirms their actual IDs.
-       Escalated findings remain unresolved; uncertain actions retain pending
-       recovery. Continue at step d after confirmed source publication, or b
-       after confirmed feedback-only actions.
+       The builder behaves as for ci-fix (path + SHA-256, exit 2 = named refusal,
+       never hand-built). `code-change`/`no-code-change`, every thread and bot
+       comment, the prior-attempt record, signed `signatureState` and a verified
+       prior receipt are evidence the host binds before launch. Codex uses
+       `shipyard-review-fix.toml` → `shipyard-review-fix-repeat.toml` →
+       `shipyard-review-fix-deep.toml`; Claude uses Sonnet/high → Sonnet/xhigh →
+       Opus/high. The boundary receipt is required before the fixer may push or the
+       attempt may be recorded; inline, inherited, literal-model, or omitted-effort
+       fallback is refused. Require a typed boundary adapter that
+       explicitly applies the resolved model and effort and returns a concrete
+       application receipt. Otherwise hard-refuse
+       before constructing a prompt, spawning, or recording. The released Claude
+       fix-round retains its named host-contract refusal. The Codex review-fix host authenticates the review
+       evidence file by path and SHA-256 before static launch and leaves source
+       uncommitted (pushed=false); source changes get host verification and a
+       signed fixer commit through the resumable finalizer before host
+       publication, feedback-only results need no commit (the host replies/resolves
+       and confirms the actual IDs), and escalated findings stay unresolved.
+       Continue at step d after confirmed source publication, or b after
+       confirmed feedback-only actions.
 
   c. arch-review agent — host-bound judgment, required only for a live integration-branch target. Skip this step for epic/stacked targets. Read the canonical
      `references/pr-sentinel.md` procedure: MEASURE the complete judged input
@@ -1561,138 +1498,77 @@ loop:
        from an agent is a CLAIM: `git -C <worktree> rev-parse HEAD` must equal
        `git -C <worktree> rev-parse origin/<branch>` (or the PR's head SHA)
      reviewers.cjs reinit <pr>
-     the LOG LINE below is what charges the attempt — there is no session counter
-       to increment, and the next round reads the number back with
-       `attempt-history.cjs <T> --json` → `next_n`
+     the LOG LINE below is what charges the attempt — there is no session counter;
+       the next round reads `attempt-history.cjs <T> --json` → `next_n`
      log the round with the keys the NEXT round reads back:
        `log-event.cjs attempt ticket=<T> pr=<N> n=<next_n> role=<role> model=<tier>
         effort_applied=<the concrete level the spawn explicitly applied>
         outcome=<pushed|no-op|escalate|flake> signature=<sig> head=<full 40-char sha>
         hypothesis="<the fixer's own one sentence, verbatim>"`
-       `signature`+`head` are what the next `verdict` compares; `hypothesis` is
-       what `attempt-history.cjs` hands the next fixer so it cannot re-propose what
-       this one already ruled out. Never invent a hypothesis the fixer did not
-       report — an invented one enters the record as something tried and excluded.
+       `signature`+`head` are what the next `verdict` compares; `hypothesis` is what
+       `attempt-history.cjs` hands the next fixer. Never invent a hypothesis the
+       fixer did not report — an invented one enters the record as tried and excluded.
        **`effort_applied` is what the SPAWN carried, never what the resolver
        decided.** Record a new routed attempt only after a launch surface explicitly
-       applied the resolved model and effort and returned that receipt. If the
-       surface cannot do so, hard-refuse before prompt construction, spawning, or
-       recording; do not use an Agent/prompt/session fallback or copy the resolved
-       value across. Historical `unsupported` and `unknown` telemetry stays readable,
-       but cannot authorize or represent a new routed attempt. This is not
-       bookkeeping: `failure-signature.cjs` will only
-       claim `repeat_exhausted` — the rung that opens the ceiling model and then
-       spends a person's attention — off a prior round whose row NAMES a real level,
-       so an unrecorded depth reads as not-yet-spent and the loop rethinks once more
-       instead of escalating early. New routed attempts accept only the resolver's
-       concrete effort vocabulary (`low|medium|high|xhigh|max`).
+       applied the resolved model and effort and returned that receipt; otherwise
+       hard-refuse before prompt construction, spawning or recording (no
+       Agent/prompt/session fallback, no copying the resolved value across).
+       Historical `unsupported`/`unknown` telemetry stays readable but cannot
+       represent a new routed attempt. New routed attempts accept only the
+       resolver's concrete effort vocabulary (`low|medium|high|xhigh|max`). `failure-signature.cjs` claims
+       `repeat_exhausted` only off a prior round whose row NAMES a real level.
      **A base merge in that round is journalled SEPARATELY, and it is not an
        attempt.** For each PR you passed `needsBaseMerge: true` whose push you just
        confirmed: `log-event.cjs base_merge ticket=<T> pr=<N> base=<the base ref you
-       passed> head=<full 40-char sha>`. Nothing else writes this event — the duty
-       is mechanical (`base-merge.cjs` does the merge, no ladder role) and the script
-       does not journal itself, whatever the comment beside its duty says — so with
-       no caller here the event is a contract with no writer, and the journal cannot
-       answer which base moved into what, or when. Two lines and not one field on the
-       attempt: charging a mechanical merge to the ticket's repair record would spend
-       its attempt budget on work no hypothesis was ever wrong about.
+       passed> head=<full 40-char sha>`. Nothing else writes this event
+       (`base-merge.cjs` does not journal itself), and a mechanical merge must not
+       spend the ticket's repair attempt budget.
      `attempts` (same `attempt-history.cjs <T> --json`) > MAX → `escalation-record.cjs mark <T> "<what the N attempts tried and why each failed>"`, continue the front
-       THE ATTEMPT BACKSTOP STAYS, even though the ladder no longer reads the
-       counter. A signature that oscillates between two values is never the same
-       as the last one, so it never reads `repeat`, and it never reaches K
-       distinct, so it never reads `plan_defect`: it dodges both rules and nothing
-       else would ever stop it. This is not dead code — do not remove it.
+       THE ATTEMPT BACKSTOP STAYS: a signature that oscillates between two values
+       never reads `repeat` and never reaches K distinct for `plan_defect`, so
+       nothing else would stop it. Do not remove it.
      → step a
 ```
 
 **A journal write is not a board refresh — after a push, the next board read is
-`state-sync.cjs`, never `front.cjs`.** `log-event.cjs` is a dumb append-only
-writer: it records the attempt and touches nothing else, while the push it
-records re-ran the checks and, after a merge, retargeted children. `front.cjs`
-recomputes its buckets from the CACHED `delivery-state.json`, so read straight
-after a journal write it reports a board computed BEFORE that write — which is
-how "0 actionable" got concluded from a state that had never seen the push
-(2026-09-08). `dispatch-record.cjs mark|clear` is the ONE exception: it refreshes
-the overlay itself, so reading the front right after a mark is correct. The same
-obligation covers every write that moves GitHub — a push, a merge, a thread
-resolve, an undraft, a PR opened. The front now warns when it can prove it is
-behind (`⚠ this board is BEHIND reality …`); treat that line as the resync order
-it is, and do not act on any bucket printed under it.
+`state-sync.cjs`, never `front.cjs`.** `log-event.cjs` only appends; `front.cjs`
+recomputes from the CACHED `delivery-state.json`, so read straight after a journal
+write it reports a board computed BEFORE the push. `dispatch-record.cjs mark|clear`
+is the one exception (it refreshes the overlay itself). The same obligation covers
+every write that moves GitHub: a push, merge, thread resolve, undraft, a PR
+opened. When the front prints `⚠ this board is BEHIND reality …`, resync and act
+on no bucket printed under it.
 
-Every `park blocked` here does NOT end the run — it's an exit from the cycle of ONE PR.
-After it, return to the actionable front (Step 3/4 for the rest); the run
-ends only when the front is empty (see the Principle and Step 5).
+Every `park blocked` here ends the cycle of ONE PR, not the run: return to the
+actionable front. Round telemetry: each pass a/b — `log-event.cjs attempt` with
+the actual role/model/outcome AND `signature`/`head`/`hypothesis`; each
+escalation (step a 'escalate', adr-outdated in c, attempts > MAX in d) —
+`escalation-record.cjs mark <T> <reason>`; a `plan_defect` verdict —
+`escalation-record.cjs mark-plan-defect` (both park AND journal, which is why
+log-event refuses the bare events).
 
-Round telemetry (see the section above): each pass a/b — `log-event.cjs
-attempt ...` with the actual role/model/outcome AND `signature`/`head`/
-`hypothesis`; each escalation (step a 'escalate', adr-outdated in c, attempts >
-MAX in d) — `escalation-record.cjs mark <T> <reason>` at that same moment, and a
-`plan_defect` verdict — `escalation-record.cjs mark-plan-defect`. Both of those
-park AND journal in one act, which is why log-event refuses the bare `escalation`
-and `plan_defect` events: journalling without parking is the half that used to get
-done alone.
+**Several open PRs on the fallback path** (no background guard) — one duty pass:
 
-Several open PRs on the **fallback path** (there is no background guard): the
-**runtime-host path** parallelizes exactly the fix work of one duty pass after
-the required worktrees exist. A background sentinel services its PRs itself.
-The round order:
-
-1. `state-sync.cjs` → for each open PR determine `needsCiFix` (checks
-   failing) and `needsReviewFix` (`reviewers.cjs unresolved` > 0). Those that are waiting
-   on pending checks — skip them this round; the next round picks them up.
-2. Sign each failing PR and take its verdict FIRST (a1–a3). A `flake`, a
-   `flake_candidate` or a `plan_defect` is served THERE and does not enter the
-   round — a quarantined or plan-defective PR handed to a fixer is the dispatch
-   this phase exists to prevent. For each remaining ci-fix or review-fix item,
-   call the mandatory boundary with its complete signals and evidence:
-
-   ```text
-   fix-round.mjs args: { prs: [{ id, pr, branch, worktreePath, planPath,
-     needsCiFix, needsReviewFix, needsBaseMerge, base, model, effort, signals,
-     priorReceipt, previous_dispatch_id, dispatch_id, attemptHistory, strategy,
-     signatureState }], ciFixRefPath, reviewFixRefPath, reinitScript,
-     artifactLanguage }
-   ```
-
-   `capabilities`, `recorder`, `applicationEvidence`, and host callbacks are
-   host-injected Workflow bridge resources, not serializable `args`; the active
-   adapter supplies them. The Codex adapter receives its
-   generated-agent directory and capabilities through the boundary context.
-
-   The per-item boundary selection resolves the canonical ladder, validates the
-   Codex generated file or Claude's native alias plus explicit
-   effort, and launches the typed
-   `fix-round.mjs` adapter, and verifies the receipt. `fix-round.mjs` receives
-   the already-validated per-item selection and must not resolve a model or
-   launch an inline/inherited session itself. A repair repeat is admitted only
-   with the immediately preceding boundary receipt in `priorApplied` and its
-   `previous_dispatch_id`; pass the full attempt history and failure/review
-   evidence into the prompt.
-   **`needsBaseMerge` is a MEASUREMENT off the board, not a judgement**: it is true
-   when `state[T].merge_state` is `BEHIND` or `DIRTY`, or `state[T].behind_by > 0` —
-   the same pair `front.cjs baseMoved` reads, which is why the board already filed
-   that PR under `fix` with a reason naming `base-merge.cjs`. Pass `base` with it:
-   the bare base name from `state[T].pr_base` (the script resolves `origin/<base>`
-   itself). Until it is passed the base merge is not step 0 of the fixer's prompt
-   and every later step of that round measures the branch against a merge base that
-   no longer exists — the test reproduces against the wrong code, the thread is
-   answered about the wrong diff, and the push may not even fast-forward. Omit both
-   when the base has not moved: `false`/absent builds exactly the prompt it always
-   did.
-   `attemptHistory` is a PRE-RENDERED string and producing it is YOURS: that path
-   builds each prompt deterministically from `args` and does not shell out, so a
-   record you do not pass does not exist for the agents. Omit it on a first
-   attempt — an empty history stated as a section reads as evidence that nothing
-   was tried, which is a claim rather than an absence. One parallel pass; each
-   agent pushes at most once and does reinit itself. `escalate` →
-   `escalation-record.cjs mark` (note it), which does NOT halt the other PRs of
-   the round.
-   The host result is bounded (`status`, `pushed`, `notes`, `hypothesis`,
-   and counts/references as applicable); complete repair evidence is resolved
-   only through the trusted role artifact before an attempt is logged.
-   For a Codex-host result, the trusted consumer first writes the compact
-   result to a disposable JSON file and seals it with the authenticated
-   `dispatch_id`:
+1. `state-sync.cjs` → per open PR `needsCiFix` (checks failing) and `needsReviewFix`
+   (`reviewers.cjs unresolved` > 0); skip PRs waiting on pending checks.
+2. Sign each failing PR and take its verdict FIRST (a1–a3): `flake`,
+   `flake_candidate` and `plan_defect` are served THERE and do not enter the round.
+   Pass the remaining ci-fix/review-fix items to the mandatory boundary with
+   complete signals and evidence through the fix-round args literal above.
+   `needsBaseMerge` is a MEASUREMENT off the board, not a judgement: true when
+   `state[T].merge_state` is `BEHIND` or `DIRTY`, or `state[T].behind_by > 0`;
+   pass `base` = the bare base name from `state[T].pr_base`; omit both when the
+   base has not moved. A repeat is admitted only with the immediately preceding
+   boundary receipt in `priorApplied` and its `previous_dispatch_id`.
+   `attemptHistory` is a PRE-RENDERED string that you produce (omit it on a first
+   attempt — an empty section would claim that nothing was tried). One parallel
+   pass; each agent pushes at most once and does reinit itself; `escalate` →
+   `escalation-record.cjs mark` without halting the other PRs. The host result is
+   bounded (`status`, `pushed`, `notes`, `hypothesis`, counts or references);
+   resolve the complete evidence only through the trusted role artifact: for a
+   Codex-host result the consumer writes the compact result to a disposable JSON
+   file and seals it with the authenticated `dispatch_id` (the Claude host does the
+   same):
 
    ```text
    node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
@@ -1703,213 +1579,120 @@ The round order:
      --result-file <trusted-result.json>
    ```
 
-   The Claude host performs the same operation. On both paths, run
-   `role-artifact.cjs validate` and then `read` with the returned
+   On both paths run `role-artifact.cjs validate` then `read` with the returned
    `artifact_ref`/`artifact_digest` before forwarding evidence or logging the
-   attempt. Wrong PR, head, base, receipt, missing evidence, digest mismatch,
-   symlink escape, or a forged application receipt is a refusal. The complete
-   hypothesis and notes stay in `findings.json`; only their bounded synopsis and
-   validated reference enter the round result.
-   (A fixer MAY publish — unlike an executor — because the result of a fix is
-   verified mechanically afterwards from live GitHub: a push that did not happen
-   simply shows up as an unchanged red PR.)
-3. For EACH item of the result — `log-event.cjs fix_round ticket=<T> pr=<N>
-   outcome=<...> pushed=<...>` — and log that item's attempt event with its
-   `hypothesis`. The round returns `{id, pr, pushed, status, notes, hypothesis}`
-   per PR and `hypothesis` is REQUIRED there, so it is always present; carry it
-   verbatim onto the attempt event together with the signature and head from a1.
-   Skipping it costs the next round the only thing it has: the fixer after this
-   one starts from zero and is free to retry what this one just ruled out.
-   For `pushed:true` — CONFIRM the push against
-   GitHub first (step d); the attempt event you just logged IS the increment, and
-   the backstop reads `attempt-history.cjs <T> --json` → `attempts`
-   (MAX = `pipeline.max_attempts`).
-   Then re-run state-sync: if the front still has actionable items, serve THEM
-   while CI runs — `ci-wait.cjs` (loop-back item 6) is the wait, and only once the
-   front has no other move: it refuses while it has.
-4. Then — step **c** of the cycle (arch-review, resolved with a measured
-   `--input-tokens`) for integration targets, the authenticated gate
-   and the `sentinel.cjs merge` for each PR in the main loop, as above. This is
-   judgment, finalization and a merge — do NOT hand any of it to an executor.
+   attempt; a wrong PR, head, base or receipt, missing evidence, digest mismatch,
+   symlink escape or forged receipt is a refusal. (A fixer MAY publish, unlike an
+   executor: a push that did not happen shows up as an unchanged red PR.)
+3. For EACH item log `log-event.cjs fix_round ticket=<T> pr=<N> outcome=<...>
+   pushed=<...>` and its attempt event with the REQUIRED `hypothesis` verbatim plus
+   the signature and head from a1. For `pushed:true` CONFIRM the push against GitHub
+   first (step d). Then re-run state-sync: serve any actionable front item while CI
+   runs; `ci-wait.cjs` (loop-back item 6) is the wait only when the front has no
+   other move.
+4. Then step **c** (arch-review with a measured `--input-tokens`) for integration
+   targets, the authenticated gate and `sentinel.cjs merge` per PR in the main loop —
+   judgment, finalization and a merge are never handed to an executor.
 
-**Serial rounds:** service PRs one at a time (a→d for each PR) through the same
-scoped host route. The INPUTS are identical on this path and you assemble them
-yourself: the failure-verdict `strategy` and the prior-attempt record
-(`attempt-history.cjs <T>`) go into the fixer's prompt, and its reported
-`hypothesis` comes back onto the attempt event.
-The `references/` files are the shared channel — they already tell a fixer to
-treat a recorded hypothesis as excluded and to report a new one — but the
-ARGUMENTS are this file's job on either path, so a fixer you dispatch without them
-is a fixer with no memory. Until each PR is green or park-blocked — and do NOT
-stop at that: move on to the recomputation of the front below.
+**Serial rounds:** service PRs one at a time (a→d each) through the same host
+route, assembling the same inputs yourself: the failure-verdict `strategy` and the
+prior-attempt record go into the fixer's prompt and its `hypothesis` comes back
+onto the attempt event. Continue until each PR is green or parked, then recompute
+the front below.
 
 **Loop-back to the fixpoint (after each round/merge — mandatory).**
-1. `state-sync.cjs` — fresh state and board, followed by the native GSD
-   projection finalization from that same published snapshot. Then, as a
-   SEPARATE act and from the project directory, run the tracker projection (see
-   "Tracker projection — the acting half"): it is bookkeeping, so it is neither
-   actionable nor a reason to block — the watermark makes catch-up free, and a
-   round that skips it costs one round of tracker lag that the next round closes.
+1. `state-sync.cjs` — fresh state and board, with the native GSD projection from
+   the same snapshot. Then, as a SEPARATE act from the project directory, run the
+   tracker projection ("Tracker projection — the acting half"): it is neither
+   actionable nor a reason to block.
 2. Repeat the tracker eligibility pass above for every pending/ready ticket in
    the expanded scope, especially tickets newly unblocked by the round. Take one
    issue read per pending candidate per loop-back round/generation, record
    `eligible`, `ineligible`, or `unknown`, and do not treat a prior generation's
    observation as fresh permission.
-3. Recompute the actionable front (the Principle at the top): new `ready` (unblocked
-   children, cascade dependents) + `branched-needs-pr` + open non-green PRs.
-4. Front NOT empty → add the new ready ones to scope, return to Step 2/3 for them;
-   the open PRs are the guard's (Step 4 duty processing only on the fallback path). Thus
-   exhaust the graph wave by wave WITHOUT re-asking the human.
-5. Only `execute`/`publish` are empty but the guard is still working → that is NOT
-   a fixpoint. Report the guard's state, and wait for its report rather than
-   ending the run. The board says this for itself once the hand-overs are
-   recorded: `sentinel: clear` never appears while a ticket is out with the
-   guard, and `fixpoint` stays NO while anything is dispatched.
-6. Only `waiting.ci` or `waiting.parent` is left → **`ci-wait.cjs` and stay in the turn.** This is the
-   one legitimate wait, and it is a script rather than your judgement because the
-   run cannot come back on its own: the babysit loop is driven by agent-completion
-   wake-ups, and when the only thing left is CI there is no agent to complete.
-   Measured — the operator asked for a phase to be merged, the run landed one
-   ticket, stopped to wait, and sat there with the next PR green and ready until a
-   person came back. Waiting in the foreground closes that hole by construction:
-   the turn never ends, so nothing has to wake it.
-
-   The waiter also publishes a compact, durable semantic event. Give it the
-   stable delivery run id (`--run-id` or `SHIPYARD_RUN_ID`), let it persist the
-   observation before returning, and consume it through the real inbox before
-   asking for model work:
+3. Recompute the actionable front: new `ready` (unblocked children, cascade
+   dependents) + `branched-needs-pr` + open non-green PRs.
+4. Front NOT empty → add the new ready ones to scope and return to Step 2/3; open
+   PRs are the guard's (Step 4 duty processing only on the fallback path).
+   Exhaust the graph wave by wave WITHOUT re-asking the human.
+5. Only `execute`/`publish` are empty but the guard is still working → NOT a
+   fixpoint: report the guard's state and wait for its report. `sentinel: clear`
+   never appears while a ticket is out with the guard.
+6. Only `waiting.ci` or `waiting.parent` is left → **`ci-wait.cjs` and stay in the
+   turn.** The run cannot come back on its own (nothing is left to complete and
+   wake it), so this is the one legitimate wait, as a script rather than your
+   judgement:
 
    ```sh
-   PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
-   GRAPH="${GRAPH:-$PROJECT_ROOT/.planning/graph}"
-   RUN_ID="${RUN_ID:-${SHIPYARD_RUN_ID:-ci-wait:$GRAPH}}"
-   WAIT_JSON="$(mktemp)"
-   trap 'rm -f "$WAIT_JSON"' EXIT
-
-   node plugins/delivery-pipeline/scripts/ci-wait.cjs --graph "$GRAPH" --run-id "$RUN_ID" --json >"$WAIT_JSON"
-   (cd "$PROJECT_ROOT" && node plugins/delivery-pipeline/scripts/state-sync.cjs)
-
-   # The waiter may watch several PRs. Extract the identity it actually returned;
-   # never reuse a stale caller-side TICKET/PR for the durable consumer.
-   EVENT_JSON="$(node -e '
-     const fs = require("node:fs");
-     const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-     const event = result.wait_event;
-     if (!event || !event.action_id || !event.dispatch_id || !event.ticket || event.pr === undefined) process.exit(1);
-     process.stdout.write(JSON.stringify({
-       ticket: String(event.ticket), repository: event.repository || "", pr: String(event.pr),
-       action_id: String(event.action_id), dispatch_id: String(event.dispatch_id),
-     }));
-   ' "$WAIT_JSON")" || EVENT_JSON=
-
-   if [ -n "$EVENT_JSON" ]; then
-     TICKET="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).ticket)' "$EVENT_JSON")"
-     REPOSITORY="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).repository)' "$EVENT_JSON")"
-     PR="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).pr)' "$EVENT_JSON")"
-     PENDING_JSON="$(node plugins/delivery-pipeline/scripts/wait-events.cjs pending \
-       --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" \
-       --repository "$REPOSITORY" --pr "$PR" --json)"
-     ACTION_ID="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).action_id)' "$PENDING_JSON")"
-     DISPATCH_ID="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).dispatch_id)' "$PENDING_JSON")"
-
-     # After the ADR-014 boundary has reserved this exact action, acknowledge
-     # the same identity. A duplicate acknowledgment is safe and idempotent.
-     node plugins/delivery-pipeline/scripts/wait-events.cjs acknowledge \
-       --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" \
-       --repository "$REPOSITORY" --pr "$PR" --action-id "$ACTION_ID" \
-       --dispatch-id "$DISPATCH_ID" --decision reserved --json
-   fi
+   GRAPH="<project>/.planning/graph"; RUN_ID="${SHIPYARD_RUN_ID:-ci-wait:$GRAPH}"
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/ci-wait.cjs --graph "$GRAPH" --run-id "$RUN_ID" --json
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs
    ```
 
-   `pending` durably consumes the action and returns the same `action_id` and
-   `dispatch_id` after a restart. Route any model work only through the
-   ADR-014 dispatch boundary, with fresh role, repository/worktree, head/base,
-   policy and live evidence. After a durable dispatch reservation or durable
-   no-action decision, acknowledge that exact identity:
+   It persists a compact durable `wait_event` before returning. When the result
+   carries one, consume the identity IT returned (`ticket`, `repository`, `pr`) —
+   never a stale caller-side one:
 
    ```sh
-   node plugins/delivery-pipeline/scripts/wait-events.cjs acknowledge --graph "$GRAPH" --run-id "$RUN_ID" --ticket "$TICKET" --repository "$REPOSITORY" --pr "$PR" --action-id "$ACTION_ID" --dispatch-id "$DISPATCH_ID" --decision reserved --json
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/wait-events.cjs pending --graph "$GRAPH" --run-id "$RUN_ID" \
+     --ticket <T> --repository <repo> --pr <N> --json     # → {action_id, dispatch_id}
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/wait-events.cjs acknowledge --graph "$GRAPH" --run-id "$RUN_ID" \
+     --ticket <T> --repository <repo> --pr <N> --action-id <id> --dispatch-id <id> --decision reserved --json
    ```
 
-   Missing, corrupt, newer-schema or unbound publication evidence is a resync
-   refusal, never a wake or a launch. A wait event never authorizes push, review,
-   or merge: the sentinel's live head, review, architecture, human-approval and
-   integration gates remain authoritative. Newly actionable work interrupts the
-   wait; re-sync and take that work rather than acknowledging an absent
-   reservation.
+   `pending` durably consumes the action and returns the same ids after a
+   restart. Route any model work only through the ADR-014 boundary with fresh role,
+   repository/worktree, head/base, policy and live evidence, and acknowledge the
+   exact identity only after a durable dispatch reservation or a durable no-action
+   decision. Missing, corrupt, newer-schema or unbound publication evidence is a
+   resync refusal, never a wake or a launch. A wait event never authorizes push,
+   review or merge — the sentinel's live head, review, architecture, human-approval
+   and integration gates stay authoritative. Newly actionable work interrupts the
+   wait: re-sync and take it.
 
    `ci-wait.cjs` **refuses** (exit 3) whenever the board holds actionable work or a
    ticket is with an agent, so it cannot become the `gh pr checks --watch`
-   serialization this conveyor removed — that rule was about opportunity cost, and
-   there is none when the board has no other move. It returns the moment any
-   watched PR settles, green OR red, or a complete CI/review observation changes;
-   on timeout it returns 0 anyway. Either way:
-   re-sync and take the round. Never hand-roll a wait; if it refuses, it is
-   telling you there is work.
-
-   **This step is enforced, not suggested.** The stop gate refuses a stop whose
-   board holds nothing but `waiting.ci` — because "the loop should call the waiter"
-   is exactly the kind of prose rule that gets skipped. And it ends on its own:
-   `ci-wait.cjs` counts empty windows against the delivery-state fingerprint and
-   escalates itself after three (~45m of nothing moving), which parks the ticket,
-   drops it from the front and stops the refusal. So a pipeline that will not
-   settle ends with a person rather than with you waiting all night — you do not
-   need to decide when to give up.
+   serialization; it returns when any watched PR settles (green or red) or a
+   complete CI/review observation changes, and returns 0 on timeout. Either way,
+   re-sync and take the round; never hand-roll a wait. **This step is enforced:**
+   the stop gate refuses a stop whose board holds only `waiting.ci`, and
+   `ci-wait.cjs` escalates itself after three empty windows (~45m), which parks the
+   ticket — you never decide when to give up.
 7. Front empty AND the guard has reported → go to Step 5 (fixpoint).
 
-`stop-gate.cjs` exists to enforce this rule, because it was skipped repeatedly and
-always at the same moment: writing the summary. Where the runtime offers a stop
-hook, it is wired there by `make install-shipyard-claude-hook` and refuses to end
-a run while `delivery-front.json` lists actionable
-work. Where it does not, nothing catches you and the rule is yours alone to keep —
-so assume you are on that side. Either way, two consequences:
-- **Do not treat a summary as an ending.** Post it if it helps the human follow
-  along, then keep going. You can also run `stop-gate.cjs` yourself — pipe it
-  `{"session_id":"<this session id>"}` — to check whether stopping here is legitimate.
+`stop-gate.cjs` enforces this rule because it was skipped repeatedly, always while
+writing the summary. Where the runtime has a stop hook (`make
+install-shipyard-claude-hook`) it refuses to end a run while `delivery-front.json`
+lists actionable work; where it does not, the rule is yours alone. Two consequences:
+- **Do not treat a summary as an ending.** Post it if it helps, then keep going.
+  Run `stop-gate.cjs` yourself — pipe it `{"session_id":"<this session id>"}` — to
+  check whether stopping here is legitimate.
 - **If work must NOT be taken, park it — do not leave it listed.**
   `escalation-record.cjs mark` when a human must decide, `drift-record.cjs mark`
   when the plan predates what shipped. A parked item leaves the front; an ignored
   one does not.
-The gate is deliberately narrow: it is silent when every actionable item is left
-behind in a phase already moved past, on a board too old to describe a live run,
-and once a session has spent its refusals — one per cascade ROUND (a refusal
-repeats only after the board advanced: a newer `generated_at`, or a journalled
-merge/push since the last one), capped by `SHIPYARD_STOP_GATE_MAX_BLOCKS` (12),
-and falling back to one per turn wherever a round cannot be proven. It is NOT
-silent when only CI is pending — that board is a WAIT, not a fixpoint, so it
-blocks and names `ci-wait.cjs` (the loop-back's item 6). It is NOT silent on a board
-the run has moved past without re-syncing: a journalled merge or push after
-`generated_at` proves the board is behind reality, whatever its age, and that is
-the shape that ended a run mid-cascade with three PRs to go. It is also silent over a ticket an
-agent already holds — that is `dispatch-record.cjs` doing its job, not a hatch
-being widened, and the record expires by itself so nothing stays hidden. So a
+
+The gate is deliberately narrow (one refusal per cascade round, capped by
+`SHIPYARD_STOP_GATE_MAX_BLOCKS`, silent over a ticket an agent holds, a phase
+already moved past or a board too old to describe a live run), but it is NOT silent
+when only CI is pending (a WAIT, not a fixpoint: it names `ci-wait.cjs`) or when a
+journalled merge/push after `generated_at` proves the board is behind reality. A
 verdict from it is real work.
 
-**Cascade servicing (epic-stacked).** A ticket-PR merges into ITS base
-(the epic for a root, the parent's branch for a dependent) — a direct merge into main
-does not happen.
+**Cascade servicing (epic-stacked).** A ticket PR merges into ITS base (the epic
+for a root, the parent's branch for a dependent), never directly into main. One
+merge is not the end of a cascade: each squash-merge rewrites the parent's
+history, so the next child goes `DIRTY` the moment its base lands — base-merge it,
+push, and the push re-runs every check. An N-ticket stack costs **N rounds and N
+CI waits**, each one `ci-wait.cjs`'s, not a stop; "merge everything" is done when
+the board says `fixpoint: YES`. After each parent merge:
+- rerun `state-sync.cjs` (the children of the merged parent now get the base `epic`);
+- retarget their open PRs: `epic-branch.sh retarget <child-pr> <epic>` (idempotent);
+- when the epic first receives commits, open the integration PR:
+  `epic-branch.sh pr <epic>` (`no-diff-yet` before there are commits — a no-op).
 
-**One merge is not the end of a cascade, and this is the step most often dropped.**
-Each squash-merge rewrites the parent's history, so the next child goes `DIRTY` the
-moment its base lands: base-merge it, push, and the push re-runs every check. An
-N-ticket stack therefore costs **N rounds and N CI waits**, and every one of them
-is `ci-wait.cjs`'s (loop-back item 6) — not a stop. "Merge everything" is done when
-the board says `fixpoint: YES`, not when the first ticket lands.
-
-After each parent merge:
-- rerun `state-sync.cjs` — the children of the merged parent will get the base
-  `epic`, and the same run finalizes the native GSD projection;
-- retarget their open PRs: `epic-branch.sh retarget <child-pr> <epic>`
-  (GitHub often does this itself, and `sentinel.cjs merge` does it for the children
-  it can see; the command stays idempotent);
-- when the epic first receives commits (the first ticket flowed in) — open the
-  integration PR: `epic-branch.sh pr <epic>` (before there are commits it prints
-  `no-diff-yet`, no-op).
-Cascade means a child can be driven IN PARALLEL with the parent: as soon as the parent is
-`branched`, the child is ready (Step 3) — the flow doesn't stop on merge.
-
-A green/branched parent unblocks the next tickets in scope → return to Step 3
-via the loop-back above. Do NOT end while the front is not empty.
+A green/branched parent unblocks the next tickets in scope → return to Step 3 via
+the loop-back above. Do NOT end while the front is not empty.
 
 ## Step 5 — Completion (only at the fixpoint)
 
