@@ -2387,8 +2387,8 @@ loop:
        static launch. The producer leaves source uncommitted and pushed=false.
        Exactly one original native completion and its durable current-policy
        receipt are required for the sealed repair result and complete dispositions.
-       Source changes receive the assigned host verification and signed fixer
-       coverage through the existing resumable finalizer before host publication.
+       Source changes receive the assigned host verification and a signed fixer
+       commit through the existing resumable finalizer before host publication.
        Feedback-only results require no commit: the host rechecks full feedback,
        performs replies/resolutions and independently confirms their actual IDs.
        Escalated findings remain unresolved; uncertain actions retain pending

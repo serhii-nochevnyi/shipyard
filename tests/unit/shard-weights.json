@@ -31,7 +31,6 @@
  "comment-policy.test.cjs": 8,
  "configure-codex-notify.test.cjs": 5,
  "context-packet.test.cjs": 1,
- "conveyor-coverage.test.cjs": 4,
  "conveyor-scratch.test.cjs": 1,
  "decompose-dispatch-wait-contract.test.cjs": 15,
  "decompose-friction-contract.test.cjs": 1,
