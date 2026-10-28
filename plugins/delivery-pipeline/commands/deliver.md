@@ -497,62 +497,43 @@ before any takeover or retry.
 
 ## Tracker projection — the acting half (ADR-008 D4)
 
-The tracker is a PROJECTION of the journal above, and a projection is driven:
-the `status_change` events the conveyor already owns are replayed onto the issue
-each ticket's `delivery.jira` key names. The deterministic half of that is
-`jira-project.cjs` — the `plan` verb computes the work list from three LOCAL
-files (the journal, `tickets.json`, the configured map) and its watermark makes
-every transition exactly-once and forward-only. That script opens no socket and
-holds no credential. **The acting half below is yours**, because the only
-tracker client the conveyor has is the MCP the session connected.
+The tracker is a PROJECTION of the journal: the `status_change` events the
+conveyor owns are replayed onto the issue each ticket's `delivery.jira` key names.
+`jira-project.cjs plan` computes the work list from three LOCAL files (journal,
+`tickets.json`, the configured map) and its watermark makes every transition
+exactly-once and forward-only; it opens no socket. **The acting half is yours**,
+because the only tracker client is the MCP the session connected.
 
 **Where it runs, and why nothing waits on it.** The projection is a SEPARATE act
-AFTER a `state-sync.cjs`, never a step inside one: state-sync runs on every
-babysit round and its wall time IS this conveyor's tick rate, so it must not
-grow a dependency on a tracker's availability. Ask the planner for the work
-list, and SAY WHICH graph: the planner resolves the project — and therefore the
-configuration — from the graph directory it is given, while a bare invocation
-resolves `<cwd>/.planning/graph`, which from a ticket worktree is someone else's
-or nothing at all. Pass the explicit project graph in the invocation below,
-including when running from a ticket worktree:
+AFTER a `state-sync.cjs`, never a step inside one (state-sync's wall time is the
+tick rate). Name the project's graph explicitly — a bare invocation resolves
+`<cwd>/.planning/graph`, which from a ticket worktree is someone else's or nothing:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs plan --json --graph <project>/.planning/graph
 ```
 
-`enabled: false`, or an empty `items` — the ordinary outcome, once a round — is
-ONE line and nothing else. Otherwise perform each emitted item below, then move
-on; the front does not wait for you here.
+`enabled: false`, or an empty `items` — the ordinary outcome — is ONE line and
+nothing else. Otherwise perform each emitted item, then move on.
 
-**A pending projection is not actionable, and it is not a reason to block.**
-That is a deliberate asymmetry with every other unreached mechanism this
-pipeline has fixed, where the remedy was to put the work on the board and let
-the stop gate enforce it. The justification here is specific rather than
-general: the watermark makes catch-up FREE, so a round that skips the projection
-costs one round of tracker lag and the next round closes it. Nothing — not the
-graph, not the front, not a merge — waits on a transition, so there is no
-equivalent here of the silent hours a skipped CI wait cost. It stays out of
-`delivery-front.json` and out of the stop gate for that reason, and only for
-that reason.
+**A pending projection is not actionable, and it is not a reason to block.** The
+watermark makes catch-up free: a round that skips it costs one round of tracker
+lag. It stays out of `delivery-front.json` and the stop gate for that reason only.
 
-**It cannot fire unconfigured.** `jira_transitions` (declared as
-`delivery_pipeline.jira_transitions`; the `pipeline.*` spelling is read too) maps
-OUR status to THEIR target status NAME — `pr-open:In Progress, merged:Done` —
-and it is EMPTY by default. Empty is the feature switched off, the planner then
-emits nothing, and nothing here runs: silence is not consent to write into
-someone's tracker.
+**It cannot fire unconfigured.** `jira_transitions`
+(`delivery_pipeline.jira_transitions`; `pipeline.*` is read too) maps OUR status
+to THEIR target status NAME — `pr-open:In Progress, merged:Done` — and is EMPTY by
+default: the planner then emits nothing.
 
-**Tracker eligibility is opt-in by status NAME.** `jira_todo_statuses` (declared
-as `delivery_pipeline.jira_todo_statuses`; the `pipeline.*` spelling is read too)
-is a comma-separated allowlist such as `To Do, Backlog, Selected for Development`.
-The reader trims entries, removes blanks, preserves the tracker's spelling and
-order, and removes duplicates. An empty value disables the eligibility gate;
-matching uses the tracker's status NAME only, with no `statusCategory` fallback.
+**Tracker eligibility is opt-in by status NAME.** `jira_todo_statuses`
+(`delivery_pipeline.jira_todo_statuses`) is a comma-separated allowlist such as
+`To Do, Backlog, Selected for Development` (trimmed, deduplicated, tracker
+spelling and order kept). Empty disables the gate; matching uses the status NAME
+only, with no `statusCategory` fallback.
 
 When the gate is enabled, a person may bypass it only for one explicitly named
-ticket after the tracker observation has been recorded. Use the canonical ticket
-id and its Jira key, preserve the observation, and state why the bypass is
-intentional:
+ticket after the observation has been recorded — canonical ticket id and Jira
+key, observation preserved, reason stated:
 
 ```bash
 # The adapter receives these four values as data, then invokes the wrapper with
@@ -567,82 +548,41 @@ record_tracker_override "$ticket_id" "$jira_key" "$override_reason" "$project_gr
 ```
 
 This is an exact-ticket escape hatch, not a scope setting: `whole phase N`,
-`everything reachable`, and `all ready` must never invoke `override` and remain
-subject to the eligibility gate for every pending ticket. The generation-bound
-record expires on the next delivery snapshot, so it is not a permanent
-exemption. A missing tracker answer is retained as `unknown`, never fabricated
-into a To Do/unassigned pair.
+`everything reachable` and `all ready` never invoke `override`. The
+generation-bound record expires on the next delivery snapshot. A missing tracker
+answer is retained as `unknown`, never fabricated into a To Do/unassigned pair.
 
-Each emitted item carries `{ticket, key, from, to, target_status, ts}`, and its
-two status fields are two different vocabularies. Confusing them is the defect
-this section exists to prevent:
+Each emitted item carries `{ticket, key, from, to, target_status, ts}`: `to` is OUR
+status (`pending`, `branched`, `pr-open`, `merged`), `target_status` is THEIR status
+NAME off the map, `ts` is the driving `status_change`'s own timestamp. For EACH item:
 
-- `to` is OUR status — one of `pending`, `branched`, `pr-open`, `merged`.
-- `target_status` is THEIR status NAME, straight off the map (`Done`).
-- `ts` is the driving `status_change`'s own timestamp, copied through — it is
-  what `record --unreachable` anchors suppression to, not the wall clock.
-
-For EACH item:
-
-1. **Ask the connected tracker MCP for the issue's available transitions** —
-   whatever operation it exposes for that (e.g. `getTransitionsForJiraIssue`).
-   Do not hand-roll REST calls, exactly as the export half does not.
-2. **Match on the TARGET STATUS, never on the transition's own name.** The one
-   you want is the offered transition whose TARGET status name equals the item's
-   `target_status`. The MCP's own schema refuses the shortcut in as many words:
-   *"Name of the transition itself, not the target status — the two often
-   differ, so 'Done' does not match a transition named 'Review->Done'."* A
-   projection keyed on the transitions' own names works against the one workflow
-   it was written for and silently does nothing on the next one.
-3. **Transition by that ID.** Two connected MCP variants take different
-   arguments here — one requires `transition: {id}` and accepts no name at all,
-   the other accepts an id or a name — so the ID is the only argument BOTH of
-   them take. Resolving it in step 1 is not an optimisation; it is the only
-   portable call.
-4. **Record it, with the id as the evidence:**
+1. Ask the connected tracker MCP for the issue's available transitions (e.g.
+   `getTransitionsForJiraIssue`); no hand-rolled REST.
+2. **Match on the TARGET STATUS, never on the transition's own name**, then
+   transition **by that ID** (the only argument every MCP variant takes).
+3. **Record it, with the id as the evidence** (use the `to` of the item actually
+   performed; this alone advances the watermark and journals `jira_transition`; a
+   report with no id is refused and an unrecorded transition is projected again):
 
    ```bash
    node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs record <T> <KEY> \
      --to <the performed item's "to"> --transition-id <id> --status "<the target status name>"
    ```
-
-   Pass the `to` from the item actually performed. If the journal advanced while
-   the tracker call ran, recording that older item refuses and the next planner
-   call retains the newer work; never substitute the newer item's `to`.
-
-   This is the ONLY thing that advances the watermark, and it journals the
-   `jira_transition` event for you. It REFUSES a report that names no id — "I
-   transitioned it" is not evidence, the id of the transition performed is — and
-   a transition you do not record is one the next round projects all over again.
-5. **Target not reachable → report it, and do not retry.** Workflows forbid
-   arbitrary jumps, so a target status the issue's current status does not offer
-   is an ORDINARY outcome, not a failure:
+4. **Target not reachable → report it, do not retry** (an ordinary outcome; `--to` is
+   OUR status, not the target name; the item is withheld until a NEWER
+   `status_change` arrives):
 
    ```bash
    node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs record --unreachable <T> <KEY> \
      --to <the item's own "to"> --offered "<the transitions that WERE offered>"
    ```
+5. Never pass a comment through the transition (it may be dropped silently while
+   the transition reports success); comments, worklogs and the phase Epic issue
+   are out of scope. No tracker MCP connected, or the map empty → skip with ONE line.
 
-   `--to` takes OUR status off the item (`merged`), NOT the target name; the
-   recorder refuses a report filed at a `to` the planner never offered. The
-   report does not advance the watermark — nothing was transitioned — and it
-   withholds that item until a NEWER `status_change` for the ticket arrives, so
-   nothing retries. Without it the pair is a retry loop wearing a report's hat:
-   one tracker call per stuck ticket per round, forever.
-6. **Never pass a comment through the transition.** The schema says a comment
-   sent with the transition's `update` may be dropped WITHOUT error while the
-   transition still reports success — a silent lie in the audit trail. Comments,
-   worklogs and the phase Epic issue are all out of scope here.
-7. **No tracker MCP connected, or the map empty → skip with ONE line.** Never an
-   error, never a retry loop, and never a reason to hold a merge.
-
-**A tracker error never blocks a merge.** It does not fail a round, hold a
-ticket, or change a fixpoint either — report it in one line and carry on with
-the front. This is the export half's standing rule (*"a Jira error never blocks
-or fails decomposition"*) extended to delivery unchanged, and it is the whole
-reason this half is allowed to write at all: the conveyor's own records are the
-source of truth and the tracker is the copy, so a copy that failed to update is
-a stale board, never a stopped pipeline.
+**A tracker error never blocks a merge.** It never fails a round, holds a ticket or
+changes a fixpoint: report it in one line and carry on. The conveyor's own records
+are the source of truth; the tracker is the copy.
 
 ## Parallel work through the selected runtime host
 
@@ -951,23 +891,19 @@ The `⚠` lines from state-sync — you MUST show them to the human as a separat
 - An argument with tickets → that's the scope; check it against the board.
 - Otherwise AskUserQuestion (multiSelect) from ready tickets + the options "whole
   phase N", **"everything reachable — drive to fixpoint" (default recommendation)**,
-  "all ready".
-  pr-open tickets are automatically in the babysit cycle's scope — they aren't chosen.
+  "all ready". pr-open tickets are automatically in the babysit scope.
 - Only a single exact ticket id (or the Jira key mapped to that one id) may use
   the generation-bound `tracker-record.cjs override`; set scopes never bypass
   tracker eligibility.
-- **Scope is EXPANDABLE, not one-shot.** Whatever is chosen, the scope transitively
-  includes the tickets that will become ready once the chosen ones advance (cascade
-  children, unblocked dependents). Don't narrow the run to the starting set — after
-  each state-sync pick up new ready tickets into scope and execute them (Step 3).
-  "Everything reachable" = the closure of the graph from roots to leaves; drive it to
-  the fixpoint without re-asking on each wave.
+- **Scope is EXPANDABLE, not one-shot.** It transitively includes the tickets that
+  become ready once the chosen ones advance; after each state-sync pick up new
+  ready tickets and execute them (Step 3). "Everything reachable" is the closure
+  of the graph from roots to leaves — drive it to the fixpoint without re-asking.
 - A chosen blocked ticket → clarify AT THAT POINT. In epic-stacked "blocked" means
-  "the parent is still pending (no branch for cascade)" — usually it's enough to add the
-  parent (which is already in "everything reachable"); the child becomes ready in the
-  same run. In direct-to-main "blocked" = the parent is not merged.
-- Cascade: a dependency does NOT have to be merged — a branch is enough. Selecting from
-  the middle of the graph is legal; the root of the stack is the epic.
+  the parent has no branch yet — usually adding the parent suffices. In
+  direct-to-main it means the parent is not merged.
+- Cascade: a dependency needs a BRANCH, not a merge; selecting from the middle of
+  the graph is legal, the root of the stack is the epic.
 
 ### Tracker eligibility read (only when `jira_todo_statuses` is non-empty)
 
@@ -993,8 +929,7 @@ The values returned by MCP are data, never shell source. Do not interpolate a
 status, assignee, or error string into a constructed command and do not use
 `eval`. Prefer the connection's argv/process-spawn API; if the only available
 runner is a shell, put each returned value in a variable and pass it as its own
-quoted argument, as below. This preserves exact tracker error text without
-letting tracker data become command syntax.
+quoted argument, as below.
 
   ```bash
   # The adapter receives ticket-id, Jira key, status NAME, assignee identity,
@@ -1030,12 +965,10 @@ assigned, wrong-status, missing, and `unknown` observations park only that
 ticket with the tracker reason. If the command names one exact ticket, the
 operator may then invoke the documented `tracker-record.cjs override` for that
 ticket; a set scope never does. An unavailable Jira MCP with the policy enabled
-is therefore a per-ticket `unknown` outcome, not permission to proceed and not
-a reason to stop processing other tickets. The override must still be based on
-a complete status-plus-assignee observation from the same delivery generation:
-an unknown/incomplete record remains blocked, and the override flag does not
-fabricate permission. The front accepts an override only alongside a known
-`eligible` or `ineligible` verdict.
+is a per-ticket `unknown` outcome, not permission to proceed and not a reason to
+stop other tickets. The override must still rest on a complete status-plus-assignee
+observation from the same delivery generation: an unknown/incomplete record remains blocked. The front accepts an override only alongside a known `eligible`
+or `ineligible` verdict.
 
 ## Step 2 — Drift-gate the chosen tickets
 
