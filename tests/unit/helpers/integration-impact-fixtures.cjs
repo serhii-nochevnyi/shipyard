@@ -249,4 +249,21 @@ function independentDomain(plan) {
   assert.deepEqual(plan.units.flatMap(unit => unit.primary_obligation_ids).sort(), plan.obligations.map(item => item.id).sort());
 }
 
-module.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, phaseBinding, projectOptions, write, git, commit, agent, claude, delivery, collector, roleArtifact, hash, stable, MiB, partitionSegments, partitionInputBytes, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactBinding, compactReviewedIdentity, compactAggregatePayload, buildPartitionUnits, observedPartitionProfile, compactProfile, partitionUnitPayload, renderPartitionInput, partitionHash, partitionCoverage, assertPartitionCoverage, partitionPlanRecord, assertPartitionInputBound, partitionResult, endpoints, prepare, originalCompactFixtureAnswer, addCompactPressure, expandCompactIdentity, independentTables, independentEdges, independentDomain, substantiveFixtureNarrative };
+async function assertCompactOriginalRefused(runtime, mutate, expected, extra = {}) {
+  await publicIntegrationFixture(async f => {
+    addCompactPressure(f);
+    let reached = false;
+    const controls = { observed: true, ...extra, result(result, payload) {
+      assert.equal(payload.format, 'compact-domain.v1');
+      reached = true;
+      originalCompactFixtureAnswer(result, payload);
+      mutate(result);
+    } };
+    const fixture = publicPartitionFixture(f, runtime, controls);
+    await assert.rejects(supportedPartitionCaller(f, runtime, fixture.options), expected);
+    assert.equal(reached, true);
+    assert.ok(controls.launches.length > 0 && controls.launches.every(({ payload }) => payload.format === 'compact-domain.v1'));
+  });
+}
+
+module.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, phaseBinding, projectOptions, write, git, commit, agent, claude, delivery, collector, roleArtifact, hash, stable, MiB, partitionSegments, partitionInputBytes, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactBinding, compactReviewedIdentity, compactAggregatePayload, buildPartitionUnits, observedPartitionProfile, compactProfile, partitionUnitPayload, renderPartitionInput, partitionHash, partitionCoverage, assertPartitionCoverage, partitionPlanRecord, assertPartitionInputBound, partitionResult, endpoints, prepare, originalCompactFixtureAnswer, addCompactPressure, expandCompactIdentity, independentTables, independentEdges, independentDomain, substantiveFixtureNarrative, assertCompactOriginalRefused };

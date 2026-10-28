@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, claude, roleArtifact, hash, stable, MiB, partitionInputBytes, compactDomainJudgments, compactAggregatePayload, partitionUnitPayload, renderPartitionInput, partitionPlanRecord, assertPartitionInputBound, prepare, originalCompactFixtureAnswer, addCompactPressure, independentTables, independentEdges, independentDomain } = require('./helpers/integration-impact-fixtures.cjs');
 
-for (const runtime of ['claude']) test(runtime + ' complete37 realistic static and original semantic fixture fits without semantic credit', async t => {
+for (const runtime of ['claude']) test(runtime + ' complete37 realistic static and original semantic fixture fits without semantic credit', async () => {
   await publicIntegrationFixture(async f => {
     addCompactPressure(f, 37, true);
     const review = prepare(f, runtime);
@@ -91,20 +91,6 @@ for (const runtime of ['claude']) test(runtime + ' complete37 realistic static a
       assert.ok(unit.reference.artifact_ref.endsWith('/.shipyard-role-artifact.json'));
     }
     assert.equal(new Set(final.payload.semantic_values.map(stable)).size, final.payload.semantic_values.length);
-    const diagnostic = { actual_final_input_bytes: partitionInputBytes(plan, final.input, 'phase') };
-    t.diagnostic(JSON.stringify({ runtime, structural_only: true, semantic_credit: false,
-      source_count: plan.material.length, source_bytes: plan.material.reduce((sum, source) => sum + source.bytes, 0),
-      unit_count: plan.units.length, pair_count: plan.interaction_domain.count,
-      governing_source_bytes: record.operational_diagnostic.governing_source_bytes,
-      obligation_metadata_bytes: record.operational_diagnostic.obligation_metadata_bytes,
-      maximum_unit_payload_components: Object.fromEntries(Object.keys(launches[0].payload).map(key => [key,
-        Math.max(...launches.filter(item => item.payload.kind === 'unit').map(item => Buffer.byteLength(stable(item.payload[key]))))])),
-      maximum_unit_table_components: Object.fromEntries(Object.keys(launches[0].payload.tables).map(key => [key,
-        Math.max(...launches.filter(item => item.payload.kind === 'unit').map(item => Buffer.byteLength(stable(item.payload.tables[key]))))])),
-      exact_original_obligation_values_bytes: Buffer.byteLength(stable(plan.obligations.filter(item => Object.hasOwn(item, 'value')).map(item => item.value))),
-      final_interned_obligation_values_bytes: Buffer.byteLength(stable(payload.tables.values)),
-      units: record.operational_diagnostic.units, actual_final_input_bytes: diagnostic.actual_final_input_bytes,
-      actual_original_final_result_bytes: Buffer.byteLength(stable(originals.get('phase'))) }));
   });
 });
 

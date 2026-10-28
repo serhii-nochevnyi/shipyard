@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, git, agent, claude, delivery, collector, roleArtifact, hash, stable, MiB, partitionSegments, partitionInputBytes, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactAggregatePayload, compactProfile, partitionUnitPayload, renderPartitionInput, partitionPlanRecord, assertPartitionInputBound, partitionResult, endpoints, prepare, originalCompactFixtureAnswer, addCompactPressure, expandCompactIdentity, independentTables, independentEdges, substantiveFixtureNarrative } = require('./helpers/integration-impact-fixtures.cjs');
+const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, assertCompactOriginalRefused, git, agent, claude, delivery, collector, roleArtifact, hash, stable, MiB, partitionSegments, partitionInputBytes, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactAggregatePayload, compactProfile, partitionUnitPayload, renderPartitionInput, partitionPlanRecord, assertPartitionInputBound, partitionResult, endpoints, prepare, originalCompactFixtureAnswer, addCompactPressure, expandCompactIdentity, independentTables, independentEdges, substantiveFixtureNarrative } = require('./helpers/integration-impact-fixtures.cjs');
 
 const root = '../../plugins/delivery-pipeline/scripts/';
 for (const runtime of ['codex', 'claude']) test(runtime + ' authentic scan crosses generic bound with deduplicated unchanged paths', async () => {
@@ -295,12 +295,10 @@ const sealingMutations = {
   'actual original field overflow': result => { result.conclusions = [substantiveFixtureNarrative(result.unit_id, 18000)]; },
 };
 const sealingRefusals = {
-  'unknown format': ['INTEGRATION_PARTITION_INVALID', /exact coverage differs/],
-  'wrong binding': ['INTEGRATION_PARTITION_INVALID', /exact coverage differs/],
-  'missing original domain': ['INTEGRATION_PARTITION_INVALID', /domain judgment gap/],
-  'overlapping original domain': ['INTEGRATION_PARTITION_INVALID', /overlapping or foreign domain judgment/],
-  'foreign original domain': ['INTEGRATION_PARTITION_INVALID', /original substantive domain judgment or domain identity is missing/],
-  'actual original field overflow': ['INTEGRATION_INPUT_OVER_BOUND', /complete unit detail exceeds frozen final-template ceiling/],
+  'unknown format': /exact coverage differs/, 'wrong binding': /exact coverage differs/,
+  'missing original domain': /domain judgment gap/, 'overlapping original domain': /overlapping or foreign domain judgment/,
+  'foreign original domain': /original substantive domain judgment or domain identity is missing/,
+  'actual original field overflow': /complete unit detail exceeds frozen final-template ceiling/,
 };
 test('compact original sealing refuses invalid originals at the sealing boundary', async t => {
   await publicIntegrationFixture(async f => {
@@ -320,8 +318,8 @@ test('compact original sealing refuses invalid originals at the sealing boundary
     assert.equal(partitionResult(accepted, record, launch), accepted);
     for (const [name, mutate] of Object.entries(sealingMutations)) await t.test('refuses ' + name, () => {
       const invalid = answer(); mutate(invalid);
-      const [code, message] = sealingRefusals[name];
-      assert.throws(() => partitionResult(invalid, record, launch), error => error.code === code && message.test(error.message));
+      assert.throws(() => partitionResult(invalid, record, launch), error => sealingRefusals[name].test(error.message)
+        && error.code === (name === 'actual original field overflow' ? 'INTEGRATION_INPUT_OVER_BOUND' : 'INTEGRATION_PARTITION_INVALID'));
     });
     await t.test('refuses incomplete original variants', () => {
       const blocker = { id: 'B1', type: 'violation', blocking: true, summary: 'Consumer contract is broken.', evidence: 'Original consumer source.' };
@@ -339,22 +337,9 @@ test('compact original sealing refuses invalid originals at the sealing boundary
     });
   });
 });
-test('compact original public sealing refuses wrong binding', async () => {
-  await publicIntegrationFixture(async f => {
-    addCompactPressure(f);
-    let compactReached = false;
-    const controls = { observed: true, result(result, payload) {
-      assert.equal(payload.format, 'compact-domain.v1');
-      compactReached = true;
-      originalCompactFixtureAnswer(result, payload); sealingMutations['wrong binding'](result);
-    } };
-    const fixture = publicPartitionFixture(f, 'claude', controls);
-    await assert.rejects(supportedPartitionCaller(f, 'claude', fixture.options),
-      error => error.code === 'INTEGRATION_PARTITION_INVALID' && /exact coverage differs/.test(error.message));
-    assert.equal(compactReached, true);
-    assert.ok(controls.launches.length > 0 && controls.launches.every(({ payload }) => payload.format === 'compact-domain.v1'));
-  });
-});
+test('compact original public sealing refuses wrong binding', () =>
+  assertCompactOriginalRefused('claude', sealingMutations['wrong binding'],
+    error => error.code === 'INTEGRATION_PARTITION_INVALID' && /exact coverage differs/.test(error.message)));
 test('compact explicit edges keep same endpoints with distinct context and incident selectors', () => {
   const plan = compactStructuralPlan(4);
   plan.seams = ['provider-context', 'consumer-context'].map(context => ({ id: 'e-' + hash(context),
