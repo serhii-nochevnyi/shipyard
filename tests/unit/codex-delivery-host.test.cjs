@@ -2809,7 +2809,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       }
       if (mutation?.startsWith('normalized-uncovered-source')) {
         fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'uncovered external source\n');
-        git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'uncovered external source');
+        git(f.root, 'add', 'src/owned.txt');
+        git(f.root, ...(mutation.endsWith('-signed') ? ['commit', '-qS'] : ['-c', 'commit.gpgsign=false', 'commit', '-q']), '-m', 'uncovered external source');
         publishedHead = git(f.root, 'rev-parse', 'HEAD');
       }
       if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) assert.equal(firstHead, first.artifact.commit);
@@ -2863,6 +2864,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         'normalized-covered-source-location-body': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-covered-source-location-author': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-covered-source-forged': 'REPAIR_SUBJECT_CHANGED', 'normalized-uncovered-source': 'REPAIR_SUBJECT_CHANGED',
+        'normalized-uncovered-source-signed': 'REPAIR_SUBJECT_CHANGED',
         'normalized-covered-source-plan': 'PLAN_DIGEST_MISMATCH', 'normalized-covered-source-owners': 'REPAIR_SUBJECT_CHANGED',
         'normalized-covered-source-reply-body': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-covered-source-reply-author': 'REPAIR_PREDECESSOR_INVALID',
@@ -3308,7 +3310,7 @@ for (const mutation of ['normalized-source-repeat', 'normalized-cli-source-repea
     () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
 
 for (const mutation of ['normalized-covered-source', 'normalized-covered-source-forged', 'normalized-covered-source-plan',
-  'normalized-covered-source-owners', 'normalized-uncovered-source', 'normalized-covered-source-reply-body',
+  'normalized-covered-source-owners', 'normalized-uncovered-source', 'normalized-uncovered-source-signed', 'normalized-covered-source-reply-body',
   'normalized-covered-source-reply-author', 'normalized-covered-source-reply-id', 'normalized-covered-source-reply-target',
   'normalized-covered-source-companion-link', 'normalized-covered-source-location-shift', 'normalized-covered-source-location-null',
   'normalized-covered-source-location-path', 'normalized-covered-source-location-original-line',
