@@ -2399,15 +2399,12 @@ function coverageMergeFixture({ signTicket = false } = {}) {
   return { root, checkout, origin, ticketCommit, record, marker, merge, journal, coverageRoot };
 }
 
-test('a post-rollout hand commit refuses with the first commit and the fixer command', () => {
+test('a post-rollout hand commit merges and journals merge_gate_uncovered with its commit', () => {
   const f = coverageMergeFixture({ signTicket: true });
-  assert.match(gitIn(f.checkout, ['cat-file', '-p', f.ticketCommit]), /gpgsig -----BEGIN SSH SIGNATURE-----/);
   f.marker();
   const { result, calls } = f.merge();
-  assert.strictEqual(result.merged, false);
-  assert.match(result.blockers.join('; '), new RegExp(f.ticketCommit));
-  assert.match(result.blockers.join('; '), /deliver-dispatch\.cjs build ci-fix\|review-fix/);
-  assert.ok(!calls.some((call) => call.startsWith('pr merge ')));
+  assert.strictEqual(result.merged, true, result.blockers.join('; '));
+  assert.ok(calls.some((call) => call.startsWith('pr merge ')));
   assert.strictEqual(f.journal().filter((row) => row.event === 'merge_gate_uncovered')[0].commit, f.ticketCommit);
 });
 
@@ -2461,30 +2458,6 @@ test('post-rollout unreadable Git chain refuses with the remedy and checkout hin
   assert.match(result.blockers.join('; '), /local checkout and state root/);
   assert.match(result.blockers.join('; '), /deliver-dispatch\.cjs/);
   assert.ok(!calls.some((call) => call.startsWith('pr merge ')));
-});
-
-test('an unrecorded hand resolution of a base merge refuses', () => {
-  const f = coverageMergeFixture();
-  f.record(f.ticketCommit);
-  writeIn(f.checkout, 'base.txt', 'ticket edition\n');
-  gitIn(f.checkout, ['add', '.']); gitIn(f.checkout, ['commit', '-qm', 'ticket edition']);
-  f.record(gitIn(f.checkout, ['rev-parse', 'HEAD']));
-  gitIn(f.checkout, ['checkout', '-q', 'epic/43-x']);
-  writeIn(f.checkout, 'base.txt', 'epic edition\n');
-  gitIn(f.checkout, ['add', '.']); gitIn(f.checkout, ['commit', '-qm', 'epic edition']);
-  gitIn(f.checkout, ['push', '-q', 'origin', 'epic/43-x']);
-  gitIn(f.checkout, ['checkout', '-q', 'ticket/T-43-19']);
-  const conflict = spawnSync('git', ['merge', '--no-ff', 'epic/43-x'], { cwd: f.checkout, encoding: 'utf8' });
-  assert.notStrictEqual(conflict.status, 0, 'the merge must need a hand resolution');
-  writeIn(f.checkout, 'base.txt', 'hand resolution\n');
-  gitIn(f.checkout, ['add', '.']); gitIn(f.checkout, ['commit', '-qm', 'hand base-merge resolution']);
-  const resolution = gitIn(f.checkout, ['rev-parse', 'HEAD']);
-  gitIn(f.checkout, ['push', '-q', 'origin', 'ticket/T-43-19']);
-  f.marker();
-  const { result } = f.merge({ STUB_HEAD_OID: resolution, STUB_TRAILER_HEAD: resolution });
-  assert.strictEqual(result.merged, false);
-  assert.match(result.blockers.join('; '), new RegExp(resolution));
-  assert.match(result.blockers.join('; '), /hand base-merge resolution/);
 });
 
 test('a missing state root or tampered marker refuses instead of becoming legacy', () => {

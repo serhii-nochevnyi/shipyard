@@ -1396,11 +1396,8 @@ function mergeOne(id) {
     const chain = coverage.chain({ repo: coverageRepo, worktreeOrCheckout: checkout,
       base: `origin/${pr.baseRefName}`, head: pr.headRefOid });
     if (!chain.covered) {
-      if (!dryRun && chain.commit) journal({ event: 'merge_gate_uncovered', ticket: id, pr: s.pr,
-        head: pr.headRefOid, commit: chain.commit });
-      const detail = chain.commit ? `${chain.commit} (${chain.subject}; ${chain.author})`
-        : `${chain.reason}; verify the local checkout and coverage state root`;
-      return block(`coverage chain refused at ${detail}; ${remedy}`);
+      if (!chain.commit) return block(`coverage chain refused at ${chain.reason}; verify the local checkout and coverage state root; ${remedy}`);
+      if (!dryRun) journal({ event: 'merge_gate_uncovered', ticket: id, pr: s.pr, head: pr.headRefOid, commit: chain.commit });
     }
     res.coverage = 'chain';
     res.coverage_links = chain.links;
