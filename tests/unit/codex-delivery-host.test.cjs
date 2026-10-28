@@ -3789,16 +3789,23 @@ test('a malformed --preflight argv is a usage error', async () => {
   await assert.rejects(runCli(['--preflight', '--bogus'], { write() {} }, {}), (error) => error.code === 'INVALID_INPUT');
 });
 
-test('code review requires private CLI preparation before any in-process launch', async () => {
-  const f = fixture();
-  try {
-    for (const codeReviewContext of [undefined, {}, { schema: 'shipyard.codex-code-review-context.v1', prepared: {} }]) {
-      await assert.rejects(delivery(f, { codeReviewContext }).run({ role: 'code-review', context: { repo: null } }),
-        error => error.code === 'CODE_REVIEW_CONTEXT_REQUIRED');
+test('code review requires private CLI preparation before any in-process launch', () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ f, request, options, calls }) => {
+    const launch = { role: 'code-review', context: { repo: null } };
+    for (const codeReviewContext of [{}, { schema: 'shipyard.codex-code-review-context.v1', prepared: {} }]) {
+      const host = createCodexDeliveryHost({ ...options, scope: request.scope, codeReviewContext });
+      await assert.rejects(host.run(launch), { code: 'CODE_REVIEW_CONTEXT_REQUIRED' });
     }
-    assert.equal(f.calls.length, 0);
-  } finally { clean(f); }
-});
+    const unavailable = createCodexDeliveryHost({ ...options, scope: request.scope,
+      getPullRequest: () => ({ ...f.pr, headRefOid: '0'.repeat(40) }) });
+    await assert.rejects(unavailable.run(launch), { code: 'STALE_CONTEXT' });
+    assert.equal(calls.length, 0);
+    const result = await createCodexDeliveryHost({ ...options, scope: request.scope }).run(launch);
+    assert.equal(result.result.review_contract, 'shipyard.semantic-review.v1');
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls.map(call => call.payload.stage), ['worker', 'worker', 'final']);
+  })));
 
 test('code review builder request admits graph_dir and refuses serialized private custody', () => {
   const root = fs.mkdtempSync(path.join(temporary, 'code-request-'));
@@ -3867,52 +3874,37 @@ async function codeReviewEntryFixture(action, config = {}) {
   }
   const agentManifest = path.join(agentDir, '.shipyard-manifest.json'); fs.writeFileSync(agentManifest, JSON.stringify(manifest));
   const recorder = createDurableRecorder(path.join(storage, 'receipts'));
-  const calls = [];
+  let launchMutationApplied = false;
+  const native = require('../fixtures/phase53/code-review-native-driver.cjs').semanticNativeDriver({
+    runtime: 'codex', worktree: f.root, storageRoot: storage, agentDir, agentManifest,
+    controls: {
+      result(result) {
+        if (config.incomplete) {
+          result.completeness = 'incomplete'; result.outcome = 'human-review-required';
+          result.limitations = ['unresolved source'];
+        }
+      },
+      afterNative(launch) {
+        if (!launchMutationApplied) {
+          launchMutationApplied = true;
+          config.afterLaunch?.({ f, launch, agentDir, recorder });
+        }
+      },
+    },
+  });
+  const calls = native.launches;
   const host = { scope, capabilities: { supportedModels: ['gpt-6.1-sol'], supportedEfforts: ['high', 'xhigh'] }, recorder,
-    launch() { assert.fail('code review must launch statically'); },
-    launchStatic(selection, context) {
-      calls.push({ selection, context });
-      const value = context.code_review_prepared;
-      const binding = codeContext.authenticateLaunch(value, context.prompt, { ticket: scope.ticket, phase: scope.phase,
-        worktree: scope.worktree, dispatch_id: context.dispatch_id, agent_file: selection.agent_file,
-        agent_file_digest: selection.agent_file_digest });
-      const raw = { ...binding, ticket_set: value.prepared.binding.ticketSet, findings: [], dispositions: [],
-        summary: 'Reviewed complete phase input', review_completeness: config.incomplete ? 'incomplete' : 'complete',
-        limitations: config.incomplete ? ['unresolved source'] : [], unresolved_sources: [], evidence_markdown: 'Code review evidence.\n' };
-      if (context.input_prepared) raw.coverage = context.input_prepared.manifest.assets.filter(asset => asset.source_partition)
-        .map(asset => ({ partition: asset.ordinal, status: 'reviewed' }));
-      helper.write(f.root, '.shipyard-code-review-evidence.md', raw.evidence_markdown);
-      const session = crypto.randomUUID();
-      const records = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
-        .trim().split('\n').map(JSON.parse);
-      for (const record of records)
-        if (record.item?.type === 'agent_message') record.item.text = JSON.stringify(raw);
-      const stream = records.map(record => JSON.stringify(record)).join('\n') + '\n';
-      const transcript = path.join(storage, session + '.jsonl'); fs.writeFileSync(transcript, stream);
-      const { native: nativePath, nativeText } = require('../fixtures/code-review/artifact-fixture.cjs').writeCodexSession({
-        home: storage, session, worktree: scope.worktree, model: selection.model,
-        effort: selection.reasoning_effort, prompt: context.prompt, raw });
-      const runtime_evidence = { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai',
-        session_id: session, worktree: scope.worktree, ticket: scope.ticket, phase: scope.phase, code_review: binding,
-        native_session_evidence: { session_id: session, bytes: Buffer.byteLength(nativeText),
-          sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
-        input_consumption: { native_session_sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
-        ...(context.input_prepared ? { input_transport: 'host-files', input_bundle: context.input_prepared.input_bundle } : {}),
-        transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: crypto.createHash('sha256').update(stream).digest('hex') } };
-      config.afterLaunch?.({ f, value, selection, context, runtime_evidence, agentDir, nativePath });
-      return { launch_id: 'code-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
-        observed_model: selection.model, observed_effort: selection.reasoning_effort,
-        agent_file_digest: selection.agent_file_digest, runtime_evidence };
-    } };
-  let controllerReads = 0;
-  Object.defineProperty(host, 'controller', { enumerable: true, get() {
-    if (++controllerReads === 2) config.beforeLaunch?.({ f, agentDir, manifest, agentManifest });
-    return undefined;
+    launch() { assert.fail('code review must use authenticated semantic child hosts'); } };
+  let recorderReads = 0;
+  Object.defineProperty(host, 'recorder', { enumerable: true, get() {
+    if (++recorderReads === 2) config.beforeLaunch?.({ f, agentDir, manifest, agentManifest });
+    return recorder;
   } });
   const file = path.join(storage, 'request.json');
   const request = { scope, graph_dir: graphDir, role: 'code-review', signals: {}, context: { repo: null } };
   const options = { host, capabilities: host.capabilities, agentDir, agentManifest, storageRoot: storage,
-    graphDir, refreshGit: false, getPullRequest: () => f.pr, env: {} };
+    graphDir, refreshGit: false, getPullRequest: () => f.pr, env: {}, spawn: native.spawn,
+    probe: { status: 'available', executable: 'codex-fixture', runtime_version: native.runtimeVersion, capabilities: host.capabilities } };
   async function run(patch = {}, extra = {}) {
     fs.writeFileSync(file, JSON.stringify({ ...request, ...patch }));
     let output = '';
@@ -3920,12 +3912,14 @@ async function codeReviewEntryFixture(action, config = {}) {
     return { result, output };
   }
   const originalHome = os.homedir;
+  const originalReadFile = fs.readFileSync;
   const originalCodexHome = process.env.CODEX_HOME;
   process.env.CODEX_HOME = storage;
   os.homedir = () => storage;
   try { return await action({ f, run, request, options, calls, codeContext, storage }); }
   finally {
     os.homedir = originalHome;
+    fs.readFileSync = originalReadFile;
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome;
     fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true });
   }
@@ -3939,17 +3933,23 @@ test('code review CLI seals one static phase verdict: ' + JSON.stringify(config)
     assert.deepEqual(JSON.parse(output), result);
     assert.equal(output.trim().split('\n').length, 1);
     assert.equal(result.artifact.outcome, config.incomplete ? 'incomplete' : 'pass');
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 3);
+    assert.equal(new Set(calls.map(launch => launch.session)).size, 3);
     assert.equal(calls[0].selection.agent_file, config.critical || config.checkpoint
       ? 'shipyard-code-review-critical.toml' : 'shipyard-code-review.toml');
-    assert.equal(calls[0].selection.sandbox_mode, 'read-only');
-    assert.equal(calls[0].context.subject_kind, 'phase');
+    assert.equal(result.receipt.runtime_evidence.sandbox_evidence.base_profile, ':read-only');
+    assert.equal(calls[0].payload.role, 'code-review');
+    assert.equal(calls[0].payload.stage, 'worker');
+    assert.equal(calls[2].payload.stage, 'final');
     assert.equal(result.dispatch.ticket, request.scope.ticket);
+    assert.equal(result.dispatch.subject_kind, 'phase');
     assert.equal(result.receipt.runtime_evidence.ticket, request.scope.ticket);
-    assert.ok(result.receipt.runtime_evidence.code_review.launch_digest);
+    assert.equal(result.receipt.runtime_evidence.code_review.review_contract, 'shipyard.semantic-review.v1');
+    assert.equal(result.receipt.runtime_evidence.code_review.stage, 'final');
     if (config.partitioned) {
-      assert.equal(result.context.input_transport, 'host-files');
-      assert.ok(calls[0].context.input_prepared.manifest.assets.some(asset => asset.source_partition));
+      assert.equal(calls[0].payload.input_transport, 'host-files');
+      assert.ok(calls[0].payload.material.some(asset => asset.content.includes('large line ')));
+      assert.ok(calls[2].payload.originals.length === 2);
     }
   }, config)));
 
@@ -3957,9 +3957,9 @@ for (const partitioned of [false, true]) for (const mutation of ['missing', 'cha
 test('code review CLI refuses original native session ' + mutation + ': partitions=' + partitioned, () => withGraphDirEnv(undefined, () =>
   codeReviewEntryFixture(async ({ run, calls }) => {
     await assert.rejects(run());
-    assert.equal(calls.length, 1);
-  }, { partitioned, afterLaunch({ nativePath, runtime_evidence }) {
-    assert.ok(fs.existsSync(runtime_evidence.transcript.path));
+    assert.equal(calls.length, 2);
+  }, { partitioned, afterLaunch({ launch: { nativePath } }) {
+    assert.ok(fs.existsSync(nativePath));
     if (mutation === 'missing') fs.rmSync(nativePath);
     else fs.appendFileSync(nativePath, 'changed');
   } })));
@@ -3979,7 +3979,7 @@ test('padded code review role cannot bypass host preparation: ' + JSON.stringify
     const host = createCodexDeliveryHost({ ...options, scope: request.scope });
     await assert.rejects(host.run({ role, dispatch_id: dispatchId, signals: { critical: true },
       context: { prompt: 'CALLER SUPPLIED PROMPT', subject_kind: 'phase' } }),
-    error => error.code === 'CODE_REVIEW_CONTEXT_REQUIRED');
+    error => error.code === 'INVALID_CODE_REVIEW_CONTEXT');
     assert.equal(calls.length, 0);
     assert.equal(options.host.recorder.getVerifiedRecord(dispatchId), null);
   })));
@@ -3998,14 +3998,26 @@ test('padded code review request file refuses caller authority: ' + JSON.stringi
 for (const mutation of ['agent', 'head', 'base', 'file-input', 'receipt'])
 test('code review refuses changes before verdict sealing: ' + mutation, () => withGraphDirEnv(undefined, () =>
   codeReviewEntryFixture(async ({ run, calls }) => {
-    await assert.rejects(run()); assert.equal(calls.length, 1);
-  }, { partitioned: mutation === 'file-input', afterLaunch({ f, selection, context, runtime_evidence, agentDir }) {
-    if (mutation === 'agent') fs.appendFileSync(path.join(agentDir, selection.agent_file), '\nchanged');
+    await assert.rejects(run()); assert.equal(calls.length, 2);
+  }, { partitioned: mutation === 'file-input', afterLaunch({ f, launch, agentDir, recorder }) {
+    if (mutation === 'agent') fs.appendFileSync(path.join(agentDir, launch.selection.agent_file), '\nchanged');
     if (mutation === 'head') f.pr.headRefOid = 'a'.repeat(40);
     if (mutation === 'base') f.pr.baseRefOid = 'b'.repeat(40);
-    if (mutation === 'receipt') delete runtime_evidence.code_review;
+    if (mutation === 'receipt') {
+      const read = fs.readFileSync;
+      fs.readFileSync = (file, ...args) => {
+        const bytes = read(file, ...args);
+        if (typeof file !== 'string' || !file.startsWith(recorder.storeDir + path.sep)
+            || !path.basename(file).startsWith('record-')) return bytes;
+        const envelope = JSON.parse(String(bytes));
+        assert.ok(envelope.payload.receipt.runtime_evidence.code_review);
+        delete envelope.payload.receipt.runtime_evidence.code_review;
+        const changed = JSON.stringify(envelope);
+        return typeof bytes === 'string' ? changed : Buffer.from(changed);
+      };
+    }
     if (mutation === 'file-input') {
-      const filename = context.input_prepared.manifest.assets.find(asset => asset.source_partition).path;
+      const filename = launch.payload.material.find(asset => asset.content.includes('large line ')).read_path;
       fs.chmodSync(filename, 0o600); fs.appendFileSync(filename, 'changed');
     }
   } })));
@@ -4014,24 +4026,24 @@ for (const mutation of ['look-alike', 'ticket', 'phase', 'worktree', 'prompt', '
 test('code review delivery rejects a mismatched prepared context: ' + mutation, () => withGraphDirEnv(undefined, () =>
   codeReviewEntryFixture(async ({ f, request, options, codeContext, calls, storage }) => {
     const scope = { ...request.scope };
-    const value = codeContext.prepare(scope, { role: 'code-review', context: {}, signals: {} },
-      { graphDir: options.graphDir, storageRoot: storage, refreshGit: false, getPullRequest: options.getPullRequest });
-    const launch = { ...value.launch, signals: { ...value.launch.signals }, context: { ...value.launch.context } };
+    const value = codeContext.prepareSemantic(scope, { role: 'code-review', context: {}, signals: {} },
+      { graphDir: options.graphDir, storageRoot: storage, refreshGit: false, getPullRequest: options.getPullRequest,
+        inflightDispatchId: 'prepared-context-original' });
+    const launch = { ...value.launch, dispatch_id: 'prepared-context-original', signals: { ...value.launch.signals }, context: { ...value.launch.context } };
     if (mutation === 'ticket') scope.ticket += 'foreign';
     if (mutation === 'phase') scope.phase++;
     if (mutation === 'worktree') {
       scope.worktree = path.join(storage, 'foreign-worktree');
       require('./helpers/codex-arch-review-fixtures.cjs').git(f.root, ['worktree', 'add', '--detach', scope.worktree, 'HEAD']);
     }
-    if (mutation === 'prompt') launch.context.prompt += 'foreign';
+    if (mutation === 'prompt') launch.context.prompt = 'foreign';
     if (mutation === 'signals') launch.signals.critical = !launch.signals.critical;
     if (mutation === 'dispatch') launch.dispatch_id += 'foreign';
     if (mutation === 'sandbox') launch.context.sandbox_mode = 'workspace-write';
     if (mutation === 'selector') launch.context.selector = 'foreign';
     const host = createCodexDeliveryHost({ ...options, scope, host: { ...options.host, scope },
       codeReviewContext: mutation === 'look-alike' ? { ...value } : value });
-    await assert.rejects(host.run(launch), error => error.code === (mutation === 'sandbox' ? 'CONFLICTING_OVERRIDE'
-      : mutation === 'selector' ? 'INVALID_INPUT' : 'CODE_REVIEW_CONTEXT_REQUIRED'));
+    await assert.rejects(host.run(launch), error => error.code === 'CODE_REVIEW_CONTEXT_REQUIRED');
     assert.equal(calls.length, 0);
   })));
 
@@ -4066,7 +4078,7 @@ test('code review launch preflight refuses semicolon repository identity before 
 for (const mutation of ['agent', 'head', 'base'])
 test('code review wrapper refuses installed or live changes immediately before launch: ' + mutation, () => withGraphDirEnv(undefined, () =>
   codeReviewEntryFixture(async ({ run, calls }) => {
-    await assert.rejects(run(), error => error.code === 'STALE_CONTEXT');
+    await assert.rejects(run(), error => error.code === (mutation === 'agent' ? 'ARTIFACT_MUTATED' : 'STALE_CONTEXT'));
     assert.equal(calls.length, 0);
   }, { beforeLaunch({ f, agentDir, manifest, agentManifest }) {
     if (mutation === 'agent') {

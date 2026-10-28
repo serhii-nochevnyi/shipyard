@@ -163,11 +163,17 @@ for (const runtime of ['codex', 'claude']) {
           }
           if (failure === 'unread') {
             if (runtime === 'claude') rows[2].message.content[0].is_error = true;
-            else rows.splice(-3, 0, { type: 'response_item', payload: { type: 'function_call',
-              name: 'exec_command', call_id: 'missing-code-review-context',
-              arguments: JSON.stringify({ cmd: 'cat src/missing.cjs' }) } },
-            { type: 'response_item', payload: { type: 'function_call_output', call_id: 'missing-code-review-context',
-              output: JSON.stringify({ exit_code: 1, output: 'No such file' }) } });
+            else {
+              const { registered, template } = require('../fixtures/phase53/code-review-native-driver.cjs');
+              const original = registered('codex-agent-stream', 'codex-agent-stream-parent.jsonl');
+              const call = template(original, row => row.payload?.type === 'function_call');
+              const output = template(original, row => row.payload?.type === 'function_call_output');
+              Object.assign(call.payload, { name: 'exec_command', call_id: 'missing-code-review-context',
+                arguments: JSON.stringify({ cmd: 'cat src/missing.cjs' }) });
+              Object.assign(output.payload, { call_id: call.payload.call_id,
+                output: JSON.stringify({ exit_code: 1, output: 'No such file' }) });
+              rows.splice(-3, 0, call, output);
+            }
           }
         }, result(result, payload) {
           if (payload.stage === 'worker') {

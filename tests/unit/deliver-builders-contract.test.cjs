@@ -8,7 +8,7 @@ if (process.argv.slice(2).some(value => value !== '--integrator-caller-only') ||
   throw new Error('Unknown integrator caller selection');
 let integratorCallerSelected = 0;
 function test(name, callback) {
-  const selected = name === 'supported integrator callers select explicit runtime contracts before legacy full-inline formatting';
+  const selected = name === 'supported integrator callers select the shared semantic contract before legacy full-inline formatting';
   if (integratorCallerOnly && !selected) return;
   if (selected) integratorCallerSelected++;
   return runTest(name, callback);
@@ -95,13 +95,13 @@ test('review roles use the prepared-context CLI and preserve the integrator in-p
   assert.match(step5, /createCodexDeliveryHost\(\{[\s\S]*?role: 'integrator'/);
 });
 
-test('supported integrator callers select explicit runtime contracts before legacy full-inline formatting', () => {
+test('supported integrator callers select the shared semantic contract before legacy full-inline formatting', () => {
   const start = step5.indexOf('**Fresh final integration contract.**');
   const end = step5.indexOf('**Phase 41 prelaunch gate', start);
   assert.ok(start >= 0 && end > start);
   const integration = step5.slice(start, end);
   const caller = integration.match(/```javascript\n([\s\S]*?)\n\s*```/)[1];
-  assert.match(caller, /const reviewContract = runtime === 'codex'\s*\? 'shipyard\.semantic-review\.v1' : 'shipyard\.integration-review\.v3'/);
+  assert.match(caller, /const reviewContract = 'shipyard\.semantic-review\.v1'/);
   assert.match(caller, /const current = prepareNativeIntegratorContext\(options, \{\s*worktree, phase: String\(phase\), review_contract: reviewContract \}\)/);
   assert.ok(!caller.includes('prepareIntegratorContext'));
   assert.strictEqual((caller.match(/review_contract: reviewContract/g) || []).length, 3);

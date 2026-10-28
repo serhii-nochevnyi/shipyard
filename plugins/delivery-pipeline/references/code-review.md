@@ -28,8 +28,9 @@ effort and report evidence before launching the final. The final must have its
 own dispatch and native session, the same role criteria and current source,
 head, base, membership and instruction bindings. Integrator, architecture or
 worker reports cannot replace that final. Return the complete original report
-in `evidence_markdown`; the host writes and seals the role evidence. Do not write
-source, contact GitHub, dispatch roles or merge.
+in `evidence_markdown`; the host writes and seals
+`.shipyard-code-review-evidence.md`. Do not write source, contact GitHub, dispatch
+roles or merge.
 
 ## Findings and carried dispositions
 
@@ -39,6 +40,9 @@ respectively. Each finding needs a nonempty `id` (at most 128 UTF-8 bytes) and
 A style or naming observation is a WARNING. INFO remains in complete original
 reports while the existing blocking projection drops and counts it. INFO alone
 cannot block acceptance.
+
+For each locatable finding, cite its relative POSIX `path`, positive integer
+`line` and verbatim `line_text`. Describe unavailable source honestly.
 
 A BLOCKER describes incorrect behavior, a security defect or data loss. Supply a
 relative POSIX `path`, a positive integer `line`, the exact source `line_text`, a
@@ -51,13 +55,14 @@ alone never demotes it.
 
 The host resolves citation identity from the path, normalized source text and
 occurrence ordinal. Labels, rule, severity, line number and prose do not create
-identity. Optional `rule` is lowercase kebab case, at most 64 characters; absent
-becomes `unlabelled`. Never invent host identity, classification or suppression.
+identity. `rule` is an optional free label: lowercase kebab case, at most 64
+characters; absent becomes `unlabelled`. Nothing may depend on the label. Never
+invent host identity, classification or suppression.
 Missing citations remain new findings and cannot match a recorded disagreement.
 
-The host maps prior findings through the fix delta and rereads the current
-source. Each carried finding has a `ref` such as `P-01`. Give each prior BLOCKER
-without a recorded disagreement exactly one final disposition: `resolved`,
+The host supplies `prior_findings`, maps them through the fix delta and rereads
+the current source. Each carried finding has a `ref` such as `P-01`. Give each
+prior BLOCKER without a recorded disagreement exactly one final disposition: `resolved`,
 `unresolved` or `disputed`. The latter two require justification. A resolved
 finding cannot also be returned at the same identity. An unresolved prior
 BLOCKER remains blocking even if omitted or returned at a lower severity.
@@ -69,6 +74,17 @@ the original carrier identity across shifted identical lines. Do not supply
 host-only disagreement bindings. The carrier is the existing bounded regular
 `code-review-disagreements.json` file in the canonical phase directory. Malformed,
 duplicate or unknown targets are refused under the existing policy.
+
+## Verification contract
+
+The semantic native report follows the host-rendered schema and retains its
+original `limitations`. The host-normalized projection derives
+`review_completeness`, `unresolved_sources`, `prior_head`, `contract_digest` and
+`reuse_key`. It computes finding `classification` (`new` or `prior`) and
+`suppressed`, and disposition `source` (`reviewer` or `recorded_disagreement`).
+`disagreement_identity` binds historical carriers; `disagreement_suppressed` and
+`citations_unresolved` count projection outcomes. Do not supply host-only
+projection values as native authority.
 
 ## Rounds, completeness and publication
 
