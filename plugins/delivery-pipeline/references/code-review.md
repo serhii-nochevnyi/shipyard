@@ -77,6 +77,11 @@ duplicate or unknown targets are refused under the existing policy.
 
 ## Verification contract
 
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path, output,
+or exit status. A claim without command-backed evidence is not verification.
+Mark untested claims as assumptions or unknown.
+
 The semantic native report follows the host-rendered schema and retains its
 original `limitations`. The host-normalized projection derives
 `review_completeness`, `unresolved_sources`, `prior_head`, `contract_digest` and
@@ -96,10 +101,8 @@ and final dispositions visible. The host computes the existing `pass`,
 A pass requires complete current material coverage, no blocking findings and
 no limitations or unresolved sources.
 
-Name the exact command and relevant output or exit status for every checkable
-claim. Mark untested claims as assumptions or unknown. Development artifacts
-supply governing execution context through the existing classifier; they are
-not product verification targets.
+Development artifacts supply governing execution context through the existing
+classifier; they are not product verification targets.
 
 Local review acceptance and remote publication acknowledgements are separate.
 A status write can succeed while its comment fails. Publication rechecks the

@@ -1050,6 +1050,7 @@ test('concurrent cold processes and both runtimes reuse one canonical repository
   const f = fixture(), directory = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-producers-'));
   try {
     f.seal();
+    const packaged = require('../../scripts/package-shipyard-codex.cjs').build(path.join(directory, 'current-package'));
     const preload = path.join(directory, 'preload.cjs');
     fs.writeFileSync(preload, `require('node:os').homedir = () => ${JSON.stringify(home)};\n`);
     const data = path.join(directory, 'data.json');
@@ -1061,8 +1062,8 @@ test('concurrent cold processes and both runtimes reuse one canonical repository
     const env = { ...process.env, PATH: directory + path.delimiter + process.env.PATH, PUBLISH_TEST_DATA: data };
     const results = await Promise.all([
       childPublication(argv(path.join(scripts, 'phase-code-review.cjs')), env),
-      childPublication(argv(path.resolve(__dirname,
-        '../../plugins/shipyard/host/plugins/delivery-pipeline/scripts/phase-code-review.cjs')), env),
+      childPublication(argv(path.join(packaged,
+        'host/plugins/delivery-pipeline/scripts/phase-code-review.cjs')), env),
     ]);
     assert.deepEqual(results.map(result => result.comment.action).sort(), ['created', 'edited']);
     assert.equal(results[0].comment.id, results[1].comment.id);
