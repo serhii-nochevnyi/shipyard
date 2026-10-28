@@ -406,7 +406,6 @@ return await __createClaudeWorkflowDispatch({
           applied_effort: options.effort,
           observed_model: options.model,
           observed_effort: options.effort,
-          output: { changed_paths: [] },
           gsd_role: gsdRole,
           gsd_launch_mechanism: options.gsd_launch_mechanism,
         });
@@ -485,8 +484,7 @@ test('typed workflow checks host lease takeover and foreign edits before recordi
           return transcriptEvidence({ launch_id: `typed-${mode}`, applied_model: selection.model,
             applied_effort: selection.effort, observed_model: selection.model,
             observed_effort: selection.effort, gsd_role: gsdRole,
-            gsd_launch_mechanism: selection.gsd_launch_mechanism,
-            output: { changed_paths: [] } });
+            gsd_launch_mechanism: selection.gsd_launch_mechanism });
         }, capabilities: PLANNING_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
         writerSession, runScope: { worktree, phase: 45 }, applicationEvidence: ({ result }) => result,
       }), { code: mode === 'takeover' ? 'WRITER_FENCED' : 'FOREIGN_EDIT' });
@@ -530,8 +528,8 @@ test('typed workflow refuses a phase symlink escaping the scoped worktree', asyn
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('typed workflow refuses another in-tree phase and a mismatched typed declaration', async () => {
-  for (const mode of ['wrong-phase', 'wrong-lease', 'wrong-snapshot', 'output-mismatch']) {
+test('typed workflow refuses another in-tree phase, lease or snapshot', async () => {
+  for (const mode of ['wrong-phase', 'wrong-lease', 'wrong-snapshot']) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-typed-scope-'));
     try {
       const worktree = path.join(root, 'worktree');
@@ -560,11 +558,10 @@ test('typed workflow refuses another in-tree phase and a mismatched typed declar
           launch_id: 'typed-scope', applied_model: selection.model, applied_effort: selection.effort,
           observed_model: selection.model, observed_effort: selection.effort,
           gsd_role: gsdRole, gsd_launch_mechanism: selection.gsd_launch_mechanism,
-          output: { changed_paths: mode === 'output-mismatch' ? ['CONTEXT.md'] : [] },
         }), capabilities: PLANNING_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
         runScope: { worktree, phase: 45 }, writerSession,
         applicationEvidence: ({ result }) => result,
-      }), { code: mode === 'output-mismatch' ? 'FOREIGN_EDIT' : 'INVALID_HOST' });
+      }), { code: 'INVALID_HOST' });
       assert.equal(fs.readdirSync(recorderDir).filter((name) => name.startsWith('record-')).length, 0);
       lease.release(handle);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -681,7 +678,7 @@ test(`typed completion rejects foreign phase entries and bytes: ${change}`, asyn
         return transcriptEvidence({
           launch_id: 'same-path-fixture', applied_model: selection.model, applied_effort: selection.effort,
           observed_model: selection.model, observed_effort: selection.effort,
-          output: { changed_paths: ['45-01-PLAN.md'] }, gsd_role: role,
+          gsd_role: role,
           gsd_launch_mechanism: selection.gsd_launch_mechanism,
         });
       },

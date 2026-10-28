@@ -646,9 +646,7 @@ function buildNativeChildFixture(gsdRole, artifactPathsOrOptions = {}) {
       record.payload.source.subagent.thread_spawn.agent_role = gsdRole;
     }
     if (record.type === 'event_msg' && record.payload.type === 'task_complete') {
-      record.payload.last_agent_message = JSON.stringify({
-        schema: 'shipyard.codex-decompose-output.v1', artifact_paths: declaredArtifactPaths,
-      });
+      record.payload.last_agent_message = 'Work completed.';
     }
     return JSON.stringify(record);
   }).join('\n') + '\n';
@@ -1511,10 +1509,7 @@ test('recover rebuilds the original ' + gsdRole + ' receipt after completion was
     const result = await setup.recover();
     assert.equal(setup.spawned.length, 0);
     assert.equal(result.recovered, true);
-    assert.deepEqual(JSON.parse(result.recovered_output).artifact_paths,
-      gsdRole === 'gsd-phase-researcher'
-        ? ['.planning/phases/38-codex-decompose/38-RESEARCH.md']
-        : gsdRole === 'gsd-planner' ? ['.planning/phases/38-codex-decompose/38-01-PLAN.md'] : []);
+    assert.equal(result.recovered_output, 'Work completed.');
     assert.equal(result.receipt.dispatch_id, setup.dispatchId);
     assert.equal(result.receipt.compliance, 'verified');
     assert.equal(result.receipt.gsd_role, gsdRole);
@@ -1602,7 +1597,7 @@ test('planner recovery seals an unchanged extra PLAN and CONTEXT from its origin
     assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
     const launchDir = path.join(setup.hostState, 'launches');
     const launch = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
-    assert.deepEqual(launch.completed.declared_paths, ['38-01-PLAN.md']);
+    assert.equal(launch.completed.declared_paths, undefined, 'the child declaration is no longer recorded');
     assert.deepEqual(launch.completed.changed_paths, ['38-01-PLAN.md']);
     assert.deepEqual(Object.keys(launch.completed.full_output_manifest).sort(),
       ['38-01-PLAN.md', '38-02-PLAN.md', 'CONTEXT.md']);
@@ -1672,41 +1667,33 @@ test('planner accepts zero-padded and ordinary declared plans with a preexisting
     const recovered = await setup.recover();
     assert.equal(recovered.receipt.dispatch_id, setup.dispatchId);
     assert.equal(recovered.receipt.compliance, 'verified');
-    assert.deepEqual(JSON.parse(recovered.recovered_output).artifact_paths, artifactPaths);
+    assert.equal(recovered.recovered_output, 'Work completed.');
     assert.equal(setup.spawned.length, 0);
   } finally { setup.f.clean(); }
 });
 
-test('planner refuses an undeclared planning delta when multiple plans are declared', async () => {
-  const declared = [
+test('planner accepts several plans the child never listed and refuses a write outside the role outputs', async () => {
+  const plans = [
     '.planning/phases/38-codex-decompose/38-01-PLAN.md',
     '.planning/phases/38-codex-decompose/38-02-PLAN.md',
   ];
-  const setup = await recoverySetup('gsd-planner', {
-    artifactPaths: declared,
-    writeArtifactPaths: [...declared, '.planning/phases/38-codex-decompose/38-03-PLAN.md'],
+  const accepted = await recoverySetup('gsd-planner', { writeArtifactPaths: plans });
+  try {
+    assert.equal(accepted.crashError.code, 'SIMULATED_HOST_DEATH', accepted.crashError.message);
+    const launchDir = path.join(accepted.hostState, 'launches');
+    const launch = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.deepEqual(launch.completed.changed_paths, ['38-01-PLAN.md', '38-02-PLAN.md']);
+  } finally { accepted.f.clean(); }
+  const refused = await recoverySetup('gsd-planner', {
+    writeArtifactPaths: [...plans, '.planning/phases/38-codex-decompose/notes.md'],
   });
   try {
-    assert.equal(setup.crashError && setup.crashError.code, 'RUNTIME_EVIDENCE_INVALID',
-      setup.crashError && setup.crashError.message);
-    assert.match(setup.crashError.message, /planning tree delta differs/);
-    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
-    assert.equal(fs.existsSync(setup.recordFile), false);
-  } finally { setup.f.clean(); }
-});
-
-test('planner refuses an artifact path that escapes its phase', async () => {
-  const setup = await recoverySetup('gsd-planner', {
-    artifactPaths: ['../../outside.md'],
-    writeArtifactPaths: ['.planning/phases/38-codex-decompose/38-01-PLAN.md'],
-  });
-  try {
-    assert.equal(setup.crashError && setup.crashError.code, 'RUNTIME_EVIDENCE_INVALID',
-      setup.crashError && setup.crashError.message);
-    assert.match(setup.crashError.message, /invalid artifact path/);
-    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
-    assert.equal(fs.existsSync(setup.recordFile), false);
-  } finally { setup.f.clean(); }
+    assert.equal(refused.crashError && refused.crashError.code, 'RUNTIME_EVIDENCE_INVALID',
+      refused.crashError && refused.crashError.message);
+    assert.match(refused.crashError.message, /outside the role seal outputs/);
+    assert.equal(refused.recorder.getReservation(refused.dispatchId).recorded, false);
+    assert.equal(fs.existsSync(refused.recordFile), false);
+  } finally { refused.f.clean(); }
 });
 
 test('recover rebuilds a completed dispatch after the native checkpoint and before the final callback', async () => {
@@ -2125,12 +2112,7 @@ function measuredFixtureData(gsdRole) {
       record.payload.source.subagent.thread_spawn.agent_role = gsdRole;
     }
     if (record.type === 'event_msg' && record.payload.type === 'task_complete') {
-      const artifactPaths = gsdRole === 'gsd-phase-researcher'
-        ? ['.planning/phases/45-detached-contract/45-RESEARCH.md']
-        : gsdRole === 'gsd-planner' ? ['.planning/phases/45-detached-contract/45-01-PLAN.md'] : [];
-      record.payload.last_agent_message = JSON.stringify({
-        schema: 'shipyard.codex-decompose-output.v1', artifact_paths: artifactPaths,
-      });
+      record.payload.last_agent_message = 'Work completed.';
     }
     return JSON.stringify(record) + (record.type === 'turn_context' ? '\n' + JSON.stringify(record) : '');
   }).join('\n') + '\n';

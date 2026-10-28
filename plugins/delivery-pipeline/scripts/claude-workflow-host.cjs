@@ -310,26 +310,6 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
     const completed = completedTyped.get(receipt.launch_id);
     if (!completed || completed.gsd_role !== gsdRole || completed.launch_id !== receipt.launch_id
         || completed.session_id !== receipt.session_id) reject('typed completion is not bound to the application receipt');
-    const output = object(completed.output) ? completed.output : completed;
-    const paths = output.changed_paths ?? output.files_modified;
-    if (!Array.isArray(paths)) reject('typed completion has no changed-path declaration');
-    const outputPaths = paths.map((item) => {
-      if (typeof item !== 'string' || !item || path.isAbsolute(item) || item.includes('\\')
-          || path.posix.normalize(item) !== item || item.split('/').includes('..')) {
-        reject('typed completion declared an invalid path');
-      }
-      const relative = path.relative(expectedPhase, path.resolve(expectedPhase, item)).split(path.sep).join('/');
-      if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) {
-        reject('typed completion declared a path outside the scoped phase');
-      }
-      return relative;
-    }).sort();
-    if (new Set(outputPaths).size !== outputPaths.length
-        || JSON.stringify(outputPaths) !== JSON.stringify([...declaredPaths].sort())) {
-      const error = new Error('host declaration differs from authenticated typed output');
-      error.code = 'FOREIGN_EDIT';
-      throw error;
-    }
     lease.assertFence({ token: handle.token, epoch: handle.epoch, base_revision: baseRevision });
     if (JSON.stringify(completed.completion_snapshot) !== JSON.stringify(completionSnapshot())) {
       const error = new Error('phase bytes changed after typed completion');

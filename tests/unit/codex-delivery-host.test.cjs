@@ -205,7 +205,7 @@ function fixture(config = {}) {
     launchTypedGsd(selection, context) {
       calls.push({ method: 'typed', selection, context });
       context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
-        last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1', artifact_paths: [] }) });
+        last_agent_message: 'Typed GSD work completed.' });
       return application(selection, context);
     },
   };
@@ -558,8 +558,7 @@ for (const mode of ['valid-subset', 'omitted-old-plan', 'extra-edit', 'old-plan-
         if (mode === 'extra-edit') fs.writeFileSync(path.join(phaseDir, 'stray.md'), '# Unreported\n');
         if (mode !== 'missing-completion') {
           context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
-            last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1',
-              artifact_paths: ['.planning/phases/38-typed-delivery/38-01-PLAN.md'] }) });
+            last_agent_message: 'Edited the first plan.' });
         }
         if (mode === 'old-plan-tamper') fs.writeFileSync(path.join(phaseDir, '38-02-PLAN.md'), '# Late edit\n');
         return application(selection, context);
@@ -574,7 +573,7 @@ for (const mode of ['valid-subset', 'omitted-old-plan', 'extra-edit', 'old-plan-
         assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 1);
       } else {
         const code = mode === 'old-plan-tamper' ? 'FOREIGN_EDIT'
-          : mode === 'missing-completion' ? 'WRITER_FENCED' : 'ARTIFACT_DECLARATION_INVALID';
+          : mode === 'missing-completion' ? 'WRITER_FENCED' : 'FOREIGN_EDIT';
         await assert.rejects(run, { code });
         assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
       }
@@ -672,30 +671,6 @@ test('typed GSD delivery refuses a lease keyed to a foreign directory', async ()
   } finally { clean(f); }
 });
 
-test('typed GSD delivery refuses a declaration unlike its completed native output', async () => {
-  const f = fixture();
-  try {
-    const phaseDir = path.join(f.root, '.planning', 'phases', '38-current');
-    fs.mkdirSync(phaseDir, { recursive: true });
-    fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# baseline\n');
-    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
-      stateRoot: path.join(f.storageRoot, 'writer') });
-    const handle = lease.acquire({ owner: 'typed-output', base_revision: f.base });
-    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
-      snapshot: lease.snapshotTree(), declaredPaths: [] };
-    f.host.launchTypedGsd = (selection, context) => {
-      context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
-        last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1',
-          artifact_paths: ['.planning/phases/38-current/CONTEXT.md'] }) });
-      return application(selection, context);
-    };
-    await assert.rejects(delivery(f, { writerSession }).run({ role: 'decomposition',
-      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }), { code: 'ARTIFACT_DECLARATION_INVALID' });
-    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
-    lease.release(handle);
-  } finally { clean(f); }
-});
-
 test('typed GSD delivery refuses a snapshot from another phase', async () => {
   const f = fixture();
   try {
@@ -743,7 +718,7 @@ test('typed GSD delivery checks host lease takeover and foreign edits before rec
       f.host.launchTypedGsd = (selection, context) => {
         f.calls.push({ method: 'typed', selection, context });
         context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
-          last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1', artifact_paths: [] }) });
+          last_agent_message: 'Typed GSD work completed.' });
         if (mode === 'takeover') { lease.release(handle); lease.acquire({ owner: 'new-owner', base_revision: f.base }); }
         else fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'foreign');
         return application(selection, context);

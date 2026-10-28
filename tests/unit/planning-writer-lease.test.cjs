@@ -56,17 +56,16 @@ test('full completion manifest binds unchanged PLAN and CONTEXT bytes alongside 
   const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir });
   const snapshot = lease.snapshotTree();
   fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Edited\n');
-  const declared = ['38-01-PLAN.md'];
-  const outputs = captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
-    declared, changed: lease.changedSince(snapshot).changed });
+  const changed = lease.changedSince(snapshot).changed;
+  assert.deepEqual(changed, ['38-01-PLAN.md']);
+  const outputs = captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot, changed });
   assert.deepEqual(Object.keys(outputs).sort(), ['38-01-PLAN.md', '38-02-PLAN.md', 'CONTEXT.md']);
   assert.equal(outputs['38-02-PLAN.md'].origin, 'unchanged-baseline');
   assert.equal(outputs['CONTEXT.md'].origin, 'unchanged-baseline');
-  assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot, declared,
-    changed: declared, outputs, lease });
+  assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot, changed, outputs, lease });
   fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Tampered\n');
   assert.throws(() => assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
-    declared, changed: declared, outputs, lease }), { code: 'FOREIGN_EDIT' });
+    changed, outputs, lease }), { code: 'FOREIGN_EDIT' });
 }));
 
 test('zero-padded phase plans remain bound through completion and recovery', () => fixture(({ stateRoot, worktree }) => {
@@ -77,16 +76,48 @@ test('zero-padded phase plans remain bound through completion and recovery', () 
   const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir });
   const snapshot = lease.snapshotTree();
   fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# New plan\n');
-  const declared = ['01-01-PLAN.md'];
-  const outputs = captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
-    declared, changed: lease.changedSince(snapshot).changed });
+  const changed = lease.changedSince(snapshot).changed;
+  assert.deepEqual(changed, ['01-01-PLAN.md']);
+  const outputs = captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot, changed });
   assert.deepEqual(Object.keys(outputs).sort(), ['01-01-PLAN.md', '01-02-PLAN.md', 'CONTEXT.md']);
   assert.equal(outputs['01-02-PLAN.md'].origin, 'unchanged-baseline');
-  assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot, declared,
-    changed: declared, outputs, lease });
+  assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot, changed, outputs, lease });
   fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Altered\n');
   assert.throws(() => assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
-    declared, changed: declared, outputs, lease }), { code: 'FOREIGN_EDIT' });
+    changed, outputs, lease }), { code: 'FOREIGN_EDIT' });
+}));
+
+test('the seal manifest takes the changed set from the host delta and refuses writes outside the role outputs', () => fixture(({ stateRoot, worktree }) => {
+  const phaseDir = path.join(worktree, '38-phase');
+  fs.mkdirSync(phaseDir);
+  fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# First\n');
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir });
+  const snapshot = lease.snapshotTree();
+  fs.writeFileSync(path.join(phaseDir, '38-02-PLAN.md'), '# Second\n');
+  const outputs = captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
+    changed: lease.changedSince(snapshot).changed });
+  assert.equal(outputs['38-02-PLAN.md'].origin, 'child-change');
+  fs.writeFileSync(path.join(phaseDir, 'notes.md'), 'stray\n');
+  const stray = lease.changedSince(snapshot).changed;
+  assert.deepEqual(stray, ['38-02-PLAN.md', 'notes.md']);
+  assert.throws(() => captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot, changed: stray }),
+    { code: 'FOREIGN_EDIT' });
+  assert.throws(() => assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
+    changed: ['38-02-PLAN.md'], outputs, lease }), { code: 'FOREIGN_EDIT' });
+  fs.rmSync(path.join(phaseDir, 'notes.md'));
+  fs.rmSync(path.join(phaseDir, '38-02-PLAN.md'));
+  const withContext = lease.snapshotTree();
+  fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Created by the planner\n');
+  assert.equal(captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot: withContext,
+    changed: ['CONTEXT.md'] })['CONTEXT.md'].origin, 'child-change');
+  const baselineContext = lease.snapshotTree();
+  fs.appendFileSync(path.join(phaseDir, 'CONTEXT.md'), 'locked decision rewritten\n');
+  assert.throws(() => captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot: baselineContext,
+    changed: lease.changedSince(baselineContext).changed }), { code: 'FOREIGN_EDIT' });
+  fs.rmSync(path.join(phaseDir, 'CONTEXT.md'));
+  fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Edited\n');
+  assert.throws(() => assertSealManifest({ role: 'gsd-plan-checker', phaseDir, snapshot,
+    changed: lease.changedSince(snapshot).changed, outputs: {}, lease }), { code: 'RECOVERY_ARTIFACT_ALTERED' });
 }));
 
 test('legacy private active and corrupt leases refuse without changing their bytes', () => fixture(({ stateRoot, worktree }) => {
