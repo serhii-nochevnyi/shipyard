@@ -73,17 +73,16 @@ You drive loop 3: a set of tickets → separate worktrees → PR per ticket → 
 state. State lives in GitHub and `.planning/graph/` — the session can be killed
 at any time and restarted with `/shipyard:deliver` without any loss.
 
-> **Communication language.** These instructions and every artifact you produce
+> **Communication language.** Instructions and every artifact you produce
 > (branches, PR bodies, commit messages, code, planning files) are in English.
-> But when you talk to the *user* — AskUserQuestion prompts, progress notes, the
-> final summary — reply in the user's language (match the language they write to
-> you). English is for the pipeline; the user's language is for the conversation.
+> When you talk to the *user* — AskUserQuestion prompts, progress notes, the
+> final summary — reply in the user's language.
 
 ## Principle: move toward the fixpoint (don't stop while there's somewhere to go)
 
-Your job is to drive the scope to completion, NOT to report the first blocker and
-halt. **You do not compute the stop condition — `state-sync.cjs` does**, and it
-prints the verdict as its last lines:
+Drive the scope to completion; do not report the first blocker and halt. **You do
+not compute the stop condition — `state-sync.cjs` does**, and prints the verdict
+as its last lines:
 
 ```text
 front: 12 actionable now — execute: T-05-01, … | fix: T-06-03 | merge: T-06-05
@@ -92,169 +91,71 @@ sentinel: 2 duty (T-06-03, T-06-05) + 1 waiting on CI — post/keep the guard, d
 fixpoint: NO — 12 item(s) are actionable RIGHT NOW. Ending the run here is a defect.
 ```
 
-The same structure is written to `.planning/graph/delivery-front.json`
-(`front.cjs` — re-runnable on its own, `--json` for the machine view). Being
-re-runnable on its own is also why it REFUSES on a project `.planning/config.json`
-that does not parse: it resolves no policy from the defaults, leads both faces
-with a `config_invalid` line, and gives the most restrictive board rather than the
-default one. An ABSENT config is not that case — nobody has configured the project
-and the defaults are the answer. The buckets:
+The same structure is in `.planning/graph/delivery-front.json` (`front.cjs`,
+`--json` for the machine view; an unparseable project `.planning/config.json`
+yields a `config_invalid` line and the most restrictive board — an ABSENT config
+just means defaults). The buckets:
 
 ```text
-actionable now  execute  — ready, no branch yet          → Step 3   [main loop]
-                publish  — branch pushed, PR missing     → Step 3 phase C [main loop]
-                fix      — open PR with failing checks, a base that MOVED under
-                           it (`base-merge`), or unresolved review threads
-                           (both serviced AHEAD of a running CI)  [SENTINEL]
-                finalize — green: resolve feedback; review only integration targets; undraft
-                           (the guard splits it into `arch-review` + `undraft`,
-                           so a faulted verdict cannot ready the PR) [SENTINEL]
-                merge    — green + resolved feedback, targets the stack: squash it in [SENTINEL]
-waiting         ci       — checks still running (NOT a fixpoint; NOT a reason to block)
-                dispatched— an agent already holds it (`dispatch-record.cjs`): not
-                           actionable, because handing it out twice is duplicate
-                           work; not parked, because nobody gave up; not a
-                           fixpoint, because the result still has to be collected
-                parent   — stacked on a parent whose PR is still open; `duty`
-                           answers `wait-parent` for the same PR [SENTINEL]
-                           Work it now and you buy a green the base move undoes:
-                           CI re-runs on different code, reviewers re-read a
-                           changed diff, resolved threads can reopen. Both the
-                           front and `duty` come back shallowest-first so the
-                           roots are reached first by default. A parent waiting
-                           on a PERSON never holds its children.
-                merge (human)/checkpoint — a human's move (fixpoint-compatible):
-                           an unanswered `human_checkpoint`, a certified draft in
-                           a repo where no check ran, or `CHANGES_REQUESTED`
-                           standing with ZERO unresolved threads (`wait-human` —
-                           a fixer has nothing to service, so a reviewer must
-                           re-review or dismiss it)
+actionable now  execute  — ready, no branch yet                       → Step 3   [main loop]
+                publish  — branch pushed, PR missing                  → Step 3 phase C [main loop]
+                fix      — open PR with failing checks, a base that MOVED
+                           (`base-merge`), or unresolved review threads [SENTINEL]
+                finalize — green: resolve feedback; review only integration targets;
+                           undraft (`arch-review` + `undraft`)         [SENTINEL]
+                merge    — green + resolved feedback, targets the stack [SENTINEL]
+waiting         ci       — checks still running (NOT a fixpoint, NOT a reason to block)
+                dispatched— an agent already holds it (`dispatch-record.cjs`)
+                parent   — stacked on a parent whose PR is still open (`duty` says
+                           `wait-parent`); shallowest-first so roots are reached first
+                merge (human)/checkpoint — a human's move (fixpoint-compatible): an
+                           unanswered `human_checkpoint`, a certified draft where no
+                           check ran, or `CHANGES_REQUESTED` with ZERO unresolved
+                           threads (`wait-human`)
 parked          blocked  — deps unsatisfied, or parked by this run
 ```
 
-**The front has two owners.** `execute`/`publish` are the main loop's — new
-worktrees, new PRs, the cascade. `fix`/`finalize`/`merge` plus everything waiting
-on CI are the **PR sentinel's** (see the section below): the guard you leave
-behind on the open PRs so the run can keep cascading instead of standing over a
-CI queue. The `sentinel:` line names that split on every board.
+`execute`/`publish` are the main loop's; `fix`/`finalize`/`merge` and everything
+waiting on CI are the **PR sentinel's** (next section).
+`fixpoint: NO` → **keep going** (ending here is a defect); `fixpoint: YES` → STOP
+and summarize (Step 5).
 
-- `fixpoint: NO` → **keep going.** Ending the run here is a defect, not a choice.
-- `fixpoint: YES` → STOP and summarize (Step 5). Everything left is merged, a
-  human's move, or a genuine blocker.
-
-Pass what only the SESSION knows back in, or the front will keep re-offering work
-you already gave up on: `state-sync.cjs --parked T-04-01,T-05-07` for tickets you
-parked this run (agent returned `escalate`, attempts > MAX). That is the one input
-the script cannot get from GitHub.
-
-But `--parked` is the WEAK channel — it lives and dies with the session, and the
-next run opens blind. Anything you expect to still be true tomorrow gets recorded
-instead, and the front reads it back by itself:
+Pass back only what the SESSION knows: `state-sync.cjs --parked T-04-01,T-05-07`
+for tickets parked this run. That channel dies with the session, so anything you
+expect to still be true tomorrow is recorded and the front reads it back itself:
 - `escalation-record.cjs mark <T> <reason...>` — this PR needs a human. Lifts when
   the PR moves (push, review answer, undraft) or on `clear`.
-- `drift-record.cjs mark <T> <plan> <reason...>` — this PLAN predates what shipped.
+- `drift-record.cjs mark <T> <plan> <reason...>` — the PLAN predates what shipped.
   Lifts when the plan is re-planned.
 - `dispatch-record.cjs mark <T> <role> --boundary-store <receipt store> --dispatch-id <dispatch id> --task-level <task-level> --graph <project>/.planning/graph` — an agent
-  is working on it RIGHT NOW. The one fact here that is motion rather than a
-  verdict, and the one the board could not see at all: nothing is pushed yet, so
-  the live state still reads `execute`/`fix` and the stop gate refuses turns over
-  work already in flight. It lifts by itself when the ticket's state moves or when
-  the dispatch times out, so a run that dies mid-wave hides nothing from the next
-  one.
-  **Keep the two route contracts separate.** `boundary.dispatch` returns the
-  canonical policy route (`role=… rung=… model=… signals=…`) for its receipt;
-  `dispatch-record.cjs` accepts the compatibility recorder route
-  (`tier=…(<alias>) effort=…(<level>)`). The record adapter must supply the
-  recorder projection with the resolved tier alias and effort, and the recorder
-  validates that projection against that pair. Do not pass the boundary route to
-  `--route`, and do not invent either route. **Do not compose a sentence about
-  the ladder** — the old `--reason` took one and is now refused,
-  because a caller's reading of the mechanism and the mechanism's own answer are
-  indistinguishable once they share a field, and this field exists to be counted.
-  It is the whole reason the record exists: without them the
-  journal can say a judge was dispatched and not what it ran at, so every row of
-  the ladder stays a matter of argument. With them a ladder review is one query
-  (below).
-  **`--task-level` is a separate compatibility projection, not the canonical
-  boundary `rung`.** The adapter classifies the same dispatch facts with
-  `taskLevelRoute` and passes one of the recorder's supported values:
-  `mechanical|routine|complex|critical|recovery`. A fixed `base` dispatch for
-  `pr-sentinel` or `drift-check` maps to `mechanical`; ordinary work maps to
-  `routine` or `complex`; an earned critical lane maps to `critical`; and an
-  exhausted repair or contested judgement maps to `recovery`. Never pass
-  `base`, `very-complex`, `alternatives`, `repeat`, or `ceiling` verbatim as
-  `--task-level`; those are boundary rung names, not recorder task levels.
-  **A sha the journal records is the full forty characters** — `$(git rev-parse HEAD)`,
-  never `--short` and never an abbreviation pasted from a PR page. `log-event.cjs`
-  refuses a shorter one outright: `gate_status` records a head that way, and a
-  reader holding only the journal cannot lengthen an abbreviation, so the two
-  formats never compare and a live architecture verdict reads as stale.
-  Add `--effort-applied <level>` only after the launch adapter explicitly applied
-  the resolved effort and returned its application receipt. A routed Agent path
-  without an explicit effort override must hard-refuse before spawn and before a
-  dispatch record: prompt text, session inheritance, `unsupported`, and `unknown`
-  are not applied effort. Never copy the resolved value into this field. Existing
-  historical `unsupported` or `unknown` evidence remains visible to reports, but
-  cannot make a new routed launch compliant.
-  When the runtime reports the concrete execution, add `--observed-model <id>`
-  and `--observed-effort <level|unsupported|unknown>`. These fields let the ladder report
-  compare requested, applied and observed values; omit them when the host gives
-  no reliable observation rather than guessing.
-  **Pass the id the host launch returned, verbatim** — the runtime host returns
-  the task or agent id that identifies the holder. This is `--route`'s provenance
-  rule over a different subject: **never a
-  label you compose.** The cap counts DISTINCT agents, so two guards recorded under
-  one hand-typed name (`guard`, `sentinel`) count as ONE agent and the budget then
-  authorises a spend past itself — the one way this field can make the count too
-  small, and nothing can validate it away. Holding no id at all, omit the flag: an
-  unidentified record counts as its own agent, which is the safe direction.
-  On the Codex bundle add the selector's `agent_file` **name without its `.toml`
-  suffix** as `--agent-file` — the file actually dispatched, which is where that
-  runtime's model choice lives. That mapping is not 1:1 for every role, so check
-  `dispatch-record.cjs`'s own mapping rather than assuming it: `research` dispatches ship as `shipyard-inv-research`
-  (the investigation loop's own name for it, not `shipyard-research`), and
-  `executor` has no agent file at all — an executor is dispatched by the main
-  loop, not a `.toml`, so its `mark` omits `--agent-file` rather than naming a
-  file nothing ships. Naming a file the role does not claim is refused. For
-  static Codex roles have their file selected by the host from the same signals
-  with `node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json
-  --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json"
-  [--project-dir <project>] [--risk …] [--type …] [--complexity …]
-  [--input-tokens …] [--contested] [--critical] [--checkpoint]
-  [--signature-state …] [--files …]`. The `--files` flag is retained only
-  for compatibility; it does not select an ADR-014 rung. Its `agent_file` is
-  a `.toml` path for the launch;
-  project it to the suffixless recorder name, and retain its canonical `route`
-  in the boundary receipt rather than passing it to the recorder.
-  The host invokes the selector from the conveyor project and the boundary
-  validates its result before launch; the caller does not run it or pass its
-  output to `spawn_agent` or `codex exec`. For `executor`, the Codex adapter
-  consumes the selector's concrete `model` and `effort` internally. The
-  selector JSON intentionally has `agent_file: null` and uses the project
-  palette directly.
-  The selector's `model` is the concrete id: record it as
-  `--observed-model <model>`, while `route` supplies the shared tier alias and
-  requested effort. Do not pass the concrete id to `dispatch-record.cjs
-  --model`; that flag accepts the resolver tier alias.
-  Research has no Codex alternatives file: `type: alternatives` is inert there.
-  Its `very-complex` rung is emitted as
-  `shipyard-inv-research-critical.toml`; `-repeat` is the repair repeat rung and
-  `-deep` is only a repair `repeat_exhausted` rung. Do not infer a suffix from a
-  role name.
-  Every mark prints a unique `dispatch_id`. After the runtime exposes its
-  transcript identity, record the join with
-  `usage-attribution.cjs record --stdin --graph <project>/.planning/graph`: include that `dispatch_id`,
-  `runtime=claude, provider=anthropic` or `runtime=codex, provider=openai`, the
-  transcript `session_id`/`request_id`/`message_id`, source path, ticket, role,
-  requested fields and any reliable observed model/effort. The ledger rejects
-  cross-provider links and the usage report leaves missing or conflicting facts
-  out of model-efficiency comparisons. Do not use the requested model as an
-  observed model.
-Reserve `--parked` for what genuinely holds only for this session.
+  is working on it RIGHT NOW. It lifts by itself when the ticket moves or the
+  dispatch times out. Reference: `docs/dispatch-record.md`. Rules:
+  - `boundary.dispatch` returns the canonical policy route (`role=… rung=…
+    model=… signals=…`); the recorder takes the compatibility recorder route
+    (`tier=…(<alias>) effort=…(<level>)`) from the adapter's recorder projection.
+    Never pass the boundary route to `--route`, never compose a sentence about
+    the ladder (`--reason` is refused), never invent either route.
+  - `--task-level` comes from `taskLevelRoute` and is one of
+    `mechanical|routine|complex|critical|recovery`; never pass a boundary rung
+    name (`base`, `very-complex`, `alternatives`, `repeat`, `ceiling`).
+  - A sha the journal records is the full forty characters
+    (`$(git rev-parse HEAD)`); `log-event.cjs` refuses a shorter one.
+  - Add `--effort-applied <receipt-applied-effort>` only from the verified
+    application receipt (prompt text, session inheritance, `unsupported` and
+    `unknown` are not applied effort; none → the launch was refused, no mark), and
+    `--observed-model <id>` / `--observed-effort <level|unsupported|unknown>` only
+    when the runtime reports them.
+  - Pass the launch id the host returned verbatim as `--agent-id`, never a label
+    you compose (the cap counts DISTINCT agents); no id → omit the flag.
+  - On the Codex bundle add the selector's `agent_file` **name without its `.toml`
+    suffix** as `--agent-file`; `executor` has no agent file, so its mark omits
+    the flag. `research` ships as `shipyard-inv-research`; do not infer other names.
+  - Every mark prints a unique `dispatch_id`; once the runtime exposes its
+    transcript identity, join it with `usage-attribution.cjs record --stdin
+    --graph <project>/.planning/graph`. Never use the requested model as observed.
 
 **The ladder review, as one query.** Run it from the project (not a worktree) when
-somebody asks whether a role is over- or under-powered — the answer is then read
-rather than argued:
+somebody asks whether a role is over- or under-powered:
 
 ```bash
 # shipyard:ladder-query — what was dispatched, at what tier, at what depth
@@ -267,70 +168,39 @@ node -e 'const fs=require("fs");
     k[s]=(k[s]||0)+1; } console.log(k);'
 ```
 
-The token counts are NOT in this journal — they live in the harness's task
-notifications — but the pairing is, and joined against these role counts it is what
-a ladder revision needs. The `UNCONFIRMED` bucket is not a defect in the data: it
-is the Agent path telling the truth about itself, and its SIZE is how much of the
-ladder is currently unverifiable. If it ever reads zero for `arch-review` or
-`pr-sentinel`, somebody has started filling the field in.
-
-For a machine-readable windowed report, use
-`node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs --json`. Its `ladder` object
-contains slices by role, task level, requested effort, applied effort, runtime,
-backend, observed model and (when runtime is Codex) the concrete `agent_file`.
-`effort_applied=unsupported` means the backend has no effort parameter;
-`unknown` means the host did not expose what ran. Those states remain visible but
-do not count as proof that a deeper repair rung was spent.
-
-`branched-needs-pr`/`publish` is a real bucket, not a curiosity: a branch that was
-pushed before its PR was opened (an executor died between the two) is unfinished
-work. Leaving it out of the front made a run report "fixpoint" while a ticket sat
-idle forever. Pick those up at Step 3 — the code may already be there; run the
-did-work gate and open the PR.
+`UNCONFIRMED` is the Agent path telling the truth about itself. Windowed report:
+`pipeline-stats.cjs --json` (its `ladder` object). `branched-needs-pr`/`publish` is
+a real bucket: a branch pushed before its PR was opened is unfinished work — pick
+it up at Step 3 (did-work gate, then open the PR).
 
 **A blocker PARKS a ticket, it does not halt the run.** When a ticket becomes
-`blocked` (escalate, attempts>MAX, adr-outdated, drift, needs a human) — mark it,
-note the reason, and **move on to the rest of the front**. Never end the run while
-there is even a single actionable element anywhere in the graph. Stopping is legal
-only when the front is empty: everything is delivered OR only blockers remain.
+`blocked` (escalate, attempts>MAX, adr-outdated, drift, needs a human), mark it,
+note the reason and **move on to the rest of the front**. Stopping is legal only
+when the front is empty: everything is delivered OR only blockers remain. The two
+ways runs have broken this rule:
 
-**The two ways runs have actually broken this rule** (both observed, both cost a
-whole session's motion — recognize them in yourself):
+1. **Serializing on CI.** Pushing a fix and then camping on that one PR's checks
+   while `execute:`/`fix:` items sit untouched. Leave the PR to the guard, serve
+   `execute`/`publish`, read its report when it lands. The one legitimate wait is
+   `ci-wait.cjs` (loop-back item 6), which REFUSES while anything is actionable.
+2. **Reading a human gate as "do nothing".** `human_checkpoint: true` and "show me
+   before you open the PR" gate the **publish/merge step only** — never the work.
+   Drive the ticket to the gate (worktree, code, verify, commit, rebase onto the
+   current base — legitimate only before the PR exists — arch-review) and bring
+   the human a concrete diff.
 
-1. **Serializing on CI.** You push a fix and then camp on that one PR's checks
-   while `execute:`/`fix:` items sit untouched. Nobody watches a PR by hand — not
-   you and not the guard, which serves every PR it holds and would serialize all
-   of them on one. Leave the PR to the guard, go serve `execute`/`publish`, and
-   read its report when it lands. The one legitimate wait is `ci-wait.cjs`, and
-   it is a script precisely so this stays mechanical: it REFUSES while anything
-   is actionable or a ticket is with an agent (loop-back item 6 below). "I'll do
-   the rest after the merge" is the same defect wearing a different hat.
-2. **Reading a human gate as "do nothing".** `human_checkpoint: true` and
-   "show me before you open the PR" gate the **publish/merge step only** — never
-   the work. Drive the ticket all the way to the gate: worktree, code, verify,
-   commit, rebase onto the current base (legitimate HERE and only here — the PR
-   does not exist yet, so this is the last moment a rebase costs nothing; once it
-   is published the base is merged in instead), arch-review — and bring the human
-   a concrete diff. Parking a checkpoint ticket with nothing done is not respecting
-   the gate, it is skipping the work.
-
-The cascade produces motion even in chains: as soon as a ticket's PR is
-`pr-open`/`branched`, its children become `ready` — after each state-sync PICK
-them up into scope and execute them, without waiting for either merge or a new
-command invocation. A single `/shipyard:deliver` run must exhaust the entire
-reachable graph autonomously.
-
-Human gates (high-risk approval, adr-outdated, merge) are parking "on a human,"
-not blocking the cycle: mark "awaiting human," continue with other tickets, and
-tally everything at the end.
+The cascade produces motion even in chains: once a ticket's PR is `pr-open` or
+`branched`, its children become `ready` — after each state-sync pick them up and
+execute them without waiting for a merge or a new command. A single
+`/shipyard:deliver` run must exhaust the entire reachable graph. Human gates
+(high-risk approval, adr-outdated, merge) are parking "on a human": mark
+"awaiting human", continue, and tally at the end.
 
 ## The PR sentinel (вартовий) — leave a guard, take the next work
 
-The moment a ticket has an open PR, two different jobs exist and they run at
-different speeds: **cascading** (open the children's branches — minutes) and
-**driving that PR to green** (CI rounds, CodeRabbit, Copilot — tens of minutes,
-mostly spent waiting). Doing them in one thread is what produced the two defects
-above. So they are split:
+Once a ticket has an open PR, two jobs run at different speeds: **cascading**
+(open the children's branches — minutes) and **driving that PR to green** (CI,
+CodeRabbit, Copilot — tens of minutes of waiting). They are split:
 
 ```text
 main loop   execute / publish  — worktrees, executors, new PRs, the cascade
@@ -339,44 +209,21 @@ SENTINEL    ci-fix / base-merge / review-fix / arch-review / undraft / merge
             until it is merged into the epic, parked, or handed to a human
 ```
 
-**Post the guard, then keep moving. Never wait for it.**
+**Post the guard (Step 4), then keep moving. Never wait for it.**
 
-- **Background sentinel.** After Step 3 publishes PRs, launch the guard through
-  the dispatch entry point (Step 4):
-  `node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role pr-sentinel`.
-  The entry point runs the sentinel preflight first and then starts the selected
-  runtime's host itself. For Claude that is one phase-scoped
-  `claude-role-host.cjs` round; the host derives the live PR set from the
-  canonical graph and GitHub, resolves Sonnet/low through ADR-014, and reserves
-  one authenticated round before starting the model. Do not construct a
-  caller-owned member list, write a request file, or call native Workflow for
-  this shared role. The boundary receipt and complete transcript are validated
-  before the reservation becomes one durable round row. The front projects that
-  one guard to each unchanged member and counts it once. Clear the exact returned
-  `round.dispatch_id` with `dispatch-record.cjs clear-round` when the report
-  returns. A changed or merged member expires independently; a new PR belongs to
-  a fresh round.
-
-  For Codex, run the same `deliver-dispatch.cjs launch --runtime codex --ticket <T> --role pr-sentinel`
-  once per guarded ticket; the entry point starts `codex-delivery-host.cjs` with
-  `role: "pr-sentinel"`, and the host resolves Luna/medium, applies the generated
-  role file, and returns a verified receipt. Record each returned dispatch id
-  against that ticket. Codex has no shared round-membership bridge, so do not
-  label separate ticket receipts as one round. A missing host, explicit
-  selection, or verified receipt is a refusal, not permission to launch a
-  native Agent or inherit the current session.
-- **Fallback: a duty pass every round (when no typed background host exists).** The
-  mandate does not change: at the TOP of each round, before taking new work, run
-  `sentinel.cjs duty` and serve every actionable item — ci-fix, base-merge,
-  review-fix, arch-review, undraft, merge — then continue with `execute`/`publish`.
-  `undraft`, `merge`, and `base-merge` are deterministic mechanical actions with
-  no model launch. Every ci-fix, review-fix, or arch-review task still goes
-  through the selected runtime host, which crosses `boundary.dispatch`; an
-  inline, inherited, or untyped Agent fallback is refused.
-  Announce it: `⚠ no typed background host → sentinel duty runs each round`.
-  `pipeline.sentinel: off` also lands here (no guard, main loop does everything).
-
-**What the sentinel is allowed to do** — the boundary is code, not trust:
+- **Background sentinel.** `node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role pr-sentinel`
+  runs the sentinel preflight and starts the runtime's host: on Claude one
+  phase-scoped round (Sonnet/low) counted once by the front, on Codex one
+  Luna/medium launch per guarded ticket. Never build a member list, write a
+  request file or call native Workflow for this role; a missing host, selection or
+  verified receipt is a refusal, not permission to use a native Agent or the
+  current session.
+- **Fallback: a duty pass every round (no typed background host, or
+  `pipeline.sentinel: off`).** At the TOP of each round, before new work, run
+  `sentinel.cjs duty` and serve every item — ci-fix, base-merge, review-fix,
+  arch-review, undraft, merge. `undraft`, `merge` and `base-merge` are mechanical;
+  every ci-fix, review-fix or arch-review still goes through the runtime host and
+  its boundary. Announce it: `⚠ no typed background host → sentinel duty runs each round`.
 
 ```text
 node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs duty   [--json] [--parked T,T] [--scope T,T]
@@ -384,35 +231,24 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs merge  <ticket|--all> [--dry-run
 node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs report [--json] [--since <iso>]
 ```
 
-`merge` squashes a ticket PR into **its own base** — the phase epic, or the
-parent ticket's branch — and only when, re-checked against LIVE GitHub: the PR is
-open and undrafted, checks are green, unresolved threads = 0, the review is
-not CHANGES_REQUESTED, the
-ticket is not `human_checkpoint`, and the base is inside the stack. It then
-retargets cascade children onto the epic and journals a `merge` event. It refuses
-— loudly, with the reason — on anything unproven, and a refusal never aborts the
-guard's other work.
+`merge` squashes a ticket PR into **its own base** (the phase epic or the parent
+ticket's branch) only when, re-checked against LIVE GitHub: open and undrafted,
+checks green, unresolved threads = 0, review not CHANGES_REQUESTED, ticket not
+`human_checkpoint`, base inside the stack. It retargets cascade children onto the
+epic and journals `merge`; it refuses loudly on anything unproven, and a refusal
+never aborts the guard's other work. **The epic → integration-branch PR is never
+auto-merged** — a human lands the phase.
 
-**The epic → integration-branch PR is never auto-merged.** The phase lands on
-`main`/`develop` by a human's hand; that is the whole point of having an epic as
-the quarantine. `sentinel.cjs` will not do it even if asked.
+Config (`.planning/config.json`; state-sync prints both): `pipeline.sentinel` =
+`auto` (default) | `off`; `pipeline.auto_merge` = `epic` (default) | `off` (every
+merge is a human's; no effect in `direct-to-main`).
 
-Config (`.planning/config.json`): `pipeline.sentinel` = `auto` (default) | `off`;
-`pipeline.auto_merge` = `epic` (default — ticket PRs land automatically) | `off`
-(every merge is a human's, the pre-sentinel behaviour). `auto_merge` has no effect
-in `direct-to-main`, where a ticket PR targets the integration branch itself.
-state-sync prints both on every run — act on what it prints, don't assume.
-
-**Concurrency is real, so the shared writes are locked.** state-sync replaces
-`delivery-state.json`/`delivery-front.json` atomically under a lock, and
-`ticket-worktree.sh` / `epic-branch.sh` take a git lock around anything that
-writes the shared `.git`. Consequences you must honour:
-- the main loop creates worktrees and branches; the SENTINEL never does. It works
-  only inside the worktrees it was handed.
-- a script may pause a moment waiting for the lock — that is the guard working,
-  not a hang. A `could not acquire the "state" lock` error means a process died
-  mid-write: check for a live sentinel before removing the lock directory.
-- never hand-edit the state files while a guard is running.
+Shared writes are locked (state-sync replaces `delivery-state.json` /
+`delivery-front.json` atomically; `ticket-worktree.sh` / `epic-branch.sh` lock the
+shared `.git`). The main loop creates worktrees and branches, the SENTINEL never
+does; a brief pause is the lock working, and `could not acquire the "state" lock`
+means a process died mid-write (check for a live sentinel before removing the lock
+directory); never hand-edit state files while a guard runs.
 
 ## Agent models and the mandatory dispatch boundary
 
