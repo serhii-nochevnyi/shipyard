@@ -2908,28 +2908,6 @@ test('automatic installed candidate retains its exact finite profile and cached 
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true }); }
 });
 
-for (const cold of [false, true]) for (const mutation of ['source', 'instructions'])
-  test('automatic integration measurement restoration refuses changed ' + mutation + (cold ? ' cold' : ' live'), async () => {
-    const { automaticCompletedReviewFixture } = require('./phase49-review-continuation.test.cjs');
-    let observed;
-    await assert.rejects(() => automaticCompletedReviewFixture('integrator', cold, false, false, 'seal-envelope', state => {
-      observed = state;
-      assert.deepEqual(state.statistics(), { launches: 1, probeCallbacks: 1, finalCallbacks: 0 });
-      if (mutation === 'source') fs.appendFileSync(path.join(state.root, 'src/reviewed.txt'), '\nChanged current source.\n');
-      else for (const name of fs.readdirSync(state.agents).filter(name => name.endsWith('.toml')))
-        fs.appendFileSync(path.join(state.agents, name), '\nChanged installed instructions.\n');
-    }), error => mutation === 'source'
-      ? error.code === 'INVALID_HOST' && error.message === 'claude-role-host: worktree has local changes before role dispatch'
-      : ['STALE_CONTEXT', 'REVIEW_RESTART_REQUIRED', 'UNBOUND_AGENT'].includes(error.code));
-    assert.ok(observed);
-    assert.deepEqual(observed.statistics(), { launches: 1, probeCallbacks: 1, finalCallbacks: 0 });
-  });
-
-test('integration measurement restoration refuses caller-created measurement custody', () => {
-  assert.throws(() => contextBuilder.restoreMeasuredIntegrationInput({ input: {}, identity: {} }, {}),
-    { code: 'REVIEW_SOURCE_REQUIRED' });
-});
-
 async function relocatedAggregate(parentName) {
   const f = fixture();
   const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'identity-parent-')));

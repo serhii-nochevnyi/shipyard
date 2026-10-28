@@ -46,11 +46,11 @@ for (const role of ['arch-review', 'integrator']) {
     }));
 }
 
-for (const role of ['arch-review', 'integrator']) for (const cold of [false, true])
+for (const role of ['arch-review']) for (const cold of [false, true])
   test('whole automatic ' + role + ' measurement and genuinely fresh ' + (cold ? 'cold' : 'live') + ' final reaches unchanged consumer',
     () => automaticCompletedReviewFixture(role, cold));
 
-for (const role of ['arch-review', 'integrator']) for (const cold of [false, true]) for (const failure of ['callback', 'record', 'record-repeat', 'seal-envelope', 'seal-tip'])
+for (const role of ['arch-review']) for (const cold of [false, true]) for (const failure of ['callback', 'record', 'record-repeat', 'seal-envelope', 'seal-tip'])
   test('whole automatic ' + role + ' reconciles original ' + failure + ' failure through unchanged consumer ' + (cold ? 'cold' : 'live'),
     () => automaticCompletedReviewFixture(role, cold, false, false, failure));
 

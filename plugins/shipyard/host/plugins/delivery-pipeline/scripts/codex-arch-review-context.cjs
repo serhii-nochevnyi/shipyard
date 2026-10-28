@@ -739,34 +739,6 @@ function restoreCompletedSourceInput(source) {
 }
 
 const measuredInputParents = new WeakMap();
-function restoreMeasuredIntegrationInput(measurement, current) {
-  if ((!roleArtifact.isAuthenticatedSourceMeasurement(measurement) && !roleArtifact.isAuthenticatedSourceCandidate(measurement)
-      && !roleArtifact.isAuthenticatedCompletedSource(measurement)) || !isPreparedFileInput(current))
-    fail('integration restoration requires original protected and private current custody', 'REVIEW_SOURCE_REQUIRED');
-  const measured = verifyFileInput(measurement.input.input_bundle, { sealed: true });
-  if (measured.manifest.binding?.review_contract !== 'shipyard.integration-review.v2')
-    fail('original measurement is not the complete integration candidate', 'REVIEW_RESTART_REQUIRED');
-  const bundle = measured.manifest.binding.original_input_bundle;
-  const previous = verifyFileInput(bundle, { sealed: true }), checked = verifyFileInput(current);
-  const subject = manifest => ({ snapshot: manifest.snapshot, binding: manifest.binding, schema: manifest.schema,
-    role: manifest.role, ticket: manifest.ticket, phase: manifest.phase, run_id: manifest.run_id,
-    dispatch_id: manifest.dispatch_id, chunk_bytes: manifest.chunk_bytes, max_chunk_reads: manifest.max_chunk_reads,
-    generated_instruction_bytes: manifest.accounting.generated_instruction_bytes,
-    assets: manifest.assets.map(({ ordinal, bytes, sha256, chunk_count }) => ({ ordinal, bytes, sha256, chunk_count })) });
-  if (previous.manifest.schema !== 'shipyard.host-file-input.v1'
-      || JSON.stringify(canonical(subject(previous.manifest))) !== JSON.stringify(canonical(subject(checked.manifest)))
-      || previous.material.some((bytes, index) => !bytes.equals(checked.material[index])))
-    fail('complete original integration subject or installed authority changed', 'REVIEW_RESTART_REQUIRED');
-  const inputBytes = previous.manifest.accounting.material_bytes + previous.manifest.accounting.manifest_bytes
-    + previous.manifest.accounting.relay_bytes + previous.manifest.accounting.generated_instruction_bytes;
-  const result = deepFreeze({ input_transport: 'host-files', input_bundle: bundle, manifest: previous.manifest,
-    prompt: fileRelay(bundle), input_bytes: inputBytes, inputTokens: Math.ceil(inputBytes / 4) });
-  preparedFileInputs.add(result);
-  fileInputOptions.set(result, { ...fileInputOptions.get(current), manifestIdentity: bundle.manifest_identity });
-  try { verifyFileInput(result); return result; }
-  catch (error) { preparedFileInputs.delete(result); fileInputOptions.delete(result); throw error; }
-}
-
 function restoreMeasuredSourceInput(measurement, current) {
   if ((!roleArtifact.isAuthenticatedSourceMeasurement(measurement) && !roleArtifact.isAuthenticatedSourceCandidate(measurement)
       && !roleArtifact.isAuthenticatedCompletedSource(measurement)) || !isPreparedFileInput(current))
@@ -2490,7 +2462,7 @@ if (require.main === module) {
   catch (error) { process.stderr.write((error.code || 'INVALID_INPUT') + ': ' + error.message + '\n'); process.exitCode = 1; }
 }
 
-module.exports = Object.freeze({ isIntegrationFileInput: value => isPreparedFileInput(value) && roleArtifact.isCodexIntegrationFileInput(value), integrationTextReads, integrationPartitionBinding, restoreMeasuredIntegrationInput, restoreMeasuredSourceInput, restoreInstalledMeasuredInput, createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
+module.exports = Object.freeze({ isIntegrationFileInput: value => isPreparedFileInput(value) && roleArtifact.isCodexIntegrationFileInput(value), integrationTextReads, integrationPartitionBinding, restoreMeasuredSourceInput, restoreInstalledMeasuredInput, createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
   FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, codexResultText, boundedBytes, file, validateCodeReviewCoverage,
   isFocusedContext, focusedProducerFiles, focusedChangeInventory, selectFocusedArchitecture, validateFocusedResult, authenticateFocusedLaunch,
   batchCommand, batchFrames, batchOutput, readBatchCli, SCHEMA, FILE_LIMITS, freezeReviewBaseline: deepFreeze, validateOriginalReviewContext, buildReviewImpactPacket, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreCompletedSourceInput, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });

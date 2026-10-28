@@ -122,7 +122,7 @@ function requestValue(input) {
     fail('INVALID_INPUT', 'context.plan_sha256 must be a 64-character hex digest');
   }
   if (input.context?.review_contract !== undefined
-      && (role !== 'integrator' || !['shipyard.integration-review.v1', 'shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3].includes(input.context.review_contract)))
+      && (role !== 'integrator' || !['shipyard.integration-review.v1', roleArtifact.INTEGRATION_REVIEW_V3].includes(input.context.review_contract)))
     fail('INVALID_INPUT', 'unsupported integration review contract');
   if (input.dispatch_id !== undefined
       && (typeof input.dispatch_id !== 'string' || !input.dispatch_id.trim())) {
@@ -774,14 +774,7 @@ function integrationDigest(value) {
 }
 
 function completeIntegrationPreflight(prepared, options) {
-  const proof = prepared.nativeMergeProof
-    ? require('./claude-role-host.cjs').createNativeIntegrationMergeProof(prepared, options)
-    : require('./phase-integrator-preflight.cjs').preflight({ phase: prepared.phaseNumber,
-      graphDir: prepared.graph.directory, worktree: prepared.canonical.worktree }, {
-      listPullRequests: options.listPullRequests, getPullRequest: options.getPullRequest,
-      git: (worktree, args) => (options.execFileSync || execFileSync)('git', ['-C', worktree, ...args], {
-        encoding: 'utf8', maxBuffer: MAX_GRAPH_BYTES, stdio: ['ignore', 'pipe', 'pipe'] }).trim(),
-    });
+  const proof = require('./claude-role-host.cjs').createNativeIntegrationMergeProof(prepared, options);
   if (proof.epic.commit !== prepared.canonical.head || proof.epic.tree !== prepared.canonical.headTree
       || JSON.stringify(proof.ticket_set) !== JSON.stringify(prepared.ticketSet)
       || proof.ticket_set_digest !== prepared.ticketSetDigest)
@@ -802,7 +795,7 @@ function prepareIntegrationLineage(scope, prepared, options) {
   const reference = require('./claude-reference-content.cjs').loadClaudeReferenceContent('integrator');
   const referencePin = { root: path.dirname(referencePath), path: path.basename(referencePath),
     bytes: Buffer.byteLength(reference), sha256: crypto.createHash('sha256').update(reference).digest('hex') };
-  const producerPins = ['claude-role-host.cjs', 'phase-integrator-preflight.cjs'].map(name => {
+  const producerPins = ['claude-role-host.cjs'].map(name => {
     const bytes = fs.readFileSync(path.join(__dirname, name));
     return { root: __dirname, path: name, bytes: bytes.length,
       sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
@@ -818,10 +811,8 @@ function prepareIntegrationLineage(scope, prepared, options) {
     storageRoot: options.storageRoot, graphDir: prepared.graph.directory,
     generatedInstructionBytes: options.generatedInstructionBytes, readerCapacity: options.readerCapacity, readerProfile: options.readerProfile };
   const original = encodeUniqueContent(prepared.packet, 32 * 1024 * 1024);
-  let currentInput = archReviewContext.prepareFileInput(scope, JSON.stringify(original), {
+  const currentInput = archReviewContext.prepareFileInput(scope, JSON.stringify(original), {
     ...fileOptions, readerCapacity: undefined, readerProfile: undefined, binding: { ...binding, packet_digest: integrationDigest(original) } });
-  if (options.nativeRuntime === 'codex' && options.readerProfile && typeof options.host?.restoreIntegrationSourceInput === 'function')
-    currentInput = options.host.restoreIntegrationSourceInput(currentInput);
   let selection = roleArtifact.selectReviewBaseline({ currentInput });
   if (options.nativeRuntime !== 'codex') selection = { schema: selection.schema, mode: 'full',
     role: selection.role, current: selection.current, baseline: null,
@@ -866,115 +857,6 @@ function recheckIntegrationReview(review, partitions) {
   const current = roleArtifact.selectReviewBaseline({ currentInput: review.currentInput });
   if (review.options.nativeRuntime === 'codex' && stableStringify(current) !== stableStringify(review.selection))
     fail('STALE_CONTEXT', 'independent integration baseline changed before current judgment');
-}
-
-function validateIntegrationCoverage(review, result) {
-  if (!review || integrationInputs.get(review.input) !== review)
-    fail('INVALID_INPUT', 'integration coverage requires original private preparation');
-  if (!object(result)) fail('INVALID_RESULT', 'integration result must be a complete object');
-  const expected = review.coverage;
-  const coverage = result.coverage;
-  const inherited = expected.current_logical_obligations.filter(item => item.coverage === 'inherited').map(item => item.identity);
-  const newly = expected.current_logical_obligations.filter(item => item.coverage !== 'inherited').map(item => item.identity);
-  if (stableStringify(result.reviewed_identity) !== stableStringify(review.reviewedIdentity)
-      || coverage?.schema !== 'shipyard.integration-coverage-result.v1'
-      || coverage.lineage_digest !== expected.digest || coverage.mode !== expected.mode
-      || stableStringify(coverage.inherited_obligations) !== stableStringify(inherited)
-      || stableStringify(coverage.newly_reviewed_obligations) !== stableStringify(newly)
-      || stableStringify(coverage.impact_paths) !== stableStringify(expected.impact.paths)
-      || stableStringify(coverage.limitations) !== stableStringify(expected.limitations)
-      || result.head !== review.reviewedIdentity.head || result.head_tree !== review.reviewedIdentity.head_tree
-      || result.base !== review.prepared.base || result.base_tree !== review.reviewedIdentity.base_tree
-      || result.phase !== review.prepared.phase || result.ticket_set_digest !== review.prepared.ticketSetDigest
-      || stableStringify(result.ticket_set) !== stableStringify(review.prepared.ticketSet))
-    fail('ARTIFACT_IDENTITY_MISMATCH', 'fresh integration identity or complete inherited/new/impact/limitations coverage differs');
-  return result;
-}
-
-
-function finishIntegrationReview(review, dispatch, recorder) {
-  recheckIntegrationReview(review);
-  const recorded = recorder?.getVerifiedRecord?.(dispatch?.dispatch_id);
-  if (!recorded || recorded.role !== 'integrator' || recorded.ticket !== review.prepared.ticket
-      || stableStringify(recorded.receipt) !== stableStringify(dispatch?.receipt))
-    fail('MISSING_RECEIPT', 'integration requires its original verified durable dispatch record');
-  const evidence = dispatch.application_evidence?.runtime_evidence;
-  const pin = evidence?.transcript;
-  if (dispatch.runtime !== 'codex' || dispatch.role !== 'integrator'
-      || (evidence?.review_continuation?.original_dispatch_id || dispatch.dispatch_id) !== review.input.manifest.dispatch_id
-      || dispatch.receipt?.dispatch_id !== dispatch.dispatch_id || dispatch.receipt?.role !== 'integrator'
-      || dispatch.receipt.compliance !== 'verified' || evidence?.worktree !== review.prepared.canonical.worktree
-      || evidence.ticket !== review.prepared.ticket || evidence.phase !== review.prepared.phaseNumber
-      || stableStringify(evidence) !== stableStringify(dispatch.receipt.runtime_evidence)
-      || !pin || !path.isAbsolute(pin.path || '') || !Number.isSafeInteger(pin.bytes)
-      || pin.bytes < 1 || pin.bytes > 128 * 1024 * 1024)
-    fail('MISSING_RECEIPT', 'fresh integration requires complete original application evidence');
-  const stat = fs.lstatSync(pin.path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== pin.bytes)
-    fail('RUNTIME_EVIDENCE_MISMATCH', 'original integration transcript identity changed');
-  const raw = fs.readFileSync(pin.path);
-  if (crypto.createHash('sha256').update(raw).digest('hex') !== pin.sha256)
-    fail('RUNTIME_EVIDENCE_MISMATCH', 'original integration transcript changed');
-  const parsed = parseCodexStream(raw.toString('utf8'));
-  if (parsed.session_id !== evidence.session_id)
-    fail('INVALID_RESULT', 'integration requires its original native session');
-  const text = repairStreamFinal(parsed, 'INVALID_RESULT', !!(evidence.completed_source || evidence.review_continuation));
-  const turnStart = parsed.records.findLastIndex(item => item.type === 'turn.started');
-  const messages = parsed.records.filter((item, index) => index > turnStart
-    && item.type === 'item.completed' && item.item?.type === 'agent_message');
-  let contracts = 0;
-  for (const message of messages) {
-    let candidate;
-    try { candidate = JSON.parse(message.item.text); } catch {}
-    if (object(candidate) && (candidate.review_contract !== undefined || candidate.status !== undefined || candidate.outcome !== undefined)) contracts++;
-  }
-  let result;
-  if (contracts !== 1 || Buffer.byteLength(text || '') > 128 * 1024)
-    fail('INVALID_RESULT', 'integration requires one bounded terminal role contract');
-  try { result = JSON.parse(text); } catch { fail('INVALID_RESULT', 'integration requires complete JSON'); }
-  validateIntegrationCoverage(review, result);
-  if (result.context_digest !== review.input.manifest.binding.packet_digest
-      || result.input_manifest_sha256 !== review.input.input_bundle.manifest_sha256
-      || result.input_material_bytes !== review.input.input_bundle.total_bytes
-      || result.input_asset_count !== review.input.input_bundle.asset_count
-      || result.input_chunk_reads !== archReviewContext.verifyFileInput(review.input).chunk_reads
-      || evidence.input_transport !== 'host-files'
-      || stableStringify(evidence.input_bundle) !== stableStringify(review.input.input_bundle)
-      || evidence.input_consumption?.manifest_sha256 !== review.input.input_bundle.manifest_sha256
-      || evidence.input_consumption?.chunk_reads !== result.input_chunk_reads
-      || evidence.input_consumption?.native_session_sha256 !== evidence.native_session_evidence?.sha256
-      || typeof result.evidence_markdown !== 'string' || !result.evidence_markdown.trim())
-    fail('INVALID_RESULT', 'integration requires complete current input and original evidence handoff');
-  const { evidence_markdown: markdown, ...judgment } = result;
-  if (evidence.review_continuation) {
-    const progress = roleArtifact.validateReviewContinuationEvidence(evidence);
-    if (stableStringify(progress.identity) !== stableStringify(archReviewContext.reviewProgressIdentity(review.input))
-        || stableStringify(progress.input.input_bundle) !== stableStringify(review.input.input_bundle))
-      fail('REVIEW_RESTART_REQUIRED', 'protected continuation differs from the complete original integration input');
-    const stat = fs.lstatSync(progress.native_file);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== evidence.native_session_evidence?.bytes
-        || stat.size > 128 * 1024 * 1024
-        || crypto.createHash('sha256').update(fs.readFileSync(progress.native_file)).digest('hex') !== evidence.native_session_evidence.sha256)
-      fail('RUNTIME_EVIDENCE_MISMATCH', 'complete protected continuation transcript changed');
-  } else {
-    const codexHome = resolveCodexHome({ scriptDir: __dirname, env: review.options.env || process.env });
-    const originals = require('./codex-runtime-host.cjs').nativeSessionCandidates(path.join(codexHome, 'sessions'), evidence.session_id);
-    if (originals.length !== 1) fail('MISSING_RECEIPT', 'one complete original native integration transcript is required');
-    archReviewContext.validateOriginalReviewContext({ receipt: dispatch.receipt, dispatchId: dispatch.dispatch_id,
-      result: judgment, evidence: Buffer.from(markdown), nativePin: { path: originals[0],
-        bytes: evidence.native_session_evidence?.bytes, sha256: evidence.native_session_evidence?.sha256 } });
-  }
-  const evidencePath = path.join(review.prepared.canonical.worktree, review.prepared.evidencePath);
-  roleArtifact.prepareRoleArtifact({ worktreePath: review.prepared.canonical.worktree,
-    role: 'integrator', phase: review.prepared.phase, evidencePath });
-  fs.writeFileSync(evidencePath, markdown);
-  const sealInput = { worktreePath: review.prepared.canonical.worktree, role: 'integrator',
-    phase: review.prepared.phase, ticket: review.prepared.ticket, base: review.prepared.base,
-    ticketSet: review.prepared.ticketSet, ticketSetDigest: review.prepared.ticketSetDigest,
-    recorder, dispatchId: dispatch.dispatch_id, result: judgment, evidencePath };
-  const artifact = roleArtifact.sealJudgment(sealInput);
-  roleArtifact.validateJudgmentManifest({ ...sealInput, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
-  return Object.freeze({ ...dispatch, result: judgment, artifact });
 }
 
 function partitionedCodexResult(dispatch, recorder) {
@@ -1203,7 +1085,7 @@ function prepareIntegratorInput(scope, request, options) {
     return review.input;
   }
   if (request.context.review_contract !== undefined
-      && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2'].includes(request.context.review_contract))
+      && request.context.review_contract !== 'shipyard.integration-review.v1')
     fail('INVALID_INPUT', 'unsupported integration review contract');
   if (request.context.input_transport !== undefined || request.context.input_bundle !== undefined) {
     const prepared = options.fileInputContext;
@@ -1213,36 +1095,7 @@ function prepareIntegratorInput(scope, request, options) {
         || request.context.prompt !== prepared.prompt) fail('INVALID_INPUT', 'serialized bundle has no private producer authority');
     archReviewContext.verifyFileInput(prepared, { association: { run_id: scope.run_id, ticket: scope.ticket,
       phase: scope.phase, role: request.role, dispatch_id: request.dispatch_id } });
-    if (request.context.review_contract === 'shipyard.integration-review.v2') {
-      const review = integrationInputs.get(prepared);
-      if (!review) fail('INVALID_INPUT', 'integration coverage requires original private preparation');
-      recheckIntegrationReview(review);
-    }
     return prepared;
-  }
-  if (request.context.review_contract === 'shipyard.integration-review.v2') {
-    const prepared = require('./claude-role-host.cjs').prepareNativeIntegratorContext(options, {
-      worktree: scope.worktree, phase: String(scope.phase), signals: undefined,
-      review_contract: 'shipyard.integration-review.v2' });
-    let signals = { ...prepared.signals };
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const selected = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals });
-      const installed = installedAgentOptions(options, selected, options.host?.capabilities || options.capabilities);
-      const instructions = archReviewContext.instructionEvidence(installed.agentDir, installed.agentFile, installed.agentManifest);
-      const review = prepareIntegrationLineage(scope, prepared, { ...options, nativeRuntime: 'codex',
-        dispatchId: request.dispatch_id, storageRoot: storageDirectory(options, scope),
-        ...(options.automaticReader ? { readerProfile: automaticReaderProfile(installed, selected) } : {}),
-        generatedInstructionBytes: instructions.generated_instruction_bytes,
-        instructionBinding: { agent_file: selected.agent_file, agent_path: path.resolve(installed.agentDir, installed.agentFile),
-          agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
-      signals = { ...signals, inputTokens: review.input.inputTokens };
-      if (policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals }).agent_file !== selected.agent_file) continue;
-      request.signals = signals;
-      request.context = { ...request.context, prompt: review.input.prompt,
-        input_transport: 'host-files', input_bundle: review.input.input_bundle };
-      return review.input;
-    }
-    fail('CONTEXT_OVER_BOUND', 'selected integration instructions did not stabilize');
   }
   const material = request.context.prompt || request.context.task_prompt || request.context.input;
   if (request.role === 'integrator' && typeof material === 'string')
@@ -3336,14 +3189,11 @@ function createCodexDeliveryHost(options = {}) {
           fail('READER_CAPACITY_UNSUPPORTED', 'automatic review requires original probe and fresh-source runtime seams');
         const selected = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals: request.signals });
         if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
-        if (integrationInputs.has(fileInput)) recheckIntegrationReview(integrationInputs.get(fileInput));
         archReviewContext.verifyFileInput(fileInput);
         const currentInput = fileInput;
         fileInput = runtimeHost.reserveCompletedSourceCandidate(fileInput);
         if (fileInput !== currentInput) {
           if (request.role === 'arch-review') archReviewContext.restoreInstalledMeasuredInput(options.archReviewContext, currentInput, fileInput);
-          const review = integrationInputs.get(currentInput);
-          if (review) integrationInputs.set(fileInput, Object.freeze({ ...review, input: fileInput }));
         }
         if (runtimeHost.recorder.getReservation(request.dispatch_id)?.recorded) {
           const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, dispatch_id: request.dispatch_id });
@@ -3369,12 +3219,6 @@ function createCodexDeliveryHost(options = {}) {
             request.context.prompt = archReviewContext.admittedPrompt(options.archReviewContext);
           } else {
             fileInput = archReviewContext.admitReaderBatchInput(fileInput, capacity);
-            const review = integrationInputs.get(previous);
-            if (review) {
-              const admitted = Object.freeze({ ...review, input: fileInput });
-              integrationInputs.set(fileInput, admitted);
-              recheckIntegrationReview(admitted);
-            }
             request.context.prompt = fileInput.prompt;
           }
           if (previous.input_bundle.manifest_sha256 !== fileInput.input_bundle.manifest_sha256
@@ -3449,16 +3293,12 @@ function createCodexDeliveryHost(options = {}) {
             }
             if (request.role === 'code-review') codeReviewContext.recheckInstalledLaunch(options.codeReviewContext);
             if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
-            if (fileInput && integrationInputs.has(fileInput)) recheckIntegrationReview(integrationInputs.get(fileInput));
             if (fileInput) archReviewContext.verifyFileInput(fileInput);
             else recheckInlineIntegrator(scope, request);
             if (completedSourceReference) {
               const [selection, context] = args;
               const { review_contract: reviewContract, ...resumeContext } = context;
-              if (reviewContract !== request.context.review_contract
-                  || (reviewContract === 'shipyard.integration-review.v2'
-                    && (!integrationInputs.has(fileInput)
-                      || fileInput.manifest.binding.review_contract !== reviewContract)))
+              if (reviewContract !== request.context.review_contract)
                 fail('INVALID_INPUT', 'completed integration source changed its private preparation contract');
               return runtimeHost.resumeCompletedSource(selection, { ...resumeContext, source: completedSourceReference, input_prepared: fileInput });
             }
@@ -3476,7 +3316,6 @@ function createCodexDeliveryHost(options = {}) {
             if (typeof runtimeHost.recoverCompletedSourceRecording !== 'function')
               fail('REVIEW_SOURCE_INVALID', 'original recorded source recovery is unavailable');
             if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
-            if (fileInput && integrationInputs.has(fileInput)) recheckIntegrationReview(integrationInputs.get(fileInput));
             archReviewContext.verifyFileInput(fileInput);
             const { review_contract: _reviewContract, ...recoveryContext } = taskContext;
             const recoveryAdapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
@@ -3598,11 +3437,6 @@ function createCodexDeliveryHost(options = {}) {
       if (request.role === 'arch-review') {
         writeCompletedArchitectureEvidence(options.archReviewContext, result, runtimeHost.recorder);
         const completed = archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
-        if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
-        return completed;
-      }
-      if (fileInput && integrationInputs.has(fileInput)) {
-        const completed = finishIntegrationReview(integrationInputs.get(fileInput), result, runtimeHost.recorder);
         if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
         return completed;
       }
@@ -4093,8 +3927,6 @@ module.exports = Object.freeze({
   prepareIntegratorInput,
   prepareIntegrationLineage,
   recheckIntegrationReview,
-  validateIntegrationCoverage,
-  finishIntegrationReview,
   validateArgs,
   collectVerificationEvidence,
   createCodexDeliveryHost,

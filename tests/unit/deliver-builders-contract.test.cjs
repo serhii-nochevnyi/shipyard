@@ -97,7 +97,7 @@ test('review roles use the prepared-context CLI and preserve the integrator in-p
 
 test('both supported integrator callers select v3 before legacy full-inline formatting', () => {
   const start = step5.indexOf('**Fresh final integration contract.**');
-  const end = step5.indexOf('**Phase 41 prelaunch gate', start);
+  const end = step5.indexOf('**Legacy full-input compatibility.', start);
   assert.ok(start >= 0 && end > start);
   const integration = step5.slice(start, end);
   const caller = integration.match(/```javascript\n([\s\S]*?)\n\s*```/)[1];

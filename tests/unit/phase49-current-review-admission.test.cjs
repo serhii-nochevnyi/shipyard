@@ -286,21 +286,6 @@ const consumers = [gate.verifyCurrentReviews,
   require('../../plugins/delivery-pipeline/scripts/sentinel.cjs').currentReviewAdmission,
   require('../../plugins/delivery-pipeline/scripts/state-sync.cjs').currentReviewAdmission];
 
-test('fresh integration admission retains its independent role authority', async () => {
-  await fixture(async f => {
-    const prior = await successfulReview(f, 'integrator');
-    write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n'); commit(f, 'integration repair');
-    const fresh = await runIntegration(f);
-    assert.equal(fresh.coverage.baseline.head, prior.head);
-    for (const consumer of consumers) {
-      const admitted = consumer(currentSubject(f));
-      assert.equal(admitted.integration.authenticated, true);
-      assert.equal(admitted.architecture.ready, false);
-    }
-    assert.deepEqual(fs.readFileSync(prior.artifact), prior.original);
-  });
-});
-
 async function runArchitecture(f, edit = {}) {
   const dispatchId = 'fresh-architecture-' + ++f.count;
   const original = currentInput(f, 'arch-review', dispatchId, { legacy: true });
@@ -368,73 +353,11 @@ function projectOptions(f) {
     } };
 }
 
-function prepareCurrentIntegration(f) {
-  const context = secondRuntime.prepareIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: '49' });
-  const a = agent(f, 'integrator', context.signals);
-  const scope = { worktree: f.worktree, repository: context.canonical.commonPath, phase: 49,
-    ticket: context.ticket, run_id: 'fresh-integrator-' + ++f.count };
-  const request = { role: 'integrator', dispatch_id: scope.run_id, signals: {},
-    context: { review_contract: 'shipyard.integration-review.v2' } };
-  const options = { ...projectOptions(f), scope, capabilities: a.capabilities,
-    agentDir: a.dir, agentManifest: a.manifest, storageRoot: path.join(f.root, 'delivery-state'), env: { CODEX_HOME: process.env.CODEX_HOME } };
-  const input = delivery.prepareIntegratorInput(scope, request, options);
-  const packet = packets.decodeUniqueContent(JSON.parse(collector.verifyFileInput(input).material[0]));
-  return { input, scope, request, options, coverage: packet.role_context.review_coverage, a };
-}
-
-function coveredResult(prepared) {
-  const { input, coverage } = prepared;
-  const checked = collector.verifyFileInput(input);
-  return { outcome: 'passed', phase: coverage.reviewed_identity.phase,
-    head: coverage.reviewed_identity.head, head_tree: coverage.reviewed_identity.head_tree,
-    base: 'origin/main', base_tree: coverage.reviewed_identity.base_tree,
-    ticket_set: coverage.current_membership.ticket_set, ticket_set_digest: coverage.current.ticket_set_digest,
-    reviewed_identity: coverage.reviewed_identity,
-    coverage: coverageResult(coverage),
-    context_digest: input.manifest.binding.packet_digest, input_manifest_sha256: input.input_bundle.manifest_sha256,
-    input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
-    input_chunk_reads: checked.chunk_reads, blocking_count: 0, findings: [],
-    summary: 'Fresh complete current integration fixture', evidence_markdown: 'Fresh integration evidence with inherited/new/impact/limitations coverage.' };
-}
-
 function coverageResult(coverage) {
   return { schema: 'shipyard.integration-coverage-result.v1', mode: coverage.mode, lineage_digest: coverage.digest,
     inherited_obligations: coverage.current_logical_obligations.filter(item => item.coverage === 'inherited').map(item => item.identity),
     newly_reviewed_obligations: coverage.current_logical_obligations.filter(item => item.coverage !== 'inherited').map(item => item.identity),
     impact_paths: coverage.impact.paths, limitations: coverage.limitations };
-}
-
-async function runIntegration(f, edit = {}) {
-  const prepared = prepareCurrentIntegration(f);
-  const { input, scope, request, options, a } = prepared;
-  const result = structuredClone(coveredResult(prepared));
-  edit.result?.(result);
-  const resultText = JSON.stringify(result), session = crypto.randomUUID();
-  const native = nativeRecords(scope, input, session, a.selection, resultText);
-  edit.native?.(native);
-  const now = new Date();
-  const directory = path.join(process.env.CODEX_HOME, 'sessions', String(now.getFullYear()),
-    String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
-  fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(path.join(directory, session + '.jsonl'), serialize(native));
-  const records = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
-    .map(type => template(cli, record => record.type === type));
-  records[0].thread_id = session; records[2].item.text = resultText;
-  const recorder = boundary.createDurableRecorder(path.join(f.root, 'receipts'));
-  const host = runtime.createCodexRuntimeHost({ scope, recorder, capabilities: a.capabilities,
-    env: options.env, transcriptDir: path.join(f.root, 'transcripts'),
-    probe: { status: 'available', executable: 'codex', runtime_version: 'fixture', capabilities: a.capabilities },
-    spawn() {
-      const processFixture = new EventEmitter();
-      processFixture.stdout = new EventEmitter(); processFixture.stderr = new EventEmitter(); processFixture.pid = process.pid;
-      processFixture.stdin = { write() {}, end() { process.nextTick(() => {
-        processFixture.stdout.emit('data', Buffer.from(serialize(records))); processFixture.emit('close', 0);
-      }); } };
-      return processFixture;
-    } });
-  edit.beforeLaunch?.(prepared);
-  const dispatched = await delivery.createCodexDeliveryHost({ ...options, host, fileInputContext: input }).run(request);
-  return { ...prepared, result: dispatched };
 }
 
 const resultMutations = [
@@ -459,16 +382,6 @@ for (const [name, mutation] of resultMutations) test('architecture publication r
       ['REVIEW_COVERAGE_INVALID', 'JUDGMENT_IDENTITY_MISMATCH', 'JUDGMENT_DIGEST_MISMATCH'].includes(error.code));
   });
 });
-
-for (const [name, mutation] of resultMutations.filter(([name]) => name !== 'mixed-role coverage'))
-  test('integration publication refuses ' + name, async () => {
-    await fixture(async f => {
-      await successfulReview(f, 'integrator');
-      write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n'); commit(f, 'current integration repair');
-      await assert.rejects(runIntegration(f, { result: mutation }), error =>
-        ['ARTIFACT_IDENTITY_MISMATCH', 'REVIEW_COVERAGE_INVALID', 'JUDGMENT_IDENTITY_MISMATCH'].includes(error.code));
-    });
-  });
 
 const archiveMutations = [
   ['baseline artifact bytes', (f, prior) => { fs.appendFileSync(prior.artifact, 'altered'); }],
@@ -599,8 +512,8 @@ test('canonicalized Codex architecture membership retains the original complete 
   });
 });
 
-test('genuine finalized Claude receipts admit full architecture and inline integration at all current consumers', async () => {
-  for (const role of ['arch-review', 'integrator']) await claudeFixture(async f => {
+test('genuine finalized Claude receipts admit full architecture at all current consumers', async () => {
+  for (const role of ['arch-review']) await claudeFixture(async f => {
     const scratch = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
     const before = scratch.statusIgnoringScratch(f.worktree, { forJudge: false });
     assert.equal(before.ok, true);
@@ -660,8 +573,6 @@ test('genuine finalized Claude receipts admit full architecture and inline integ
         '.planning/graph/provenance/' + receipt.dispatch_id + '.json']) {
         assert.ok(dirty.entries.some(entry => entry.status === '??' && entry.path === relative), relative);
       }
-      await assert.rejects(runClaudeCurrentReview(f, 'integrator'),
-        error => error.code === 'INVALID_HOST' && /worktree has local changes before role dispatch/.test(error.message));
     }
   });
 });
@@ -768,7 +679,7 @@ for (const [name, mutate] of [
   });
 });
 
-for (const role of ['arch-review', 'integrator']) for (const [name, mutate] of [
+for (const role of ['arch-review']) for (const [name, mutate] of [
   ['missing physical stream', pin => fs.unlinkSync(pin.path)],
   ['changed original final JSON', pin => {
     const rows = fs.readFileSync(pin.path, 'utf8').trim().split('\n').map(JSON.parse);
@@ -790,48 +701,6 @@ for (const role of ['arch-review', 'integrator']) for (const [name, mutate] of [
       if (role === 'arch-review') assert.equal(admitted.architecture.ready, false);
       else assert.equal(admitted.integration, null);
     }
-  });
-});
-
-for (const [name, edit] of [
-  ['absent user packet', rows => rows.shift()],
-  ['duplicate user packet', rows => rows.unshift(structuredClone(rows[0]))],
-  ['changed original user packet', rows => { rows[0].message.content = rows[0].message.content.replace('AUTHENTICATED_CONTEXT_PACKET', 'ALTERED_CONTEXT_PACKET'); }],
-  ['foreign user session', rows => { rows[0].sessionId = crypto.randomUUID(); }],
-]) test('Claude inline integration refuses ' + name, async () => {
-  await claudeFixture(async f => {
-    await assert.rejects(runClaudeCurrentReview(f, 'integrator', { native: edit }),
-      error => error.code === 'REVIEW_COVERAGE_INVALID');
-  });
-});
-
-for (const [name, edit] of [
-  ['incomplete stream without terminal newline', raw => raw.slice(0, -1)],
-  ['stream with records after final result', raw => raw + serialize([JSON.parse(raw.split('\n')[0])])],
-]) test('Claude inline integration refuses ' + name + ' even with matching original pins', async () => {
-  await claudeFixture(async f => {
-    await assert.rejects(runClaudeCurrentReview(f, 'integrator', { stream: edit }),
-      error => error.code === 'REVIEW_NATIVE_INVALID');
-  });
-});
-
-for (const [name, edit] of [
-  ['wrong native policy', { native: rows => { rows[1].effort = rows[1].effort === 'low' ? 'high' : 'low'; } }],
-  ['wrong original stream session', { stream: raw => serialize(raw.trim().split('\n').map(JSON.parse).map(row => ({ ...row, session_id: 'foreign-session' }))) }],
-]) test('Claude inline integration refuses ' + name, async () => {
-  await claudeFixture(async f => {
-    await assert.rejects(runClaudeCurrentReview(f, 'integrator', edit),
-      error => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
-  });
-});
-
-for (const [name, edit] of [
-  ['caller-altered completed JSON', output => { output.summary = 'Caller replacement'; }],
-  ['caller-provided evidence alias', output => { output.runtime_evidence = { session_id: 'caller-session' }; }],
-]) test('Claude inline integration refuses ' + name, async () => {
-  await claudeFixture(async f => {
-    await assert.rejects(runClaudeCurrentReview(f, 'integrator', { result: edit }),
-      error => error.code === 'REVIEW_NATIVE_INVALID');
   });
 });
 
@@ -909,14 +778,6 @@ async function runClaudeCurrentReview(f, role, edit = {}) {
                   ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest,
                   verdict: 'conform', blocking_count: 0, summary: 'Complete original architecture fixture', findings: [] };
                 write(f.worktree, '.shipyard-arch-review-evidence.md', 'Complete original architecture fixture evidence.\n');
-              } else {
-                const coverage = context.review_coverage;
-                result = { outcome: 'passed', phase: context.phase, head: context.combined_diff.head,
-                  head_tree: context.combined_diff.head_tree, base: context.integration_base.ref,
-                  base_tree: context.integration_base.tree, ticket_set: context.ticket_set,
-                  ticket_set_digest: context.ticket_set_digest, reviewed_identity: coverage.reviewed_identity,
-                  coverage: coverageResult(coverage), blocking_count: 0, summary: 'Complete inline integration fixture', findings: [] };
-                write(f.worktree, '.planning/phases/' + f.phase + '/INTEGRATION.md', 'Complete original integration fixture evidence.\n');
               }
               edit.originalResult?.(result);
               const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
@@ -1000,10 +861,8 @@ async function runClaudeCurrentReview(f, role, edit = {}) {
     fs.unlinkSync(path.join(f.worktree, '.shipyard-arch-review-evidence.md'));
     return { dispatch, artifact: { ref: artifact.artifact_path }, result };
   }
-  if (role === 'integrator') options.getPullRequest = projectOptions(f).getPullRequest;
   return secondRuntime.createClaudeRoleHost(options).run({ schema: secondRuntime.REQUEST_SCHEMA,
-    role, worktree: f.worktree, phase: f.phase,
-    ...(role === 'arch-review' ? { pr: f.pr.number } : { review_contract: 'shipyard.integration-review.v2' }) });
+    role, worktree: f.worktree, phase: f.phase, pr: f.pr.number });
 }
 
 async function fixture(action) {
@@ -1115,7 +974,7 @@ function currentInput(f, role, dispatchId = 'current-' + role + '-' + ++f.count,
   const referencePath = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs').REFERENCE_PATHS.integrator;
   const reference = fs.readFileSync(referencePath);
   const producerRoot = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts');
-  const producerPins = ['claude-role-host.cjs', 'phase-integrator-preflight.cjs'].map(name => {
+  const producerPins = ['claude-role-host.cjs'].map(name => {
     const bytes = fs.readFileSync(path.join(producerRoot, name));
     return { root: producerRoot, path: name, bytes: bytes.length, sha256: hash(bytes) };
   });

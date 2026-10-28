@@ -100,7 +100,7 @@ function parseRequest(value) {
       ? new Set(['schema', 'role', 'worktree', 'phase', 'pr', 'repo', 'signals'])
     : new Set(['schema', 'role', 'worktree', 'phase', 'signals', ...(role === 'integrator' ? ['review_contract'] : [])]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) reject(`request field ${key} is not permitted`);
-  if (value.review_contract !== undefined && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3].includes(value.review_contract))
+  if (value.review_contract !== undefined && !['shipyard.integration-review.v1', roleArtifact.INTEGRATION_REVIEW_V3].includes(value.review_contract))
     reject('unsupported integration review contract', 'INVALID_INPUT');
   if (value.review_contract === roleArtifact.INTEGRATION_REVIEW_V3 && Object.keys(value.signals || {}).length)
     reject('v3 model selection and stage authority are host-owned', 'INVALID_INPUT');
@@ -1012,8 +1012,7 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
     reject('integrator worktree is not on the canonical default branch');
   }
   const sources = sourceReferences(canonical.projectRoot, graph, selection.rows);
-  const useNativeProof = native && request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3;
-  const nativeMergeProof = useNativeProof ? collectNativeMergeProof({ worktree: canonical.worktree,
+  const nativeMergeProof = native ? collectNativeMergeProof({ worktree: canonical.worktree,
     graphDir: graph.directory, phase: String(phaseNumber) }, options) : null;
   const { ticketSet, livePullRequests } = nativeMergeProof
     ? { ticketSet: nativeMergeProof.ticket_set, livePullRequests: nativeMergeProof.merges.map(member => ({
@@ -1070,23 +1069,13 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
       nativeMergeProof.plans.find(pin => pin.path === plan.path)?.sha256 !== sha(plan.content)))
     reject('complete phase plan bytes changed during preparation', 'STALE_CONTEXT');
   integratorContexts.set(prepared, collection);
-  if (native) return prepared;
-  if (request.review_contract !== 'shipyard.integration-review.v2') return prepared;
-  const scope = { worktree: canonical.worktree, phase: phaseNumber, ticket: subject, run_id: newDispatchId() };
-  const review = require('./codex-delivery-host.cjs').prepareIntegrationLineage(scope, prepared, {
-    ...options, nativeRuntime: 'claude', dispatchId: scope.run_id,
-    storageRoot: storageDirectory(options, scope.run_id, canonical.worktree),
-    instructionBinding: {}, generatedInstructionBytes: Buffer.byteLength(reference),
-  });
-  const currentPrompt = makePrompt('integrator', subject, review.packet, reference);
-  return Object.freeze({ ...prepared, packet: review.packet, prompt: currentPrompt, integrationReview: review,
-    signals: observedSignals(request, selection.rows, livePullRequests, Math.ceil(Buffer.byteLength(currentPrompt) / 4)) });
+  return prepared;
 }
 
 function prepareIntegratorContext(options, request) {
   const canonical = canonicalWorktree(options, request.worktree, true);
   const graph = graphData(options, canonical.projectRoot);
-  if (request.review_contract !== undefined && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3].includes(request.review_contract))
+  if (request.review_contract !== undefined && !['shipyard.integration-review.v1', roleArtifact.INTEGRATION_REVIEW_V3].includes(request.review_contract))
     reject('unsupported integration review contract', 'INVALID_INPUT');
   if (request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3)
     return prepareIntegrator(options, request, canonical, graph, nativeIntegratorCollection);
@@ -1350,7 +1339,7 @@ function estimatePromptTokens(role, packet, plan, pr, reference, readOnlySmoke =
 
 function prepareInvocation(options, request) {
   const canonical = canonicalWorktree(options, request.worktree, (request.role === 'arch-review' && !!request.phase)
-    || (request.role === 'integrator' && ['shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3].includes(request.review_contract)), request.role === 'code-review', request.repo);
+    || (request.role === 'integrator' && request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3), request.role === 'code-review', request.repo);
   const graph = graphData(options, canonical.projectRoot);
   const rows = requestRows(request, graph, canonical);
   const prepared = request.role === 'arch-review'
@@ -1553,8 +1542,6 @@ function validateResult(prepared, result) {
         || result.ticket_set_digest !== prepared.ticketSetDigest) {
       reject('integrator result identity differs from the authenticated phase snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
     }
-    if (prepared.integrationReview)
-      require('./codex-delivery-host.cjs').validateIntegrationCoverage(prepared.integrationReview, result);
   } else {
     if (result.outcome !== 'clear' && result.outcome !== 'blocked' && result.outcome !== 'awaiting-human') {
       reject('sentinel result has an unsupported outcome', 'INVALID_RESULT');

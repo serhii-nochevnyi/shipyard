@@ -2481,10 +2481,10 @@ for (const role of ['arch-review', 'integrator']) {
     'outcome-write', 'outcome-file-fsync', 'outcome-rename-response', 'outcome-directory-fsync'])
     test('original recorded ' + role + ' reconciles ' + fault + ' ' + (cold ? 'cold' : 'live'),
       () => require('./phase49-review-continuation.test.cjs').completedSourceReceiptRecoveryFixture(role, cold, fault));
-  for (const cold of [false, true]) for (const fault of ['record-link-response', 'outcome-write', 'outcome-file-fsync'])
+  if (role === 'arch-review') for (const cold of [false, true]) for (const fault of ['record-link-response', 'outcome-write', 'outcome-file-fsync'])
     test('automatic original recorded ' + role + ' completes unchanged consumers after ' + fault + ' ' + (cold ? 'restored' : 'live'),
       () => require('./phase49-review-continuation.test.cjs').automaticCompletedReviewFixture(role, cold, false, false, fault));
-  test('automatic original recorded ' + role + ' cold controller releases only its actually dead owner',
+  if (role === 'arch-review') test('automatic original recorded ' + role + ' cold controller releases only its actually dead owner',
     () => require('./phase49-review-continuation.test.cjs').coldRecordedSourceControllerFixture(role));
   for (const mutation of ['tampered-receipt', 'foreign-receipt', 'source', 'base', 'agent', 'native', 'unknown-pid', 'live-pid'])
     test('original recorded ' + role + ' refuses ' + mutation + ' cold',

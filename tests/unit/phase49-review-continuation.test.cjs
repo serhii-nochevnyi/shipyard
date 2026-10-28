@@ -2821,12 +2821,12 @@ test('four continuation entries preserve the exact original registration names a
     'continuation helper import registers zero genuine tests and launches zero children',
   ]);
   const groups = [inventories[0].slice(0, -2), ...inventories.slice(1)];
-  assert.deepEqual(groups.map(group => group.length), [90, 100, 93, 103]);
+  assert.deepEqual(groups.map(group => group.length), [90, 100, 93, 91]);
   const original = groups.flat(), names = original.map(record => record[0]);
-  assert.equal(original.length, 386);
-  assert.equal(new Set(names).size, 386);
-  assert.equal(sha(JSON.stringify(names)), 'f33a352f7acc9cc7595a0da6e9666bc33a66dc9f4fbdb247a282bba572b0dc88');
-  assert.equal(sha(JSON.stringify(original)), 'cd6ccde73f57967c69a6ee661797686165825dee6b095c9c671531762aed52fe');
+  assert.equal(original.length, 374);
+  assert.equal(new Set(names).size, 374);
+  assert.equal(sha(JSON.stringify(names)), '9eb654b2db7b57316a6f6a4da8b14196f2b1e05048cefd367877866074b0ef93');
+  assert.equal(sha(JSON.stringify(original)), '8b313921e2eb04d543380430a345f1ba3b7b938e8acb1108833955355d3be371');
 });
 
 test('continuation helper import registers zero genuine tests and launches zero children', () => {

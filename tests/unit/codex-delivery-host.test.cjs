@@ -3484,9 +3484,8 @@ for (const mutation of ['issue-repost', 'issue-oscillation', 'issue-unknown', 'i
 test('known issue history uses the original applied predecessor across reposts: ' + mutation,
   () => withGraphDirEnv(undefined, () => originalFixerFixture('escalate', mutation)));
 
-for (const full of [false, true])
 for (const mutation of ['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal', 'incomplete-turn', 'failed-turn', 'foreign-session'])
-test('original integration boundary completes and retains one terminal contract: ' + mutation + ' full=' + full, () => withGraphDirEnv(undefined, async () => {
+test('original integration boundary completes and retains one terminal contract: ' + mutation, () => withGraphDirEnv(undefined, async () => {
   const Module = require('node:module');
   const file = require.resolve('./phase49-incremental-integration.test.cjs');
   const fixtureModule = new Module(file, module);
@@ -3502,11 +3501,10 @@ test('original integration boundary completes and retains one terminal contract:
   };
   try {
     fixtureModule._compile(fs.readFileSync(file, 'utf8')
-      + '\ntest("owned integration original stream regression", () => fixture(f => module.regression(f, runIntegration, successfulReview)));\n', file);
+      + '\ntest("owned integration original stream regression", () => fixture(f => module.regression(f, null, successfulReview)));\n', file);
   } finally { Module._load = load; }
   require('node:events').EventEmitter.prototype.emit = function(event, bytes, ...args) {
-    if (event === 'data' && Buffer.isBuffer(bytes) && (bytes.toString().includes('shipyard.integration-coverage-result.v1')
-      || (full && bytes.toString().includes('Complete original role review.')))) {
+    if (event === 'data' && Buffer.isBuffer(bytes) && bytes.toString().includes('Complete original role review.')) {
       const rows = bytes.toString().trim().split('\n').map(JSON.parse);
       const at = rows.findIndex(row => row.item?.type === 'agent_message');
       const progress = structuredClone(rows[at]); progress.item.id += '-progress';
@@ -3527,18 +3525,16 @@ test('original integration boundary completes and retains one terminal contract:
   };
   try {
     fixtureModule.regression = async (f, runIntegration, successfulReview) => {
-      const run = () => full ? successfulReview(f, 'integrator', { legacy: true }) : runIntegration(f);
+      const run = () => successfulReview(f, 'integrator', { legacy: true });
       if (mutation === 'progress') {
         const fresh = await run();
-        const dispatched = full ? fresh.dispatched : fresh.result;
+        const dispatched = fresh.dispatched;
         assert.equal(dispatched.receipt.role, 'integrator');
-        assert.ok(full ? fresh.artifact : fresh.result.artifact.artifact_path);
+        assert.ok(fresh.artifact);
         const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-        if (full) {
-          const catalogue = JSON.parse(fs.readFileSync(path.join(authority.archiveAuthorityDirectory(f.worktree), 'catalogue.json'), 'utf8'));
-          assert.equal(typeof catalogue.payload.records[dispatched.dispatch_id].receipt_store, 'string');
-          assert.ok(fs.statSync(catalogue.payload.records[dispatched.dispatch_id].receipt_store).isDirectory());
-        }
+        const retained = JSON.parse(fs.readFileSync(path.join(authority.archiveAuthorityDirectory(f.worktree), 'catalogue.json'), 'utf8'));
+        assert.equal(typeof retained.payload.records[dispatched.dispatch_id].receipt_store, 'string');
+        assert.ok(fs.statSync(retained.payload.records[dispatched.dispatch_id].receipt_store).isDirectory());
         const currentVerdict = () => authority.currentIntegrationVerdict({ worktreePath: f.worktree, head: f.head,
           baseName: 'main', baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName });
         assert.equal(currentVerdict()?.dispatch_id, dispatched.dispatch_id);
@@ -3556,11 +3552,11 @@ test('original integration boundary completes and retains one terminal contract:
         };
         try { assert.equal(lookup()?.dispatch_id, dispatched.dispatch_id); assert.equal(foreignReads, 0); }
         finally { fs.readFileSync = read; }
-        const manifest = full ? fresh.artifact : fresh.result.artifact.artifact_path;
+        const manifest = fresh.artifact;
         fs.appendFileSync(manifest, 'changed relevant manifest');
         assert.throws(lookup);
 
-      } else if (full && ['duplicate-contract', 'duplicate-item'].includes(mutation)) {
+      } else if (['duplicate-contract', 'duplicate-item'].includes(mutation)) {
         const fresh = await run();
         assert.equal(fresh.dispatched.receipt.role, 'integrator');
         assert.ok(observed > 0);
@@ -4077,187 +4073,6 @@ test('code review wrapper refuses installed or live changes immediately before l
       fs.writeFileSync(agentManifest, JSON.stringify(manifest));
     } else f.pr[mutation === 'head' ? 'headRefOid' : 'baseRefOid'] = 'a'.repeat(40);
   } })));
-
-test('public integration-review.v2 completes shared preparation with coordinator-only planning', () => withGraphDirEnv(undefined, async () => {
-  const Module = require('node:module');
-  const file = require.resolve('./phase49-incremental-integration.test.cjs');
-  const loaded = new Module(file, module);
-  loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
-  const load = Module._load;
-  Module._load = function(name, ...args) {
-    if (name === 'node:test') return { test() {} };
-    return load.call(this, name, ...args);
-  };
-  try {
-    loaded._compile(fs.readFileSync(file, 'utf8')
-      + '\nmodule.exports = { fixture, projectOptions, agent, git, write };\n', file);
-  } finally { Module._load = load; }
-  const helper = loaded.exports;
-  const originalHomedir = os.homedir;
-  const hadCodexHome = Object.prototype.hasOwnProperty.call(process.env, 'CODEX_HOME');
-  const originalCodexHome = process.env.CODEX_HOME;
-  for (const large of [false, true]) {
-    await helper.fixture(async f => {
-      if (large) {
-        for (const file of ['src/complete.cjs', 'tests/complete.test.cjs', 'plugins/generated/complete.cjs']) {
-          helper.write(f.worktree, file, Array.from({ length: 17000 }, (_, index) =>
-            '// ' + file + ' ' + index + ' ' + 'x'.repeat(55) + '\n').join(''));
-        }
-        helper.git(f.worktree, 'add', '.'); helper.git(f.worktree, 'commit', '-qm', 'complete product material');
-        f.head = helper.git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
-      }
-      const coordinator = path.join(f.root, 'coordinator');
-      helper.git(f.worktree, 'worktree', 'add', '--detach', coordinator, f.head);
-      for (const row of Object.values(f.rows)) {
-        fs.appendFileSync(path.join(coordinator, row.plan), '\nSelects `.planning/backlog/selected.md`.\n'
-          + (large ? 'Complete current plan obligation.\n'.repeat(5000) : ''));
-      }
-      helper.write(coordinator, '.planning/backlog/selected.md', '# Coordinator backlog\n\nComplete selected backlog.\n'
-        + (large ? 'Selected current backlog obligation.\n'.repeat(3000) : ''));
-      if (large) fs.appendFileSync(path.join(coordinator, '.planning/architecture/ADR-014-original.md'),
-        'Required current governing reference.\n'.repeat(3000));
-      helper.write(coordinator, '.planning/phases/' + f.phase + '/CONTEXT.md', 'Coordinator context.\n');
-      helper.write(coordinator, 'src/provider.cjs', 'exports.value = 99;\n');
-      helper.git(coordinator, 'add', '.'); helper.git(coordinator, 'commit', '-qm', 'coordinator-only references');
-      helper.git(f.worktree, 'rm', '-r', '.planning');
-      helper.git(f.worktree, 'commit', '-qm', 'planning belongs to coordinator');
-      f.head = helper.git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
-      helper.git(f.worktree, 'update-ref', 'refs/remotes/origin/' + f.pr.headRefName, f.head);
-      f.graphDir = path.join(coordinator, '.planning/graph');
-      assert.equal(fs.existsSync(path.join(f.worktree, '.planning')), false);
-      const options = helper.projectOptions(f);
-      const shared = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
-      if (large) assert.throws(() => shared.prepareIntegratorContext(options, { worktree: f.worktree, phase: '49',
-        deferInline: true, review_contract: 'shipyard.integration-review.v2' }), /over its bound of 750000/);
-      const prepared = shared.prepareNativeIntegratorContext(options, { worktree: f.worktree, phase: '49' });
-      if (large) assert.ok(prepared.packet.accounting.estimated_tokens > 750000);
-      assert.equal(prepared.prompt, undefined);
-      assert.equal(shared.isPreparedIntegratorContext({ ...prepared }), false);
-      assert.equal(prepared.canonical.worktree, f.worktree);
-      assert.equal(prepared.canonical.head, f.head);
-      assert.equal(prepared.canonical.projectRoot, coordinator);
-      assert.ok(prepared.packet.required_refs.some(ref => ref.path.endsWith('ADR-014-original.md')));
-      assert.ok(prepared.packet.backlog.selected.some(item => item.content.includes('Complete selected backlog.')));
-      assert.ok(prepared.packet.role_context.combined_diff.content.includes('+exports.value = 1;'));
-      assert.ok(!prepared.packet.role_context.combined_diff.content.includes('exports.value = 99;'));
-      const a = helper.agent(f, 'integrator', prepared.signals);
-      const scope = { worktree: f.worktree, repository: prepared.canonical.commonPath, phase: 49,
-        ticket: prepared.ticket, run_id: 'coordinator-integration' };
-      const publicHost = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
-      const request = { role: 'integrator', dispatch_id: scope.run_id, signals: {},
-        context: { review_contract: 'shipyard.integration-review.v2' } };
-      const nativeOptions = { ...options, scope,
-        agentDir: a.dir, agentManifest: a.manifest, capabilities: a.capabilities,
-        storageRoot: path.join(f.root, 'coordinator-delivery'), env: { CODEX_HOME: process.env.CODEX_HOME } };
-      const input = publicHost.prepareIntegratorInput(scope, request, nativeOptions);
-      const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-      const checked = context.verifyFileInput(input);
-      const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-      const packet = packets.decodeUniqueContent(JSON.parse(checked.material[0]));
-      const original = context.verifyFileInput(checked.manifest.binding.original_input_bundle, { sealed: true });
-      for (const verified of [original, checked]) {
-        assert.equal(verified.manifest.role, 'integrator');
-        assert.equal(verified.manifest.binding.review_contract, 'shipyard.integration-review.v2');
-        assert.equal(verified.manifest.max_chunk_reads, 4160);
-        assert.equal(verified.chunk_reads, Math.ceil(verified.manifest_bytes.length / 8192)
-          + verified.manifest.assets.reduce((sum, asset) => sum + Math.ceil(asset.bytes / 8192), 0));
-      }
-      assert.equal(input.input_bundle.review_contract, 'shipyard.integration-review.v2');
-      assert.equal(checked.manifest.binding.original_input_bundle.review_contract, 'shipyard.integration-review.v2');
-      assert.throws(() => context.prepareFileInput(scope, original.material[0], {
-        role: 'integrator', dispatchId: scope.run_id, graphDir: f.graphDir,
-        binding: original.manifest.binding, integrationProducer: { ...prepared },
-        storageRoot: path.join(f.root, 'copied-producer') }), /private producer/);
-
-      for (const change of ['content', 'hash']) {
-        const changed = packets.decodeUniqueContent(JSON.parse(original.material[0]), 32 * 1024 * 1024);
-        const ref = changed.required_refs[0];
-        if (change === 'content') {
-          ref.content += '\nAltered complete reference.\n';
-          ref.bytes = Buffer.byteLength(ref.content);
-          ref.sha256 = crypto.createHash('sha256').update(ref.content).digest('hex');
-        } else ref.sha256 = '0'.repeat(64);
-        assert.throws(() => {
-          const encoded = packets.encodeUniqueContent(changed, 32 * 1024 * 1024);
-          return context.prepareFileInput(scope, JSON.stringify(encoded), {
-            role: 'integrator', dispatchId: scope.run_id, graphDir: f.graphDir,
-            integrationProducer: prepared, storageRoot: path.join(f.root, 'changed-reference-' + change),
-            binding: { ...original.manifest.binding, packet_digest: crypto.createHash('sha256')
-              .update(require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify(encoded)).digest('hex') } });
-        }, /original private producer|immutable identity/);
-      }
-
-      const canonicalPacket = value => {
-        const copy = structuredClone(value);
-        for (const key of ['logical_source_obligations', 'required_refs']) {
-          copy[key].sort((a, b) => a.path.localeCompare(b.path));
-        }
-        return copy;
-      };
-      require('node:assert').deepStrictEqual(
-        canonicalPacket(packets.decodeUniqueContent(JSON.parse(original.material[0]))),
-        canonicalPacket(prepared.packet));
-      for (const verified of [original, checked]) for (const [index, asset] of verified.manifest.assets.entries()) {
-        assert.equal(crypto.createHash('sha256').update(verified.material[index]).digest('hex'), asset.sha256);
-      }
-      for (const copy of [undefined, { ...input }, JSON.parse(JSON.stringify(input))]) {
-        assert.throws(() => publicHost.prepareIntegratorInput(scope, { ...request, context: { ...request.context } },
-          { ...nativeOptions, fileInputContext: copy }), /private producer authority/);
-      }
-      const unassociated = context.prepareFileInput(scope, original.material[0], {
-        role: 'integrator', dispatchId: scope.run_id, graphDir: f.graphDir,
-        storageRoot: path.join(f.root, 'unassociated-input') });
-      assert.throws(() => publicHost.prepareIntegratorInput(scope, { role: 'integrator', dispatch_id: scope.run_id,
-        context: { review_contract: 'shipyard.integration-review.v2', input_transport: 'host-files',
-          input_bundle: unassociated.input_bundle, prompt: unassociated.prompt } },
-        { ...nativeOptions, fileInputContext: unassociated }), /original private preparation/);
-      assert.throws(() => publicHost.prepareIntegrationLineage(scope, { ...prepared },
-        { ...nativeOptions, nativeRuntime: 'codex' }), /complete private runtime preparation/);
-      assert.throws(() => publicHost.prepareIntegratorInput(scope, { role: 'integrator', dispatch_id: scope.run_id,
-        context: { review_contract: 'shipyard.integration-review.v2', deferInline: true } },
-        { ...nativeOptions, readerCapacity: {} }), /reader|capacity|schema/i);
-      if (large) for (const file of ['src/complete.cjs', 'tests/complete.test.cjs', 'plugins/generated/complete.cjs']) {
-        assert.ok(packet.role_context.combined_diff.content.includes('diff --git a/' + file));
-        assert.ok(packet.role_context.combined_diff.content.includes(file + ' 16999 '));
-      }
-      assert.equal(checked.manifest.snapshot.worktree, f.worktree);
-      assert.equal(checked.manifest.snapshot.head, f.head);
-      assert.equal(checked.manifest.snapshot.head_tree, prepared.canonical.headTree);
-      assert.equal(packet.role_context.ticket_set_digest, prepared.ticketSetDigest);
-      assert.deepEqual(packet.role_context.ticket_set, prepared.ticketSet);
-      assert.equal(packet.role_context.combined_diff.content, prepared.packet.role_context.combined_diff.content);
-      assert.equal(packet.canonical_root, coordinator);
-      assert.equal(packet.source_revision, f.head);
-      for (const ref of packet.required_refs) {
-        assert.equal(fs.existsSync(path.join(f.worktree, ref.path)), false);
-        assert.equal(ref.content, fs.readFileSync(path.join(coordinator, ref.path), 'utf8'));
-      }
-      assert.ok(packet.backlog.selected.some(item => item.content.includes('Complete selected backlog.')));
-      const foreign = path.join(f.root, 'foreign'); fs.mkdirSync(foreign);
-      fs.cpSync(path.join(coordinator, '.planning'), path.join(foreign, '.planning'), { recursive: true });
-      helper.git(foreign, 'init', '-qb', 'main'); helper.git(foreign, 'add', '.');
-      helper.git(foreign, 'commit', '-qm', 'unrelated planning graph');
-      assert.throws(() => publicHost.prepareIntegratorInput(scope, { ...request, context: {
-        review_contract: 'shipyard.integration-review.v2' } }, { ...options,
-        graphDir: path.join(foreign, '.planning/graph') }), /unrelated repository/);
-      fs.appendFileSync(path.join(coordinator, Object.values(f.rows)[0].plan), '\nchanged required planning bytes\n');
-      assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
-      if (large) {
-        const oversized = 'Complete selected obligation.\n'.repeat(1200000);
-        assert.ok(Buffer.byteLength(oversized) > 32 * 1024 * 1024);
-        fs.appendFileSync(path.join(coordinator, '.planning/backlog/selected.md'), oversized);
-        helper.git(coordinator, 'add', '.planning'); helper.git(coordinator, 'commit', '-qm', 'complete oversized planning input');
-        assert.throws(() => publicHost.prepareIntegratorInput(scope, { role: 'integrator', dispatch_id: scope.run_id,
-          context: { review_contract: 'shipyard.integration-review.v2' } }, nativeOptions),
-          error => (error.code === 'CONTEXT_OVER_BOUND' && /complete material exceeds its bound/.test(error.message))
-            || (error.code === 'INVALID_CONTEXT_PACKET' && /semantic packet exceeds its bound/.test(error.message)));
-      }
-    });
-    assert.equal(os.homedir, originalHomedir);
-    assert.equal(Object.prototype.hasOwnProperty.call(process.env, 'CODEX_HOME'), hadCodexHome);
-    assert.equal(process.env.CODEX_HOME, originalCodexHome);
-  }
-}));
 
 for (const historicalRecovery of ['direct', 'admitted', 'pending', 'action']) {
   for (const mutation of ['normalized-repeat', 'normalized-covered-source']) {
