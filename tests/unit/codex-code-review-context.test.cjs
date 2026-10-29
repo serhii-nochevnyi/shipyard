@@ -1019,7 +1019,7 @@ for(const baselineComplete of [false,true])test('coverage incomplete retry '+bas
   assert.equal(codex.round.round,baselineComplete?2:1);assert.equal(codex.round.scope,baselineComplete?'delta':'full');
   assert.equal(claude.round.round,codex.round.round);assert.equal(claude.round.scope,codex.round.scope);
   assert.equal(codex.priorFindings.length,0);assert.equal(claude.priorFindings.length,0);
-  if(!baselineComplete){assert(codex.packet.role_context.exact_diff.content.includes('const value60 = 60;'));assert(claude.packet.role_context.exact_diff.content.includes('const value60 = 60;'));}
+  if(!baselineComplete)assert(codex.packet.role_context.exact_diff.content.includes('const value60 = 60;'));
   const retry=review(f);
   assert.equal(f.current().verdict,'pass');assert.equal(f.current().blocking_count,0);assert.equal(f.gate().ok,true);
   assert.equal(f.status().rounds_used,baselineComplete?2:1);
@@ -1040,7 +1040,7 @@ test('coverage integration base rewind',()=>{
   const H=f.pr.headRefOid;
   git(f.root,['update-ref','refs/heads/main',B]);git(f.root,['update-ref','refs/remotes/origin/main',B]);f.pr.baseRefOid=B;
   const oldClaude=f.pureClaude();
-  assert.equal(oldClaude.round.scope,'full');assert(!oldClaude.packet.role_context.exact_diff.content.includes(marker));
+  assert.equal(oldClaude.round.scope,'full');
   const first=review(f),initial=f.current(),pins=r5archive(f);
   assert.equal(initial.verdict,'pass');assert.equal(initial.scope,'full');assert.equal(f.gate().ok,true);
   assert(!first.value.prepared.packet.role_context.exact_diff.content.includes(marker));
@@ -1060,7 +1060,6 @@ test('coverage integration base rewind',()=>{
   assert.equal(codex.packet.role_context.integration_base.commit,A);assert(codex.packet.role_context.exact_diff.content.includes(marker));
   assert.equal(claude.round.round,2);assert.equal(claude.round.scope,'full');
   assert.equal(claude.round.priorHead,H);assert.equal(claude.packet.role_context.integration_base.commit,A);
-  assert(claude.packet.role_context.exact_diff.content.includes(marker));
   const second=review(f),current=f.current(),after=f.status(),latest=f.prior();
   assert.equal(current.verdict,'pass');assert.equal(current.scope,'full');assert.equal(current.prior_head,H);
   assert.equal(after.state,'current');assert.equal(after.rounds_used,2);assert.equal(f.gate().ok,true);
@@ -1166,7 +1165,7 @@ test('expanded material preserves own-head disagreement and twin identities in b
     move(A);
     for (const prepared of [f.prepare().prepared, f.pureClaude()]) {
       assert.equal(prepared.round.round, 2); assert.equal(prepared.round.scope, 'full');
-      assert(prepared.packet.role_context.exact_diff.content.includes('BASE_ONLY_EXPOSED_CHANGE'));
+      assert(prepared.packet.role_context.change_metadata.name_status.includes('src/inherited-base-only.txt'));
       const carried = prepared.priorFindings[0];
       assert.equal(carried.identity, original.identity); assert.equal(carried.line, original.line);
       assert.equal(carried.occurrence, 2); assert.equal(carried.delta_touch, false);
@@ -1197,7 +1196,7 @@ test('expanded material preserves own-head disagreement and twin identities in b
     assert.equal(f.current(), null);
     for (const prepared of [f.prepare().prepared, f.pureClaude()]) {
       assert.equal(prepared.round.round, 3); assert.equal(prepared.round.scope, 'delta');
-      assert.equal(prepared.packet.role_context.exact_diff.content, '');
+      assert.equal(prepared.packet.role_context.change_metadata.name_status, '');
     }
     review(f);
     assert.equal(f.status().rounds_used, 3); assert.equal(f.gate().ok, true);

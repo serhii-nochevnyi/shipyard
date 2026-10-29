@@ -16,7 +16,8 @@ The orchestrator supplies a `role_context` object:
 | `review_contract` | `shipyard.phase-code-review.v1` |
 | `subject` | Authenticated phase subject; repeat as output `id` |
 | `focused` | Identity echo: `review_contract`, `repository`, `id`, `pr`, `head`, `base_commit`, `merge_base`, `base_tree`, `ticket_set_digest` |
-| `exact_diff` | Complete full diff for the first countable round; fix delta for a later round |
+| `exact_diff` | Range `{base, head}` of the full diff for the first countable round, or of the fix delta for a later round; the diff itself is read with git unless `content` carries it |
+| `part`, `parts` | A part reviewer receives `part`; the final reviewer receives `parts` |
 | `integration_base` | Integration base supplied by the host |
 | `ticket_set` | Complete phase membership and delivery evidence; repeat unchanged |
 | `plan_acceptance` | Acceptance criteria of the phase plans |
@@ -171,6 +172,15 @@ limit. The input-manifest validator belongs to the host and retains its bounds,
 duplicate and unknown-reference refusals. The artifact records `partitions_total`
 and `partitions_not_reviewed` from this list (both zero for inline input). Any
 unreviewed partition requires an incomplete verdict.
+
+Without a partitioned input, the host splits the product paths of a large diff
+into parts, each path in exactly one. A part reviewer reads only its `part.paths` and returns
+`{part, review_completeness, limitations, unresolved_sources, summary, findings}`.
+The final reviewer is a separate session: it reads the parts' results as evidence,
+verifies blocking claims with git and owns the verdict; each part BLOCKER needs a justified
+disposition keyed by its `ref`. A Claude reviewer returns no
+`coverage`; the host derives it, one `{partition, status}` entry per part and none for a
+single session. Any unreviewed part requires an incomplete verdict.
 
 Example reviewer output before host normalization:
 

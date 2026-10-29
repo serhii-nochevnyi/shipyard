@@ -671,7 +671,7 @@ test('D35 cold public CLI refuses changed native evidence and accepts restored o
 });
 
 const d37Fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
-const d37Modes = ['claude', 'codex'].flatMap(runtime => ['inline', 'host-files'].map(transport => ({ runtime, transport })));
+const d37Modes = [{ runtime: 'claude', transport: 'inline' }, { runtime: 'codex', transport: 'inline' }, { runtime: 'codex', transport: 'host-files' }];
 const d37Prior = f => artifact.priorCodeReviewVerdicts({ worktreePath: f.root, graphDir: f.graphDir,
   repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
 function d37Input(f, binding, mode, original = raw(), round = 1, priorHead = null, priorFindings = [], extra = {}) {

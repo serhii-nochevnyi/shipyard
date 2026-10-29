@@ -79,8 +79,8 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
   const raw = structuredClone(snapshot.raw), priorFindings = snapshot.priorFindings;
   const refs = input.result.ticket_set.map(item => item.row.plan);
   const requestedPartitions = raw.coverage?.length || 0;
-  const useCodex = options.runtime ? options.runtime === 'codex' : requestedPartitions === collector.FILE_LIMITS.assets;
-  const hostFiles = options.transport === 'host-files' || requestedPartitions && !useCodex;
+  const useCodex = options.runtime ? options.runtime === 'codex' : requestedPartitions > 0;
+  const hostFiles = options.transport === 'host-files' || requestedPartitions > 0;
   for (const plan of refs) {
     const absolute = path.join(planningRoot, plan);
     fs.mkdirSync(path.dirname(absolute), { recursive: true });
@@ -148,9 +148,9 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
           focused: { ...packet.role_context.focused, context_digest: contextDigest } } });
     raw.coverage = spans.map((span, index) => ({ partition: span.partition, status: snapshot.raw.coverage?.[index]?.status || 'reviewed' }));
   }
-  const semantic = core.normalizeResult(useCodex ? raw : { ...raw, ...collector.validateCodeReviewCoverage(raw, fileInput?.manifest || null) },
-    { round: round.round, scope: round.scope, priorFindings,
-      readSource: core.createSourceReader({ head, git: (args, maximum) => execFileSync('git', ['-C', f.root, ...args], { encoding: 'utf8', maxBuffer: maximum }) }) });
+  const normalization = { round: round.round, scope: round.scope, priorFindings,
+    readSource: core.createSourceReader({ head, git: (args, maximum) => execFileSync('git', ['-C', f.root, ...args], { encoding: 'utf8', maxBuffer: maximum }) }) };
+  const semantic = useCodex ? core.normalizeResult(raw, normalization) : core.normalizeFinal(raw, [], normalization);
   if (useCodex && fileInput) Object.assign(semantic, collector.validateCodeReviewCoverage(semantic, fileInput.manifest));
   const { evidence_markdown: _markdown, host_context: _context, ...result } = semantic;
   Object.assign(result, { prior_head: round.priorHead, contract_digest: roleContext.contract_digest,
@@ -161,8 +161,7 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
     const session = crypto.randomUUID();
     const native = path.join(planningRoot, '.planning', session + '.native.jsonl');
     const stream = path.join(planningRoot, '.planning', session + '.stream.jsonl');
-    const prompt = fileInput ? '<AUTHENTICATED_FOCUSED_INPUT>\n' + JSON.stringify(fileInput.input_bundle) + '\n</AUTHENTICATED_FOCUSED_INPUT>'
-      : '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet)) + '\n</AUTHENTICATED_CONTEXT_PACKET>';
+    const prompt = '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet)) + '\n</AUTHENTICATED_CONTEXT_PACKET>';
     const rows = [{ type: 'user', sessionId: session, message: { content: prompt } },
       { type: 'assistant', sessionId: session, effort: r.effort, message: { role: 'assistant', model: r.model,
         content: [{ type: 'tool_use', name: 'StructuredOutput', input: raw }] } }];
@@ -176,7 +175,6 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
       launch_id: session, session_id: session, requested_model: r.requested_model, requested_effort: r.requested_effort,
       applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
       policy_hash: r.policy_hash, transcript: { path: stream, bytes: Buffer.byteLength(streamText), sha256: hash(streamText) },
-      ...(fileInput ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle } : {}),
       selection_evidence: { source: 'claude-session-assistant-transcript', session_id: session,
         assistant_records: 1, model: r.model, effort: r.effort,
         transcript: { path: native, bytes: Buffer.byteLength(nativeText), sha256: hash(nativeText) } } };

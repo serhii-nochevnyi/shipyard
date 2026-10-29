@@ -1145,11 +1145,10 @@ test('a contended publication lock fails the comment independently without a wri
   } finally { if (handle) handle.release(); f.cleanup(); }
 });
 
-for (const partitioned of [false, true]) test('D35 publication requires the completed original normalized answer: ' + partitioned, () => {
+test('D35 publication requires the completed original normalized answer', () => {
   const f = fixture(null, 'hold');
   try {
     const review = raw(true, [{ ...blocker, failure_scenario: undefined, fix_ticket: undefined }]);
-    if (partitioned) review.coverage = Array.from({ length: 129 }, () => ({ status: 'reviewed' }));
     f.seal(review);
     assert.equal(f.lookup().verdict, 'pass');
     assert.equal(flow.verifyCodeReview({ ...f.input(), live: f.live() }).ok, true);

@@ -916,50 +916,13 @@ test('code-review seals a recorded WARNING returned with BLOCKER severity withou
   } finally { f.cleanup(); }
 });
 
-test('code-review seals 129 small reviewed references within the shared asset capacity', () => {
+test('code-review refuses a complete verdict whose coverage lists an unreviewed partition', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
-  const { FILE_LIMITS } = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
   const f = withOriginalPlanning(reviewFixture());
   try {
-    const binding = f.advance(1);
-    const coverage = Array.from({ length: 129 }, (_, index) => {
-      const content = 'reference-' + index;
-      return { path: `src/reference-${index}.js`, bytes: Buffer.byteLength(content),
-        sha256: crypto.createHash('sha256').update(content).digest('hex'), status: 'reviewed' };
-    });
-    assert(coverage.reduce((total, ref) => total + ref.bytes, 0) < FILE_LIMITS.material);
-    assert(coverage.length <= FILE_LIMITS.assets);
-    for (const count of [129, FILE_LIMITS.assets]) {
-      const refs = Array.from({ length: count }, (_, index) => ({ ...coverage[index % coverage.length], path: `src/reference-${index}.js` }));
-      const raw = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [], coverage: refs };
-      const input = f.input(binding, 1, null, raw);
-      assert.equal(input.result.coverage.length, count);
-      const sealed = roleArtifact.sealJudgment(input);
-      const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
-      assert.equal(validated.manifest.partitions_total, count);
-      assert.equal(validated.manifest.partitions_not_reviewed, 0);
-      assert.equal(f.lookup().verdict, 'pass');
-    }
-    for (const coverage of [Array(FILE_LIMITS.assets + 1).fill({ status: 'reviewed' }), [{ status: 'unknown' }]]) {
-      const input = f.input(binding);
-      input.result.coverage = coverage;
-      assert.throws(() => roleArtifact.sealJudgment(input), error => error.code === 'INVALID_RESULT');
-    }
-    const input = f.input(binding);
-    input.result.coverage = coverage.map((ref, index) => ({ ...ref, status: index ? 'reviewed' : 'not-reviewed' }));
+    const input = f.input(f.advance(1));
+    input.result.coverage = [{ partition: 1, status: 'not-reviewed' }];
     assert.throws(() => roleArtifact.sealJudgment(input), error => error.code === 'JUDGMENT_OUTCOME_MISMATCH');
-    input.result.verdict = 'incomplete';
-    input.result.review_completeness = 'incomplete';
-    input.result.limitations = ['One source was not reviewed'];
-    require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(input, { review_completeness: 'incomplete',
-      limitations: ['One source was not reviewed'], unresolved_sources: [], findings: [], dispositions: [],
-      coverage: coverage.map((ref, index) => ({ ...ref, status: index ? 'reviewed' : 'not-reviewed' })) });
-    retainPlanningInput(f, input);
-    const sealed = roleArtifact.sealJudgment(input);
-    const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
-    assert.equal(validated.manifest.partitions_total, 129);
-    assert.equal(validated.manifest.partitions_not_reviewed, 1);
-    assert.equal(f.lookup().review_completeness, 'incomplete');
   } finally { f.cleanup(); }
 });
 
