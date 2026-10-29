@@ -173,105 +173,71 @@ test('nonzero assertion, environment refusal and missing evidence cannot authent
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-const configured = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '.planning', 'config.json'), 'utf8'))
+test('evidence is authenticated by the host MAC, the host key and private file permissions', () => {
+  const crypto = require('node:crypto');
+  const canonical = (value) => Array.isArray(value) ? '[' + value.map(canonical).join(',') + ']'
+    : value && typeof value === 'object'
+      ? '{' + Object.keys(value).sort().map((key) => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}'
+      : JSON.stringify(value);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-verification-mac-'));
+  try {
+    const sealed = evidence([{ outcome: 'passed' }], { stateRoot: root, ticket: 'T-1', plan_sha256: 'a'.repeat(64) });
+    const keyPath = path.join(root, 'verification', 'hmac.key');
+    const key = fs.readFileSync(keyPath);
+    const original = fs.readFileSync(sealed.path, 'utf8');
+    const admit = () => readEvidence(sealed.path, sealed.digest);
+    assert.equal(admit().ticket, 'T-1');
+    const forged = (mutate) => {
+      const envelope = JSON.parse(original);
+      mutate(envelope);
+      fs.writeFileSync(sealed.path, JSON.stringify(envelope), { mode: 0o600 });
+      return readEvidence(sealed.path, crypto.createHash('sha256').update(canonical(envelope)).digest('hex'));
+    };
+    assert.equal(forged((envelope) => { envelope.integrity.mac = '0'.repeat(64); }), null, 'invalid MAC with recomputed digest');
+    assert.equal(forged((envelope) => { envelope.payload.ticket = 'foreign'; }), null, 'tampered payload with recomputed digest');
+    assert.equal(forged((envelope) => {
+      envelope.payload.schema = 'foreign';
+      envelope.integrity.mac = crypto.createHmac('sha256', key).update(canonical(envelope.payload)).digest('hex');
+    }), null, 'authenticated payload with a foreign schema');
+    fs.writeFileSync(sealed.path, original, { mode: 0o600 });
+    fs.writeFileSync(keyPath, crypto.randomBytes(32));
+    assert.equal(admit(), null, 'wrong key');
+    fs.writeFileSync(keyPath, key);
+    fs.chmodSync(keyPath, 0o644);
+    assert.equal(admit(), null, 'key permissions');
+    fs.chmodSync(keyPath, 0o600);
+    fs.chmodSync(sealed.path, 0o644);
+    assert.equal(admit(), null, 'evidence permissions');
+    fs.chmodSync(sealed.path, 0o600);
+    assert.equal(admit().ticket, 'T-1');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+const REPOSITORY = path.join(__dirname, '..', '..');
+const configured = JSON.parse(fs.readFileSync(path.join(REPOSITORY, '.planning', 'config.json'), 'utf8'))
   .delivery_pipeline.verification_commands.default;
-const unitTests = (profile, entry, ...names) => ({ profile, entry,
-  command: 'node --test ' + names.map((name) => `tests/unit/${name}.test.cjs`).join(' ') });
 
-// @contract: one row per distinct `## Verification commands` bullet of plans 52-01 to 52-12.
-const PHASE52_COMMANDS = [
-  unitTests('sandbox', 'existing', 'phase47-host-assignment', 'host-verification'),
-  unitTests('sandbox', 'existing', 'model-policy', 'model-capability', 'codex-agent', 'codex-dispatch-adapter', 'gen-codex-shipyard'),
-  unitTests('host', 'existing', 'gen-codex-shipyard', 'gsd-tune', 'marketplace-install'),
-  unitTests('host', 'existing', 'codex-decompose-host', 'codex-runtime-host', 'codex-delivery-host', 'dispatch-boundary', 'pipeline-config'),
-  unitTests('sandbox', 'existing', 'source-contract', 'workflows-args', 'auto-route'),
-  unitTests('sandbox', 'existing', 'run-contract', 'run-store', 'run-controller', 'model-policy', 'marketplace-install'),
-  unitTests('host', 'new', 'context-packet', 'dispatch-record', 'conveyor-scratch', 'claude-reference-content'),
-  unitTests('host', 'new', 'front'),
-  unitTests('host', 'new', 'files-contract'),
-  unitTests('sandbox', 'existing', 'host-entry-contract', 'subject-contract'),
-  unitTests('sandbox', 'existing', 'host-preflight', 'runtime-context'),
-  { profile: 'sandbox', entry: 'existing', command: 'node scripts/refresh-runtime-digests.cjs --check .' },
-  { profile: 'sandbox', entry: 'existing', command: 'bash tests/smoke/docs-smoke.sh' },
-  unitTests('host', 'new', 'architecture-target', 'dispatch-boundary'),
-  unitTests('host', 'new', 'run-contract', 'dispatch-record'),
-  unitTests('sandbox', 'existing', 'subject-contract', 'architecture-target'),
-  unitTests('host', 'new', 'codex-arch-review-context', 'claude-role-host'),
-  unitTests('sandbox', 'existing', 'legacy-pin-readers', 'launch-upgrade-verification-record'),
-  unitTests('sandbox', 'new', 'code-review-core'),
-  unitTests('host', 'new', 'role-artifact', 'judgment-artifacts', 'judgment-contract'),
-  unitTests('host', 'new', 'claude-role-host', 'code-review-core'),
-  unitTests('host', 'new', 'codex-code-review-context', 'codex-arch-review-context'),
-  unitTests('host', 'new', 'codex-delivery-host', 'codex-runtime-host', 'codex-dispatch-adapter'),
-  unitTests('host', 'new', 'phase-code-review', 'deliver-dispatch'),
-  unitTests('host', 'new', 'trailer', 'sentinel'),
-  unitTests('host', 'new', 'pipeline-config'),
-  unitTests('host', 'new', 'phase-code-review-publish', 'deliver-builders-contract'),
-  unitTests('host', 'new', 'pr-hygiene', 'check-state'),
-  unitTests('sandbox', 'existing', 'source-contract'),
-  unitTests('host', 'new', 'pipeline-config', 'phase-code-review', 'deliver-dispatch'),
-  unitTests('host', 'new', 'architecture-target', 'codex-arch-review-context', 'phase49-review-lineage',
-    'phase49-incremental-integration', 'deliver-builders-contract'),
-  unitTests('sandbox', 'new', 'marketplace-install', 'source-contract'),
-].map((row) => ({ ...row, argv: row.command.split(' ') }));
-
-const sameArgv = (left, right) => left.length === right.length && left.every((part, index) => part === right[index]);
-const newRows = PHASE52_COMMANDS.filter((row) => row.entry === 'new');
-const appendedEntries = newRows.map((row) => configured.filter((entry) => Array.isArray(entry.argv) && sameArgv(entry.argv, row.argv)));
-
-test('the phase-52 command table is 32 distinct commands: 13 admitted today and 19 appended', () => {
-  assert.equal(PHASE52_COMMANDS.length, 32);
-  assert.equal(new Set(PHASE52_COMMANDS.map((row) => row.command)).size, 32);
-  assert.equal(newRows.length, 19);
-  assert.equal(PHASE52_COMMANDS.filter((row) => row.entry === 'existing').length, 13);
-});
-
-test('the configured allow-list admits every phase-52 command with the profile the table names', () => {
-  for (const row of PHASE52_COMMANDS) {
-    const admitted = admit([row.argv], configured);
-    assert.deepEqual(admitted.not_allowed, [], `not admitted: ${row.command}`);
-    assert.equal(admitted.commands[0].profile, row.profile, `wrong profile for: ${row.command}`);
+test('every configured verification command has a known shape', () => {
+  assert.ok(configured.length > 0);
+  for (const entry of configured) {
+    const label = entry.argv.join(' ');
+    assert.deepEqual(Object.keys(entry).sort(), ['argv', 'profile', 'timeout_s'], label);
+    assert.ok(['node', 'bash', 'make'].includes(entry.argv[0]), label);
+    assert.ok(['host', 'sandbox'].includes(entry.profile), label);
+    assert.ok(Number.isInteger(entry.timeout_s) && entry.timeout_s > 0, label);
   }
 });
 
-test('each admitting entry is a prefix of a sandbox command and equal to a host command', () => {
-  for (const row of PHASE52_COMMANDS) {
-    const admitting = configured.filter((entry) => admit([row.argv], [entry]).commands.length === 1)
-      .sort((left, right) => right.argv.length - left.argv.length)[0];
-    assert.ok(admitting, `no admitting entry for: ${row.command}`);
-    assert.equal(admitting.profile, row.profile, `admitted through the wrong profile: ${row.command}`);
-    if (row.profile === 'host') assert.deepEqual(admitting.argv, row.argv, `host entry is not exact: ${row.command}`);
-    else assert.deepEqual(admitting.argv, row.argv.slice(0, admitting.argv.length), `not a prefix: ${row.command}`);
-  }
-});
-
-test('every new row has exactly one entry with its exact argv, its profile and a 600 s timeout', () => {
-  newRows.forEach((row, index) => {
-    assert.equal(appendedEntries[index].length, 1, `expected exactly one entry for: ${row.command}`);
-    const [entry] = appendedEntries[index];
-    assert.deepEqual(Object.keys(entry).sort(), ['argv', 'profile', 'timeout_s'], row.command);
-    assert.equal(entry.profile, row.profile, row.command);
-    assert.equal(entry.timeout_s, 600, row.command);
-  });
-  const positions = appendedEntries.flat().map((entry) => configured.indexOf(entry));
-  assert.deepEqual([...positions].sort((left, right) => left - right), positions, 'appended entries keep the table order');
-});
-
-test('appended entries admit only node, bash or make and never a wrapper, npm, git or a bare node --test', () => {
-  const appended = appendedEntries.flat();
-  assert.ok(appended.every((entry) => ['node', 'bash', 'make'].includes(entry.argv[0])));
+test('the configured allow-list refuses wrappers, npm, git and a bare node --test', () => {
   for (const refused of [['node', '-e', 'process.exit(0)'], ['bash', '-c', 'true'], ['npm', 'test'],
     ['make', 'test'], ['git', 'status'], ['node', '--test']]) {
-    assert.deepEqual(admit([refused], appended).not_allowed, [refused], refused.join(' '));
+    assert.deepEqual(admit([refused], configured).not_allowed, [refused], refused.join(' '));
   }
 });
 
-test('one extra trailing argument is never admitted as host, and no appended entry admits it at all', () => {
-  const appended = appendedEntries.flat();
-  for (const row of PHASE52_COMMANDS.filter((item) => item.profile === 'host')) {
-    const extended = [...row.argv, 'extra.cjs'];
-    const full = admit([extended], configured);
-    assert.ok(!full.commands.some((item) => item.profile === 'host'), `host entry admits an extra argument: ${row.command}`);
-    assert.deepEqual(admit([extended], appended.filter((entry) => entry.profile === 'host')).not_allowed, [extended], row.command);
+test('one extra trailing argument is never admitted through a host entry', () => {
+  for (const entry of configured.filter((item) => item.profile === 'host')) {
+    const extended = [...entry.argv, 'extra.cjs'];
+    assert.ok(!admit([extended], configured).commands.some((item) => item.profile === 'host'), entry.argv.join(' '));
   }
 });

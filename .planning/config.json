@@ -142,18 +142,6 @@
         },
         {
           "argv": [
-            "node",
-            "--test",
-            "tests/unit/source-contract.test.cjs",
-            "tests/unit/workflows-args.test.cjs",
-            "tests/unit/claude-instructions.test.cjs",
-            "tests/unit/auto-route.test.cjs"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
             "bash",
             "tests/smoke/model-ladder-runtime-smoke.sh"
           ],
