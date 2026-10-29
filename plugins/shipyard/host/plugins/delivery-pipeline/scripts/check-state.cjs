@@ -60,8 +60,6 @@ function stateBucket(row) {
   return BUCKETS.has(b) ? b : 'pending';
 }
 
-// A URL is a locator, not provider authority. Only the supported GitHub job
-// locator can be associated with a run fetched from this repository's API.
 function actionsJob(link) {
   try {
     const url = new URL(link);
@@ -94,9 +92,6 @@ function actionsIdentity(row) {
     && (job.attempt === null || job.attempt === row.run_attempt) ? job : null;
 }
 
-// One relation for selection AND cancellation. Names qualify jobs only inside
-// verified workflow/run/attempt identity; duplicate names within an attempt are
-// ambiguous across attempts/runs and must keep their independent obligations.
 function sameLogicalCheck(a, b, list) {
   if (!a || !b || a.name !== b.name || a.app_id !== b.app_id
       || a.workflow_id !== b.workflow_id || a.event !== b.event || a.head_sha !== b.head_sha
@@ -249,7 +244,6 @@ function unavailableNote(r) {
     || `gh pr checks exited ${r.status}`;
 }
 
-// Version 1 could already have discarded independent rows before publication.
 const CI_OBSERVATION_VERSION = 2;
 const SHA = /^[0-9a-f]{40}$/i;
 
@@ -340,8 +334,6 @@ function collectCiObservation({ pr, repo, head, pollId }, request) {
       const job = actionsJob(row.link);
       if (row.app_id === 15368 && row.app_slug === 'github-actions'
           && job && job.repository === repo.toLowerCase() && row.check_suite_id !== null) {
-        // Attempt-specific locators require the original attempt response. A
-        // latest-run response alone cannot assign its attempt to an older job.
         const runPath = `${base}/actions/runs/${job.run_id}${job.attempt === null ? '' : `/attempts/${job.attempt}`}`;
         if (!workflows.has(runPath)) workflows.set(runPath, json(['api', runPath]));
         const run = workflows.get(runPath);
@@ -359,7 +351,6 @@ function collectCiObservation({ pr, repo, head, pollId }, request) {
       return row;
     });
     // Unknown/conflicting identities retain all rows. Retain cancelled originals
-    // even when proven obsolete so publication and the waiter share the evidence.
     const selectedRows = rows.filter(row => row.bucket === 'cancel' || !isSuperseded(row, rows));
     const latestStatuses = new Map();
     for (const r of statuses.rows) {

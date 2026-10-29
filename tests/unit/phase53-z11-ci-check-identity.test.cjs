@@ -107,7 +107,6 @@ function pendingBoard(f) {
   f.update({});
 }
 
-// Tracer: an independent App's current failure must survive the ordinary path.
 test('independent Apps with equal check names survive collection, publication and waiting', t => {
   const f = fixture(t);
   pendingBoard(f);
@@ -138,8 +137,6 @@ const runResponse = (id, extra = {}) => ({ id, head_sha: HEAD, name: 'CI', workf
   repository: { full_name: 'acme/demo' }, check_suite_id: 1000 + id,
   run_number: id, run_attempt: 1, ...extra });
 
-// Substitute physical API responses only; exercise the public collector and
-// classifier, including verification of provider, repository and suite evidence.
 function collect(raw, { runs = {}, statuses = [], split = false, pull = {}, consumer = checks } = {}) {
   const calls = [];
   const observation = consumer.collectCiObservation({ pr: 108, repo: 'acme/demo', head: HEAD, pollId: 'identity' }, args => {
