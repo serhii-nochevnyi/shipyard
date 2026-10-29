@@ -130,7 +130,8 @@ function normalizePart(result, group, integrator = false) {
   const findings = result.findings.map((finding, index) => {
     if (!object(finding)) fail('INVALID_RESULT', 'part finding must be an object');
     const { id, path: file, line, line_text, summary, failure_scenario, rule, fix_ticket, type, evidence, ticket } = finding;
-    const blocker = integrator ? finding.blocking === true : findingSeverity(finding) === 'BLOCKER';
+    if (integrator && typeof finding.blocking !== 'boolean') fail('INVALID_RESULT', 'part finding blocking must be a boolean');
+    const blocker = integrator ? finding.blocking : findingSeverity(finding) === 'BLOCKER';
     const { title, scope, files, depends_on } = object(fix_ticket) ? fix_ticket : {};
     return JSON.parse(JSON.stringify({ id, ...(integrator ? { type, blocking: blocker, evidence, ticket }
       : { severity: findingSeverity(finding), path: file, line, line_text, failure_scenario, rule }), summary,
