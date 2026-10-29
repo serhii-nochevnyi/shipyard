@@ -2261,7 +2261,7 @@ function verifySemanticReads(raw) {
   if (finals.length !== 1 || users.length !== 1 || users[0] <= starts[0] || users[0] >= finals[0] || finals[0] >= ends[0])
     fail('RUNTIME_EVIDENCE_INVALID', 'semantic reads require the original ordered input and final');
   const boundary = finals[0], turn = rows[starts[0]].payload.turn_id;
-  const calls = new Map(), incomplete = [], completed = [];
+  const calls = new Map(), outputs = new Set(), incomplete = [], completed = [], negative_queries = [];
   let outputBytes = 0;
   const unpack = value => {
     if (Array.isArray(value)) {
@@ -2277,21 +2277,36 @@ function verifySemanticReads(raw) {
     }
     return object(value) && (Object.hasOwn(value, 'exit_code') || Object.hasOwn(value, 'session_id')) ? [value] : [];
   };
+  const exactResult = value => {
+    if (typeof value !== 'string') return null;
+    try {
+      const result = JSON.parse(value);
+      return object(result) && Object.hasOwn(result, 'exit_code') ? result : null;
+    } catch {
+      const results = unpack(value);
+      return results.length === 1 ? results[0] : null;
+    }
+  };
   for (let index = 0; index < rows.length; index++) {
     const item = rows[index].type === 'response_item' ? rows[index].payload : null;
     if (!item) continue;
-    const operations = batchPhysicalArguments(item);
-    const opaque = !operations.length && item.type === 'custom_tool_call'
-      && ['exec', 'functions.exec'].includes(item.name) && /tools\.exec_command\s*\(/.test(item.input || '');
-    if (opaque) operations.push({ cmd: item.input });
+    const decoded = batchPhysicalArguments(item);
+    const operations = decoded.every(operation => object(operation) && typeof operation.cmd === 'string') ? decoded : [];
+    const opaque = !operations.length && (item.type === 'custom_tool_call'
+      && ['exec', 'functions.exec'].includes(item.name) && /tools\.exec_command\s*\(/.test(item.input || '')
+      || item.type === 'function_call' && /(?:^|[._])exec_command$/.test(item.name || ''));
+    if (opaque) operations.push({ cmd: item.input || item.arguments });
     if (operations.length) {
-      if (index <= users[0] || index >= boundary || !item.call_id || calls.has(item.call_id)
+      if (index <= users[0] || index >= boundary || !item.call_id || calls.has(item.call_id) || outputs.has(item.call_id)
           || item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
             && item.internal_chat_message_metadata_passthrough.turn_id !== turn)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic read has a foreign or duplicate native call');
-      calls.set(item.call_id, { operations, opaque, custom: item.type === 'custom_tool_call', completed: false });
+      calls.set(item.call_id, { operations, opaque, transparent: semanticQueryCall(item, operations),
+        custom: item.type === 'custom_tool_call', completed: false });
     }
-    if (!['function_call_output', 'custom_tool_call_output'].includes(item.type) || !calls.has(item.call_id)) continue;
+    if (!['function_call_output', 'custom_tool_call_output'].includes(item.type)) continue;
+    outputs.add(item.call_id);
+    if (!calls.has(item.call_id)) continue;
     const call = calls.get(item.call_id);
     if (call.completed || index >= boundary || call.custom !== (item.type === 'custom_tool_call_output')
         || item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
@@ -2299,21 +2314,75 @@ function verifySemanticReads(raw) {
       fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic read output has a foreign or duplicate identity');
     call.completed = true;
     const encoded = JSON.stringify(item.output);
-    outputBytes += Buffer.byteLength(encoded);
+    outputBytes += Buffer.byteLength(encoded || '');
     if (outputBytes > NATIVE_SESSION_MAX_BYTES) fail('RUNTIME_EVIDENCE_INVALID', 'semantic read outputs exceed native bound');
     const results = unpack(item.output);
     const outer = Array.isArray(item.output) ? item.output[0]?.text : item.output;
     const truncated = /^Warning: truncated output \(original token count:/i.test(outer || '')
       || results.some(result => result.truncated === true || /^Warning: truncated output \(original token count:/i.test(result.output || ''));
+    const paired = call.transparent && item.truncated !== true && rows[index].truncated !== true
+      && item.is_error !== true && item.isError !== true && item.error === undefined && (call.custom
+      ? Array.isArray(item.output) && item.output.length === call.operations.length + 1
+        && item.output.every(block => ['text', 'input_text'].includes(block?.type) && typeof block.text === 'string'
+          && block.truncated !== true && block.is_error !== true && block.isError !== true && block.error === undefined)
+        && /^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(outer)
+        && item.output.slice(1).every(block => exactResult(block.text))
+      : exactResult(item.output) !== null);
+    const negative = paired && results.length === call.operations.length
+      ? results.flatMap((result, operation_index) => semanticNegativeQuery(call.operations[operation_index], result)
+        ? [{ call_id: item.call_id, operation_index, command: call.operations[operation_index].cmd,
+          exit_code: result.exit_code, outcome: 'no-match', semantic_credit: false }] : []) : [];
     const reason = truncated ? 'truncated' : !results.length || !call.opaque && results.length !== call.operations.length ? 'unread'
-      : results.some(result => result.exit_code !== 0 || result.session_id !== undefined) ? 'unfinished-or-failed' : null;
+      : results.some((result, operation_index) => result.session_id !== undefined || result.exit_code !== 0
+        && !negative.some(query => query.operation_index === operation_index)) ? 'unfinished-or-failed' : null;
     (reason ? incomplete : completed).push({ call_id: item.call_id,
       commands: call.operations.map(operation => operation.cmd), ...(reason ? { reason } : {}) });
+    if (!truncated) negative_queries.push(...negative);
   }
   for (const [call_id, call] of calls) if (!call.completed) incomplete.push({ call_id, reason: 'missing-output',
     commands: call.operations.map(operation => operation.cmd) });
-  return freeze({ schema: 'shipyard.semantic-native-reads.v1', completed, incomplete, output_bytes: outputBytes,
+  return freeze({ schema: 'shipyard.semantic-native-reads.v1', completed, incomplete,
+    ...(negative_queries.length ? { negative_queries } : {}), output_bytes: outputBytes,
     semantic_credit: false });
+}
+
+function semanticQueryCall(item, operations) {
+  if (item.type === 'function_call') return ['exec_command', 'functions.exec_command'].includes(item.name) && operations.length === 1;
+  const statement = /\s*text\s*\(\s*await\s+tools\.exec_command\s*\(\s*(\{(?:[^"{}]|"(?:\\.|[^"\\])*")*\})\s*\)\s*\)\s*;?/gy;
+  const input = item.input || '';
+  let end = 0, count = 0, match;
+  while ((match = statement.exec(input))) { end = statement.lastIndex; count++; }
+  return count === operations.length && !input.slice(end).trim();
+}
+
+function semanticNegativeQuery(operation, result) {
+  if (!object(operation) || typeof operation.cmd !== 'string' || operation.shell !== undefined || operation.tty === true
+      || operation.workdir !== undefined && typeof operation.workdir !== 'string'
+      || operation.login !== undefined && typeof operation.login !== 'boolean'
+      || operation.tty !== undefined && typeof operation.tty !== 'boolean'
+      || operation.max_output_tokens !== undefined && (!Number.isSafeInteger(operation.max_output_tokens) || operation.max_output_tokens <= 0)
+      || operation.yield_time_ms !== undefined && (!Number.isSafeInteger(operation.yield_time_ms) || operation.yield_time_ms < 0)
+      || Object.keys(operation).some(key => !['cmd', 'workdir', 'max_output_tokens', 'yield_time_ms', 'login', 'tty'].includes(key))
+      || result.exit_code !== 1 || result.output !== '' || result.session_id !== undefined
+      || result.truncated !== undefined && result.truncated !== false
+      || result.original_token_count !== undefined && result.original_token_count !== 0
+      || Object.keys(result).some(key => !['exit_code', 'output', 'stdout', 'stderr', 'wall_time_seconds',
+        'chunk_id', 'original_token_count', 'truncated'].includes(key))
+      || result.stderr !== undefined && result.stderr !== '' || result.stdout !== undefined && result.stdout !== '') return false;
+  const token = /[ \t]*(?:'([^'\r\n]*)'|"([^"\\$`\r\n]*)"|([A-Za-z0-9_./:@+,-]+))/gy;
+  const args = [];
+  let end = 0, match;
+  while ((match = token.exec(operation.cmd))) {
+    args.push(match[1] ?? match[2] ?? match[3]); end = token.lastIndex;
+    if (end < operation.cmd.length && !/[ \t]/.test(operation.cmd[end])) return false;
+  }
+  if (operation.cmd.slice(end).trim() || /[\r\n]/.test(operation.cmd) || args.shift() !== 'rg') return false;
+  const flags = new Set(['-n', '--line-number', '-i', '--ignore-case', '-s', '--case-sensitive', '-S', '--smart-case',
+    '-F', '--fixed-strings', '-w', '--word-regexp', '-x', '--line-regexp', '--no-heading', '--with-filename']);
+  while (flags.has(args[0])) args.shift();
+  const terminated = args[0] === '--';
+  if (terminated) args.shift();
+  return args.length > 0 && (terminated || args.every(arg => !arg.startsWith('-')));
 }
 
 function batchPhysicalArguments(item) {
