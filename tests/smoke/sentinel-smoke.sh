@@ -212,12 +212,8 @@ d() { node -e 'const s=require(process.argv[1]);process.stdout.write(String(s.it
 [[ "$(d T-01-01 depth)" == "0" && "$(d T-01-02 depth)" == "1" ]] \
   && ok "duty carries the stack depth it sorts by" \
   || bad "duty carries the stack depth" "got: $(d T-01-01 depth) / $(d T-01-02 depth)"
-# The guard reads the base's freshness for every PR it is about to walk towards a
-# merge, off the same `reviewers.cjs unresolved` call plus one compare. `clean`
-# and `unknown` are different answers and only one of them may end in `merge`:
-# before this, `duty` said `merge` and the gate — which does ask — refused.
-[[ "$(d T-01-01 base_check)" == "clean" ]] \
-  && ok "duty records that the base WAS checked, not merely that nothing objected" \
+[[ "$(d T-01-01 base_check)" == "unknown" ]] \
+  && ok "duty does not claim a base check it skipped for a PR into the epic" \
   || bad "duty records the base check" "got: $(d T-01-01 base_check)"
 
 # ── the duty names a remedy that exists ──────────────────────────────────────

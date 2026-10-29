@@ -1967,6 +1967,15 @@ test('mergeStateStatus BEHIND is an actionable base-merge naming the script', ()
   assert.strictEqual(d.actionable_count, 1, 'the guard can do this one now');
 });
 
+const mainDuty = (extra, gh = stubGh()) => JSON.parse(run(project({
+  tickets: { 'T-BM': { branch: 'ticket/T-BM', epic: 'epic/24-x' } },
+  state: { 'T-BM': { status: 'pr-open', pr: 9, draft: false, checks: checks(), gate: conform,
+    pr_base: 'main', integration_branch: 'main', epic: 'epic/24-x', branch: 'ticket/T-BM' } },
+  config: epicConfig,
+}), ['duty', '--json'], {
+  env: onPath(gh, { STUB_BASE: 'main', STUB_HEAD: 'ticket/T-BM', STUB_PR: '9', ...extra }),
+}).stdout).items[0];
+
 test('a stale-but-clean branch is caught by the compare only where it targets the integration branch', () => {
   // GitHub only says BEHIND where branch protection requires up-to-date
   // branches; everywhere else a stale branch reports CLEAN.
@@ -1974,15 +1983,7 @@ test('a stale-but-clean branch is caught by the compare only where it targets th
   const stack = bmDuty({ STUB_BEHIND: '3', STUB_LOG: log }).items[0];
   assert.notStrictEqual(stack.action, 'base-merge', stack.why);
   assert.ok(!callsIn(log).some((c) => c.includes('/compare/')), callsIn(log).join(' | '));
-  const root = project({
-    tickets: { 'T-BM': { branch: 'ticket/T-BM', epic: 'epic/24-x' } },
-    state: { 'T-BM': { status: 'pr-open', pr: 9, draft: false, checks: checks(), gate: conform,
-      pr_base: 'main', integration_branch: 'main', epic: 'epic/24-x', branch: 'ticket/T-BM' } },
-    config: epicConfig,
-  });
-  const main = JSON.parse(run(root, ['duty', '--json'], {
-    env: onPath(stubGh(), { STUB_BASE: 'main', STUB_HEAD: 'ticket/T-BM', STUB_PR: '9', STUB_BEHIND: '3' }),
-  }).stdout).items[0];
+  const main = mainDuty({ STUB_BEHIND: '3' });
   assert.strictEqual(main.action, 'base-merge', main.why);
   assert.strictEqual(main.behind_by, 3);
   assert.ok(/3 commit/.test(main.why), main.why);
@@ -1994,10 +1995,17 @@ test('DIRTY names the conflicts instead of a commit count', () => {
   assert.ok(/conflict/.test(i.why), i.why);
 });
 
-test('an up-to-date branch still merges, and says the base was checked', () => {
+test('an up-to-date branch still merges, and a stacked one does not claim a base check it skipped', () => {
   const i = bmDuty().items[0];
   assert.strictEqual(i.action, 'merge', i.why);
-  assert.strictEqual(i.base_check, 'clean');
+  assert.strictEqual(i.base_check, 'unknown');
+  assert.strictEqual(mainDuty({ STUB_BEHIND: '0' }).base_check, 'clean');
+});
+
+test('an unreadable compare for a PR into the integration branch is unknown, not zero behind', () => {
+  const i = mainDuty({ STUB_COMPARE_FAIL: '1' });
+  assert.strictEqual(i.base_check, 'unknown');
+  assert.notStrictEqual(i.action, 'base-merge', i.why);
 });
 
 test('a base freshness gh could not answer falls through rather than inventing work', () => {

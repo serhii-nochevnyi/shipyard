@@ -203,8 +203,6 @@ function reviewCheckpointReady(s) {
   } catch { return false; }
 }
 
-// `gh pr checks` reports CI state through its EXIT CODE while still printing the
-// JSON (8 = pending, 1 = failing or no checks at all) — see state-sync.cjs.
 // @invariant: an unreadable compare is null, never zero.
 function behindBy(base, head, repo) {
   const out = gh(['api', `${apiBase(repo)}/compare/${head}...${base}`, '--jq', '.ahead_by'], { tolerate: true });
@@ -785,8 +783,8 @@ function baseCheck(s, repo, strict) {
   }
   const base = st.base || s.pr_base || s.base || null;
   const head = st.head || s.branch || null;
-  if (!st.merge_state || !base || !head) return { moved: null, known: false };
-  const behind = strict ? behindBy(base, head, repo) : 0;
+  if (!strict || !st.merge_state || !base || !head) return { moved: null, known: false };
+  const behind = behindBy(base, head, repo);
   if (behind === null) return { moved: null, known: false };
   return { moved: baseMoved({ merge_state: st.merge_state, behind_by: behind }), known: true };
 }
