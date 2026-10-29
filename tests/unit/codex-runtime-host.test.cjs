@@ -2563,7 +2563,7 @@ test('focused runtime association cannot be minted from serialized contract mark
     ticket: 'T-49-20', phase: 49, worktree: '/tmp', dispatch_id: 'forged' }), /private host custody/);
 });
 
-async function codeReviewRuntimeFixture(action, partitioned = false, critical = false) {
+async function codeReviewRuntimeFixture(action, critical = false) {
   await Promise.all(originalRuntimeCases);
   const helper = require('./helpers/codex-arch-review-fixtures.cjs');
   const code = require('../../plugins/delivery-pipeline/scripts/codex-code-review-context.cjs');
@@ -2577,7 +2577,6 @@ async function codeReviewRuntimeFixture(action, partitioned = false, critical = 
     const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
     const row = Object.values(graph.tickets)[0]; row.epic = 'epic/38-code-runtime'; row.human_checkpoint = false; row.critical = critical;
     helper.write(f.root, '.planning/graph/tickets.json', JSON.stringify(graph));
-    if (partitioned) helper.write(f.root, 'src/reviewed.txt', ('large line ' + 'x'.repeat(240) + '\n').repeat(5000));
     helper.git(f.root, ['add', '.']); helper.git(f.root, ['commit', '-m', 'code review runtime phase']);
     helper.git(f.root, ['switch', '-c', row.epic]);
     Object.assign(f.pr, { headRefName: row.epic, headRefOid: helper.git(f.root, ['rev-parse', 'HEAD']) });
@@ -2596,19 +2595,17 @@ async function codeReviewRuntimeFixture(action, partitioned = false, critical = 
     const agentManifest = path.join(agentDir, '.shipyard-manifest.json');
     fs.writeFileSync(agentManifest, JSON.stringify({ agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: digest } }));
     code.admitInstalledLaunch(value, { agentDir, agentFile: selected.agent_file, agentManifest, capabilities });
-    const input = code.admittedFileInput(value);
     const selection = { model: selected.model, effort: selected.effort, sandbox_mode: 'read-only', agent_file: selected.agent_file,
       agent_file_content: content, agent_file_digest: digest };
-    const context = { dispatch_id: value.launch.dispatch_id, prompt: code.admittedPrompt(value), code_review_prepared: value,
-      ...(input ? { input_prepared: input, input_transport: 'host-files', input_bundle: input.input_bundle } : {}) };
-    await action({ f, storage, scope, code, value, selection, context, input });
+    const context = { dispatch_id: value.launch.dispatch_id, prompt: code.admittedPrompt(value), code_review_prepared: value };
+    await action({ f, storage, scope, code, value, selection, context });
   } finally {
     os.homedir = originalHome;
     fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true });
   }
 }
 
-for (const mutation of ['prompt', 'ticket', 'phase', 'worktree', 'dispatch', 'agent', 'look-alike', 'cross-role', 'focused-key', 'file-input', 'partition-file'])
+for (const mutation of ['prompt', 'ticket', 'phase', 'worktree', 'dispatch', 'agent', 'look-alike', 'cross-role', 'focused-key', 'file-input'])
 test('code review runtime refuses foreign private custody: ' + mutation, () => codeReviewRuntimeFixture(async f => {
   let launches = 0;
   const scope = { ...f.scope }, context = { ...f.context }, selection = { ...f.selection };
@@ -2624,11 +2621,7 @@ test('code review runtime refuses foreign private custody: ' + mutation, () => c
   if (mutation === 'look-alike') context.code_review_prepared = { ...f.value };
   if (mutation === 'cross-role') selection.agent_file = 'shipyard-arch-review.toml';
   if (mutation === 'focused-key') context.focused_prepared = {};
-  if (mutation === 'file-input') context.input_prepared = { ...f.input };
-  if (mutation === 'partition-file') {
-    const file = f.input.manifest.assets.find(asset => asset.source_partition).path;
-    fs.chmodSync(file, 0o600); fs.appendFileSync(file, 'changed');
-  }
+  if (mutation === 'file-input') context.input_transport = 'host-files';
   const host = createCodexRuntimeHost({ scope, capabilities, probe: probe(),
     env: { CODEX_HOME: path.join(f.storage, 'home') }, recorderDir: path.join(f.storage, 'receipts'),
     transcriptDir: path.join(f.storage, 'transcripts'), spawn() { launches++; throw new Error('unexpected spawn'); } });
@@ -2637,11 +2630,10 @@ test('code review runtime refuses foreign private custody: ' + mutation, () => c
     : error.message !== 'unexpected spawn');
   assert.equal(launches, 0);
   assert.equal(host.recorder.getVerifiedRecord(context.dispatch_id), null);
-}, ['file-input', 'partition-file'].includes(mutation)));
+}));
 
-for (const partitioned of [false, true])
 for (const critical of [false, true])
-test('code review runtime requires private custody: ' + JSON.stringify({ partitioned, critical }), () => codeReviewRuntimeFixture(async f => {
+test('code review runtime requires private custody: ' + JSON.stringify({ critical }), () => codeReviewRuntimeFixture(async f => {
   let launches = 0;
   const context = { ...f.context };
   delete context.code_review_prepared;
@@ -2651,11 +2643,10 @@ test('code review runtime requires private custody: ' + JSON.stringify({ partiti
   await assert.rejects(host.launchStatic(f.selection, context), error => error.code === 'CODE_REVIEW_CONTEXT_REQUIRED');
   assert.equal(launches, 0);
   assert.equal(host.recorder.getVerifiedRecord(context.dispatch_id), null);
-}, partitioned, critical));
+}, critical));
 
-for (const partitioned of [false, true])
 for (const critical of [false, true])
-test('code review runtime records private custody and evidence-only permissions: ' + JSON.stringify({ partitioned, critical }), () => codeReviewRuntimeFixture(async f => {
+test('code review runtime records private custody and evidence-only permissions: ' + JSON.stringify({ critical }), () => codeReviewRuntimeFixture(async f => {
   const helper = require('./helpers/codex-arch-review-fixtures.cjs');
   const session = crypto.randomUUID(), home = path.join(f.storage, 'home');
   const binding = f.code.authenticateLaunch(f.value, f.context.prompt, { ...f.scope, dispatch_id: f.context.dispatch_id });
@@ -2691,17 +2682,13 @@ test('code review runtime records private custody and evidence-only permissions:
       .concat(JSON.stringify(evidencePath) + '="write"').join(',') + '}');
   assert.deepEqual(result.runtime_evidence.code_review, binding);
   assert.equal(result.runtime_evidence.focused_review, undefined);
-  if (partitioned) {
-    assert.equal(result.runtime_evidence.input_transport, 'host-files');
-    assert.deepEqual(result.runtime_evidence.input_bundle, f.input.input_bundle);
-    assert.equal(result.runtime_evidence.input_consumption, undefined);
-  }
+  assert.equal(result.runtime_evidence.input_transport, undefined);
   fs.rmSync(evidencePath, { force: true });
   fs.symlinkSync(path.join(f.storage, 'outside'), evidencePath);
   await assert.rejects(host.launchStatic(f.selection, f.context), error => error.code === 'INVALID_INPUT'
     && /role evidence path must be a regular file/.test(error.message));
   assert.equal(calls.length, 1);
-}, partitioned, critical));
+}, critical));
 
 
 

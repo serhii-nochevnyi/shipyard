@@ -93,3 +93,47 @@ test('a part result must echo its part and keeps only bounded finding fields', (
   for (const changed of [{ part: 'part-1' }, { findings: 'none' }, { limitations: ['x'.repeat(2000)] }, { summary: '' }])
     assert.throws(() => core.normalizePart({ ...result, ...changed }, group), { code: 'INVALID_RESULT' });
 });
+
+test('dispositions that are not an array are a coded refusal, not a TypeError', () => {
+  for (const dispositions of [{ ref: 'PB-1-1' }, 'resolved', 7, true])
+    assert.throws(() => core.normalizeFinal(final({ dispositions }), [part('complete')], OPTIONS), { code: 'JUDGMENT_OUTCOME_MISMATCH' });
+  assert.equal(core.normalizeFinal(final({ dispositions: undefined }), [], OPTIONS).verdict, 'pass');
+});
+
+test('a part result over its byte share is refused so the final always fits', () => {
+  const group = { id: 'part-1', ordinal: 1, paths: ['a.js'] };
+  const result = { part: 'part-1', review_completeness: 'complete', limitations: [], unresolved_sources: [], summary: 'ok',
+    findings: Array.from({ length: 40 }, (_, index) => ({ id: 'F-' + index, severity: 'WARNING', path: 'a.js', line: 3, summary: 'x'.repeat(1000) })) };
+  assert.throws(() => core.normalizePart(result, group), { code: 'INVALID_RESULT', message: /32 KiB/ });
+  assert.doesNotThrow(() => core.normalizePart({ ...result, findings: result.findings.slice(0, 10) }, group));
+});
+
+test('the runner checks the final at upper-bound size, then runs every part in order before the final', async () => {
+  const groups = [1, 2, 3].map(ordinal => ({ id: 'part-' + ordinal, ordinal, paths: ['p' + ordinal] }));
+  const log = [];
+  const result = await core.runParts(groups, { check: parts => { log.push(['check', parts.length, parts[0].summary.length]); },
+    part: async group => { log.push(['part', group.ordinal]); return { id: group.id }; },
+    final: async parts => { log.push(['final', parts.map(entry => entry.id)]); return 'sealed'; } });
+  assert.equal(result, 'sealed');
+  assert.deepEqual(log, [['check', 3, 32768], ['part', 1], ['part', 2], ['part', 3], ['final', ['part-1', 'part-2', 'part-3']]]);
+  const refused = [];
+  await assert.rejects(core.runParts(groups, { check() { throw Object.assign(new Error('too big'), { code: 'CONTEXT_OVER_BOUND' }); },
+    part: group => refused.push(group), final: () => refused.push('final') }), { code: 'CONTEXT_OVER_BOUND' });
+  assert.deepEqual(refused, []);
+});
+
+test('a part packet drops prior findings and carries only its own changes; the final carries the parts', () => {
+  const base = { subject: 's', identity: { id: 's', repository: 'r', pr: 1, head: 'h', base_commit: 'b', merge_base: 'm', base_tree: 't', ticket_set_digest: 'd' },
+    exactDiff: { base: 'm', head: 'h' }, integrationBase: {}, ticketSet: [], planAcceptance: [], round: { round: 1, scope: 'full' }, referenceDigest: 'x',
+    priorFindings: [{ ref: 'P-01' }], changeMetadata: { changes: [change('a.js'), change('b.js')] } };
+  const groups = core.pathGroups(base.changeMetadata.changes, 2);
+  const forPart = core.assemblePacket({ ...base, part: groups[0], groups });
+  assert.deepEqual(forPart.prior_findings, []);
+  assert.deepEqual(forPart.change_metadata.changes.map(entry => entry.new_path), ['a.js']);
+  assert.deepEqual(forPart.part, { id: 'part-1', ordinal: 1, of: 2, paths: ['a.js'] });
+  const forFinal = core.assemblePacket({ ...base, parts: [{ id: 'part-1' }], groups });
+  assert.equal(forFinal.prior_findings.length, 1);
+  assert.equal(forFinal.change_metadata.changes.length, 2);
+  assert.deepEqual(forFinal.parts, [{ id: 'part-1' }]);
+  assert.equal(Object.hasOwn(core.assemblePacket(base), 'parts'), false);
+});

@@ -13,6 +13,7 @@ const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
 const archReviewContext = require('./codex-arch-review-context.cjs');
 const codeReviewContext = require('./codex-code-review-context.cjs');
+const core = require('./code-review-core.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
@@ -746,8 +747,7 @@ function admitCodeReviewInput(prepared, options, capabilities) {
   const signals = { ...prepared.prepared.signals };
   const selected = policy.resolveDispatch({ runtime: 'codex', role: 'code-review', signals });
   codeReviewContext.admitInstalledLaunch(prepared, installedAgentOptions(options, selected, capabilities));
-  const input = codeReviewContext.admittedFileInput(prepared);
-  return input ? { ...signals, inputTokens: input.inputTokens } : signals;
+  return signals;
 }
 
 const inlineIntegratorInputs = new WeakMap();
@@ -3137,12 +3137,10 @@ function createCodexDeliveryHost(options = {}) {
           fail('CODE_REVIEW_CONTEXT_REQUIRED', 'code-review context must be host-built and graph-bound');
         if (Object.hasOwn(request.context, 'sandbox_mode'))
           fail('CONFLICTING_OVERRIDE', 'sandbox mode is owned by the generated role');
-        if (Object.keys(request.context).some(key => !['prompt', 'input_transport', 'input_bundle'].includes(key)))
+        if (Object.keys(request.context).some(key => key !== 'prompt'))
           fail('INVALID_INPUT', 'code-review context cannot carry caller selectors or overrides');
         if (options.codeReviewSignals) codeReviewContext.recheckInstalledLaunch(prepared);
         request.signals = admitCodeReviewInput(prepared, options, runtimeHost.capabilities);
-        fileInput = codeReviewContext.admittedFileInput(prepared);
-        if (fileInput) Object.assign(request.context, { input_transport: 'host-files', input_bundle: fileInput.input_bundle });
         request.context.prompt = codeReviewContext.admittedPrompt(prepared);
       }
       if (!['arch-review', 'code-review'].includes(request.role))
@@ -3685,6 +3683,35 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     graphDir: inflightGraphDir(options, scope.worktree),
     ...stateInputs() });
   if (checkOnly || gate.code !== 0) return gate.result;
+  if (parsed.launch.role === 'code-review') return runCodeReview(parsed, scope, options, stdout);
+  return launchRole(parsed, scope, options, stdout);
+}
+
+function codeReviewPreparation(parsed, scope, options, extra = {}) {
+  return codeReviewContext.prepare(scope, parsed.launch, { graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
+    execFileSync: options.execFileSync, getPullRequest: options.getPullRequest, refreshGit: options.refreshGit,
+    partBudget: options.partBudget, storageRoot: storageDirectory(options, scope), ...extra });
+}
+
+async function runCodeReview(parsed, scope, options, stdout) {
+  const id = parsed.launch.dispatch_id || newDispatchId();
+  const whole = codeReviewPreparation(parsed, scope, options, { inflightDispatchId: id });
+  const groups = whole.prepared.groups;
+  if (groups.length < 2) return launchRole(parsed, scope, options, stdout, { id, prepared: whole });
+  const capabilities = options.host?.capabilities || options.capabilities || {};
+  const launch = (extra, ordinal) => {
+    const dispatchId = ordinal ? newDispatchId() : id;
+    const launchScope = ordinal ? { ...scope, run_id: scope.run_id + ':part-' + ordinal + ':' + crypto.randomUUID() } : scope;
+    return launchRole(parsed, launchScope, options.host ? { ...options, host: { ...options.host, scope: launchScope } } : options,
+      ordinal ? null : stdout, { id: dispatchId, prepared: codeReviewPreparation(parsed, scope, options,
+        { inflightDispatchId: dispatchId, ...extra }) });
+  };
+  return core.runParts(groups, {
+    check: parts => admitCodeReviewInput(codeReviewPreparation(parsed, scope, options, { inflightDispatchId: newDispatchId(), parts }), options, capabilities),
+    part: group => launch({ part: group.ordinal }, group.ordinal), final: parts => launch({ parts }) });
+}
+
+async function launchRole(parsed, scope, options, stdout, codeReview = {}) {
   const archDispatchId = parsed.launch.role === 'arch-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
   const preparedArchReview = parsed.launch.role === 'arch-review'
     ? archReviewContext.prepare(scope, parsed.launch, {
@@ -3693,14 +3720,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       refreshGit: options.refreshGit,
       inflightDispatchId: archDispatchId, storageRoot: storageDirectory(options, scope),
     }) : null;
-  const codeDispatchId = parsed.launch.role === 'code-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
-  const preparedCodeReview = parsed.launch.role === 'code-review'
-    ? codeReviewContext.prepare(scope, parsed.launch, {
-      graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
-      execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
-      refreshGit: options.refreshGit,
-      inflightDispatchId: codeDispatchId, storageRoot: storageDirectory(options, scope),
-    }) : null;
+  const { id: codeDispatchId = null, prepared: preparedCodeReview = null } = codeReview;
   const preparedReview = preparedArchReview || preparedCodeReview;
   const request = preparedReview ? { ...preparedReview.launch, signals: { ...preparedReview.launch.signals },
     context: { ...preparedReview.launch.context }, dispatch_id: archDispatchId || codeDispatchId } : parsed.launch;
@@ -3784,7 +3804,6 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     if (inflight) {
       recordInflight({ ...inflight, ticket: scope.ticket, role: resolution.role, host: 'codex' });
       if (preparedArchReview) archReviewContext.admitBookkeeping(preparedArchReview);
-      if (preparedCodeReview) codeReviewContext.admitBookkeeping(preparedCodeReview);
     }
     const host = createCodexDeliveryHost({
       scope,
@@ -3834,7 +3853,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       else controller.complete(scope.run_id, {
         reason: request.role === 'executor' ? 'verified signed commit ' + result.artifact.commit
           : Array.isArray(result) ? 'sealed research lines ' + result.map((line) => line && line.id).join(', ')
-            : result && result.receipt ? 'verified dispatch receipt ' + result.receipt.dispatch_id
+            : result && (result.receipt || result.dispatch_id) ? 'verified dispatch receipt ' + (result.receipt?.dispatch_id || result.dispatch_id)
               : 'research result ' + String(result && (result.status || result.code) || 'without a receipt'),
       });
     }
@@ -3848,7 +3867,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       try { clearInflight(inflight); } catch {}
     }
   }
-  stdout.write(JSON.stringify(result) + '\n');
+  stdout?.write(JSON.stringify(result) + '\n');
   return result;
   } catch (error) {
     primaryError = error;

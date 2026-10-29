@@ -184,7 +184,8 @@ Revision 12 of the delivered T-52-05 PLAN authorizes these operator choices deri
 | Quantity | Value and unit | Meaning |
 |---|---|---|
 | Claude `CODE_REVIEW_PACKET_TOKENS` | 262144 estimated packet tokens | Inline packet estimate, derived as 1048576 bytes / 4. The Claude code-review packet carries no diff: the reviewer reads it with git, split into path-group parts by one changed-line budget per runtime. |
-| Codex `INPUT_MAX_BYTES` | 1048576 bytes, unchanged | Inline/relay routing and launch-prompt byte bound. |
+| Codex `INPUT_MAX_BYTES` | 1048576 bytes, unchanged | Launch-prompt byte bound; a code-review prompt above it refuses before any part runs. |
+| Codex code-review `PART_BUDGET` | 10000 changed lines per part | One part per path group within the Sol window; Claude uses 40000. |
 | Codex `FILE_LIMITS.material` | 16777216 material bytes, unchanged | Complete-input material capacity. |
 | Claude `DIFF_MAX_BYTES` | 6291456 diff bytes | The supported 6 MiB choice from Section 4 row 3. |
 | Claude `ARCH_REVIEW_PACKET_TOKENS` | 550000 estimated packet tokens | The supported packet-size choice from Section 4 row 4. |
