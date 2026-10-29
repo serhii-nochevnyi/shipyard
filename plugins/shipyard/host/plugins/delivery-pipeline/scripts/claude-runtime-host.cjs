@@ -434,22 +434,26 @@ function transcriptPathForEvidence(root, transcriptPath, sessionId) {
     fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript path cannot be inspected: ${error.message}`);
   }
   if (projectStat.isSymbolicLink() || !projectStat.isDirectory()) fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript project directory is not a regular directory');
+  let realProject;
+  try { realProject = fs.realpathSync(project); }
+  catch (error) { fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript path cannot be resolved: ${error.message}`); }
+  if (path.dirname(realProject) !== rootReal) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript resolves outside the exact Claude project/session location');
+  }
   let fileStat;
   try { fileStat = fs.lstatSync(file); }
   catch (error) {
-    if (error && error.code === 'ENOENT') return file;
+    if (error && error.code === 'ENOENT') return path.join(realProject, path.basename(file));
     fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript file cannot be inspected: ${error.message}`);
   }
   if (fileStat.isSymbolicLink() || !fileStat.isFile()) fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript file is not a regular file');
-  let realProject;
   let realFile;
   try {
-    realProject = fs.realpathSync(project);
     realFile = fs.realpathSync(file);
   } catch (error) {
     fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript path cannot be resolved: ${error.message}`);
   }
-  if (path.dirname(realProject) !== rootReal || path.dirname(realFile) !== realProject
+  if (path.dirname(realFile) !== realProject
       || path.basename(realFile) !== `${sessionId}.jsonl`) {
     fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript resolves outside the exact Claude project/session location');
   }

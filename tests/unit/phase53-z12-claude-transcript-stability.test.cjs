@@ -171,6 +171,27 @@ cases.set('runtime host accepts the same session and output at regular 100 ms ca
   } finally { f.close(); }
 });
 
+cases.set('launch waits for a new transcript through a physical parent alias', async () => {
+  const f = fixture();
+  try {
+    f.typed = true;
+    const complete = fs.readFileSync(f.nativeFile);
+    fs.unlinkSync(f.nativeFile);
+    const alias = path.join(f.root, 'native-alias');
+    fs.symlinkSync(path.join(f.root, 'native'), alias, 'dir');
+    f.projects = path.join(alias, 'projects');
+    f.nativeFile = path.join(f.projects, 'project', SESSION + '.jsonl');
+    const timer = clock(5000, 100, undefined, (_time, count) => {
+      if (count === 1) fs.writeFileSync(f.nativeFile, complete);
+    });
+    const result = await launch(f, timer);
+    assertCompleted(f, result);
+    assert.notEqual(f.nativeFile, fs.realpathSync(f.nativeFile));
+    assert.deepEqual(timer.sleeps, [100, 100, 100]);
+    assert.equal(result.applicationEvidence.gsd_agent_evidence.session_start_agent_type, ROLE);
+  } finally { f.close(); }
+});
+
 for (const mode of ['launch', 'saved launch']) {
   const savedMode = mode === 'saved launch';
   const deadline = savedMode ? 200 : 5000;
