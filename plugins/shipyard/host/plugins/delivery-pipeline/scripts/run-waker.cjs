@@ -44,7 +44,7 @@ function storeDirOf(input = {}) {
   if (value) return path.resolve(safe(String(value), 'store_dir'));
   const graph = input.graph_dir || input.graphDir || process.env.SHIPYARD_GRAPH_DIR;
   if (graph) return path.join(path.resolve(safe(String(graph), 'graph_dir')), 'runs');
-  return path.join(process.cwd(), '.planning', 'graph', 'runs');
+  return path.join(require('./graph-dir.cjs').resolveGraphDir().dir, 'runs');
 }
 
 function graphDirOf(worktree) {

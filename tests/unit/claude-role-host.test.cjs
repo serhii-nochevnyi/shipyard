@@ -129,9 +129,117 @@ test(`${kind} completes preparation from coordinator-only planning without movin
       assert.ok(prepared.packet.required_refs.some(ref => ref.path === '.planning/architecture/ADR-014-test.md'));
     }
     fs.appendFileSync(path.join(fixture.project, prepared.packet.required_refs[0].path), '\nchanged required bytes\n');
-    assert.throws(() => host.assertEvidenceOnlyChanges(options, prepared), /changed|stale/i);
+    assert.throws(() => host.assertEvidenceOnlyChanges(options, prepared, host.graphStateSnapshot(prepared)), /changed|stale/i);
   } catch (error) { t.diagnostic(error.stack); throw error; }
   finally { cleanupFixture(fixture); }
+});
+
+function ignoredStateFixture() {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'role-host-ignored-state-')));
+  const run = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+  run(root, 'init', '-q'); run(root, 'config', 'user.email', 'a@b.c'); run(root, 'config', 'user.name', 'n');
+  fs.writeFileSync(path.join(root, '.gitignore'), '.planning/graph/*\n!.planning/graph/tickets.json\n');
+  fs.mkdirSync(path.join(root, 'docs'));
+  fs.writeFileSync(path.join(root, 'docs', 'tickets.json'), '{"tickets":1}\n');
+  const graph = path.join(root, '.planning', 'graph');
+  fs.mkdirSync(path.join(graph, 'provenance'), { recursive: true });
+  for (const name of ['tickets.json', 'dispatches.json', 'escalations.json', 'drift.json', 'pr-ledger.json', 'ci-waits.json',
+    'delivery-state.yaml', 'provenance/d1.json']) fs.writeFileSync(path.join(graph, name), `{"${name}":1}\n`);
+  run(root, 'add', '.'); run(root, 'commit', '-q', '-m', 'seed');
+  const linked = path.join(root, '..', `${path.basename(root)}-linked`);
+  run(root, 'worktree', 'add', '-q', '-b', 'ticket/x', linked);
+  fs.mkdirSync(path.join(linked, '.planning', 'graph'), { recursive: true });
+  fs.writeFileSync(path.join(linked, '.planning', 'graph', 'dispatches.json'), '{"local":1}\n');
+  const host = preparationOnlyHost();
+  const prepared = (worktree) => ({ evidencePath: '.evidence', role: 'arch-review', canonical: { worktree, projectRoot: root, scratchDigests: new Map() },
+    graph: { directory: graph } });
+  return { root, graph, linked, host, prepared,
+    cleanup: () => { try { run(root, 'worktree', 'remove', '--force', linked); } catch {} fs.rmSync(root, { recursive: true, force: true }); } };
+}
+
+const refusedStateScenarios = {
+  'tickets.json rewritten': (f) => fs.writeFileSync(path.join(f.graph, 'tickets.json'), '{}\n'),
+  'tickets.json deleted': (f) => fs.rmSync(path.join(f.graph, 'tickets.json')),
+  'tickets.json replaced by a symlink to an identical copy': (f) => {
+    fs.copyFileSync(path.join(f.graph, 'tickets.json'), path.join(f.root, 'copy.json'));
+    fs.rmSync(path.join(f.graph, 'tickets.json')); fs.symlinkSync(path.join(f.root, 'copy.json'), path.join(f.graph, 'tickets.json'));
+  },
+  'another dispatch provenance rewritten': (f) => fs.writeFileSync(path.join(f.graph, 'provenance', 'd1.json'), '{}\n'),
+  'another dispatch provenance deleted': (f) => fs.rmSync(path.join(f.graph, 'provenance', 'd1.json')),
+  'a provenance entry outside the sidecar name shape': (f) => fs.writeFileSync(path.join(f.graph, 'provenance', 'a b.json'), '{}\n'),
+  'a provenance symlink': (f) => fs.symlinkSync('/etc/hosts', path.join(f.graph, 'provenance', 'd3.json')),
+};
+
+for (const [name, mutate] of Object.entries(refusedStateScenarios))
+test(`a role run that changes protected conveyor state is refused: ${name}`, () => {
+  const f = ignoredStateFixture();
+  try {
+    const prepared = f.prepared(f.root), baseline = f.host.graphStateSnapshot(prepared);
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline), error => error.code === 'STALE_CONTEXT');
+    mutate(f);
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline), error => error.code === 'WORKTREE_MUTATED');
+  } finally { f.cleanup(); }
+});
+
+test('a role run tolerates what concurrent conveyor processes legitimately write, and refuses without a baseline', async () => {
+  const f = ignoredStateFixture();
+  try {
+    const prepared = f.prepared(f.root);
+    await assert.rejects(f.host.withStateGuard({}, prepared, async () => {
+      for (const name of ['dispatches.json', 'escalations.json', 'drift.json', 'pr-ledger.json', 'ci-waits.json', 'delivery-state.yaml'])
+        fs.writeFileSync(path.join(f.graph, name), '{"other dispatch":1}\n');
+      fs.rmSync(path.join(f.graph, 'escalations.json'));
+      fs.writeFileSync(path.join(f.graph, 'provenance', 'd2.json'), '{}\n');
+      fs.writeFileSync(path.join(f.graph, 'session-observations.jsonl'), '{}\n');
+    }), error => error.code !== 'WORKTREE_MUTATED');
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared), error => error.code === 'USAGE');
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, null), error => error.code === 'USAGE');
+  } finally { f.cleanup(); }
+});
+
+test('the guard shared by the Claude and Codex hosts refuses a role that rewrites protected state during its run', async () => {
+  const f = ignoredStateFixture();
+  try {
+    await assert.rejects(f.host.withStateGuard({}, f.prepared(f.linked), async () => {
+      fs.writeFileSync(path.join(f.linked, '.planning', 'graph', 'escalations.json'), '{"forged":true}\n');
+    }), error => error.code === 'WORKTREE_MUTATED');
+    await assert.rejects(f.host.withStateGuard({}, f.prepared(f.root), async () => {
+      fs.writeFileSync(path.join(f.graph, 'tickets.json'), '{}\n');
+    }), error => error.code === 'WORKTREE_MUTATED');
+  } finally { f.cleanup(); }
+});
+
+test('a role in a linked worktree cannot touch its own graph directory, except hook-written session files', () => {
+  const f = ignoredStateFixture();
+  try {
+    const prepared = f.prepared(f.linked), local = path.join(f.linked, '.planning', 'graph');
+    fs.writeFileSync(path.join(local, 'stop-gate-ledger.json'), '{}\n');
+    fs.writeFileSync(path.join(local, 'session-observations.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(local, 'session-observations.jsonl.tmp-1'), '{}\n');
+    fs.mkdirSync(path.join(local, '.locks'));
+    const baseline = f.host.graphStateSnapshot(prepared);
+    assert.deepEqual([...baseline.keys()].map(file => path.basename(file)).filter(name => /^(session|stop-gate|\.locks)/.test(name)), []);
+    fs.appendFileSync(path.join(local, 'session-observations.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(local, 'stop-gate-ledger.json'), '{"n":2}\n');
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline), error => error.code === 'STALE_CONTEXT');
+    for (const [mutate, why] of [
+      [() => fs.writeFileSync(path.join(local, 'escalations.json'), '{"forged":true}\n'), 'new state file'],
+      [() => fs.writeFileSync(path.join(local, 'dispatches.json'), '{"local":2}\n'), 'changed local file'],
+    ]) {
+      mutate();
+      assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline), error => error.code === 'WORKTREE_MUTATED', why);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('a git-visible change is excused only by the exact path of a baseline entry, never by its basename', () => {
+  const f = ignoredStateFixture();
+  try {
+    const prepared = f.prepared(f.linked), baseline = f.host.graphStateSnapshot(prepared);
+    fs.writeFileSync(path.join(f.linked, 'docs', 'tickets.json'), '{"tickets":2}\n');
+    assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline),
+      error => error.code === 'WORKTREE_MUTATED' && error.message.includes('docs/tickets.json'));
+  } finally { f.cleanup(); }
 });
 
 for (const kind of ['arch-review', 'integrator', 'code-review'])

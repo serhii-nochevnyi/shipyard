@@ -353,7 +353,7 @@ if (require.main === module) {
       fail(`--graph needs a directory value (got ${val === undefined ? 'nothing' : `the flag "${val}"`})`);
     }
   }
-  const cwd = gIdx === -1 ? process.cwd() : path.resolve(argv[gIdx + 1], '..', '..');
+  const cwd = path.resolve(gIdx === -1 ? require('./graph-dir.cjs').resolveGraphDir().dir : argv[gIdx + 1], '..', '..');
   if (gIdx !== -1) argv.splice(gIdx, 2);
   // Fail-closed, matching drift-record.cjs/log-event.cjs's convention (CLAUDE.md,
   // "the two durable stores"): a mark/mark-plan-defect run from a ticket worktree

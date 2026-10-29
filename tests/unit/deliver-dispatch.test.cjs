@@ -717,6 +717,33 @@ test('an explicit canonical project graph overrides stale ticket-branch state', 
   }
 });
 
+test('a launch from a linked worktree without --graph-dir resolves and passes on the main checkout graph', async () => {
+  const fixture = shipyardFixture();
+  const linked = path.join(fixture.root, '..', `${path.basename(fixture.root)}-ticket`);
+  const saved = process.env.SHIPYARD_GRAPH_DIR;
+  delete process.env.SHIPYARD_GRAPH_DIR;
+  try {
+    git(fixture.root, 'branch', ticketRow().branch);
+    git(fixture.root, 'worktree', 'add', '-q', linked, ticketRow().branch);
+    assert.equal(fs.existsSync(path.join(linked, '.planning', 'graph', 'tickets.json')), true);
+    let env;
+    const result = await deliverDispatch.launch(['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: linked,
+      stateDir: sharedStateDir,
+      spawn(command, spawnArgs, spawnOptions) {
+        env = spawnOptions.env;
+        return { pid: 999999, unref() {}, on() {} };
+      },
+    });
+    assert.equal(env.SHIPYARD_GRAPH_DIR, fs.realpathSync(fixture.graphDir));
+    assert.equal(result.ticket, fixture.id);
+  } finally {
+    if (saved !== undefined) process.env.SHIPYARD_GRAPH_DIR = saved;
+    try { git(fixture.root, 'worktree', 'remove', '--force', linked); } catch {}
+    cleanup(fixture.root, linked);
+  }
+});
+
 test('D-43: a target-project fixture resolves the project graph, and its packet has no .planning ref', async () => {
   const fixture = targetProjectFixture();
   try {

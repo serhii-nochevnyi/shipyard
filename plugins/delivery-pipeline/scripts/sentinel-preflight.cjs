@@ -98,18 +98,18 @@ function statusEntries(worktree) {
   return raw.split('\n').filter(Boolean).map((line) => ({ status: line.slice(0, 2), path: line.slice(3) }));
 }
 
-// @invariant: untracked files anywhere are exempt; only tracked drift outside the graph slice refuses.
-function assertNotDirtyOutsideGraph(worktree) {
-  const outside = statusEntries(worktree)
-    .filter((entry) => entry.status !== '??' && !entry.path.startsWith('.planning/graph/'));
-  if (outside.length) {
-    refuse(`tracked files outside .planning/graph/ are dirty: ${outside.map((entry) => entry.path).join(', ')}; `
-      + `run: git -C ${worktree} status`, 'WORKTREE_DIRTY');
+// @invariant: untracked files anywhere are exempt; any tracked drift refuses.
+function assertNotDirty(worktree) {
+  const dirty = statusEntries(worktree).filter((entry) => entry.status !== '??');
+  if (dirty.length) {
+    const graph = dirty.filter((entry) => entry.path.startsWith('.planning/graph/'));
+    const state = graph.filter((entry) => !/^\.planning\/graph\/tickets\.(json|yaml)$/.test(entry.path));
+    const hint = state.length
+      ? "stop tracking the runtime state, keeping tickets.*: git rm -r --cached -- .planning/graph ':!.planning/graph/tickets.json' ':!.planning/graph/tickets.yaml', then commit the removal"
+      : graph.length ? 'tickets.json|yaml are your own edits (the sync no longer commits them): commit or discard them' : 'commit, stash or discard them';
+    refuse(`tracked files are dirty: ${dirty.map((entry) => entry.path).join(', ')}; `
+      + `run: git -C ${worktree} status; ${hint}`, 'WORKTREE_DIRTY');
   }
-}
-
-function isTracked(projectRoot, relative) {
-  try { git(projectRoot, ['ls-files', '--error-unmatch', relative]); return true; } catch { return false; }
 }
 
 function defaultRun(file, args, options) {
@@ -128,16 +128,6 @@ function runSync(projectRoot, run) {
   }
 }
 
-// @invariant: write back only .planning/graph/, and only when the project already tracks it.
-function maybeCommitGraph(projectRoot) {
-  if (!isTracked(projectRoot, '.planning/graph/delivery-state.json')) return null;
-  const changed = statusEntries(projectRoot).some((entry) => entry.path.startsWith('.planning/graph/'));
-  if (!changed) return null;
-  git(projectRoot, ['add', '--', '.planning/graph']);
-  git(projectRoot, ['commit', '--quiet', '-m', 'chore: sync delivery state']);
-  return git(projectRoot, ['rev-parse', 'HEAD']);
-}
-
 function preflight(params) {
   if (!object(params)) refuse('preflight requires an options object', 'USAGE');
   if (typeof params.worktree !== 'string' || !params.worktree) refuse('--worktree is required', 'USAGE');
@@ -149,9 +139,8 @@ function preflight(params) {
   fetchBase(worktree, base);
   const baseOid = fastForward(worktree, base, originOid(worktree, base));
   runSync(projectRoot, params.run);
-  const committed = maybeCommitGraph(projectRoot);
-  assertNotDirtyOutsideGraph(worktree);
-  return { base_oid: baseOid, synced: true, committed };
+  assertNotDirty(worktree);
+  return { base_oid: baseOid, synced: true };
 }
 
 function resolveForeignRoot(ticket, repo, state) {
@@ -201,9 +190,8 @@ function preflightRound(params) {
   }
 
   runSync(projectRoot, params.run);
-  const committed = maybeCommitGraph(projectRoot);
-  assertNotDirtyOutsideGraph(projectWt);
-  return { repos, synced: true, committed };
+  assertNotDirty(projectWt);
+  return { repos, synced: true };
 }
 
 function parseArgs(argv) {

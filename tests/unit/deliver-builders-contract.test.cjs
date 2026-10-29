@@ -196,9 +196,10 @@ test('documented review argv selects project hold policy over a linked epic repo
             '<codex|claude>': 'codex', '<project-root>/.planning/graph': graphDir };
           const argv = documented.map(arg => substitutions[arg] || arg);
           const implicit = argv.slice(0, argv.indexOf('--graph'));
-          assert.strictEqual(dispatcher.build(implicit, options).graph_dir, path.join(linked, '.planning/graph'));
-          if (argv[0] === 'code-review') assert.strictEqual(dispatcher.build(argv, options).graph_dir, graphDir);
-          else assert.throws(() => dispatcher.build(argv, options), /phase code review is owed.*delivery_pipeline.code_review.*report/);
+          for (const request of [implicit, argv]) {
+            if (argv[0] === 'code-review') assert.strictEqual(dispatcher.build(request, options).graph_dir, graphDir);
+            else assert.throws(() => dispatcher.build(request, options), /phase code review is owed.*delivery_pipeline.code_review.*report/);
+          }
         }
       }
     } finally {

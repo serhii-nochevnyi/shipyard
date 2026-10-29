@@ -17,7 +17,7 @@ function git(cwd, ...args) {
 
 let counter = 0;
 
-function fixture({ trackGraph = true } = {}) {
+function fixture({ trackGraph = false } = {}) {
   counter += 1;
   const dir = path.join(ROOT, `f${counter}`);
   const origin = path.join(dir, 'origin.git');
@@ -27,6 +27,7 @@ function fixture({ trackGraph = true } = {}) {
   git(dir, 'clone', '--quiet', origin, wt);
   fs.mkdirSync(path.join(wt, '.planning', 'graph'), { recursive: true });
   fs.writeFileSync(path.join(wt, '.planning', 'graph', 'delivery-state.json'), '{}');
+  fs.writeFileSync(path.join(wt, '.planning', 'graph', 'tickets.json'), '{}');
   fs.writeFileSync(path.join(wt, 'src.txt'), 'base\n');
   git(wt, 'add', trackGraph ? '.' : 'src.txt');
   git(wt, 'commit', '--quiet', '-m', 'seed');
@@ -77,7 +78,6 @@ test('a behind local base is fast-forwarded to the fetched origin tip', () => {
   assert.strictEqual(result.base_oid, advanced);
   assert.strictEqual(git(f.wt, 'rev-parse', 'refs/heads/main'), advanced);
   assert.strictEqual(result.synced, true);
-  assert.strictEqual(result.committed, null);
 });
 
 test('a diverged local base refuses, naming branch -f and the rebase alternative', () => {
@@ -101,33 +101,41 @@ test('a diverged local base refuses, naming branch -f and the rebase alternative
   );
 });
 
-test('a tracked graph change is committed with the conventional subject', () => {
+test('state-sync output in untracked .planning/ passes and commits nothing', () => {
   const f = fixture();
   const run = () => {
     fs.writeFileSync(path.join(f.graphDir, 'delivery-state.json'), JSON.stringify({ synced: true }));
   };
   const before = git(f.wt, 'rev-parse', 'HEAD');
-  const result = pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run });
-  assert.notStrictEqual(result.committed, null);
-  assert.notStrictEqual(git(f.wt, 'rev-parse', 'HEAD'), before);
-  assert.strictEqual(git(f.wt, 'log', '-1', '--format=%s'), 'chore: sync delivery state');
-  assert.deepStrictEqual(git(f.wt, 'diff', '--name-only', before, 'HEAD').split('\n'),
-    ['.planning/graph/delivery-state.json']);
-  assert.strictEqual(git(f.wt, 'status', '--porcelain'), '');
+  pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run });
+  assert.strictEqual(git(f.wt, 'rev-parse', 'HEAD'), before);
 });
 
-test('untracked .planning/ commits nothing and passes', () => {
-  const f = fixture({ trackGraph: false });
+test('a tracked state file dirtied by state-sync refuses and is not committed', () => {
+  const f = fixture({ trackGraph: true });
   const run = () => {
     fs.writeFileSync(path.join(f.graphDir, 'delivery-state.json'), JSON.stringify({ synced: true }));
   };
   const before = git(f.wt, 'rev-parse', 'HEAD');
-  const result = pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run });
-  assert.strictEqual(result.committed, null);
+  assert.throws(
+    () => pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run }),
+    (error) => error.code === 'WORKTREE_DIRTY' && error.message.includes('.planning/graph/delivery-state.json')
+      && error.message.includes("git rm -r --cached -- .planning/graph ':!.planning/graph/tickets.json' ':!.planning/graph/tickets.yaml', then commit the removal"),
+  );
   assert.strictEqual(git(f.wt, 'rev-parse', 'HEAD'), before);
 });
 
-test('a dirty tracked source file outside .planning/graph/ refuses, naming status', () => {
+test('a dirty tracked tickets.json is the operator\'s own edit: the hint never untracks it', () => {
+  const f = fixture({ trackGraph: true });
+  fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), '{"edited":1}');
+  assert.throws(
+    () => pre.preflight({ worktree: f.wt, base: 'main', graphDir: f.graphDir, run: noopRun }),
+    (error) => error.code === 'WORKTREE_DIRTY' && error.message.includes('.planning/graph/tickets.json')
+      && error.message.includes('commit or discard') && !error.message.includes('git rm'),
+  );
+});
+
+test('a dirty tracked source file refuses, naming status', () => {
   const f = fixture();
   fs.writeFileSync(path.join(f.wt, 'src.txt'), 'dirty\n');
   assert.throws(
@@ -147,6 +155,16 @@ test('a state-sync failure refuses, naming the command to run', () => {
     (error) => error.code === 'STATE_SYNC_FAILED' && error.message.includes('boom')
       && error.message.includes(`cd ${f.wt} && node`) && error.message.includes('state-sync.cjs'),
   );
+});
+
+test('this repository ignores conveyor runtime state but tracks the ticket graph', () => {
+  const ignored = (file) => {
+    try { git(path.resolve(__dirname, '../..'), 'check-ignore', '-q', file); return true; } catch { return false; }
+  };
+  assert.strictEqual(ignored('.planning/graph/dispatches.json'), true);
+  assert.strictEqual(ignored('.planning/graph/delivery-state.json'), true);
+  assert.strictEqual(ignored('.planning/graph/tickets.json'), false);
+  assert.strictEqual(ignored('.planning/graph/tickets.yaml'), false);
 });
 
 suite('sentinel-preflight: multi-repository round (D-44)');

@@ -58,15 +58,6 @@ function git(dir, argv) {
   return execFileSync('git', ['-C', dir, ...argv], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-function trackedAtHead(dir, relPath) {
-  try {
-    execFileSync('git', ['-C', dir, 'cat-file', '-e', `HEAD:${relPath}`], { stdio: ['ignore', 'pipe', 'pipe'] });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function readJsonBounded(file, maxBytes = 8 * 1024 * 1024) {
   let stat;
   try { stat = fs.lstatSync(file); } catch { return null; }
@@ -95,10 +86,7 @@ function resolveLaunchGraphDir({ worktree, explicitGraphDir }) {
     }
     return canonicalizeGraphDir(explicitGraphDir, worktree, 'flag');
   }
-  if (trackedAtHead(worktree, '.planning/graph/tickets.json')) {
-    return canonicalizeGraphDir(path.join(worktree, '.planning', 'graph'), worktree, 'worktree');
-  }
-  const resolved = resolveGraphDir([], null);
+  const resolved = resolveGraphDir([], worktree);
   if (resolved.how === 'none' || !fs.existsSync(path.join(resolved.dir, 'tickets.json'))) {
     fail('GRAPH_UNRESOLVED', `no canonical ticket graph found (looked in ${resolved.dir}); pass --graph-dir <project>/.planning/graph`);
   }
@@ -589,10 +577,6 @@ function resolveBuildGraphDir(worktree, options, { optional = false } = {}) {
     }
     try { return canonicalizeGraphDir(options.graphDir, worktree, 'flag'); }
     catch (error) { buildFail('--graph-dir', error.message.replace(/^deliver-dispatch: /, '')); }
-  }
-  if (trackedAtHead(worktree, '.planning/graph/tickets.json')) {
-    try { return canonicalizeGraphDir(path.join(worktree, '.planning', 'graph'), worktree, 'worktree'); }
-    catch (error) { buildFail('graph', error.message.replace(/^deliver-dispatch: /, '')); }
   }
   const resolved = resolveGraphDir([], worktree);
   // A planning build that precedes the first decomposition has no graph to find: decompose

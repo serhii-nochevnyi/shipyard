@@ -62,7 +62,7 @@ function resolveGraphDir(argv) {
   }
   const explicit = flagAt !== -1 ? argv[flagAt + 1] : process.env.SHIPYARD_GRAPH_DIR;
   if (explicit) return { dir: path.resolve(explicit), explicit: true };
-  return { dir: path.join(process.cwd(), '.planning', 'graph'), explicit: false };
+  return { dir: require('./graph-dir.cjs').resolveGraphDir().dir, explicit: false };
 }
 
 const argvAll = process.argv.slice(2);

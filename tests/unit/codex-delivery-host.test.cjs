@@ -4310,7 +4310,7 @@ test('public Codex v3 accepts omitted capacity through original observed evidenc
 
 for (const scenario of ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
   'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'over-bound-actual-final', 'changed-exact-input',
-  'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'native-input-substitution', 'native-result-substitution'])
+  'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'state-substitution', 'native-input-substitution', 'native-result-substitution'])
 test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () => withGraphDirEnv(undefined, async () => {
   const helper = codexPartitionHelpers();
   await helper.fixture(async f => {
@@ -4327,7 +4327,10 @@ test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () 
         proof.input_tokens_upper_bound = 100000000;
       if (scenario === 'changed-exact-input' && kind === 'request' && controls.measured?.length >= 2) proof.input += 'changed';
     };
-    controls.onLaunch = () => { if (scenario === 'source-substitution') fs.appendFileSync(path.join(f.worktree, 'src/provider.cjs'), 'changed'); };
+    controls.onLaunch = () => {
+      if (scenario === 'source-substitution') fs.appendFileSync(path.join(f.worktree, 'src/provider.cjs'), 'changed');
+      if (scenario === 'state-substitution') fs.appendFileSync(path.join(f.worktree, '.planning/graph/tickets.json'), ' ');
+    };
     controls.result = result => {
       if (scenario === 'wrong-output') result.runtime = 'claude';
       if (scenario === 'incomplete-unit') result.completeness = 'incomplete';
@@ -4343,7 +4346,8 @@ test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () 
       }
     };
     await assert.rejects(createCodexDeliveryHost(options).run({ role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } }),
-      error => /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_|RUNTIME_/.test(error.code || ''));
+      error => scenario === 'state-substitution' ? error.code === 'WORKTREE_MUTATED'
+        : /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_|RUNTIME_/.test(error.code || ''));
     const prelaunch = ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
       'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'changed-exact-input'].includes(scenario);
     assert.equal(controls.launches?.length || 0, prelaunch ? 0 : 1);

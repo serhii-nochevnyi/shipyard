@@ -989,10 +989,12 @@ prints `0 agents` the project config does not parse: fix the file.
    node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role executor [--graph-dir <project>/.planning/graph]
    ```
 
-   `--graph-dir` is required whenever this worktree does not itself track
-   `.planning/graph/tickets.json` at HEAD, and when the project coordinator's
-   fresh `state-sync` board is newer than the graph tracked by a ticket branch.
-   An explicit graph takes precedence only after the canonical-graph check;
+   `--graph-dir` is optional: `launch` reads the board and the dispatch and
+   escalation records, which git never carries, from the main checkout's
+   `.planning/graph` of this worktree's repository, never from the worktree's
+   own copy. Pass it only for a graph outside that repository, as for a
+   cross-repo ticket. An explicit graph takes precedence only after the
+   canonical-graph check;
    untracked copies in linked worktrees still refuse. `launch` returns
    immediately with `{dispatch_id, ticket, role, runtime, log, result}`; the
    selected host runs DETACHED, never in the foreground. Collect the result with:
@@ -1211,8 +1213,8 @@ point reads the WHOLE round from the front, one repository at a time. Before
 launching it runs the sentinel preflight (`sentinel-preflight.cjs`'s
 `preflightRound`, never invoked by hand) over every guarded PR: fetch and
 fast-forward each PR's base in the checkout that owns it, then re-run
-`state-sync.cjs`. A failed fetch, a diverged base or a worktree left dirty
-outside `.planning/graph/` is a REFUSAL from `launch` itself, reported VERBATIM
+`state-sync.cjs`. A failed fetch, a diverged base or a worktree with tracked changes
+(`state-sync.cjs` output is untracked runtime state and commits nothing) is a REFUSAL from `launch` itself, reported VERBATIM
 with the exact command it names; nothing is launched over it. On success `launch`
 returns `{dispatch_id, ticket, role, runtime, log, result}` and the guard runs
 DETACHED: do not `wait` on it (`status --dispatch <dispatch_id>` checks without

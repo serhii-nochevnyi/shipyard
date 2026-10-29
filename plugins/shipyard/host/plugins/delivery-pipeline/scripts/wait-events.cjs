@@ -71,7 +71,7 @@ function iso(ms) {
 
 function graphDirOf(input = {}, io = {}) {
   const value = io.graphDir || io.graph || input.graphDir || input.graph
-    || process.env.SHIPYARD_GRAPH_DIR || path.join(process.cwd(), '.planning', 'graph');
+    || process.env.SHIPYARD_GRAPH_DIR || require('./graph-dir.cjs').resolveGraphDir().dir;
   return path.resolve(String(value));
 }
 
@@ -883,7 +883,7 @@ function cli() {
   const argv = process.argv.slice(2);
   const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'pending';
   const graphDir = cliValue(argv, '--graph', process.env.SHIPYARD_GRAPH_DIR);
-  const resolvedGraphDir = path.resolve(graphDir || path.join(process.cwd(), '.planning', 'graph'));
+  const resolvedGraphDir = path.resolve(graphDir || require('./graph-dir.cjs').resolveGraphDir().dir);
   const input = {
     graphDir: resolvedGraphDir,
     run_id: cliValue(argv, '--run-id', process.env.SHIPYARD_RUN_ID || `ci-wait:${resolvedGraphDir}`),

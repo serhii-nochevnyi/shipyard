@@ -567,6 +567,16 @@ unproven or dirty worktrees.
 project, correct the plan dependency or ownership evidence, and rerun the
 command. Do not edit generated graph files by hand.
 
+**Migrating an existing project.** Runtime state under `.planning/graph/`
+(everything except `tickets.json` and `tickets.yaml`) is no longer tracked, and
+pulling the change deletes those files from a checkout that still tracks them.
+Migrate first, then update the plugin, while no delivery session, sentinel or
+`ci-wait` is running. Copy `.planning/graph` aside; run
+`git checkout -- .planning/graph` (local edits to `tickets.json|yaml` are lost,
+the copy keeps them); pull or merge; copy every file back except `tickets.json`
+and `tickets.yaml`; then run `state-sync`. A project that keeps tracking the
+state is refused with `WORKTREE_DIRTY`, which names the untracking command.
+
 ## Repository layout
 
 ```text

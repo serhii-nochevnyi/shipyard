@@ -217,7 +217,7 @@ function git(worktree, args) {
 function graphDirectory(options, worktree) {
   const source = options.graphDir ? 'flag' : process.env.SHIPYARD_GRAPH_DIR ? 'env' : 'default';
   const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR
-    || path.join(process.cwd(), '.planning', 'graph'));
+    || require('./graph-dir.cjs').resolveGraphDir().dir);
   let stat;
   try {
     stat = fs.lstatSync(directory);

@@ -726,7 +726,7 @@ function cliValue(argv, name, fallback = null) {
 function cli(argv = process.argv.slice(2)) {
   const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'report';
   const graph = path.resolve(cliValue(argv, '--graph', process.env.SHIPYARD_GRAPH_DIR
-    || path.join(process.cwd(), '.planning', 'graph')));
+    || require('./graph-dir.cjs').resolveGraphDir().dir));
   const recorder = createRecorder(graph);
   if (command === 'record') {
     let value;

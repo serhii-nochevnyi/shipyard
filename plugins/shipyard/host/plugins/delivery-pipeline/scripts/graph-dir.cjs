@@ -11,14 +11,7 @@
 // the one place those files put the agent, and it said "run validate-graph first",
 // sending it to a command that cannot help and naming the wrong cause.
 //
-// Resolution order, and the reason for each step:
-//   1. --graph <dir> / SHIPYARD_GRAPH_DIR — an explicit answer always wins. This
-//      is the ONLY thing that works for a cross-repo ticket, where the worktree
-//      lives in a sibling repository and the graph does not.
-//   2. <cwd>/.planning/graph — the main loop's case; unchanged behaviour.
-//   3. the worktree's OWN repository root, via `git rev-parse --git-common-dir`,
-//      which reports the main repo's .git even from a linked worktree. This is
-//      what rescues the agent, and it needs no change to any prompt contract.
+// @invariant: an explicit graph wins, then the main checkout's graph, then cwd's; nothing is guessed past that.
 //
 // Nothing is guessed past that: a caller who lands here with no graph gets told
 // the actual cause and the flag that fixes it, because a misdirecting error costs
@@ -49,13 +42,12 @@ function resolveGraphDir(argv = [], worktree = null) {
   if (process.env.SHIPYARD_GRAPH_DIR) return { dir: path.resolve(process.env.SHIPYARD_GRAPH_DIR), how: 'env' };
 
   const fromCwd = path.join(process.cwd(), '.planning', 'graph');
-  if (hasGraph(fromCwd)) return { dir: fromCwd, how: 'cwd' };
-
-  if (worktree) {
-    const root = repoRootOf(worktree);
+  for (const origin of [worktree, process.cwd()]) {
+    const root = origin && repoRootOf(origin);
     const fromRepo = root && path.join(root, '.planning', 'graph');
     if (hasGraph(fromRepo)) return { dir: fromRepo, how: 'worktree-repo' };
   }
+  if (hasGraph(fromCwd)) return { dir: fromCwd, how: 'cwd' };
   // Report the cwd candidate so the error can name what was actually looked at.
   return { dir: fromCwd, how: 'none' };
 }
