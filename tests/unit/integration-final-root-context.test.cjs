@@ -150,25 +150,15 @@ const passRefusal = 'unresolved seams or limits cannot yield passed';
 test('critical codex strict final limitations alone refuse passing authority', async () => {
   await rootCase('codex', { limitations: ['Assigned consumer source is unavailable'] }, passRefusal);
 });
-test('critical claude observed final required_context alone refuses passing authority', async () => {
-  await rootCase('claude', { required_context: ['Missing assigned consumer context'] }, passRefusal);
-});
 test('behavior codex strict final required_context alone refuses passing authority', async () => {
   await rootCase('codex', { required_context: ['Missing assigned consumer context'] }, passRefusal);
 });
-test('behavior claude observed final limitations alone refuse passing authority', async () => {
-  await rootCase('claude', { limitations: ['Assigned consumer source is unavailable'] }, passRefusal);
-});
 test('behavior codex null final limitations refuse their field type', async () => {
   await rootCase('codex', { limitations: null }, 'legacy final limitations must be an array');
-});
-test('behavior claude false final required_context refuses its field type', async () => {
-  await rootCase('claude', { required_context: false }, 'legacy final required_context must be an array');
 });
 test('behavior codex object final required_context refuses its field type', async () => {
   await rootCase('codex', { required_context: {} }, 'legacy final required_context must be an array');
 });
 test('behavior omitted and empty final root arrays preserve current original authority', async () => {
   await rootCase('codex', {}, null);
-  await rootCase('claude', { limitations: [], required_context: [] }, null);
 });

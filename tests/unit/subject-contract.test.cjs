@@ -283,7 +283,7 @@ for (const [label, dirName] of PATH_FORMS) {
     const records = require(SCRIPTS + 'dispatch-record.cjs');
     const { normalizeTicketIdentity } = require(SCRIPTS + 'run-contract.cjs');
     const f = integratorFixture(`integrator-${dirName}`);
-    const prepared = roleHost.prepareIntegratorContext({
+    const prepared = roleHost.prepareNativeIntegratorContext({
       storageRoot: scratch, refreshGit: false, defaultBranch: 'main',
       listPullRequests: ({ branch }) => (branch === f.ticketBranch ? [f.pr] : []), getPullRequest: () => f.pr },
     { schema: roleHost.REQUEST_SCHEMA, role: 'integrator', worktree: f.root, phase: f.phase });
@@ -303,7 +303,7 @@ for (const [label, dirName] of PATH_FORMS) {
 test('the Claude integrator producer refuses a semicolon path', () => {
   const roleHost = require(SCRIPTS + 'claude-role-host.cjs');
   const f = integratorFixture('integrator-semi;colon');
-  assert.throws(() => roleHost.prepareIntegratorContext({
+  assert.throws(() => roleHost.prepareNativeIntegratorContext({
     storageRoot: scratch, refreshGit: false, defaultBranch: 'main',
     listPullRequests: ({ branch }) => (branch === f.ticketBranch ? [f.pr] : []), getPullRequest: () => f.pr },
   { schema: roleHost.REQUEST_SCHEMA, role: 'integrator', worktree: f.root, phase: f.phase }), { code: 'REPOSITORY_IDENTITY_INVALID' });

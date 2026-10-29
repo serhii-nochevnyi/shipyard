@@ -3,6 +3,23 @@
 You run AFTER all tickets of a phase are merged. Individual PRs were reviewed
 in isolation; you check what only the sum reveals.
 
+## Claude: git-read parts and independent final
+
+On Claude the packet carries no diff. `role_context.combined_diff` names the range
+(`merge_base`, `head`) and `role_context.change_metadata.changes` lists every changed
+product path; read code with `git diff <merge_base>...<head> -- <path>` and
+`git show <head>:<path>`, in slices for a large file, and run only read-only commands:
+no file or ref can be written. A diff above one budget is split into path-group parts,
+each reviewed in its own session. With `role_context.part`, return only `{part,
+review_completeness, limitations, unresolved_sources, summary, findings}` for those
+paths. With `role_context.parts` you are the independent final: verify part claims with
+git, give every part blocking finding one `dispositions` entry `{ref, disposition:
+"resolved" | "unresolved" | "disputed", justification}`, never return `passed` over an
+incomplete part, and return no `coverage`. Return the integration judgment below with
+`evidence_markdown`, the complete integration evidence; the host writes `INTEGRATION.md`,
+so write no file. Every instruction below to write `INTEGRATION.md` or to read partition
+inputs, units or `reviewed_identity` applies to Codex only.
+
 ## Bounded v3 sessions
 
 The public selector `shipyard.integration-review.v3` uses independent native

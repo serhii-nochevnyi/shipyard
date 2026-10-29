@@ -123,26 +123,29 @@ function findingSeverity(finding) {
   if (!SEVERITIES.includes(severity)) fail('INVALID_RESULT', 'invalid finding severity');
   return severity;
 }
-function normalizePart(result, group) {
+function normalizePart(result, group, integrator = false) {
   if (!object(result) || result.part !== group.id || !['complete', 'incomplete'].includes(result.review_completeness)
       || !Array.isArray(result.findings) || result.findings.length > 128)
     fail('INVALID_RESULT', 'part result must echo its part id with completeness and at most 128 findings');
   const findings = result.findings.map((finding, index) => {
     if (!object(finding)) fail('INVALID_RESULT', 'part finding must be an object');
-    const { id, path: file, line, line_text, summary, failure_scenario, rule, fix_ticket } = finding;
-    const severity = findingSeverity(finding), { title, scope, files, depends_on } = object(fix_ticket) ? fix_ticket : {};
-    return JSON.parse(JSON.stringify({ id, severity, path: file, line, line_text, summary, failure_scenario, rule,
-      ...(severity === 'BLOCKER' ? { ref: `PB-${group.ordinal}-${index + 1}` } : {}),
+    const { id, path: file, line, line_text, summary, failure_scenario, rule, fix_ticket, type, evidence, ticket } = finding;
+    if (integrator && typeof finding.blocking !== 'boolean') fail('INVALID_RESULT', 'part finding blocking must be a boolean');
+    const blocker = integrator ? finding.blocking : findingSeverity(finding) === 'BLOCKER';
+    const { title, scope, files, depends_on } = object(fix_ticket) ? fix_ticket : {};
+    return JSON.parse(JSON.stringify({ id, ...(integrator ? { type, blocking: blocker, evidence, ticket }
+      : { severity: findingSeverity(finding), path: file, line, line_text, failure_scenario, rule }), summary,
+      ...(blocker ? { ref: `PB-${group.ordinal}-${index + 1}` } : {}),
       fix_ticket: object(fix_ticket) ? { title, scope, files, depends_on } : undefined }));
   });
   return { id: group.id, ordinal: group.ordinal, paths: group.paths, review_completeness: result.review_completeness,
     limitations: boundedList(result.limitations, 'limitations'), unresolved_sources: boundedList(result.unresolved_sources, 'unresolved_sources'),
     summary: requireText(result.summary, 'summary', 2048), findings };
 }
-function normalizeFinal(result, parts, options) {
+function settleParts(result, parts, complete) {
   const coverage = parts.map((part, index) => ({ partition: index + 1, status: part.review_completeness === 'complete'
     && !part.limitations.length && !part.unresolved_sources.length ? 'reviewed' : 'not-reviewed' }));
-  if (result.review_completeness === 'complete' && coverage.some(entry => entry.status !== 'reviewed'))
+  if (complete && coverage.some(entry => entry.status !== 'reviewed'))
     fail('INVALID_RESULT', 'complete code review has unreviewed parts');
   const refs = parts.flatMap(part => part.findings.map(finding => finding.ref).filter(Boolean));
   const own = (Array.isArray(result.dispositions) ? result.dispositions : []).filter(entry => refs.includes(entry?.ref));
@@ -150,6 +153,10 @@ function normalizeFinal(result, parts, options) {
     && bounded(entry.justification));
   if (refs.some(ref => justified(ref).length !== 1))
     fail('JUDGMENT_OUTCOME_MISMATCH', 'each part BLOCKER needs one justified disposition keyed by its ref');
+  return { coverage, refs, own };
+}
+function normalizeFinal(result, parts, options) {
+  const { coverage, refs, own } = settleParts(result, parts, result.review_completeness === 'complete');
   const normalized = normalizeResult({ ...result, coverage,
     dispositions: (result.dispositions || []).filter(entry => !refs.includes(entry?.ref)) }, options);
   if (own.some(entry => entry.disposition === 'unresolved') && !normalized.blocking_count)
@@ -491,7 +498,7 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
     change_metadata: changeMetadata, contract_digest: contractDigest(referenceDigest) };
 }
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
-module.exports = { CONTRACT_ID, ROUND_CAP, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, normalizeFinal, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
+module.exports = { CONTRACT_ID, ROUND_CAP, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
   lineageComplete, coverageComplete, nextRound, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };

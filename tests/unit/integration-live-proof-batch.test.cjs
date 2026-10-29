@@ -235,7 +235,7 @@ test('pure legacy fallback preserves list and detail refusal and independent-pas
   });
 });
 
-for (const runtime of ['codex', 'claude']) {
+for (const runtime of ['codex']) {
   for (const mode of ['strict', 'observed']) test('behavior ' + runtime + ' ordered ' + mode + ' original custody and independent final', async () => {
     await publicIntegrationFixture(async f => {
       const observed = mode !== 'strict';

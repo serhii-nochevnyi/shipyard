@@ -10,7 +10,7 @@ const { execFileSync } = require('node:child_process');
 const policy = require('./model-policy.cjs');
 const { createClaudeRuntimeHost, probeClaudeRuntime } = require('./claude-runtime-host.cjs');
 const { createClaudeDispatchAdapter } = require('./claude-dispatch-adapter.cjs');
-const { createDispatchBoundary, createDurableRecorder, newDispatchId, isDurableRecorder } = require('./dispatch-boundary.cjs');
+const { createDispatchBoundary, newDispatchId, isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { buildContextPacket, validateContextPacket, encodeUniqueContent, decodeUniqueContent } = require('./context-packet.cjs');
 const { preflightReviewMaterial } = require('./codex-arch-review-context.cjs');
 const { inventory: readBacklogInventory } = require('./backlog-index.cjs');
@@ -49,9 +49,8 @@ const DECISIONS_PATH_RE = /\.planning\/investigations\/[A-Za-z0-9._/-]+\/DECISIO
 const HEX64_RE = /^[a-f0-9]{64}$/i;
 const TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 const USAGE_FIELDS = Object.freeze(['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens']);
-const integratorContexts = new WeakMap();
+const integratorContexts = new WeakSet();
 const nativeIntegratorCollection = Symbol('native integrator collection');
-const nativeIntegrationStages = new WeakMap();
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -99,10 +98,9 @@ function parseRequest(value) {
       ? new Set(['schema', 'role', 'worktree', 'phase', 'pr', 'repo', 'signals'])
     : new Set(['schema', 'role', 'worktree', 'phase', 'signals', ...(role === 'integrator' ? ['review_contract'] : [])]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) reject(`request field ${key} is not permitted`);
-  if (value.review_contract !== undefined && !['shipyard.integration-review.v1', roleArtifact.INTEGRATION_REVIEW_V3].includes(value.review_contract))
+  // @invariant: review_contract v3 is accepted and ignored; the integrator has one path.
+  if (value.review_contract !== undefined && value.review_contract !== roleArtifact.INTEGRATION_REVIEW_V3)
     reject('unsupported integration review contract', 'INVALID_INPUT');
-  if (value.review_contract === roleArtifact.INTEGRATION_REVIEW_V3 && Object.keys(value.signals || {}).length)
-    reject('v3 model selection and stage authority are host-owned', 'INVALID_INPUT');
   if (role === 'arch-review' && value.phase !== undefined && (value.ticket !== undefined || value.pr === undefined))
     reject('phase architecture review requires an explicit PR and no ticket selector');
   if (role === 'code-review' && (value.phase === undefined || value.pr === undefined))
@@ -130,7 +128,6 @@ function parseRequest(value) {
     }
   }
   return Object.freeze({ schema: REQUEST_SCHEMA, role, worktree: realWorktree, ...selector,
-    ...(value.review_contract === undefined ? {} : { review_contract: value.review_contract }),
     ...(value.phase !== undefined && ['arch-review', 'code-review'].includes(role) ? { repo: value.repo ?? null } : {}),
     ...(value.pr === undefined ? {} : { pr: value.pr }),
     ...(value.signals === undefined ? {} : { signals: Object.freeze({ ...value.signals }) }),
@@ -494,9 +491,9 @@ function requestRows(request, graph, canonical) {
   return phaseSelection(graph, request.phase).rows;
 }
 
-function diffBytes(options, worktree, range) {
+function diffBytes(options, worktree, range, pathspec = []) {
   const limit = require('./codex-arch-review-context.cjs').FILE_LIMITS.material;
-  try { return Buffer.byteLength(git(options, worktree, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50', range], limit, true)); }
+  try { return Buffer.byteLength(git(options, worktree, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50', range, ...pathspec], limit, true)); }
   catch (error) { if (error?.code === 'INPUT_TOO_LARGE') return limit + 1; throw error; }
 }
 
@@ -582,6 +579,14 @@ function prepareArch(options, request, canonical, graph, rows) {
     livePullRequests: [live], canonical, graph, rows, sources, packet, prompt, signals, evidencePath: ARCH_EVIDENCE });
 }
 
+function changeInventory(options, worktree, range) {
+  const inventory = {};
+  for (const [key, flag] of [['name_status', '--name-status'], ['numstat', '--numstat']])
+    inventory[key] = git(options, worktree, ['diff', flag, '-z', '--find-renames', ...range, ...productPathspec()], DIFF_MAX_BYTES, true);
+  inventory.changes = require('./codex-arch-review-context.cjs').focusedChangeInventory(inventory.name_status, inventory.numstat);
+  return inventory;
+}
+
 function loadCodeReviewDisagreements(graph, phase, priorFindings) {
   return require('./code-review-core.cjs').loadDisagreements({ projectRoot: path.resolve(graph.directory, '../..'),
     phaseDirName: phase, priorFindings, readFile(file, maximum) {
@@ -593,7 +598,6 @@ function loadCodeReviewDisagreements(graph, phase, priorFindings) {
 function prepareCodeReview(options, request, canonical, graph, rows) {
   const core = require('./code-review-core.cjs');
   const target = require('./architecture-target.cjs');
-  const collector = require('./codex-arch-review-context.cjs');
   const { row } = rows[0];
   if (canonical.branch !== row.epic) reject('code-review worktree branch differs from the canonical epic branch');
   const live = getPullRequest(options, canonical.worktree, request.pr, request.repo);
@@ -649,10 +653,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
   const sources = { plans, files: [...new Set(rows.flatMap(({ row }) => row.files))].sort(),
     requiredRefs: [], architecture: { refs: [], excluded: [], unresolved: [] } };
   const reference = loadClaudeReferenceContent('code-review');
-  const changeMetadata = {};
-  for (const [key, flag] of [['name_status', '--name-status'], ['numstat', '--numstat']])
-    changeMetadata[key] = git(options, canonical.worktree, ['diff', flag, '-z', '--find-renames', ...range, ...productPathspec()], DIFF_MAX_BYTES, true);
-  changeMetadata.changes = collector.focusedChangeInventory(changeMetadata.name_status, changeMetadata.numstat);
+  const changeMetadata = changeInventory(options, canonical.worktree, range);
   const groups = core.pathGroups(changeMetadata.changes, options.partBudget ?? core.PART_BUDGET);
   const identity = { repository: canonical.commonPath, id: binding.subject, pr: live.number, head: canonical.head,
     base_commit: live.baseRefOid, merge_base: mergeBase, base_tree: mergeBaseTree, ticket_set_digest: binding.membership };
@@ -1006,10 +1007,8 @@ function assertNativeIntegrationMergeProof(proof, input, options = {}) {
   return current;
 }
 
-function prepareIntegrator(options, request, canonical, graph, collection) {
-  const native = collection === nativeIntegratorCollection;
+function integrationBase(options, request, canonical, graph) {
   const selection = phaseSelection(graph, request.phase);
-  const { phase, phaseNumber } = selection;
   const epicBranches = new Set(selection.rows.map(({ row }) => row.epic).filter(Boolean));
   if (epicBranches.size > 1) reject('phase tickets span multiple epic branches');
   const expectedBranch = epicBranches.size ? safeBranch([...epicBranches][0], 'epic branch') : null;
@@ -1022,19 +1021,78 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
   if (!expectedBranch && canonical.branch !== defaultBranch && canonical.branch !== unprefixedDefault) {
     reject('integrator worktree is not on the canonical default branch');
   }
-  const sources = sourceReferences(canonical.projectRoot, graph, selection.rows);
-  const nativeMergeProof = native ? collectNativeMergeProof({ worktree: canonical.worktree,
-    graphDir: graph.directory, phase: String(phaseNumber) }, options) : null;
-  const { ticketSet, livePullRequests } = nativeMergeProof
-    ? { ticketSet: nativeMergeProof.ticket_set, livePullRequests: nativeMergeProof.merges.map(member => ({
-      number: member.pr, state: member.state, headRefName: member.head_branch, headRefOid: member.head,
-      baseRefName: member.base_branch, baseRefOid: member.base, mergedAt: member.merged_at,
-      mergeCommit: { oid: member.merge_commit }, reviewDecision: member.review_decision })) }
-    : collectIntegrationMembers(options, canonical, graph, selection);
-  if (!nativeMergeProof) for (const live of livePullRequests) {
-    try { git(options, canonical.worktree, ['merge-base', '--is-ancestor', live.mergeCommit.oid, canonical.head]); }
-    catch { reject(`merged PR ${live.number} is not included in the integrator worktree`); }
-  }
+  return { selection, defaultBase, defaultOid, defaultBaseTree,
+    sources: sourceReferences(canonical.projectRoot, graph, selection.rows) };
+}
+
+function assertMergesIncluded(options, worktree, head, ticketSet, livePullRequests) {
+  const included = (oid, tip) => {
+    try { git(options, worktree, ['merge-base', '--is-ancestor', oid, tip]); return true; } catch { return false; }
+  };
+  const covered = (member, seen = new Set()) => {
+    const merge = livePullRequests.find(live => live.number === member.pr).mergeCommit.oid;
+    const parent = ticketSet.find(item => item.branch === member.base);
+    return included(merge, head) || (!!parent && !seen.has(member.id) && included(merge, parent.head)
+      && covered(parent, new Set([...seen, member.id])));
+  };
+  for (const member of ticketSet)
+    if (!covered(member)) reject(`merged PR ${member.pr} is not included in the integrator worktree`);
+}
+
+function prepareIntegrator(options, request, canonical, graph) {
+  const core = require('./code-review-core.cjs');
+  const { selection, defaultBase, defaultOid, defaultBaseTree, sources } = integrationBase(options, request, canonical, graph);
+  const { phase, phaseNumber } = selection;
+  const { ticketSet, livePullRequests } = collectIntegrationMembers(options, canonical, graph, selection);
+  assertMergesIncluded(options, canonical.worktree, canonical.head, ticketSet, livePullRequests);
+  const ticketSetDigest = sha(JSON.stringify(ticketSet));
+  const subject = buildSubject('integrator', { phase, repository: canonical.commonPath, tickets: ticketSetDigest });
+  const mergeBase = git(options, canonical.worktree, ['merge-base', defaultBase, canonical.head]);
+  const mergeBaseTree = git(options, canonical.worktree, ['rev-parse', '--verify', `${mergeBase}^{tree}`]);
+  const range = [`${mergeBase}...${canonical.head}`];
+  const { changes } = changeInventory(options, canonical.worktree, range);
+  if (!changes.length) reject('the integrator head has no product changes against the default branch', 'INTEGRATION_EMPTY');
+  const groups = core.pathGroups(changes, options.partBudget ?? core.PART_BUDGET);
+  const reference = loadClaudeReferenceContent('integrator');
+  const phaseContracts = sources.plans.map((plan) => ({ ticket: plan.id, path: plan.path,
+    acceptance: plan.acceptance, verification: plan.verification, sha256: sha(plan.content) }));
+  const synthetic = { plans: sources.plans, requiredRefs: sources.requiredRefs, files: sources.files };
+  const plan = { id: subject, path: sources.plans[0].path, content: sources.plans.map((item) => item.content).join('\n'),
+    acceptance: [], verification: [] };
+  const launchFor = ({ part, parts = [] } = {}) => {
+    const roleContext = { phase, phase_number: phaseNumber, phase_contracts: phaseContracts,
+      combined_diff: { base: defaultBase, base_commit: defaultOid, merge_base: mergeBase,
+        merge_base_tree: mergeBaseTree, head: canonical.head, head_tree: canonical.headTree },
+      integration_base: { ref: defaultBase, commit: defaultOid, tree: defaultBaseTree },
+      change_metadata: { changes: part ? part.changes : changes },
+      ticket_set: ticketSet, ticket_set_digest: ticketSetDigest,
+      adr_refs: sources.architecture.refs, adr_excluded: sources.architecture.excluded,
+      adr_unresolved: sources.architecture.unresolved, reference_digest: referenceDigest(reference),
+      ...(part ? { part: { id: part.id, ordinal: part.ordinal, of: groups.length, paths: part.paths } } : {}),
+      ...(parts.length ? { parts } : {}) };
+    const packet = buildPacket(canonical, 'integrator', subject, synthetic, plan, roleContext);
+    return { packet, prompt: makePrompt('integrator', subject, packet, reference), part };
+  };
+  const launch = launchFor();
+  // @invariant: the diff is read through git but its size still drives the measured-window routing signal.
+  const signals = observedSignals(request, selection.rows, livePullRequests, Math.ceil(Buffer.byteLength(launch.prompt) / 4)
+    + Math.ceil(diffBytes(options, canonical.worktree, range[0], productPathspec()) / 4));
+  return Object.freeze({ role: 'integrator', ticket: subject, phase, phaseNumber, base: defaultBase,
+    baseCommit: defaultOid, defaultBaseTree, mergeBase, mergeBaseTree, ticketSet, ticketSetDigest, livePullRequests,
+    archivePins: canonical.archivePins, canonical, graph, rows: selection.rows, sources, groups, launchFor, changes,
+    ...launch, signals, evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
+}
+
+function prepareNativeIntegrator(options, request, canonical, graph) {
+  const { selection, defaultBase, defaultOid, defaultBaseTree, sources } = integrationBase(options, request, canonical, graph);
+  const { phase, phaseNumber } = selection;
+  const nativeMergeProof = collectNativeMergeProof({ worktree: canonical.worktree,
+    graphDir: graph.directory, phase: String(phaseNumber) }, options);
+  const ticketSet = nativeMergeProof.ticket_set;
+  const livePullRequests = nativeMergeProof.merges.map(member => ({
+    number: member.pr, state: member.state, headRefName: member.head_branch, headRefOid: member.head,
+    baseRefName: member.base_branch, baseRefOid: member.base, mergedAt: member.merged_at,
+    mergeCommit: { oid: member.merge_commit }, reviewDecision: member.review_decision }));
   const ticketSetDigest = sha(JSON.stringify(ticketSet));
   const subject = buildSubject('integrator', { phase, repository: canonical.commonPath, tickets: ticketSetDigest });
   const mergeBase = git(options, canonical.worktree, ['merge-base', defaultBase, canonical.head]);
@@ -1047,7 +1105,7 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
     phase,
     phase_number: phaseNumber,
     phase_contracts: phaseContracts,
-    ...(nativeMergeProof ? { native_merge_proof: nativeMergeProof } : {}),
+    native_merge_proof: nativeMergeProof,
     combined_diff: { base: defaultBase, base_commit: defaultOid, merge_base: mergeBase,
       merge_base_tree: mergeBaseTree, head: canonical.head, head_tree: canonical.headTree, content: combinedDiff },
     integration_base: { ref: defaultBase, commit: defaultOid, tree: defaultBaseTree },
@@ -1063,40 +1121,28 @@ function prepareIntegrator(options, request, canonical, graph, collection) {
     content: sources.plans.map((item) => item.content).join('\n'),
     acceptance: [],
     verification: [] };
-  const packet = buildPacket(canonical, 'integrator', subject, synthetic, plan, roleContext, collection);
-  const signals = observedSignals(request, selection.rows, livePullRequests,
-    native ? packet.accounting.estimated_tokens : estimatePromptTokens('integrator', packet, plan, null, reference));
-  const prompt = native ? undefined : makePrompt('integrator', subject, packet, reference);
+  const packet = buildPacket(canonical, 'integrator', subject, synthetic, plan, roleContext, nativeIntegratorCollection);
+  const signals = observedSignals(request, selection.rows, livePullRequests, packet.accounting.estimated_tokens);
   const prepared = Object.freeze({ role: 'integrator', ticket: subject, phase, phaseNumber,
     base: defaultBase, baseCommit: defaultOid, defaultBaseTree, mergeBase, mergeBaseTree, ticketSet,
-    ticketSetDigest, livePullRequests, canonical, graph, rows: selection.rows, sources, packet, prompt, signals, nativeMergeProof,
+    ticketSetDigest, livePullRequests, canonical, graph, rows: selection.rows, sources, packet, prompt: undefined, signals, nativeMergeProof,
     evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
-  if (nativeMergeProof && (nativeMergeProof.epic.commit !== canonical.head
+  if (nativeMergeProof.epic.commit !== canonical.head
       || nativeMergeProof.epic.tree !== canonical.headTree
       || canonicalJson(nativeMergeProof.planning_reference) !== canonicalJson(canonical.planningReference)
-      || canonicalJson(nativeMergeProof.integration_base) !== canonicalJson(roleContext.integration_base)))
+      || canonicalJson(nativeMergeProof.integration_base) !== canonicalJson(roleContext.integration_base))
     reject('native merge subject changed during preparation', 'STALE_CONTEXT');
-  if (nativeMergeProof && sources.plans.some(plan =>
+  if (sources.plans.some(plan =>
       nativeMergeProof.plans.find(pin => pin.path === plan.path)?.sha256 !== sha(plan.content)))
     reject('complete phase plan bytes changed during preparation', 'STALE_CONTEXT');
-  integratorContexts.set(prepared, collection);
+  integratorContexts.add(prepared);
   return prepared;
-}
-
-function prepareIntegratorContext(options, request) {
-  const canonical = canonicalWorktree(options, request.worktree, true);
-  const graph = graphData(options, canonical.projectRoot);
-  if (request.review_contract !== undefined && !['shipyard.integration-review.v1', roleArtifact.INTEGRATION_REVIEW_V3].includes(request.review_contract))
-    reject('unsupported integration review contract', 'INVALID_INPUT');
-  if (request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3)
-    return prepareIntegrator(options, request, canonical, graph, nativeIntegratorCollection);
-  return prepareIntegrator(options, request, canonical, graph);
 }
 
 function prepareNativeIntegratorContext(options, request) {
   const canonical = canonicalWorktree(options, request.worktree, true);
   const graph = graphData(options, canonical.projectRoot);
-  return prepareIntegrator(options, request, canonical, graph, nativeIntegratorCollection);
+  return prepareNativeIntegrator(options, request, canonical, graph);
 }
 
 function isPreparedIntegratorContext(value) { return integratorContexts.has(value); }
@@ -1104,7 +1150,7 @@ function isPreparedIntegratorContext(value) { return integratorContexts.has(valu
 function integrationPacketWithCoverage(prepared, coverage) {
   return buildPacket(prepared.canonical, 'integrator', prepared.ticket, prepared.sources,
     { acceptance: [], verification: [] }, { ...prepared.packet.role_context, review_coverage: coverage },
-    integratorContexts.get(prepared) === nativeIntegratorCollection ? nativeIntegratorCollection : undefined);
+    integratorContexts.has(prepared) ? nativeIntegratorCollection : undefined);
 }
 
 function sentinelPreflightRound(options, canonical, graph, selection) {
@@ -1247,7 +1293,7 @@ function prepareSentinel(options, request, canonical, graph) {
 }
 
 function packetBound(role, roleContext) {
-  if (role === 'arch-review') return ARCH_REVIEW_PACKET_TOKENS;
+  if (role === 'arch-review' || (role === 'integrator' && roleContext.combined_diff.content === undefined)) return ARCH_REVIEW_PACKET_TOKENS;
   if (role === 'code-review') return CODE_REVIEW_PACKET_TOKENS;
   if (role === 'pr-sentinel') return PR_SENTINEL_PACKET_TOKENS;
   const diffBytes = Buffer.byteLength(roleContext.combined_diff.content, 'utf8');
@@ -1291,12 +1337,15 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
   if (typeof packet?.schema === 'string' && packet.schema.startsWith('shipyard.semantic-content.'))
     packet = decodeUniqueContent(packet);
   const codeReview = role === 'code-review';
-  const { part, parts } = codeReview ? packet.role_context : {};
+  const { part, parts } = codeReview || role === 'integrator' ? packet.role_context : {};
   const sharedReview = role === 'arch-review' || role === 'integrator' || codeReview;
   const encoded = sharedReview ? encodeUniqueContent(packet) : packet;
   if (sharedReview) preflightReviewMaterial(encoded, { root: packet.canonical_root, role, subject,
     sourceRevision: packet.source_revision, policyHash: policy.POLICY_HASH });
-  const readGit = base => `The packet carries no diff. Read the PR diff yourself with git in the current worktree: git diff ${base}...${packet.role_context.focused.head} -- <path> for every changed path listed in role_context.change_metadata.changes, and git show ${packet.role_context.focused.head}:<path> for current content. Read a large diff in slices (| sed -n 'START,ENDp'). Run only read-only git commands; do not change the worktree, index, refs or remotes.`;
+  const { exact_diff: exact, combined_diff: combined } = packet.role_context ?? {};
+  const range = exact || (role === 'integrator' && combined?.content === undefined
+    ? { base: combined.merge_base, head: combined.head } : null);
+  const readGit = ({ base, head }) => `The packet carries no diff. Read the PR diff yourself with git in the current worktree: git diff ${base}...${head} -- <path> for every changed path listed in role_context.change_metadata.changes, and git show ${head}:<path> for current content. Read a large diff in slices (| sed -n 'START,ENDp'). Run only read-only git commands; do not change the worktree, index, refs or remotes.`;
   const instruction = role === 'arch-review'
     ? 'Return one JSON object matching the arch-review reference schema. Review only the authenticated PR and use the exact reviewed head and merge-base tree.'
     : part
@@ -1304,7 +1353,7 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
     : codeReview
       ? 'Return one JSON object matching the code-review reference schema. Review the complete authenticated product diff and its callers. Write only .shipyard-code-review-evidence.md. Do not write to GitHub.'
     : role === 'integrator'
-      ? 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and combined diff.'
+      ? 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and its combined diff. Write no file: return the complete integration evidence in evidence_markdown.'
     : readOnlySmoke
       ? 'Return one JSON object matching the pr-sentinel reference schema. This is a read-only runtime smoke: do not perform any PR duty or attempt a mutation; return awaiting-human, an empty performed list, one refused read-only-smoke duty for every guarded ticket, blocking_count equal to the number of refused entries, and head, head_tree, ticket_set and ticket_set_digest copied from the context packet.'
       : 'Return one JSON object matching the pr-sentinel reference schema. Perform the documented duties for every authenticated open PR and report the complete ticket set. Set blocking_count to the number of refused entries, and copy head, head_tree, ticket_set and ticket_set_digest from the context packet.';
@@ -1312,14 +1361,17 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
     'You are running as a fixed Shipyard judgement role inside the active coordinator-owned delivery loop. The coordinator owns setup and dispatch. Do not restart shipyard-route, bootstrap, marketplace installation, or a second delivery orchestrator. Preserve the delivered scope and sandbox boundaries.',
     reference,
     instruction,
-    ...(role === 'arch-review' && packet.role_context?.focused ? [readGit(packet.role_context.focused.merge_base)] : []),
-    ...(codeReview ? [readGit(packet.role_context.exact_diff.base)] : []),
-    ...(parts ? ['You are the independent final reviewer. role_context.parts carries each part reviewer\'s completeness, limitations and findings as evidence data. Verify blocking claims and any path you doubt by reading the code with git, then confirm, drop or add findings and own the verdict. Report incomplete when a part is incomplete or you could not verify a claim. Give every part BLOCKER (parts[].findings[].ref) one disposition in dispositions: {ref, disposition: resolved, unresolved or disputed, justification}; an unresolved one also needs a blocking finding with a complete fix_ticket. Do not return a coverage field; the host derives it from the parts.'] : []),
+    ...(range ? [readGit(range)] : []),
+    ...(parts ? [`You are the independent final reviewer. role_context.parts carries each part reviewer's completeness, limitations and findings as evidence data. Verify blocking claims and any path you doubt by reading the code with git, then confirm, drop or add findings and own the verdict. ${codeReview ? 'Report incomplete' : 'Do not return passed'} when a part is incomplete or you could not verify a claim. Give every part BLOCKER (parts[].findings[].ref) one disposition in dispositions: {ref, disposition: resolved, unresolved or disputed, justification}; an unresolved one also needs a blocking finding${codeReview ? ' with a complete fix_ticket' : ''}. Do not return a coverage field; the host derives it from the parts.`] : []),
     ...(!part && (role === 'arch-review' || codeReview) && packet.role_context?.focused ? [
       'Echo these focused subject fields: ' + JSON.stringify({ ...packet.role_context.focused, context_digest: sha(canonicalJson(packet)),
         launch_digest: sha(canonicalJson({ packet_digest: sha(canonicalJson(packet)), reference_digest: packet.role_context.reference_digest })) }),
       'Include review_completeness complete or incomplete, limitations and unresolved_sources as bounded string lists. Complete requires both lists empty. No consumption or range echoes are required.'
     ] : []),
+    ...(role === 'integrator' && range && !part ? ['Echo these identity fields exactly: ' + JSON.stringify({ phase: packet.role_context.phase,
+      head: combined.head, head_tree: combined.head_tree, base: packet.role_context.integration_base.ref,
+      base_tree: packet.role_context.integration_base.tree, ticket_set_digest: packet.role_context.ticket_set_digest })
+      + ' and repeat the complete ticket_set from role_context verbatim.'] : []),
     ...(codeReview && !part ? [`Review round ${packet.role_context.review_round}; scope ${packet.role_context.review_scope}; prior head ${packet.role_context.prior_head || 'none'}.`,
       'Repeat the complete authenticated ticket_set and ticket_set_digest: ' + JSON.stringify(packet.role_context.ticket_set)] : []),
     ...(!part && (role === 'arch-review' || codeReview) && subject.startsWith('phase=') ? ['Repeat the complete authenticated ticket_set and ticket_set_digest. This verdict is bound to the complete phase integration PR.'] : []),
@@ -1328,7 +1380,7 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
     ...(role === 'arch-review' ? ['Each $semantic_content alias in the packet resolves to the dictionary entry with that sha256; read the architecture records and plans it holds.']
       : sharedReview ? ['Read the complete inline dictionary and every logical obligation. Resolve shared content references without discarding distinct purposes or provenance. Trusted mechanical integrity supplies no semantic reading credit.'] : []),
     `Authenticated subject: ${subject}`,
-    ...(part ? [] : ['Write the complete evidence to the role-owned evidence path from the reference before returning JSON.']),
+    ...(part || role === 'integrator' ? [] : ['Write the complete evidence to the role-owned evidence path from the reference before returning JSON.']),
     '<AUTHENTICATED_CONTEXT_PACKET>',
     JSON.stringify(encoded),
     '</AUTHENTICATED_CONTEXT_PACKET>',
@@ -1350,8 +1402,8 @@ function estimatePromptTokens(role, packet, plan, pr, reference, readOnlySmoke =
 }
 
 function prepareInvocation(options, request) {
-  const canonical = canonicalWorktree(options, request.worktree, (request.role === 'arch-review' && !!request.phase)
-    || (request.role === 'integrator' && request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3), request.role === 'code-review', request.repo);
+  const canonical = canonicalWorktree(options, request.worktree, request.role === 'arch-review' && !!request.phase,
+    request.role === 'code-review' || request.role === 'integrator', request.repo);
   const graph = graphData(options, canonical.projectRoot);
   const rows = requestRows(request, graph, canonical);
   const prepared = request.role === 'arch-review'
@@ -1359,18 +1411,14 @@ function prepareInvocation(options, request) {
     : request.role === 'code-review'
       ? prepareCodeReview(options, request, canonical, graph, rows)
     : request.role === 'integrator'
-      ? prepareIntegrator(options, request, canonical, graph,
-        request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3 ? nativeIntegratorCollection : undefined)
+      ? prepareIntegrator(options, request, canonical, graph)
     : prepareSentinel(options, request, canonical, graph);
   if (request.role === 'pr-sentinel') return prepared;
   const preflightPins = ['claude-role-host.cjs', 'claude-runtime-host.cjs', 'context-packet.cjs',
     'codex-arch-review-context.cjs', 'role-artifact.cjs', 'model-policy.cjs', 'model-policy-internal.cjs',
     'code-review-core.cjs', 'conveyor-scratch.cjs']
     .map(name => ({ path: path.join(__dirname, name), sha256: sha(fs.readFileSync(path.join(__dirname, name))) }));
-  const result = Object.freeze({ ...prepared, preflightPins });
-  if (request.review_contract === roleArtifact.INTEGRATION_REVIEW_V3)
-    integratorContexts.set(result, nativeIntegratorCollection);
-  return result;
+  return Object.freeze({ ...prepared, preflightPins });
 }
 
 function resultFrom(output) {
@@ -1472,10 +1520,10 @@ function roleOutputSchema(role) {
           ticket: FINDING_TICKET_SCHEMA, fix_ticket: FIX_TICKET_SCHEMA,
           question: { type: 'string' }, evidence: { type: 'string' },
         } } },
-      reviewed_identity: { type: 'object' }, coverage: { type: 'object' },
+      evidence_markdown: { type: 'string' }, dispositions: { type: 'array', maxItems: 128, items: { type: 'object' } },
     });
     return { type: 'object', properties, required: ['outcome', 'phase', 'head', 'head_tree', 'base',
-      'base_tree', 'ticket_set', 'ticket_set_digest', 'blocking_count', 'summary', 'findings'] };
+      'base_tree', 'ticket_set', 'ticket_set_digest', 'blocking_count', 'summary', 'findings', 'evidence_markdown'] };
   }
   Object.assign(properties, {
     outcome: { type: 'string', enum: ['clear', 'blocked', 'awaiting-human'] },
@@ -1550,6 +1598,12 @@ function validateResult(prepared, result) {
         || result.ticket_set_digest !== prepared.ticketSetDigest) {
       reject('integrator result identity differs from the authenticated phase snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
     }
+    const parts = prepared.packet.role_context.parts;
+    if (parts) {
+      const { own } = require('./code-review-core.cjs').settleParts(result, parts, result.outcome === 'passed');
+      if (own.some(entry => entry.disposition === 'unresolved') && !result.findings.some(finding => finding.blocking === true))
+        reject('an unresolved part blocker requires a blocking finding', 'JUDGMENT_OUTCOME_MISMATCH');
+    }
   } else {
     if (result.outcome !== 'clear' && result.outcome !== 'blocked' && result.outcome !== 'awaiting-human') {
       reject('sentinel result has an unsupported outcome', 'INVALID_RESULT');
@@ -1593,11 +1647,11 @@ function storageDirectory(options, runId, worktree) {
 
 function runtimeFor(options, scope, controller, storage, prepared) {
   const runtimeOptions = { scope, controller, readOnlySmoke: options.readOnlySmoke === true,
-    ...(nativeIntegrationStages.has(prepared) ? { recorder: nativeIntegrationStages.get(prepared).recorder } : {}),
     recorderDir: path.join(storage, 'receipts'), transcriptDir: path.join(storage, 'transcripts'),
-    ...(prepared.role === 'code-review' ? { spawn(executable, args, spawnOptions) {
+    ...(prepared.role === 'code-review' || prepared.role === 'integrator' ? { spawn(executable, args, spawnOptions) {
       const at = flag => { const index = args.indexOf(flag) + 1; if (!index) reject(`review runtime lacks ${flag}`, 'RUNTIME_CAPABILITY_MISSING'); return index; };
-      const worktree = prepared.canonical.worktree, evidence = prepared.part ? [] : [path.join(worktree, prepared.evidencePath)];
+      const worktree = prepared.canonical.worktree;
+      const evidence = prepared.part || prepared.role === 'integrator' ? [] : [path.join(worktree, prepared.evidencePath)];
       const settings = JSON.parse(args[at('--settings')]);
       settings.sandbox.filesystem.allowWrite = evidence;
       settings.sandbox.filesystem.denyWrite.push(worktree, prepared.canonical.commonPath);
@@ -1638,11 +1692,12 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
           for (const pin of prepared.preflightPins)
             if (sha(fs.readFileSync(pin.path)) !== pin.sha256)
               reject('trusted preflight implementation changed before launch', 'STALE_CONTEXT');
-          if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
+          if (prepared.role === 'code-review' || prepared.role === 'integrator')
+            roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
           revalidateLiveInputs(options, prepared, dispatchId);
           if (git(options, prepared.canonical.worktree, ['rev-parse', 'HEAD']) !== prepared.canonical.head)
             reject('review HEAD changed before native launch', 'STALE_CONTEXT');
-          if (!nativeIntegrationStages.has(prepared)) preflightReviewMaterial(encodeUniqueContent(prepared.packet), { root: prepared.canonical.projectRoot,
+          preflightReviewMaterial(encodeUniqueContent(prepared.packet), { root: prepared.canonical.projectRoot,
             role: prepared.role, subject: prepared.packet.subject, sourceRevision: prepared.canonical.head,
             policyHash: policy.POLICY_HASH });
           if (canonicalJson(referenceDigest(loadClaudeReferenceContent(prepared.role)))
@@ -1665,9 +1720,8 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
         const child = await runtime.agent(prepared.prompt, {
           model: selection.model,
           effort: selection.effort,
-          schema: nativeIntegrationStages.has(prepared) ? integrationStageSchema(nativeIntegrationStages.get(prepared).stage)
-            : prepared.part ? require('./code-review-core.cjs').PART_SCHEMA : roleOutputSchema(prepared.role),
-          ...(nativeIntegrationStages.has(prepared) || prepared.readOnlySmoke ? { readOnly: true } : {}),
+          schema: prepared.part ? require('./code-review-core.cjs').PART_SCHEMA : roleOutputSchema(prepared.role),
+          ...(prepared.readOnlySmoke ? { readOnly: true } : {}),
         });
         launched = child;
         return runtime.applicationEvidence({ result: child });
@@ -1748,7 +1802,7 @@ function assertEvidenceOnlyChanges(options, prepared, graphBaseline) {
         && integrationPins.some(pin => pin.path === file)) return false;
     if (prepared.role !== 'code-review' && prepared.binding && untracked.includes(file) && !changed.includes(file)
         && file.startsWith(roleArtifact.ARTIFACT_ARCHIVE_DIR + '/')) return false;
-    if (prepared.role === 'code-review' && untracked.includes(file) && !changed.includes(file)) {
+    if ((prepared.role === 'code-review' || prepared.role === 'integrator') && untracked.includes(file) && !changed.includes(file)) {
       const pin = prepared.archivePins.find(pin => pin.path === file);
       if (pin) { roleArtifact.assertArchivePin(prepared.canonical.worktree, pin); return false; }
     }
@@ -1780,15 +1834,14 @@ function assertEvidenceOnlyChanges(options, prepared, graphBaseline) {
     prepared.canonical.planningReference);
   if (!prepared.integrationPartitions) validateContextPacket(prepared.packet, { root: prepared.canonical.projectRoot, role: prepared.role,
     subject: prepared.packet.subject, sourceRevision: prepared.canonical.head, policyHash: policy.POLICY_HASH });
-  if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
+  if (prepared.role === 'code-review' || (prepared.role === 'integrator' && !prepared.integrationPartitions))
+    roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
 }
 
 function revalidateLiveInputs(options, prepared, currentDispatchId) {
   require('./context-packet.cjs').authenticatedPlanningRoot(prepared.canonical.worktree,
     prepared.canonical.planningReference);
   const worktree = prepared.canonical.worktree;
-  if (prepared.integrationReview)
-    require('./codex-delivery-host.cjs').recheckIntegrationReview(prepared.integrationReview, prepared.integrationPartitions);
   if (prepared.role === 'arch-review' || prepared.role === 'code-review') {
     if (prepared.role === 'code-review') {
       const current = loadCodeReviewDisagreements(prepared.graph, prepared.phase, prepared.priorFindings);
@@ -1874,10 +1927,6 @@ function revalidateLiveInputs(options, prepared, currentDispatchId) {
       }
     }
     return expiredTickets;
-  }
-  if (prepared.nativeMergeProof) {
-    createNativeIntegrationMergeProof(prepared.integrationReview?.prepared || prepared, options);
-    return;
   }
   const defaultBranch = baseDefaultBranch(options, worktree, prepared.canonical.projectRoot);
   const currentBase = branchOid(options, worktree, defaultBranch);
@@ -1992,7 +2041,6 @@ function codeReviewEvidenceFs(evidencePath, markdown) {
 
 function sealResult(prepared, result, recorder, dispatchId, evidenceMarkdown) {
   const common = { worktreePath: prepared.canonical.worktree, role: prepared.role,
-    ...(prepared.integrationPartitions ? { integrationReview: prepared.integrationReview } : {}),
     ticket: prepared.ticket, base: prepared.base, recorder, dispatchId, result,
     ...(prepared.binding ? { phase: prepared.binding.phase, ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest } : {}),
     ...(prepared.role === 'code-review' ? { io: { fs: codeReviewEvidenceFs(
@@ -2005,229 +2053,6 @@ function sealResult(prepared, result, recorder, dispatchId, evidenceMarkdown) {
   const validated = roleArtifact.validateJudgmentManifest({ ...input,
     artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
   return { artifact, validated };
-}
-
-function integrationStageSchema(stage) {
-  if (typeof stage.input !== 'string' || sha(stage.input) !== stage.input_sha256)
-    reject('integration schema requires exact authenticated input', 'INVALID_INPUT');
-  const opening = '\n<AUTHENTICATED_INTEGRATION_PARTITION>\n';
-  const closing = '\n</AUTHENTICATED_INTEGRATION_PARTITION>';
-  const start = stage.input.indexOf(opening);
-  if (start < 0 || stage.input.indexOf(opening, start + opening.length) !== -1 || !stage.input.endsWith(closing))
-    reject('integration schema requires one terminal authenticated payload', 'INVALID_INPUT');
-  const raw = stage.input.slice(start + opening.length, -closing.length);
-  if (/[\r\n]/.test(raw)) reject('integration schema authenticated payload is not one line', 'INVALID_INPUT');
-  let payload;
-  try { payload = JSON.parse(raw); }
-  catch { reject('integration schema authenticated payload is malformed', 'INVALID_INPUT'); }
-  if (!object(payload) || !object(payload.reviewed_identity))
-    reject('integration schema authenticated identity is missing', 'INVALID_INPUT');
-  const properties = Object.fromEntries(Object.entries(payload.reviewed_identity)
-    .filter(([, value]) => typeof value !== 'number' || Number.isFinite(value))
-    .map(([key, value]) => [key, value !== null && typeof value === 'object'
-      ? { type: Array.isArray(value) ? 'array' : 'object' } : { const: value }]));
-  const required = Object.keys(properties).filter(key => Object.hasOwn(properties[key], 'const'));
-  const schema = stage.kind === 'phase' ? roleOutputSchema('integrator') : { type: 'object', properties: {}, required: [] };
-  Object.assign(schema.properties, {
-    schema: { type: 'string' }, review_contract: { const: roleArtifact.INTEGRATION_REVIEW_V3 },
-    kind: { const: stage.kind }, runtime: { const: 'claude' }, subject: { const: stage.subject },
-    plan_sha256: { const: stage.plan_sha256 }, input_sha256: { const: stage.input_sha256 },
-    reviewed_identity: { type: 'object', properties, required }, completeness: { enum: ['complete', 'incomplete'] },
-    outcome: { enum: ['passed', 'needs-fix', 'human-review-required'] }, unit_id: { type: 'string' },
-    coverage: { type: 'object' }, blocking_count: { type: 'integer', minimum: 0 },
-    conclusions: { type: 'array' }, findings: { type: 'array' }, limitations: { type: 'array' },
-    seams: { type: 'array' }, required_context: { type: 'array' }, evidence_markdown: { type: 'string' },
-  });
-  if (payload.schema === 'shipyard.integration-partition-input.v2') {
-    if (payload.kind !== stage.kind || payload.runtime !== 'claude' || payload.subject !== stage.subject || payload.plan_sha256 !== stage.plan_sha256)
-      reject('compact integration stage differs from exact input', 'INVALID_INPUT');
-    const binding = require('./codex-arch-review-context.cjs').integrationPartitionBinding(payload);
-    const properties = Object.fromEntries(Object.entries(binding).map(([key, value]) => [key, { const: value }]));
-    schema.properties.reviewed_identity.additionalProperties = false;
-    schema.properties.format = { const: payload.format };
-    schema.properties.binding = { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
-    if (stage.kind === 'unit') {
-      schema.properties.schema = { const: 'shipyard.integration-unit-result.v2' };
-      schema.properties.unit_id = { const: payload.unit_id };
-    }
-    const groups = { type: 'array', items: { type: 'object', properties: {
-      id: { type: 'string' }, domain: { enum: ['pairs', 'edges'] },
-      domain_sha256: { enum: [binding.domain_sha256, binding.explicit_edge_sha256] },
-      ranges: { type: 'array', minItems: 1, items: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'integer' } } },
-      ...(stage.kind === 'unit' ? { incident_unit: { const: payload.unit_id } } : {}),
-      disposition: { enum: ['resolved', 'unresolved'] }, rationale: { type: 'string' },
-      findings: { type: 'array' }, limitations: { type: 'array' }, required_context: { type: 'array' },
-      exception: { type: 'boolean' },
-    }, required: ['id', 'domain', 'domain_sha256', 'disposition', 'rationale', 'findings', 'limitations', 'required_context',
-      ...(stage.kind === 'phase' ? ['ranges'] : [])], additionalProperties: false } };
-    if (stage.kind === 'unit') {
-      schema.properties.seams = groups;
-      schema.properties.coverage = schema.properties.binding;
-    }
-    else {
-      const properties = Object.fromEntries(Object.entries(payload.coverage).filter(([, value]) => value === null || typeof value !== 'object')
-        .map(([key, value]) => [key, { const: value }]));
-      Object.assign(properties, { binding: schema.properties.binding, limitations: { type: 'array' }, seam_dispositions: groups });
-      schema.properties.coverage = { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
-    }
-    schema.required = [...schema.required, 'format', 'binding', 'blocking_count', 'conclusions', 'findings', 'limitations', 'required_context'];
-  } else if (payload.format !== undefined || payload.binding !== undefined) reject('mixed integration format', 'INVALID_INPUT');
-  schema.required = [...new Set([...schema.required, 'review_contract', 'kind', 'runtime', 'subject', 'plan_sha256',
-    'input_sha256', 'reviewed_identity', 'completeness', 'outcome', 'coverage', 'evidence_markdown',
-    ...(stage.kind === 'unit' ? ['schema', 'unit_id', 'conclusions', 'findings', 'limitations', 'seams', 'required_context'] : [])])];
-  return schema;
-}
-
-function prepareClaudeIntegrationPartitions(options, request) {
-  const prepared = prepareInvocation(options, request);
-  const scope = { worktree: prepared.canonical.worktree, phase: prepared.phaseNumber,
-    ticket: prepared.ticket, run_id: newDispatchId() };
-  const storage = storageDirectory(options, scope.run_id, scope.worktree);
-  const referencePath = require('./claude-reference-content.cjs').REFERENCE_PATHS.integrator;
-  const reference = fs.readFileSync(referencePath);
-  const review = require('./codex-delivery-host.cjs').prepareIntegrationLineage(scope, prepared, {
-    ...options, nativeRuntime: 'claude', dispatchId: scope.run_id, storageRoot: storage,
-    generatedInstructionBytes: reference.length,
-    instructionBinding: { agent_file: path.basename(referencePath), agent_path: referencePath,
-      agent_sha256: sha(reference), installed_files: [], policy_hash: policy.POLICY_HASH } });
-  if (options.integrationCapacity !== undefined && (!object(options.integrationCapacity) || !options.integrationCapacity.capacity))
-    reject('supplied strict capacity resources are malformed', 'INTEGRATION_CAPACITY_UNPROVEN');
-  const previous = options.integrationCapacity?.plan_sha256;
-  const partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity: options.integrationCapacity?.capacity,
-    ...(previous ? { plan_sha256: previous } : {}) });
-  require('./codex-delivery-host.cjs').recheckIntegrationReview(review, partitions);
-  const recorder = options.integrationCapacity?.recorder || createDurableRecorder(path.join(storage, 'partition-receipts'));
-  const resources = options.integrationCapacity || {};
-  const capacityHost = roleArtifact.createIntegrationCapacityHost({ ...resources,
-    ...(typeof resources.renderLaunch === 'function' ? { renderLaunch: launch => resources.renderLaunch(launch, {
-      model: launch.model, effort: launch.effort, schema: integrationStageSchema(launch), readOnly: true }) } : {}),
-    partitions, runtime: 'claude', recorder });
-  const stages = [];
-  const lazyUnits = ['shipyard.integration-partition-plan.v2', 'shipyard.integration-partition-plan.v3'].includes(partitions.plan.schema);
-  if (!lazyUnits) for (const unit of partitions.plan.units) {
-    try { roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); continue; }
-    catch (error) {
-      if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
-    }
-    stages.push(roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
-      dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id }));
-  }
-  return { request: canonicalJson(request), prepared, review, partitions, recorder, capacityHost, stages,
-    admissions: new Set(), recovered: !!previous, final: null, finalAdmitted: false };
-}
-
-async function runClaudeIntegrationPartitions(options, execution) {
-  const delivery = require('./codex-delivery-host.cjs');
-  const { prepared: original, review, recorder, capacityHost } = execution;
-  execution.partitions = roleArtifact.prepareIntegrationPartitions({ review, plan_sha256: execution.partitions.plan.plan_sha256 });
-  const { partitions } = execution;
-  const lazyUnits = ['shipyard.integration-partition-plan.v2', 'shipyard.integration-partition-plan.v3'].includes(partitions.plan.schema);
-  delivery.recheckIntegrationReview(review, partitions);
-  if (!lazyUnits) for (const stage of [partitions.reserved_template, ...execution.stages].filter(Boolean)) {
-    if (execution.recovered) break;
-    if (execution.admissions.has(stage.launch_sha256)) continue;
-    await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: capacityHost });
-    execution.admissions.add(stage.launch_sha256);
-  }
-  const launch = async stage => {
-    delivery.recheckIntegrationReview(review, partitions);
-    const prepared = Object.freeze({ ...original, prompt: stage.input,
-      integrationReview: review, integrationPartitions: partitions });
-    nativeIntegrationStages.set(prepared, { stage, recorder });
-    assertEvidenceOnlyChanges(options, prepared, graphStateSnapshot(prepared));
-    const runId = 'claude-integration-' + crypto.randomUUID(), ownerId = 'claude-integration-owner-' + crypto.randomUUID();
-    const scope = makeRuntimeScope(prepared, runId, stage.dispatch_id, ownerId);
-    const storage = storageDirectory(options, runId, prepared.canonical.worktree);
-    const controller = options.controller === false ? null : createRunController({ storeDir: path.join(storage, 'controller'), ownerId });
-    if (controller) controller.begin(scope);
-    let heartbeatError;
-    const heartbeat = controller ? setInterval(() => {
-      try { controller.heartbeat(runId); } catch (error) { heartbeatError = error; }
-    }, 60000) : null;
-    heartbeat?.unref();
-    try {
-      const runtime = runtimeFor(options, scope, controller, storage, prepared);
-      if (runtime.recorder !== recorder || controller && runtime.controller !== controller)
-        reject('partition runtime differs from its original recorder/controller', 'MISSING_RECEIPT');
-      const { boundary, getLaunched, getLaunchCount, getGraphBaseline } = buildBoundary(prepared, runtime, stage.dispatch_id, ownerId, options);
-      roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: stage, host: capacityHost });
-      const record = await boundary.dispatch({ runtime: 'claude', role: 'integrator',
-        signals: original.signals, dispatch_id: stage.dispatch_id }, {
-        ticket: prepared.ticket, role: 'integrator', phase: prepared.phase,
-        worktreePath: prepared.canonical.projectRoot, sourceRevision: prepared.canonical.head, contextPacket: prepared.packet });
-      if (getLaunchCount() !== 1 || !getLaunched()) reject('partition requires one original native launch', 'MISSING_RECEIPT');
-      if (heartbeatError) throw heartbeatError;
-      delivery.recheckIntegrationReview(review, partitions);
-      assertEvidenceOnlyChanges(options, prepared, getGraphBaseline());
-      const result = resultFrom(getLaunched().output);
-      if (stage.kind === 'unit') {
-        const artifact = roleArtifact.sealIntegrationUnit({ prepared: stage, recorder, dispatchId: stage.dispatch_id, result });
-        if (controller) controller.complete(runId);
-        return { artifact, result };
-      }
-      const { evidence_markdown, ...judgment } = result;
-      if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
-        reject('final requires the complete original evidence handoff', 'INVALID_RESULT');
-      roleArtifact.prepareRoleArtifact({ worktreePath: prepared.canonical.worktree,
-        role: 'integrator', phase: prepared.phase, evidencePath: prepared.evidencePath });
-      fs.writeFileSync(path.join(prepared.canonical.worktree, prepared.evidencePath), evidence_markdown);
-      const { validated } = sealResult(prepared, judgment, recorder, stage.dispatch_id, evidence_markdown);
-      if (controller) controller.complete(runId);
-      return Object.freeze({ schema: 'shipyard.claude-role-result.v1', role: 'integrator', subject: prepared.ticket,
-        phase: prepared.phase, ticket_set_digest: prepared.ticketSetDigest, result: judgment, dispatch: record,
-        artifact: { ref: validated.artifact_ref, digest: validated.artifact_digest, outcome: validated.envelope.outcome },
-        context: { run_id: runId, source_revision: prepared.canonical.head, policy_hash: record.policy_hash,
-          ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
-            actual_final_input_bytes: Buffer.byteLength(JSON.stringify({ type: 'user', message: { role: 'user', content: stage.input } }) + '\n')
-              + Buffer.byteLength(JSON.stringify(integrationStageSchema(stage))) } } : {}),
-          host_identity: HOST_IDENTITY, plan_sha256: partitions.plan.plan_sha256, prompt_bytes: Buffer.byteLength(stage.input),
-          model: record.applied_model, effort: record.applied_effort } });
-    } catch (error) {
-      if (controller) controller.fail(runId, { reason: String(error.message).slice(0, 500) });
-      throw error;
-    } finally { if (heartbeat) clearInterval(heartbeat); }
-  };
-  for (const unit of partitions.plan.units) {
-    let completed;
-    try { completed = roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); }
-    catch (error) {
-      if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
-    }
-    if (!completed) {
-      let stage = execution.stages.find(stage => stage.unit_id === unit.unit_id);
-      if (lazyUnits) {
-        if (!stage) {
-          stage = roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
-            dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id });
-          execution.stages.push(stage);
-        }
-        execution.admissions ||= new Set();
-        if (!execution.admissions.has(stage.launch_sha256)) {
-          await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: capacityHost });
-          execution.admissions.add(stage.launch_sha256);
-        }
-      }
-      completed = await launch(stage);
-    }
-    if (completed.result.completeness !== 'complete' || completed.result.outcome !== 'passed' || completed.result.required_context.length)
-      reject('incomplete, failing or context-blocked unit requires repair', 'INTEGRATION_PARTITION_INVALID');
-  }
-  delivery.recheckIntegrationReview(review, partitions);
-  if (!execution.final) execution.final = roleArtifact.prepareIntegrationAggregate({ partitions,
-    dispatch_id: 'integration-final-' + partitions.plan.plan_sha256 });
-  if (execution.recovered && !execution.finalAdmitted) {
-    try {
-      roleArtifact.assertIntegrationAdmission({ prepared: execution.final, launch: execution.final, host: capacityHost });
-      execution.finalAdmitted = true;
-    } catch (error) {
-      if (error.code !== 'INTEGRATION_CAPACITY_UNPROVEN' || !error.message.endsWith('exact launch has no protected capacity admission')) throw error;
-    }
-  }
-  if (!execution.finalAdmitted) {
-    await roleArtifact.admitIntegrationCapacity({ prepared: execution.final, host: capacityHost });
-    execution.finalAdmitted = true;
-  }
-  return launch(execution.final);
 }
 
 async function dispatchRole(options, prepared) {
@@ -2274,12 +2099,19 @@ async function dispatchRole(options, prepared) {
     const output = resultFrom(getLaunched().output);
     if (prepared.part) {
       if (controller) controller.complete(scope.run_id);
-      return { ...require('./code-review-core.cjs').normalizePart(output, prepared.part), dispatch_id: record.receipt.dispatch_id };
+      return { ...require('./code-review-core.cjs').normalizePart(output, prepared.part, prepared.role === 'integrator'), dispatch_id: record.receipt.dispatch_id };
     }
     const originalResult = validateResult(prepared, output);
     const evidence_markdown = originalResult.evidence_markdown;
     const validatedResult = { ...originalResult };
-    if (['arch-review', 'code-review'].includes(prepared.role)) delete validatedResult.evidence_markdown;
+    if (['arch-review', 'code-review', 'integrator'].includes(prepared.role)) delete validatedResult.evidence_markdown;
+    if (prepared.role === 'integrator') {
+      if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
+        reject('integrator result requires its complete evidence_markdown', 'INVALID_RESULT');
+      const evidenceFile = path.join(prepared.canonical.worktree, prepared.evidencePath);
+      fs.mkdirSync(path.dirname(evidenceFile), { recursive: true });
+      fs.writeFileSync(evidenceFile, evidence_markdown);
+    }
     if (prepared.role === 'arch-review' && (typeof evidence_markdown !== 'string'
         || evidence_markdown.trim() !== fs.readFileSync(path.join(prepared.canonical.worktree, prepared.evidencePath), 'utf8').trim()))
       reject('focused original evidence differs from the role-owned file', 'INVALID_RESULT');
@@ -2339,40 +2171,27 @@ async function dispatchRole(options, prepared) {
   }
 }
 
-async function runCodeReviewParts(options, prepared) {
+async function runParts(options, prepared) {
   prepared.launchFor({ parts: prepared.groups.map(({ id, ordinal, paths }) => ({ id, ordinal, paths, review_completeness: 'complete',
     limitations: [], unresolved_sources: [], summary: 'x'.repeat(2048), findings: [], dispatch_id: 'x'.repeat(64) })) });
   const parts = [];
   for (const group of prepared.groups)
     parts.push(await dispatchRole(options, Object.freeze({ ...prepared, ...prepared.launchFor({ part: group }) })));
   require('./code-review-core.cjs').assertPathPartition(prepared.changes, parts);
-  return dispatchRole(options, Object.freeze({ ...prepared, ...prepared.launchFor({ parts }) }));
+  const final = await dispatchRole(options, Object.freeze({ ...prepared, ...prepared.launchFor({ parts }) }));
+  return Object.freeze({ ...final, parts: parts.map(({ id, dispatch_id, review_completeness }) => ({ id, dispatch_id, review_completeness })) });
 }
 
 function createClaudeRoleHost(options = {}) {
   if (!object(options)) reject('host options must be an object');
   let used = false;
-  let partitionExecution;
-  let partitionRunning = false;
   return Object.freeze({
     async run(rawRequest) {
       const parsed = parseRequest(rawRequest);
-      if (parsed.review_contract === roleArtifact.INTEGRATION_REVIEW_V3) {
-        if (partitionRunning || used && !partitionExecution)
-          reject('role host already has an active or different request');
-        if (partitionExecution && partitionExecution.request !== canonicalJson(parsed))
-          reject('restart requires the exact original request', 'INVALID_INPUT');
-        used = true;
-        partitionRunning = true;
-        try {
-          partitionExecution ||= prepareClaudeIntegrationPartitions(options, parsed);
-          return await runClaudeIntegrationPartitions(options, partitionExecution);
-        } finally { partitionRunning = false; }
-      }
       if (used) reject('one role host instance accepts only one request');
       used = true;
       const prepared = prepareInvocation(options, parsed);
-      return prepared.groups?.length > 1 ? runCodeReviewParts(options, prepared) : dispatchRole(options, prepared);
+      return prepared.groups?.length > 1 ? runParts(options, prepared) : dispatchRole(options, prepared);
     },
   });
 }
@@ -2463,13 +2282,11 @@ module.exports = Object.freeze({
   parseCli,
   firstResponseUsage,
   prepareInlineReview: makePrompt,
-  prepareIntegratorContext,
   prepareNativeIntegratorContext,
   createNativeIntegrationMergeProof,
   assertNativeIntegrationMergeProof,
   isPreparedIntegratorContext,
   integrationPacketWithCoverage,
-  integrationStageSchema,
   assertEvidenceOnlyChanges,
   graphStateSnapshot,
   withStateGuard,

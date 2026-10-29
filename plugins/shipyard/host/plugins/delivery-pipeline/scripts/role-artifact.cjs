@@ -4154,7 +4154,7 @@ function legacyStaticOverflow(plan) {
   const minimumInput = renderPartitionInput(plan, aggregatePayload({ plan }, verified));
   const minimumResult = { reviewed_identity: plan.identity, ticket_set: plan.identity.ticket_set,
     coverage: { ...partitionCoverage(plan), seam_dispositions: plan.seams.map(seam => ({ id: seam.id, disposition: '', rationale: '' })) } };
-  return partitionInputBytes(plan, minimumInput, 'phase') > plan.capacity.max_input_bytes || bytes(stable(minimumResult)) > PARTITION_RESULT_LIMIT;
+  return bytes(minimumInput) > plan.capacity.max_input_bytes || bytes(stable(minimumResult)) > PARTITION_RESULT_LIMIT;
 }
 
 function partitionError(message, code = 'INTEGRATION_PARTITION_INVALID') { fail(code, message); }
@@ -4393,12 +4393,6 @@ function partitionProfile(plan) {
   if (stable(plan.capacity) !== stable(compactPartition(plan) ? compactProfile() : observedPartitionProfile())) partitionError('observed mode or operational budget changed');
   return plan.capacity;
 }
-function partitionInputBytes(plan, input, kind) {
-  if (!observedPartition(plan) || plan.runtime !== 'claude') return bytes(input);
-  const schema = require('./claude-role-host.cjs').integrationStageSchema({ kind, subject: plan.subject, input,
-    plan_sha256: plan.plan_sha256, input_sha256: digest(input) });
-  return bytes(JSON.stringify({ type: 'user', message: { role: 'user', content: input } }) + '\n') + bytes(JSON.stringify(schema));
-}
 function partitionCapacityOptions(options) {
   if (!object(options)) partitionError('static all-in capacity is required', 'INTEGRATION_CAPACITY_UNPROVEN');
   const capacity = partitionCopy(options);
@@ -4445,7 +4439,7 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0, localR
     unit.support_segments = [...new Map(context.filter(item => !unit.primary_segments.some(own => stable(own) === stable(item)))
       .map(item => [partitionSegmentId(item), item])).values()];
     return (!observedPartition(plan) || unit.primary_segments.length <= plan.capacity.primary_segments_per_unit)
-      && partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, unit)), 'unit') <= plan.capacity.unit_input_bytes - reservation(unit);
+      && bytes(renderPartitionInput(plan, partitionUnitPayload(plan, unit))) <= plan.capacity.unit_input_bytes - reservation(unit);
   };
   let unit = create();
   for (const source of plan.material) for (const segment of sourceRanges.get(source)) {
@@ -4517,7 +4511,7 @@ function buildPartitionUnits(plan, reservedContextBytes = 0, attempt = 0, localR
       ...plan.governing.filter(id => !candidate.primary_obligation_ids.includes(id)),
       ...plan.seams.filter(seam => candidate.seam_ids.includes(seam.id)).flatMap(seam => seam.required_context)])]
       .filter(id => !candidate.primary_obligation_ids.includes(id));
-    const actualOverflow = partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, candidate)), 'unit') - plan.capacity.unit_input_bytes;
+    const actualOverflow = bytes(renderPartitionInput(plan, partitionUnitPayload(plan, candidate))) - plan.capacity.unit_input_bytes;
     overflow = Math.max(overflow, actualOverflow);
     if (compactPartition(plan) && actualOverflow > 0) {
       const next = reservation(candidate) + actualOverflow;
@@ -4775,7 +4769,7 @@ function prepareIntegrationPartitions({ review, capacity, plan_sha256: previous 
         && item.source_id === source.source_id)).reduce((sum, source) => sum + source.bytes, 0),
       obligation_metadata_bytes: bytes(stable(plan.obligations)), identity_bytes: bytes(stable(plan.identity)),
       units: plan.units.map(unit => ({ unit_id: unit.unit_id,
-        complete_input_bytes: partitionInputBytes(plan, renderPartitionInput(plan, partitionUnitPayload(plan, unit)), 'unit'),
+        complete_input_bytes: bytes(renderPartitionInput(plan, partitionUnitPayload(plan, unit))),
         primary_bytes: unit.primary_segments.reduce((sum, part) => sum + part.end_byte - part.start_byte, 0),
         support_bytes: unit.support_segments.reduce((sum, part) => sum + part.end_byte - part.start_byte, 0) })),
       actual_final_input_bytes: null } } : {}) };
@@ -4851,7 +4845,7 @@ function aggregatePayload(record, verified, reserved = false) {
   return payload;
 }
 function assertPartitionInputBound(plan, input, kind) {
-  if (partitionInputBytes(plan, input, kind) > (kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes)) partitionError('actual complete ' + kind + ' rendered input exceeds static bound; HOLD', 'INTEGRATION_INPUT_OVER_BOUND');
+  if (bytes(input) > (kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes)) partitionError('actual complete ' + kind + ' rendered input exceeds static bound; HOLD', 'INTEGRATION_INPUT_OVER_BOUND');
 }
 function preparePartitionStage(partitions, kind, unitId, dispatchId, verified) {
   const found = partitionPreparations.get(partitions);
@@ -5213,11 +5207,11 @@ function observedPartitionAdmission(record, launch, hash, receiptStore) {
       partitionError('observed assigned complete unit input differs');
   }
   const ceiling = launch.kind === 'unit' ? plan.capacity.unit_input_bytes : plan.capacity.max_input_bytes;
-  if (partitionInputBytes(plan, launch.input, launch.kind) > ceiling) partitionError('actual complete ' + launch.kind + ' input exceeds operational byte bound; HOLD', 'INTEGRATION_INPUT_OVER_BOUND');
+  if (bytes(launch.input) > ceiling) partitionError('actual complete ' + launch.kind + ' input exceeds operational byte bound; HOLD', 'INTEGRATION_INPUT_OVER_BOUND');
   return { schema: 'shipyard.integration-operational-launch.v1', mode: 'native-observed',
     plan_sha256: plan.plan_sha256, launch_sha256: hash, input_sha256: launch.input_sha256,
     profile_sha256: launch.profile_sha256, runtime: launch.runtime, model: launch.model, effort: launch.effort,
-    input_bytes: partitionInputBytes(plan, launch.input, launch.kind), input_byte_ceiling: ceiling, verified_index_sha256: launch.verified_index_sha256,
+    input_bytes: bytes(launch.input), input_byte_ceiling: ceiling, verified_index_sha256: launch.verified_index_sha256,
     receipt_store: receiptStore };
 }
 function admitObservedPartition(stage, owned) {
@@ -5295,189 +5289,7 @@ function nativeObservationSamples(trusted, launch, native, streamRows) {
       groups.set(key, sample);
     }
     samples.push(...groups.values());
-  } else {
-    const terminal = streamRows.at(-1), selected = terminal?.modelUsage;
-    if (streamRows.filter(row => row.type === 'result').length !== 1
-        || terminal?.type !== 'result' || terminal.subtype !== 'success' || terminal.is_error !== false
-        || terminal.stop_reason && !['end_turn', 'tool_use', 'stop_sequence'].includes(terminal.stop_reason)
-        || terminal.session_id !== session || !object(selected)) partitionError('original Claude successful completion/modelUsage is absent');
-    const keys = Object.keys(selected);
-    if (keys.length !== 1 || !require('./runtime-adapters.cjs').matchesModelObservation('claude', keys[0], launch.model)
-        || !require('./runtime-adapters.cjs').matchesModelObservation('claude', keys[0], trusted.receipt.observed_model))
-      partitionError('original Claude selected-model window is foreign or ambiguous');
-    if (!object(selected[keys[0]])) partitionError('original Claude model metadata is malformed');
-    if (selected[keys[0]].canonicalModel !== undefined && selected[keys[0]].canonicalModel !== trusted.receipt.observed_model)
-      partitionError('original Claude canonical model metadata differs');
-    const window = nativeCounter(selected[keys[0]].contextWindow, 'context window', true);
-    const group = rows => {
-      const groups = new Map(), identities = new Map();
-      for (const row of rows) {
-        if (row.type !== 'assistant') continue;
-        const message = row.message;
-        if ((row.sessionId || row.session_id) !== session || row.sessionId && row.sessionId !== session
-            || row.session_id && row.session_id !== session || !object(message) || typeof message.id !== 'string' || !message.id
-            || !require('./runtime-adapters.cjs').matchesModelObservation('claude', message.model, launch.model)
-            || message.model !== trusted.receipt.observed_model)
-          partitionError('original Claude request model/session/message identity differs');
-        if (identities.has(message.id) && identities.get(message.id) !== (row.request_id || null))
-          partitionError('original Claude message belongs to conflicting native requests');
-        identities.set(message.id, row.request_id || null);
-        if (message.stop_reason && !['end_turn', 'tool_use', 'stop_sequence'].includes(message.stop_reason))
-          partitionError('original Claude request was truncated or incomplete');
-        if (message.context_management?.applied_edits?.length || message.context_management?.edits?.length)
-          partitionError('original Claude request removed context');
-        const usages = message.usage?.iterations ?? undefined;
-        if (usages !== undefined && (!Array.isArray(usages) || !usages.length)) partitionError('unsupported Claude per-iteration usage');
-        const records = usages || [message.usage];
-        for (let iteration = 0; iteration < records.length; iteration++) {
-          const usage = records[iteration];
-          if (!object(usage)) partitionError('original Claude per-request usage is absent');
-          if (usages && usage.type !== 'message') partitionError('unsupported or context-removing Claude usage iteration');
-          const counters = Object.fromEntries(['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens']
-            .map(key => [key, nativeCounter(usage[key], key)]));
-          if (usages?.length === 1) {
-            for (const field of Object.keys(counters))
-              if (nativeCounter(message.usage[field], field) !== counters[field])
-                partitionError('inconsistent Claude native single iteration');
-            const topThinking = message.usage.output_tokens_details?.thinking_tokens;
-            if (topThinking !== undefined && (nativeCounter(topThinking, 'included thinking output') > counters.output_tokens
-                || usage.output_tokens_details?.thinking_tokens !== undefined && usage.output_tokens_details.thinking_tokens !== topThinking))
-              partitionError('inconsistent Claude native single iteration thinking');
-          }
-          const thinking = usage.output_tokens_details?.thinking_tokens;
-          if (thinking !== undefined && nativeCounter(thinking, 'included thinking output') > counters.output_tokens)
-            partitionError('original Claude thinking exceeds inclusive output');
-          const key = message.id + (usages ? ':' + iteration : ''), old = groups.get(key);
-          if (old && old.stop_reason && stable(old.counters) !== stable(counters))
-            partitionError('contradictory completed Claude message usage');
-          if (old) for (const field of Object.keys(counters)) counters[field] = Math.max(old.counters[field], counters[field]);
-          nativeOccupancy(Object.values(counters), window);
-          groups.set(key, { request: key, model: message.model, counters, window,
-            stop_reason: message.stop_reason || old?.stop_reason || null, variant: usages ? 'assistant-iterations' : 'assistant-message' });
-        }
-      }
-      return [...groups.values()];
-    };
-    const user = native.rows.findIndex(row => row.type === 'user' && row.sessionId === session
-      && (typeof row.message?.content === 'string' ? row.message.content === launch.input
-        : row.message?.content?.map(block => block.text || '').join('') === launch.input));
-    if (user < 0 || native.rows.some((row, index) => row.type === 'assistant' && index <= user))
-      partitionError('original Claude request usage precedes its assigned input');
-    const partial = streamRows.some(row => row.type === 'assistant' && row.message?.stop_reason == null);
-    const original = group(native.rows), streamed = group(streamRows);
-    const completeConcordance = original.every(sample => sample.stop_reason !== null)
-      && stable(original) === stable(streamed);
-    if (!partial || completeConcordance) {
-      if (stable(original) !== stable(streamed)) partitionError('original Claude native/stream per-request usage differs');
-      samples.push(...original);
-    } else {
-      const fields = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens'];
-      const countersOf = usage => {
-        if (!object(usage)) partitionError('original Claude per-request usage is absent');
-        const counters = Object.fromEntries(fields.map(key => [key, nativeCounter(usage[key], key)]));
-        if (usage.output_tokens_details !== undefined) {
-          if (!object(usage.output_tokens_details)) partitionError('original Claude output details are malformed');
-          const thinking = usage.output_tokens_details.thinking_tokens;
-          if (thinking !== undefined && nativeCounter(thinking, 'included thinking output') > counters.output_tokens)
-            partitionError('original Claude thinking exceeds inclusive output');
-        }
-        if (usage.cache_creation !== undefined) {
-          if (!object(usage.cache_creation)) partitionError('original Claude cache details are malformed');
-          const detail = ['ephemeral_5m_input_tokens', 'ephemeral_1h_input_tokens']
-            .map(key => nativeCounter(usage.cache_creation[key], key));
-          if (detail.reduce((sum, value) => sum + BigInt(value), 0n) !== BigInt(counters.cache_creation_input_tokens))
-            partitionError('original Claude cache details differ from inclusive cache creation');
-        }
-        return counters;
-      };
-      const identity = row => {
-        const message = row.message;
-        if ((row.sessionId || row.session_id) !== session || row.sessionId && row.sessionId !== session
-            || row.session_id && row.session_id !== session || !object(message) || typeof message.id !== 'string' || !message.id
-            || message.model !== trusted.receipt.observed_model
-            || !require('./runtime-adapters.cjs').matchesModelObservation('claude', message.model, launch.model))
-          partitionError('original Claude request model/session/message identity differs');
-        if (row.request_id !== undefined && (typeof row.request_id !== 'string' || !row.request_id))
-          partitionError('original Claude request association is malformed');
-        if (message.context_management?.applied_edits?.length || message.context_management?.edits?.length)
-          partitionError('original Claude request removed context');
-        return message;
-      };
-      const ledger = new Map(), associations = new Map();
-      for (const row of native.rows) {
-        if (row.type !== 'assistant') continue;
-        const message = identity(row), counters = countersOf(message.usage);
-        if (!['end_turn', 'tool_use', 'stop_sequence'].includes(message.stop_reason))
-          partitionError('original Claude native ledger is incomplete');
-        const iterations = message.usage.iterations;
-        if (iterations !== undefined) {
-          if (!Array.isArray(iterations) || iterations.length !== 1 || iterations[0]?.type !== 'message'
-              || stable(countersOf(iterations[0])) !== stable(counters)
-              || iterations[0].output_tokens_details !== undefined && message.usage.output_tokens_details !== undefined
-                && stable(iterations[0].output_tokens_details) !== stable(message.usage.output_tokens_details)
-              || iterations[0].cache_creation !== undefined && message.usage.cache_creation !== undefined
-                && stable(iterations[0].cache_creation) !== stable(message.usage.cache_creation))
-            partitionError('ambiguous or inconsistent Claude native single iteration');
-        }
-        nativeOccupancy(Object.values(counters), window);
-        const sample = { request: message.id, model: message.model, counters, window,
-          stop_reason: message.stop_reason, variant: 'assistant-message' };
-        const entry = { sample, request_id: row.request_id, usage: message.usage };
-        if (ledger.has(message.id) && stable(ledger.get(message.id)) !== stable(entry))
-          partitionError('contradictory completed Claude message usage');
-        ledger.set(message.id, entry);
-        if (row.request_id !== undefined) associations.set(message.id, row.request_id);
-      }
-      const seen = new Set();
-      for (const row of streamRows) {
-        if (row.type !== 'assistant') continue;
-        const message = identity(row), entry = ledger.get(message.id), counters = countersOf(message.usage);
-        if (!entry) partitionError('original Claude stream has foreign message identity');
-        if (row.request_id !== undefined) {
-          if (associations.has(message.id) && associations.get(message.id) !== row.request_id)
-            partitionError('original Claude message belongs to conflicting native requests');
-          associations.set(message.id, row.request_id);
-        }
-        if (message.stop_reason != null) {
-          const iterations = message.usage.iterations;
-          if (message.stop_reason !== entry.sample.stop_reason || stable(counters) !== stable(entry.sample.counters)
-              || iterations !== undefined && (!Array.isArray(iterations) || iterations.length !== 1
-                || iterations[0]?.type !== 'message' || stable(countersOf(iterations[0])) !== stable(counters))
-              || message.usage.output_tokens_details !== undefined && entry.usage.output_tokens_details !== undefined
-                && stable(message.usage.output_tokens_details) !== stable(entry.usage.output_tokens_details)
-              || message.usage.cache_creation !== undefined && entry.usage.cache_creation !== undefined
-                && stable(message.usage.cache_creation) !== stable(entry.usage.cache_creation))
-            partitionError('contradictory completed Claude message usage');
-        } else {
-          if (message.usage.iterations !== undefined || fields.some(key => key === 'output_tokens'
-              ? counters[key] > entry.sample.counters[key] : counters[key] !== entry.sample.counters[key]))
-            partitionError('original Claude partial request counters differ');
-          const thinking = message.usage.output_tokens_details?.thinking_tokens;
-          const completeThinking = entry.usage.output_tokens_details?.thinking_tokens;
-          if (thinking !== undefined && completeThinking !== undefined && thinking > completeThinking)
-            partitionError('original Claude partial thinking exceeds completed output details');
-          if (message.usage.cache_creation !== undefined
-              && stable(message.usage.cache_creation) !== stable(entry.usage.cache_creation))
-            partitionError('original Claude partial cache details differ');
-        }
-        seen.add(message.id);
-      }
-      if (!ledger.size || seen.size !== ledger.size) partitionError('original Claude stream is missing native requests');
-      const totals = fields.map(key => [...ledger.values()].reduce((sum, entry) => sum + BigInt(entry.sample.counters[key]), 0n));
-      const modelFields = ['inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens', 'outputTokens'];
-      if (!object(terminal.usage)) partitionError('original Claude terminal usage is absent');
-      countersOf(terminal.usage);
-      for (let index = 0; index < fields.length; index++) {
-        if (totals[index] !== BigInt(nativeCounter(terminal.usage[fields[index]], fields[index]))
-            || totals[index] !== BigInt(nativeCounter(selected[keys[0]][modelFields[index]], modelFields[index])))
-          partitionError('original Claude terminal/model usage does not corroborate complete ledger');
-      }
-      if (selected[keys[0]].thinkingTokens !== undefined
-          && BigInt(nativeCounter(selected[keys[0]].thinkingTokens, 'included model thinking output')) > totals[3])
-        partitionError('original Claude model thinking exceeds inclusive output');
-      samples.push(...[...ledger.values()].map(entry => entry.sample));
-    }
-  }
+  } else partitionError('only original Codex native observation is supported');
   if (!samples.length) partitionError('original native per-request usage/window observation is absent');
   return samples;
 }

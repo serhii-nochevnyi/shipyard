@@ -19,8 +19,8 @@ const artifactOwner = path.resolve(__dirname, root + 'role-artifact.cjs');
 const measured = new Module(artifactOwner, module);
 measured.filename = artifactOwner;
 measured.paths = Module._nodeModulePaths(path.dirname(artifactOwner));
-measured._compile(fs.readFileSync(artifactOwner, 'utf8') + '\nmodule.exports = { partitionSegments, partitionInputBytes, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactBinding, compactReviewedIdentity, compactAggregatePayload, buildPartitionUnits, observedPartitionProfile, compactProfile, partitionUnitPayload, renderPartitionInput, partitionHash, partitionCoverage, assertPartitionCoverage, partitionPlanRecord, assertPartitionInputBound, partitionResult };', artifactOwner);
-const { partitionSegments, partitionInputBytes, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactBinding, compactReviewedIdentity, compactAggregatePayload, buildPartitionUnits, observedPartitionProfile, compactProfile, partitionUnitPayload, renderPartitionInput, partitionHash, partitionCoverage, assertPartitionCoverage, partitionPlanRecord, assertPartitionInputBound, partitionResult } = measured.exports;
+measured._compile(fs.readFileSync(artifactOwner, 'utf8') + '\nmodule.exports = { partitionSegments, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactBinding, compactReviewedIdentity, compactAggregatePayload, buildPartitionUnits, observedPartitionProfile, compactProfile, partitionUnitPayload, renderPartitionInput, partitionHash, partitionCoverage, assertPartitionCoverage, partitionPlanRecord, assertPartitionInputBound, partitionResult };', artifactOwner);
+const { partitionSegments, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactBinding, compactReviewedIdentity, compactAggregatePayload, buildPartitionUnits, observedPartitionProfile, compactProfile, partitionUnitPayload, renderPartitionInput, partitionHash, partitionCoverage, assertPartitionCoverage, partitionPlanRecord, assertPartitionInputBound, partitionResult } = measured.exports;
 const MiB = 1024 * 1024;
 const stable = require(root + 'model-policy-internal.cjs').stableStringify;
 function endpoints(f, sources, provider = 'exports.value = 2;\n') {
@@ -37,7 +37,7 @@ function endpoints(f, sources, provider = 'exports.value = 2;\n') {
 }
 function prepare(f, runtime) {
   const options = projectOptions(f);
-  const context = claude.prepareNativeIntegratorContext(options, { worktree: f.worktree, phase: '49', review_contract: 'shipyard.integration-review.v3' });
+  const context = claude.prepareNativeIntegratorContext(options, { worktree: f.worktree, phase: '49' });
   let instructionBinding, generatedInstructionBytes;
   if (runtime === 'codex') {
     const installed = agent(f, 'integrator', context.signals);
@@ -46,12 +46,6 @@ function prepare(f, runtime) {
     instructionBinding = { agent_file: installed.selection.agent_file,
       agent_path: path.join(installed.dir, installed.selection.agent_file), agent_sha256: instructions.sha256,
       installed_files: instructions.installed_files, policy_hash: installed.selection.policy_hash };
-  } else {
-    const referencePath = require(root + 'claude-reference-content.cjs').REFERENCE_PATHS.integrator;
-    const reference = fs.readFileSync(referencePath);
-    generatedInstructionBytes = reference.length;
-    instructionBinding = { agent_file: path.basename(referencePath), agent_path: referencePath,
-      agent_sha256: hash(reference), installed_files: [], policy_hash: require(root + 'model-policy.cjs').POLICY_HASH };
   }
   const scope = { worktree: f.worktree, phase: 49, ticket: context.ticket, run_id: 'impact-' + runtime + ++f.count };
   return delivery.prepareIntegrationLineage(scope, context, { ...options, nativeRuntime: runtime,
@@ -266,4 +260,4 @@ async function assertCompactOriginalRefused(runtime, mutate, expected, extra = {
   });
 }
 
-module.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, phaseBinding, projectOptions, write, git, commit, agent, claude, delivery, collector, roleArtifact, hash, stable, MiB, partitionSegments, partitionInputBytes, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactBinding, compactReviewedIdentity, compactAggregatePayload, buildPartitionUnits, observedPartitionProfile, compactProfile, partitionUnitPayload, renderPartitionInput, partitionHash, partitionCoverage, assertPartitionCoverage, partitionPlanRecord, assertPartitionInputBound, partitionResult, endpoints, prepare, originalCompactFixtureAnswer, addCompactPressure, expandCompactIdentity, independentTables, independentEdges, independentDomain, substantiveFixtureNarrative, assertCompactOriginalRefused };
+module.exports = { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, phaseBinding, projectOptions, write, git, commit, agent, claude, delivery, collector, roleArtifact, hash, stable, MiB, partitionSegments, compactInteractionDomain, compactPair, compactStaticTables, compactDomainJudgments, compactBinding, compactReviewedIdentity, compactAggregatePayload, buildPartitionUnits, observedPartitionProfile, compactProfile, partitionUnitPayload, renderPartitionInput, partitionHash, partitionCoverage, assertPartitionCoverage, partitionPlanRecord, assertPartitionInputBound, partitionResult, endpoints, prepare, originalCompactFixtureAnswer, addCompactPressure, expandCompactIdentity, independentTables, independentEdges, independentDomain, substantiveFixtureNarrative, assertCompactOriginalRefused };

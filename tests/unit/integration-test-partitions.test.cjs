@@ -15,10 +15,10 @@ const ownerName = path.basename(owner);
 const checkName = path.basename(__filename);
 const source = fs.readFileSync(owner, 'utf8');
 const shards = require('./shard-files.cjs');
-const counts = [1, 1, 19, 19, 24, 21];
+const counts = [1, 8, 9, 9, 9, 9];
 const taskKeys = [1, 2, 3, 4, 5, 6].map(number => ownerName + '#integration-partition=' + number);
 const suffixAnchor = "const assert = require('node:assert/strict');";
-const suffixDigest = '74e568cb47742eb297bb49ba093880f457f54f1e335642cd37a4dc9f161aac3d';
+const suffixDigest = '1ccf2333467d40bb4c74041ead4586515a4ff9a6ff962b4235c56cc399171ff7';
 assert.equal(crypto.createHash('sha256').update(source.slice(source.indexOf(suffixAnchor))).digest('hex'), suffixDigest);
 function discover(args = []) {
   const result = spawnSync(process.execPath, [owner, '--list-integration-tests', ...args], {
@@ -47,7 +47,7 @@ function capture(args = [], main = true, bytes = source) {
 test('actual default registrations are exactly the disjoint nonempty six-partition union', () => {
   const actual = capture();
   const names = actual.map(item => item.name);
-  assert.equal(names.length, 85);
+  assert.equal(names.length, 45);
   assert.equal(new Set(names).size, names.length);
   assert.deepEqual(discover(), names);
   const partitions = counts.map((count, index) => {
@@ -63,9 +63,7 @@ test('actual default registrations are exactly the disjoint nonempty six-partiti
   });
   assert.deepEqual(partitions.flat().sort(), [...names].sort());
   assert.equal(new Set(partitions.flat()).size, names.length);
-  for (const [index, runtime] of ['codex', 'claude'].entries()) {
-    assert.deepEqual(partitions[index], names.filter(name => name.startsWith('D36 ' + runtime + ' aggregate ')));
-  }
+  assert.deepEqual(partitions[0], names.filter(name => name.startsWith('D36 codex aggregate ')));
   assert.ok(partitions[2].includes('D36 codex ingress actual ASCII unit and fresh final retain original producer across cold readers'));
   assert.ok(partitions[3].includes('D36 codex geometry phase-shaped complete governing floor fits with at most three primary segments'));
 });
@@ -161,9 +159,8 @@ test('node --test name patterns select actual registered names through default a
   try {
     for (const [partition, pattern] of [
       [null, '^D36 codex aggregate '], [1, '^D36 codex aggregate '],
-      [2, '^D36 claude aggregate '], [3, '^D36 codex ingress actual ASCII unit '],
+      [2, '^D36 codex ingress actual public stage '], [3, '^D36 codex ingress actual ASCII unit '],
       [4, '^D36 codex geometry phase-shaped '],
-      [5, '^D36 claude geometry phase-shaped '],
       [6, '^D36 codex positive observed caller '],
       [null, '^supported .* final preserves planted cross-unit mismatch:'],
     ]) {

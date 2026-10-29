@@ -16,59 +16,23 @@ if (require.main === module) {
 const integrationRegisteredNames = new Set();
 const integrationSelectedNames = [];
 const integrationPartitionEntries = Object.freeze([
-  ["D36 claude aggregate refuses the complete actual final over bound and preserves accepted originals", 2],
-  ["D36 claude contracts refuses acceptance before authority", 3],
-  ["D36 claude contracts refuses changed-effort before authority", 3],
-  ["D36 claude contracts refuses final-completion before authority", 3],
-  ["D36 claude contracts refuses final-index before authority", 6],
-  ["D36 claude contracts refuses foreign-session before authority", 5],
-  ["D36 claude contracts refuses incomplete-unit before authority", 6],
-  ["D36 claude contracts refuses input-drift before authority", 4],
-  ["D36 claude contracts refuses needs-fix-unit before authority", 5],
-  ["D36 claude contracts refuses primary-duplicate before authority", 3],
-  ["D36 claude contracts refuses primary-tail before authority", 6],
-  ["D36 claude contracts refuses seam before authority", 4],
-  ["D36 claude contracts refuses semantic-disagreement before authority", 5],
-  ["D36 claude contracts refuses support before authority", 3],
-  ["D36 claude geometry phase-shaped complete governing floor fits with at most three primary segments", 5],
-  ["D36 claude positive cumulative accounting above a window preserves fitting per-request samples", 5],
-  ["D36 claude positive observed caller authenticates complete originals and cold current authority", 6],
-  ["D36 claude signals refuses answer-text-telemetry before authority", 6],
-  ["D36 claude signals refuses compaction before authority", 4],
-  ["D36 claude signals refuses final-telemetry before authority", 5],
-  ["D36 claude signals refuses foreign-model before authority", 5],
-  ["D36 claude signals refuses malformed-usage before authority", 4],
-  ["D36 claude signals refuses missing before authority", 5],
-  ["D36 claude signals refuses missing-counter before authority", 3],
-  ["D36 claude signals refuses missing-window before authority", 3],
-  ["D36 claude signals refuses negative-counter before authority", 6],
-  ["D36 claude signals refuses negative-window before authority", 4],
-  ["D36 claude signals refuses overflow-later before authority", 5],
-  ["D36 claude signals refuses quoted-telemetry before authority", 3],
-  ["D36 claude signals refuses rate-only before authority", 3],
-  ["D36 claude signals refuses rollback before authority", 6],
-  ["D36 claude signals refuses tool-telemetry before authority", 4],
-  ["D36 claude signals refuses truncation before authority", 5],
-  ["D36 claude signals refuses unsafe-counter before authority", 3],
-  ["D36 claude signals refuses unsafe-window before authority", 5],
-  ["D36 claude signals refuses zero-window before authority", 6],
   ["D36 codex aggregate refuses the complete actual final over bound and preserves accepted originals", 1],
   ["D36 codex contracts refuses acceptance before authority", 3],
-  ["D36 codex contracts refuses changed-effort before authority", 4],
+  ["D36 codex contracts refuses changed-effort before authority", 2],
   ["D36 codex contracts refuses final-completion before authority", 3],
-  ["D36 codex contracts refuses final-index before authority", 4],
-  ["D36 codex contracts refuses foreign-session before authority", 6],
-  ["D36 codex contracts refuses incomplete-unit before authority", 4],
-  ["D36 codex contracts refuses input-drift before authority", 5],
+  ["D36 codex contracts refuses final-index before authority", 2],
+  ["D36 codex contracts refuses foreign-session before authority", 2],
+  ["D36 codex contracts refuses incomplete-unit before authority", 2],
+  ["D36 codex contracts refuses input-drift before authority", 2],
   ["D36 codex contracts refuses needs-fix-unit before authority", 3],
-  ["D36 codex contracts refuses primary-duplicate before authority", 6],
-  ["D36 codex contracts refuses primary-tail before authority", 4],
+  ["D36 codex contracts refuses primary-duplicate before authority", 2],
+  ["D36 codex contracts refuses primary-tail before authority", 2],
   ["D36 codex contracts refuses seam before authority", 4],
   ["D36 codex contracts refuses semantic-disagreement before authority", 6],
   ["D36 codex contracts refuses support before authority", 3],
   ["D36 codex geometry phase-shaped complete governing floor fits with at most three primary segments", 4],
   ["D36 codex ingress actual ASCII unit and fresh final retain original producer across cold readers", 3],
-  ["D36 codex ingress actual public stage rejects changed or unowned oversized launches before any process", 5],
+  ["D36 codex ingress actual public stage rejects changed or unowned oversized launches before any process", 2],
   ["D36 codex ingress supplied strict public caller retains the legacy static prompt guard", 5],
   ["D36 codex positive cumulative accounting above a window preserves fitting per-request samples", 3],
   ["D36 codex positive observed caller authenticates complete originals and cold current authority", 6],
@@ -92,10 +56,6 @@ const integrationPartitionEntries = Object.freeze([
   ["D36 codex signals refuses unsafe-window before authority", 6],
   ["D36 codex signals refuses zero-window before authority", 6],
   ["actual final caller and reviewer reference require trusted preparation and fresh complete coverage", 4],
-  ["supported claude final preserves planted cross-unit mismatch: contradictory-pass", 6],
-  ["supported claude final preserves planted cross-unit mismatch: incomplete", 6],
-  ["supported claude final preserves planted cross-unit mismatch: needs-fix", 5],
-  ["supported claude v3 caller reaches normal final consumer with linked canonical planning", 5],
   ["supported codex final preserves planted cross-unit mismatch: contradictory-pass", 6],
   ["supported codex final preserves planted cross-unit mismatch: incomplete", 4],
   ["supported codex final preserves planted cross-unit mismatch: needs-fix", 5],
@@ -103,8 +63,8 @@ const integrationPartitionEntries = Object.freeze([
   ["unknown integration and dictionary versions fail closed while v1 full input stays supported", 5]
 ]);
 const integrationPartitions = Object.freeze(Object.fromEntries(integrationPartitionEntries));
-const integrationPartitionCounts = [1, 1, 19, 19, 24, 21];
-if (integrationPartitionEntries.length !== 85 || Object.keys(integrationPartitions).length !== integrationPartitionEntries.length
+const integrationPartitionCounts = [1, 8, 9, 9, 9, 9];
+if (integrationPartitionEntries.length !== 45 || Object.keys(integrationPartitions).length !== integrationPartitionEntries.length
   || integrationPartitionCounts.some((count, index) =>
     Object.values(integrationPartitions).filter(partition => partition === index + 1).length !== count))
   throw new Error('Invalid integration partition map');
@@ -197,7 +157,7 @@ test('unknown integration and dictionary versions fail closed while v1 full inpu
       worktree: f.worktree, phase: '49', review_contract: 'shipyard.integration-review.v9' }), /unsupported/);
     const request = { role: 'integrator', signals: {}, dispatch_id: 'legacy-full', context: {
       review_contract: 'shipyard.integration-review.v1', prompt: 'Complete legacy integration review.' } };
-    const full = secondRuntime.prepareIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: '49' });
+    const full = secondRuntime.prepareNativeIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: '49' });
     const a = agent(f, 'integrator', {});
     assert.equal(delivery.prepareIntegratorInput({ worktree: f.worktree, ticket: full.ticket, phase: 49, run_id: 'legacy-full' },
       request, { agentDir: a.dir, agentManifest: a.manifest, capabilities: a.capabilities, graphDir: f.graphDir }), null);
@@ -280,30 +240,6 @@ if (args[1] === 'list' && args.includes('--head')) {
     ({ options } = codexPartitionFixture(f,
       { projectOptions, agent, template, parent, cli, serialize }, controls));
     options.recorder = recorder;
-  } else {
-    const { fakeRuntimeFactory, claudePartitionCapacity } = partitionFixtureFunctions('claude-role-host.test.cjs',
-      ['fakeRuntimeFactory', 'claudePartitionCapacity'], {
-        stable: require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify,
-        livePr: () => f.pr, createDurableRecorder: boundary.createDurableRecorder,
-      });
-    const original = { root: f.worktree, kind: 'integrator', storageRoot: path.join(f.root, 'claude-public') };
-    options = { ...projectOptions(f), storageRoot: original.storageRoot,
-      integrationCapacity: claudePartitionCapacity(original, controls),
-      createRuntimeHost: fakeRuntimeFactory(original, { originalStream: true,
-        observedTelemetry: controls.observed === true,
-        mutateObservation: (rows, stream, final) => controls.observation?.(rows, stream, final),
-        onLaunch(input) {
-          const payload = JSON.parse(input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
-          (controls.launches ||= []).push({ input, payload });
-          controls.onLaunch?.(input, payload);
-        }, mutateResult: (result, payload) => controls.result?.(result, payload) }) };
-    const createRuntimeHost = options.createRuntimeHost;
-    options.createRuntimeHost = input => {
-      const host = createRuntimeHost(input);
-      recorder = host.recorder;
-      return host;
-    };
-    options.integrationCapacity.recorder = recorder;
   }
   options.integrationCapacity.capacity.unit_input_bytes = 128 * 1024;
   if (controls.observed) delete options.integrationCapacity;
@@ -327,7 +263,6 @@ async function supportedPartitionCaller(f, nativeRuntime, options) {
   const snippet = section.match(/```javascript\n([\s\S]*?)\n\s*```/)[1];
   let preliminary = 0;
   const supportedRequire = file => file.endsWith('/claude-role-host.cjs') ? { ...secondRuntime,
-    prepareIntegratorContext() { assert.fail('preliminary legacy full-inline formatting is forbidden'); },
     prepareNativeIntegratorContext(...args) {
       preliminary++;
       const prepared = secondRuntime.prepareNativeIntegratorContext(...args);
@@ -405,7 +340,7 @@ function originalPartitionSessions(f, nativeRuntime, recorder, controls) {
   return sessions;
 }
 
-for (const nativeRuntime of ['codex', 'claude']) {
+for (const nativeRuntime of ['codex']) {
   test('supported ' + nativeRuntime + ' v3 caller reaches normal final consumer with linked canonical planning', async () => {
     await publicIntegrationFixture(async f => {
       write(f.worktree, 'src/unchanged.cjs', '// complete current context Ω\n'.repeat(3000));
@@ -610,7 +545,7 @@ function currentInput(f, role, dispatchId = 'current-' + role + '-' + ++f.count)
         agent_sha256: instructions.sha256, agent_path: path.join(a.dir, a.selection.agent_file),
         installed_files: instructions.installed_files } });
   }
-  const complete = secondRuntime.prepareIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: String(49) });
+  const complete = secondRuntime.prepareNativeIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: String(49) });
   f.lastIntegrator = complete;
   const a = agent(f, role, complete.signals);
   const instructions = collector.instructionEvidence(a.dir, a.selection.agent_file, a.manifest);
@@ -738,7 +673,7 @@ async function successfulReview(f, role, options = {}) {
     host: { requireRuntimeEvidence: true, launchStatic: () => launched }, capabilities: a.capabilities });
   const dispatched = boundary.createDispatchBoundary({ adapters: { codex: adapter }, recorder }).dispatch(
     { runtime: 'codex', role, dispatch_id: dispatchId, signals: value?.launch.signals
-      || secondRuntime.prepareIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: '49' }).signals },
+      || secondRuntime.prepareNativeIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: '49' }).signals },
     { ticket: scope.ticket, ...(role === 'arch-review' ? { subject_kind: 'phase' } : {}) });
   let sealed;
   if (value) {
@@ -769,7 +704,7 @@ function d36Telemetry(runtimeName, rows, stream) {
     : (stream || rows).find(row => row.type === 'assistant').message.usage;
 }
 
-for (const nativeRuntime of ['codex', 'claude']) {
+for (const nativeRuntime of ['codex']) {
   test('D36 ' + nativeRuntime + ' positive observed caller authenticates complete originals and cold current authority', async () => {
     await publicIntegrationFixture(async f => {
       write(f.worktree, 'src/unchanged.cjs', 'exports.primary = "complete source continuation Ω";\n'.repeat(6500));
@@ -1186,7 +1121,7 @@ test('D36 codex ingress supplied strict public caller retains the legacy static 
   });
 });
 
-for (const nativeRuntime of ['codex', 'claude'])
+for (const nativeRuntime of ['codex'])
 test('D36 ' + nativeRuntime + ' geometry phase-shaped complete governing floor fits with at most three primary segments', async () => {
   await publicIntegrationFixture(async f => {
     const governing = 'Required complete plan context: every assigned range preserves this material.\n'.repeat(2250);
@@ -1221,7 +1156,7 @@ test('D36 ' + nativeRuntime + ' geometry phase-shaped complete governing floor f
   });
 });
 
-for (const nativeRuntime of ['codex', 'claude'])
+for (const nativeRuntime of ['codex'])
 test('D36 ' + nativeRuntime + ' aggregate refuses the complete actual final over bound and preserves accepted originals', async () => {
   await publicIntegrationFixture(async f => {
     for (let index = 0; index < 139; index++)
