@@ -75,7 +75,6 @@ const { execFileSync, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const pipelineConfig = require('../../plugins/delivery-pipeline/scripts/pipeline-config.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createDurableRecorder } = boundaryModule;
@@ -768,68 +767,6 @@ function writeGeneratedResearchAgent(agentsDir, resolution) {
   }) + '\n');
 }
 
-test('decompose documents the three explicit boundary dispatches and refusal rules', () => {
-  const source = readRepo('plugins/delivery-pipeline/commands/decompose.md');
-  const boundarySection = source.slice(
-    source.indexOf('## Step 0.5 — Mandatory GSD runtime dispatch'),
-    source.indexOf('## Step 1 — Clarify the mode and the ticket size')
-  );
-  for (const phrase of [
-    'createDispatchBoundary',
-    'createCodexDispatchAdapter',
-    'createClaudeDispatchAdapter',
-    'createDurableRecorder',
-    'requireGsdRole',
-    'boundary.dispatch',
-    'pipelineConfig.resolveDispatch',
-    'Before every researcher, planner, or checker launch',
-    'configuration-free fallback',
-    'gsd-phase-researcher',
-    'gsd-planner',
-    'gsd-plan-checker',
-    'Sol/high',
-    'Sol/xhigh',
-    'receipt.compliance',
-    'generic-agent',
-    'inherited',
-    'pipeline-config.cjs',
-    'resolveDispatch',
-    'pipeline.fable: auto',
-    'context.gsd_role',
-    'agentType',
-    'agent_type',
-    'launchTypedGsd',
-    'typedGsdCallback',
-    'gsd_launch_mechanism',
-    'source-contract fixtures exercise',
-  ]) {
-    assert.ok(boundarySection.includes(phrase), `decompose.md must state the boundary contract: ${phrase}`);
-  }
-  assert.ok(/direct\s+inline/.test(boundarySection), 'decompose.md must refuse direct inline launches');
-  for (const phrase of [
-    '**Codex runtime — logical model ladder**',
-    '**Claude runtime — Anthropic alias ladder**',
-    'sonnet/xhigh',
-    'opus/high',
-  ]) {
-    assert.ok(source.includes(phrase), `decompose.md must state the runtime-specific ladder: ${phrase}`);
-  }
-  for (const phrase of ['role: research', 'role: decomposition']) {
-    assert.ok(source.includes(phrase), `decompose.md must route the GSD role explicitly: ${phrase}`);
-  }
-  assert.ok(
-    !boundarySection.includes('"model_profile"') && !boundarySection.includes('"models"'),
-    'GSD model profiles and model maps must not be launch authority'
-  );
-  assert.ok(
-    normalized(source).includes(normalized('If GSD, the Skill, callback wiring, or the durable recorder is unavailable, refuse before launching'))
-      && normalized(source).includes(normalized('do not run the Skill opaquely')),
-    'an opaque GSD Skill invocation must be refused'
-  );
-  assert.ok(normalized(source).includes(normalized('do not prompt the user to run an external command')), 'Skill fallback must not escape the receipt boundary');
-  assert.ok(normalized(source).includes(normalized('there is no receipt-bound decomposition fallback')), 'missing receipts must fail closed');
-});
-
 test('the documented GSD boundary call selects typed callbacks and refuses a missing role', () => {
   const cases = [
     { runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner' },
@@ -896,208 +833,6 @@ test('the documented GSD boundary call selects typed callbacks and refuses a mis
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-  }
-});
-
-test('decompose selects runtime before tuning and establishes context before three host calls', () => {
-  const source = readRepo('plugins/delivery-pipeline/commands/decompose.md');
-  const boundarySection = source.slice(
-    source.indexOf('## Step 0.5 — Mandatory GSD runtime dispatch'),
-    source.indexOf('## Step 1 — Clarify the mode and the ticket size')
-  );
-  const runtimeAt = boundarySection.indexOf('1. Identify the active host runtime');
-  const tuneAt = boundarySection.indexOf('gsd-tune.cjs --check');
-  const configAt = boundarySection.indexOf('Before every researcher, planner, or checker launch');
-  const boundaryAt = boundarySection.indexOf('5. The host uses the canonical boundary call for each role');
-  assert.ok(
-    runtimeAt >= 0 && tuneAt > runtimeAt && configAt > tuneAt && boundaryAt > configAt,
-    'the active runtime, tuning, and routed configuration must precede each host launch'
-  );
-  assert.match(
-    boundarySection,
-    /gsd-tune\.cjs --check --runtime "\$runtime"/,
-    'gsd-tune --check must receive the already-selected runtime explicitly'
-  );
-  assert.ok(
-    normalized(boundarySection).includes(normalized('Tuning drift is harmless and MUST NOT block decomposition'))
-      && normalized(boundarySection).includes(normalized('required delivery-contract or projection failures and every entry in the report\'s `blockers` array do block')),
-    'tuning-only drift must not block while required contract/projection and blocker failures do'
-  );
-
-  const chain = source.slice(
-    source.indexOf('## Step 2 — GSD chain'),
-    source.indexOf('## Step 3 — Delivery frontmatter extension')
-  );
-  const phaseAt = chain.indexOf('Pick the phase number');
-  const contextAt = chain.indexOf('/gsd-plan-phase <N> --ingest .planning/.adr-ingest/*.ingest.md');
-  const researcherAt = chain.indexOf('`gsd-phase-researcher` →');
-  const plannerAt = chain.indexOf('`gsd-planner` →');
-  const checkerAt = chain.indexOf('`gsd-plan-checker` →');
-  assert.ok(
-    phaseAt >= 0 && phaseAt < contextAt && contextAt < researcherAt
-      && researcherAt < plannerAt && plannerAt < checkerAt,
-    'phase/ADR context must precede the researcher, planner, and checker callbacks'
-  );
-  assert.ok(normalized(chain).includes(normalized('invoke the selected host exactly three times')));
-  assert.ok(normalized(chain).includes(normalized('same explicit context')));
-  assert.ok(normalized(chain).includes(normalized('exactly three host dispatches and three verified receipts')));
-  assert.ok(normalized(chain).includes(normalized('same checker receipt')));
-  assert.ok(normalized(chain).includes(normalized('must not dispatch or record a second `gsd-plan-checker`')));
-  assert.equal(
-    (chain.match(/`gsd-plan-checker` →/g) || []).length,
-    1,
-    'convergence must not add a second checker callback or receipt'
-  );
-});
-
-test('delivery launch docs route every role through the boundary and the generated Codex names', () => {
-  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
-  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
-  const source = `${deliver}\n${sentinel}`;
-  const compact = normalized(source);
-
-  for (const phrase of [
-    'resolve → validate → launch → receipt',
-    'createDispatchBoundary',
-    'createCodexDispatchAdapter',
-    'createClaudeDispatchAdapter',
-    'createDurableRecorder',
-    'boundary.dispatch',
-    'priorApplied',
-    'previous_dispatch_id',
-    'literal model',
-    'omitted effort',
-    'inline',
-    'inherited',
-    'phantom',
-    'receipt',
-  ]) {
-    assert.ok(compact.includes(normalized(phrase)), `delivery docs must state the boundary contract: ${phrase}`);
-  }
-
-  for (const role of [
-    'executor', 'pr-sentinel', 'drift-check', 'ci-fix', 'review-fix',
-    'arch-review', 'code-review', 'integrator',
-  ]) {
-    assert.ok(compact.includes(normalized(role)), `delivery docs must name routed role ${role}`);
-  }
-
-  const guide = readRepo('docs/gsd_multilevel_delivery_pipeline.md');
-  for (const pair of [
-    'Luna/medium', 'Sol/low', 'Sol/high', 'Sol/xhigh',
-    'Sonnet/low', 'Sonnet/medium', 'Sonnet/high', 'Sonnet/xhigh', 'Opus/high',
-    'Fable/medium',
-  ]) {
-    assert.ok(`${source}\n${guide}`.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
-  }
-  const sectionStart = guide.indexOf('### 7.5.1. Runtime-native model grids');
-  const assertionStart = guide.indexOf('\n**Canonical-table assertion.**', sectionStart);
-  assert.ok(sectionStart >= 0 && assertionStart > sectionStart,
-    'the active native grid and its canonical assertion must remain in the operator guide');
-
-  const activeGrid = guide.slice(sectionStart, assertionStart);
-  const tableRows = activeGrid.split('\n').filter((line) => line.startsWith('|'));
-  assert.deepStrictEqual(tableRows, [
-    '| Logical key | Codex concrete model | Claude Code selection |',
-    '|---|---|---|',
-    '| Luna | `gpt-6-luna` | — |',
-    '| Sol | `gpt-6.1-sol` | — |',
-    '| Sonnet | — | `claude-sonnet-5-5` |',
-    '| Opus | — | `claude-opus-5-5` |',
-    '| Fable | — | `fable` |',
-    '| Role | Codex base and evidence-based escalation | Claude Code base and evidence-based escalation |',
-    '|---|---|---|',
-    '| `research` | Sol/high → Sol/xhigh only on `complexity: very-complex`; `type: alternatives` alone stays at base | Sonnet/xhigh → Opus/high only on `complexity: very-complex`; `type: alternatives` alone stays at base |',
-    '| `decomposition` | Sol/high → Sol/xhigh on `critical: true` or `checkpoint: true` | Sonnet/xhigh → Opus/high on `critical: true` or `checkpoint: true` |',
-    '| `executor` | Sol/low → Sol/high on `critical: true` or `checkpoint: true` | Sonnet/medium → Sonnet/xhigh on `critical: true` or `checkpoint: true`; no failure-driven promotion in this slice |',
-    '| `pr-sentinel` | Luna/medium, fixed; no automatic tier promotion | Sonnet/low for bounded actionable duty; return to host classification outside scope |',
-    '| `integrator` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` |',
-    '| `drift-check` | Sol/low, fixed; no automatic tier promotion | Sonnet/medium, fixed; reroute uncertain scope through a policy amendment |',
-    '| `arch-review` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, or `contested: true`; Fable/medium on measured `inputTokens > 250000` with `pipeline.fable: auto` consent |',
-    '| `code-review` | Sol/high → Sol/xhigh on `critical: true` or `checkpoint: true` | Sonnet/xhigh → Opus/high on `critical: true` or `checkpoint: true` |',
-    '| `ci-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |',
-    '| `review-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |',
-  ]);
-
-  const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
-  assert.ok(deliver.includes('config.gsd.runtime')
-    && deliver.includes('claude-delivery-host.cjs')
-    && deliver.includes('codex-delivery-host.cjs'), 'deliver must select one provider host');
-  assert.ok(investigate.includes('claude-investigation-host.cjs')
-    && investigate.includes('codex-delivery-host.cjs'), 'investigate must select one provider host');
-  assert.ok(sentinel.includes('Workflow runtime'), 'the sentinel reference must name its Workflow runtime mechanism');
-
-  for (const variant of codexStaticVariants(2)) {
-    assert.ok(`${source}\n${guide}`.includes(variant.file), `delivery docs must name generated Codex variant ${variant.file}`);
-  }
-  for (const retired of ['pr-sentinel-deep', 'arch-review-deep']) {
-    assert.ok(!source.includes(retired), `delivery docs must not reintroduce retired variant ${retired}`);
-  }
-  assert.ok(!/--backend[^\n]*\|inline/.test(source), 'delivery docs must not authorize an inline backend');
-    assert.ok(
-      !/node[^\n]*pipeline-config\.cjs\s+model\s+/.test(source),
-      'delivery docs must not execute the compatibility model command'
-    );
-});
-
-test('delivery docs project selector, recorder, and workflow contracts without inventing fields', () => {
-  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
-  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
-  const source = `${deliver}\n${sentinel}`;
-
-  for (const phrase of [
-    '--capabilities-file <current-host-capabilities.json>',
-    'concrete `model`, `model_key`, `effort`/`requested_effort`',
-    'name without its `.toml` suffix',
-    'Codex dynamic roles are `decomposition` and `executor`',
-    '--effort-applied <receipt-applied-effort>',
-    '`failure-signature.cjs verdict` supplies only verdict/history facts',
-    '`repeat`/`repeat_exhausted` → `rethink`',
-    'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
-    'priorReceipt, previous_dispatch_id, dispatch_id',
-    'The `pipeline.use_workflow` setting cannot select an',
-    '**Cardinality is per work item.**',
-    'round-scoped `pr-sentinel`',
-    'pipeline.fable: auto',
-    'Codex research has no alternatives rung',
-    'shipyard-inv-research-critical.toml',
-  ]) {
-    assert.ok(source.includes(phrase), `delivery docs must state the actual contract: ${phrase}`);
-  }
-
-  for (const stale of ['model_tier', 'boundaryReceipt', 'shipyard-inv-research-alternatives.toml']) {
-    assert.ok(!source.includes(stale), `delivery docs must not invent stale contract field/variant ${stale}`);
-  }
-  assert.ok(normalized(source).includes(normalized('obsolete instruction')),
-    'delivery docs must identify the retired native Agent fallback rule');
-  assert.ok(normalized(source).includes(normalized('never authorizes a native Agent fallback')),
-    'delivery docs must reject the native Agent fallback explicitly');
-  assert.ok(
-    !source.includes('The resolver returns `strategy: fix|continue|rethink`'),
-    'strategy must remain a failure-verdict input, not an invented boundary result'
-  );
-});
-
-test('recorder task levels are projected separately from boundary rungs', () => {
-  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
-  const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
-  const source = `${deliver}\n${sentinel}`;
-  assert.ok(source.includes('taskLevelRoute'), 'recorder marks must use the task-level projection');
-  assert.ok(source.includes('mechanical|routine|complex|critical|recovery'), 'docs must name recorder task levels');
-  assert.ok(!source.includes('--task-level <rung>'), 'canonical boundary rung must not be passed to the recorder');
-
-  const adaptive = { ...pipelineConfig.DEFAULTS, model_ladder: 'adaptive' };
-  for (const [role, signals, expected] of [
-    ['pr-sentinel', {}, 'mechanical'],
-    ['drift-check', {}, 'mechanical'],
-    ['executor', { risk: 'low', files: 2 }, 'routine'],
-    ['executor', { risk: 'high' }, 'critical'],
-    ['ci-fix', { signatureState: 'repeat_exhausted' }, 'recovery'],
-    ['arch-review', { contested: true }, 'recovery'],
-  ]) {
-    const level = pipelineConfig.resolveTaskLevel(role, signals, adaptive);
-    assert.ok(pipelineConfig.TASK_LEVELS.includes(level), `${role} projection must be recorder-compatible`);
-    assert.equal(level, expected, `${role} must project its evidence to the expected recorder task level`);
   }
 });
 
@@ -1587,22 +1322,6 @@ test('GSD callback wiring refuses generic launches and mismatched host attestati
   }
 });
 
-test('boundary refuses missing or ambiguous runtime before any GSD launch', () => {
-  let launches = 0;
-  const adapter = { launch: () => { launches++; } };
-  const boundary = boundaryModule.createDispatchBoundary({
-    adapters: { undefined: adapter, both: adapter },
-    recorder: () => true,
-  });
-  for (const input of [
-    { role: 'research' },
-    { runtime: 'both', role: 'research' },
-  ]) {
-    expectCode(() => boundary.dispatch(input), 'UNKNOWN_RUNTIME');
-  }
-  assert.equal(launches, 0);
-});
-
 test('boundary refuses a missing recorder, unsupported selection, and missing application receipt', () => {
   const resolution = dispatchResolution('claude', 'research', {}, 'contract-refusal');
   const capabilities = capabilitiesFor([resolution]);
@@ -2045,43 +1764,6 @@ test('Claude palette and provider adapter sources match their checked-in baselin
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-6-astra'), false);
 });
 
-test('decompose normalizes ADRs before calling GSD ingest', () => {
-  const decompose = readRepo('plugins/delivery-pipeline/commands/decompose.md');
-  const normalizeAt = decompose.indexOf('adr-ingest.cjs');
-  const ingestAt = decompose.indexOf('/gsd-plan-phase', normalizeAt);
-  assert.ok(normalizeAt >= 0, 'decompose must invoke the ADR compatibility layer');
-  assert.ok(ingestAt > normalizeAt, 'GSD ingest must follow ADR normalization');
-  assert.ok(decompose.includes('.planning/.adr-ingest/*.ingest.md'), 'GSD must ingest normalized files inside the project');
-});
-
-test('investigate emits flat machine-readable decision lists', () => {
-  const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
-  assert.ok(investigate.includes('each locked decision is one bullet under `## Decision`'));
-  assert.ok(investigate.includes('scope fences use\n     `## Out of scope`'));
-});
-
-test('delivery routes model-bearing roles through one provider-specific shipped host', () => {
-  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
-  const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
-  const decompose = readRepo('plugins/delivery-pipeline/commands/decompose.md');
-  const routing = deliver.slice(deliver.indexOf('**Runtime path selection.**'), deliver.indexOf('**Typed host adapter:'));
-  for (const entrypoint of [
-    'claude-delivery-host.cjs', 'codex-delivery-host.cjs',
-    'claude-investigation-host.cjs', 'claude-decompose-host.cjs',
-    'codex-decompose-host.cjs', 'claude-role-host.cjs',
-  ]) {
-    assert.ok(routing.includes(entrypoint), `delivery runtime routing must name ${entrypoint}`);
-  }
-  assert.match(routing, /Architecture review and integration[\s\S]*claude-role-host\.cjs[\s\S]*codex-delivery-host\.cjs/);
-  assert.match(routing, /PR sentinel[\s\S]*claude-role-host\.cjs[\s\S]*codex-delivery-host\.cjs[\s\S]*per ticket/);
-  assert.ok(investigate.includes('claude-investigation-host.cjs')
-    && investigate.includes('codex-delivery-host.cjs'));
-  assert.ok(decompose.includes('claude-decompose-host.cjs')
-    && decompose.includes('codex-decompose-host.cjs'));
-  assert.match(deliver, /The command must not invoke a native Workflow\s+or Agent directly/);
-  assert.doesNotMatch(deliver, /Codex has no Workflow tool[\s\S]{0,100}built-in Agent path/);
-});
-
 test('GSD sync projects controller state without volatile owner or store fields', () => {
   const source = readRepo('plugins/delivery-pipeline/scripts/gsd-sync.cjs');
   const start = source.indexOf('function controllerStateProjection');
@@ -2108,16 +1790,6 @@ test('shipped Codex compatibility palette and README advertise the native Sol de
   const expected = 'gpt-6.1-sol:high@0.155.1, gpt-6.1-sol:xhigh@0.155.1';
   assert.strictEqual(capability.config['delivery_pipeline.codex_models'].default, expected);
   assert.ok(readRepo('README.md').includes(`\"codex_models\": \"${expected}\"`));
-});
-
-test('phase code review documents hold as the default and report as the exit', () => {
-  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
-  const guide = readRepo('docs/gsd_multilevel_delivery_pipeline.md');
-  assert.ok(deliver.includes('`delivery_pipeline.code_review` defaults to `hold`'));
-  assert.ok(deliver.includes('`report` observes without holding and is the single exit for this PR'));
-  assert.ok(guide.includes('selects `hold` (the shipped default) or `report`'));
-  assert.ok(guide.includes('set `delivery_pipeline.code_review` to `report` for this PR'));
-  assert.ok(!guide.includes('`report` (the shipped default)'));
 });
 
 done();

@@ -217,7 +217,7 @@ const REPOSITORY = path.join(__dirname, '..', '..');
 const configured = JSON.parse(fs.readFileSync(path.join(REPOSITORY, '.planning', 'config.json'), 'utf8'))
   .delivery_pipeline.verification_commands.default;
 
-test('every configured verification command has a known shape', () => {
+test('every configured verification command has a known shape and names only files that exist', () => {
   assert.ok(configured.length > 0);
   for (const entry of configured) {
     const label = entry.argv.join(' ');
@@ -225,6 +225,9 @@ test('every configured verification command has a known shape', () => {
     assert.ok(['node', 'bash', 'make'].includes(entry.argv[0]), label);
     assert.ok(['host', 'sandbox'].includes(entry.profile), label);
     assert.ok(Number.isInteger(entry.timeout_s) && entry.timeout_s > 0, label);
+    for (const part of entry.argv.filter((item) => ['tests/', 'scripts/', 'plugins/'].some((prefix) => item.startsWith(prefix)))) {
+      assert.ok(fs.existsSync(path.join(REPOSITORY, part)), `${label} names a missing file: ${part}`);
+    }
   }
 });
 
