@@ -10,7 +10,6 @@ const test = require('node:test');
 const dispatch = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { defaultRunStoreDir, readRequestFile } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
-const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 
 const HOST = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
 const CAPTURED_SHA256 = 'de94a486861cedd3587db16ba051e5c5bf80e0ab05fa44ed50ad48688e6f8b4c';
@@ -199,27 +198,6 @@ function waitOptions(f) {
   };
 }
 
-function retainedCallerAccounting(f, id, options = {}) {
-  const planningHost = require('../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs');
-  const stream = path.join(f.graph, overhead.STREAM_NAME);
-  const before = fs.existsSync(stream) ? fs.readFileSync(stream) : null;
-  const accounting = planningHost.readWaitAccounting({ scope: f.scope, dispatchId: id, graphDir: f.graph }, {
-    testStateRoot: path.join(f.home, '.local', 'state', 'shipyard', 'codex-decompose'), ...options,
-  });
-  assert.equal(accounting.missing_evidence, null);
-  assert.equal(accounting.run_id, f.scope.run_id);
-  assert.equal(accounting.dispatch_id, id);
-  assert.equal(accounting.graph_dir, f.graph);
-  assert.ok(!accounting.sink.startsWith(f.root + path.sep));
-  assert.ok(accounting.parent_rows.length > 0, 'real blocking waiter retains external parent rows');
-  assert.ok(accounting.parent_rows.every(row => row.dispatch_id === id && row.run_id === f.scope.run_id
-    && row.actor === 'parent' && row.stage === 'wait_poll' && row.counts.polls === 1
-    && row.counts.model_turns === null && row.provider_tokens === null));
-  assert.deepEqual(fs.existsSync(stream) ? fs.readFileSync(stream) : null, before, 'reporting leaves graph bytes unchanged');
-  assert.ok(!overhead.readStream(f.graph).rows.some(row => row.actor === 'parent'));
-  return accounting;
-}
-
 for (const includeDispatchId of [true, false]) {
 test(`detached decomposition preserves ${includeDispatchId ? 'explicit' : 'omitted'} dispatch identity through wait`, async () => {
   const f = createFixture({ includeDispatchId });
@@ -299,17 +277,6 @@ test(`detached decomposition preserves ${includeDispatchId ? 'explicit' : 'omitt
     assert.equal(foregroundResult.receipt.runtime_evidence.native_child_evidence.agent_role,
       waited.result.receipt.runtime_evidence.native_child_evidence.agent_role);
 
-    const childRow = overhead.readStream(f.graph).rows.find((row) => row.actor === 'child');
-    assert.ok(childRow, 'the verified detached child records model evidence');
-    assert.equal(childRow.dispatch_id, f.dispatchId);
-    assert.equal(childRow.model, waited.result.receipt.observed_model);
-    assert.equal(childRow.effort, waited.result.receipt.observed_effort);
-    assert.equal(childRow.requested_model, waited.result.receipt.requested_model);
-    assert.equal(childRow.observed_model, waited.result.receipt.observed_model);
-    const report = overhead.report({ graphDir: f.graph });
-    assert.equal(report.verdict, 'inconclusive');
-    assert.equal(Object.keys(report).some((key) => /percent/i.test(key)), false);
-
     let tick = 0;
     const timedOut = await dispatch.waitOnce(f.dispatchId, {
       ...waitOptions(f), pidLive: () => true, timeoutMs: 20, intervalMs: 10,
@@ -368,7 +335,7 @@ function planningRequest(f) {
 }
 
 for (const includeDispatchId of [true, false]) {
-  test(`supported planning caller blocks and measures the original ${includeDispatchId ? 'explicit' : 'generated'} dispatch`, () => {
+  test(`supported planning caller blocks on the original ${includeDispatchId ? 'explicit' : 'generated'} dispatch`, () => {
     const f = createFixture({ includeDispatchId });
     try {
       const contextPacket = planningRequest(f);
@@ -385,16 +352,6 @@ for (const includeDispatchId of [true, false]) {
       const copied = JSON.parse(fs.readFileSync(path.join(f.stateDir, id, 'args.json'), 'utf8'));
       assert.equal(copied.dispatch_id, id);
       assert.ok(copied.prompt.includes(JSON.stringify(contextPacket)));
-      const accounting = retainedCallerAccounting(f, id);
-      const rows = [...accounting.child_rows, ...accounting.parent_rows];
-      const parent = accounting.parent_rows;
-      assert.ok(parent.length > 0, 'real blocking waiter emits parent rows');
-      assert.ok(parent.every((row) => row.dispatch_id === id && row.run_id === f.scope.run_id
-        && row.stage === 'wait_poll' && row.counts.polls === 1));
-      const child = rows.find((row) => row.actor === 'child');
-      assert.equal(child.dispatch_id, id);
-      assert.equal(child.counts.model_turns, null);
-      assert.equal(accounting.report.verdict, 'inconclusive');
     } finally { f.clean(); }
   });
 }
@@ -431,17 +388,9 @@ test('actual caller timeout resumes the original child with frozen context and a
     assert.equal(completed.receipt.dispatch_id, f.dispatchId);
     assert.equal(launches, 1);
     assert.deepEqual(fs.readFileSync(context), frozen);
-    const accounting = retainedCallerAccounting(f, f.dispatchId, options);
-    const rows = [...accounting.child_rows, ...accounting.parent_rows];
-    assert.ok(rows.some((row) => row.actor === 'parent'));
-    const before = rows.length;
     const repeated = await planningHost.runCli(['--args-file', f.request], { write() {} }, options);
     assert.equal(repeated.receipt.dispatch_id, f.dispatchId);
     assert.equal(launches, 1);
-    const repeatedAccounting = retainedCallerAccounting(f, f.dispatchId, options);
-    assert.equal(repeatedAccounting.child_rows.length + repeatedAccounting.parent_rows.length, before,
-      'terminal re-wait adds no observer');
-    assert.deepEqual(repeatedAccounting.parent_rows, accounting.parent_rows);
     // Keep the authentic stored receipt intact while testing a foreign readable result.
     const resultFile = path.join(f.stateDir, f.dispatchId, 'result.jsonl');
     fs.writeFileSync(resultFile, JSON.stringify({ ...completed,

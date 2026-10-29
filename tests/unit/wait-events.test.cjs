@@ -382,6 +382,43 @@ test('CLI observe and pending share the graph-derived run id by default', () => 
   assert.ok(JSON.parse(pending.stdout).action_id, 'the transition is addressable by the shared default');
 });
 
+test('a selected treatment is persisted, an unknown one is refused, and a switch keeps the pending action', () => {
+  const waitEvents = loadWaitEvents();
+  const graphDir = graph();
+  const ctx = context(graphDir);
+  const pendingChecks = { checks: [{ name: 'build', state: 'IN_PROGRESS', bucket: 'pending' }] };
+  const failedChecks = { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] };
+  const recorded = () => Object.values(store(graphDir).records)[0].treatments;
+
+  waitEvents.observe({ ...ctx, observation: pendingChecks, treatments: { wait_events: 'opt-06', bounded_context: 'baseline' } }, { now: 1000 });
+  assert.deepEqual(recorded(), { wait_events: 'opt-06', bounded_context: 'baseline' });
+
+  const refused = waitEvents.observe({ ...ctx, observation: pendingChecks, treatments: { wait_events: 'opt-99' } }, { now: 1500 });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, 'INVALID_TREATMENT');
+
+  const changed = waitEvents.observe({ ...ctx, observation: failedChecks, treatments: { wait_events: 'opt-06', bounded_context: 'baseline' } }, { now: 2000 });
+  assert.ok(changed.action);
+  const switched = waitEvents.observe({ ...ctx, observation: failedChecks, treatments: { wait_events: 'baseline', bounded_context: 'opt-07' } }, { now: 2200 });
+  assert.equal(switched.pending_action.action_id, changed.action.action_id, 'switching treatment cannot erase an unacknowledged action');
+  assert.deepEqual(recorded(), { wait_events: 'baseline', bounded_context: 'opt-07' });
+
+  const file = path.join(graphDir, 'wait-events.json');
+  const raw = store(graphDir);
+  Object.values(raw.records)[0].treatments = { wait_events: 'on', bounded_context: 'baseline' };
+  fs.writeFileSync(file, JSON.stringify(raw));
+  assert.equal(waitEvents.pending(ctx, { now: 2300 }).code, 'STORE_MALFORMED', 'a non-canonical stored treatment refuses');
+
+  const cliGraph = graph();
+  const observationFile = path.join(path.dirname(cliGraph), 'observation.json');
+  fs.writeFileSync(observationFile, JSON.stringify(pendingChecks));
+  const run = spawnSync(process.execPath, [SCRIPT, 'observe', '--graph', cliGraph, '--ticket', 'T-33-01', '--repository', 'acme/widgets',
+    '--pr', '101', '--head', 'head-a', '--observation-file', observationFile, '--wait-treatment', 'opt-06', '--context-treatment', 'opt-07'],
+  { encoding: 'utf8', timeout: 10000 });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(Object.values(store(cliGraph).records)[0].treatments, { wait_events: 'opt-06', bounded_context: 'opt-07' });
+});
+
 test('duplicate acknowledgment is idempotent and leaves no pending action', () => {
   const waitEvents = loadWaitEvents();
   const graphDir = graph();

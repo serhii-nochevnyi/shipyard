@@ -377,10 +377,8 @@ test('checkpoint, successor startup, and cache warm-up are recorded as separate 
     assert.deepEqual(rows.map((row) => row.stage).sort(), [
       'cache_warmup', 'checkpoint_collection', 'successor_startup',
     ]);
-    const report = recorder.report({ experiment_id: 'handoff-costs' });
-    assert.equal(report.metrics.checkpoint_collection_estimated_tokens.sum, 30);
-    assert.equal(report.metrics.successor_startup_estimated_tokens.sum, 90);
-    assert.equal(report.metrics.cache_warmup_estimated_tokens.sum, 20);
+    assert.deepEqual(Object.fromEntries(rows.map((row) => [row.stage, row.estimated_tokens])),
+      { checkpoint_collection: 30, successor_startup: 90, cache_warmup: 20 });
   } finally {
     clean(graph);
   }

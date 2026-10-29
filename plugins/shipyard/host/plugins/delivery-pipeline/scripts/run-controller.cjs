@@ -275,18 +275,6 @@ function createRunController(options = {}) {
     return authority;
   }
 
-  function handleFor(record) {
-    const value = {
-      run_id: record.run.run_id,
-      owner_id: record.owner.owner_id,
-      lease_id: record.owner.lease_id,
-      epoch: record.owner.epoch,
-    };
-    const authority = authorityFor(record.run.run_id);
-    if (authority) Object.defineProperty(value, 'authority', { value: authority, enumerable: false });
-    return Object.freeze(value);
-  }
-
   function currentSession(record, now, { allowCheckpointed = false } = {}) {
     const session = authorities.get(record.run.run_id);
     if (!session) refuse('HOST_AUTHORITY_REQUIRED', 'the controller has no process-local host authority for this run');

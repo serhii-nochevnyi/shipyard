@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
-const { normalizeTreatment, recordMeasurement } = require(path.join(__dirname, 'orchestration-overhead.cjs'));
+const { normalizeTreatment } = require(path.join(__dirname, 'orchestration-overhead.cjs'));
 
 const SCHEMA_VERSION = 1;
 const STORE_NAME = 'wait-events.json';
@@ -460,52 +460,6 @@ function treatmentInput(input) {
   catch (error) { return { error }; }
 }
 
-function waitMeasurement(input, result, recorder) {
-  if (!recorder || !result || !result.ok) return { recorded: false, skipped: 'no-recorder-or-result' };
-  const record = result.record || {};
-  const pollId = input.measurement_id || input.measurementId
-    || `wait-poll:${record.run_id || input.run_id}:${record.ticket || input.ticket}:${record.window_id || 'default'}:${record.observed_at || result.observation_digest}`;
-  return recordMeasurement(recorder, {
-    observation_id: pollId,
-    run_id: record.run_id || input.run_id,
-    dispatch_id: input.dispatch_id || input.dispatchId || null,
-    role: input.role || 'waiter',
-    runtime: input.runtime || 'controller',
-    backend: input.backend || 'controller',
-    policy_hash: input.policy_hash || input.policyHash || null,
-    treatment: result.treatments || input.treatments || input.treatment,
-    stage: 'wait_poll',
-    source: 'wait-events',
-    bytes: 0,
-    estimated_tokens: null,
-    provider_tokens: null,
-    evidence: 'wait-event',
-    counts: { polls: 1, model_turns: null, tool_calls: null },
-  });
-}
-
-function deliveredActionMeasurement(input, result, recorder) {
-  if (!recorder || !result || !result.action_id) return { recorded: false, skipped: 'no-recorder-or-action' };
-  const record = result.record || {};
-  return recordMeasurement(recorder, {
-    observation_id: `delivery-action:${result.action_id}`,
-    run_id: record.run_id || input.run_id,
-    dispatch_id: result.dispatch_id || result.action_id,
-    role: input.role || 'waiter',
-    runtime: input.runtime || 'controller',
-    backend: input.backend || 'controller',
-    policy_hash: input.policy_hash || input.policyHash || null,
-    treatment: record.treatments || input.treatments || input.treatment,
-    stage: 'ordinary_input',
-    source: 'wait-events',
-    bytes: 0,
-    estimated_tokens: null,
-    provider_tokens: null,
-    evidence: 'controller',
-    counts: { polls: null, model_turns: null, tool_calls: null },
-  });
-}
-
 function observe(input = {}, io = {}) {
   const identity = identityOf(input, io);
   if (!validIdentity(identity)) return refusal('INVALID_IDENTITY', 'run_id, ticket and PR are required; no event was written');
@@ -641,13 +595,6 @@ function observe(input = {}, io = {}) {
         record: clone(record),
       };
     });
-    if (result && result.ok) {
-      try {
-        result.measurement = waitMeasurement(input, result, input.overheadRecorder || input.overhead && input.overhead.recorder);
-      } catch (error) {
-        return refusal('MEASUREMENT_WRITE_FAILED', `could not persist wait measurement: ${error.message}`);
-      }
-    }
     return result;
   } catch (error) {
     return refusal('STORE_WRITE_FAILED', `could not persist wait event: ${error.message}`);
@@ -692,13 +639,6 @@ function pending(input = {}, io = {}) {
         record: clone(record),
       };
     });
-    if (result && result.action_id) {
-      try {
-        result.measurement = deliveredActionMeasurement(input, result, input.overheadRecorder || input.overhead && input.overhead.recorder);
-      } catch (error) {
-        return refusal('MEASUREMENT_WRITE_FAILED', `could not persist delivered-action measurement: ${error.message}`);
-      }
-    }
     return result;
   } catch (error) {
     return refusal('STORE_READ_FAILED', `could not consume pending wait event: ${error.message}`);
@@ -865,7 +805,6 @@ function observePublished(input = {}, io = {}) {
         eligibility: published.front,
         ...(input.treatments === undefined && input.treatment === undefined
           ? {} : { treatments: input.treatments === undefined ? input.treatment : input.treatments }),
-        ...(input.overheadRecorder ? { overheadRecorder: input.overheadRecorder } : {}),
       };
       return observe(merged, io);
     });
@@ -938,8 +877,6 @@ module.exports = Object.freeze({
   canonicalObservation,
   digest,
   observe,
-  waitMeasurement,
-  deliveredActionMeasurement,
   pending,
   acknowledge,
   readPublished,

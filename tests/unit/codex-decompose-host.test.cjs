@@ -21,7 +21,6 @@ const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/s
 const { captureContainmentBaseline } = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
 const { createCodexRuntimeHost } = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
 const { runDecomposition: runClaudeDecomposition } = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
-const orchestrationOverhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 const { repositoryIdentity } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 const {
   createCodexDecomposeHost, defaultRunStoreDir, parseCliArguments, parseRecoverArguments, readRequestFile, requestValue, runCli,
@@ -512,62 +511,6 @@ for (const mode of ['active', 'corrupt']) {
     } finally { f.clean(); }
   });
 }
-
-test('child telemetry collector failure warns without leaking collector details or changing the verified result', async () => {
-  const f = fixture();
-  const gsdRole = 'gsd-planner';
-  const fixtureData = buildNativeChildFixture(gsdRole);
-  const clock = manualClock(Date.now());
-  const heartbeat = manualHeartbeat();
-  try {
-    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
-      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
-    const file = path.join(f.root, 'telemetry-failure-request.json');
-    fs.writeFileSync(file, JSON.stringify({
-      scope: f.scope, gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Check this phase plan.',
-    }));
-    const stdout = [];
-    const stderr = [];
-    const secret = 'api_key=collector-secret';
-    const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
-      clock.advance(50);
-      heartbeat.fire();
-    });
-    const result = await runCli(['--args-file', file], { write(value) { stdout.push(value); } }, {
-      env: { CODEX_HOME: f.codexHome },
-      agentDir: f.agentDir,
-      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
-      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
-      leaseTtlMs: 1000,
-      now: clock,
-      heartbeat: heartbeat.scheduler,
-      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
-      spawn,
-      overheadRecorder: { record() { throw new Error(secret); } },
-      stderr: { write(value) { stderr.push(value); } },
-    });
-    assert.equal(result.receipt.compliance, 'verified');
-    assert.deepEqual(JSON.parse(stdout.join('')), result);
-    assert.deepEqual(stderr, [
-      'preflight: ok\npreflight: note legacy history: not evaluated, no graph directory\n',
-      'codex-decompose-host: child model telemetry collection failed\n',
-    ]);
-    assert.equal(JSON.stringify({ result, stdout, stderr }).includes(secret), false);
-    const storeDir = defaultRunStoreDir(f.scope, f.stateRoot);
-    const receipts = createDurableRecorder(path.join(path.dirname(storeDir), 'receipts'));
-    assert.deepEqual(receipts.getVerifiedRecord(result.receipt.dispatch_id).receipt, result.receipt);
-  } finally { f.clean(); }
-});
-
-test('multi-turn child telemetry consumes the real measured planning waiter', async () => {
-  const measured = await measuredPlanningFixture();
-  const rows = measured.rows;
-  const children = rows.filter((row) => row.actor === 'child');
-  assert.equal(children.length, 1);
-  assert.equal(children[0].dispatch_id, measured.result.receipt.dispatch_id);
-  assert.deepEqual(children[0].counts, { polls: null, model_turns: null, tool_calls: null, retries: null });
-  assert.ok(rows.some((row) => row.actor === 'parent' && row.counts.polls === 1));
-});
 
 const CAPTURED_SHA256 = 'de94a486861cedd3587db16ba051e5c5bf80e0ab05fa44ed50ad48688e6f8b4c';
 
@@ -2068,7 +2011,6 @@ test('recover argv is exact', () => {
   assert.throws(() => parseRecoverArguments(['recover', '--dispatch', 'd-1']), (error) => error.code === 'INVALID_INPUT');
 });
 
-const MEASURED_HOST = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
 function measuredGit(root, ...args) {
   const result = spawnSync('git', ['-C', root, '-c', 'commit.gpgsign=false', '-c', 'user.name=t',
     '-c', 'user.email=t@example.invalid', ...args], { encoding: 'utf8' });
@@ -2295,21 +2237,11 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
     const originalId = result.receipt.dispatch_id;
     pid = JSON.parse(fs.readFileSync(path.join(f.stateDir, originalId, 'record.json'))).pid;
     assert.equal(launches, 1);
-    const accounting = planning.readWaitAccounting({ scope: f.scope, dispatchId: originalId, graphDir: f.graph }, options);
-    const graphRows = orchestrationOverhead.readStream(f.graph).rows;
-    const rows = [...graphRows, ...accounting.parent_rows];
-    assert.ok(accounting.parent_rows.length > 0);
-    assert.ok(!accounting.sink.startsWith(f.root + path.sep));
-    assert.equal(graphRows.some(row => row.actor === 'parent'), false);
     const request = JSON.parse(fs.readFileSync(f.request));
     fs.writeFileSync(f.request, JSON.stringify({ ...request, dispatch_id: originalId }));
     const repeated = await planning.runCli(['--args-file', f.request], { write() {} }, options);
     assert.equal(repeated.receipt.dispatch_id, originalId);
     assert.equal(launches, 1);
-    assert.deepEqual(orchestrationOverhead.readStream(f.graph).rows, graphRows);
-    assert.deepEqual(planning.readWaitAccounting({ scope: f.scope, dispatchId: originalId, graphDir: f.graph }, options).parent_rows, accounting.parent_rows);
-    assert.equal(new Set(rows.map(row => row.observation_id)).size, rows.length);
-    assert.ok(rows.every(row => row.dispatch_id === originalId && row.run_id === f.scope.run_id));
     const record = JSON.parse(fs.readFileSync(path.join(f.stateDir, originalId, 'record.json')));
     const original = fs.readFileSync(record.result);
     for (const status of ['blocked', 'verification_failed']) {
@@ -2322,8 +2254,6 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
       error => error.code === 'DISPATCH_UNAVAILABLE');
     fs.writeFileSync(record.result, original);
     assert.equal(launches, 1);
-    assert.deepEqual(orchestrationOverhead.readStream(f.graph).rows, graphRows);
-    assert.deepEqual(planning.readWaitAccounting({ scope: f.scope, dispatchId: originalId, graphDir: f.graph }, options).parent_rows, accounting.parent_rows);
     const store = defaultRunStoreDir(f.scope, options.testStateRoot);
     const authenticated = createDurableRecorder(path.join(path.dirname(store), 'receipts')).getVerifiedRecord(originalId);
     assert.deepEqual(authenticated.receipt, result.receipt);
@@ -2331,7 +2261,7 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
     const transcript = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
       String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'),
       'rollout-' + f.data.childId + '.jsonl');
-    return { rows, result, authenticated, accounting, childTranscript: fs.readFileSync(transcript, 'utf8') };
+    return { result, authenticated, childTranscript: fs.readFileSync(transcript, 'utf8') };
   } finally {
     if (pid && delivery.pidLive(pid)) { try { process.kill(pid, 'SIGTERM'); } catch {} }
     f.clean();
@@ -2341,12 +2271,9 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
 module.exports = { measuredPlanningFixture };
 
 for (const input of [{ includeDispatchId: false }, { timeout: true }]) {
-  test('supported contained caller preserves external accounting through ' + (input.timeout ? 'timeout/resume' : 'generated identity'), async () => {
+  test('supported contained caller completes with an authenticated receipt through ' + (input.timeout ? 'timeout/resume' : 'generated identity'), async () => {
     const measured = await measuredPlanningFixture(input);
-    assert.equal(measured.accounting.dispatch_id, measured.result.receipt.dispatch_id);
-    assert.equal(measured.accounting.missing_evidence, null);
-    assert.equal(measured.accounting.savings, 'inconclusive');
-    assert.ok(measured.rows.some(row => row.actor === 'parent' && row.evidence === 'wait-event'));
+    assert.equal(measured.authenticated.receipt.dispatch_id, measured.result.receipt.dispatch_id);
   });
 }
 
@@ -2360,7 +2287,7 @@ for (const mutation of ['SOURCE', 'GRAPH']) test('supported caller keeps origina
     const options = { stateDir: f.stateDir, env: { ...f.env, ['MOCK_MUTATE_' + mutation]: '1' },
       probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
       testStateRoot: path.join(f.home, '.local/state/shipyard/codex-decompose'),
-      waitOptions: measuredWaitOptions(f), onWaitAccounting() {} };
+      waitOptions: measuredWaitOptions(f) };
     await assert.rejects(planning.runCli(['--args-file', f.request], { write() {} }, options),
       error => error.code === 'DISPATCH_UNAVAILABLE');
     const original = JSON.parse(fs.readFileSync(path.join(f.stateDir, f.dispatchId, 'record.json')));
@@ -2375,9 +2302,6 @@ for (const mutation of ['SOURCE', 'GRAPH']) test('supported caller keeps origina
     assert.deepEqual(fs.readFileSync(path.join(f.stateDir, f.dispatchId, 'args.json')), copied);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.stateDir, f.dispatchId, 'record.json'))), original);
     assert.equal(recorder.getVerifiedRecord(f.dispatchId), null);
-    const accounting = planning.readWaitAccounting({ scope: f.scope, dispatchId: f.dispatchId, graphDir: f.graph }, options);
-    assert.ok(accounting.parent_rows.length > 0);
-    assert.equal(orchestrationOverhead.readStream(f.graph).rows.some(row => row.actor === 'parent'), false);
   } finally {
     if (pid && dispatch.pidLive(pid)) { try { process.kill(pid, 'SIGTERM'); } catch {} }
     f.clean();

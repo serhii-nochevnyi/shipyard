@@ -328,11 +328,6 @@ function explicitCodexHome(env, flags) {
   return nonEmpty(flags && flags.codexHome) || (env && nonEmpty(env.CODEX_HOME)) || null;
 }
 
-function explicitCapabilitiesFile(env, flags) {
-  return nonEmpty(flags && flags.capabilitiesFile)
-    || (env && nonEmpty(env.SHIPYARD_CODEX_CAPABILITIES_FILE)) || null;
-}
-
 function sameFile(candidate, expectedFile, expectedDigest) {
   const physical = physicalPath(candidate);
   if (physical && physical === physicalPath(expectedFile)) return true;

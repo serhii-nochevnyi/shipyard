@@ -628,7 +628,6 @@ test('the previous-generation reader is derived internally and cannot be caller-
   }));
   execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
   const record = require(RECORD);
-  assert.deepStrictEqual(Object.keys(record.activePreviousTrackers(graph)), ['T-01']);
   assert.deepStrictEqual(Object.keys(record.activeRecords(graph)), ['T-02']);
   assert.deepStrictEqual(record.activeRecords(graph, 1), record.activeRecords(graph));
 });
@@ -643,14 +642,14 @@ test('the front snapshot combines only the current and publisher-backed predeces
   }));
   execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
   const record = require(RECORD);
-  assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshot(graph)), ['T-01', 'T-02']);
+  assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshotLocked(graph)), ['T-01', 'T-02']);
   const isolated = scratch(1);
   execFileSync('node', markArgs(isolated.graph, 'T-01', 'MYD-1'), { cwd: isolated.project });
   fs.writeFileSync(path.join(isolated.graph, 'delivery-state-meta.json'), JSON.stringify({
     generation: 2,
     previous_generation_identity: 'different-publication-epoch',
   }));
-  assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshot(isolated.graph)), []);
+  assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshotLocked(isolated.graph)), []);
 });
 
 test('the predecessor bridge does not carry a direct override into the next generation', () => {
@@ -666,8 +665,7 @@ test('the predecessor bridge does not carry a direct override into the next gene
   }));
   execFileSync('node', markArgs(graph, 'T-02', 'MYD-2'), { cwd: project });
   const record = require(RECORD);
-  assert.deepStrictEqual(Object.keys(record.activePreviousTrackers(graph)), []);
-  assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshot(graph)), ['T-02']);
+  assert.deepStrictEqual(Object.keys(record.activeTrackerSnapshotLocked(graph)), ['T-02']);
 });
 
 test('the state-sync publish reader excludes a current-generation override', () => {
@@ -679,7 +677,7 @@ test('the state-sync publish reader excludes a current-generation override', () 
   const record = require(RECORD);
   assert.ok(record.activeRecords(graph)['T-01'], 'the ordinary reader honors the current override');
   assert.deepStrictEqual(
-    record.activeTrackersForPublish(graph),
+    record.activeTrackersForPublishLocked(graph),
     {},
     'the next published snapshot must not extend the override by one generation'
   );
@@ -700,7 +698,7 @@ test('an invalid current-generation record fences the predecessor fallback', () 
     pipeline: { jira_todo_statuses: 'To Do' },
   }));
   const record = require(RECORD);
-  assert.deepStrictEqual(record.activeTrackerSnapshot(graph), {});
+  assert.deepStrictEqual(record.activeTrackerSnapshotLocked(graph), {});
 });
 
 test('a malformed or missing metadata file never falls back to the advisory front generation', () => {

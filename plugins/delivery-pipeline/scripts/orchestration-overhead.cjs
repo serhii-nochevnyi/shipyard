@@ -11,10 +11,7 @@ const { withLock } = require('./lock.cjs');
 
 const SCHEMA_VERSION = 1;
 const STREAM_NAME = 'orchestration-overhead.jsonl';
-const REPORT_SCHEMA = 'shipyard.orchestration-overhead-report.v1';
 const ESTIMATOR_VERSION = 'utf8-bytes-div4-v1';
-const DEFAULT_MIN_COMPLETED = 20;
-const DEFAULT_ATTRIBUTION_TARGET = 0.95;
 const TREATMENT_KEYS = Object.freeze(['wait_events', 'bounded_context']);
 const TREATMENT_VALUES = Object.freeze({
   wait_events: new Set(['baseline', 'opt-06']),
@@ -408,16 +405,6 @@ function recordMeasurement(recorder, value) {
   return recorder.record(value);
 }
 
-function recordWaitPoll(recorder, value = {}) {
-  if (!object(value)) fail('INVALID_OBSERVATION', 'wait poll must be an object');
-  return recordMeasurement(recorder, {
-    ...value,
-    actor: 'parent',
-    stage: 'wait_poll',
-    evidence: 'wait-event',
-  });
-}
-
 function recordHandoffCost(recorder, value = {}) {
   if (!object(value)) fail('INVALID_OBSERVATION', 'handoff cost must be an object');
   if (!HANDOFF_COST_STAGES.has(value.stage)) {
@@ -428,6 +415,12 @@ function recordHandoffCost(recorder, value = {}) {
     evidence: value.evidence === undefined ? 'controller' : value.evidence,
     source: value.source === undefined ? 'session-handoff' : value.source,
   });
+}
+
+function sumField(rows, getter) {
+  if (!rows.length) return null;
+  return rows.every((row) => Number.isSafeInteger(getter(row)))
+    ? rows.reduce((total, row) => total + getter(row), 0) : null;
 }
 
 function handoffCostSummary(rows) {
@@ -456,256 +449,6 @@ function handoffCostSummary(rows) {
   };
 }
 
-function recordModelEvidence(recorder, value = {}) {
-  if (!object(value)) fail('INVALID_OBSERVATION', 'model evidence must be an object');
-  const stage = value.stage || 'model_turn';
-  if (!['model_turn', 'tool_call'].includes(stage)) fail('INVALID_OBSERVATION', 'model evidence stage must be model_turn or tool_call');
-  const evidence = value.evidence;
-  if (!['usage', 'transcript'].includes(evidence)) {
-    fail('UNSUPPORTED_TURN_EVIDENCE', 'model evidence requires usage or transcript evidence');
-  }
-  const countKey = stage === 'tool_call' ? 'tool_calls' : 'model_turns';
-  const count = value.count === undefined ? 1 : value.count;
-  const counts = { polls: null, model_turns: null, tool_calls: null, ...(value.counts || {}) };
-  counts[countKey] = count;
-  return recordMeasurement(recorder, { ...value, stage, evidence, counts });
-}
-
-function metricStats(values) {
-  const usable = values.filter((value) => Number.isSafeInteger(value) && value >= 0).sort((a, b) => a - b);
-  if (!usable.length) return { value: null, count: 0, sum: null, median: null, p90: null };
-  const percentile = (fraction) => usable[Math.min(usable.length - 1, Math.ceil(usable.length * fraction) - 1)];
-  const sum = usable.reduce((total, value) => total + value, 0);
-  return { value: sum, count: usable.length, sum, median: percentile(0.5), p90: percentile(0.9) };
-}
-
-function supportedEvidence(row) { return row && ['usage', 'transcript'].includes(row.evidence); }
-
-function joinAttribution(rows, attributions) {
-  const list = Array.isArray(attributions) ? attributions : [];
-  return rows.map((row) => {
-    if (!row.dispatch_id) return { ...row, attribution_status: row.attribution_status || 'unknown' };
-    const matches = list.filter((candidate) => candidate && candidate.dispatch_id === row.dispatch_id
-      && (!candidate.runtime || candidate.runtime === row.runtime));
-    return { ...row, attribution_status: matches.length === 1 ? 'observed'
-      : matches.length > 1 ? 'ambiguous' : (row.attribution_status || 'missing') };
-  });
-}
-
-function qualityTotals(rows, supplied) {
-  const out = {};
-  for (const key of QUALITY_KEYS) {
-    const values = rows.map((row) => row.quality && row.quality[key]).filter((value) => Number.isSafeInteger(value));
-    out[key] = (supplied && Number.isSafeInteger(supplied[key]) ? supplied[key] : 0)
-      + values.reduce((sum, value) => sum + value, 0);
-  }
-  return out;
-}
-
-function metricSet(rows) {
-  const sumStage = (stage, field) => metricStats(rows.filter((row) => row.stage === stage).map((row) => row[field]));
-  const count = (field, supportedOnly = false) => metricStats(rows
-    .filter((row) => !supportedOnly || supportedEvidence(row))
-    .map((row) => row.counts && row.counts[field]));
-  const modelTurns = count('model_turns', true);
-  const toolCalls = count('tool_calls', true);
-  if (!rows.some((row) => supportedEvidence(row) && row.counts && row.counts.model_turns !== null)) {
-    Object.assign(modelTurns, { value: null, sum: null, median: null, p90: null });
-  }
-  if (!rows.some((row) => supportedEvidence(row) && row.counts && row.counts.tool_calls !== null)) {
-    Object.assign(toolCalls, { value: null, sum: null, median: null, p90: null });
-  }
-  const providerRows = rows.filter((row) => supportedEvidence(row) && row.provider_tokens && object(row.provider_tokens));
-  const providerTokens = metricStats(providerRows.map((row) => Object.values(row.provider_tokens).reduce((sum, value) => sum + value, 0)));
-  return {
-    startup_bytes: sumStage('startup', 'bytes'),
-    parent_reingestion_bytes: sumStage('parent_reingestion', 'bytes'),
-    startup_estimated_tokens: metricStats(rows.filter((row) => row.stage === 'startup').map((row) => row.estimated_tokens)),
-    parent_reingestion_estimated_tokens: metricStats(rows.filter((row) => row.stage === 'parent_reingestion').map((row) => row.estimated_tokens)),
-    checkpoint_collection_bytes: sumStage('checkpoint_collection', 'bytes'),
-    checkpoint_collection_estimated_tokens: sumStage('checkpoint_collection', 'estimated_tokens'),
-    successor_startup_bytes: sumStage('successor_startup', 'bytes'),
-    successor_startup_estimated_tokens: sumStage('successor_startup', 'estimated_tokens'),
-    cache_warmup_bytes: sumStage('cache_warmup', 'bytes'),
-    cache_warmup_estimated_tokens: sumStage('cache_warmup', 'estimated_tokens'),
-    wait_polls: count('polls'), model_turns: modelTurns, tool_calls: toolCalls, retries: count('retries'),
-    provider_tokens: providerTokens,
-  };
-}
-
-const COHORT_KEYS = Object.freeze(['runtime', 'model', 'effort', 'role', 'account_scope']);
-
-function cohortOf(row) {
-  return Object.fromEntries(COHORT_KEYS.map((key) => [key, row[key] || null]));
-}
-
-function treatmentDiff(a, b) {
-  return TREATMENT_KEYS.filter((key) => a[key] !== b[key]);
-}
-
-// @contract: matched needs full cohort identity and two arms differing in exactly one treatment key.
-function matchedCohorts(rows) {
-  const groups = new Map();
-  for (const row of rows) {
-    const cohort = cohortOf(row);
-    const key = stable(cohort);
-    if (!groups.has(key)) groups.set(key, { cohort, rows: [] });
-    groups.get(key).rows.push(row);
-  }
-  return [...groups.values()].map(({ cohort, rows: cohortRows }) => {
-    const byTreatment = [...new Map(cohortRows.map((row) => [row.treatment_id, row.treatment])).entries()]
-      .map(([id, treatment]) => ({ id, treatment, metrics: metricSet(cohortRows.filter((row) => row.treatment_id === id)) }));
-    const comparisons = [];
-    for (let i = 0; i < byTreatment.length; i++) {
-      for (let j = i + 1; j < byTreatment.length; j++) {
-        const changed = treatmentDiff(byTreatment[i].treatment, byTreatment[j].treatment);
-        if (changed.length === 1) comparisons.push({ arms: [byTreatment[i].id, byTreatment[j].id], treatment_key: changed[0] });
-      }
-    }
-    const missingIdentity = COHORT_KEYS.filter((key) => cohort[key] === null);
-    return { ...cohort, rows: cohortRows.length, by_treatment: byTreatment, comparisons,
-      missing_identity: missingIdentity, matched: missingIdentity.length === 0 && comparisons.length > 0 };
-  });
-}
-
-function cohortCoverageGaps(cohorts) {
-  const gaps = [];
-  for (const cohort of cohorts) {
-    if (cohort.by_treatment.length < 2) continue;
-    const label = `${cohort.runtime}/${cohort.role}`;
-    if (cohort.missing_identity.length) gaps.push(`cohort identity for ${label} (missing ${cohort.missing_identity.join(', ')})`);
-    if (!cohort.comparisons.length) gaps.push(`single-treatment difference between arms for ${label}`);
-  }
-  return gaps;
-}
-
-function completionClaims(row, completion) {
-  const dispatchIds = new Set(Array.isArray(completion.dispatch_ids) ? completion.dispatch_ids
-    : completion.dispatch_id ? [completion.dispatch_id] : []);
-  const runIds = new Set(Array.isArray(completion.run_ids) ? completion.run_ids
-    : completion.run_id ? [completion.run_id] : []);
-  if (dispatchIds.size) return Boolean(row.dispatch_id) && dispatchIds.has(row.dispatch_id);
-  return runIds.has(row.run_id);
-}
-
-function sumField(rows, getter) {
-  if (!rows.length) return null;
-  return rows.every((row) => Number.isSafeInteger(getter(row)))
-    ? rows.reduce((total, row) => total + getter(row), 0) : null;
-}
-
-const COMPLETION_FIELDS = Object.freeze({
-  bytes: [(row) => row.bytes, false],
-  estimated_tokens: [(row) => row.estimated_tokens, false],
-  wait_polls: [(row) => row.counts && row.counts.polls, false],
-  model_turns: [(row) => row.counts && row.counts.model_turns, true],
-  tool_calls: [(row) => row.counts && row.counts.tool_calls, true],
-  retries: [(row) => row.counts && row.counts.retries, false],
-});
-
-function fieldTotals(rows) {
-  const supported = rows.filter(supportedEvidence);
-  return Object.fromEntries(Object.entries(COMPLETION_FIELDS)
-    .map(([field, [getter, supportedOnly]]) => [field, sumField(supportedOnly ? supported : rows, getter)]));
-}
-
-// @contract: numerator is all cohort use per verified completion; unclaimed rows are unassigned overhead.
-function completionMetrics(rows, completions) {
-  const list = Array.isArray(completions) ? completions : [];
-  if (!list.length) return null;
-  const claims = rows.map((row) => list.filter((completion) => completionClaims(row, completion)));
-  const perCompletion = list.map((completion) => {
-    const matched = rows.filter((row, index) => claims[index].length === 1 && claims[index][0] === completion);
-    return { ticket: completion.ticket || null, run_id: completion.run_id || null, rows: matched.length,
-      ...fieldTotals(matched) };
-  });
-  const unassigned = rows.filter((row, index) => claims[index].length === 0);
-  const shared = rows.filter((row, index) => claims[index].length > 1);
-  const cohortTotals = fieldTotals(rows);
-  const stats = (field) => ({
-    ...metricStats(perCompletion.map((c) => c[field])),
-    cohort_total: cohortTotals[field],
-    per_completion: cohortTotals[field] === null ? null
-      : Math.round((cohortTotals[field] / perCompletion.length) * 100) / 100,
-  });
-  return {
-    completions: perCompletion.length,
-    ...Object.fromEntries(Object.keys(COMPLETION_FIELDS).map((field) => [field, stats(field)])),
-    unassigned_overhead: { rows: unassigned.length, ...fieldTotals(unassigned) },
-    shared_overhead: { rows: shared.length, ...fieldTotals(shared) },
-    rows: perCompletion,
-  };
-}
-
-function report(input = {}, options = {}) {
-  const opts = Array.isArray(input) ? options : input;
-  let rows = Array.isArray(input) ? input : opts.rows;
-  if (!rows && opts.graphDir) rows = readStream(opts.graphDir).rows;
-  rows = joinAttribution(latestRows(rows || []), opts.attributions || opts.usageAttributions || opts.attributionRecords);
-  const quality = qualityTotals(rows, opts.quality);
-  const reasons = [], missing = [];
-  const attributionRows = rows.filter((row) => supportedEvidence(row) && row.dispatch_id);
-  const attributed = attributionRows.filter((row) => row.attribution_status === 'observed').length;
-  const attributionCoverage = opts.attribution_coverage === undefined
-    ? attributionRows.length ? attributed / attributionRows.length : null : opts.attribution_coverage;
-  const usageRows = rows.filter((row) => supportedEvidence(row));
-  const providerCoverage = usageRows.length === 0 ? 'unknown'
-    : usageRows.every((row) => row.provider_tokens && object(row.provider_tokens)) ? 'observed'
-      : usageRows.some((row) => row.provider_tokens && object(row.provider_tokens)) ? 'partial' : 'unknown';
-  const metrics = metricSet(rows);
-  if (metrics.model_turns.value === null) missing.push('supported transcript/usage evidence for model turns');
-  if (metrics.tool_calls.value === null) missing.push('supported transcript evidence for tool calls');
-  if (providerCoverage !== 'observed') missing.push('provider token observations');
-  if (attributionCoverage === null || attributionCoverage < DEFAULT_ATTRIBUTION_TARGET) missing.push('dispatch attribution coverage >= 95%');
-  if (opts.finalized_output_coverage !== 'observed') missing.push('finalized output coverage');
-  if (opts.experiment_boundary !== true) missing.push('declared experiment boundary');
-  const cohorts = matchedCohorts(rows);
-  const hasMatchedCohort = cohorts.some((cohort) => cohort.matched);
-  if (!hasMatchedCohort) missing.push('comparable baseline and treatment arms matched by runtime/model/effort/role/account');
-  missing.push(...cohortCoverageGaps(cohorts));
-  const perCompletion = completionMetrics(rows, opts.verified_completions || opts.completions);
-  const completed = Number.isSafeInteger(opts.completed_tickets) ? opts.completed_tickets
-    : perCompletion ? perCompletion.completions : quality.completed;
-  const minCompleted = Number.isSafeInteger(opts.min_completed) ? opts.min_completed : DEFAULT_MIN_COMPLETED;
-  if (completed < minCompleted) missing.push(`completed-ticket cohort (${completed}/${minCompleted})`);
-  if (opts.defect_window_days === undefined || opts.defect_window_days < 7) missing.push('seven-day defect window');
-  if (quality.false_green || quality.invalid_carry || quality.skipped_gate || quality.recovery_loss
-      || quality.duplicate_dispatch || quality.orphaned_work || quality.lost_constraints
-      || quality.reopens || quality.escaped_defects) {
-    const failed = ['false_green', 'invalid_carry', 'skipped_gate', 'recovery_loss',
-      'duplicate_dispatch', 'orphaned_work', 'lost_constraints', 'reopens', 'escaped_defects'].filter((key) => quality[key]);
-    reasons.push(`quality/recovery failure (${failed.join(', ')}) requires rollback`);
-  }
-  const qualityClean = reasons.length === 0;
-  let verdict = reasons.length ? 'rollback' : 'inconclusive';
-  if (!reasons.length && !missing.length) verdict = opts.verdict === 'continue_trial' ? 'continue_trial' : 'promote';
-  if (verdict === 'inconclusive') reasons.push('evidence is incomplete; no savings or quota claim is permitted');
-  const treatments = [...new Map(rows.map((row) => [row.treatment_id, row.treatment])).values()];
-  const byTreatment = [...new Map(rows.map((row) => [row.treatment_id, row.treatment])).entries()]
-    .map(([id, treatment]) => ({ id, treatment, metrics: metricSet(rows.filter((row) => row.treatment_id === id)) }));
-  const byCategory = [...new Set(rows.map((row) => row.cost_category || 'orchestration'))]
-    .sort().map((category) => ({ category, metrics: metricSet(rows.filter((row) => (row.cost_category || 'orchestration') === category)) }));
-  const actors = [...new Set(rows.map((row) => row.actor === undefined ? null : row.actor))]
-    .sort((a, b) => String(a || '').localeCompare(String(b || '')))
-    .map((actor) => ({ actor, metrics: metricSet(rows.filter((row) => (row.actor === undefined ? null : row.actor) === actor)) }));
-  // @invariant: behaviorally_verified is independent of the savings verdict (efficiency_measured).
-  const status = {
-    implemented: true,
-    installed: rows.length > 0,
-    behaviorally_verified: qualityClean && opts.finalized_output_coverage === 'observed',
-    efficiency_measured: verdict === 'promote' || verdict === 'continue_trial',
-  };
-  return {
-    schema: REPORT_SCHEMA, version: SCHEMA_VERSION, experiment_id: opts.experiment_id || null,
-    rows: rows.length, treatments, by_treatment: byTreatment, by_category: byCategory, by_actor: actors, metrics,
-    matched_cohorts: cohorts, metrics_per_completion: perCompletion,
-    coverage: { provider_tokens: providerCoverage, attribution: attributionCoverage,
-      attributed_rows: attributed, dispatch_rows: attributionRows.length,
-      finalized_output: opts.finalized_output_coverage === undefined ? 'unknown' : opts.finalized_output_coverage },
-    quality, missing_coverage: missing, verdict, verdict_reasons: reasons, status,
-  };
-}
-
 function createRecorder(graphDir) {
   const graph = path.resolve(graphDir);
   return Object.freeze({
@@ -714,7 +457,6 @@ function createRecorder(graphDir) {
     recordBatch: (value) => recordBatch(graph, value),
     read: () => readStream(graph),
     latest: () => latestRows(readStream(graph).rows),
-    report: (options = {}) => report({ ...options, graphDir: graph, rows: options.rows || latestRows(readStream(graph).rows) }),
   });
 }
 
@@ -724,7 +466,7 @@ function cliValue(argv, name, fallback = null) {
 }
 
 function cli(argv = process.argv.slice(2)) {
-  const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'report';
+  const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'list';
   const graph = path.resolve(cliValue(argv, '--graph', process.env.SHIPYARD_GRAPH_DIR
     || require('./graph-dir.cjs').resolveGraphDir().dir));
   const recorder = createRecorder(graph);
@@ -739,28 +481,15 @@ function cli(argv = process.argv.slice(2)) {
     process.stdout.write(JSON.stringify(recorder.latest(), null, 2) + '\n');
     return 0;
   }
-  if (command === 'report') {
-    const completed = cliValue(argv, '--completed-tickets');
-    const attribution = cliValue(argv, '--attribution-coverage');
-    const output = recorder.report({
-      experiment_id: cliValue(argv, '--experiment-id'),
-      ...(completed === null ? {} : { completed_tickets: Number(completed) }),
-      ...(attribution === null ? {} : { attribution_coverage: Number(attribution) }),
-      ...(argv.includes('--experiment-boundary') ? { experiment_boundary: true } : {}),
-      ...(argv.includes('--finalized-output') ? { finalized_output_coverage: 'observed' } : {}),
-    });
-    process.stdout.write(JSON.stringify(output, null, 2) + '\n');
-    return output.verdict === 'rollback' ? 3 : 0;
-  }
-  fail('INVALID_INPUT', 'usage: orchestration-overhead.cjs <record|list|report> [--graph PATH]');
+  fail('INVALID_INPUT', 'usage: orchestration-overhead.cjs <record|list> [--graph PATH]');
 }
 
 module.exports = Object.freeze({
-  SCHEMA_VERSION, STREAM_NAME, REPORT_SCHEMA, ESTIMATOR_VERSION, STAGES,
+  SCHEMA_VERSION, STREAM_NAME, ESTIMATOR_VERSION, STAGES,
   HANDOFF_COST_STAGES, LIFECYCLE_CLASS_VALUES, PASS_KINDS,
   TREATMENT_KEYS, TREATMENT_VALUES, OverheadError, normalizeTreatment, treatmentId,
-  normalizeObservation, recordBatch, recordMeasurement, recordHandoffCost, recordModelEvidence, recordWaitPoll,
-  handoffCostSummary, readStream, latestRows, report, createRecorder,
+  normalizeObservation, recordBatch, recordMeasurement, recordHandoffCost,
+  handoffCostSummary, readStream, latestRows, createRecorder,
 });
 
 if (require.main === module) {

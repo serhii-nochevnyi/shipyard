@@ -24,7 +24,6 @@ const { sealDecomposition, assertContained, captureContainmentBaseline,
   persistContainmentBaseline, restoreContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
   assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
-const orchestrationOverhead = require('./orchestration-overhead.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const LAUNCH_SCHEMA = 'shipyard.codex-decompose-launch.v1';
@@ -728,7 +727,6 @@ function createCodexDecomposeHost(options = {}) {
               ...(captureTranscriptWritten ? { onTranscriptWritten: captureTranscriptWritten } : {}),
               ...(captureCompleted ? { onCompleted: captureCompleted } : {}),
             });
-          const evidence = applied && applied.runtime_evidence;
           if (launchRecord) {
             const durable = readLaunchRecord(options.launchDir, context.dispatch_id);
             if (!durable.completed || durable.completed.launch_id !== applied.launch_id
@@ -1042,42 +1040,6 @@ function detachCli(argv, stdout, options) {
   const response = Object.freeze({ dispatch_id: dispatchId, wait });
   stdout.write(JSON.stringify(response) + '\n');
   return response;
-}
-
-function recordChildModelEvidence(scope, dispatchId, result, resolution, options) {
-  const receipt = result && result.receipt;
-  const child = receipt && receipt.runtime_evidence && receipt.runtime_evidence.native_child_evidence;
-  if (!child) return;
-  try {
-    const env = options.env || process.env;
-    const graphDir = options.graphDir || env.SHIPYARD_GRAPH_DIR;
-    const recorder = options.overheadRecorder || (graphDir ? orchestrationOverhead.createRecorder(graphDir) : null);
-    if (!recorder) return;
-    orchestrationOverhead.recordMeasurement(recorder, {
-      observation_id: `codex-decompose:${dispatchId}:child`,
-      run_id: scope.run_id,
-      dispatch_id: dispatchId,
-      role: resolution.role,
-      runtime: 'codex',
-      backend: 'codex-agent',
-      policy_hash: resolution.policy_hash,
-      model: receipt.observed_model,
-      effort: receipt.observed_effort,
-      requested_model: receipt.requested_model,
-      requested_effort: receipt.requested_effort,
-      observed_model: receipt.observed_model,
-      observed_effort: receipt.observed_effort,
-      actor: 'child',
-      stage: 'model_turn',
-      evidence: 'none',
-      counts: { polls: null, model_turns: null, tool_calls: null, retries: null },
-      provider_tokens: null,
-      bytes: 0,
-      estimated_tokens: null,
-    });
-  } catch {
-    (options.stderr || process.stderr).write('codex-decompose-host: child model telemetry collection failed\n');
-  }
 }
 
 async function recoverCli(argv, stdout, options) {
@@ -1405,7 +1367,6 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     try { writerLease.release({ token: leaseHandle.token, epoch: leaseHandle.epoch }); }
     catch { /* @invariant: a fenced or expired lease has nothing left to release */ }
   }
-  recordChildModelEvidence(scope, dispatchId, result, resolution, options);
   stdout.write(JSON.stringify(result) + '\n');
   return result;
 }

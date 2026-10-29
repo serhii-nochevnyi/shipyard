@@ -126,9 +126,7 @@ measurement and complete enough provider coverage.
 
 ## Verdict and rollback
 
-Generate a report only at an experiment boundary with
-`orchestration-overhead.cjs` and preserve its JSON output with the experiment
-revision. The deterministic verdict rules are:
+The `orchestration-overhead.cjs report` command was removed; the verdict rules below are historical:
 
 | Condition | Verdict |
 |---|---|

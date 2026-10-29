@@ -62,7 +62,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { execFileSync, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 
 // The invocation the two command docs name. Exported so a test can pin the docs
 // against the script instead of against a copy of its usage.
