@@ -403,7 +403,7 @@ function authenticatedReceipt(recorder, dispatchId, expectedRole = 'executor') {
   if (!version || versions.some((value) => value !== version) || !registered
       || registered.policy_hash !== receipt.policy_hash || record.policy_hash !== receipt.policy_hash
       || (record.resolution && record.resolution.policy_hash !== receipt.policy_hash)) {
-    fail('MISSING_RECEIPT', 'authenticated original receipt has no consistent registered policy identity');
+    fail('MISSING_RECEIPT', `authenticated original receipt has no consistent registered policy identity (${version || 'no version'}); rerun under ${policy.POLICY_VERSION}`);
   }
   return Object.freeze({ receipt, digest: sha256(canonical(receipt)), policy_version: version });
 }

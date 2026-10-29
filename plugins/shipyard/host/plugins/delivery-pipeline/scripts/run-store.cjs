@@ -262,16 +262,26 @@ function normalizeRecord(input) {
   };
 }
 
-function normalizeStore(input) {
+const RETIRED_POLICY_VERSIONS = new Set(['adr-014.v6', 'adr-014.v7']);
+
+function normalizeStore(input, { dropRetiredPolicy = false } = {}) {
   if (!object(input) || input.schema !== SCHEMA || input.version !== VERSION || !object(input.runs)) {
     refuse('INVALID_STORE', 'run store has an unknown schema');
   }
   const generation = integer(input.generation === undefined ? 0 : input.generation, 'store.generation', { zero: true });
-  const runs = Object.fromEntries(Object.entries(input.runs).map(([runId, value]) => {
-    const record = normalizeRecord(value);
+  const runs = {};
+  for (const [runId, value] of Object.entries(input.runs)) {
+    let record;
+    try { record = normalizeRecord(value); }
+    catch (error) {
+      const recorded = object(value) && object(value.run || value.contract) ? (value.run || value.contract).dispatch : null;
+      if (dropRetiredPolicy && error.code === 'UNSUPPORTED_POLICY_VERSION' && object(recorded)
+          && RETIRED_POLICY_VERSIONS.has(recorded.policy_version)) continue;
+      throw error;
+    }
     if (record.run.run_id !== runId) refuse('SCOPE_MISMATCH', 'run store key does not match run_id');
-    return [runId, record];
-  }));
+    runs[runId] = record;
+  }
   return {
     schema: SCHEMA,
     version: VERSION,
@@ -294,7 +304,7 @@ function createRunStore(options = {}) {
     let parsed;
     try { parsed = JSON.parse(fs.readFileSync(storeFile, 'utf8')); }
     catch (cause) { refuse('INVALID_STORE', `run store is not readable JSON: ${cause.message}`); }
-    return normalizeStore(parsed);
+    return normalizeStore(parsed, { dropRetiredPolicy: true });
   }
 
   function writeState(state) {
