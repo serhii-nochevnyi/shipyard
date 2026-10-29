@@ -3005,7 +3005,6 @@ function partitionTestReview(f, helper, runtimeName = 'codex') {
 }
 async function partitionNativeFixture(f, helper, original, stage, result, dispatchId, mutateNative) {
   partitionAssertFixture(original, stage);
-  if (stage.runtime === 'claude') return partitionClaudeNativeFixture(f, original, stage, result, dispatchId);
   const crypto = require('node:crypto');
   const { EventEmitter } = require('node:events');
   const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
@@ -3070,64 +3069,6 @@ async function partitionNativeFixture(f, helper, original, stage, result, dispat
   const dispatched = createDispatchBoundary({ adapters: { codex: adapter }, recorder }).dispatch({ runtime: 'codex', role: 'integrator',
     dispatch_id: dispatchId, signals: original.review.prepared.signals }, { ticket: scope.ticket });
   return { recorder, dispatched, nativeFile, result };
-}
-async function partitionClaudeNativeFixture(f, original, stage, result, dispatchId) {
-  const crypto = require('node:crypto');
-  const { EventEmitter } = require('node:events');
-  const { createClaudeRuntimeHost } = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
-  const { createClaudeDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
-  const { capture } = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs');
-  const registry = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/captured/boundaries/claude-stream.json')));
-  const streamPath = registry.fixtures.find(file => file.endsWith('/claude-stream-research.jsonl'));
-  assert.ok(streamPath, 'registered original Claude stream is required');
-  const templates = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
-    .map(JSON.parse).filter(row => !row.shipyard_fixture);
-  const template = predicate => structuredClone(templates.find(predicate));
-  const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
-  const session = crypto.randomUUID(), transcriptDir = path.join(f.root, 'partition-claude', dispatchId);
-  const recorder = f.partitionRecorder;
-  const runtime = createClaudeRuntimeHost({ scope: { ...original.scope, run_id: dispatchId }, recorder,
-    transcriptDir, uuid: () => session, startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
-    sessionTranscriptRoot: path.join(f.root, 'partition-claude-native'),
-    probe: { status: 'available', executable: 'claude-fixture', runtime_version: registry.cli_version,
-      capabilities: { assistantTranscriptEvidence: true, restrictedTools: true, sandboxedBash: true } },
-    spawn(_file, args) {
-      f.partitionModelLaunches = (f.partitionModelLaunches || 0) + 1;
-      const child = new EventEmitter(); child.pid = process.pid;
-      child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
-      let framed = '';
-      child.stdin = { write(raw) { framed += raw; }, end() { process.nextTick(() => {
-        try {
-          const user = JSON.parse(framed.trim());
-          assert.equal(user.message.content, stage.input);
-          const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
-          const init = template(row => row.type === 'system' && row.subtype === 'init');
-          Object.assign(init, { session_id: session, model, cwd: f.worktree });
-          const assistant = template(row => row.type === 'assistant'); assistant.session_id = session;
-          assistant.message.model = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
-          assistant.message.content[0].input = result;
-          const final = template(row => row.type === 'result');
-          Object.assign(final, { session_id: session, is_error: false, structured_output: result, result: JSON.stringify(result) });
-          const file = path.join(f.root, 'partition-claude-native/project', session + '.jsonl');
-          fs.mkdirSync(path.dirname(file), { recursive: true });
-          fs.writeFileSync(file, serialize([{ ...user, sessionId: session }, { ...structuredClone(assistant), sessionId: session, effort }]));
-          const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
-          const hook = settings.hooks.SessionStart[0].hooks[0].args;
-          const value = name => hook[hook.indexOf(name) + 1];
-          capture({ hook_event_name: 'SessionStart', source: 'startup', session_id: session, transcript_path: file, cwd: f.worktree },
-            { evidenceFile: value('--evidence-file'), expectedSession: value('--expected-session') });
-          child.stdout.emit('data', Buffer.from(serialize([init, assistant, final]))); child.emit('close', 0, null);
-        } catch (error) { child.emit('error', error); }
-      }); } };
-      return child;
-    } });
-  const adapter = createClaudeDispatchAdapter({ capabilities: runtime.capabilities, host: {
-    async launch(selection) { return runtime.applicationEvidence({ result: await runtime.agent(stage.input, selection) }); },
-  } });
-  const dispatched = await createDispatchBoundary({ adapters: { claude: adapter }, recorder }).dispatch({
-    runtime: 'claude', role: 'integrator', dispatch_id: dispatchId, signals: original.review.prepared.signals }, { ticket: stage.subject });
-  assert.equal(dispatched.receipt.compliance, 'verified');
-  return { recorder, dispatched, result };
 }
 function partitionFixtureRequest(helper, original, launch) {
   const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
@@ -3506,61 +3447,6 @@ test('D-32 capacity refuses unknown and over-bound evidence before granting stag
   });
 });
 
-test('D-32 Claude admits independent behavior-only non-model evidence and retains native unit/final custody', async () => {
-  const helper = partitionFixtureHelpers();
-  await helper.fixture(async f => {
-    const original = partitionTestReview(f, helper, 'claude');
-    const partitions = original.partitions = roleArtifact.prepareIntegrationPartitions({ review: original.review, capacity: partitionTestCapacity() });
-    const codex = partitionTestReview(f, helper, 'codex');
-    const codexPartitions = codex.partitions = roleArtifact.prepareIntegrationPartitions({ review: codex.review, capacity: partitionTestCapacity() });
-    const codexHost = partitionFixtureHost(f, helper, codex, codexPartitions);
-    const stages = partitions.plan.units.map(unit => roleArtifact.prepareIntegrationUnit({ partitions,
-      unit_id: unit.unit_id, dispatch_id: 'claude-partition-' + ++f.count }));
-    await assert.rejects(roleArtifact.admitIntegrationCapacity({ prepared: stages[0], host: codexHost }),
-      error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
-    for (const target of ['window', 'measurement']) await assert.rejects(partitionAdmitFixture(f, helper, original, stages[0], (evidence, kind) => {
-      if (kind === target) evidence.runtime = 'codex';
-    }), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
-    const bounded = roleArtifact.prepareIntegrationPartitions({ review: original.review,
-      capacity: partitionTestCapacity({ recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'certified-upper-bound' } }) });
-    const boundAdmission = await partitionAdmitFixture(f, helper, original, bounded.reserved_template, undefined, bounded);
-    assert.equal(boundAdmission.runtime, 'claude'); assert.equal(boundAdmission.measurement.method, 'certified-upper-bound');
-    const template = await partitionAdmitFixture(f, helper, original, partitions.reserved_template);
-    assert.equal(template.runtime, 'claude'); assert.match(template.sources.window, /behavior-only-fixture-claude-window/);
-    for (const stage of stages) await partitionAdmitFixture(f, helper, original, stage);
-    assert.equal(f.partitionModelLaunches || 0, 0, 'Claude prelaunch measurement launches no native model session');
-    const sessions = [];
-    for (const stage of stages) {
-      const result = partitionUnitFixtureResult(stage);
-      const native = await partitionNativeFixture(f, helper, original, stage, result, stage.dispatch_id);
-      roleArtifact.sealIntegrationUnit({ prepared: stage, recorder: native.recorder, dispatchId: stage.dispatch_id, result });
-      sessions.push(native.dispatched.receipt.session_id);
-      assert.equal(roleArtifact.validateIntegrationUnit({ partitions, unit_id: stage.unit_id }).result.runtime, 'claude');
-      const recovered = roleArtifact.prepareIntegrationPartitions({ review: original.review, plan_sha256: partitions.plan.plan_sha256 });
-      assert.equal(roleArtifact.validateIntegrationUnit({ partitions: recovered, unit_id: stage.unit_id }).result.runtime, 'claude');
-      roleArtifact.assertArchiveInventory(f.worktree, original.review.archivePins, { partitions });
-    }
-    const aggregate = roleArtifact.prepareIntegrationAggregate({ partitions, dispatch_id: 'claude-partition-final' });
-    assert.throws(() => partitionAssertFixture(original, aggregate), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
-    const actual = await partitionAdmitFixture(f, helper, original, aggregate);
-    assert.equal(actual.verified_index_sha256, aggregate.payload.verified_index_sha256);
-    assert.notEqual(actual.request_sha256, template.request_sha256, 'actual verified results require fresh final evidence');
-    const result = partitionPhaseFixtureResult(f, original, partitions, aggregate);
-    const native = await partitionNativeFixture(f, helper, original, aggregate, result, aggregate.dispatch_id);
-    assert.ok(!sessions.includes(native.dispatched.receipt.session_id));
-    assert.equal(f.partitionModelLaunches, stages.length + 1, 'exactly one native session per unit and one independent final');
-    const evidencePath = path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md');
-    fs.writeFileSync(evidencePath, result.evidence_markdown);
-    const { evidence_markdown, ...sealedResult } = result;
-    const args = { worktreePath: f.worktree, role: 'integrator', phase: f.phase, ticket: partitions.plan.subject,
-      base: 'origin/main', recorder: native.recorder, dispatchId: aggregate.dispatch_id, result: sealedResult,
-      ticketSet: original.review.prepared.ticketSet, ticketSetDigest: partitions.plan.identity.ticket_set_digest,
-      evidencePath, integrationReview: original.review };
-    const sealed = roleArtifact.sealJudgment(args);
-    assert.equal(roleArtifact.validateJudgmentManifest({ ...args, artifactPath: sealed.artifact_ref,
-      artifactDigest: sealed.artifact_digest }).manifest.integration_partition.kind, 'phase');
-  });
-});
 
 for (const mode of ['incomplete', 'needs-fix']) test('D-32 authentic ' + mode + ' unit cannot supply aggregate authority', async () => {
   const helper = partitionFixtureHelpers();

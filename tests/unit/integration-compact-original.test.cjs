@@ -3,24 +3,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, git, agent, claude, roleArtifact, hash, stable, originalCompactFixtureAnswer, addCompactPressure, expandCompactIdentity } = require('./helpers/integration-impact-fixtures.cjs');
+const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, git, roleArtifact, hash, stable, originalCompactFixtureAnswer, addCompactPressure, expandCompactIdentity } = require('./helpers/integration-impact-fixtures.cjs');
 
-function captureCompactSchemas(runtime, fixture) {
-  const captured = new Map();
-  if (runtime === 'claude') {
-    const create = fixture.options.createRuntimeHost;
-    fixture.options.createRuntimeHost = options => {
-      const host = create(options), agent = host.agent;
-      return { ...host, async agent(input, selection) {
-        captured.set(hash(input), structuredClone(selection.schema));
-        return agent.call(host, input, selection);
-      } };
-    };
-  }
-  return captured;
-}
 
-for (const runtime of ['codex', 'claude']) test(runtime + ' explicit compact original fixture reaches independent final and current discovery', async () => {
+for (const runtime of ['codex']) test(runtime + ' explicit compact original fixture reaches independent final and current discovery', async () => {
   await publicIntegrationFixture(async f => {
     addCompactPressure(f);
     const originals = new Map();
@@ -80,7 +66,6 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' explicit compact ori
       }
     } };
     const fixture = publicPartitionFixture(f, runtime, controls);
-    const capturedSchemas = captureCompactSchemas(runtime, fixture);
     const result = await supportedPartitionCaller(f, runtime, fixture.options);
     const launches = controls.launches;
     assert.ok(launches.length > 2);
@@ -99,11 +84,6 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' explicit compact ori
       assert.match(input, /Unresolved final groups or remaining final limitations cannot authorize a\nphase pass/);
       assert.equal(hash(stable(expandCompactIdentity(payload.identity))), payload.binding.identity_sha256);
       assert.ok(Buffer.byteLength(input) <= (payload.kind === 'unit' ? 2097152 : 4194304));
-      if (runtime === 'claude') {
-        const schema = claude.integrationStageSchema({ ...payload, input, input_sha256: hash(input) });
-        assert.deepEqual(capturedSchemas.get(hash(input)), schema);
-        for (const [key, value] of Object.entries(payload.binding)) assert.deepEqual(schema.properties.binding.properties[key], { const: value });
-      }
     }
   });
 });

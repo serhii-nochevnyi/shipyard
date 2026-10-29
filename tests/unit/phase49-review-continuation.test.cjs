@@ -1650,7 +1650,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       listPullRequests: () => [f.pr], execFileSync: gh };
     const ordinaryMaterial = 'Complete ordinary integration input, including € source obligations.\n'.repeat(20000);
     const integration = role === 'integrator' && !ordinary ? require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareIntegratorContext(canonicalOptions, { worktree: f.root, phase: '38' }) : null;
+      .prepareNativeIntegratorContext(canonicalOptions, { worktree: f.root, phase: '38' }) : null;
     const subject = integration ? integration.ticket : ticket;
     if (integration) {
       const completeDiff = helper.git(f.root, ['diff', '--no-ext-diff', '--unified=50', 'HEAD~1...HEAD']) + '\n';
@@ -2094,7 +2094,7 @@ async function coldRecordedSourceControllerFixture(role) {
       request = { ...prepared.launch, signals: { ...prepared.launch.signals }, context: { ...prepared.launch.context },
         dispatch_id: request.dispatch_id };
     } else options.integrationContext = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareIntegratorContext(canonical, { worktree: origin.root, phase: '38' });
+      .prepareNativeIntegratorContext(canonical, { worktree: origin.root, phase: '38' });
     const recovered = await delivery.createCodexDeliveryHost(options).run(request);
     assert.equal(stable(recovered.receipt), stable(record.receipt));
     assert.ok(recovered.artifact);

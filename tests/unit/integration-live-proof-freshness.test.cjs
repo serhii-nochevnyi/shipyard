@@ -7,7 +7,7 @@ const { loadOwner } = require('./helpers/integration-owner.cjs');
 const { publicIntegrationFixture, publicPartitionFixture, supportedPartitionCaller, write, commit } = loadOwner([
   'publicIntegrationFixture', 'publicPartitionFixture', 'supportedPartitionCaller', 'write', 'commit']);
 
-for (const [outcome, runtime] of [['failed', 'codex'], ['incomplete', 'claude'], ['context', 'codex']]) test('behavior ' + runtime + ' late ' + outcome + ' prevents final', async () => {
+for (const [outcome, runtime] of [['failed', 'codex'], ['incomplete', 'codex'], ['context', 'codex']]) test('behavior ' + runtime + ' late ' + outcome + ' prevents final', async () => {
   await publicIntegrationFixture(async f => {
     write(f.worktree, 'src/unchanged.cjs', 'exports.primary = "complete source continuation";\n'.repeat(6500));
     commit(f, 'multiple original units for late failure');
@@ -24,7 +24,7 @@ for (const [outcome, runtime] of [['failed', 'codex'], ['incomplete', 'claude'],
   });
 });
 
-for (const runtime of ['codex', 'claude']) {
+for (const runtime of ['codex']) {
   for (const boundary of ['source', 'graph', 'PLAN', 'metadata', 'head']) test('behavior ' + runtime + ' fresh post-unit ' + boundary + ' drift refuses final', async () => {
     await publicIntegrationFixture(async f => {
       const prepared = publicPartitionFixture(f, runtime, { observed: true });

@@ -5,21 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-
-const runtimeMarkerNames = ['SHIPYARD_RUNTIME', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED'];
-const originalRuntimeMarkers = new Map(runtimeMarkerNames.map(name => [name, process.env[name]]));
-for (const name of runtimeMarkerNames) delete process.env[name];
-process.on('exit', () => {
-  for (const [name, value] of originalRuntimeMarkers) if (value !== undefined) process.env[name] = value;
-});
-
-const testAuthorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-authority-')));
-const testAuthorityModule = path.join(testAuthorityHome, 'fixture.cjs');
-fs.writeFileSync(testAuthorityModule, "require('node:os').homedir = () => " + JSON.stringify(testAuthorityHome) + ";\n");
-const testAuthorityArgs = ['--require', testAuthorityModule];
-const testOriginalHomedir = os.homedir;
-os.homedir = () => testAuthorityHome;
-process.on('exit', () => { os.homedir = testOriginalHomedir; fs.rmSync(testAuthorityHome, {recursive:true,force:true}); });
+const { PHASE, TICKET, POLICY_MD, git, fileSha, write, planText, writeCorpus, setupRepository, livePr, stable, packetFromPrompt, fakeEvidence, fakeEvidenceLines, fakeRuntimeFactory, hostOptions, cleanupFixture, request } = require('./helpers/claude-role-fixtures.cjs');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -28,10 +14,6 @@ const { activeDispatches } = require('../../plugins/delivery-pipeline/scripts/di
 const { agentsInFlight } = require('../../plugins/delivery-pipeline/scripts/front.cjs');
 const { loadClaudeReferenceContent } = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs');
 const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
-
-const POLICY_MD = '# ADR-014 test\nExplicit model and effort are required.\n';
-const PHASE = '38-role-host-test';
-const TICKET = 'T-38-01-role-host';
 
 function preparationOnlyHost() {
   const Module = require('node:module');
@@ -99,9 +81,7 @@ test(`${kind} completes preparation from coordinator-only planning without movin
     if (kind === 'arch-review') registerCoordinatorRoster(fixture);
     const options = hostOptions(fixture);
     if (kind !== 'integrator') options.getPullRequest = () => ({ ...livePr(fixture), baseRefName: 'integration' });
-    const prepared = kind === 'integrator'
-      ? host.prepareIntegratorContext(options, phasePreparationRequest(fixture))
-      : host.prepareInvocation(options, parseRequest(phasePreparationRequest(fixture)));
+    const prepared = host.prepareInvocation(options, parseRequest(phasePreparationRequest(fixture)));
     assert.equal(prepared.canonical.projectRoot, fixture.project);
     assert.equal(prepared.canonical.worktree, fixture.root);
     assert.equal(prepared.canonical.head, fixture.head);
@@ -117,12 +97,9 @@ test(`${kind} completes preparation from coordinator-only planning without movin
       assert.equal(ref.content, fs.readFileSync(path.join(fixture.project, ref.path), 'utf8'));
     }
     const diff = prepared.packet.role_context.exact_diff || prepared.packet.role_context.combined_diff;
-    if (kind !== 'integrator') assert.equal(diff.content, undefined, `${kind} reads the diff through git`);
-    else {
-      assert.ok(diff.content.includes('+reviewed change'));
-      assert.ok(!diff.content.includes('coordinator product'));
-    }
-    if (kind === 'code-review') assert.deepEqual(prepared.packet.role_context.change_metadata.changes.flatMap(item => item.paths), ['src/role.txt']);
+    assert.equal(diff.content, undefined, `${kind} reads the diff through git`);
+    assert.equal(diff.head, fixture.head);
+    if (kind !== 'arch-review') assert.deepEqual(prepared.packet.role_context.change_metadata.changes.flatMap(item => item.paths), ['src/role.txt']);
     assert.ok(prepared.evidencePath.startsWith('.'));
     assert.equal(fs.existsSync(path.join(fixture.project, prepared.evidencePath)), false);
     if (kind === 'integrator') {
@@ -251,8 +228,7 @@ test(`${kind} coordinator packet survives real file transport and serialized con
     const options = hostOptions(f);
     if (kind !== 'integrator') options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
     const host = preparationOnlyHost();
-    const prepared = kind === 'integrator' ? host.prepareIntegratorContext(options, phasePreparationRequest(f))
-      : host.prepareInvocation(options, parseRequest(phasePreparationRequest(f)));
+    const prepared = host.prepareInvocation(options, parseRequest(phasePreparationRequest(f)));
     const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
     const relay = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
     const input = relay.prepareFileInput({ worktree: f.root, ticket: prepared.ticket, phase: 38 },
@@ -348,7 +324,7 @@ test(`${kind} coordinator input seals captured native bytes and reads its curren
     const factory = options.createRuntimeHost;
     options.createRuntimeHost = input => { const runtime = factory(input); recorder = runtime.recorder; return runtime; };
     const prepared = kind === 'integrator'
-      ? preparationOnlyHost().prepareIntegratorContext(options, phasePreparationRequest(f)) : null;
+      ? preparationOnlyHost().prepareInvocation(options, parseRequest(phasePreparationRequest(f))) : null;
     if (kind === 'code-review') options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
     const result = await createClaudeRoleHost(options).run(phasePreparationRequest(f));
     assert.equal(result.artifact.outcome, kind === 'code-review' ? 'pass' : 'passed');
@@ -396,7 +372,7 @@ test(`coordinator planning refuses ${scenario}`, (t) => {
       fs.writeFileSync(file, JSON.stringify(graph));
     } else if (scenario === 'missing plan') fs.unlinkSync(path.join(fixture.project, fixture.planPath));
     else write(fixture.root, 'src/role.txt', 'local product change\n');
-    assert.throws(() => preparationOnlyHost().prepareIntegratorContext(options, phasePreparationRequest(fixture)),
+    assert.throws(() => preparationOnlyHost().prepareInvocation(options, parseRequest(phasePreparationRequest(fixture))),
       scenario === 'foreign graph' ? /unrelated repository/
         : scenario === 'wrong placement' ? /placed at \.planning\/graph/
         : scenario === 'local product change' ? /local changes/
@@ -434,128 +410,14 @@ test('code-review packet bound is 262144 estimated packet tokens with the phase-
   assert.throws(() => host.parseRequest({ schema: REQUEST_SCHEMA, role: 'code-review' }), /phase.*PR/);
 });
 
-function git(root, args) {
-  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-}
 
-function fileSha(relative) {
-  return crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname, '..', '..', relative))).digest('hex');
-}
 
-function write(root, relative, value) {
-  const file = path.join(root, relative);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, value);
-}
 
-function planText(extra = []) {
-  return [
-    '---', 'phase: 38', 'plan: 01', `title: ${JSON.stringify('Test role host')}`, '---', '',
-    '## Context', '- Follows ADR-014.', ...extra, '',
-    '## Acceptance criteria', '- host authenticates each role result', '',
-    '## Verification commands', '- node --test tests/unit/claude-role-host.test.cjs', '',
-  ].join('\n');
-}
 
-function writeCorpus(root, { adrs = [], backlogFiles = [], investigations = [] } = {}) {
-  for (const adr of adrs) write(root, `.planning/architecture/${adr.name}`, adr.content);
-  for (const item of backlogFiles) write(root, `.planning/backlog/${item.name}`, item.content);
-  for (const item of investigations) write(root, item.path, item.content);
-}
 
-function setupRepository(kind, options = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), options.spaced ? 'shipyard claude role ' : 'shipyard-claude-role-')));
-  const storageRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-state-')));
-  git(root, ['init', '-b', 'main']);
-  git(root, ['config', 'user.name', 'Shipyard Test']);
-  git(root, ['config', 'user.email', 'shipyard-test@example.invalid']);
-  git(root, ['config', 'commit.gpgsign', 'false']);
-  const planPath = `.planning/phases/${PHASE}/38-01-PLAN.md`;
-  const branch = kind === 'arch-review' ? `ticket/${TICKET}` : `epic/${PHASE}`;
-  const ticketBranch = `ticket/${TICKET}`;
-  const row = {
-    title: 'Test role host', plan: planPath, phase: '38', repo: null, wave: 1,
-    depends_on: [], cross_phase_deps: [], cross_repo_deps: [], files: ['src/role.txt'],
-    risk: 'high', type: 'implementation', human_checkpoint: true, branch,
-    pr_base: kind === 'integrator' ? branch : 'main', epic: kind === 'integrator' ? branch : null,
-  };
-  if (kind === 'integrator') row.branch = ticketBranch;
-  write(root, '.planning/architecture/ADR-014-test.md', POLICY_MD);
-  write(root, planPath, planText(options.planExtra));
-  write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' } }));
-  write(root, '.planning/graph/tickets.json', JSON.stringify({ tickets: { [TICKET]: row } }));
-  write(root, '.planning/graph/delivery-state.json', JSON.stringify({
-    [TICKET]: { status: kind === 'integrator' ? 'merged' : 'pr-open', pr: 101,
-      branch: kind === 'integrator' ? ticketBranch : branch, base: kind === 'integrator' ? branch : 'main' },
-  }));
-  write(root, 'src/role.txt', 'base\n');
-  if (options.corpus) writeCorpus(root, options.corpus);
-  git(root, ['add', '.']);
-  git(root, ['commit', '-m', 'chore: seed test repository']);
-  const base = git(root, ['rev-parse', 'HEAD']);
-  const baseTree = git(root, ['rev-parse', 'HEAD^{tree}']);
-  git(root, ['update-ref', 'refs/remotes/origin/main', base]);
-  git(root, ['checkout', '-b', branch]);
-  write(root, 'src/role.txt', options.sourceContent || 'reviewed change\n');
-  git(root, ['add', 'src/role.txt']);
-  if (options.planningBytes) {
-    write(root, `.planning/phases/${PHASE}/PROJECTION.md`, 'p'.repeat(options.planningBytes));
-    git(root, ['add', '.planning']);
-  }
-  git(root, ['commit', '-m', 'feat: change role source']);
-  const head = git(root, ['rev-parse', 'HEAD']);
-  const headTree = git(root, ['rev-parse', 'HEAD^{tree}']);
-  if (kind === 'integrator') {
-    git(root, ['branch', ticketBranch, head]);
-    git(root, ['update-ref', `refs/remotes/origin/${ticketBranch}`, head]);
-  } else {
-    git(root, ['update-ref', 'refs/remotes/origin/main', base]);
-  }
-  if (kind === 'integrator') git(root, ['update-ref', `refs/remotes/origin/${branch}`, head]);
-  const mergeBase = kind === 'arch-review' ? base : git(root, ['merge-base', 'main', head]);
-  const mergeBaseTree = git(root, ['rev-parse', `${mergeBase}^{tree}`]);
-  return { root, storageRoot, branch, ticketBranch, prBranch: ticketBranch, base, baseTree, head, headTree, mergeBase, mergeBaseTree, planPath, kind };
-}
 
-function livePr(fixture) {
-  return {
-    number: 101,
-    state: fixture.kind === 'integrator' ? 'MERGED' : 'OPEN',
-    isDraft: false,
-    title: `feat(${TICKET}): change role source`,
-    body: `Implements ${TICKET}.`,
-    headRefName: fixture.kind === 'integrator' ? fixture.prBranch : fixture.branch,
-    headRefOid: fixture.head,
-    baseRefName: fixture.kind === 'integrator' ? fixture.branch : 'main',
-    baseRefOid: fixture.kind === 'integrator' ? fixture.head : fixture.base,
-    mergedAt: fixture.kind === 'integrator' ? '2026-09-23T12:00:00Z' : null,
-    mergeCommit: fixture.kind === 'integrator' ? { oid: fixture.head } : null,
-    reviewDecision: null,
-  };
-}
 
-function stable(value) {
-  if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}';
-}
 
-function packetFromPrompt(prompt) {
-  const focused = /<AUTHENTICATED_FOCUSED_INPUT>\s*([\s\S]*?)\s*<\/AUTHENTICATED_FOCUSED_INPUT>/.exec(prompt);
-  if (focused) {
-    const checked = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs')
-      .verifyFileInput(JSON.parse(focused[1]), { sealed: true });
-    return require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]));
-  }
-  const startTag = '<AUTHENTICATED_CONTEXT_PACKET>\n\n';
-  const endTag = '\n\n</AUTHENTICATED_CONTEXT_PACKET>';
-  const start = prompt.indexOf(startTag);
-  const end = prompt.indexOf(endTag, start + startTag.length);
-  assert.ok(start >= 0 && end > start);
-  const packet = JSON.parse(prompt.slice(start + startTag.length, end));
-  return packet.schema === 'shipyard.semantic-content.v1'
-    ? require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(packet) : packet;
-}
 
 test('native inline preparation preserves shared logical coverage and refuses incompatible schemas', () => {
   const fixture = setupRepository('integrator');
@@ -606,453 +468,8 @@ test('native inline launch refuses governing source mutation after preparation',
   } finally { cleanupFixture(fixture); }
 });
 
-function fakeEvidence(model, effort, usage) {
-  const sessionId = `session-${crypto.randomUUID()}`;
-  const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
-  let transcript;
-  if (usage) {
-    const transcriptPath = path.join(os.tmpdir(), `${sessionId}.jsonl`);
-    const line = JSON.stringify({ type: 'assistant', sessionId,
-      message: { role: 'assistant', id: 'm1', model: observedModel, usage, stop_reason: 'end_turn' } });
-    fs.writeFileSync(transcriptPath, `${line}\n`);
-    const buffer = fs.readFileSync(transcriptPath);
-    transcript = { path: transcriptPath, bytes: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
-  } else {
-    transcript = { path: path.join(os.tmpdir(), `${sessionId}.jsonl`), bytes: 64, sha256: 'a'.repeat(64) };
-  }
-  return {
-    launch_id: `claude-${sessionId}`,
-    session_id: sessionId,
-    process_id: process.pid,
-    runtime_version: '2.1.280',
-    applied_model: model,
-    applied_effort: effort,
-    observed_model: observedModel,
-    observed_effort: effort,
-    selection_evidence: { source: 'claude-session-assistant-transcript', session_id: sessionId,
-      assistant_records: 1, model: observedModel, effort, transcript },
-    stream_evidence: { format: 'stream-json', records: 1, assistant_messages: 1 },
-    transcript,
-  };
-}
 
-function fakeEvidenceLines(model, effort, lines) {
-  const sessionId = `session-${crypto.randomUUID()}`;
-  const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
-  const transcriptPath = path.join(os.tmpdir(), `${sessionId}.jsonl`);
-  const text = `${lines.map((line) => JSON.stringify({ sessionId, ...line })).join('\n')}\n`;
-  fs.writeFileSync(transcriptPath, text);
-  const buffer = fs.readFileSync(transcriptPath);
-  const transcript = { path: transcriptPath, bytes: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
-  return {
-    launch_id: `claude-${sessionId}`,
-    session_id: sessionId,
-    process_id: process.pid,
-    runtime_version: '2.1.280',
-    applied_model: model,
-    applied_effort: effort,
-    observed_model: observedModel,
-    observed_effort: effort,
-    selection_evidence: { source: 'claude-session-assistant-transcript', session_id: sessionId,
-      assistant_records: lines.length, model: observedModel, effort, transcript },
-    stream_evidence: { format: 'stream-json', records: lines.length, assistant_messages: lines.length },
-    transcript,
-  };
-}
 
-function fakeRuntimeFactory(fixture, options = {}) {
-  const live = fixture.kind === 'pr-sentinel' ? null : livePr(fixture);
-  return ({ scope, controller, recorderDir, transcriptDir, recorder: partitionRecorder }) => {
-    const recorder = partitionRecorder || createDurableRecorder(recorderDir);
-    const runtime = {
-      scope: { worktree: scope.worktree.path },
-      controller,
-      recorder,
-      capabilities: {
-        supportedModels: ['claude-opus-5-5', 'claude-fable-5', 'claude-sonnet-5-5'],
-        supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-        observedModel: true,
-        observedEffort: true,
-      },
-      async agent(prompt, selection) {
-        options.onLaunch?.(prompt, selection);
-        if (prompt.includes('<AUTHENTICATED_INTEGRATION_PARTITION>')) {
-          const payload = JSON.parse(prompt.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
-          assert.equal(payload.runtime, 'claude');
-          const identity = payload.reviewed_identity, assignment = payload.assignment;
-          const result = { review_contract: 'shipyard.integration-review.v3', kind: payload.kind, runtime: 'claude',
-            subject: payload.subject, plan_sha256: payload.plan_sha256,
-            input_sha256: crypto.createHash('sha256').update(prompt).digest('hex'), reviewed_identity: identity,
-            completeness: 'complete', outcome: 'passed', blocking_count: 0, findings: [],
-            evidence_markdown: 'Original Claude fixture evidence; behavior only.' };
-          if (payload.kind === 'unit') Object.assign(result, {
-            schema: 'shipyard.integration-unit-result.v1', unit_id: assignment.unit_id,
-            coverage: { primary_segments: assignment.primary_segments, primary_obligation_ids: assignment.primary_obligation_ids,
-              support_segments: assignment.support_segments, support_obligation_ids: assignment.support_obligation_ids },
-            conclusions: ['Fixture evaluated all primary bytes and obligations.'], limitations: [], required_context: [],
-            seams: assignment.seam_ids.map(id => ({ id, disposition: 'unresolved', rationale: 'Independent final must judge this seam.' })) });
-          else Object.assign(result, { phase: identity.phase, head: identity.head, head_tree: identity.head_tree,
-            base: payload.reviewed_identity.base_ref.replace(new RegExp('^refs/remotes/'), ''), base_tree: identity.base_tree,
-            ticket_set: identity.ticket_set, ticket_set_digest: identity.ticket_set_digest, summary: 'Independent Claude fixture final.',
-            coverage: { ...payload.coverage, limitations: [], seam_dispositions: payload.seams.map(seam => ({
-              id: seam.id, disposition: 'resolved', rationale: 'Fixture final judged the complete seam and acceptance.' })) } });
-          options.mutateResult?.(result, payload);
-          return { output: result };
-        }
-        const packet = packetFromPrompt(prompt);
-        const context = packet.role_context;
-        let result;
-        let evidencePath;
-        if (packet.role === 'code-review' && context.part) {
-          result = { part: context.part.id, review_completeness: 'complete', limitations: [], unresolved_sources: [],
-            summary: 'Reviewed ' + context.part.paths.join(', '), findings: [] };
-        } else if (packet.role === 'code-review') {
-          result = { ...context.focused, id: packet.subject, ticket_set: context.ticket_set,
-            ticket_set_digest: context.focused.ticket_set_digest,
-            context_digest: crypto.createHash('sha256').update(stable(packet)).digest('hex'),
-            launch_digest: crypto.createHash('sha256').update(stable({
-              packet_digest: crypto.createHash('sha256').update(stable(packet)).digest('hex'),
-              reference_digest: context.reference_digest })).digest('hex'),
-            review_completeness: 'complete', limitations: [], unresolved_sources: [],
-            summary: 'Reviewed the product changes.', findings: [], dispositions: [] };
-          evidencePath = path.join(fixture.root, '.shipyard-code-review-evidence.md');
-          result.evidence_markdown = `Reviewed ${fixture.head}; base tree ${fixture.mergeBaseTree}.\n`;
-          fs.writeFileSync(evidencePath, result.evidence_markdown);
-        } else if (packet.role === 'arch-review') {
-          result = { ...context.focused, review_completeness: 'complete', limitations: [], unresolved_sources: [],
-            context_digest: crypto.createHash('sha256').update(stable(packet)).digest('hex'),
-            launch_digest: crypto.createHash('sha256').update(stable({ packet_digest: crypto.createHash('sha256').update(stable(packet)).digest('hex'),
-              reference_digest: context.reference_digest })).digest('hex'),
-            id: packet.subject, ...(context.ticket_set ? { ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest } : {}), pr: live.number, verdict: 'conform', head: fixture.head,
-            base_tree: fixture.mergeBaseTree, blocking_count: 0, summary: 'No architecture conflict.', findings: [] };
-          evidencePath = path.join(fixture.root, '.shipyard-arch-review-evidence.md');
-          result.evidence_markdown = `Reviewed ${fixture.head}; base tree ${fixture.mergeBaseTree}.\n`;
-          fs.writeFileSync(evidencePath, result.evidence_markdown);
-        } else if (packet.role === 'pr-sentinel') {
-          const ticketSet = context.ticket_set;
-          const readOnlySmoke = selection.readOnly === true;
-          result = {
-            outcome: readOnlySmoke ? 'awaiting-human' : 'clear',
-            ticket_set: ticketSet,
-            ticket_set_digest: context.ticket_set_digest,
-            head: fixture.head,
-            head_tree: fixture.headTree,
-            performed: readOnlySmoke ? [] : ticketSet.map((entry) => ({ ticket: entry.id, duty: 'check-current-front', status: 'complete' })),
-            refused: readOnlySmoke ? ticketSet.map((entry) => ({ ticket: entry.id, duty: 'read-only-smoke',
-              status: 'refused', reason: 'Read-only runtime smoke.' })) : [],
-            blocking_count: readOnlySmoke ? ticketSet.length : 0,
-            summary: readOnlySmoke ? 'Read-only runtime smoke; no PR duties were attempted.' : 'All guarded PRs are clear.',
-          };
-          evidencePath = path.join(fixture.root, '.shipyard-sentinel-evidence.md');
-          fs.writeFileSync(evidencePath, `Checked ${ticketSet.length} guarded PRs for this round.\n`);
-        } else {
-          const ticketSet = context.ticket_set;
-          const defaultTree = context.integration_base.tree;
-          result = { outcome: 'passed', phase: context.phase, head: context.combined_diff.head,
-            head_tree: context.combined_diff.head_tree,
-            base: context.integration_base.ref, base_tree: defaultTree,
-            ticket_set: ticketSet, ticket_set_digest: context.ticket_set_digest,
-            blocking_count: 0, summary: 'Phase is coherent.', findings: [] };
-          evidencePath = path.join(fixture.root, `.planning/phases/${context.phase}/INTEGRATION.md`);
-          fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
-          fs.writeFileSync(evidencePath, `Integration check at ${context.combined_diff.head}.\n`);
-        }
-        options.mutateResult?.(result, packet);
-        if (options.originalStream) return { output: result };
-        const applicationEvidence = options.badEvidence ? fakeEvidence(selection.model, 'low')
-          : options.firstResponseLines ? fakeEvidenceLines(selection.model, selection.effort, options.firstResponseLines)
-          : fakeEvidence(selection.model, selection.effort, options.firstResponseUsage);
-        if (options.corruptDigest && applicationEvidence.transcript) applicationEvidence.transcript.sha256 = 'b'.repeat(64);
-        return { output: result, applicationEvidence };
-      },
-      applicationEvidence({ result }) { return result.applicationEvidence; },
-    };
-    if (options.originalStream) {
-      const claudeRuntime = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
-      const captureStart = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs').capture;
-      const registry = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/captured/boundaries/claude-stream.json')));
-      const streamPath = registry.fixtures.find(file => file.endsWith('/claude-stream-research.jsonl'));
-      assert.ok(streamPath, 'registered original Claude stream is required');
-      const records = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
-        .map(JSON.parse).filter(record => !record.shipyard_fixture);
-      const template = predicate => structuredClone(records.find(predicate));
-      const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
-      const session = crypto.randomUUID();
-      return claudeRuntime.createClaudeRuntimeHost({ scope, controller, recorder, recorderDir, transcriptDir,
-        startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
-        uuid: () => session, sessionTranscriptRoot: path.join(fixture.storageRoot, 'native'),
-        probe: { status: 'available', executable: 'claude-fixture', runtime_version: registry.cli_version,
-          capabilities: { assistantTranscriptEvidence: true, restrictedTools: true, sandboxedBash: true } },
-        spawn(_file, args) {
-          const { EventEmitter } = require('node:events');
-          const child = new EventEmitter(); child.pid = process.pid;
-          child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
-          let framedInput = '';
-          child.stdin = { write(value) { framedInput += value; }, end() {
-            process.nextTick(async () => {
-              try {
-                assert.ok(framedInput.endsWith('\n'));
-                const userInput = JSON.parse(framedInput.slice(0, -1));
-                options.onSpawn?.(args);
-                const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
-                const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
-                const { output } = await runtime.agent(userInput.message.content, { model, effort, readOnly: true, schema: JSON.parse(args[args.indexOf('--json-schema') + 1]) });
-                const init = template(row => row.type === 'system' && row.subtype === 'init');
-                Object.assign(init, { session_id: session, model, cwd: fixture.root });
-                const assistant = template(row => row.type === 'assistant');
-                assistant.session_id = session; assistant.sessionId = session; assistant.message.model = observedModel;
-                if (options.observedTelemetry) {
-                  assistant.message.stop_reason = 'end_turn';
-                  assistant.message.usage.output_tokens = 113;
-                } else delete assistant.message.usage;
-                assistant.message.content[0].input = output;
-                const final = template(row => row.type === 'result');
-                Object.assign(final, { session_id: session, is_error: false, structured_output: output, result: JSON.stringify(output) });
-                if (options.observedTelemetry) {
-                  const modelUsage = Object.values(final.modelUsage)[0];
-                  if (modelUsage.canonicalModel !== undefined) modelUsage.canonicalModel = observedModel;
-                  final.modelUsage = { [observedModel]: modelUsage };
-                }
-                const nativeFile = path.join(fixture.storageRoot, 'native/project', session + '.jsonl');
-                fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
-                const nativeAssistant = { ...structuredClone(assistant), sessionId: session, effort };
-                if (options.nativeAnswerCarrier === 'text') nativeAssistant.message.content = [{ type: 'text', text: JSON.stringify(output) }];
-                const nativeRows = [{ ...userInput, sessionId: session }, nativeAssistant];
-                options.mutateNativeTranscript?.(nativeRows);
-                options.mutateTerminal?.(final);
-                if (options.terminalCarrier === 'json') delete final.structured_output;
-                if (options.terminalCarrier === 'structured') delete final.result;
-                const observationStream = options.observedTelemetry
-                  ? [init, ...nativeRows.filter(row => row.type !== 'user').map(row => structuredClone(row)), final] : null;
-                options.mutateObservation?.(nativeRows, observationStream, final);
-                fs.writeFileSync(nativeFile, serialize(nativeRows));
-                const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
-                const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
-                const hookValue = name => hookArgs[hookArgs.indexOf(name) + 1];
-                captureStart({ hook_event_name: 'SessionStart', source: 'startup', session_id: session,
-                  transcript_path: nativeFile, cwd: fixture.root }, {
-                  evidenceFile: hookValue('--evidence-file'), expectedSession: hookValue('--expected-session') });
-                if (options.firstResponseUsage) {
-                  assistant.message.usage = options.firstResponseUsage; assistant.message.stop_reason = 'end_turn';
-                }
-                const usageRecords = options.firstResponseLines
-                  ? options.firstResponseLines.map(row => ({ ...structuredClone(row), session_id: session, sessionId: session })) : [assistant];
-                child.stdout.emit('data', Buffer.from(serialize(observationStream || [init, ...usageRecords, final]))); child.emit('close', 0, null);
-              } catch (error) { child.emit('error', error); }
-            });
-          } };
-          return child;
-        } });
-    }
-    return runtime;
-  };
-}
-
-function claudePartitionCapacity(fixture, controls = {}) {
-  const directory = path.join(fixture.storageRoot, 'claude-behavior-only-capacity');
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
-  const retain = payload => {
-    const raw = stable({ ...payload, behavior_only: true }), file = path.join(directory, digest(raw) + '.json');
-    if (!fs.existsSync(file)) fs.writeFileSync(file, raw, { mode: 0o600 });
-    return { path: file, bytes: Buffer.byteLength(raw), sha256: digest(raw) };
-  };
-  return {
-    capacity: { max_input_bytes: 8 * 1024 * 1024, unit_input_bytes: 256 * 1024, segment_bytes: 16 * 1024,
-      output_reserve_tokens: 32000, tool_reserve_tokens: 10000,
-      output_limits: { conclusions: 1024, findings: 2048, limitations: 1024, required_context: 1024, seams: 16384 },
-      recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'native-exact' } },
-    counterSource: 'claude-behavior-only-counter', windowSource: 'claude-behavior-only-window',
-    renderLaunch(launch, selection) {
-      assert.equal(launch.runtime, 'claude');
-      assert.equal(selection.schema.properties.kind.const, launch.kind);
-      assert.equal(selection.readOnly, true);
-      controls.render?.(launch);
-      const request = { schema: 'shipyard.integration-native-request.v1', runtime: 'claude', model: launch.model,
-        effort: launch.effort, input: launch.input, instruction_sha256: launch.instruction_sha256,
-        recipe_sha256: digest(stable(this.capacity.recipe)),
-        frame: { developers: [], other_users: [], base_instructions: null, contexts: [] }, tools: [],
-        native_payload: JSON.stringify({ user: { type: 'user', message: { role: 'user', content: launch.input } }, selection }) };
-      controls.mutate?.(request, 'request', launch);
-      return request;
-    },
-    readWindow(identity) {
-      if (controls.noWindow) throw new Error('fixture window unavailable');
-      const proof = { schema: 'shipyard.integration-runtime-window.v1', ...identity,
-        source: 'claude-behavior-only-window', evidence_id: 'claude-behavior-only-window', window_tokens: 100000000 };
-      controls.mutate?.(proof, 'window');
-      return retain(proof);
-    },
-    measureInput(request, identity) {
-      const payload = JSON.parse(request.input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
-      (controls.measured ||= []).push(payload);
-      const proof = { schema: 'shipyard.integration-input-measurement.v1', ...identity,
-        runtime: 'claude', model: request.model, source: 'claude-behavior-only-counter',
-        evidence_id: 'claude-behavior-only-count-' + identity.launch_sha256,
-        input_tokens_upper_bound: 1000 };
-      controls.mutate?.(proof, 'measurement', payload);
-      return retain(proof);
-    },
-  };
-}
-
-function setupClaudePartitionRepository(options) {
-  const f = setupRepository('integrator', options);
-  f.partitionHomedir = os.homedir;
-  os.homedir = () => f.storageRoot;
-  for (const name of ['tickets.json', 'delivery-state.json']) {
-    const file = path.join(f.root, '.planning/graph', name), value = JSON.parse(fs.readFileSync(file));
-    const rows = value.tickets || value;
-    rows['T-38-01'] = rows[TICKET]; delete rows[TICKET];
-    fs.writeFileSync(file, JSON.stringify(value));
-  }
-  git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'fixture canonical integration member']);
-  f.head = git(f.root, ['rev-parse', 'HEAD']); f.headTree = git(f.root, ['rev-parse', 'HEAD^{tree}']);
-  git(f.root, ['branch', '-f', f.ticketBranch, f.head]);
-  for (const branch of [f.ticketBranch, f.branch]) git(f.root, ['update-ref', 'refs/remotes/origin/' + branch, f.head]);
-  return f;
-}
-
-function claudePartitionOptions(fixture, extra) {
-  return { ...hostOptions(fixture, extra),
-    listPullRequests: () => [livePr(fixture)], getPullRequest: () => livePr(fixture),
-    execFileSync(file, args, options) {
-      if (file === 'git' && args.includes('fetch')) return '';
-      return execFileSync(file, args, options);
-    } };
-}
-
-test('public Claude v3 runs original independent units, recovers exact custody and seals one fresh actual final', async () => {
-  const fixture = setupClaudePartitionRepository();
-  const controls = {}, launches = [], capacities = [];
-  try {
-    useCoordinatorGraph(fixture);
-    const prior = await createClaudeRoleHost(claudePartitionOptions(fixture, { originalStream: true })).run(request(fixture));
-    const historical = reviewArtifacts.authenticatedArchivePins(fixture.root);
-    const originalPins = structuredClone(historical), originalReceipt = structuredClone(prior.dispatch.receipt);
-    fs.unlinkSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`));
-    write(fixture.root, 'src/role.txt', 'exact Claude primary line Ω\n'.repeat(3000));
-    git(fixture.root, ['add', 'src']); git(fixture.root, ['commit', '-m', 'fixture complete current integration material']);
-    fixture.head = git(fixture.root, ['rev-parse', 'HEAD']); fixture.headTree = git(fixture.root, ['rev-parse', 'HEAD^{tree}']);
-    git(fixture.root, ['branch', '-f', fixture.ticketBranch, fixture.head]);
-    for (const branch of [fixture.ticketBranch, fixture.branch]) git(fixture.root, ['update-ref', 'refs/remotes/origin/' + branch, fixture.head]);
-    const options = claudePartitionOptions(fixture, { originalStream: true, onLaunch(prompt) {
-      const payload = JSON.parse(prompt.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
-      assert.equal(controls.measured.filter(item => item.kind === 'phase' && item.reserved_template).length, 1);
-      if (!launches.length) assert.ok(controls.measured.filter(item => item.kind === 'unit').length > 1);
-      assert.equal(prompt.includes('<AUTHENTICATED_CONTEXT_PACKET>'), false);
-      launches.push({ prompt, payload });
-      capacities.push(controls.measured.length);
-      assert.equal(fs.existsSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`)), false);
-    } });
-    options.integrationCapacity = claudePartitionCapacity(fixture, controls);
-    options.integrationCapacity.capacity.unit_input_bytes = 128 * 1024;
-    const factory = options.createRuntimeHost;
-    let interrupted = false;
-    options.createRuntimeHost = input => {
-      options.integrationCapacity.recorder ||= input.recorder;
-      if (launches.length === 2 && !interrupted) { interrupted = true; throw new Error('fixture restart before next reservation'); }
-      return factory(input);
-    };
-    const host = createClaudeRoleHost(options), selected = { ...request(fixture), review_contract: 'shipyard.integration-review.v3' };
-    await assert.rejects(host.run(selected), /fixture restart before next reservation/);
-    assert.equal(launches.length, 2);
-    for (const pin of historical) assert.deepEqual(reviewArtifacts.authenticatedArchivePins(fixture.root).find(item => item.path === pin.path), pin);
-    const unitFiles = reviewArtifacts.authenticatedArchivePins(fixture.root).filter(pin => !historical.some(old => old.path === pin.path));
-    assert.equal(unitFiles.length, 6);
-    const saved = fs.readFileSync(path.join(fixture.root, historical[0].path));
-    fs.appendFileSync(path.join(fixture.root, historical[0].path), 'tamper');
-    await assert.rejects(host.run(selected), /pin|changed|digest|archive/i);
-    fs.writeFileSync(path.join(fixture.root, historical[0].path), saved);
-    write(fixture.root, '.shipyard-role-artifacts/unlisted/unrelated.json', '{}');
-    await assert.rejects(host.run(selected), /archive|membership/i);
-    fs.rmSync(path.join(fixture.root, '.shipyard-role-artifacts/unlisted'), { recursive: true });
-    options.integrationCapacity.plan_sha256 = controls.measured[0].plan_sha256;
-    const restarted = createClaudeRoleHost(options);
-    const result = await restarted.run(selected);
-    assert.equal(result.result.kind, 'phase');
-    assert.equal(result.result.review_contract, 'shipyard.integration-review.v3');
-    assert.equal(result.result.outcome, 'passed');
-    assert.equal(result.dispatch.receipt.runtime, 'claude');
-    assert.equal(result.dispatch.receipt.compliance, 'verified');
-    assert.equal(launches.filter(item => item.payload.kind === 'phase').length, 1);
-    assert.equal(new Set(launches.filter(item => item.payload.kind === 'unit').map(item => item.payload.assignment.unit_id)).size, launches.length - 1);
-    assert.equal(controls.measured.length, launches.length + 1);
-    assert.equal(capacities.at(-1), controls.measured.length, 'actual final is freshly measured after authentic results exist');
-    const actual = controls.measured.at(-1);
-    assert.equal(actual.reserved_template, undefined);
-    assert.notEqual(actual.verified_index_sha256, '0'.repeat(64));
-    assert.equal(actual.unit_artifacts.length, launches.length - 1);
-    assert.deepEqual(historical, originalPins);
-    assert.deepEqual(prior.dispatch.receipt, originalReceipt);
-    for (const pin of historical) reviewArtifacts.assertArchivePin(fixture.root, pin);
-    const manifests = reviewArtifacts.authenticatedArchivePins(fixture.root).filter(pin => pin.path.endsWith('/.shipyard-role-artifact.json'))
-      .map(pin => JSON.parse(fs.readFileSync(path.join(fixture.root, pin.path))));
-    assert.equal(manifests.filter(item => item.artifact_kind === 'integration-unit').length, launches.length - 1);
-    assert.equal(new Set(manifests.map(item => item.producer_launch)).size, manifests.length);
-    await assert.rejects(restarted.run(selected), /reserved|membership|archive|baseline/i);
-    assert.equal(launches.filter(item => item.payload.kind === 'phase').length, 1);
-  } catch (error) {
-    process.stderr.write('Claude v3 lifecycle diagnostic: ' + error.stack + '\n');
-    throw error;
-  } finally { cleanupFixture(fixture); }
-});
-
-for (const scenario of ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
-  'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'over-bound-actual-final', 'changed-exact-input',
-  'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'native-input-substitution'])
-test('public Claude v3 refuses ' + scenario + ' with behavior-only capacity', async () => {
-  const fixture = setupClaudePartitionRepository();
-  const controls = {}, launches = [];
-  try {
-    const options = claudePartitionOptions(fixture, { originalStream: true, onLaunch(prompt) {
-      launches.push(prompt);
-      if (scenario === 'source-substitution') fs.appendFileSync(path.join(fixture.root, 'src/role.txt'), 'changed');
-    }, mutateResult(result) {
-      if (scenario === 'wrong-output') result.runtime = 'codex';
-      if (scenario === 'incomplete-unit') result.completeness = 'incomplete';
-      if (scenario === 'failed-unit') { result.outcome = 'human-review-required'; result.required_context = ['Unresolved interaction.']; }
-    } });
-    options.integrationCapacity = scenario === 'missing-bootstrap' ? {} : claudePartitionCapacity(fixture, controls);
-    if (scenario === 'missing-renderer') delete options.integrationCapacity.renderLaunch;
-    if (scenario === 'unknown-window') controls.noWindow = true;
-    controls.mutate = (proof, kind, payload) => {
-      if (scenario === 'foreign-window' && kind === 'window') proof.runtime = 'codex';
-      if (scenario === 'foreign-counter' && kind === 'measurement') proof.runtime = 'codex';
-      if (scenario === 'unknown-instructions' && kind === 'request') delete proof.frame.base_instructions;
-      if (scenario === 'over-bound-unit' && kind === 'measurement' && payload.kind === 'unit'
-          || scenario === 'over-bound-template' && kind === 'measurement' && payload.reserved_template
-          || scenario === 'over-bound-actual-final' && kind === 'measurement' && payload.kind === 'phase' && !payload.reserved_template)
-        proof.input_tokens_upper_bound = 100000000;
-      if (scenario === 'changed-exact-input' && kind === 'request' && controls.measured?.length >= 2) proof.input += 'changed';
-    };
-    if (scenario === 'native-input-substitution') {
-      const factory = options.createRuntimeHost;
-      options.createRuntimeHost = input => {
-        const runtime = factory(input);
-        return { ...runtime, agent(prompt, selection) { return runtime.agent(prompt + '\nforeign native bytes', selection); } };
-      };
-    }
-    await assert.rejects(createClaudeRoleHost(options).run({ ...request(fixture), review_contract: 'shipyard.integration-review.v3' }),
-      error => /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_/.test(error.code || ''));
-    const prelaunch = ['missing-bootstrap', 'missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
-      'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'changed-exact-input'].includes(scenario);
-    assert.equal(launches.length, prelaunch ? 0 : 1);
-    assert.equal(fs.existsSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`)), false);
-  } finally { cleanupFixture(fixture); }
-});
-
-test('public Claude v3 rejects serialized stage, receipt and capacity authority', () => {
-  const fixture = setupRepository('integrator');
-  try {
-    const selected = { ...request(fixture), review_contract: 'shipyard.integration-review.v3' };
-    assert.equal(parseRequest(selected).review_contract, selected.review_contract);
-    for (const field of ['prompt', 'kind', 'unit_id', 'plan_sha256', 'partitions', 'verified_index_sha256', 'receipt',
-      'integrationCapacity', 'renderLaunch', 'measureInput', 'readWindow', 'capacity_certificate'])
-      assert.throws(() => parseRequest({ ...selected, [field]: {} }), /not permitted/);
-    assert.throws(() => parseRequest({ ...selected, signals: { critical: true } }), /host-owned/);
-  } finally { cleanupFixture(fixture); }
-});
 
 test('changed role instruction bytes refuse before native launch without modifying shared references', async (t) => {
   const fixture = setupRepository('arch-review');
@@ -1087,34 +504,6 @@ test('changed role instruction bytes refuse before native launch without modifyi
   }
 });
 
-function hostOptions(fixture, extra = {}) {
-  const pr = livePr(fixture);
-  return {
-    storageRoot: fixture.storageRoot,
-    ...(fixture.graphDir ? { graphDir: fixture.graphDir } : {}),
-    refreshGit: false,
-    defaultBranch: 'main',
-    listPullRequests({ branch, state }) {
-      if (fixture.kind === 'pr-sentinel') {
-        return state === 'open' ? fixture.sentinelPrs.filter((item) => item.headRefName === branch) : [];
-      }
-      if (fixture.kind === 'arch-review') return state === 'open' && branch === fixture.branch ? [pr] : [];
-      return state === 'closed' && branch === fixture.prBranch ? [pr] : [];
-    },
-    getPullRequest(input = {}) {
-      const number = input.pr;
-      if (fixture.kind === 'pr-sentinel') return fixture.sentinelPrs.find((item) => item.number === number);
-      return pr;
-    },
-    preflightRound({ projectWorktree, prs }) {
-      const repos = [...new Set(prs.map((item) => item.repo || null))]
-        .map((repo) => ({ repo, root: projectWorktree, base: null, base_oid: null }));
-      return { repos, synced: true, committed: null };
-    },
-    createRuntimeHost: fakeRuntimeFactory(fixture, {
-      ...(['arch-review', 'code-review'].includes(fixture.kind) && !extra.badEvidence && !extra.corruptDigest ? { originalStream: true } : {}), ...extra }),
-  };
-}
 
 function setupSentinelRepository(options = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-sentinel-')));
@@ -1158,19 +547,7 @@ function setupSentinelRepository(options = {}) {
     sentinelPrs, base, baseTree, head: base, headTree: baseTree };
 }
 
-function cleanupFixture(fixture) {
-  if (fixture.partitionHomedir) os.homedir = fixture.partitionHomedir;
-  fs.rmSync(fixture.root, { recursive: true, force: true });
-  fs.rmSync(fixture.storageRoot, { recursive: true, force: true });
-}
 
-function request(fixture) {
-  return fixture.kind === 'arch-review'
-    ? { schema: REQUEST_SCHEMA, role: 'arch-review', worktree: fixture.root, ticket: TICKET, pr: 101 }
-    : fixture.kind === 'pr-sentinel'
-      ? { schema: REQUEST_SCHEMA, role: 'pr-sentinel', worktree: fixture.root, phase: fixture.phase }
-    : { schema: REQUEST_SCHEMA, role: 'integrator', worktree: fixture.root, phase: PHASE };
-}
 
 test('request contract accepts only host-owned role selectors and capability probe arguments', async () => {
   const fixture = setupRepository('arch-review');
@@ -1682,16 +1059,15 @@ test('integrator and arch-review launch schemas declare the finding ticket contr
   }
 });
 
-test('integrator judges the code diff without conveyor planning state', async () => {
+test('integrator inventories the product paths without conveyor planning state', async () => {
   const fixture = setupRepository('integrator', { planningBytes: 1200 * 1024 });
   let launched;
   try {
     await createClaudeRoleHost(hostOptions(fixture, {
       onLaunch(prompt, selection) { launched = { prompt, selection }; },
     })).run(request(fixture));
-    const diff = packetFromPrompt(launched.prompt).role_context.combined_diff.content;
-    assert.ok(diff.includes('diff --git a/src/role.txt b/src/role.txt'));
-    assert.equal(diff.includes('.planning/'), false);
+    const { changes } = packetFromPrompt(launched.prompt).role_context.change_metadata;
+    assert.deepEqual(changes.flatMap(change => change.paths), ['src/role.txt']);
   } finally {
     cleanupFixture(fixture);
   }
@@ -1710,55 +1086,8 @@ test('arch-review routing still sees the diff size although the diff is not in t
   } finally { cleanupFixture(fixture); }
 });
 
-test('integrator admits a role diff above the former 1 MiB bound', async () => {
-  const fixture = setupRepository('integrator', { sourceContent: bulkSource(14000) });
-  let launched;
-  try {
-    await createClaudeRoleHost(hostOptions(fixture, {
-      onLaunch(prompt) { launched = prompt; },
-    })).run(request(fixture));
-    const diff = packetFromPrompt(launched).role_context.combined_diff.content;
-    assert.ok(Buffer.byteLength(diff, 'utf8') > 1024 * 1024);
-    assert.ok(Buffer.byteLength(diff, 'utf8') <= 2 * 1024 * 1024);
-  } finally {
-    cleanupFixture(fixture);
-  }
-});
 
-test('an integrator diff of about 2 MB prepares within the packet and prompt bounds', async () => {
-  const fixture = setupRepository('integrator', { sourceContent: bulkSource(25000) });
-  let launched;
-  try {
-    await createClaudeRoleHost(hostOptions(fixture, {
-      onLaunch(prompt) { launched = prompt; },
-    })).run(request(fixture));
-    const packet = packetFromPrompt(launched);
-    const diffBytes = Buffer.byteLength(packet.role_context.combined_diff.content, 'utf8');
-    assert.ok(diffBytes > 1.9 * 1024 * 1024 && diffBytes <= 2 * 1024 * 1024);
-    assert.ok(packet.accounting.estimated_tokens > 320000);
-    assert.equal(packet.accounting.overflow, false);
-  } finally {
-    cleanupFixture(fixture);
-  }
-});
 
-test('an integrator packet above its diff-scaled token bound is refused as over bound', async () => {
-  const bigBody = (label) => `# ${label}\n\n- **Status:** accepted\n\n${'x'.repeat(150 * 1024)}\n`;
-  const corpus = { adrs: [201, 202, 203, 204, 205].map((number) => ({
-    name: `ADR-${number}-big.md`, content: bigBody(`ADR-${number} — big`) })) };
-  const planExtra = ['References ADR-201, ADR-202, ADR-203, ADR-204 and ADR-205 for scale.'];
-  const fixture = setupRepository('integrator', { corpus, planExtra, sourceContent: bulkSource(12000) });
-  try {
-    await assert.rejects(
-      createClaudeRoleHost(hostOptions(fixture)).run(request(fixture)),
-      (error) => error.code === 'CONTEXT_PACKET_OVER_BOUND'
-        && error.message.includes('integrator context packet is')
-        && error.message.includes('remedy: split the phase'),
-    );
-  } finally {
-    cleanupFixture(fixture);
-  }
-});
 
 test('native integrator collection retains overflowing accounting without admitting an inline launch', () => {
   const fixture = setupRepository('integrator', { sourceContent: bulkSource(50000) });
@@ -1766,10 +1095,6 @@ test('native integrator collection retains overflowing accounting without admitt
   try {
     const options = hostOptions(fixture);
     const original = request(fixture);
-    for (const extra of [{}, { deferInline: true }, { nativeRuntime: 'codex' }]) {
-      assert.throws(() => host.prepareIntegratorContext(options, { ...original, ...extra }),
-        error => error.code === 'CONTEXT_PACKET_OVER_BOUND' && error.message.includes('over its bound of 750000'));
-    }
     const prepared = host.prepareNativeIntegratorContext(options, original);
     assert.equal(host.isPreparedIntegratorContext(prepared), true);
     assert.equal(prepared.prompt, undefined);
@@ -1788,18 +1113,6 @@ test('native integrator collection retains overflowing accounting without admitt
   } finally { cleanupFixture(fixture); }
 });
 
-test('integrator refuses a role diff above the 6291456 diff byte bound as too large, not as a failed preflight', async () => {
-  const fixture = setupRepository('integrator', { sourceContent: bulkSource(80000) });
-  try {
-    await assert.rejects(
-      createClaudeRoleHost(hostOptions(fixture)).run(request(fixture)),
-      (error) => error.message.includes('role diff exceeds the bounded context packet')
-        && !error.message.includes('preflight failed'),
-    );
-  } finally {
-    cleanupFixture(fixture);
-  }
-});
 
 test('an overflowing change-metadata listing is refused as too large with the bound named', async () => {
   const fixture = setupRepository('arch-review');
@@ -1819,6 +1132,32 @@ test('an overflowing change-metadata listing is refused as too large with the bo
     cleanupFixture(fixture);
   }
 });
+
+function setupClaudePartitionRepository(options) {
+  const f = setupRepository('integrator', options);
+  f.partitionHomedir = os.homedir;
+  os.homedir = () => f.storageRoot;
+  for (const name of ['tickets.json', 'delivery-state.json']) {
+    const file = path.join(f.root, '.planning/graph', name), value = JSON.parse(fs.readFileSync(file));
+    const rows = value.tickets || value;
+    rows['T-38-01'] = rows[TICKET]; delete rows[TICKET];
+    fs.writeFileSync(file, JSON.stringify(value));
+  }
+  git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'fixture canonical integration member']);
+  f.head = git(f.root, ['rev-parse', 'HEAD']); f.headTree = git(f.root, ['rev-parse', 'HEAD^{tree}']);
+  git(f.root, ['branch', '-f', f.ticketBranch, f.head]);
+  for (const branch of [f.ticketBranch, f.branch]) git(f.root, ['update-ref', 'refs/remotes/origin/' + branch, f.head]);
+  return f;
+}
+
+function claudePartitionOptions(fixture, extra) {
+  return { ...hostOptions(fixture, extra),
+    listPullRequests: () => [livePr(fixture)], getPullRequest: () => livePr(fixture),
+    execFileSync(file, args, options) {
+      if (file === 'git' && args.includes('fetch')) return '';
+      return execFileSync(file, args, options);
+    } };
+}
 
 function reverseSquashRepository() {
   const f = setupClaudePartitionRepository();
@@ -1862,18 +1201,16 @@ function reverseSquashRepository() {
   return f;
 }
 
-test('D-34 real reverse squash reaches Claude and the Codex shared lineage entry without a provider', () => {
+test('D-34 real reverse squash reaches the Codex shared lineage entry without a provider', () => {
   const f = reverseSquashRepository();
   const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
   try {
-    const prepared = host.prepareIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' });
-    const codex = host.prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' });
-    const proof = host.createNativeIntegrationMergeProof(prepared, f.options);
+    const codex = host.prepareNativeIntegratorContext(f.options, request(f));
+    const proof = host.createNativeIntegrationMergeProof(codex, f.options);
     assert.equal(proof.schema, 'shipyard.native-integration-merge-proof.v1');
     assert.deepEqual(proof.paths.map(item => item.tickets), [
       ['T-38-01', 'T-38-02', 'T-38-03'], ['T-38-02', 'T-38-03'], ['T-38-03']]);
-    assert.equal(proof.ticket_set_digest, crypto.createHash('sha256').update(JSON.stringify(prepared.ticketSet)).digest('hex'));
-    assert.deepEqual(host.createNativeIntegrationMergeProof(codex, f.options), proof);
+    assert.equal(proof.ticket_set_digest, crypto.createHash('sha256').update(JSON.stringify(codex.ticketSet)).digest('hex'));
     const scope = { worktree: f.root, ticket: codex.ticket, phase: 38, run_id: 'd34-codex' };
     const review = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').prepareIntegrationLineage(scope, codex,
       { ...f.options, nativeRuntime: 'codex', dispatchId: scope.run_id, storageRoot: f.storageRoot, instructionBinding: {} });
@@ -1920,7 +1257,7 @@ test('D-34 reverse squash refuses ' + scenario, () => {
       git(f.root, ['update-ref', 'refs/remotes/origin/' + f.branch, git(f.root, ['rev-parse', 'HEAD'])]);
     }
     assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' }), /included|inclusion|parent|merged|identity|phase|repository|ambiguous|duplicate|cycle|object|plan set|delivery state/i);
+      .prepareNativeIntegratorContext(f.options, request(f)), /included|inclusion|parent|merged|identity|phase|repository|ambiguous|duplicate|cycle|object|plan set|delivery state/i);
   } finally { cleanupFixture(f); }
 });
 
@@ -1936,7 +1273,7 @@ test('D-34 collection refuses concurrent PR drift in ' + field, () => {
       return pr;
     };
     assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' }), error => error.code === 'STALE_CONTEXT');
+      .prepareNativeIntegratorContext(f.options, request(f)), error => error.code === 'STALE_CONTEXT');
   } finally { cleanupFixture(f); }
 });
 
@@ -1959,7 +1296,7 @@ test('D-34 collection refuses concurrent ' + scenario + ' drift', () => {
       return pr;
     };
     assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(f.options, { ...request(f), review_contract: 'shipyard.integration-review.v3' }), error => error.code === 'STALE_CONTEXT');
+      .prepareNativeIntegratorContext(f.options, request(f)), error => error.code === 'STALE_CONTEXT');
   } finally { cleanupFixture(f); }
 });
 
@@ -2314,18 +1651,6 @@ test('architecture above its typical target stays complete while other role boun
     cleanupFixture(archFixture);
   }
 
-  const integratorFixture = setupRepository('integrator', { corpus, planExtra });
-  try {
-    await assert.rejects(
-      createClaudeRoleHost(hostOptions(integratorFixture)).run(request(integratorFixture)),
-      (error) => error.code === 'CONTEXT_PACKET_OVER_BOUND'
-        && error.message.includes('integrator context packet is')
-        && error.message.includes('remedy: split the phase'),
-    );
-  } finally {
-    cleanupFixture(integratorFixture);
-  }
-
   const sentinelFixture = setupSentinelRepository({ corpus, planExtra });
   try {
     await assert.rejects(
@@ -2354,8 +1679,7 @@ test('role packets carry their explicit token bounds', async () => {
     await createClaudeRoleHost(hostOptions(integratorFixture, {
       onLaunch(prompt) { integratorPacket = packetFromPrompt(prompt); },
     })).run(request(integratorFixture));
-    const diffBytes = Buffer.byteLength(integratorPacket.role_context.combined_diff.content, 'utf8');
-    assert.equal(integratorPacket.accounting.soft_ceiling, 60000 + Math.ceil(diffBytes / 3));
+    assert.equal(integratorPacket.accounting.soft_ceiling, 550000, 'estimated packet tokens');
 
     let sentinelPacket;
     await createClaudeRoleHost(hostOptions(sentinelFixture, {
@@ -2678,9 +2002,8 @@ test('integrator subject for a space-path worktree is accepted by the authority 
   const fixture = setupRepository('integrator', { spaced: true });
   const targets = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
   const records = require('../../plugins/delivery-pipeline/scripts/dispatch-record.cjs');
-  const { prepareIntegratorContext } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
   try {
-    const prepared = prepareIntegratorContext(hostOptions(fixture), request(fixture));
+    const prepared = preparationOnlyHost().prepareInvocation(hostOptions(fixture), parseRequest(request(fixture)));
     const parsed = targets.parseSubject('integrator', prepared.ticket);
     assert.ok(parsed, 'integrator subject parses');
     assert.ok(parsed.repository.includes(' '));
@@ -3852,131 +3175,6 @@ test('D35 Claude authenticates original recorded disagreement without newest-his
       baseName: 'main', baseCommit: fixture.base, graphDir: fixture.graphDir }), null);
   } finally { cleanupFixture(fixture); }
 });
-
-async function d36ClaudeObservation(extra, action) {
-  const fixture = setupClaudePartitionRepository();
-  const launches = [];
-  try {
-    const options = claudePartitionOptions(fixture, { originalStream: true, observedTelemetry: true,
-      onLaunch(prompt, selection) { launches.push({ prompt, selection }); }, ...extra });
-    assert.equal(Object.hasOwn(options, 'integrationCapacity'), false);
-    const run = () => createClaudeRoleHost(options).run({ ...request(fixture), review_contract: 'shipyard.integration-review.v3' });
-    await action({ fixture, options, run, launches });
-  } finally { cleanupFixture(fixture); }
-}
-
-test('D36 Claude original message maxima, separate requests and inclusive output preserve native transport identity', async () => {
-  await d36ClaudeObservation({ mutateObservation(rows, stream, final) {
-    const assistant = rows.find(row => row.type === 'assistant');
-    assistant.message.usage = { input_tokens: 100, cache_read_input_tokens: 700, cache_creation_input_tokens: 100, output_tokens: 100,
-      output_tokens_details: { thinking_tokens: 90 } };
-    const partial = structuredClone(assistant); partial.message.stop_reason = null; partial.message.usage.output_tokens = 1;
-    partial.message.usage.output_tokens_details.thinking_tokens = 1;
-    const earlier = structuredClone(assistant); earlier.message.id += '-separate'; earlier.request_id += '-separate';
-    rows.splice(1, 0, earlier, partial);
-    stream.splice(1, stream.length - 2, ...rows.filter(row => row.type === 'assistant').map(row => structuredClone(row)));
-    const metadata = Object.values(final.modelUsage)[0]; metadata.contextWindow = 1100; metadata.inputTokens = 999999; metadata.thinkingTokens = 999999;
-  } }, async ({ run, launches }) => {
-    const result = await run();
-    assert.equal(result.result.outcome, 'passed'); assert.ok(launches.length > 1);
-    assert.equal(launches.filter(item => item.selection.schema.properties.kind.const === 'phase').length, 1);
-    assert.ok(launches.every(item => item.selection.readOnly && item.selection.model === result.context.model));
-    assert.ok(launches.every(item => item.prompt.includes('<AUTHENTICATED_INTEGRATION_PARTITION>')));
-    assert.equal(result.dispatch.receipt.compliance, 'verified');
-  });
-});
-
-for (const scenario of ['cache-overflow', 'cache-missing', 'cache-negative', 'window-zero', 'window-missing', 'window-unsafe',
-  'foreign-window', 'multiple-windows', 'foreign-session', 'foreign-message-model', 'changed-effort', 'changed-input',
-  'contradictory-message', 'removed-context', 'iteration-compaction', 'later-iteration-overflow', 'failed-terminal', 'missing-terminal',
-  'semantic-disagreement', 'nested-answer', 'nested-tool', 'quoted-transcript'])
-test('D36 Claude original observation refuses ' + scenario, async () => {
-  await d36ClaudeObservation({ mutateObservation(rows, stream, final) {
-    const assistant = rows.find(row => row.type === 'assistant');
-    const metadata = Object.values(final.modelUsage)[0];
-    if (scenario === 'cache-overflow') {
-      assistant.message.usage.input_tokens = 1; assistant.message.usage.cache_read_input_tokens = metadata.contextWindow;
-    }
-    if (scenario === 'cache-missing') delete assistant.message.usage.cache_creation_input_tokens;
-    if (scenario === 'cache-negative') assistant.message.usage.cache_read_input_tokens = -1;
-    if (scenario === 'window-zero') metadata.contextWindow = 0;
-    if (scenario === 'window-missing') delete metadata.contextWindow;
-    if (scenario === 'window-unsafe') metadata.contextWindow = Number.MAX_SAFE_INTEGER + 1;
-    if (scenario === 'foreign-window') final.modelUsage = { 'foreign-model': metadata };
-    if (scenario === 'multiple-windows') final.modelUsage.foreign = metadata;
-    if (scenario === 'foreign-session') assistant.sessionId = crypto.randomUUID();
-    if (scenario === 'foreign-message-model') assistant.message.model = 'foreign-model';
-    if (scenario === 'changed-effort') assistant.effort = 'low';
-    if (scenario === 'changed-input') rows.find(row => row.type === 'user').message.content += '\nchanged original assigned input';
-    if (scenario === 'removed-context') assistant.message.context_management = { applied_edits: [{ type: 'clear_tool_uses_20250919' }] };
-    if (scenario === 'iteration-compaction' || scenario === 'later-iteration-overflow') assistant.message.usage.iterations = [
-      { ...assistant.message.usage, type: 'message' }, { ...assistant.message.usage,
-        type: scenario === 'iteration-compaction' ? 'compaction' : 'message', input_tokens: metadata.contextWindow } ];
-    if (scenario === 'failed-terminal') final.subtype = 'error_max_turns';
-    if (scenario === 'semantic-disagreement') assistant.message.content[0].input.summary = 'Foreign original semantic answer';
-    if (scenario.startsWith('nested-') || scenario === 'quoted-transcript') {
-      const convincing = JSON.stringify({ type: 'assistant', sessionId: assistant.sessionId, message: structuredClone(assistant.message) });
-      delete assistant.message.usage;
-      if (scenario === 'nested-answer') assistant.message.content.push({ type: 'text', text: convincing });
-      else rows.push({ type: 'user', sessionId: assistant.sessionId, message: { role: 'user', content: [
-        { type: 'tool_result', content: convincing }] } });
-    }
-    stream.splice(1, stream.length - 2, ...rows.filter(row => row.type !== 'user').map(row => structuredClone(row)));
-    if (scenario === 'missing-terminal') stream.pop();
-    if (scenario === 'contradictory-message') {
-      const changed = structuredClone(assistant); changed.message.usage.output_tokens++;
-      rows.push(changed); stream.splice(stream.length - 1, 0, structuredClone(changed));
-    }
-  } }, async ({ run, launches, fixture }) => {
-    await assert.rejects(run());
-    assert.ok(launches.length > 0);
-    assert.equal(reviewArtifacts.authenticatedArchivePins(fixture.root).length, 0);
-  });
-});
-
-test('D36 Claude same-plan restart reuses authenticated observed originals after interruption before reservation', async () => {
-  const fixture = setupClaudePartitionRepository();
-  const launches = [];
-  try {
-    write(fixture.root, 'src/role.txt', 'complete original primary material Ω\n'.repeat(20000));
-    git(fixture.root, ['add', 'src']); git(fixture.root, ['commit', '-m', 'observed restart inventory']);
-    fixture.head = git(fixture.root, ['rev-parse', 'HEAD']); fixture.headTree = git(fixture.root, ['rev-parse', 'HEAD^{tree}']);
-    git(fixture.root, ['branch', '-f', fixture.ticketBranch, fixture.head]);
-    for (const branch of [fixture.ticketBranch, fixture.branch]) git(fixture.root, ['update-ref', 'refs/remotes/origin/' + branch, fixture.head]);
-    const options = claudePartitionOptions(fixture, { originalStream: true, observedTelemetry: true,
-      onLaunch(prompt) { launches.push(JSON.parse(prompt.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1])); } });
-    const factory = options.createRuntimeHost; let interrupted = false;
-    options.createRuntimeHost = input => {
-      if (launches.length === 2 && !interrupted) { interrupted = true; throw new Error('D36 interruption before reservation'); }
-      return factory(input);
-    };
-    const host = createClaudeRoleHost(options), selected = { ...request(fixture), review_contract: 'shipyard.integration-review.v3' };
-    await assert.rejects(host.run(selected), /D36 interruption before reservation/);
-    const pins = reviewArtifacts.authenticatedArchivePins(fixture.root);
-    assert.equal(pins.length, 6);
-    const firstUnits = launches.map(payload => payload.assignment.unit_id);
-    const result = await host.run(selected);
-    assert.equal(result.result.outcome, 'passed');
-    for (const id of firstUnits) assert.equal(launches.filter(payload => payload.assignment?.unit_id === id).length, 1);
-    for (const pin of pins) reviewArtifacts.assertArchivePin(fixture.root, pin);
-    assert.equal(launches.filter(payload => payload.kind === 'phase').length, 1);
-  } finally { cleanupFixture(fixture); }
-});
-
-test('D36 Claude supported native per-iteration samples fit independently of cumulative message cost', async () => {
-  await d36ClaudeObservation({ mutateObservation(rows, stream, final) {
-    const assistant = rows.find(row => row.type === 'assistant');
-    assistant.message.usage = { input_tokens: 200, cache_read_input_tokens: 1400, cache_creation_input_tokens: 200, output_tokens: 200,
-      iterations: [0, 1].map(() => ({ type: 'message', input_tokens: 100, cache_read_input_tokens: 700,
-        cache_creation_input_tokens: 100, output_tokens: 100 })) };
-    stream.splice(1, stream.length - 2, structuredClone(assistant));
-    Object.values(final.modelUsage)[0].contextWindow = 1100;
-  } }, async ({ run, launches }) => {
-    const result = await run();
-    assert.equal(result.result.outcome, 'passed'); assert.ok(launches.length > 1);
-  });
-});
-
 
 function d35t36Review(mode = 'deletion', options = {}) {
   const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');

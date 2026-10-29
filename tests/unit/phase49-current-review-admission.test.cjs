@@ -946,7 +946,7 @@ function currentInput(f, role, dispatchId = 'current-' + role + '-' + ++f.count,
         agent_sha256: instructions.sha256, agent_path: path.join(a.dir, a.selection.agent_file),
         installed_files: instructions.installed_files } });
   }
-  const complete = secondRuntime.prepareIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: String(49) });
+  const complete = secondRuntime.prepareNativeIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: String(49) });
   f.lastIntegrator = complete;
   const a = agent(f, role, complete.signals);
   const instructions = collector.instructionEvidence(a.dir, a.selection.agent_file, a.manifest);
@@ -1066,7 +1066,7 @@ async function successfulReview(f, role, options = {}) {
     host: { requireRuntimeEvidence: true, launchStatic: () => launched }, capabilities: a.capabilities });
   const dispatched = boundary.createDispatchBoundary({ adapters: { codex: adapter }, recorder }).dispatch(
     { runtime: 'codex', role, dispatch_id: dispatchId, signals: value?.launch.signals
-      || secondRuntime.prepareIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: '49' }).signals },
+      || secondRuntime.prepareNativeIntegratorContext(projectOptions(f), { worktree: f.worktree, phase: '49' }).signals },
     { ticket: scope.ticket, ...(role === 'arch-review' ? { subject_kind: 'phase' } : {}) });
   let sealed;
   if (value) {
