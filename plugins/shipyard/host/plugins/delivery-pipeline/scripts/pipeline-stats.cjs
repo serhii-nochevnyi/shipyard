@@ -25,7 +25,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { readLedger } = require(path.join(__dirname, 'pr-ledger.cjs'));
-const { loadConfig, ROLES, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { loadConfig, ROLES, EFFORTS } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const usageAttribution = require(path.join(__dirname, 'usage-attribution.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
@@ -343,19 +343,13 @@ const routeValid = (event) => {
   // A stale but well-formed historical route is still a route, never rewritten
   // into today's policy.
   const canonicalRoute = present(event, 'route') ? event.route : event.reason;
-  if (present(event, 'route') || present(event, 'policy_hash') || present(event, 'rung')) {
-    const parsed = canonicalRouteParts(canonicalRoute);
-    return Boolean(parsed)
-      && (!present(event, 'role') || parsed.role === event.role)
-      && (!present(event, 'rung') || parsed.rung === event.rung)
-      && (!present(event, 'logical_rung') || parsed.rung === event.logical_rung)
-      && (!present(event, 'logical_model') || parsed.model_key === event.logical_model);
-  }
-  if (!present(event, 'reason')) return false;
-  const route = parseRoute(event.reason);
-  return Boolean(route)
-    && route.tier.model === event.model
-    && route.effort.effort === event.effort;
+  if (!present(event, 'route') && !present(event, 'policy_hash') && !present(event, 'rung')) return false;
+  const parsed = canonicalRouteParts(canonicalRoute);
+  return Boolean(parsed)
+    && (!present(event, 'role') || parsed.role === event.role)
+    && (!present(event, 'rung') || parsed.rung === event.rung)
+    && (!present(event, 'logical_rung') || parsed.rung === event.logical_rung)
+    && (!present(event, 'logical_model') || parsed.model_key === event.logical_model);
 };
 const requestedMissing = (event) => [
   'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'role',
