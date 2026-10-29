@@ -409,7 +409,8 @@ if (group === 'api') {
       base: { repo: { full_name: entry.owner + '/' + entry.name } } }) + '\\n');
   }
   const commit = entry.prs.find(pr => target.startsWith(prefix + '/commits/' + pr.headRefOid + '/'));
-  if (commit && target === prefix + '/commits/' + commit.headRefOid + '/check-runs?per_page=100&filter=latest')
+  if (commit && (target === prefix + '/commits/' + commit.headRefOid + '/check-runs?per_page=100&filter=latest'
+    || target === prefix + '/commits/' + commit.headRefOid + '/check-runs?per_page=100&filter=all'))
     done(JSON.stringify([{ total_count: 0, check_runs: [] }]) + '\\n');
   if (commit && target === prefix + '/commits/' + commit.headRefOid + '/status?per_page=100')
     done(JSON.stringify([{ sha: commit.headRefOid, total_count: 0, statuses: [] }]) + '\\n');
