@@ -133,7 +133,7 @@ const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 const MARK_FLAGS = [
   'model', 'effort', 'effort-applied', 'route', 'task-level', 'runtime', 'backend',
   'observed-model', 'observed-effort', 'agent-file', 'agent-id', 'dispatch-id',
-  'boundary-store', 'run-id', 'account-scope', 'treatment-id', 'arm', 'policy-id',
+  'boundary-store', 'run-id', 'policy-id',
   'policy-version', 'policy-hash',
 ];
 
@@ -362,9 +362,6 @@ function parseMarkFlags(argv, role, ticket) {
         'observed-model': facts.observed_model, 'observed-effort': facts.observed_effort,
         'agent-file': recorderAgentFile(facts.agent_file), 'agent-id': facts.launch_id,
         'run-id': facts.session_handoff && facts.session_handoff.run_id,
-        'account-scope': facts.account_scope,
-        'treatment-id': facts.treatment_id,
-        arm: facts.arm,
         'policy-id': facts.policy_id,
         'policy-version': facts.policy_version,
         'policy-hash': facts.policy_hash,
@@ -447,9 +444,6 @@ const BATCH_FIELDS = new Map([
   ['dispatch_id', 'dispatch-id'],
   ['boundary_store', 'boundary-store'],
   ['run_id', 'run-id'],
-  ['account_scope', 'account-scope'],
-  ['treatment_id', 'treatment-id'],
-  ['arm', 'arm'],
   ['policy_id', 'policy-id'],
   ['policy_version', 'policy-version'],
   ['policy_hash', 'policy-hash'],

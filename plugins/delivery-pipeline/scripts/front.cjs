@@ -1516,7 +1516,7 @@ function formatFront(front) {
   // does not know and silently declines to route.
   const live = ORDER.filter((k) => front.actionable[k].length && (BUCKET_ROLES[k] || []).length);
   if (live.length) {
-    lines.push(`  dispatch roles (for "model <role>"): ${live.map((k) => `${k} → ${BUCKET_ROLES[k].join(' / ')}`).join(', ')}`);
+    lines.push(`  dispatch roles (boundary dispatch role): ${live.map((k) => `${k} → ${BUCKET_ROLES[k].join(' / ')}`).join(', ')}`);
   }
 
   const wparts = [];
