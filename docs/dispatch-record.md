@@ -40,24 +40,22 @@ cat <<'JSON' | node plugins/delivery-pipeline/scripts/dispatch-record.cjs mark-m
   {
     "ticket": "T-01-01",
     "role": "executor",
-    "model": "opus",
-    "effort": "high",
-    "route": "tier=floor(opus) effort=row(high)",
-    "task_level": "routine",
-    "runtime": "codex",
-    "backend": "codex-exec",
-    "effort_applied": "high",
-    "agent_id": "<launch id>"
+    "boundary_store": "<receipt store>",
+    "dispatch_id": "<dispatch id>",
+    "task_level": "routine"
   }
 ]
 JSON
 ```
 
-Ticket input is a JSON array of objects with `ticket`, `role` and the same fields
-as `mark`: `model`, `effort`, `effort_applied`, `route`, `task_level`, `runtime`,
-`backend`, `observed_model`, `observed_effort`, `agent_file`, `agent_id` and an
-optional `dispatch_id`. The boundary receipt supplies those routing facts; this
-command does not select a model, launch an agent, or infer applied effort.
+Ticket input is a JSON array of objects with `ticket`, `role`, `boundary_store`
+and `dispatch_id`. The boundary receipt supplies the model, effort, route,
+runtime, backend, launch id and application evidence; the optional fields
+(`model`, `effort`, `effort_applied`, `route`, `task_level`, `runtime`,
+`backend`, `observed_model`, `observed_effort`, `agent_file`, `agent_id`) are
+accepted only when they equal the receipt. Without a receipt only `agent_id` and
+`dispatch_id` are accepted. This command does not select a model, launch an
+agent, or infer applied effort.
 After the runtime supplies a transcript session/request/message id, connect it
 with `usage-attribution.cjs record`.
 

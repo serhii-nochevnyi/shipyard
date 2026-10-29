@@ -131,10 +131,8 @@ expect to still be true tomorrow is recorded and the front reads it back itself:
   is working on it RIGHT NOW. It lifts by itself when the ticket moves or the
   dispatch times out. Rules:
   - `boundary.dispatch` returns the canonical policy route (`role=… rung=…
-    model=… signals=…`); the recorder takes the compatibility recorder route
-    (`tier=…(<alias>) effort=…(<level>)`) from the adapter's recorder projection.
-    Never pass the boundary route to `--route`, never compose a sentence about
-    the ladder (`--reason` is refused), never invent either route.
+    model=… signals=…`); `mark` records the receipt's model, effort and route
+    itself. Never compose a sentence about the ladder or invent a route.
   - `--task-level` comes from `taskLevelRoute` and is one of
     `mechanical|routine|complex|critical|recovery`; never pass a boundary rung
     name (`base`, `very-complex`, `alternatives`, `repeat`, `ceiling`).

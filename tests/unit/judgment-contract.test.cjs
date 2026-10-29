@@ -154,7 +154,7 @@ const SUBJECTS = [
       {
         step: 'resolve',
         name: /resolve/i,
-        markers: [/pipeline-config\.cjs model arch-review/],
+        markers: [/boundary\.dispatch\(/],
         why: 'model and effort come from the ladder, never from an assumption',
       },
       {
@@ -173,7 +173,7 @@ const SUBJECTS = [
     // The invocations that must live in exactly ONE of the two sections.
     // Deliberately NOT `gate-trailer.cjs write`, which both documents show on
     // purpose and `trailer.test.cjs` requires in both.
-    statedOnce: [/pipeline-config\.cjs model arch-review/, /log-event\.cjs arch_review/],
+    statedOnce: [/boundary\.dispatch\(/, /log-event\.cjs arch_review/],
   },
 ];
 

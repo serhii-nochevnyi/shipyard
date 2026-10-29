@@ -91,13 +91,6 @@ function attributionShape(record, index) {
   if (record.task_level !== undefined && !pipeline.TASK_LEVELS.includes(record.task_level)) {
     return { error: `attribution ${index} has an unknown task level` };
   }
-  if (record.model !== undefined && !pipeline.TIERS.includes(record.model)) {
-    return { error: `attribution ${index} has an unknown requested model` };
-  }
-  if (record.model !== undefined && typeof pipeline.tierAllowedForRuntime === 'function'
-      && !pipeline.tierAllowedForRuntime(runtime, record.model)) {
-    return { error: `attribution ${index} requested model "${record.model}" is not available on runtime ${runtime}` };
-  }
   for (const field of ['effort', 'effort_applied', 'observed_effort']) {
     if (record[field] !== undefined && !attributionRules.EFFORT_STATES.has(record[field])) {
       return { error: `attribution ${index} has an invalid ${field}` };

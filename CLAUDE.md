@@ -97,8 +97,8 @@ conditions. When adding a rule, add a focused unit or fixture test with it.
 **Mandatory boundary:** every routed launch must resolve → validate → launch → receipt. The selected runtime-native model and effort must be explicit at launch; validate the policy fingerprint and selected generated Codex agent or dynamic launch arguments before side effects; then record requested and applied model/effort with an application receipt. Unknown or ambiguous runtimes, unsupported selections, stale or missing generated variants, conflicting overrides, inline or session-inherited selection, and missing receipts hard-refuse. A successful process exit is not evidence that the runtime applied the selection. Historical ADR reasoning stays in ADR-005 and ADR-012; it is not operating guidance.
 
 `model-policy.cjs` is the versioned reader for routed model and effort selections.
-`pipeline-config.cjs` remains a compatibility reader; it cannot authorize routed
-dispatches. Claude launches use the runtime-native model ID, including
+`pipeline-config.cjs` reads `.planning/config.json` and validates it against the
+routed policy; it has no tier or effort resolver of its own. Claude launches use the runtime-native model ID, including
 `claude-sonnet-5-5` and `claude-opus-5-5`; Codex writes a concrete
 model and effort into generated agent files because its agents are static.
 Codex model ids are resolved from the runtime-native ADR-014 grid; the active

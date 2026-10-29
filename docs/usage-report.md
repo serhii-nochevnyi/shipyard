@@ -34,7 +34,7 @@ JSON
 
 Use `runtime=claude, provider=anthropic` for Claude. The ledger rejects a
 provider/runtime mismatch, so an Anthropic model cannot be attributed to a Codex
-launch or the reverse. `model` is the requested Shipyard tier alias;
+launch or the reverse. `model` is the requested runtime-native id;
 `observed_model` is the concrete runtime id. Omit an unavailable observation;
 do not copy the requested value into an observed field.
 

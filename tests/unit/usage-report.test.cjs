@@ -487,19 +487,6 @@ test('unassigned overhead is bucketed by reason and runtime', () => {
  assert.equal(r.efficiency.input_per_verified_completion.unassigned_total, null);
 });
 
-test('runtime-incompatible requested tiers are skipped from in-memory attributions', () => {
- const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), {
-   attributions: [{
-     observation_id:'bad-runtime-tier', dispatch_id:'dispatch-1', runtime:'codex', provider:'openai', kind:'ordinary',
-     source:'fixture', session_id:'s1', request_id:'r1', message_id:'m1', ticket:'T-01-01',
-     role:'executor', task_level:'routine', backend:'workflow', model:'fable', effort:'high',
-     observed_model:'gpt-5.6-luna', observed_effort:'high',
-   }],
- });
- assert.ok(r.warnings.some((w) => w.includes('not available on runtime codex')));
- assert.equal(r.observations[0].attribution_status, 'unattributed');
-});
-
 test('malformed observed_model values are skipped instead of entering efficiency rows', () => {
  const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), {
    attributions: [{
