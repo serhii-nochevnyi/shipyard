@@ -4,6 +4,11 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const CONTRACT_ID = 'shipyard.phase-code-review.v1';
 const ROUND_CAP = 3;
+const PART_BUDGET = 40000;
+const PART_SCHEMA = Object.freeze({ type: 'object', required: ['part', 'review_completeness', 'limitations', 'unresolved_sources', 'summary', 'findings'],
+  properties: { part: { type: 'string' }, review_completeness: { enum: ['complete', 'incomplete'] }, summary: { type: 'string' },
+    limitations: { type: 'array', items: { type: 'string' } }, unresolved_sources: { type: 'array', items: { type: 'string' } },
+    findings: { type: 'array', items: { type: 'object' } } } });
 const SOURCE_MAX_BYTES = 2 * 1024 * 1024;
 const SEVERITIES = Object.freeze(['BLOCKER', 'WARNING', 'INFO']);
 const VERDICTS = Object.freeze(['pass', 'needs-fix', 'incomplete']);
@@ -86,6 +91,71 @@ function boundedList(value, label) {
     fail('INVALID_RESULT', `${label} must have at most 128 strings of at most 1024 bytes`);
   return value;
 }
+function changePath(change) { return change.new_path ?? change.old_path; }
+function pathGroups(changes, budget) {
+  const weight = change => 1 + (change.additions ?? 0) + (change.deletions ?? 0);
+  const directories = new Map();
+  for (const change of [...changes].sort((a, b) => changePath(a) < changePath(b) ? -1 : changePath(a) > changePath(b) ? 1 : 0)) {
+    const directory = path.posix.dirname(changePath(change));
+    directories.set(directory, [...(directories.get(directory) || []), change]);
+  }
+  const groups = [];
+  let open = null;
+  const place = items => {
+    const size = items.reduce((sum, change) => sum + weight(change), 0);
+    if (open && open.size + size <= budget) { open.changes.push(...items); open.size += size; }
+    else groups.push(open = { changes: [...items], size });
+  };
+  for (const items of directories.values()) {
+    if (items.reduce((sum, change) => sum + weight(change), 0) <= budget) place(items);
+    else for (const change of items) place([change]);
+  }
+  return groups.map((group, index) => ({ id: 'part-' + (index + 1), ordinal: index + 1, changes: group.changes,
+    paths: [...new Set(group.changes.flatMap(change => change.paths))].sort() }));
+}
+function assertPathPartition(changes, parts) {
+  const expected = changes.flatMap(change => change.paths).sort(), actual = parts.flatMap(part => part.paths).sort();
+  if (expected.length !== actual.length || expected.some((value, index) => value !== actual[index]))
+    fail('INVALID_RESULT', 'parts must cover every product path exactly once');
+}
+function findingSeverity(finding) {
+  const severity = ({ CR: 'BLOCKER', WR: 'WARNING', IN: 'INFO' })[finding.severity] || finding.severity;
+  if (!SEVERITIES.includes(severity)) fail('INVALID_RESULT', 'invalid finding severity');
+  return severity;
+}
+function normalizePart(result, group) {
+  if (!object(result) || result.part !== group.id || !['complete', 'incomplete'].includes(result.review_completeness)
+      || !Array.isArray(result.findings) || result.findings.length > 128)
+    fail('INVALID_RESULT', 'part result must echo its part id with completeness and at most 128 findings');
+  const findings = result.findings.map((finding, index) => {
+    if (!object(finding)) fail('INVALID_RESULT', 'part finding must be an object');
+    const { id, path: file, line, line_text, summary, failure_scenario, rule, fix_ticket } = finding;
+    const severity = findingSeverity(finding), { title, scope, files, depends_on } = object(fix_ticket) ? fix_ticket : {};
+    return JSON.parse(JSON.stringify({ id, severity, path: file, line, line_text, summary, failure_scenario, rule,
+      ...(severity === 'BLOCKER' ? { ref: `PB-${group.ordinal}-${index + 1}` } : {}),
+      fix_ticket: object(fix_ticket) ? { title, scope, files, depends_on } : undefined }));
+  });
+  return { id: group.id, ordinal: group.ordinal, paths: group.paths, review_completeness: result.review_completeness,
+    limitations: boundedList(result.limitations, 'limitations'), unresolved_sources: boundedList(result.unresolved_sources, 'unresolved_sources'),
+    summary: requireText(result.summary, 'summary', 2048), findings };
+}
+function normalizeFinal(result, parts, options) {
+  const coverage = parts.map((part, index) => ({ partition: index + 1, status: part.review_completeness === 'complete'
+    && !part.limitations.length && !part.unresolved_sources.length ? 'reviewed' : 'not-reviewed' }));
+  if (result.review_completeness === 'complete' && coverage.some(entry => entry.status !== 'reviewed'))
+    fail('INVALID_RESULT', 'complete code review has unreviewed parts');
+  const refs = parts.flatMap(part => part.findings.map(finding => finding.ref).filter(Boolean));
+  const own = (Array.isArray(result.dispositions) ? result.dispositions : []).filter(entry => refs.includes(entry?.ref));
+  const justified = ref => own.filter(entry => entry.ref === ref && ['resolved', 'unresolved', 'disputed'].includes(entry.disposition)
+    && bounded(entry.justification));
+  if (refs.some(ref => justified(ref).length !== 1))
+    fail('JUDGMENT_OUTCOME_MISMATCH', 'each part BLOCKER needs one justified disposition keyed by its ref');
+  const normalized = normalizeResult({ ...result, coverage,
+    dispositions: (result.dispositions || []).filter(entry => !refs.includes(entry?.ref)) }, options);
+  if (own.some(entry => entry.disposition === 'unresolved') && !normalized.blocking_count)
+    fail('JUDGMENT_OUTCOME_MISMATCH', 'an unresolved part BLOCKER requires a blocking finding');
+  return own.length ? { ...normalized, part_dispositions: own.map(({ ref, disposition, justification }) => ({ ref, disposition, justification })) } : normalized;
+}
 function normalizeResult(result, { round, scope, priorFindings = [], readSource } = {}) {
   if (!object(result) || !Array.isArray(result.findings) || result.findings.length > 128)
     fail('INVALID_RESULT', 'review requires at most 128 findings');
@@ -110,8 +180,7 @@ function normalizeResult(result, { round, scope, priorFindings = [], readSource 
     const id = requireText(finding.id, 'finding.id', 128);
     if (ids.has(id)) fail('DUPLICATE_FINDING_ID', `duplicate finding id ${id}`);
     ids.add(id);
-    let severity = ({ CR: 'BLOCKER', WR: 'WARNING', IN: 'INFO' })[finding.severity] || finding.severity;
-    if (!SEVERITIES.includes(severity)) fail('INVALID_RESULT', 'invalid finding severity');
+    let severity = findingSeverity(finding);
     requireText(finding.summary, 'finding.summary');
     const rule = finding.rule === undefined ? 'unlabelled' : finding.rule;
     if (typeof rule !== 'string' || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(rule) || rule.length > 64)
@@ -422,7 +491,7 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
     change_metadata: changeMetadata, contract_digest: contractDigest(referenceDigest) };
 }
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
-module.exports = { CONTRACT_ID, ROUND_CAP, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
+module.exports = { CONTRACT_ID, ROUND_CAP, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, normalizeFinal, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
   lineageComplete, coverageComplete, nextRound, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };

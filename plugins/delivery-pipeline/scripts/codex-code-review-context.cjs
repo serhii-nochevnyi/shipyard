@@ -11,7 +11,7 @@ const { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, P
 const roleArtifact = require('./role-artifact.cjs');
 const core = require('./code-review-core.cjs');
 const packets = require('./context-packet.cjs');
-const { CODE_REVIEW_PACKET_TOKENS, CODE_REVIEW_MATERIAL_MAX_BYTES } = require('./claude-role-host.cjs');
+const { CODE_REVIEW_PACKET_TOKENS } = require('./claude-role-host.cjs');
 const { CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, FILE_LIMITS,
   prepareFileInput, verifyFileInput, validateCodeReviewCoverage, codexResultText, boundedBytes,
   file } = require('./codex-arch-review-context.cjs');
@@ -40,7 +40,7 @@ function deepFreeze(value) {
   for (const child of Object.values(value)) deepFreeze(child);
   return Object.freeze(value);
 }
-function run(options, executable, args, cwd, maxBuffer = CODE_REVIEW_MATERIAL_MAX_BYTES) {
+function run(options, executable, args, cwd, maxBuffer = FILE_LIMITS.material) {
   try {
     const result = (options.execFileSync || execFileSync)(executable, args, {
       cwd, env: Object.fromEntries(Object.entries(process.env).filter(([key]) =>
@@ -200,11 +200,11 @@ function collect(scope, options) {
     scope: { files_modified: [...new Set(binding.rows.flatMap(item => item.row.files || []))] },
     requiredRefs: plans.map(plan => plan.path), roleContext, tokenCeiling: CODE_REVIEW_PACKET_TOKENS });
   packets.validateContextPacket(packet, { role: 'code-review', subject: binding.subject, sourceRevision: head });
-  if (Buffer.byteLength(JSON.stringify(packet)) > CODE_REVIEW_MATERIAL_MAX_BYTES)
+  if (Buffer.byteLength(JSON.stringify(packet)) > FILE_LIMITS.material)
     fail('complete packet exceeds its material bytes per launch bound', 'CONTEXT_PACKET_OVER_BOUND');
   const serialized = JSON.stringify(packets.encodeUniqueContent(packet));
   const materialBytes = Buffer.byteLength(serialized) + Buffer.byteLength(diff);
-  if (materialBytes > CODE_REVIEW_MATERIAL_MAX_BYTES)
+  if (materialBytes > FILE_LIMITS.material)
     fail('complete material exceeds its material bytes per launch bound', 'CONTEXT_PACKET_OVER_BOUND');
   for (const pin of [graphFile, stateFile, ...plans])
     if (file(project, pin.path).sha256 !== pin.sha256) fail('context source changed while collecting', 'STALE_CONTEXT');

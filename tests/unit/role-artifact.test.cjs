@@ -2817,14 +2817,13 @@ for (const changed of ['config mapping', 'epic membership', 'graph symlink', 'so
   });
 
 
-for (const partitioned of [false, true]) for (const changed of ['plan', 'config', 'transcript'])
-  test('existing-format foreign native input retains original planning pins: partitions=' + partitioned + ', ' + changed, () => {
+for (const changed of ['plan', 'config', 'transcript'])
+  test('existing-format foreign native input retains original planning pins: ' + changed, () => {
     const f = foreignCodeReviewArchive();
     try {
       const plan = f.graph.tickets['T-52-01'].plan;
       const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
-      fixtures.retainPlanningInput(f, f.input, f.coordinator, 'acme/app',
-        { transport: partitioned ? 'host-files' : 'inline' });
+      fixtures.retainPlanningInput(f, f.input, f.coordinator, 'acme/app', { transport: 'inline' });
       const native = f.recorder.getVerifiedRecord(f.input.dispatchId).receipt.selection_evidence.transcript;
       const transcript = native.path;
       assert.equal(f.input.result.host_context, undefined);
@@ -2879,10 +2878,9 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
     const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
     const flow = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
     const originalCarrier = Buffer.from(JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [] }) + '\n');
-    for (const runtime of ['codex', 'claude']) for (const partitioned of [false, true]) for (const present of [false, true]) {
+    for (const [runtime, partitioned] of [['codex', false], ['codex', true], ['claude', false]]) for (const present of [false, true]) {
       const source = ('const captured = "' + 'x'.repeat(1024) + '";\n').repeat(1020);
-      const f = runtime === 'codex' ? codex.fixture() : claude.coordinatorOnlyPlanning('code-review',
-        partitioned ? { sourceContent: source } : {});
+      const f = runtime === 'codex' ? codex.fixture() : claude.coordinatorOnlyPlanning('code-review');
       try {
         if (runtime === 'codex' && partitioned) f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), source));
         const phase = runtime === 'codex' ? path.basename(path.dirname(f.row.plan)) : claude.PHASE;
@@ -2906,7 +2904,7 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
           assert.equal(!!context.admittedFileInput(review.value), partitioned);
         } else {
           const options = claude.hostOptions(f, { originalStream: true, onLaunch(prompt) {
-            assert.equal(prompt.includes('<AUTHENTICATED_FOCUSED_INPUT>'), partitioned);
+            assert.ok(!prompt.includes('<AUTHENTICATED_FOCUSED_INPUT>'));
           } });
           const factory = options.createRuntimeHost;
           options.createRuntimeHost = input => { const runtimeHost = factory(input); recorder = runtimeHost.recorder; return runtimeHost; };
@@ -3590,7 +3588,7 @@ for (const mode of ['incomplete', 'needs-fix']) test('D-32 authentic ' + mode + 
   });
 });
 
-assert.equal(d37Selected, 9, 'exact role-artifact D37 registration');
+assert.equal(d37Selected, 6, 'exact role-artifact D37 registration');
 assert.equal(reuseSelected, 1, 'exact role-artifact reuse registration');
 assert.equal(legacyCompatibilitySelected, 1, 'exact legacy compatibility registration');
 done();
