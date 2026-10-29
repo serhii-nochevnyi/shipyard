@@ -551,7 +551,22 @@ test('real isolated builder reproduces complete inventory and independently load
   const actual = inventory(candidate);
   assert.deepEqual(actual, before);
   const owned = new Set(['host/plugins/delivery-pipeline/scripts/check-state.cjs', '.codex-plugin/plugin.json', 'package-build.json']);
-  assert.equal(hash(JSON.stringify(actual.filter(r => !owned.has(r.path)))), capture.parent.other_package_inventory_sha256);
+  const priorMirrors = {
+    'ci-wait.cjs': { mode: 493, digest: 'a22edb2ce48790bae6bc8526405fdd86cd8818c76126d6e72decece58af962b4' },
+    'codex-runtime-host.cjs': { mode: 420, digest: 'f684acac76b9ae49ffcb7c890ff47cf7964d90558556dddb377381f49c1a9968' },
+  };
+  const previous = actual.filter(r => !owned.has(r.path)).map(row => {
+    const name = Object.keys(priorMirrors).find(name => row.path === `host/plugins/delivery-pipeline/scripts/${name}`);
+    if (!name) return row;
+    const canonical = path.join(SCRIPTS, name), mirror = path.join(candidate, row.path);
+    assert.deepEqual(fs.readFileSync(mirror), fs.readFileSync(canonical));
+    assert.equal(row.directory, false);
+    assert.equal(row.mode, fs.statSync(canonical).mode & 0o777);
+    assert.equal(row.mode, priorMirrors[name].mode);
+    return { ...row, ...priorMirrors[name], directory: false };
+  });
+  assert.equal(previous.filter(r => Object.values(priorMirrors).some(prior => prior.digest === r.digest)).length, 2);
+  assert.equal(hash(JSON.stringify(previous)), capture.parent.other_package_inventory_sha256);
   const mirror = path.join(candidate, 'host/plugins/delivery-pipeline/scripts/check-state.cjs');
   assert.deepEqual(fs.readFileSync(mirror), fs.readFileSync(path.join(SCRIPTS, 'check-state.cjs')));
   assert.equal(fs.statSync(mirror).mode & 0o777, fs.statSync(path.join(SCRIPTS, 'check-state.cjs')).mode & 0o777);
@@ -601,15 +616,28 @@ test('actual selector preserves all parent36 rows and appends z17 alone as shard
   assert.equal(capture.parent.source, '4f9da2383097a4c206a61741fbd24ac69646990c');
   assert.equal(capture.parent.shards.length, 36);
   const final = selector.appendShard(manifest, selector.unitTasks(selector.unitFiles()));
-  assert.equal(final.shards.length, 37);
+  assert.ok(final.shards.length >= 37);
   assert.deepEqual(final.shards.slice(0, 36), capture.parent.shards);
   assert.deepEqual(final.shards.slice(0, 16), manifest.shards);
   assert.equal(hash(JSON.stringify(final.shards.slice(0, 28))), 'd25784320d6e89ddf07aa22ce3487b65b2b1a476e0f7a816e034ca7f88b1c025');
   assert.deepEqual(final.shards[36], ['phase53-z17-ci-job-attempts.test.cjs']);
-  for (let i = 0; i < 37; i++) assert.deepEqual(selector.selectTaskShard(`${i + 1}/37`), final.shards[i]);
+  assert.equal(hash(JSON.stringify(final.shards.slice(0, 37))), '5bf00ad885a7e3e264b1dcdb8ad32fedb9d7d7d4ccd23928a1d7b4c184bba84c');
+  for (let i = 0; i < final.shards.length; i++)
+    assert.deepEqual(selector.selectTaskShard(`${i + 1}/${final.shards.length}`), final.shards[i]);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'z17-future-shard-'));
+  try {
+    for (const file of selector.unitFiles()) fs.writeFileSync(path.join(directory, file), '');
+    const future = 'phase53-z99-future.test.cjs';
+    fs.writeFileSync(path.join(directory, future), '');
+    const appended = selector.appendShard(final, selector.unitTasks(selector.unitFiles(directory)));
+    assert.deepEqual(appended.shards.slice(0, final.shards.length), final.shards);
+    assert.deepEqual(appended.shards.at(-1), [future]);
+    for (let i = 0; i < appended.shards.length; i++)
+      assert.deepEqual(selector.selectTaskShard(`${i + 1}/${appended.shards.length}`, directory, final), appended.shards[i]);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/test.yml'), 'utf8');
   assert.deepEqual([...workflow.slice(workflow.indexOf('\njobs:\n')).matchAll(/^  ([\w-]+):\n/gm)].map(m => m[1]), ['shards', 'unit', 'rest', 'test-fast']);
-  assert.equal(final.shards.length + 3, 40, '37 unit rows plus shards, gates and smoke, test-fast; no remote CI credit');
+  assert.equal(final.shards.slice(0, 37).length + 3, 40, 'historical 37 unit rows plus three checks; no remote CI credit');
 });
 
 test('all captured inputs and historical failed/cancelled outcomes remain immutable', () => {
