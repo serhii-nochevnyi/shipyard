@@ -1237,7 +1237,17 @@ test('concurrent waiters atomically claim one rerun for a ticket head', async ()
 test('a superseded cancel is ignored: the newer pass settles green', () => {
   const dir = project(ciOnly(), stateWith({ 'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD } }));
   const gh = stubGhRerun(dir);
-  gh.setRows([cancelRow('2020-01-01T00:00:00Z'), { name: 'publish', state: 'SUCCESS', bucket: 'pass', startedAt: '2020-01-01T00:10:00Z' }]);
+  gh.setRows([
+    { ...cancelRow('2020-01-01T00:00:00Z'), source: 'check-run', id: 1,
+      repository: 'acme/widgets', head_sha: HEAD, app_id: 15368, app_slug: 'github-actions',
+      workflow_id: 50, event: 'pull_request', run_id: '777', job_id: '1',
+      check_suite_id: 1777, run_number: 777, run_attempt: 1 },
+    { name: 'publish', state: 'SUCCESS', bucket: 'pass', startedAt: '2020-01-01T00:10:00Z',
+      source: 'check-run', id: 2, repository: 'acme/widgets', head_sha: HEAD,
+      app_id: 15368, app_slug: 'github-actions', workflow_id: 50, event: 'pull_request',
+      link: 'https://github.com/acme/widgets/actions/runs/778/attempts/2/job/2',
+      run_id: '778', job_id: '2', check_suite_id: 1778, run_number: 778, run_attempt: 2 },
+  ]);
   const { json } = asJson(null, null, ['--interval', '1'], { dir, bin: gh.bin });
   assert.equal(json.settled, 'T-01-01');
   assert.equal(json.checks.failing, 0);
@@ -1354,9 +1364,15 @@ test('direct compatibility polls retain status rows, unknown buckets and superse
   } }));
   const rows = [
     { name: 'build', state: 'CANCELLED', bucket: 'cancel', startedAt: '2020-01-01T00:00:00Z',
-      link: 'https://github.com/acme/widgets/actions/runs/123/job/1', run_id: '123' },
+      source: 'check-run', id: 1, repository: 'acme/widgets', head_sha: HEAD,
+      app_id: 15368, app_slug: 'github-actions', workflow_id: 50, event: 'pull_request',
+      link: 'https://github.com/acme/widgets/actions/runs/123/job/1', run_id: '123',
+      job_id: '1', check_suite_id: 1123, run_number: 123, run_attempt: 1 },
     { name: 'build', state: 'SUCCESS', bucket: 'pass', startedAt: '2020-01-02T00:00:00Z',
-      link: 'https://github.com/acme/widgets/actions/runs/456/job/1', run_id: '456' },
+      source: 'check-run', id: 2, repository: 'acme/widgets', head_sha: HEAD,
+      app_id: 15368, app_slug: 'github-actions', workflow_id: 50, event: 'pull_request',
+      link: 'https://github.com/acme/widgets/actions/runs/456/attempts/2/job/2', run_id: '456',
+      job_id: '2', check_suite_id: 1456, run_number: 456, run_attempt: 2 },
     { name: 'external-status', state: 'SUCCESS', bucket: 'pass', source: 'commit-status' },
     { name: 'new-status', state: 'FUTURE', bucket: 'future' },
   ];
