@@ -402,7 +402,6 @@ function collectCiObservation({ pr, repo, head, pollId }, request) {
       }
       return row;
     });
-    // Unknown/conflicting identities retain all rows. Retain cancelled originals
     const selectedRows = rows.filter(row => row.bucket === 'cancel' || !isSuperseded(row, rows));
     const latestStatuses = new Map();
     for (const r of statuses.rows) {
