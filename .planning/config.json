@@ -142,18 +142,6 @@
         },
         {
           "argv": [
-            "node",
-            "--test",
-            "tests/unit/source-contract.test.cjs",
-            "tests/unit/workflows-args.test.cjs",
-            "tests/unit/claude-instructions.test.cjs",
-            "tests/unit/auto-route.test.cjs"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
             "bash",
             "tests/smoke/model-ladder-runtime-smoke.sh"
           ],
@@ -382,26 +370,6 @@
         {
           "argv": [
             "node",
-            "tests/unit/phase47-package-publication.test.cjs",
-            "--group",
-            "candidate"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
-            "node",
-            "tests/unit/phase47-package-publication.test.cjs",
-            "--group",
-            "launch"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
-            "node",
             "--test",
             "tests/unit/codex-decompose-host.test.cjs",
             "tests/unit/planning-result-sealer.test.cjs"
@@ -424,15 +392,6 @@
             "node",
             "--test",
             "tests/unit/phase47-research-handback.test.cjs"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
-            "node",
-            "--test",
-            "tests/unit/phase47-runtime-acceptance.test.cjs"
           ],
           "profile": "sandbox",
           "timeout_s": 600
@@ -481,46 +440,6 @@
             "node",
             "--test",
             "tests/unit/usage-report.test.cjs"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
-            "node",
-            "tests/unit/phase47-package-publication.test.cjs",
-            "--group",
-            "caller"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
-            "node",
-            "tests/unit/phase47-package-publication.test.cjs",
-            "--group",
-            "integration"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
-            "node",
-            "tests/unit/phase47-package-publication.test.cjs",
-            "--group",
-            "relay"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
-            "node",
-            "tests/unit/phase47-package-publication.test.cjs",
-            "--group",
-            "complete"
           ],
           "profile": "sandbox",
           "timeout_s": 600
