@@ -1127,7 +1127,7 @@ for (;;) {
   // elapsed wake into the next round after a bounded sleep.
   nextWakeAt = null;
   const seen = [];
-  const refresh = refreshPublishedState();
+  refreshPublishedState();
   for (const w of watch) {
     const c = checksOf(w);
     if (c) goodEver.add(w.id);

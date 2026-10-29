@@ -15,10 +15,6 @@ const CLAIMS_FILE = 'wake-claims.json';
 const WAIT_KINDS = new Set(['ci', 'review', 'quota', 'lease', 'host', 'dispatch']);
 const TERMINAL = new Set(['completed', 'failed', 'human_checkpoint']);
 
-function object(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function error(code, message, details = {}) {
   const result = new Error(`run-waker: ${message}`);
   result.code = code;

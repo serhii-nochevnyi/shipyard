@@ -6,7 +6,6 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const ROOT = path.resolve(__dirname, '..');
 const CAPTURE_PROMPT = 'Reply with the single word OK and take no other action.';
 const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g;
 const USER_ID_KEYS = ['creator_user_id', 'user_id'];

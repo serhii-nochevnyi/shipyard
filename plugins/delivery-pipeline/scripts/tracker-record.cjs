@@ -459,44 +459,6 @@ function activeRecords(graphDir, configuredStatuses) {
     activeRecordsLocked(graphDir, configuredStatuses), { label: 'tracker-record read' });
 }
 
-// Tracker observations are recorded against the snapshot that was current
-// when the external read happened. The next state-sync publishes the next
-// generation, so front readers need this narrow, internally-derived bridge
-// across that publish boundary. Callers cannot choose an arbitrary generation.
-function activePreviousTrackersLocked(graphDir, configuredStatuses) {
-  if (fs.existsSync(pendingPath(graphDir))) return {};
-  const store = readStore(graphDir);
-  const generation = currentGeneration(graphDir);
-  const previousIdentity = metadataPreviousIdentity(graphDir);
-  const statuses = Array.isArray(configuredStatuses)
-    ? configuredStatuses
-    : readConfigStatuses(projectRootOf(graphDir));
-  if (!Number.isInteger(generation) || generation <= 1) return {};
-  const previous = recordsForGeneration(
-    store,
-    generation - 1,
-    statuses,
-    previousIdentity,
-    { excludeOverrides: true, tickets: ticketMap(graphDir) },
-  );
-  // A current-generation entry is a fresh answer even when it is malformed or
-  // no longer agrees with the current policy. Do not resurrect an older
-  // eligible answer behind that failed current read; the gate must fail closed.
-  for (const [ticket, record] of Object.entries(store.tickets)) {
-    if (record && typeof record === 'object' && record.generation === generation) delete previous[ticket];
-  }
-  return previous;
-}
-
-function activePreviousTrackers(graphDir, configuredStatuses) {
-  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () =>
-    activePreviousTrackersLocked(graphDir, configuredStatuses), { label: 'tracker-record read' });
-}
-
-// Front readers need the current observation and the one publish-boundary
-// predecessor as one coherent cache view. The exported wrapper takes the
-// tracker lock; state-sync uses the locked form because it already holds that
-// lock before entering its state publish.
 function activeTrackerSnapshotLocked(graphDir, configuredStatuses) {
   if (fs.existsSync(pendingPath(graphDir))) return {};
   const store = readStore(graphDir);
@@ -527,19 +489,6 @@ function activeTrackerSnapshotLocked(graphDir, configuredStatuses) {
   };
 }
 
-function activeTrackerSnapshot(graphDir, configuredStatuses) {
-  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () =>
-    activeTrackerSnapshotLocked(graphDir, configuredStatuses), { label: 'tracker-record read' });
-}
-
-// The flat view is convenient for callers that only need the current record;
-// unlike the store itself it never exposes an older delivery generation.
-// state-sync enters the tracker-record lock before reading the cache. Keep its
-// alias on the locked implementation so the public reader can close its own
-// pending-marker race without making state-sync try to acquire the same lock a
-// second time.
-const activeTrackers = activeRecordsLocked;
-
 // state-sync is publishing the NEXT generation. A current-generation override
 // is valid for the round that recorded it, but copying it into that next
 // snapshot would grant one extra round of bypass. Keep this separate from the
@@ -547,11 +496,6 @@ const activeTrackers = activeRecordsLocked;
 // override before the next publish.
 function activeTrackersForPublishLocked(graphDir, configuredStatuses) {
   return activeRecordsLocked(graphDir, configuredStatuses, { excludeOverrides: true });
-}
-
-function activeTrackersForPublish(graphDir, configuredStatuses) {
-  return withLock(lockDirFor(projectRootOf(graphDir)), 'tracker-record', () =>
-    activeTrackersForPublishLocked(graphDir, configuredStatuses), { label: 'tracker-record read' });
 }
 
 function requireNonEmpty(value, label) {
@@ -1037,11 +981,7 @@ module.exports = {
   metadataIdentity,
   currentGeneration,
   activeRecords,
-  activePreviousTrackers,
-  activeTrackerSnapshot,
   activeTrackerSnapshotLocked,
-  activeTrackers,
-  activeTrackersForPublish,
   activeTrackersForPublishLocked,
   observe,
   unknown,

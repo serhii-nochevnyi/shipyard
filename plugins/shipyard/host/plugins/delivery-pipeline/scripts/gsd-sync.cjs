@@ -629,17 +629,6 @@ function makePlanRecords(plans, state) {
   });
 }
 
-function generatedPathList(phases, planRecords) {
-  const files = [path.join(ROOT, '.planning', 'STATE.md'), path.join(ROOT, '.planning', 'REQUIREMENTS.md'), ROADMAP];
-  for (const plan of planRecords) files.push(path.join(path.dirname(plan.file), plan.fileName.replace(/-PLAN\.md$/, '-SUMMARY.md')));
-  for (const phase of phases) {
-    const dir = path.join(PHASES_DIR, phase.dirName);
-    files.push(path.join(dir, `${phase.dirName}-UAT.md`));
-    files.push(path.join(dir, `${phase.dirName}-VERIFICATION.md`));
-  }
-  return files;
-}
-
 function phaseNameMap(roadmapInfo, existingDirs) {
   return roadmapInfo.phases.map((entry) => ({
     ...entry,
