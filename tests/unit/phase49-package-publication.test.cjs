@@ -1272,10 +1272,9 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     }
     const claude = require(path.join(publicationRoot, OWNED[5]));
     const request = { schema: claude.REQUEST_SCHEMA, role: 'integrator', worktree: repository, phase: '49' };
-    assert.equal(claude.parseRequest({ ...request, review_contract: 'shipyard.integration-review.v1' }).review_contract,
-      'shipyard.integration-review.v1');
-    assert.throws(() => claude.parseRequest({ ...request, review_contract: 'shipyard.integration-review.v999' }),
-      error => error.code === 'INVALID_INPUT');
+    assert.equal(claude.parseRequest({ ...request, review_contract: 'shipyard.integration-review.v3' }).review_contract, undefined);
+    for (const contract of ['shipyard.integration-review.v1', 'shipyard.integration-review.v999'])
+      assert.throws(() => claude.parseRequest({ ...request, review_contract: contract }), error => error.code === 'INVALID_INPUT');
     assert.equal(claude.isPreparedIntegratorContext({}), false);
     inspectRuntimeConsumers(repository);
 

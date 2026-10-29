@@ -331,3 +331,12 @@ test('an integrator head that moves while its parts run is refused and launches 
     assert.equal(launches, 2);
   } finally { cleanupFixture(fixture); }
 });
+
+test('a part finding without a boolean blocking flag is refused', async () => {
+  const fixture = integratorFixture({ files: FILES });
+  try {
+    await assert.rejects(runIntegrator(fixture, { mutateResult(result, packet) {
+      if (packet.role_context.part?.ordinal === 1) result.findings = [{ id: 'F-1', type: 'fix-ticket', severity: 'BLOCKER', summary: 'unflagged blocker' }];
+    } }, 5), { code: 'INVALID_RESULT' });
+  } finally { cleanupFixture(fixture); }
+});
