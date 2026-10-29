@@ -2250,17 +2250,175 @@ function verifyCompletedReviewConsumption(selectors) {
     semantic_credit: false, current_verdict_authority: false });
 }
 
-function verifySemanticReads(raw) {
-  const rows = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+function semanticContextDigest(value) {
+  return reviewHash(require('./model-policy-internal.cjs').stableStringify(value));
+}
+
+function captureSemanticInitialContext(scope, env, commandDigest, input, sandbox, protectedPaths, evidenceWritePath, selection) {
+  const cwd = fs.realpathSync(scope.worktree), home = codexHomeOf(env);
+  const ancestors = [cwd];
+  while (!fs.existsSync(path.join(ancestors[0], '.git')) && path.dirname(ancestors[0]) !== ancestors[0])
+    ancestors.unshift(path.dirname(ancestors[0]));
+  const directories = fs.existsSync(path.join(ancestors[0], '.git')) ? ancestors : [cwd];
+  const sources = [];
+  for (const directory of [home, ...directories]) {
+    for (const name of ['AGENTS.override.md', 'AGENTS.md']) {
+      const candidate = path.join(directory, name);
+      try { fs.lstatSync(candidate); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      const physical = fs.realpathSync(candidate), stat = fs.statSync(physical);
+      if (!stat.isFile() || stat.size > 32768) fail('RUNTIME_EVIDENCE_INVALID', 'unsupported initialization instruction source');
+      const raw = fs.readFileSync(physical), text = raw.toString('utf8');
+      if (!Buffer.from(text).equals(raw)) fail('RUNTIME_EVIDENCE_INVALID', 'initialization instructions are not UTF-8');
+      if (!text.trim()) continue;
+      sources.push({ path: physical, bytes: raw.length, sha256: reviewHash(raw), text });
+      break;
+    }
+  }
+  const instructions = sources.map(source => source.text.trim()).join('\n\n');
+  if (Buffer.byteLength(instructions) > 32768) fail('RUNTIME_EVIDENCE_INVALID', 'initialization instruction resolution exceeds supported bound');
+  const timezone = env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let date;
+  try { date = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
+  catch { fail('RUNTIME_EVIDENCE_INVALID', 'initialization timezone cannot be resolved'); }
+  const shell = path.basename(env.SHELL || os.userInfo().shell || '');
+  if (!shell || !timezone) fail('RUNTIME_EVIDENCE_INVALID', 'initialization environment cannot be resolved');
+  const pin = { schema: 'shipyard.codex-initial-context.v1',
+    binding: { run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase, worktree: cwd, dispatch_id: scope.dispatch_id,
+      command_digest: commandDigest, input_sha256: reviewHash(input) },
+    sources, instructions, selection,
+    environment: { cwd, workspace_roots: [cwd], shell, current_date: date, timezone,
+      sandbox_mode: sandbox, approval_policy: 'never', permission_profile: PERMISSION_PROFILE,
+      protected_paths: [...protectedPaths], evidence_write_path: evidenceWritePath || null } };
+  return freeze({ ...pin, sha256: semanticContextDigest(pin) });
+}
+
+function semanticInitialEnvironment(environment, managed) {
+  const escape = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
+  const e = environment;
+  let filesystem = '';
+  if (managed) {
+    const entry = (access, tag, value) => `<entry access="${access}"${access === 'deny' ? ' escalatable="false"' : ''}><${tag}>${escape(value)}</${tag}></entry>`;
+    const denies = e.protected_paths.map(value => entry('deny', 'path', value)).join('');
+    const writes = (e.sandbox_mode === 'workspace-write'
+      ? entry('write', 'special', ':slash_tmp') + entry('write', 'special', ':tmpdir') + entry('write', 'path', e.cwd) : '')
+      + (e.evidence_write_path ? entry('write', 'path', e.evidence_write_path) : '');
+    filesystem = '\n  <filesystem><workspace_roots>' + e.workspace_roots.map(value => `<root>${escape(value)}</root>`).join('')
+      + '</workspace_roots><permission_profile type="managed"><file_system type="restricted">'
+      + denies + entry('read', 'special', ':root') + writes + '</file_system></permission_profile></filesystem>';
+  }
+  return `<environment_context>\n  <cwd>${escape(e.cwd)}</cwd>\n  <shell>${escape(e.shell)}</shell>\n  <current_date>${escape(e.current_date)}</current_date>\n  <timezone>${escape(e.timezone)}</timezone>${filesystem}\n</environment_context>`;
+}
+
+// @security: Extraction grants no authority; the consumer authenticates the original retained launch custody.
+function extractSemanticInitialInput(rows, { input, initialContext, sessionId } = {}) {
+  if (!Array.isArray(rows)) fail('RUNTIME_EVIDENCE_INVALID', 'semantic native rows are required');
   const starts = rows.flatMap((row, index) => row.type === 'event_msg' && row.payload?.type === 'task_started' ? [index] : []);
   const ends = rows.flatMap((row, index) => row.type === 'event_msg' && row.payload?.type === 'task_complete' ? [index] : []);
   if (starts.length !== 1 || ends.length !== 1 || starts[0] >= ends[0])
     fail('RUNTIME_EVIDENCE_INVALID', 'semantic reads require one original completed native turn');
   const finals = rows.flatMap((row, index) => row.type === 'response_item' && row.payload?.phase === 'final_answer' ? [index] : []);
   const users = rows.flatMap((row, index) => row.type === 'response_item' && row.payload?.role === 'user' ? [index] : []);
-  if (finals.length !== 1 || users.length !== 1 || users[0] <= starts[0] || users[0] >= finals[0] || finals[0] >= ends[0])
+  const turn = rows[starts[0]].payload.turn_id;
+  if (finals.length !== 1 || ![1, 2].includes(users.length) || users[0] <= starts[0] || users.at(-1) >= finals[0] || finals[0] >= ends[0]
+      || typeof turn !== 'string' || !turn || rows[ends[0]].payload.turn_id !== turn
+      || rows[finals[0]].payload.type !== 'message' || rows[finals[0]].payload.role !== 'assistant')
     fail('RUNTIME_EVIDENCE_INVALID', 'semantic reads require the original ordered input and final');
-  const boundary = finals[0], turn = rows[starts[0]].payload.turn_id;
+  const inputIndex = users.at(-1), initialIndex = users.length === 2 ? users[0] : null;
+  const content = rows[inputIndex].payload.content;
+  if (rows[inputIndex].payload.type !== 'message' || !Array.isArray(content) || content.length !== 1
+      || content[0]?.type !== 'input_text' || typeof content[0].text !== 'string'
+      || input !== undefined && content[0].text !== input)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic native input differs from the exact launch');
+  if (sessionId !== undefined) {
+    const metadata = rows.filter(row => row.type === 'session_meta');
+    if (metadata.length !== 1 || (metadata[0].payload?.id || metadata[0].payload?.session_id) !== sessionId
+        || metadata[0].payload?.session_id !== undefined && metadata[0].payload.session_id !== sessionId)
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic initialization session differs');
+  }
+  const nativeCalls = new Map(), nativeOutputs = new Set();
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index], p = row.payload;
+    if (row.type === 'response_item' && /_call(?:_output)?$/.test(p?.type || '')
+        && !['function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output'].includes(p.type))
+      fail('RUNTIME_EVIDENCE_INVALID', 'unsupported semantic native tool shape');
+    if (row.type === 'response_item' && ['function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output'].includes(p?.type)
+        && (index <= inputIndex || index >= finals[0]))
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic native tool precedes exact input or follows final');
+    if (row.type === 'response_item' && ['function_call', 'custom_tool_call'].includes(p?.type)) {
+      if (!p.call_id || nativeCalls.has(p.call_id)) fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic native tool identity is duplicated or absent');
+      nativeCalls.set(p.call_id, p.type);
+    }
+    if (row.type === 'response_item' && ['function_call_output', 'custom_tool_call_output'].includes(p?.type)) {
+      if (nativeCalls.get(p.call_id) + '_output' !== p.type || nativeOutputs.has(p.call_id))
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic native output lacks its original preceding call');
+      nativeOutputs.add(p.call_id);
+    }
+    for (const identity of [p, p?.internal_chat_message_metadata_passthrough]) {
+      if (!identity) continue;
+      if (identity.turn_id !== undefined && identity.turn_id !== turn
+          || sessionId !== undefined && [identity.session_id, identity.thread_id].some(value => value !== undefined && value !== sessionId))
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic native row belongs to another turn or session');
+    }
+  }
+  if (initialContext !== undefined) {
+    const { sha256, ...pin } = initialContext || {};
+    if (pin.schema !== 'shipyard.codex-initial-context.v1' || sha256 !== semanticContextDigest(pin)
+        || pin.binding?.input_sha256 !== reviewHash(content[0].text) || !object(pin.environment) || !object(pin.selection)
+        || !Array.isArray(pin.sources) || pin.sources.some(source => typeof source.text !== 'string'
+          || !path.isAbsolute(source.path || '') || source.bytes !== Buffer.byteLength(source.text) || source.sha256 !== reviewHash(source.text))
+        || pin.instructions !== pin.sources.map(source => source.text.trim()).join('\n\n'))
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic initialization launch pin differs');
+    const e = pin.environment;
+    if (e.cwd !== pin.binding.worktree || !path.isAbsolute(e.cwd || '') || !Array.isArray(e.workspace_roots)
+        || JSON.stringify(e.workspace_roots) !== JSON.stringify([e.cwd]) || !Array.isArray(e.protected_paths)
+        || e.protected_paths.some(value => typeof value !== 'string' || !path.isAbsolute(value))
+        || !['read-only', 'workspace-write'].includes(e.sandbox_mode) || e.approval_policy !== 'never'
+        || e.permission_profile !== PERMISSION_PROFILE || typeof e.shell !== 'string' || !e.shell
+        || typeof e.timezone !== 'string' || !e.timezone || !/^\d{4}-\d{2}-\d{2}$/.test(e.current_date)
+        || e.evidence_write_path !== null && !path.isAbsolute(e.evidence_write_path || '')
+        || Buffer.byteLength(pin.instructions) > 32768)
+      fail('RUNTIME_EVIDENCE_INVALID', 'unsupported semantic initialization environment pin');
+    if (rows.filter(row => row.type === 'session_meta').length !== 1
+        || rows.filter(row => row.type === 'turn_context').length !== 1)
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic native environment lacks unique session and turn bindings');
+    for (const row of rows) {
+      if (row.type === 'session_meta' && (row.payload.cwd !== e.cwd
+          || JSON.stringify(row.payload.runtime_workspace_roots) !== JSON.stringify(e.workspace_roots))
+          || row.type === 'turn_context' && (row.payload.cwd !== e.cwd
+            || Object.hasOwn(row.payload, 'workspace_roots')
+              && JSON.stringify(row.payload.workspace_roots) !== JSON.stringify(e.workspace_roots)
+            || row.payload.sandbox_policy?.type !== e.sandbox_mode || row.payload.approval_policy !== e.approval_policy
+            || row.payload.sandbox_policy.network_access === true
+            || ['exclude_tmpdir_env_var', 'exclude_slash_tmp'].some(key => row.payload.sandbox_policy[key] === true)
+            || row.payload.model !== pin.selection.model || (row.payload.effort || row.payload.reasoning_effort) !== pin.selection.effort
+            || row.payload.collaboration_mode?.settings && (row.payload.collaboration_mode.settings.model !== pin.selection.model
+              || row.payload.collaboration_mode.settings.reasoning_effort !== pin.selection.effort
+              || row.payload.collaboration_mode.settings.developer_instructions != null)))
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic native environment differs from launch');
+    }
+    if (initialIndex !== null) {
+      const initial = rows[initialIndex].payload;
+      const expectedInstructions = '# AGENTS.md instructions\n\n<INSTRUCTIONS>\n' + pin.instructions + '\n</INSTRUCTIONS>';
+      const blocks = initial.content;
+      const kinds = initial.internal_chat_message_metadata_passthrough?.content_item_kinds;
+      if (initial.type !== 'message' || !pin.instructions || !Array.isArray(blocks) || blocks.length !== 2
+          || blocks.some(block => block.type !== 'input_text' || typeof block.text !== 'string')
+          || blocks[0].text !== expectedInstructions
+          || ![false, true].some(managed => blocks[1].text === semanticInitialEnvironment(e, managed))
+          || kinds !== undefined && JSON.stringify(kinds) !== JSON.stringify(['agents_md.instructions', 'environments.environment_context'])
+          || rows.slice(starts[0] + 1, inputIndex).some((row, offset) => starts[0] + 1 + offset !== initialIndex
+            && row.type === 'response_item' && (starts[0] + 1 + offset > initialIndex || row.payload?.role !== 'developer')))
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'unsupported or substituted native initialization');
+    }
+  } else if (initialIndex !== null) fail('RUNTIME_EVIDENCE_MISSING', 'native initialization lacks original private launch provenance');
+  return freeze({ input_index: inputIndex, final_index: finals[0], turn_id: turn, initial_index: initialIndex });
+}
+
+function verifySemanticReads(raw, options = {}) {
+  const rows = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const ordered = extractSemanticInitialInput(rows, options);
+  const boundary = ordered.final_index, turn = ordered.turn_id;
   const calls = new Map(), outputs = new Set(), incomplete = [], completed = [], negative_queries = [];
   let outputBytes = 0;
   const unpack = value => {
@@ -2297,7 +2455,7 @@ function verifySemanticReads(raw) {
       || item.type === 'function_call' && /(?:^|[._])exec_command$/.test(item.name || ''));
     if (opaque) operations.push({ cmd: item.input || item.arguments });
     if (operations.length) {
-      if (index <= users[0] || index >= boundary || !item.call_id || calls.has(item.call_id) || outputs.has(item.call_id)
+      if (index <= ordered.input_index || index >= boundary || !item.call_id || calls.has(item.call_id) || outputs.has(item.call_id)
           || item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
             && item.internal_chat_message_metadata_passthrough.turn_id !== turn)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic read has a foreign or duplicate native call');
@@ -2920,10 +3078,14 @@ function createCodexCliLauncher(options = {}) {
     args.push('-');
     const startedAt = Date.now();
     const commandDigest = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
+    const initialContext = !agent && !resumeReview && staticInput?.includes('<AUTHENTICATED_SEMANTIC_REVIEW>')
+      ? captureSemanticInitialContext({ ...scope, dispatch_id: launchOptions.dispatch_id }, env, commandDigest,
+        staticInput, sandbox, protectedPaths, evidenceWritePath, { model, effort }) : null;
     const runtimeLaunch = freeze({
       runtime: 'codex', provider: 'openai', run_id: scope.run_id,
       ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree,
       dispatch_id: launchOptions.dispatch_id,
+      ...(initialContext ? { initial_context: initialContext } : {}),
       ...(typedRole ? {
         gsd_role: typedRole,
         agent_file: agent.file,
@@ -3190,6 +3352,15 @@ function createCodexCliLauncher(options = {}) {
         allowTimedOutWait: false, startedAt, task,
       });
       const nativeEvidence = verified.native_session_evidence;
+      let retainedInitialContext;
+      if (initialContext) {
+        const raw = readNativeParentRaw(parsed.session_id, nativeEvidence, env);
+        const rows = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+        const ordered = extractSemanticInitialInput(rows, { input: staticInput, initialContext, sessionId: parsed.session_id });
+        retainedInitialContext = freeze({ launch: initialContext, native_sha256: reviewHash(raw),
+          session_id: parsed.session_id, turn_id: ordered.turn_id,
+          preamble_sha256: ordered.initial_index === null ? null : semanticContextDigest(rows[ordered.initial_index].payload.content) });
+      }
       if (fileTransport && !focused && !codeReview) {
         const message = parsed.records.filter(record => record.type === 'item.completed'
           && record.item?.type === 'agent_message').at(-1);
@@ -3261,6 +3432,7 @@ function createCodexCliLauncher(options = {}) {
         phase: scope.phase,
         worktree: scope.worktree,
         dispatch_id: launchOptions.dispatch_id,
+        ...(retainedInitialContext ? { initial_context: retainedInitialContext } : {}),
         ...(capacityProbe ? { reader_capacity_probe: probeState.association } : {}),
         session_id: parsed.session_id,
         process_id: Number.isInteger(child.pid) ? child.pid : undefined,
@@ -4019,6 +4191,7 @@ module.exports = Object.freeze({
   parseNativeParentSpawn,
   parseNativeChildTranscript,
   verifySemanticReads,
+  extractSemanticInitialInput,
   installedGsdAgent,
   signerProtectionPaths,
   signerPermissionProfileArgs,
