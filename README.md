@@ -331,8 +331,7 @@ native model grid instead.
 Inspect the effective policy from the target project:
 
     node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve
-    node plugins/delivery-pipeline/scripts/pipeline-config.cjs model executor --json
-    node plugins/delivery-pipeline/scripts/pipeline-config.cjs model ci-fix --json --signature-state repeat
+    node plugins/delivery-pipeline/scripts/pipeline-config.cjs dispatch '{"role":"executor","runtime":"claude","signals":{}}'
 
 ## Usage observability
 

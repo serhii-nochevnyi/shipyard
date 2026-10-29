@@ -4,14 +4,6 @@
 // dispatch-record.cjs — the durable home for "this ticket is with an agent right
 // now".
 //
-//   dispatch-record.cjs mark  <ticket> <role> [--model <alias>] [--effort <level>]
-//                             [--effort-applied <level|unsupported|unknown>]
-//                             [--route <resolver route>]
-//                             [--task-level <level>] [--runtime <runtime>]
-//                             [--backend <backend>] [--observed-model <id>]
-//                             [--observed-effort <level>] [--agent-file <name>]
-//                             [--agent-id <launch id>] [--dispatch-id <id>]
-//                             [--graph <dir>]
 //   dispatch-record.cjs mark-many --stdin [--graph <dir>]
 //                             # JSON array of {ticket, role, ...mark fields}
 //   dispatch-record.cjs clear <ticket> <dispatch_id> [--graph <dir>]
@@ -68,23 +60,7 @@ const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock
 // `activeDispatches`. Never reimplemented, so a legacy record is read with exactly
 // the hash it was written with.
 const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
-// One role vocabulary for the whole conveyor: the same names `pipeline-config.cjs
-// model <role>` resolves a model for. A dispatch filed under a name the ladder
-// does not know is a record whose owner nobody can identify.
-//
-// TIERS and EFFORTS come from the SAME module for the same reason: the recorder
-// validates against the ladder's own vocabulary, never a copy of it, or a tier
-// added there would be refused here by a list nobody remembered to update.
-// `parseRoute` for the same reason again: the route the journal records is the
-// RESOLVER's, so it is validated against the resolver's own grammar rather than a
-// regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
-const {
-  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, resolveModel, resolveEffort,
-  resolveTaskLevel, routeOf, tierAllowedForRuntime, loadConfig,
-} = require(path.join(__dirname, 'pipeline-config.cjs'));
-const {
-  CODEX_STATIC_ROLES, CODEX_ROLE_RUNG_DEFINITIONS, codexAgentFile, variantSuffix,
-} = require(path.join(__dirname, 'model-policy.cjs'));
+const { ROLES, loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
 const hostProvenance = require(path.join(__dirname, 'host-provenance.cjs'));
 const { normalizeTicketIdentity, normalizePhaseIdentity } = require('./run-contract.cjs');
@@ -154,85 +130,12 @@ const DEFAULT_SUBJECT = DISPATCH_SUBJECT.executor;
 
 const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
 
-// ── WHAT THE DISPATCH DECIDED, recorded beside WHO holds the ticket ──────────
-//
-// The record used to carry `role` and nothing about the model, so the journal
-// could say a judge was dispatched 196 times and not once what it ran at. Every
-// row of the ladder was therefore adopted on reasoning, and no revision of it
-// could be better than the reasoning until these fields existed.
-//
-// Every one is OPTIONAL and every one is written ONLY when the caller passes it.
-// There is no default, no inference and no fallback to a session setting: an
-// omitted flag writes NO KEY AT ALL, because absence here means UNMEASURED and a
-// `null` would read as a measured unknown. The same discipline the conveyor
-// applies to `landed`, `checks` and `unresolved` — positive evidence before a
-// mutation, and writing a fact IS the mutation.
-//
-// `effort` and `effort_applied` are TWO CLAIMS and must never be collapsed into
-// one:
-//   * `--effort` is what the RESOLVER decided (`pipeline-config.cjs model … --json`);
-//   * `--effort-applied` is what the SPAWN could actually carry, and only the
-//     Workflow path can: `agent()` takes an effort, the Agent tool has no such
-//     parameter, so an Agent-dispatched judge runs at the SESSION's own effort
-//     whatever the ladder chose. Recording the resolved value as applied would
-//     poison the very evidence these fields exist to collect — a later review
-//     would compare rows that were never in force against rows that were.
-// So the Agent path omits `--effort-applied`, its absence means "nobody measured
-// this", and the recorder must not helpfully fill it in from the other flag.
 const MARK_FLAGS = [
   'model', 'effort', 'effort-applied', 'route', 'task-level', 'runtime', 'backend',
   'observed-model', 'observed-effort', 'agent-file', 'agent-id', 'dispatch-id',
-  'boundary-store', 'run-id', 'account-scope', 'treatment-id', 'arm', 'policy-id',
+  'boundary-store', 'run-id', 'policy-id',
   'policy-version', 'policy-hash',
 ];
-
-// ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
-//
-// The field shipped as `--reason <text>` and deliver.md claimed the text was
-// "the branch the resolver already returned". It was not: the resolver returned
-// `{model, effort}` and named the route only on stderr, as prose — so what landed
-// in the journal was the caller's READING of the ladder, in whatever words that
-// caller chose. One field then held two provenances, and the field exists for
-// exactly one purpose: to make a later review of the ladder cheap by counting
-// rows. Two vocabularies cannot be counted (ADR-006 D5).
-//
-// So the flag is refused rather than merged, with its own branch and its own
-// message — dropping it from MARK_FLAGS alone would report it as an "unexpected
-// argument", which names neither the replacement nor where the value comes from.
-const REFUSED_FLAGS = {
-  reason: 'a hand-composed reason is not the ladder\'s answer, it is the caller\'s reading of it, and one\n' +
-    '  field cannot hold both provenances and still be countable.\n' +
-    '  The route comes from the resolver: `pipeline-config.cjs model <role> --json [flags]` now returns\n' +
-    '  a `route` field beside the pair — pass THAT, verbatim, as `--route "<route>"`.',
-};
-// Flag name → the key written into the record and the journal line. The query in
-// deliver.md reads these names, so they are the field vocabulary, not an
-// implementation detail.
-const MARK_FIELD = {
-  model: 'model',
-  effort: 'effort',
-  'effort-applied': 'effort_applied',
-  // The KEY stays `reason`: two journal rows already carry it and deliver.md's
-  // ladder query reads it by that name. What changed is where the value comes
-  // from, not what a reader greps for.
-  route: 'reason',
-  'task-level': 'task_level',
-  runtime: 'runtime',
-  backend: 'backend',
-  'observed-model': 'observed_model',
-  'observed-effort': 'observed_effort',
-  'agent-file': 'agent_file',
-  'agent-id': 'agent_id',
-  'dispatch-id': 'dispatch_id',
-  'boundary-store': 'boundary_store',
-  'run-id': 'run_id',
-  'account-scope': 'account_scope',
-  'treatment-id': 'treatment_id',
-  arm: 'arm',
-  'policy-id': 'policy_id',
-  'policy-version': 'policy_version',
-  'policy-hash': 'policy_hash',
-};
 
 // Boundary resolutions use the generated file's physical name, while this
 // recorder's public schema names the corresponding Codex agent without its
@@ -374,13 +277,6 @@ function agentIdSafetyIssue(id) {
   return null;
 }
 
-// Requested/applied/observed reconciliation is useful only when the extra
-// fields have stable vocabularies. Model ids are intentionally opaque because
-// Codex can expose a new concrete id before GSD's catalog knows it; the safety
-// check only protects the JSONL line and keeps whitespace from creating two
-// spellings of one value.
-const DISPATCH_RUNTIMES = new Set(['claude', 'codex']);
-const DISPATCH_BACKENDS = new Set(['agent', 'workflow', 'inline', 'codex-agent']);
 function opaqueDispatchValueIssue(value) {
   if (typeof value !== 'string') return 'it is not a string';
   if (value.trim() === '') return 'it is blank';
@@ -388,83 +284,6 @@ function opaqueDispatchValueIssue(value) {
   if (value.length > AGENT_ID_MAX) return `it is longer than ${AGENT_ID_MAX} characters`;
   return null;
 }
-
-// ── the Codex half: which FILE was invoked ───────────────────────────────────
-//
-// An agent on Codex is a static `.toml`, so the dispatch's real decision is the
-// exact file generated for the canonical policy rung. Recording the role alone
-// loses the distinction between base, alternatives, repeat and ceiling work.
-//
-// Keep this reader on the policy module that the generator and bundle validator
-// already use. Requiring the repository-level generator from this plugin would
-// fail once the plugin is installed without the repository checkout beside it.
-// The installed agents directory is still checked below: policy names alone do
-// not prove that the selected file exists on this host.
-const CODEX_AGENT_PREFIX = 'shipyard-';
-const CODEX_DEEP_SUFFIX = variantSuffix('ci-fix', 'repeat_exhausted');
-const CODEX_CRITICAL_SUFFIX = variantSuffix('arch-review', 'critical');
-
-const agentRoleName = (role) => codexAgentFile(role, 'base')
-  .replace(new RegExp(`^${CODEX_AGENT_PREFIX}`), '')
-  .replace(/\.toml$/, '');
-
-const rolesWithVariantSuffix = (suffix) => new Set(
-  CODEX_STATIC_ROLES
-    .filter((role) => CODEX_ROLE_RUNG_DEFINITIONS[role]
-      .some((rung) => variantSuffix(role, rung.name) === suffix))
-    .map(agentRoleName)
-);
-
-// Compatibility views retained for callers that group the generated names by
-// suffix. They are derived from the same canonical rung metadata as
-// `agentFilesFor`: only ci-fix/review-fix have a deep recovery file, while the
-// critical set includes research, integrator and arch-review. In particular,
-// the emitted integrator-critical file cannot be omitted or replaced by a
-// retired fixed-role recovery name.
-const CODEX_DEEP_ROLES = rolesWithVariantSuffix(CODEX_DEEP_SUFFIX);
-const CODEX_CRITICAL_ROLES = rolesWithVariantSuffix(CODEX_CRITICAL_SUFFIX);
-
-// The ladder's roles and the generated agent files are NOT one-to-one, and the
-// cross-check below is wrong in both directions if it assumes they are:
-//
-//   * `research`'s reference ships as `inv-research.md` — the investigation loop's
-//     own name — so the file a research dispatch runs is `shipyard-inv-research`;
-//   * `executor` has NO agent file at all. There is no `executor.md` for the
-//     generator to emit one from, because an executor is dispatched by the main
-//     loop rather than by a `.toml`. So `--agent-file` on an executor mark cannot
-//     name a file anybody can look at, whatever the value.
-//
-// `agentFilesFor` enumerates every canonical rung and intersects it with the
-// files that actually exist, so a policy variant added or renamed changes this
-// contract in one place. The unit contract pins that every shipped file is
-// claimed by exactly one static role.
-
-function agentFilesFor(role, known) {
-  if (!CODEX_STATIC_ROLES.includes(role)) return new Set();
-  const candidates = CODEX_ROLE_RUNG_DEFINITIONS[role].map((rung) =>
-    codexAgentFile(role, rung.name).replace(/\.toml$/, '')
-  );
-  return new Set(candidates.filter((f) => known.has(f)));
-}
-
-function codexAgentDir(env = process.env) {
-  return path.resolve(
-    env.SHIPYARD_CODEX_AGENT_DIR
-      || path.join(require('./runtime-context.cjs').resolveCodexHome({ scriptDir: __dirname, env }), 'agents')
-  );
-}
-
-function codexAgentFiles(dir = codexAgentDir()) {
-  let refs;
-  try { refs = fs.readdirSync(dir); } catch { return null; }
-  const out = new Set();
-  for (const f of refs) {
-    if (!f.endsWith('.toml') || !f.startsWith(CODEX_AGENT_PREFIX)) continue;
-    out.add(f.slice(0, -5));
-  }
-  return out;
-}
-
 /**
  * The `mark` flags, in ONE left-to-right pass — gate-trailer.cjs's shape, for the
  * holes it already paid for:
@@ -482,14 +301,11 @@ function codexAgentFiles(dir = codexAgentDir()) {
  * recorded silently is worse than no field, because it would be counted later as
  * fact.
  */
-function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
+function parseMarkFlags(argv, role, ticket) {
   const given = new Map();
   for (let i = 0; i < argv.length;) {
     const arg = String(argv[i]);
     const name = arg.startsWith('--') ? arg.slice(2) : null;
-    if (name !== null && Object.prototype.hasOwnProperty.call(REFUSED_FLAGS, name)) {
-      fail(`--${name} is no longer accepted — ${REFUSED_FLAGS[name]}`);
-    }
     if (name === null || !MARK_FLAGS.includes(name)) {
       fail(
         `unexpected argument "${arg}" — the recorder would drop it in silence, and a dispatch ` +
@@ -515,8 +331,6 @@ function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
       'the dispatch id must name the receipt the boundary recorded after launch.'
     );
   }
-  // The legacy flags below remain readable historical telemetry. They cannot
-  // populate applied_* or mint an application_receipt by themselves.
   if (given.has('boundary-store')) {
     let lease = null;
     try {
@@ -540,40 +354,14 @@ function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
         const issue = opaqueDispatchValueIssue(facts[field]);
         if (issue) throw new Error(`boundary receipt ${field} cannot be recorded: ${issue}`);
       }
-      // ADR-014 resolves concrete provider IDs and a boundary-native route.
-      // The dispatch journal predates that vocabulary: its model/reason fields
-      // are compatibility projections consumed by pipeline-stats. Preserve the
-      // boundary facts in their own fields while deriving those legacy fields
-      // from the same role/signals using the existing legacy resolver and the
-      // project/runtime configuration that owns this graph. Without this load,
-      // a configured effort or model ladder could make the compatibility fields
-      // describe a different policy than the dispatch being reconciled.
-      const loaded = loadConfig(projectRoot, { runtime: facts.runtime });
-      if (!loaded.valid) {
-        throw new Error(
-          `project model configuration is invalid (${loaded.error && loaded.error.relative || loaded.file}); ` +
-          'refusing to write a compatibility projection'
-        );
-      }
-      const legacyConfig = loaded.config;
-      const legacyModel = resolveModel(facts.role, facts.signals, legacyConfig);
-      const legacyEffort = resolveEffort(facts.role, legacyModel, legacyConfig, facts.signals);
-      const legacyRoute = routeOf(facts.role, facts.signals, legacyConfig);
-      const legacyTaskLevel = resolveTaskLevel(facts.role, facts.signals, legacyConfig);
-      if (facts.task_level !== legacyTaskLevel) {
-        throw new Error('boundary task level does not match the resolver projection');
-      }
       const aliases = {
-        model: legacyModel, effort: legacyEffort,
-        'effort-applied': facts.applied_effort, route: legacyRoute,
+        model: facts.requested_model, effort: facts.requested_effort,
+        'effort-applied': facts.applied_effort, route: facts.route,
         'task-level': facts.task_level,
         runtime: facts.runtime, backend: facts.backend,
         'observed-model': facts.observed_model, 'observed-effort': facts.observed_effort,
         'agent-file': recorderAgentFile(facts.agent_file), 'agent-id': facts.launch_id,
         'run-id': facts.session_handoff && facts.session_handoff.run_id,
-        'account-scope': facts.account_scope,
-        'treatment-id': facts.treatment_id,
-        arm: facts.arm,
         'policy-id': facts.policy_id,
         'policy-version': facts.policy_version,
         'policy-hash': facts.policy_hash,
@@ -594,8 +382,8 @@ function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
         }
       }
       const decided = { ...facts, agent_file: recorderAgentFile(facts.agent_file),
-        model: legacyModel, effort: legacyEffort, effort_applied: facts.applied_effort,
-        reason: legacyRoute, agent_id: facts.launch_id };
+        model: facts.requested_model, effort: facts.requested_effort, effort_applied: facts.applied_effort,
+        reason: facts.route, agent_id: facts.launch_id };
       if (facts.session_handoff && facts.session_handoff.run_id) decided.run_id = facts.session_handoff.run_id;
       Object.defineProperty(decided, RECONCILIATION_CLAIM, { value: lease });
       return decided;
@@ -606,260 +394,31 @@ function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
       fail(`boundary receipt reconciliation failed: ${errorMessage(error)}`);
     }
   }
+  const manual = [...given.keys()].filter((flag) => !['agent-id', 'dispatch-id'].includes(flag));
+  if (manual.length) {
+    fail(
+      `--${manual[0]} needs --boundary-store and --dispatch-id: model, effort, route and launch facts ` +
+      'come only from the authenticated boundary receipt.'
+    );
+  }
   const decided = {};
-  const model = given.get('model');
-  if (model !== undefined) {
-    if (!TIERS.includes(model)) {
-      fail(
-        `"${model}" is not a tier alias — a model recorded by a name nothing resolves would be read ` +
-        'later as fact.\n' +
-        `  tiers: ${TIERS.join(', ')}`
-      );
-    }
-    decided.model = model;
-  }
-  for (const flag of ['effort', 'effort-applied']) {
-    const level = given.get(flag);
-    if (level === undefined) continue; // absent stays absent — never filled in from its twin
-    const evidenceState = flag === 'effort-applied' && ['unknown', 'unsupported'].includes(level);
-    if (!EFFORTS.includes(level) && !evidenceState) {
-      fail(
-        `"${level}" is not an effort level or applied-effort state — --${flag} would record a depth ` +
-        'nothing ran at.\n' +
-        `  efforts: ${EFFORTS.join(', ')}; applied states: unsupported, unknown`
-      );
-    }
-    decided[MARK_FIELD[flag]] = level;
-  }
-  const taskLevel = given.get('task-level');
-  if (taskLevel !== undefined) {
-    if (!TASK_LEVELS.includes(taskLevel)) {
-      fail(
-        `"${taskLevel}" is not a task level — --task-level would make the dispatch impossible to compare.\n` +
-        `  task levels: ${TASK_LEVELS.join(', ')}`
-      );
-    }
-    decided.task_level = taskLevel;
-  }
-  const runtime = given.get('runtime');
-  if (runtime !== undefined) {
-    if (!DISPATCH_RUNTIMES.has(runtime)) {
-      fail(`"${runtime}" is not a supported dispatch runtime — runtimes: ${[...DISPATCH_RUNTIMES].join(', ')}`);
-    }
-    decided.runtime = runtime;
-  }
-  const backend = given.get('backend');
-  if (backend !== undefined) {
-    if (!DISPATCH_BACKENDS.has(backend)) {
-      fail(`"${backend}" is not a dispatch backend — backends: ${[...DISPATCH_BACKENDS].join(', ')}`);
-    }
-    decided.backend = backend;
-  }
-  for (const flag of ['observed-model']) {
-    const observed = given.get(flag);
-    if (observed === undefined) continue;
-    const why = opaqueDispatchValueIssue(observed);
-    if (why !== null) fail(`--${flag} ${JSON.stringify(observed)} cannot be recorded: ${why}`);
-    decided[MARK_FIELD[flag]] = observed;
-  }
-  const observedEffort = given.get('observed-effort');
-  if (observedEffort !== undefined) {
-    if (!['unknown', 'unsupported'].includes(observedEffort) && !EFFORTS.includes(observedEffort)) {
-      fail(
-        `"${observedEffort}" is not an observed effort level — observed values: unknown, unsupported, ${EFFORTS.join(', ')}`
-      );
-    }
-    decided.observed_effort = observedEffort;
-  }
-  // The agent's identity. Opaque by nature — a launch id has no vocabulary to
-  // check against, and inventing an allowlist for one is the mistake this repo
-  // refused for Codex model ids (an unknown id cannot be told from a new one).
-  // So only what cannot be COMPARED or JOURNALLED is refused: nothing, blank,
-  // whitespace or a control character inside (two spellings of one id would count
-  // as two agents, and a newline would break the journal into two lines), and an
-  // absurd length. Everything else is stored exactly as passed.
   const agentId = given.get('agent-id');
   if (agentId !== undefined) {
-    // The SAME predicate `agentIdOf` reads back with, so a value accepted here
-    // can never later fail that check -- and a hand-edited or pre-validation
-    // record that would NOT pass this check is exactly the one `agentIdOf`
-    // must refuse to trust when reading it back.
     const why = agentIdSafetyIssue(agentId);
     if (why !== null) {
-      // Echoed via JSON.stringify, never raw interpolation: an id refused
-      // BECAUSE it holds a newline or control character must not then inject
-      // that same newline or control character into this stderr message.
       fail(
         `--agent-id ${JSON.stringify(agentId)} cannot identify an agent: ${why}.\n` +
-        '  Pass the id the LAUNCH returned, verbatim — the Workflow tool returns a task id, the Agent tool an\n' +
-        '  agent id — and never a label you compose: two guards recorded under one hand-typed name count as\n' +
-        '  ONE agent, and the cap then authorises a spend past itself.\n' +
-        '  Holding no id at all, OMIT the flag: an unidentified record counts as its own agent, which is the\n' +
-        '  safe direction.'
+        '  Pass the id the LAUNCH returned verbatim; holding no id at all, OMIT the flag.'
       );
     }
     decided.agent_id = agentId;
   }
-  // This id is generated when the record is written, so callers do not have to
-  // invent a correlation key before a launch exists. Accept an explicit value
-  // for orchestrators that already have one, but keep it opaque and safe for the
-  // JSONL journal. The id is separate from agent_id: one agent can own several
-  // ticket dispatches in a wave, while every dispatch needs its own usage join.
   const dispatchId = given.get('dispatch-id');
   if (dispatchId !== undefined) {
     const why = opaqueDispatchValueIssue(dispatchId);
     if (why !== null) fail(`--dispatch-id ${JSON.stringify(dispatchId)} cannot be recorded: ${why}`);
     decided.dispatch_id = dispatchId;
   }
-  for (const flag of ['run-id', 'account-scope', 'treatment-id', 'policy-id', 'policy-version', 'policy-hash']) {
-    const value = given.get(flag);
-    if (value === undefined) continue;
-    const why = opaqueDispatchValueIssue(value);
-    if (why !== null) fail(`--${flag} ${JSON.stringify(value)} cannot be recorded: ${why}`);
-    decided[MARK_FIELD[flag]] = value;
-  }
-  if (given.has('arm')) {
-    const arm = given.get('arm');
-    if (!['baseline', 'treatment'].includes(arm)) fail(`--arm must be baseline or treatment, got ${JSON.stringify(arm)}`);
-    decided.arm = arm;
-  }
-  // The RESOLVER's route, checked against the resolver's own grammar and then
-  // against the pair recorded beside it. The grammar check is what stops a
-  // sentence being posted through the new flag; the pair check is what stops a
-  // route from a DIFFERENT dispatch — a copy-paste from the round before, or from
-  // another role's resolve — describing this one. Both are cheap, and a journal
-  // whose provenance field describes the wrong decision is worse than one with no
-  // provenance field at all.
-  const route = given.get('route');
-  if (route !== undefined) {
-    const parsed = parseRoute(route);
-    if (!parsed) {
-      fail(
-        `--route "${route}" is not a resolver route — it is the \`route\` field of\n` +
-        '  `pipeline-config.cjs model <role> --json [flags]`, passed verbatim, e.g.\n' +
-        '  --route "tier=floor(opus) effort=row(high)". A sentence about the ladder is what this\n' +
-        '  field used to hold, and what it can no longer be counted with.'
-      );
-    }
-    // `--effort-applied` is deliberately NOT cross-checked: it is what the SPAWN
-    // could carry, and on the Agent path that is legitimately a different number
-    // from what the resolver decided. Checking it would refuse exactly the honest
-    // dispatches T-25-05 built the two fields to tell apart.
-    if (decided.model !== undefined && parsed.tier.model !== decided.model) {
-      fail(
-        `--route names tier "${parsed.tier.model}" and --model says "${decided.model}" — one of them is from\n` +
-        '  another dispatch. Re-run the resolver for THIS role and its signals, and pass the model and\n' +
-        '  the route it returned together.'
-      );
-    }
-    if (decided.effort !== undefined && parsed.effort.effort !== decided.effort) {
-      fail(
-        `--route names effort "${parsed.effort.effort}" and --effort says "${decided.effort}" — one of them is\n` +
-        '  from another dispatch. Re-run the resolver for THIS role and its signals, and pass the effort\n' +
-        '  and the route it returned together (--effort-applied is the other claim, and is not checked).'
-      );
-    }
-    // `route` and `{model, effort}` are the SAME claim in two encodings — not
-    // two claims the way `effort`/`effort_applied` are (that pair is left alone
-    // above on purpose: they measure different things). So a caller who passes
-    // `--route` alone is not under-specifying; the pair is read out of the
-    // route's own parse rather than left absent, which is what closes the gap
-    // Copilot found: a `--route`-only mark used to store a `reason` naming a
-    // model and effort while leaving the structured `model`/`effort` fields
-    // empty, and a reader of `model_overrides` or the ladder query would see a
-    // route text and no pair to cross-check it against. Disagreement is still
-    // refused above, before this ever runs.
-    if (decided.model === undefined) decided.model = parsed.tier.model;
-    if (decided.effort === undefined) decided.effort = parsed.effort.effort;
-    // A route makes this a new ladder-routed dispatch, not merely a legacy
-    // ownership mark. It must carry the launch receipt's concrete effort: an
-    // absent value, `unsupported`, or `unknown` proves that the launch surface
-    // did not apply the selected pair and must fail before this record can hide
-    // the ticket from the front. Older rows remain readable as telemetry; this
-    // is a write-time rule only.
-    if (!EFFORTS.includes(decided.effort_applied)) {
-      fail(
-        'a routed dispatch requires a concrete --effort-applied receipt from a launch that explicitly applied ' +
-        'the resolved model and effort; absent, unsupported, and unknown are historical telemetry, not evidence for a new dispatch.\n' +
-        `  efforts: ${EFFORTS.join(', ')}`
-      );
-    }
-    decided.reason = route;
-  }
-  if (runtime !== undefined && decided.model !== undefined
-      && typeof tierAllowedForRuntime === 'function'
-      && !tierAllowedForRuntime(runtime, decided.model)) {
-    fail(
-      `"${decided.model}" is not available on runtime "${runtime}" — the dispatch recorder only accepts ` +
-      'runnable tier aliases for that runtime.'
-    );
-  }
-  if (runtime !== undefined && decided.model === undefined) {
-    fail(
-      `a ${runtime} dispatch must carry the resolver's --model or --route — otherwise its model lane is unknown.\n` +
-      '  Resolve with `pipeline-config.cjs model <role> --json [signals]` and pass the returned pair and route.'
-    );
-  }
-  const agentFile = given.get('agent-file');
-  if (agentFile !== undefined) {
-    if (runtime !== undefined && runtime !== 'codex') {
-      fail('--agent-file is a Codex-only field — omit it for a Claude dispatch');
-    }
-    const known = codexAgentFiles();
-    if (!known) {
-      fail(
-        `--agent-file cannot be verified: no Codex agents directory exists at ${codexAgentDir()}.\n` +
-        '  The point of the field is to record which generated file RAN, so an unverifiable name is worse than none.'
-      );
-    }
-    if (!known.has(agentFile)) {
-      fail(
-        `"${agentFile}" is not an agent file the Codex generator produces — recording it would name a ` +
-        'file nobody can look at.\n' +
-        `  agent files: ${[...known].sort().join(', ')}`
-      );
-    }
-    // A KNOWN file belonging to a DIFFERENT role is the case the flag was blind
-    // to, and it was found by reproduction: a dispatch could name an
-    // arch-review recovery file for an executor. Either the dispatch went to the
-    // wrong agent or the record names the wrong file, and the journal must not
-    // quietly hold it under either reading — the whole point of the field is that
-    // the ordinary/rung choice IS the dispatch's decision on Codex, so a file
-    // from another role makes the model recorded beside it fiction.
-    //
-    // Built from the ROLE rather than parsed out of the file name: five role names
-    // contain a hyphen, and a rung suffix is part of the file name, so splitting
-    // the name is where an off-by-one lives. Never compared against itself — the
-    // mutation test asserts that a known file for another role still refuses.
-    const mine = agentFilesFor(role, known);
-    if (!mine.size) {
-      fail(
-        `${role} has no agent file the Codex generator produces, so "${agentFile}" cannot be the file this\n` +
-        '  dispatch ran: the generator emits one agent per shipped `references/*.md`, and this role has\n' +
-        '  none — it is dispatched by the main loop rather than by a `.toml`. Omit --agent-file.'
-      );
-    }
-    if (!mine.has(agentFile)) {
-      fail(
-        `"${agentFile}" is not ${role}'s agent file — a dispatch recorded as ${role} ran either the wrong\n` +
-        '  agent or is recording the wrong file, and on Codex the FILE is what carries the model.\n' +
-        `  ${role} runs: ${[...mine].sort().join(' or ')}`
-      );
-    }
-    decided.agent_file = agentFile;
-  }
-  if (given.has('route') && !given.has('boundary-store')) {
-    fail(
-      'a new routed dispatch requires an authenticated application receipt — pass ' +
-      '--boundary-store <receipt store> and --dispatch-id <boundary dispatch id>.\n' +
-      '  Existing receiptless rows remain readable as historical telemetry; caller-supplied route or effort fields\n' +
-      '  cannot authorize a new routed record.'
-    );
-  }
-  // Receiptless records without a route remain readable compatibility telemetry
-  // for already-started or pre-boundary work. The routed branch above is
-  // deliberately fail-closed: a new route cannot be written until the boundary
-  // has authenticated the launch and supplied its application receipt.
   return decided;
 }
 
@@ -885,15 +444,12 @@ const BATCH_FIELDS = new Map([
   ['dispatch_id', 'dispatch-id'],
   ['boundary_store', 'boundary-store'],
   ['run_id', 'run-id'],
-  ['account_scope', 'account-scope'],
-  ['treatment_id', 'treatment-id'],
-  ['arm', 'arm'],
   ['policy_id', 'policy-id'],
   ['policy_version', 'policy-version'],
   ['policy_hash', 'policy-hash'],
 ]);
 
-function parseBatchEntries(raw, projectRoot = process.cwd()) {
+function parseBatchEntries(raw) {
   if (!Array.isArray(raw)) {
     throw new Error('mark-many input must be a JSON array of dispatch objects');
   }
@@ -931,7 +487,7 @@ function parseBatchEntries(raw, projectRoot = process.cwd()) {
     return {
       ticket: item.ticket,
       role: item.role,
-      decided: parseMarkFlags(flags, item.role, item.ticket, projectRoot),
+      decided: parseMarkFlags(flags, item.role, item.ticket),
     };
   });
 }
@@ -1933,9 +1489,7 @@ function refreshFront(cwd) {
 module.exports = {
   activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, reserveRound, recordRound, clearRound,
   recordInflight, clearInflight, readProvenance, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
-  MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
-  CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
-  CODEX_AGENT_PREFIX, DISPATCH_RUNTIMES, DISPATCH_BACKENDS, newDispatchId,
+  MARK_FLAGS, newDispatchId,
 };
 
 if (require.main === module) {
@@ -1982,7 +1536,7 @@ if (require.main === module) {
     // Parsed and validated BEFORE the state lookup and before anything is
     // written: a usage error must cost no lock and must never leave half a
     // record behind.
-    const decided = parseMarkFlags(rest.slice(2), role, ticket, cwd);
+    const decided = parseMarkFlags(rest.slice(2), role, ticket);
     const at = new Date().toISOString();
     let dispatchId;
     try {
@@ -2057,7 +1611,7 @@ if (require.main === module) {
     }
     let entries;
     try {
-      entries = parseBatchEntries(raw, cwd);
+      entries = parseBatchEntries(raw);
     } catch (e) {
       fail(e && e.message ? e.message : e);
     }

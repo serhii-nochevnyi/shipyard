@@ -763,77 +763,9 @@ launch selection, policy fingerprinting, and receipt requirements; Codex and
 Claude resolve those facts through their own adapters. ADR-005 and ADR-012 are
 historical records and are superseded for current model and effort selection.
 
-The following blocks are retained only as the compatibility projection of the
-legacy `pipeline-config.cjs model <role> --json` reader. They are not launch
-authority and must not be used to choose a routed model. The first block records
-the reader's default role rows, including the reason for each below-floor
-exemption. `tests/smoke/docs-smoke.sh` compares it with that compatibility
-reader so the diagnostic surface cannot drift silently:
-
-```text
-role          tier     effort   why this row
-integrator    opus     high     the last mechanical judgment before a person merges,
-                                so its effort never drops; its measured run is a
-                                dispatch-specific fact, not a standing exception
-arch-review   opus     high     reads a whole diff against every ADR; its effort is
-                                fixed by the compatibility reader, not by a runtime
-                                model preference
-code-review   opus     high     a balanced general review of the whole epic diff; its
-                                effort is fixed by the compatibility reader, not by a
-                                runtime model preference
-executor      opus     high     it implements a contract; falsifying that contract
-                                belongs upstream of it
-ci-fix        opus     high     diagnosing a failing pipeline
-review-fix    opus     high     diagnosing review threads
-research      opus     high     gathering facts
-drift-check   sonnet   high     EXEMPT: it returns a file list and reuse pointers;
-                                its plan-defect burden is bought with effort, not
-                                with a tier, while the gate remains mechanical
-pr-sentinel   sonnet   high     EXEMPT: the merge decision is enforced by
-                                sentinel.cjs against live GitHub, not by the model;
-                                the script decides what lands
-```
-
-The compatibility reader also has signal-specific diagnostics. This second
-block is exhaustive for that legacy surface and is deliberately separate from
-the authoritative ADR-014 table below; it exists so old non-routed callers and
-their documentation cannot silently disagree about what the compatibility CLI
-reports:
-
-```text
-role          tier     effort   the dispatch signal that reaches it
-drift-check   opus     high     --input-tokens over pipeline.fable_window_tokens
-pr-sentinel   sonnet   max      --signature-state repeat
-pr-sentinel   opus     high     --signature-state repeat_exhausted
-pr-sentinel   opus     high     --input-tokens over pipeline.fable_window_tokens
-```
-
-The compatibility reader caps Opus at `high` (`--signature-state xhigh`/`max`
-are clamped down, never launched): every row that would otherwise have escalated
-an already-Opus role to `xhigh` or `max` — `integrator`/`--contested`,
-`arch-review`/`--contested`, `executor`/`--risk high` or `--checkpoint`,
-`ci-fix` and `review-fix`/`--signature-state repeat` or `repeat_exhausted`,
-`research`/`--type alternatives`, and the measured-window row for each of those
-roles — now resolves to that role's own baseline `opus`/`high` and is not a
-distinct row here any more. What survives is only what still changes the
-resolved *tier*: `drift-check` and `pr-sentinel` are `sonnet` at baseline, so a
-route that reaches them still moves the pair; `pr-sentinel --signature-state
-repeat` also survives because it deepens effort without a cap (the exempt role
-is never routed through `opus`).
-
-For the compatibility reader, `repeat` deepens only the effort route and does
-not enter `fableRoute`; therefore `pr-sentinel --signature-state repeat` retains
-its `sonnet` exemption at `max`. `repeat_exhausted` is the distinct ceiling
-signal, so it is the first repair state that resolves to `opus`/`high` when the
-legacy Fable consent is closed. These rows describe the current
-`pipeline-config.cjs` compatibility branch only; ADR-014 does not promote the
-fixed routed `pr-sentinel` role for either signal.
-
 ### 7.5.1. Runtime-native model grids
 
-The compatibility examples above describe current legacy compatibility-only
-reader behavior, not routed launch authority. This section is the current
-ADR-024 routed grid. Codex uses its own logical keys and resolves
+This section is the current ADR-024 routed grid. Codex uses its own logical keys and resolves
 them to concrete IDs in the Codex adapter; Claude uses native Claude selections
 and never translates Luna or Sol into a Claude model.
 
@@ -861,13 +793,11 @@ The canonical role/rung/signal ladder is:
 | `review-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |
 
 **Canonical-table assertion.** This table is a normative transcription of
-`plugins/delivery-pipeline/scripts/model-policy.cjs`, not of the compatibility
-reader above: for every listed runtime/role pair, its base model/effort and each
+`plugins/delivery-pipeline/scripts/model-policy.cjs`: for every listed runtime/role pair, its base model/effort and each
 named escalation signal must equal the result of `model-policy.cjs resolve`.
 `node plugins/delivery-pipeline/scripts/model-policy.cjs fingerprint` identifies
 the policy revision being asserted. A change to either runtime grid, a role, or
-an escalation signal requires changing this table in the same review; the
-compatibility `pipeline-config.cjs model` rows cannot validate or override it.
+an escalation signal requires changing this table in the same review.
 
 The canonical signal vocabulary is `type`, `complexity`, `risk`, `critical`,
 `checkpoint`, `contested`, measured `inputTokens`, `signatureState`, and the

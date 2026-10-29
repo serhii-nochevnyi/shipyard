@@ -293,13 +293,6 @@ test('a custom graph serializes writers beside its own ledger', () => {
   }
 });
 
-test('Codex attributions reject Claude-only requested tiers', () => {
-  assert.throws(
-    () => normalizeRecord(base({ runtime: 'codex', provider: 'openai', model: 'fable' })),
-    /not available on runtime "codex"/
-  );
-});
-
 const claude = {
   type: 'assistant', sessionId: 'claude-session', requestId: 'claude-request',
   message: {

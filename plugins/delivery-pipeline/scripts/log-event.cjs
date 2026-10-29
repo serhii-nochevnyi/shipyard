@@ -169,7 +169,7 @@ const OWNED_BY_SCRIPTS = {
     by: 'dispatch-record.cjs mark', kind: 'dispatch', why: halfAct,
     otherHalf: 'MARKING the ticket as held',
     lost: 'record',
-    fix: 'dispatch-record.cjs mark <ticket> <role> --model <alias> --effort <level>',
+    fix: 'dispatch-record.cjs mark <ticket> <role> --boundary-store <receipt store> --dispatch-id <id>',
   },
   // `jira_transition` is the same half-act, one store further out, and the half
   // it skips is the one that makes the projection exactly-once. A hand-written

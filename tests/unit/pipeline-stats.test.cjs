@@ -389,17 +389,17 @@ test('dispatch routing fields are grouped without turning missing observations i
   const recentComplete = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',
     model: 'sonnet', effort: 'high', effort_applied: 'high',
-    reason: 'tier=level:routine(sonnet) effort=row(high)', task_level: 'routine',
+    reason: 'role=executor rung=base model=sonnet signals=base', route: 'role=executor rung=base model=sonnet signals=base', task_level: 'routine',
     runtime: 'claude', backend: 'workflow', observed_model: 'claude-sonnet-5',
     observed_effort: 'high', dispatch_id: 'dispatch-complete',
   };
   const recentPartial = {
     ts: recently, event: 'dispatch', ticket: 'T-01-02', role: 'arch-review',
-    model: 'opus', effort: 'xhigh', reason: 'tier=floor(opus) effort=row(xhigh)',
+    model: 'opus', effort: 'xhigh', reason: 'role=arch-review rung=base model=sonnet signals=base', route: 'role=arch-review rung=base model=sonnet signals=base',
   };
   const old = {
     ts: iso(Date.now() - 30 * DAY), event: 'dispatch', ticket: 'T-01-03', role: 'executor',
-    model: 'opus', effort: 'high', reason: 'tier=floor(opus) effort=row(high)',
+    model: 'opus', effort: 'high', reason: 'role=executor rung=base model=sonnet signals=base', route: 'role=executor rung=base model=sonnet signals=base',
     task_level: 'complex', runtime: 'claude', backend: 'workflow', observed_model: 'claude-opus-5',
   };
   const { code, json } = asJson({
@@ -443,22 +443,6 @@ test('dispatch routing fields are grouped without turning missing observations i
   assert.strictEqual(json.ladder.missing_attribution.dispatch_id, 1);
 });
 
-test('a parseable route whose structured fields disagree is not comparable', () => {
-  const contradictory = {
-    ts: recently, event: 'dispatch', ticket: 'T-01-04', role: 'executor',
-    model: 'opus', effort: 'high',
-    reason: 'tier=level:routine(sonnet) effort=row(high)', task_level: 'routine',
-    runtime: 'claude', backend: 'workflow',
-  };
-  const { code, json } = asJson({
-    tickets: {}, journal: [JSON.stringify(contradictory)], prs: [],
-    config: { delivery_pipeline: { model_ladder: 'adaptive' } },
-  });
-  assert.strictEqual(code, 0);
-  assert.strictEqual(json.ladder.missing_route, 1);
-  assert.strictEqual(json.ladder.requested_comparable, 0);
-});
-
 test('an ADR-014 route model key must agree with the event logical model', () => {
   const row = adrDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'wrong-model-key' });
   row.logical_model = 'astra';
@@ -472,7 +456,7 @@ test('non-concrete effort states do not count as applied or observed coverage', 
   const row = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',
     model: 'sonnet', effort: 'high', effort_applied: 'unsupported',
-    reason: 'tier=level:routine(sonnet) effort=row(high)', task_level: 'routine',
+    reason: 'role=executor rung=base model=sonnet signals=base', route: 'role=executor rung=base model=sonnet signals=base', task_level: 'routine',
     runtime: 'claude', backend: 'agent', observed_model: 'claude-sonnet-5',
     observed_effort: 'unknown', dispatch_id: 'dispatch-no-effort',
   };
@@ -530,12 +514,12 @@ test('human output names the project repository when its PR listing is unreachab
 test('routing coverage rejects a missing role and a malformed resolver route', () => {
   const complete = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',
-    model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
+    model: 'sonnet', effort: 'high', reason: 'role=executor rung=base model=sonnet signals=base', route: 'role=executor rung=base model=sonnet signals=base',
     task_level: 'complex', runtime: 'claude', backend: 'workflow', dispatch_id: 'dispatch-valid',
   };
   const noRole = { ...complete, ticket: 'T-01-02', dispatch_id: 'dispatch-no-role' };
   delete noRole.role;
-  const malformed = { ...complete, ticket: 'T-01-03', dispatch_id: 'dispatch-bad-route', reason: 'role baseline' };
+  const malformed = { ...complete, ticket: 'T-01-03', dispatch_id: 'dispatch-bad-route', route: 'role baseline' };
   const { code, json } = asJson({
     tickets: {},
     journal: [JSON.stringify(complete), JSON.stringify(noRole), JSON.stringify(malformed)],
@@ -550,7 +534,7 @@ test('routing coverage rejects a missing role and a malformed resolver route', (
 test('Codex agent-file coverage is required only when the runtime is known', () => {
   const complete = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'arch-review',
-    model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
+    model: 'sonnet', effort: 'high', reason: 'role=arch-review rung=base model=sonnet signals=base', route: 'role=arch-review rung=base model=sonnet signals=base',
     task_level: 'complex', runtime: 'codex', backend: 'codex-agent', dispatch_id: 'dispatch-codex',
     agent_file: 'shipyard-arch-review-critical', observed_model: 'gpt-6-sol',
   };
@@ -582,7 +566,7 @@ test('ADR-014 reconciliation keeps resolution, application, observation and join
   });
   const legacy = {
     ts: recently, event: 'dispatch', ticket: 'T-36-legacy', role: 'executor',
-    model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
+    model: 'sonnet', effort: 'high', reason: 'role=executor rung=base model=sonnet signals=base', route: 'role=executor rung=base model=sonnet signals=base',
     task_level: 'complex', runtime: 'claude', backend: 'workflow', dispatch_id: 'legacy',
   };
   const { code, json } = asJson({

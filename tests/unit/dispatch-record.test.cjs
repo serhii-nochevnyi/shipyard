@@ -29,12 +29,9 @@ const { activeDispatches, dispatchWhy, dispatchFingerprint, reserveRound, record
 // One role vocabulary for the whole conveyor — the same list `mark` validates
 // against. The per-role subject table below is checked against IT, not against a
 // second list written out here.
-const {
-  ROLES, routeOf, parseRoute, parseRoute: parseLegacyRoute,
-} = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
+const { ROLES } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
 const boundaryModule = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
 const { agentsInFlight } = require(path.join(SCRIPTS, 'front.cjs'));
-const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
 
 // SHIPYARD_GRAPH_DIR is the other explicit channel for "which graph"; a value
 // inherited from the runner would decide these cases instead of the flag.
@@ -42,10 +39,6 @@ process.env.SHIPYARD_GRAPH_DIR = '';
 const run = (args, cwd, env = {}) => spawnSync('node', [DISPATCH, ...args], {
   cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '', ...env },
 });
-
-const DEFAULT_CODEX_AGENT_FILES = gen.codexStaticVariants()
-  .map(({ file }) => file.replace(/\.toml$/, ''))
-  .sort();
 
 test('requiring dispatch-record does not install a process-wide exit handler', () => {
   const probe = spawnSync(process.execPath, ['-e', [
@@ -57,22 +50,13 @@ test('requiring dispatch-record does not install a process-wide exit handler', (
   assert.equal(probe.stdout, '0', 'the reconciliation cleanup hook is installed only after a claim exists');
 });
 
-function writeCodexAgents(dir, files = DEFAULT_CODEX_AGENT_FILES) {
-  fs.mkdirSync(dir, { recursive: true });
-  for (const name of files) {
-    fs.writeFileSync(path.join(dir, `${name}.toml`), `name = "${name}"\n`);
-  }
-  return dir;
-}
-
 // A project (has a ticket graph) and a worktree beside it (has none) — the two
 // cwds this command can find itself in, because the guard dispatches its fixers
 // from inside worktrees.
-function scratch(state, { codexFiles = DEFAULT_CODEX_AGENT_FILES } = {}) {
+function scratch(state) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-'));
   const project = path.join(dir, 'project');
   const worktree = path.join(dir, 'worktree');
-  const codexAgentDir = writeCodexAgents(path.join(dir, 'codex-agents'), codexFiles);
   const graph = path.join(project, '.planning', 'graph');
   fs.mkdirSync(graph, { recursive: true });
   fs.mkdirSync(worktree, { recursive: true });
@@ -80,7 +64,7 @@ function scratch(state, { codexFiles = DEFAULT_CODEX_AGENT_FILES } = {}) {
   for (const id of Object.keys(state)) tickets[id] = { phase: id.split('-')[1] };
   fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
-  return { dir, project, worktree, graph, codexAgentDir };
+  return { dir, project, worktree, graph };
 }
 
 const readState = (graph) => JSON.parse(fs.readFileSync(path.join(graph, 'delivery-state.json'), 'utf8'));
@@ -254,9 +238,6 @@ test('boundary receipts reconcile into the existing store and journal without re
     assert.equal(run(['mark', 'T-01-02', 'executor'], project).status, 0);
     const legacy = store(graph)['T-01-02'];
     const boundaryStore = path.join(dir, 'receipts');
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({
-      pipeline: { effort: { executor: 'low' } },
-    }));
     const boundary = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
     const result = boundary.createDispatchBoundary({
       recorder: boundary.createDurableRecorder(boundaryStore),
@@ -274,11 +255,11 @@ test('boundary receipts reconcile into the existing store and journal without re
     assert.notEqual(missingId.status, 0);
     assert.match(missingId.stderr, /requires both --boundary-store and --dispatch-id/);
     const manualRoute = run([
-      'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
-      '--effort-applied', 'high', '--route', routeOf('executor', {}),
+      'mark', 'T-01-01', 'executor', '--model', 'claude-sonnet-5-5', '--effort', 'medium',
+      '--effort-applied', 'medium', '--route', 'role=executor rung=base model=sonnet signals=base',
     ], project);
     assert.equal(manualRoute.status, 1, 'a routed record cannot bypass the boundary');
-    assert.match(manualRoute.stderr, /authenticated application receipt/);
+    assert.match(manualRoute.stderr, /needs --boundary-store and --dispatch-id/);
     assert.equal(store(graph)['T-01-01'], undefined);
     const batch = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
       cwd: project, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '' },
@@ -302,10 +283,9 @@ test('boundary receipts reconcile into the existing store and journal without re
     assert.equal(rec.applied_model, result.receipt.applied_model);
     assert.equal(rec.applied_effort, result.receipt.applied_effort);
     assert.equal(rec.task_level, result.resolution.task_level);
-    assert.equal(rec.effort, 'low', 'legacy projection reads the project/runtime configuration');
-    assert.notEqual(rec.model, result.requested_model, 'legacy tier projection is distinct from the concrete receipt model');
-    assert.equal(parseLegacyRoute(rec.reason).tier.model, rec.model);
-    assert.equal(parseLegacyRoute(rec.reason).effort.effort, rec.effort);
+    assert.equal(rec.model, result.resolution.requested_model);
+    assert.equal(rec.effort, result.resolution.requested_effort);
+    assert.equal(rec.reason, result.resolution.route);
     assert.deepStrictEqual(rec.application_receipt, result.receipt);
     assert.deepStrictEqual(rec.launch_arguments, result.resolution.launch_arguments);
     assert.deepStrictEqual(store(graph)['T-01-02'], legacy);
@@ -386,7 +366,7 @@ test('boundary-store reconciliation refuses a stale or missing receipt without c
 });
 
 test('reconciled records hold the receipt lease and normalize static Codex agent files', () => {
-  const { dir, project, graph, codexAgentDir } = scratch({ 'T-01-01': READY, 'T-01-02': READY });
+  const { dir, project, graph } = scratch({ 'T-01-01': READY, 'T-01-02': READY });
   try {
     const boundaryStore = path.join(dir, 'receipts');
     const boundary = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
@@ -430,8 +410,7 @@ test('reconciled records hold the receipt lease and normalize static Codex agent
     assert.match(staticResult.resolution.agent_file, /\.toml$/, 'the boundary retains the physical generated file');
     const publicAgentFile = staticResult.resolution.agent_file.replace(/\.toml$/, '');
     const marked = run(['mark', 'T-01-02', 'research', '--boundary-store', boundaryStore,
-      '--dispatch-id', staticResult.dispatch_id, '--agent-file', publicAgentFile], project,
-    { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir });
+      '--dispatch-id', staticResult.dispatch_id, '--agent-file', publicAgentFile], project);
     assert.equal(marked.status, 0, marked.stderr);
     assert.equal(store(graph)['T-01-02'].agent_file, publicAgentFile);
     const event = JSON.parse(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').at(-1));
@@ -441,23 +420,6 @@ test('reconciled records hold the receipt lease and normalize static Codex agent
   }
 });
 
-test('dispatch-record refuses ambiguous runtime and models outside the native runtime grids', () => {
-  const { project, graph } = scratch({ 'T-01-01': READY });
-  try {
-    for (const [index, args] of [
-      ['--runtime', 'both', '--model', 'opus', '--effort', 'high'],
-      ['--runtime', 'codex', '--model', 'fable', '--effort', 'medium'],
-      ['--runtime', 'claude', '--model', 'gpt-6-astra', '--effort', 'medium'],
-    ].entries()) {
-      const result = run(['mark', 'T-01-01', 'executor', ...args], project);
-      assert.notEqual(result.status, 0, `runtime grid refusal ${index}`);
-      assert.ok(/runtime|available|supported|tier|alias|model/.test(result.stderr), result.stderr);
-      assert.deepStrictEqual(store(graph), {}, `runtime grid refusal ${index} creates no record`);
-    }
-  } finally {
-    fs.rmSync(path.dirname(project), { recursive: true, force: true });
-  }
-});
 // `head_sha` is what a fixer's push moves. state-sync starts recording it in
 // T-24-04, so every case here must hold with it and without it.
 const OPEN_PR = {
@@ -586,74 +548,8 @@ test('dispatch-record holds no private subject grammar or Codex home expression'
   assert.ok(!/repository=/.test(source), 'the integrator subject grammar lives in architecture-target');
   assert.ok(!/homedir\(\), '\.codex'/.test(source), 'the Codex home has one resolver');
   assert.ok(/parseSubject\('integrator'/.test(source));
-  assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env \}\)/g) || []).length, 1,
-    'the agents directory follows the executing bundle like every converted site');
   assert.ok(!/^const [^\n]*require\(['"]\.\/runtime-context\.cjs['"]\)/m.test(source),
     'runtime-context is required lazily at the site');
-});
-
-test('an installed bundle answers its own agents directory with no environment variable', () => {
-  const { codexCapabilities } = require(path.join(__dirname, '..', 'smoke', 'installed-launch', 'lib.cjs'));
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bundle-agents-')));
-  try {
-    const home = path.join(root, 'custom-codex-home');
-    const bundle = path.join(home, 'shipyard');
-    fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
-    fs.cpSync(SCRIPTS, path.join(bundle, 'scripts'), { recursive: true });
-    const evidence = Buffer.from(JSON.stringify(codexCapabilities()));
-    fs.writeFileSync(path.join(bundle, 'codex-capabilities.json'), evidence);
-    fs.writeFileSync(path.join(home, 'agents', '.shipyard-manifest.json'), JSON.stringify({
-      phase: 2, codexHome: home, scriptsRoot: bundle, capabilities_file: 'codex-capabilities.json',
-      capabilities_digest: crypto.createHash('sha256').update(evidence).digest('hex') }));
-    fs.writeFileSync(path.join(home, 'agents', 'shipyard-bundled.toml'), '');
-    const probe = (env) => spawnSync(process.execPath, ['-e',
-      'console.log(JSON.stringify([...require(process.argv[1]).codexAgentFiles()]))',
-      path.join(bundle, 'scripts', 'dispatch-record.cjs')], {
-      env: { PATH: process.env.PATH, HOME: path.join(root, 'empty-home'), ...env }, encoding: 'utf8' });
-    const bare = probe({});
-    assert.equal(bare.status, 0, bare.stderr);
-    assert.deepEqual(JSON.parse(bare.stdout), ['shipyard-bundled']);
-    const explicit = path.join(root, 'explicit');
-    fs.mkdirSync(explicit);
-    fs.writeFileSync(path.join(explicit, 'shipyard-explicit.toml'), '');
-    const owned = probe({ SHIPYARD_CODEX_AGENT_DIR: explicit });
-    assert.equal(owned.status, 0, owned.stderr);
-    assert.deepEqual(JSON.parse(owned.stdout), ['shipyard-explicit']);
-    const conflict = probe({ CODEX_HOME: path.join(root, 'elsewhere') });
-    assert.notEqual(conflict.status, 0);
-    assert.ok(/ENV_CONFLICT|disagrees/.test(conflict.stderr), conflict.stderr);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test('the agents directory is SHIPYARD_CODEX_AGENT_DIR, then the resolved Codex home, then HOME', () => {
-  const { codexAgentFiles } = require(DISPATCH);
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-dir-')));
-  const put = (label, dir) => {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `shipyard-${label}.toml`), '');
-    return `shipyard-${label}`;
-  };
-  const names = { explicit: put('explicit', path.join(root, 'explicit', 'agents')),
-    codex: put('codex', path.join(root, 'codex', 'agents')),
-    home: put('home', path.join(root, 'home', '.codex', 'agents')) };
-  const saved = { a: process.env.SHIPYARD_CODEX_AGENT_DIR, c: process.env.CODEX_HOME, h: process.env.HOME };
-  const restore = (key, value) => value === undefined ? delete process.env[key] : (process.env[key] = value);
-  try {
-    process.env.HOME = path.join(root, 'home');
-    delete process.env.CODEX_HOME;
-    delete process.env.SHIPYARD_CODEX_AGENT_DIR;
-    assert.deepEqual([...codexAgentFiles()], [names.home]);
-    process.env.CODEX_HOME = path.join(root, 'codex');
-    assert.deepEqual([...codexAgentFiles()], [names.codex]);
-    process.env.SHIPYARD_CODEX_AGENT_DIR = path.join(root, 'explicit', 'agents');
-    assert.deepEqual([...codexAgentFiles()], [names.explicit]);
-    delete process.env.SHIPYARD_CODEX_AGENT_DIR;
-    process.env.CODEX_HOME = '   ';
-    assert.deepEqual([...codexAgentFiles()], [names.home], 'a blank CODEX_HOME is unset, as the resolver reads it');
-  } finally {
-    restore('SHIPYARD_CODEX_AGENT_DIR', saved.a); restore('CODEX_HOME', saved.c); restore('HOME', saved.h);
-    fs.rmSync(root, { recursive: true, force: true });
-  }
 });
 
 test('planning in-flight admission agrees with the role-scoped run contract', () => {
@@ -1360,52 +1256,21 @@ test('every dispatch reaches the journal exactly once', () => {
   assert.equal(new Set(log.map((e) => e.ticket)).size, 3, 'no ticket logged twice');
 });
 
-test('mark-many rejects a manual routed wave before one mutation', () => {
+test('mark-many rejects manual decision fields before one mutation', () => {
   const state = {};
   for (let i = 1; i <= 3; i++) state[`T-01-0${i}`] = { ...READY };
   const { project, graph } = scratch(state);
-  const payload = [
-    {
-      ticket: 'T-01-01', role: 'executor', route: 'tier=floor(opus) effort=row(high)', model: 'opus', effort: 'high',
-      task_level: 'routine',
-      runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-1',
-    },
-    {
-      ticket: 'T-01-02', role: 'executor', route: 'tier=floor(opus) effort=row(high)', model: 'opus', effort: 'high',
-      task_level: 'routine',
-      runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-2',
-    },
-    {
-      ticket: 'T-01-03', role: 'executor', route: 'tier=floor(opus) effort=row(high)', model: 'opus', effort: 'high',
-      task_level: 'routine',
-      runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-3',
-    },
-  ];
+  const payload = [1, 2, 3].map((i) => ({
+    ticket: `T-01-0${i}`, role: 'executor', model: 'claude-sonnet-5-5', effort: 'medium',
+    task_level: 'routine', runtime: 'claude', backend: 'workflow', effort_applied: 'medium', agent_id: `workflow-${i}`,
+  }));
   const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
     cwd: project, input: JSON.stringify(payload), encoding: 'utf8',
   });
-  assert.equal(r.status, 1, `manual routed batch must fail (${r.stderr})`);
-  assert.match(r.stderr, /authenticated application receipt/);
-  assert.deepStrictEqual(store(graph), {}, 'a rejected routed batch is atomic');
+  assert.equal(r.status, 1, `manual decision batch must fail (${r.stderr})`);
+  assert.match(r.stderr, /needs --boundary-store and --dispatch-id/);
+  assert.deepStrictEqual(store(graph), {}, 'a rejected batch is atomic');
   assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'and writes no journal lines');
-});
-
-test('mark-many rejects a receiptless routed wave before writing', () => {
-  const state = {};
-  for (let i = 1; i <= 3; i++) state[`T-01-0${i}`] = { ...READY };
-  const { project, graph } = scratch(state);
-  const payload = [
-    { ticket: 'T-01-01', role: 'executor', route: 'tier=floor(opus) effort=row(high)', effort_applied: 'high' },
-    { ticket: 'T-01-02', role: 'executor', route: 'tier=floor(opus) effort=row(high)', effort_applied: 'high' },
-    { ticket: 'T-01-03', role: 'executor', route: 'tier=floor(opus) effort=row(high)', effort_applied: 'high' },
-  ];
-  const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
-    cwd: project, input: JSON.stringify(payload), encoding: 'utf8',
-  });
-  assert.equal(r.status, 1, 'a routed batch without boundary receipts must refuse');
-  assert.match(r.stderr, /authenticated application receipt/);
-  assert.deepStrictEqual(store(graph), {}, 'a refused routed batch writes no records');
-  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'and no journal lines');
 });
 
 for (const command of ['mark', 'mark-many']) {
@@ -1429,8 +1294,8 @@ test('mark-many rejects the whole batch before writing when one item is invalid'
   const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
     cwd: project,
     input: JSON.stringify([
-      { ticket: 'T-01-01', role: 'executor', model: 'opus' },
-      { ticket: 'T-01-01', role: 'executor', model: 'opus' },
+      { ticket: 'T-01-01', role: 'executor' },
+      { ticket: 'T-01-01', role: 'executor' },
     ]),
     encoding: 'utf8',
   });
@@ -1552,12 +1417,6 @@ const DECIDED_KEYS = [
   'model', 'effort', 'effort_applied', 'reason', 'task_level', 'runtime', 'backend',
   'observed_model', 'observed_effort', 'agent_file', 'agent_id',
 ];
-// What `pipeline-config.cjs model executor --json` returns for a signal-less
-// dispatch, in its own `route` field. Taken from the resolver rather than typed
-// here — a fixture that drifts from the grammar would make every test below
-// assert against a route the resolver cannot produce.
-const ROUTE = routeOf('executor', {});
-
 test('every mark creates a dispatch id for the later usage join', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const r = run(['mark', 'T-01-01', 'executor'], project);
@@ -1604,128 +1463,14 @@ test('a mark with no flags writes NO such key at all — not null', () => {
   }
 });
 
-test('the Agent path omits --effort-applied and the key STAYS out', () => {
-  // The ticket's reason for existing. `arch-review` is dispatched with the Agent
-  // tool, which has no effort parameter, so `xhigh` is what the ladder decided and
-  // nothing observed what ran. A `null` here would read as a measured unknown.
-  const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-  const r = run(['mark', 'T-01-02', 'arch-review', '--model', 'opus', '--effort', 'xhigh'], project);
-  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
-  const rec = store(graph)['T-01-02'];
-  const ev = lastDispatch(graph);
-  assert.equal(rec.effort, 'xhigh', 'what the resolver decided is recorded');
-  assert.equal(ev.effort, 'xhigh');
-  assert.ok(!('effort_applied' in rec), 'and what the spawn carried is UNRECORDED, not null');
-  assert.ok(!('effort_applied' in ev), 'in the journal too — the query reads that key by presence');
-});
-
-test('the two claims are never collapsed into one', () => {
-  // Not a hypothetical: the deepening the ladder chooses and the depth a spawn can
-  // carry are different numbers, and the only implementation that can prove it
-  // never copies one into the other is one that records them apart.
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  assert.equal(run(['mark', 'T-01-01', 'executor', '--effort', 'high', '--effort-applied', 'low'], project).status, 0);
-  const rec = store(graph)['T-01-01'];
-  assert.equal(rec.effort, 'high', 'the resolver\'s decision, verbatim');
-  assert.equal(rec.effort_applied, 'low', 'and the spawn\'s, verbatim — neither borrowed from the other');
-});
-
-test('a receiptless routed round trip is refused before the store or journal', () => {
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run([
-    'mark', 'T-01-01', 'executor',
-    '--model', 'opus', '--effort', 'high', '--effort-applied', 'high', '--route', ROUTE,
-  ], project);
-  assert.equal(r.status, 1, 'a routed record without a boundary receipt must refuse');
-  assert.match(r.stderr, /authenticated application receipt/);
-  const rec = store(graph)['T-01-01'];
-  assert.equal(rec, undefined, 'the refused routed record is not written');
-  assert.equal(fs.existsSync(path.join(graph, 'delivery-log.jsonl')), false,
-    'and does not journal a launch');
-});
-
-test('requested, applied and observed routing facts round-trip separately', () => {
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run([
-    'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
-    '--effort-applied', 'high', '--task-level', 'complex',
-    '--runtime', 'claude', '--backend', 'workflow', '--observed-model', 'claude-opus-5',
-    '--observed-effort', 'xhigh',
-  ], project);
-  assert.equal(r.status, 0, r.stderr);
-  assert.deepStrictEqual(store(graph)['T-01-01'], {
-    ...store(graph)['T-01-01'],
-    model: 'opus', effort: 'high', effort_applied: 'high', task_level: 'complex',
-    runtime: 'claude', backend: 'workflow', observed_model: 'claude-opus-5', observed_effort: 'xhigh',
-  });
-});
-
-test('a known runtime cannot create an unmeasured model dispatch', () => {
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--runtime', 'codex'], project);
-  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
-  assert.ok(/must carry.*model.*route/.test(r.stderr), r.stderr);
-  assert.deepStrictEqual(store(graph), {});
-});
-
-test('a known runtime refuses a tier that cannot run there', () => {
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--runtime', 'codex', '--model', 'fable'], project);
-  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
-  assert.match(r.stderr, /not available on runtime "codex"/);
-  assert.deepStrictEqual(store(graph), {});
-});
-
-test('observed model ids reject whitespace and controls but keep opaque ids flexible', () => {
-  for (const bad of ['claude opus', 'claude\topus', 'claude\nopus']) {
-    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-    const r = run([
-      'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--model', 'opus', '--effort', 'high',
-      '--observed-model', bad,
-    ], project);
-    assert.equal(r.status, 1, `${JSON.stringify(bad)} must refuse (${r.stderr})`);
-    assert.ok(/whitespace or a control character/.test(r.stderr), r.stderr);
-    assert.deepStrictEqual(store(graph), {});
-  }
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const ok = run([
-    'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--model', 'opus', '--effort', 'high',
-    '--effort-applied', 'high', '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
-  ], project);
-  assert.equal(ok.status, 0, ok.stderr);
-  assert.equal(store(graph)['T-01-01'].observed_model, 'claude-opus-5.1-preview');
-  assert.equal(store(graph)['T-01-01'].observed_effort, 'unknown');
-});
-
 test('the flags survive --graph in any position, from a foreign cwd', () => {
   // The guard marks its fixers from inside a ticket worktree, so the two parsers
   // have to coexist: one --graph spelling, stripped anywhere, and the strip must
   // not eat a value flag or the subcommand.
   const s = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['--graph', s.graph, 'mark', 'T-01-01', 'ci-fix', '--model', 'sonnet', '--effort', 'high'], s.worktree);
+  const r = run(['--graph', s.graph, 'mark', 'T-01-01', 'ci-fix', '--agent-id', 'agent_01'], s.worktree);
   assert.equal(r.status, 0, `must succeed (${r.stderr})`);
-  assert.equal(store(s.graph)['T-01-01'].model, 'sonnet');
-  assert.equal(store(s.graph)['T-01-01'].effort, 'high');
-});
-
-test('a value outside TIERS/EFFORTS is refused by name, in the role refusal\'s shape', () => {
-  // A mis-spelled alias recorded silently is worse than no field: it would be
-  // counted later as fact. The message therefore names the rejected value and
-  // prints the accepted set, exactly as the unknown-role refusal does.
-  const cases = [
-    [['--model', 'gpt-5.6-sol'], 'gpt-5.6-sol', /tiers:/],
-    [['--effort', 'ultra'], 'ultra', /efforts:/],
-    [['--effort-applied', 'ultra'], 'ultra', /efforts:/],
-  ];
-  for (const [flags, value, vocabulary] of cases) {
-    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-    const r = run(['mark', 'T-01-01', 'arch-review', ...flags], project);
-    assert.equal(r.status, 1, `${flags[0]} must refuse (${r.stderr})`);
-    assert.ok(r.stderr.includes(`"${value}"`), `${flags[0]} names the rejected value: ${r.stderr}`);
-    assert.ok(vocabulary.test(r.stderr), `${flags[0]} prints the accepted set: ${r.stderr}`);
-    assert.deepStrictEqual(store(graph), {}, 'and nothing at all is recorded');
-    assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'no half-written journal line either');
-  }
+  assert.equal(store(s.graph)['T-01-01'].agent_id, 'agent_01');
 });
 
 test('an unknown flag, a duplicate and a missing value are all refused', () => {
@@ -1737,7 +1482,7 @@ test('an unknown flag, a duplicate and a missing value are all refused', () => {
     [['--model', 'opus', '--model', 'sonnet'], /more than once/],
     [['--model'], /needs a value/],
     [['--effort', '--route', 'x'], /needs a value/],
-    [['--route', ''], /not a resolver route/],
+    [['--route', ''], /needs --boundary-store/],
     [['opus'], /unexpected argument/],
   ];
   for (const [flags, expected] of cases) {
@@ -1747,86 +1492,6 @@ test('an unknown flag, a duplicate and a missing value are all refused', () => {
     assert.ok(expected.test(r.stderr), `${flags.join(' ')} says why: ${r.stderr}`);
     assert.deepStrictEqual(store(graph), {}, `${flags.join(' ')} records nothing`);
   }
-});
-
-test('--agent-file records the Codex file that ran, and refuses one nothing produces', () => {
-  // On Codex the model lives IN the file, so the canonical rung filename IS the
-  // dispatch's decision. A name the generator does not produce is unverifiable,
-  // and an unverifiable name is worse than none.
-  const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
-  const ok = run(
-    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-critical'],
-    project,
-    { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
-  );
-  assert.equal(ok.status, 0, `must succeed (${ok.stderr})`);
-  assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-critical', 'verbatim');
-  assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-critical');
-
-  const claude = scratch({ 'T-01-02': { ...OPEN_PR } });
-  const impossible = run([
-    'mark', 'T-01-02', 'arch-review', '--runtime', 'claude',
-    '--agent-file', 'shipyard-arch-review', '--route', ROUTE, '--effort-applied', 'high',
-  ], claude.project);
-  assert.equal(impossible.status, 1, impossible.stderr);
-  assert.match(impossible.stderr, /Codex-only/);
-  assert.deepStrictEqual(store(claude.graph), {});
-
-  for (const bad of [
-    'shipyard-nope',
-    'shipyard-arch-review-deep',
-    'shipyard-pr-sentinel-deep',
-    'shipyard-integrator-deep',
-    'shipyard-ci-fix-critical',
-  ]) {
-    const s = scratch({ 'T-01-02': { ...OPEN_PR } });
-    const r = run(
-      ['mark', 'T-01-02', 'arch-review', '--agent-file', bad],
-      s.project,
-      { SHIPYARD_CODEX_AGENT_DIR: s.codexAgentDir },
-    );
-    assert.equal(r.status, 1, `"${bad}" must refuse (${r.stderr})`);
-    assert.ok(r.stderr.includes(`"${bad}"`), 'and names it');
-    assert.deepStrictEqual(store(s.graph), {}, 'nothing recorded');
-  }
-});
-
-test('the accepted agent files are read from the generated Codex agents directory', () => {
-  const {
-    codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX,
-    CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
-  } = require(DISPATCH);
-  assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), [...gen.DEEP_ROLES].sort(),
-    'only canonical repair roles may select a deep recovery file');
-  assert.equal(CODEX_DEEP_SUFFIX, gen.DEEP_SUFFIX);
-  assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), [...gen.CRITICAL_ROLES].sort(),
-    'the critical roles must include every canonical critical rung');
-  assert.equal(CODEX_CRITICAL_SUFFIX, gen.CRITICAL_SUFFIX);
-  assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), ['ci-fix', 'review-fix']);
-  assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), ['arch-review', 'code-review', 'integrator', 'inv-research']);
-
-  // Every canonical variant is present, including research alternatives and the
-  // repeat rung that used to be absent from this contract.
-  const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
-    .filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agents-'));
-  const files = codexAgentFiles(writeCodexAgents(dir));
-  assert.ok(files.has('shipyard-integrator-critical'), 'integrator-critical is a canonical file');
-  for (const role of refs) assert.ok(files.has(`shipyard-${role}`), `shipyard-${role} must be accepted`);
-  const expected = gen.codexStaticVariants().map(({ file }) => file.replace(/\.toml$/, '')).sort();
-  assert.deepStrictEqual([...files].sort(), expected, 'and nothing else is');
-});
-
-test('a stale critical file is refused when the installed Codex agents directory did not generate it', () => {
-  const s = scratch({ 'T-01-02': { ...OPEN_PR } }, { codexFiles: ['shipyard-arch-review'] });
-  const r = run(
-    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-critical'],
-    s.project,
-    { SHIPYARD_CODEX_AGENT_DIR: s.codexAgentDir },
-  );
-  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
-  assert.match(r.stderr, /not an agent file the Codex generator produces/);
-  assert.deepStrictEqual(store(s.graph), {});
 });
 
 test('the front does not gain a field — the overlay is byte-identical', () => {
@@ -1855,11 +1520,7 @@ test('the front does not gain a field — the overlay is byte-identical', () => 
   // `ci-fix` on both sides, and not `executor`: the role has to be identical for
   // the boards to compare, and it has to be one with an agent file for the
   // --agent-file half of this test to mean anything.
-  assert.equal(run([
-    'mark', 'T-01-01', 'ci-fix', '--model', 'opus', '--effort', 'high',
-    '--effort-applied', 'high', '--agent-file', 'shipyard-ci-fix-deep',
-    '--agent-id', 'agent_01FIXER',
-  ], rich.project, { SHIPYARD_CODEX_AGENT_DIR: rich.codexAgentDir }).status, 0);
+  assert.equal(run(['mark', 'T-01-01', 'ci-fix', '--agent-id', 'agent_01FIXER'], rich.project).status, 0);
 
   const richRaw = fs.readFileSync(path.join(rich.graph, 'delivery-front.json'), 'utf8');
   assert.deepStrictEqual(
@@ -1871,196 +1532,6 @@ test('the front does not gain a field — the overlay is byte-identical', () => 
     assert.ok(!richRaw.includes(`"${k}"`), `the front must not carry "${k}"`);
   }
   assert.ok(!richRaw.includes('tier=floor'), 'nor the resolver route the reason now holds');
-});
-
-suite('dispatch-record — the reason is the RESOLVER\'s route, not the caller\'s sentence');
-
-// The field shipped as `--reason <text>` and deliver.md said the text was "the
-// branch the resolver already returned". It was not: the resolver returned
-// `{model, effort}` and named the route on stderr, as prose — so the journal held
-// the caller's READING of the ladder, in whatever words that caller chose. The
-// field exists to make a later ladder review cheap by counting rows, and two
-// vocabularies in one field cannot be counted (ADR-006 D5).
-
-test('the route grammar the recorder validates against IS the resolver\'s own', () => {
-  // Not a copy: `parseRoute` is exported by the resolver and required here, so the
-  // routes it can emit and the routes this recorder accepts are the same set by
-  // construction. `CODEX_DEEP_ROLES` is the local copy this repo already pays a
-  // pin test for, and one is enough.
-  assert.ok(parseRoute(ROUTE), `the resolver's own output must parse: ${ROUTE}`);
-  assert.equal(parseRoute(ROUTE).tier.model, 'opus');
-  assert.equal(parseRoute(ROUTE).effort.effort, 'high');
-});
-
-test('a hand-composed reason is REFUSED, and the message names where the value comes from', () => {
-  // Its own branch, not the generic unexpected-argument path: that message names
-  // neither the replacement flag nor the command that produces its value, and a
-  // caller who cannot see the way forward composes a sentence somewhere else.
-  for (const text of ['role baseline', 'signature repeat', 'xhigh because risk high', '']) {
-    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-    const r = run(['mark', 'T-01-01', 'executor', '--reason', text], project);
-    assert.equal(r.status, 1, `"${text}" must refuse (${r.stdout}${r.stderr})`);
-    assert.ok(/no longer accepted/.test(r.stderr), `it says the flag is gone: ${r.stderr}`);
-    assert.ok(/pipeline-config\.cjs model/.test(r.stderr), `and names the resolver: ${r.stderr}`);
-    assert.ok(/--route/.test(r.stderr), `and the flag that replaces it: ${r.stderr}`);
-    assert.deepStrictEqual(store(graph), {}, 'and nothing is recorded');
-  }
-});
-
-test('--route requires an authenticated application receipt for new writes', () => {
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
-  assert.equal(r.status, 1, `receiptless routed write must refuse (${r.stderr})`);
-  assert.match(r.stderr, /authenticated application receipt/);
-  assert.deepStrictEqual(store(graph), {});
-});
-
-test('a receiptless route cannot be backfilled from caller-supplied route fields', () => {
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
-  assert.equal(r.status, 1, `receiptless routed write must refuse (${r.stderr})`);
-  assert.match(r.stderr, /authenticated application receipt/);
-  assert.deepStrictEqual(store(graph), {});
-  // Disagreement is still refused before the reconciliation requirement, so a
-  // malformed/copy-pasted manual route cannot hide the more useful diagnosis.
-  const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE, '--effort-applied', 'high'], project);
-  assert.equal(bad.status, 1, 'an explicit --model that disagrees with the route must still refuse');
-});
-
-test('routed dispatches refuse an absent, unsupported, or unknown applied-effort receipt', () => {
-  for (const receipt of [undefined, 'unsupported', 'unknown']) {
-    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-    const flags = ['--route', ROUTE];
-    if (receipt !== undefined) flags.push('--effort-applied', receipt);
-    const r = run(['mark', 'T-01-01', 'review-fix', ...flags], project);
-    assert.equal(r.status, 1, `${receipt || 'absent'} receipt must refuse (${r.stderr})`);
-    assert.match(r.stderr, /concrete --effort-applied receipt|authenticated application receipt/, r.stderr);
-    assert.deepStrictEqual(store(graph), {}, 'the refusal must not hide a ticket');
-    assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'the refusal must not journal a dispatch');
-  }
-});
-
-test('a sentence posted through the new flag is refused too — the grammar is the check', () => {
-  // The refusal has to be about the VALUE and not about the flag's name, or the
-  // change would be a rename and the journal would hold prose again by Friday.
-  for (const bad of ['role baseline', 'the ceiling fired', 'tier=floor(opus)', 'tier=floor(gpt-5.6-sol) effort=row(high)']) {
-    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-    const r = run(['mark', 'T-01-01', 'executor', '--route', bad], project);
-    assert.equal(r.status, 1, `"${bad}" must refuse (${r.stdout}${r.stderr})`);
-    assert.ok(/not a resolver route/.test(r.stderr), r.stderr);
-    assert.ok(/pipeline-config\.cjs model/.test(r.stderr), 'and names where a real one comes from');
-    assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
-  }
-});
-
-test('a route from ANOTHER dispatch is refused — the pair and the route must agree', () => {
-  // A well-formed route is not automatically THIS dispatch's route: the round
-  // before, or another role's resolve, produces one that parses perfectly and
-  // describes a decision nobody made here. The cross-check is the only thing that
-  // can tell those apart, since the route text carries no ticket.
-  const cases = [
-    [['--model', 'sonnet', '--route', 'tier=floor(opus) effort=row(high)'], /tier "opus".*--model says "sonnet"/s],
-    [['--effort', 'xhigh', '--route', 'tier=floor(opus) effort=row(high)'], /effort "high".*--effort says "xhigh"/s],
-  ];
-  for (const [flags, expected] of cases) {
-    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-    const r = run(['mark', 'T-01-01', 'executor', ...flags], project);
-    assert.equal(r.status, 1, `${flags.join(' ')} must refuse (${r.stdout}${r.stderr})`);
-    assert.ok(expected.test(r.stderr), `it names both sides: ${r.stderr}`);
-    assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
-  }
-});
-
-test('a distinct non-routed applied effort remains separate from the requested effort', () => {
-  // The two efforts are two facts (T-25-05): what the ladder decided, and what the
-  // spawn could carry. On the Agent path the second is legitimately different, so
-  // a check here would refuse exactly the honest dispatches those two fields exist
-  // to tell apart — and the journal would lose the only rows that prove the gap.
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run([
-    'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
-    '--effort-applied', 'low',
-  ], project);
-  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
-  assert.equal(store(graph)['T-01-01'].effort_applied, 'low');
-  assert.equal(Object.prototype.hasOwnProperty.call(store(graph)['T-01-01'], 'reason'), false,
-    'a non-routed record has no route claim');
-});
-
-test('a KNOWN agent file belonging to another role is refused, and names both', () => {
-  // On Codex the model lives IN the file, so a file from another role makes the
-  // model recorded beside it fiction — either the dispatch ran the wrong agent
-  // or the record names the wrong file, and the journal must not quietly hold it
-  // under either reading.
-  const cases = [
-    ['arch-review', 'shipyard-ci-fix'],
-    ['arch-review', 'shipyard-ci-fix-deep'],
-    ['ci-fix', 'shipyard-review-fix'],
-    ['integrator', 'shipyard-inv-research-critical'],
-    ['pr-sentinel', 'shipyard-arch-review'],
-  ];
-  for (const [role, file] of cases) {
-    const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
-    const r = run(
-      ['mark', 'T-01-02', role, '--agent-file', file],
-      project,
-      { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
-    );
-    assert.equal(r.status, 1, `${role} × ${file} must refuse (${r.stdout}${r.stderr})`);
-    assert.ok(r.stderr.includes(`"${file}"`), `it names the file: ${r.stderr}`);
-    assert.ok(r.stderr.includes(role), `and the role it was recorded against: ${r.stderr}`);
-    assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
-  }
-});
-
-test('every role accepts its OWN files, and a role with none says so instead', () => {
-  // The other half of the check, and the half that keeps the refusal above a
-  // discriminator rather than a blanket. It is also where the assumption behind
-  // the first draft died: the ladder's roles and the generator's files are NOT
-  // one-to-one. `research` ships as `inv-research.md`, and `executor` has no
-  // reference at all because it is dispatched by the main loop rather than by a
-  // `.toml` — so a check built on `shipyard-<role>` refused every legitimate
-  // research mark and offered executors a file name that does not exist.
-  const { agentFilesFor, codexAgentFiles } = require(DISPATCH);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agentfiles-'));
-  const known = codexAgentFiles(writeCodexAgents(dir));
-  let withFiles = 0;
-  const claimed = new Set();
-  for (const role of ROLES) {
-    const files = agentFilesFor(role, known);
-    if (!files.size) {
-      // Any known file, to prove the refusal is about the ROLE having none rather
-      // than about the file being unknown.
-      const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
-      const r = run(
-        ['mark', 'T-01-02', role, '--agent-file', 'shipyard-ci-fix'],
-        project,
-        { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
-      );
-      assert.equal(r.status, 1, `${role} has no agent file, so it must refuse (${r.stdout}${r.stderr})`);
-      assert.ok(/no agent file/.test(r.stderr), `and say which fact refused it: ${r.stderr}`);
-      assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
-      continue;
-    }
-    withFiles += 1;
-    for (const file of files) {
-      claimed.add(file);
-      const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
-      const r = run(
-        ['mark', 'T-01-02', role, '--agent-file', file],
-        project,
-        { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
-      );
-      assert.equal(r.status, 0, `${role} × ${file} must be accepted (${r.stderr})`);
-      assert.equal(store(graph)['T-01-02'].agent_file, file);
-    }
-  }
-  assert.ok(withFiles >= 6, `most roles do have a file (${withFiles})`);
-  // No shipped file may be unclaimed: one that no role can record is a file the
-  // generator emits and this store can never name, which is the mirror of the
-  // refusal above and the thing a rename would break silently.
-  assert.deepStrictEqual([...claimed].sort(), [...known].sort(),
-    'every agent file the generator produces is claimed by exactly one role');
 });
 
 suite('dispatch-record — WHICH agent holds it (ADR-007 D1)');
@@ -2294,10 +1765,10 @@ test('deliver.md\'s ladder query runs, and UNCONFIRMED is a bucket rather than a
   assert.ok(block, 'deliver.md must carry the ladder query beside the flags');
 
   const { project } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...OPEN_PR } });
-  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor',
-    '--model', 'opus', '--effort', 'high', '--effort-applied', 'high'], { cwd: project });
-  execFileSync('node', [DISPATCH, 'mark', 'T-01-02', 'arch-review',
-    '--model', 'opus', '--effort', 'xhigh'], { cwd: project });
+  fs.writeFileSync(path.join(project, '.planning', 'graph', 'delivery-log.jsonl'), [
+    { event: 'dispatch', role: 'executor', model: 'opus', effort: 'high', effort_applied: 'high' },
+    { event: 'dispatch', role: 'arch-review', model: 'opus', effort: 'xhigh' },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n');
 
   const r = spawnSync('bash', ['-c', block], { cwd: project, encoding: 'utf8' });
   assert.equal(r.status, 0, `the query must run (${r.stderr})`);
@@ -2305,23 +1776,6 @@ test('deliver.md\'s ladder query runs, and UNCONFIRMED is a bucket rather than a
     `the Workflow row is counted: ${r.stdout}`);
   assert.ok(/arch-review opus resolved:xhigh applied:UNCONFIRMED': 1/.test(r.stdout),
     `and the Agent row reads UNCONFIRMED rather than a guess: ${r.stdout}`);
-});
-
-test('dispatch records run scope metadata', () => {
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const result = run([
-    'mark', 'T-01-01', 'executor',
-    '--model', 'opus', '--effort', 'high', '--runtime', 'claude', '--backend', 'workflow',
-    '--run-id', 'run-dispatch-1', '--account-scope', 'anthropic-max',
-    '--treatment-id', 'phase-37-baseline', '--arm', 'baseline',
-    '--policy-id', 'ADR-014', '--policy-version', 'adr-014.v2', '--policy-hash', 'policy-hash-1',
-  ], project);
-  assert.equal(result.status, 0, result.stderr);
-  const record = store(graph)['T-01-01'];
-  const event = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).find((item) => item.event === 'dispatch');
-  assert.equal(record.run_id, 'run-dispatch-1');
-  assert.equal(record.account_scope, 'anthropic-max');
-  assert.equal(event.dispatch_id, record.dispatch_id);
 });
 
 test('fresh linked-worker provenance remains authenticated when the next host runs at the project root', () => {

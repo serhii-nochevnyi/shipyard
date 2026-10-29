@@ -207,16 +207,9 @@ grep -q '"ok":true' <<<"$SYNC_CHECK" || { echo "bundled gsd-sync check was not c
 # report that instead of the grep result.
 vg_out="$( ( cd "$WORK" && node -e 'require(process.argv[1])' "$CODEX_HOME/shipyard/scripts/validate-graph.cjs" 2>&1 ) || true )"
 grep -q 'missing .planning' <<<"$vg_out" || { echo "bundled validate-graph.cjs cannot load its modules: $vg_out"; exit 1; }
-# The model resolver travels with the bundle and only emits tier aliases.
-# Run it from "$WORK" for the same reason validate-graph is run there: the
-# resolver reads `<cwd>/.planning/config.json`. The bundled script is itself
-# under the throwaway Codex home, so runtime-context must identify Codex from
-# that path even though the fixture has no persisted project runtime. On Codex
-# the runtime cap deliberately maps the judgment tier to `sonnet`; this checks
-# the active-runtime policy rather than the old ambiguous-runtime fallback.
-pc_tier="$( cd "$WORK" && node "$CODEX_HOME/shipyard/scripts/pipeline-config.cjs" model arch-review )"
-[[ "$pc_tier" == sonnet ]] \
-  || { echo "bundled pipeline-config.cjs does not resolve the Codex judgment tier (got '$pc_tier', want 'sonnet')"; exit 1; }
+pc_out="$( cd "$WORK" && node "$CODEX_HOME/shipyard/scripts/pipeline-config.cjs" resolve )"
+grep -q '"valid": true' <<<"$pc_out" \
+  || { echo "bundled pipeline-config.cjs cannot read the project configuration: $pc_out"; exit 1; }
 
 # ${CLAUDE_PLUGIN_ROOT} is rewritten to the bundle root, so every path the skills
 # reference must actually EXIST there — including workflows/, which used to be

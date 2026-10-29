@@ -1048,8 +1048,6 @@ test('delivery docs project selector, recorder, and workflow contracts without i
   for (const phrase of [
     '--capabilities-file <current-host-capabilities.json>',
     'concrete `model`, `model_key`, `effort`/`requested_effort`',
-    'compatibility recorder route',
-    'recorder projection',
     'name without its `.toml` suffix',
     'Codex dynamic roles are `decomposition` and `executor`',
     '--effort-applied <receipt-applied-effort>',

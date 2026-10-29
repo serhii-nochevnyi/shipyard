@@ -441,10 +441,8 @@ points here instead of creating a second launch protocol.
    this ticket's own `conform` — as a contest. A prior line for THIS ticket
    carrying `verdict=violation` is what `--contested` reports.
 
-   The old compatibility invocation `pipeline-config.cjs model arch-review` is
-   named here only as a prohibition: do not execute it or use its output.
-   `boundary.dispatch` resolves and validates the canonical selection, so the
-   actual launch never contains that literal model command.
+   `boundary.dispatch` resolves and validates the canonical selection; no other
+   command chooses the model.
 
 2. **RESOLVE, VALIDATE, and LAUNCH through the boundary** — never assume or
    inherit the guard's own selection. Measure `<n>` and then call:
@@ -688,11 +686,8 @@ work twice. The Workflow runtime's phase-wide `pr-sentinel` uses one authenticat
   `codex-agent.cjs` launches, and keep concrete observed model/effort separate
   from the requested tier/effort. Missing observations remain unknown and are
   excluded from efficiency comparisons.
-  **Keep the boundary and recorder representations separate.** The boundary
-  receipt keeps its canonical `role=… rung=… model=… signals=…` route. The
-  recorder adapter supplies its separately validated compatibility tier/effort/
-  route projection; do not pass the boundary route to `--route` or re-derive a
-  ladder decision here. A routed
+  The boundary receipt's canonical `role=… rung=… model=… signals=…` route is
+  what `mark` records; do not re-derive a ladder decision here. A routed
   fixer must launch only through a surface that explicitly applies the resolved
   model and effort and returns that application receipt; record its concrete
   `--effort-applied <effort>`. If that surface is unavailable, hard-refuse before

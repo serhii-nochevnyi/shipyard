@@ -424,13 +424,6 @@ function normalizeRecord(raw, now = new Date().toISOString()) {
       && !pipeline.TASK_LEVELS.includes(record.task_level)) {
     fail(`task_level "${record.task_level}" is not a Shipyard task level`);
   }
-  if (record.model !== undefined && Array.isArray(pipeline.TIERS) && !pipeline.TIERS.includes(record.model)) {
-    fail(`model "${record.model}" is not a requested tier alias — concrete ids belong in observed_model`);
-  }
-  if (record.model !== undefined && typeof pipeline.tierAllowedForRuntime === 'function'
-      && !pipeline.tierAllowedForRuntime(runtime, record.model)) {
-    fail(`model "${record.model}" is not available on runtime "${runtime}"`);
-  }
   for (const key of ['effort', 'effort_applied', 'observed_effort']) {
     if (record[key] === undefined) continue;
     if (!EFFORT_STATES.has(record[key])) {
