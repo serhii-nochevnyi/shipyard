@@ -8,6 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const Module = require('node:module');
 const { spawnSync } = require('node:child_process');
+const { registered, template } = require('../fixtures/phase53/code-review-native-driver.cjs');
 const root = path.resolve(__dirname, '../..');
 const scripts = path.join(root, 'plugins/delivery-pipeline/scripts');
 const runtime = require(path.join(scripts, 'codex-runtime-host.cjs'));
@@ -31,27 +32,41 @@ function fixtureHelpers() {
   } finally { Module._load = original; }
 }
 
+const nativeSource = registered('codex-agent-stream', 'codex-agent-stream-parent.jsonl');
+function nativeTemplate(predicate) {
+  const row = template(nativeSource, predicate);
+  if (row.payload.turn_id !== undefined) row.payload.turn_id = 'original-turn';
+  if (row.payload.internal_chat_message_metadata_passthrough?.turn_id !== undefined)
+    row.payload.internal_chat_message_metadata_passthrough.turn_id = 'original-turn';
+  return row;
+}
 function nativeRows() {
-  return [
-    { type: 'event_msg', payload: { type: 'task_started', turn_id: 'original-turn' } },
-    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Review source.' }] } },
-    { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Original report.' }] } },
-    { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'original-turn' } },
-  ];
+  const start = nativeTemplate(row => row.payload?.type === 'task_started');
+  const input = nativeTemplate(row => row.payload?.role === 'user');
+  const final = nativeTemplate(row => row.payload?.phase === 'final_answer');
+  const end = nativeTemplate(row => row.payload?.type === 'task_complete');
+  start.payload.turn_id = end.payload.turn_id = 'original-turn';
+  input.payload.content = [{ type: 'input_text', text: 'Review source.' }];
+  final.payload.content = [{ type: 'output_text', text: 'Original report.' }];
+  return [start, input, final, end];
 }
 function insertRead(rows, commands = ['rg -n absent src/provider.cjs'], results = [{ exit_code: 1, output: '' }], custom = false) {
   const turn = rows.find(row => row.payload?.type === 'task_started').payload.turn_id;
   const call_id = 'query-' + rows.length;
   const args = commands.map(cmd => ({ cmd, max_output_tokens: 5000 }));
-  const invocation = { type: 'response_item', payload: { call_id,
+  const invocation = nativeTemplate(row => row.payload?.type === 'function_call');
+  Object.assign(invocation.payload, { call_id,
     internal_chat_message_metadata_passthrough: { turn_id: turn }, ...(custom
       ? { type: 'custom_tool_call', name: 'functions.exec', input: args.map(arg => `text(await tools.exec_command(${JSON.stringify(arg)}));`).join('\n') }
-      : { type: 'function_call', name: 'exec_command', arguments: JSON.stringify(args[0]) }) } };
-  const response = { type: 'response_item', payload: { type: custom ? 'custom_tool_call_output' : 'function_call_output',
+      : { type: 'function_call', name: 'exec_command', arguments: JSON.stringify(args[0]) }) });
+  if (custom) delete invocation.payload.arguments;
+  else delete invocation.payload.input;
+  const response = nativeTemplate(row => row.payload?.type === 'function_call_output');
+  Object.assign(response.payload, { type: custom ? 'custom_tool_call_output' : 'function_call_output',
     call_id, internal_chat_message_metadata_passthrough: { turn_id: turn }, output: custom
       ? [{ type: 'text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
         ...results.map(result => ({ type: 'text', text: JSON.stringify(result) }))]
-      : JSON.stringify(results[0]) } };
+      : JSON.stringify(results[0]) });
   const boundary = rows.findIndex(row => row.payload?.phase === 'final_answer');
   rows.splice(boundary, 0, invocation, response);
   return { invocation, response, args };
