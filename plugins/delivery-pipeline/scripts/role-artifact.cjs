@@ -8493,7 +8493,7 @@ function validateRoleManifest(value, options) {
       fail('STALE_ARTIFACT', 'historical artifact integration-base tree no longer matches the recorded revision');
     }
   } else if ((recordedBase.commit !== liveBase.commit || recordedBase.tree !== liveBase.tree)
-      && !(role !== 'drift-check' && /^(?:origin\/)?(?:epic|ticket)\//.test(identity.base)
+      && !(role !== 'drift-check' && /^(?:origin[/])?(?:epic|ticket)[/]/.test(identity.base)
         && baseAdvanced(input, worktree, recordedBase, liveBase))) {
     fail('STALE_ARTIFACT', 'artifact integration-base identity is stale', {
       expected: liveBase,

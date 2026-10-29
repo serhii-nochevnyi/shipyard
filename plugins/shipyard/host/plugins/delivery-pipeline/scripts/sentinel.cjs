@@ -205,29 +205,11 @@ function reviewCheckpointReady(s) {
 
 // `gh pr checks` reports CI state through its EXIT CODE while still printing the
 // JSON (8 = pending, 1 = failing or no checks at all) — see state-sync.cjs.
-// Commits on <base> that <head> does not have yet — i.e. how stale this branch is.
-// The mirror of epic-branch.sh's `ahead_by`, in the other direction.
-//
-// WHY WE ASK OURSELVES instead of trusting mergeStateStatus: GitHub only reports
-// BEHIND when branch protection requires branches to be up to date. Without that
-// setting a stale-but-conflict-free branch reports CLEAN, so a gate that only
-// reads mergeStateStatus is silent exactly where the repo has not been hardened.
-// One extra call, on the merge path only — merges are rare next to the per-round
-// syncing, so this does not touch the conveyor's tick rate.
-//
-// TWO defects lived in one line here (external audit 2026-09-07, F06). The
-// endpoint named `{owner}/{repo}` and the repo was passed as `--repo`, which
-// `gh api` does not accept: the call errored for every foreign-repo ticket, and
-// the `null` it returned was read by the gate as "not behind". So the answer is
-// now a RESULT — `{behind}` or `{error}` — and the caller refuses on the error
-// rather than treating an unknown as a pass. `apiBase` is the same spelling
-// `epic-branch.sh`'s mirror-image `ahead_by` compare uses.
+// @invariant: an unreadable compare is null, never zero.
 function behindBy(base, head, repo) {
   const out = gh(['api', `${apiBase(repo)}/compare/${head}...${base}`, '--jq', '.ahead_by'], { tolerate: true });
-  if (typeof out !== 'string') return { error: (out && out.error) || 'gh api compare failed' };
-  const n = parseInt(out.trim(), 10);
-  if (!Number.isFinite(n)) return { error: `gh api compare answered "${out.trim().slice(0, 80)}", not a commit count` };
-  return { behind: n };
+  const n = typeof out === 'string' ? parseInt(out.trim(), 10) : NaN;
+  return Number.isFinite(n) ? n : null;
 }
 
 // ── did the epic actually RECEIVE it? (ADR-006 D3) ──────────────────────────
@@ -795,23 +777,8 @@ function settlement(pr, repo) {
   return v;
 }
 
-// "Has the base moved under this branch?" — the guard's reading of the same two
-// signals the merge gate reads, so `duty` stops offering a merge that gate is
-// about to refuse and names the remedy instead of describing it.
-//
-// The merge state rides on `settlement` above and costs nothing. The compare is
-// one extra `gh api` for each PR that gets this far, and it is required rather
-// than optional: GitHub reports BEHIND only where branch protection requires
-// up-to-date branches, so without the second opinion the duty is silent exactly
-// where the repo has not been hardened — and the merge path, which does ask,
-// then refuses what the duty offered. It is not paid for a parked PR, a child
-// behind a moving parent, or a red one: the chain below never reaches here for
-// those.
-//
-// An UNKNOWN answer is never "not behind" (the defect T-24-05 fixed one level
-// up): it reports `known: false`, the chain falls through unchanged, and the
-// merge gate still refuses rather than guessing.
-function baseCheck(s, repo) {
+// @invariant: only a PR into the integration branch pays the compare; an unreadable one is unknown, never behind.
+function baseCheck(s, repo, strict) {
   const st = settlement(s.pr, repo);
   if (st.merge_state === 'DIRTY' || st.merge_state === 'BEHIND') {
     return { moved: baseMoved({ merge_state: st.merge_state }), known: true };
@@ -819,9 +786,9 @@ function baseCheck(s, repo) {
   const base = st.base || s.pr_base || s.base || null;
   const head = st.head || s.branch || null;
   if (!st.merge_state || !base || !head) return { moved: null, known: false };
-  const cmp = behindBy(base, head, repo);
-  if (typeof cmp.behind !== 'number') return { moved: null, known: false };
-  return { moved: baseMoved({ merge_state: st.merge_state, behind_by: cmp.behind }), known: true };
+  const behind = strict ? behindBy(base, head, repo) : 0;
+  if (behind === null) return { moved: null, known: false };
+  return { moved: baseMoved({ merge_state: st.merge_state, behind_by: behind }), known: true };
 }
 
 // How many unmerged tickets this one is stacked on. 0 = its PR targets the epic
@@ -945,7 +912,7 @@ function dutyItems() {
     // item whatever the answer is, so a reader can tell "the base was checked and
     // is fine" from "nobody could check it" — the two used to look identical, and
     // one of them is the state the merge gate refuses.
-    const bc = baseCheck(s, s.repo || null);
+    const bc = baseCheck(s, s.repo || null, item.architecture.required);
     item.base_check = bc.moved ? 'stale' : bc.known ? 'clean' : 'unknown';
     if (bc.moved) {
       // FIRST inside this block, ahead of threads and of pending CI. Everything
@@ -1414,38 +1381,11 @@ function mergeOne(id) {
     );
   }
 
-  // The green that is the most expensive to trust: CI passed against a base that
-  // has since moved. Retargeting a cascade child updates WHERE it points; it does
-  // not re-run anything, so the check result still describes a merge base that no
-  // longer exists. Landing a night of those produces an epic where every ticket
-  // was green and the whole is broken.
-  //
-  // The comment two rules up has named BEHIND since this gate was written, and
-  // nothing ever checked it. Both readings are used, because neither alone is
-  // enough: mergeStateStatus is authoritative but only speaks when branch
-  // protection requires up-to-date branches, and our own comparison works
-  // everywhere but is a second opinion, not GitHub's verdict.
-  const cmp = behindBy(pr.baseRefName, pr.headRefName, repo);
-  if (pr.mergeStateStatus === 'BEHIND' || (cmp.behind || 0) > 0) {
-    // GitHub's own verdict is reported first and needs no second opinion; our
-    // count only sharpens the remedy when it is available.
-    const staleBy = typeof cmp.behind === 'number' ? cmp.behind : 'some';
-    res.behind_by = staleBy;
+  // @invariant: only GitHub's own BEHIND refuses; a moved epic or stacked base lands by ancestry.
+  if (pr.mergeStateStatus === 'BEHIND') {
     return block(
-      `the base moved: ${pr.baseRefName} is ${staleBy} commit(s) ahead of this branch, so the green checks were ` +
-      'measured against a merge base that no longer exists. In the ticket worktree: ' +
+      `the base moved: ${pr.baseRefName} requires this branch to be up to date. In the ticket worktree: ` +
       '`git fetch origin && git merge origin/<base>` (NEVER rebase — the PR is pushed), push, let CI re-run.'
-    );
-  }
-  // An UNKNOWN answer is not "not behind". The old code returned null on an
-  // errored compare and the comparison `null > 0` read as a pass — which is how
-  // this whole gate came to be silently absent for every foreign-repo ticket
-  // (the endpoint was unqualified, so the call always errored). Fail closed and
-  // quote the gh error, or the refusal is unactionable.
-  if (cmp.error) {
-    return block(
-      `base freshness unproven — gh compare failed: ${cmp.error}. A green measured against a base that has ` +
-      'since moved cannot be told from a real green without it, so the merge is refused rather than guessed.'
     );
   }
 
