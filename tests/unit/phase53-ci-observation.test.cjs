@@ -63,6 +63,18 @@ else if (a[0] === 'run' && a[1] === 'rerun') {
   const n = Number(fs.existsSync(process.env.CI_PULL_COUNT) ? fs.readFileSync(process.env.CI_PULL_COUNT) : 0) + 1;
   fs.writeFileSync(process.env.CI_PULL_COUNT, String(n));
   emit({ number: 108, state: 'open', head: { sha: d.move && n % 2 === 0 ? 'c'.repeat(40) : '${HEAD}' }, base: { repo: { full_name: 'acme/demo' } } });
+ } else if (/\\/actions\\/runs\\/\\d+\\/jobs\\?/.test(e)) {
+  const runId = Number(e.match(/\\/runs\\/(\\d+)/)[1]);
+  const jobs = d.checkPages.flatMap(p => p.check_runs).flatMap(r => {
+   const m = r.html_url.match(/\\/runs\\/(\\d+)\\/job\\/(\\d+)/);
+   if (!m || Number(m[1]) !== runId) return [];
+   const id = Number(m[2]);
+   return [{ id, run_id: runId, head_sha: r.head_sha, name: r.name, run_attempt: d.attempt || 1,
+    url: 'https://api.github.com/repos/acme/demo/actions/jobs/' + id,
+    run_url: 'https://api.github.com/repos/acme/demo/actions/runs/' + runId,
+    check_run_url: 'https://api.github.com/repos/acme/demo/check-runs/' + r.id, html_url: r.html_url }];
+  });
+  emit([{ total_count: jobs.length, jobs }]);
  } else if (/\\/actions\\/runs\\/\\d+$/.test(e)) {
   const id = Number(e.split('/').pop());
   emit({ id, head_sha: '${HEAD}', name: 'CI', workflow_id: 50, event: 'pull_request',

@@ -85,6 +85,7 @@ const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
 let activeSharedLockDeadline = Number.POSITIVE_INFINITY;
+let activeSharedLockRead = false;
 const lockModule = require(path.join(__dirname, 'lock.cjs'));
 const { withLock, lockDirFor, writeAtomic } = lockModule;
 const sharedWithLock = lockModule.withLock;
@@ -93,7 +94,8 @@ lockModule.withLock = (dir, name, fn, options = {}) => {
       || !Number.isFinite(activeSharedLockDeadline)) {
     return sharedWithLock(dir, name, fn, options);
   }
-  const remaining = remainingTimeoutMs(DEFAULT_LOCK_WAIT_MS, activeSharedLockDeadline, LOCK_TAIL_RESERVE_MS);
+  const remaining = remainingTimeoutMs(DEFAULT_LOCK_WAIT_MS, activeSharedLockDeadline,
+    activeSharedLockRead ? 25 : LOCK_TAIL_RESERVE_MS);
   if (remaining <= 0) throw new Error('wait call deadline reached before shared lock');
   const waitMs = Number.isFinite(options.waitMs) ? Math.min(options.waitMs, remaining) : remaining;
   return sharedWithLock(dir, name, fn, { ...options, waitMs });
@@ -945,10 +947,15 @@ function waitWallDeadline() {
     : callDeadline;
 }
 
-function withSharedLockDeadline(deadlineAt, fn) {
+function withSharedLockDeadline(deadlineAt, fn, readOnly = false) {
   const previous = activeSharedLockDeadline;
+  const previousRead = activeSharedLockRead;
   activeSharedLockDeadline = deadlineAt;
-  try { return fn(); } finally { activeSharedLockDeadline = previous; }
+  activeSharedLockRead = readOnly;
+  try { return fn(); } finally {
+    activeSharedLockDeadline = previous;
+    activeSharedLockRead = previousRead;
+  }
 }
 let nextWakeAt = null;
 let lastWaitEvent = null;
@@ -1028,7 +1035,7 @@ function refreshPublishedState() {
     publisherHealthy = false;
     return { enabled: true, ok: false, reason: `state-sync did not publish (${diagnostic(sync)})` };
   }
-  const published = withSharedLockDeadline(deadline, () => waitEvents.readPublished({ graphDir: GRAPH }));
+  const published = withSharedLockDeadline(deadline, () => waitEvents.readPublished({ graphDir: GRAPH }), true);
   if (!published || !published.ok) {
     publisherHealthy = false;
     return { enabled: true, ok: false, reason: published && published.reason ? published.reason : 'published state binding is unavailable' };

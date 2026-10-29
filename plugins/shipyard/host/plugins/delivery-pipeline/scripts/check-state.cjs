@@ -321,6 +321,57 @@ function collectCiObservation({ pr, repo, head, pollId }, request) {
     const statuses = pages(`${base}/commits/${checkedHead}/status?per_page=100`,
       'statuses', p => p.sha === checkedHead);
     const workflows = new Map();
+    const jobs = new Map();
+    const apiId = (link, resource) => {
+      try {
+        const url = new URL(link);
+        if (url.origin !== 'https://api.github.com' || url.username || url.password || url.search || url.hash) return null;
+        const prefix = `/repos/${repo}/${resource}/`.toLowerCase();
+        if (!url.pathname.toLowerCase().startsWith(prefix)) return null;
+        const id = url.pathname.slice(prefix.length);
+        return /^[1-9]\d*$/.test(id) && positiveId(Number(id)) ? id : null;
+      } catch { return null; }
+    };
+    const jobsFor = runId => {
+      if (!jobs.has(runId)) {
+        jobs.set(runId, null);
+        try {
+          const listing = pages(`${base}/actions/runs/${runId}/jobs?per_page=100&filter=all`,
+            'jobs', p => p.jobs.every(j => j && positiveId(j.id)));
+          const byId = new Map(), checkIds = new Set();
+          for (const j of listing.rows) {
+            const checkId = apiId(j.check_run_url, 'check-runs');
+            if (checkId !== null) {
+              if (checkIds.has(checkId)) throw new Error('CI jobs claim duplicate check identities');
+              checkIds.add(checkId);
+            }
+            byId.set(String(j.id), j);
+          }
+          jobs.set(runId, byId);
+        } catch { jobs.set(runId, null); }
+      }
+      return jobs.get(runId);
+    };
+    const actualAttempt = (r, row, job, run) => {
+      if (job.attempt !== null || run.run_attempt === 1) return run.run_attempt;
+      const matched = jobsFor(job.run_id)?.get(job.job_id);
+      const locator = matched && actionsJob(matched.html_url);
+      if (!matched || !positiveId(run.id) || !positiveId(matched.run_id) || matched.run_id !== run.id
+          || !positiveId(matched.id) || String(matched.id) !== job.job_id
+          || matched.head_sha !== checkedHead || matched.name !== row.name
+          || !positiveId(matched.run_attempt) || matched.run_attempt > run.run_attempt
+          || apiId(matched.url, 'actions/jobs') !== job.job_id
+          || apiId(matched.run_url, 'actions/runs') !== job.run_id
+          || apiId(matched.check_run_url, 'check-runs') !== String(row.id)
+          || !locator || locator.repository !== job.repository || locator.run_id !== job.run_id
+          || locator.job_id !== job.job_id || (locator.attempt !== null && locator.attempt !== matched.run_attempt)) return null;
+      for (const link of [r.details_url, r.html_url]) {
+        const other = actionsJob(link);
+        if (other && (other.repository !== job.repository || other.run_id !== job.run_id
+            || other.job_id !== job.job_id || (other.attempt !== null && other.attempt !== matched.run_attempt))) return null;
+      }
+      return matched.run_attempt;
+    };
     const rows = checkRuns.rows.map(r => {
       if (typeof r.name !== 'string' || !r.name || !positiveId(r.id))
         throw new Error('CI check identity is incomplete');
@@ -344,8 +395,9 @@ function collectCiObservation({ pr, repo, head, pollId }, request) {
             && positiveId(run.run_number) && positiveId(run.run_attempt)
             && (job.attempt === null || job.attempt === run.run_attempt)
             && typeof run.name === 'string' && typeof run.event === 'string' && run.event) {
-          Object.assign(row, { workflow: run.name, event: run.event, workflow_id: run.workflow_id,
-            run_id: job.run_id, job_id: job.job_id, run_number: run.run_number, run_attempt: run.run_attempt });
+          const attempt = actualAttempt(r, row, job, run);
+          if (attempt !== null) Object.assign(row, { workflow: run.name, event: run.event, workflow_id: run.workflow_id,
+            run_id: job.run_id, job_id: job.job_id, run_number: run.run_number, run_attempt: attempt });
         }
       }
       return row;

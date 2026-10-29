@@ -872,7 +872,8 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort, live = false
     }
     const reported = outputs.get(wait.call_id);
     // @invariant: Interrupted waits grant no completion; the separately bound child must complete exactly once.
-    if (reported === 'Wait interrupted by new input.') return { timed_out: false, interrupted: true };
+    if (reported === 'Wait interrupted by new input.' || reported === 'aborted before dispatch')
+      return { timed_out: false, interrupted: true };
     try { return JSON.parse(reported); }
     catch (_) { fail('RUNTIME_EVIDENCE_INVALID', 'native wait output is invalid'); }
   });
