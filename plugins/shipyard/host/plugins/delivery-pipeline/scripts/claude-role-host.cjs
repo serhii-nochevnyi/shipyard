@@ -1689,7 +1689,7 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
 
 // @invariant: only graph files no concurrent conveyor process rewrites are role-run baseline state.
 const GRAPH_PROTECTED = ['tickets.json', 'tickets.yaml'];
-const GRAPH_HOOK_STATE = /^(session-observations\.jsonl|stop-gate-.*)$/;
+const GRAPH_HOOK_STATE = /^(session-observations\.jsonl(\.tmp-.*)?|stop-gate-.*|\.locks)$/;
 const PROVENANCE_SIDECAR = /^[A-Za-z0-9_.-]+\.json$/;
 
 function fingerprint(file) {
