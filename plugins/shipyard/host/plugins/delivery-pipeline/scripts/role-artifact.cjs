@@ -4451,9 +4451,24 @@ function semanticNative(trusted, launch, record, result, facts, binding = [recor
   if (immutableFileFact(facts, 'sha256', pin.path, raw, binding, () => digest(raw)) !== pin.sha256) semanticError('semantic original native pin changed');
   const rows = immutableFileFact(facts, 'native-rows', pin.path, raw, binding, () => partitionNativeRows(raw));
   const claude = snapshot.runtime === 'claude';
+  const codexRuntime = claude ? null : require('./codex-runtime-host.cjs');
+  const initial = runtime.initial_context;
+  if (!claude && (!initial && !record.historical || initial && (!object(initial) || !object(initial.launch))))
+    semanticError('semantic original lacks retained initialization provenance');
+  const ordered = claude ? null : codexRuntime.extractSemanticInitialInput(rows, {
+    input: launch.input, initialContext: initial?.launch, sessionId: runtime.session_id });
+  if (!claude && initial && (initial.native_sha256 !== pin.sha256 || initial.session_id !== runtime.session_id
+      || initial.turn_id !== ordered.turn_id || initial.preamble_sha256 !== (ordered.initial_index === null
+        ? null : digest(stable(rows[ordered.initial_index].payload.content)))
+      || initial.launch.binding.run_id !== runtime.run_id || initial.launch.binding.ticket !== snapshot.subject
+      || initial.launch.binding.dispatch_id !== trusted.dispatchId || initial.launch.binding.phase !== runtime.phase
+      || initial.launch.binding.worktree !== snapshot.identity.worktree || initial.launch.binding.worktree !== runtime.worktree
+      || initial.launch.binding.command_digest !== runtime.command_digest
+      || runtime.command_digest !== digest(JSON.stringify(runtime.command?.args))))
+    semanticError('semantic original retained initialization association differs');
   const users = claude ? rows.filter(row => row.type === 'user' && row.sessionId === runtime.session_id
     && (typeof row.message?.content === 'string' || row.message?.content?.some(block => block.text?.includes('<AUTHENTICATED_SEMANTIC_REVIEW>'))))
-    : rows.filter(row => row.type === 'response_item' && row.payload?.role === 'user');
+    : [rows[ordered.input_index]];
   const content = claude ? users[0]?.message?.content : users[0]?.payload?.content;
   const input = typeof content === 'string' ? content : content?.map(block => block.text || '').join('');
   if (users.length !== 1 || input !== launch.input
@@ -4525,7 +4540,8 @@ function semanticNative(trusted, launch, record, result, facts, binding = [recor
     }
   }
   const reads = require(claude ? './claude-runtime-host.cjs' : './codex-runtime-host.cjs')
-    .verifySemanticReads(raw.toString('utf8'), runtime.session_id);
+    .verifySemanticReads(raw.toString('utf8'), claude ? runtime.session_id
+      : { input: launch.input, initialContext: initial?.launch, sessionId: runtime.session_id });
   return { native_pin: pin, output_pin: runtime.transcript, observation, accounting, resource_failure, reads, session_id: runtime.session_id };
 }
 function validateSemanticResult(result, launch, record, facts) {
