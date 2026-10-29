@@ -150,7 +150,8 @@ test('public phase builder and native context use the explicit aggregate PR and 
     assert.equal(prepared.prepared.pr,801);
     assert.equal(prepared.prepared.rows[0].id,TICKET);
     assert.equal(prepared.prepared.packet.review_contract, context.FOCUSED_CONTRACT);
-    assert.match(prepared.launch.context.prompt,/reviewed implementation change/);
+    assert.match(prepared.launch.context.prompt,/git diff [0-9a-f]{40}\.\.\.[0-9a-f]{40} -- <path>/);
+    assert.doesNotMatch(prepared.launch.context.prompt,/reviewed implementation change/);
     assert.deepEqual(prepared.prepared.binding.ticketSet.map(row => row.id), [TICKET]);
     const selectedAdr = prepared.prepared.packet.refs.find(ref => ref.path.endsWith('ADR-014-host-bound-review.md'));
     assert.ok(selectedAdr);
@@ -159,8 +160,8 @@ test('public phase builder and native context use the explicit aggregate PR and 
     const adrSelection = prepared.prepared.packet.adr_selection.find(ref => ref.path === selectedAdr.path);
     assert.ok(adrSelection.selected);
     assert.ok(adrSelection.reasons.some(reason => reason.includes('plan reference')));
-    assert.match(prepared.prepared.packet.diff.content, /reviewed implementation change/);
-    assert.equal(prepared.prepared.packet.diff.content, git(f.root, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50', f.base + '...' + f.pr.headRefOid]) + '\n');
+    assert.equal(prepared.prepared.packet.diff.content, undefined);
+    assert.equal(prepared.prepared.packet.diff.merge_base, f.base);
     assert.equal(prepared.prepared.packet.refs.some(ref => ref.path.endsWith('SUMMARY.md')), false);
     assert.equal(fs.readFileSync(path.join(f.root, '.planning/phases/38-codex-arch-review/38-01-SUMMARY.md'), 'utf8'),
       'Original acceptance: installed obligations remain HOLD.');
@@ -222,7 +223,8 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     assert.equal(prepared.prepared.pr,801);
     assert.equal(prepared.prepared.rows[0].id,TICKET);
     assert.equal(prepared.prepared.packet.review_contract, context.FOCUSED_CONTRACT);
-    assert.match(prepared.launch.context.prompt,/reviewed implementation change/);
+    assert.match(prepared.launch.context.prompt,/git diff [0-9a-f]{40}\.\.\.[0-9a-f]{40} -- <path>/);
+    assert.doesNotMatch(prepared.launch.context.prompt,/reviewed implementation change/);
     assert.deepEqual(prepared.prepared.binding.ticketSet.map(row => row.id), [TICKET]);
     const selectedAdr = prepared.prepared.packet.refs.find(ref => ref.path.endsWith('ADR-014-host-bound-review.md'));
     assert.ok(selectedAdr);
@@ -231,8 +233,8 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     const adrSelection = prepared.prepared.packet.adr_selection.find(ref => ref.path === selectedAdr.path);
     assert.ok(adrSelection.selected);
     assert.ok(adrSelection.reasons.some(reason => reason.includes('plan reference')));
-    assert.match(prepared.prepared.packet.diff.content, /reviewed implementation change/);
-    assert.equal(prepared.prepared.packet.diff.content, git(f.root, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50', f.base + '...' + f.pr.headRefOid]) + '\n');
+    assert.equal(prepared.prepared.packet.diff.content, undefined);
+    assert.equal(prepared.prepared.packet.diff.merge_base, f.base);
     assert.equal(prepared.prepared.packet.refs.some(ref => ref.path.endsWith('SUMMARY.md')), false);
     assert.equal(fs.readFileSync(path.join(f.root, '.planning/phases/38-codex-arch-review/38-01-SUMMARY.md'), 'utf8'),
       'Original acceptance: installed obligations remain HOLD.');
@@ -430,7 +432,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     const originalGraph = fs.readFileSync(graphPath);
     graph.tickets[TICKET].repo = repo === null ? 'acme/wrong' : null;
     fs.writeFileSync(graphPath,JSON.stringify(graph));
-    assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /phase absent|canonical phase epic|membership|digest|one current phase|independently retained current phase roster/);
+    assert.equal(artifacts.currentArchitectureVerdict(verdictInput), null, 'a graph without exactly one current phase leaves the review owed');
     fs.writeFileSync(graphPath,originalGraph);
     const findingsPin = artifacts.authenticatedArchivePins(f.root).find(pin=>pin.path.endsWith('/findings.json'));
     const findingsPath = path.join(f.root,findingsPin.path);

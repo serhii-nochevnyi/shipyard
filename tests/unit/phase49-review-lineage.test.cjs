@@ -110,7 +110,7 @@ function agent(f, role, signals) {
     '# shipyard-policy-role = "' + role + '"', '# shipyard-policy-rung = "' + selection.rung + '"',
     'name = "' + selection.agent_file.replace(/\.toml$/, '') + '"', 'model = "' + selection.model + '"',
     'model_reasoning_effort = "' + selection.effort + '"', 'sandbox_mode = "read-only"',
-    "developer_instructions = '''", 'Read complete original material.' + (role === 'arch-review' ? 'a'.repeat(900000) : ''), "'''", '',
+    "developer_instructions = '''", 'Read complete original material.', "'''", '',
   ].join('\n');
   fs.writeFileSync(path.join(dir, selection.agent_file), text);
   const manifest = path.join(dir, '.shipyard-manifest.json');
@@ -319,8 +319,6 @@ test('latest authenticated success is role-specific and later unresolved finding
     assert.equal(fresh.mode, 'incremental', JSON.stringify(fresh));
     assert.equal(fresh.baseline.dispatch_id, repaired.dispatched.dispatch_id);
     assert.deepEqual(fs.readFileSync(rejected.artifact), rejected.original);
-    const architecture = authority.selectReviewBaseline({ currentInput: currentInput(f, 'arch-review') });
-    assert.equal(architecture.mode, 'full'); assert.equal(architecture.baseline, null);
   });
 });
 
@@ -605,8 +603,9 @@ test('focused current architecture covers the complete repaired diff without bor
       assert.equal(original.result.result.review_contract, collector.FOCUSED_CONTRACT);
       assert.equal(original.result.result.review_completeness, 'complete');
       assert.equal(original.result.receipt.runtime_evidence.input_consumption, undefined);
-      assert.match(original.value.prepared.packet.diff.content, /exports.value = 1/);
-      assert.match(original.value.prepared.packet.diff.content, /value \+ 1/);
+      assert.equal(original.value.prepared.packet.diff.content, undefined);
+      assert.deepEqual(original.value.prepared.packet.change_metadata.changes.map(change => change.new_path).sort(),
+        ['src/consumer.cjs', 'src/provider.cjs']);
       assert.ok(original.value.prepared.packet.adr_selection.some(ref => ref.selected && ref.path.endsWith('ADR-014-original.md')));
       const current = { worktreePath: f.worktree, pr: f.pr.number, head: f.head, baseName: 'main',
         baseCommit: f.base, graphDir: f.graphDir, headBranch: f.pr.headRefName };

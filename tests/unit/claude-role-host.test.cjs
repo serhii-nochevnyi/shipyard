@@ -117,8 +117,11 @@ test(`${kind} completes preparation from coordinator-only planning without movin
       assert.equal(ref.content, fs.readFileSync(path.join(fixture.project, ref.path), 'utf8'));
     }
     const diff = prepared.packet.role_context.exact_diff || prepared.packet.role_context.combined_diff;
-    assert.ok(diff.content.includes('+reviewed change'));
-    assert.ok(!diff.content.includes('coordinator product'));
+    if (kind === 'arch-review') assert.equal(diff.content, undefined, 'arch-review reads the diff through git');
+    else {
+      assert.ok(diff.content.includes('+reviewed change'));
+      assert.ok(!diff.content.includes('coordinator product'));
+    }
     assert.ok(prepared.evidencePath.startsWith('.'));
     assert.equal(fs.existsSync(path.join(fixture.project, prepared.evidencePath)), false);
     if (kind === 'integrator') {
@@ -157,16 +160,17 @@ test(`${kind} coordinator packet survives real file transport and serialized con
   } finally { cleanupFixture(f); }
 });
 
-for (const transport of ['inline', 'file'])
-test(`coordinator architecture completes captured native ${transport} sealing and public current readback`, async () => {
-  const f = coordinatorOnlyPlanning('arch-review', transport === 'file'
-    ? { sourceContent: 'Complete coordinator review source.\n'.repeat(38000) } : {});
+test('coordinator architecture completes captured native inline sealing and public current readback', async () => {
+  const f = coordinatorOnlyPlanning('arch-review');
   try {
     const binding = registerCoordinatorRoster(f);
     let launches = 0;
     const options = hostOptions(f, { originalStream: true, onLaunch(prompt) {
       launches++;
-      assert.equal(prompt.includes('<AUTHENTICATED_FOCUSED_INPUT>'), transport === 'file');
+      assert.ok(!prompt.includes('<AUTHENTICATED_FOCUSED_INPUT>'));
+      assert.ok(!prompt.includes('+reviewed change'), 'the diff is not in the prompt');
+      assert.match(prompt, new RegExp('git diff ' + f.mergeBase + '\\.\\.\\.' + f.head + ' -- <path>'));
+      assert.ok(prompt.includes('"new_path":"src/role.txt"'), 'the changed-path inventory is in the packet');
     } });
     let recorder;
     const runtimeFactory = options.createRuntimeHost;
@@ -197,6 +201,29 @@ test(`coordinator architecture completes captured native ${transport} sealing an
   finally { cleanupFixture(f); }
 });
 
+
+test('an older-shaped architecture record in the catalogue is skipped so the verdict is owed, not an exception', async () => {
+  const f = coordinatorOnlyPlanning('arch-review');
+  try {
+    registerCoordinatorRoster(f);
+    const options = hostOptions(f, { originalStream: true });
+    options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
+    const result = await createClaudeRoleHost(options).run(phasePreparationRequest(f));
+    const input = { worktreePath: f.root, pr: 101, head: f.head, baseName: 'integration',
+      baseCommit: f.base, graphDir: f.graphDir, headBranch: f.branch };
+    assert.equal(reviewArtifacts.currentArchitectureVerdict(input)?.subject, result.subject);
+    const directory = reviewArtifacts.archiveAuthorityDirectory(f.root);
+    const file = path.join(directory, 'catalogue.json');
+    const envelope = JSON.parse(fs.readFileSync(file));
+    for (const record of Object.values(envelope.payload.records)) record.pins = [];
+    envelope.mac = crypto.createHmac('sha256', fs.readFileSync(path.join(directory, 'hmac.key')))
+      .update(stable(envelope.payload)).digest('hex');
+    fs.writeFileSync(file, JSON.stringify(envelope));
+    const refusals = [];
+    assert.equal(reviewArtifacts.currentArchitectureVerdict({ ...input, onCandidateRefusal: item => refusals.push(item) }), null);
+    assert.deepEqual(refusals.map(item => item.message), ['architecture manifest pin is missing']);
+  } finally { cleanupFixture(f); }
+});
 
 for (const kind of ['code-review', 'integrator'])
 test(`${kind} coordinator input seals captured native bytes and reads its current verdict`, async () => {
@@ -304,8 +331,8 @@ function reviewInputFixture(fixture, packet, promptBytes) {
 }
 
 for (const promptBytes of [1048575, 1048576, 1048577])
-test('arch-review relay routes at ' + promptBytes + ' prompt bytes independently of estimated packet tokens', () => {
-  const role = 'arch-review';
+test('code-review relay routes at ' + promptBytes + ' prompt bytes independently of estimated packet tokens', () => {
+  const role = 'code-review';
   const fixture = setupRepository('arch-review');
   const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
   const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
@@ -325,7 +352,7 @@ test('arch-review relay routes at ' + promptBytes + ' prompt bytes independently
       assert.equal(checked.manifest.role, role);
       assert.deepEqual(JSON.parse(checked.material[0]), packetsForTest(packet));
       assert.ok(Buffer.byteLength(result.prompt) < 1048576, 'relayed prompt bytes');
-      assert.equal(result.focusedInput.input_bundle.review_contract, collector.FOCUSED_CONTRACT);
+      assert.equal(result.focusedInput.input_bundle.review_contract, collector.CODE_REVIEW_CONTRACT);
     }
   } finally { cleanupFixture(fixture); }
 });
@@ -1183,6 +1210,31 @@ test('role mutation check refuses changes to a pre-existing scratch file', async
   }
 });
 
+test('arch-review refuses a head that moves while the reviewer reads git', async () => {
+  const fixture = setupRepository('arch-review');
+  try {
+    const options = hostOptions(fixture, {
+      onLaunch() {
+        write(fixture.root, 'src/role.txt', 'moved during review\n');
+        git(fixture.root, ['commit', '-am', 'moved head']);
+      },
+    });
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), error => error.code === 'STALE_CONTEXT');
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('arch-review refuses a worktree the reviewer modified', async () => {
+  const fixture = setupRepository('arch-review');
+  try {
+    const options = hostOptions(fixture, { onLaunch() { write(fixture.root, 'src/role.txt', 'edited by the reviewer\n'); } });
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), error => error.code === 'WORKTREE_MUTATED');
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
 test('arch-review launches through ADR-014 and seals only the matching PR judgment', async () => {
   const fixture = setupRepository('arch-review');
   let launched;
@@ -1247,7 +1299,7 @@ test('aggregate architecture seals a phase verdict without a registered roster a
     assert.match(result.subject, /^phase=38-/);
     assert.equal(packet.role_context.ticket_set.length, 1);
     assert.deepStrictEqual(result.result.host_context.phase_archive_selection, packet.role_context.phase_archive_selection);
-    assert.ok(packet.role_context.exact_diff.content.includes('SUMMARY.md'));
+    assert.ok(packet.role_context.change_metadata.name_status.includes('SUMMARY.md'));
     const input = { worktreePath: fixture.root, pr: 101, head: fixture.head, baseName: 'main', baseCommit: fixture.base };
     assert.equal(artifact.currentArchitectureVerdict(input).subject, result.subject);
     const live = livePr(fixture);
@@ -1627,6 +1679,15 @@ test('integrator judges the code diff without conveyor planning state', async ()
 function bulkSource(lines) {
   return Array.from({ length: lines }, (_, index) => `${String(index).padStart(8, '0')} ${'x'.repeat(70)}\n`).join('');
 }
+
+test('arch-review routing still sees the diff size although the diff is not in the prompt', () => {
+  const fixture = setupRepository('arch-review', { sourceContent: bulkSource(14000) });
+  try {
+    const prepared = preparationOnlyHost().prepareInvocation(hostOptions(fixture), parseRequest(request(fixture)));
+    assert.ok(Buffer.byteLength(prepared.prompt) < 200000, 'the prompt carries no diff');
+    assert.ok(prepared.signals.inputTokens > 250000, 'the measured window counts the diff the reviewer reads');
+  } finally { cleanupFixture(fixture); }
+});
 
 test('integrator admits a role diff above the former 1 MiB bound', async () => {
   const fixture = setupRepository('integrator', { sourceContent: bulkSource(14000) });
@@ -2182,25 +2243,22 @@ test('a plan-referenced backlog file is the only backlog in the packet', async (
   }
 });
 
-test('focused Claude overflow preserves complete pinned input through original current admission', async () => {
+test('a large PR diff stays out of the focused prompt while complete ADRs stay inline through original current admission', async () => {
   const sourceContent = 'Complete current producer and consumer source.\n'.repeat(17000);
   const adrs = [201, 202].map(number => ({ name: 'ADR-' + number + '-overflow.md',
     content: '# ADR-' + number + ' — governing overflow\n\n- **Status:** accepted\n\n' + 'Governing decision.\n'.repeat(8000) }));
   const fixture = setupRepository('arch-review', { sourceContent, corpus: { adrs },
     planExtra: ['References ADR-201 and ADR-202.'] });
   try {
-    let checked;
+    let launched = false;
     const result = await createClaudeRoleHost(hostOptions(fixture, { onLaunch(prompt) {
-      const descriptor = /<AUTHENTICATED_FOCUSED_INPUT>\s*([\s\S]*?)\s*<\/AUTHENTICATED_FOCUSED_INPUT>/.exec(prompt);
-      assert.ok(descriptor, 'overflow uses pinned focused files');
-      checked = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs')
-        .verifyFileInput(JSON.parse(descriptor[1]), { sealed: true });
-      assert.ok(checked.material.length > 1, 'oversized input is explicitly partitioned');
+      launched = true;
+      assert.ok(!prompt.includes('<AUTHENTICATED_FOCUSED_INPUT>'), 'the focused prompt never relays files');
+      assert.ok(!prompt.includes(sourceContent.split('\n')[0]), 'the diff is read through git, not embedded');
       const packet = packetFromPrompt(prompt);
-      assert.ok(packet.role_context.exact_diff.content.includes(sourceContent.split('\n')[0]));
       for (const adr of adrs) assert.ok(packet.required_refs.some(ref => ref.content === adr.content));
     } })).run(request(fixture));
-    assert.ok(checked);
+    assert.ok(launched);
     assert.equal(result.artifact.outcome, 'conform');
     assert.equal(result.result.review_completeness, 'complete');
     const input = { worktreePath: fixture.root, pr: 101, head: fixture.head, baseName: 'main', baseCommit: fixture.base };
@@ -2224,7 +2282,8 @@ test('architecture above its typical target stays complete while other role boun
     const reviewed = await createClaudeRoleHost(hostOptions(archFixture, { onLaunch(prompt) {
       launched = true;
       const packet = packetFromPrompt(prompt);
-      assert.equal(packet.accounting.overflow, true);
+      assert.ok(packet.accounting.estimated_bytes > 200 * 1024, 'above the typical packet target');
+      assert.ok(!packet.accounting.overflow);
       assert.ok(packet.required_refs.some(ref => ref.content === corpus.adrs[0].content));
       assert.ok(packet.required_refs.some(ref => ref.content === corpus.adrs[1].content));
     } })).run(request(archFixture));
