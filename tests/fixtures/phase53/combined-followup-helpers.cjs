@@ -82,9 +82,13 @@ function shards() {
     'phase53-z13-negative-query-outcomes.test.cjs', 'phase53-z14-codex-native-preamble.test.cjs',
     'phase53-z14b-codex-native-preamble-final.test.cjs', 'phase53-z15-responsibility-support.test.cjs',
     'phase53-z16-final-followup-acceptance.test.cjs', 'phase53-z16b-final-followup-negative.test.cjs'];
-  assert.deepEqual(actual.shards.slice(28), appended.map(file => [file]));
+  assert.deepEqual(actual.shards.slice(28, 28 + appended.length), appended.map(file => [file]));
   const denominator = actual.shards.length;
-  assert.equal(denominator, 28 + appended.length);
+  assert.ok(denominator >= 28 + appended.length);
+  const futureTask = 'zz-future-phase-regression.test.cjs';
+  const extended = s.appendShard(manifest, s.unitTasks([...s.unitFiles(), futureTask]));
+  assert.deepEqual(extended.shards.slice(0, denominator), actual.shards);
+  assert.deepEqual(extended.shards.at(-1), [futureTask]);
   for (let i = 0; i < denominator; i++)
     assert.deepEqual(s.selectTaskShard(`${i + 1}/${denominator}`), actual.shards[i]);
   for (const file of appended) assert.equal(actual.shards.flat().filter(item => item === file).length, 1);
@@ -382,7 +386,7 @@ function expectedVariants(runtime, kind) {
     : ['changed-terminal', 'unread-support'];
 }
 
-// Importing this module performs setup only; suites explicitly invoke this entrypoint.
+// @contract: Imports register no tests; suites explicitly invoke this entrypoint.
 async function runShard(t, kind) {
     expectedVariants('codex', kind);
     const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'z16-combined-')));
