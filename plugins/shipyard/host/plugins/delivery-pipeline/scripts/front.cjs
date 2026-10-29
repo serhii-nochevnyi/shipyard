@@ -262,7 +262,7 @@ const REVIEW_STANDS_WHY = 'CHANGES_REQUESTED stands with no unresolved thread â€
 function baseMoved(facts) {
   const f = facts || {};
   const st = String(f.merge_state || '').toUpperCase();
-  const n = Number(f.behind_by);
+  const n = f.architecture && f.architecture.required === false ? 0 : Number(f.behind_by);
   const behind = Number.isFinite(n) && n > 0 ? n : null;
   if (st === 'DIRTY') return { kind: 'dirty', behind };
   if (st === 'BEHIND') return { kind: 'behind', behind };

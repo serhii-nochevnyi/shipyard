@@ -1613,7 +1613,7 @@ test('an observed branch from another repository remains outside the stack', () 
   assert.ok(r.blockers.some((b) => /outside the stack/.test(b)), r.blockers.join('; '));
 });
 
-suite('base freshness is measured in the ticket\'s OWN repository, and an unknown answer refuses');
+suite('a base that moved on does not refuse a merge inside the stack');
 
 // External audit 2026-09-07, F06. `behindBy` ran `gh api repos/{owner}/{repo}/…
 // --repo <o/n>`: `gh api` does not accept `--repo`, and the placeholders resolve
@@ -1630,26 +1630,15 @@ const foreignMerge = (env) => JSON.parse(run(foreignRoot(), ['merge', 'T-FR', '-
   env: onPath(stubGh(), { STUB_BASE: 'epic/24-x', STUB_HEAD: 'ticket/T-FR', STUB_PR: '9', ...env }),
 }).stdout).results[0];
 
-test('the compare is repo-qualified and passes no --repo flag', () => {
+test('a branch behind its epic base still merges and no compare is asked', () => {
   const log = logFile('compare');
-  const r = foreignMerge({ STUB_LOG: log });
+  const r = foreignMerge({ STUB_LOG: log, STUB_BEHIND: '3' });
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
-  const cmp = callsIn(log).find((c) => c.startsWith('api repos/') && c.includes('/compare/'));
-  assert.ok(cmp, callsIn(log).join(' | '));
-  assert.ok(cmp.startsWith('api repos/acme/other/compare/'), `the ticket's own repo, not {owner}/{repo}: ${cmp}`);
-  assert.ok(!/--repo/.test(cmp), `gh api does not accept --repo: ${cmp}`);
+  assert.ok(!callsIn(log).some((c) => c.includes('/compare/')), callsIn(log).join(' | '));
 });
 
-test('a compare gh cannot answer refuses the merge instead of reading as "not behind"', () => {
-  const r = foreignMerge({ STUB_COMPARE_FAIL: '1' });
-  assert.strictEqual(r.merged, false);
-  assert.strictEqual(r.would_merge, undefined);
-  assert.ok(r.blockers.some((b) => /base freshness unproven/.test(b)), r.blockers.join('; '));
-  assert.ok(r.blockers.some((b) => /404/.test(b)), 'the gh error itself, or the reason is unactionable');
-});
-
-test('GitHub\'s own BEHIND verdict still refuses when the compare cannot be read', () => {
-  const r = foreignMerge({ STUB_COMPARE_FAIL: '1', STUB_MERGE_STATE: 'BEHIND' });
+test('GitHub\'s own BEHIND verdict still refuses the merge', () => {
+  const r = foreignMerge({ STUB_MERGE_STATE: 'BEHIND' });
   assert.strictEqual(r.would_merge, undefined);
   assert.ok(r.blockers.some((b) => /the base moved/.test(b)), r.blockers.join('; '));
 });
@@ -1978,13 +1967,26 @@ test('mergeStateStatus BEHIND is an actionable base-merge naming the script', ()
   assert.strictEqual(d.actionable_count, 1, 'the guard can do this one now');
 });
 
-test('a stale-but-clean branch is caught by the compare, which reports how far', () => {
+const mainDuty = (extra, gh = stubGh()) => JSON.parse(run(project({
+  tickets: { 'T-BM': { branch: 'ticket/T-BM', epic: 'epic/24-x' } },
+  state: { 'T-BM': { status: 'pr-open', pr: 9, draft: false, checks: checks(), gate: conform,
+    pr_base: 'main', integration_branch: 'main', epic: 'epic/24-x', branch: 'ticket/T-BM' } },
+  config: epicConfig,
+}), ['duty', '--json'], {
+  env: onPath(gh, { STUB_BASE: 'main', STUB_HEAD: 'ticket/T-BM', STUB_PR: '9', ...extra }),
+}).stdout).items[0];
+
+test('a stale-but-clean branch is caught by the compare only where it targets the integration branch', () => {
   // GitHub only says BEHIND where branch protection requires up-to-date
   // branches; everywhere else a stale branch reports CLEAN.
-  const i = bmDuty({ STUB_BEHIND: '3' }).items[0];
-  assert.strictEqual(i.action, 'base-merge', i.why);
-  assert.strictEqual(i.behind_by, 3);
-  assert.ok(/3 commit/.test(i.why), i.why);
+  const log = logFile('duty');
+  const stack = bmDuty({ STUB_BEHIND: '3', STUB_LOG: log }).items[0];
+  assert.notStrictEqual(stack.action, 'base-merge', stack.why);
+  assert.ok(!callsIn(log).some((c) => c.includes('/compare/')), callsIn(log).join(' | '));
+  const main = mainDuty({ STUB_BEHIND: '3' });
+  assert.strictEqual(main.action, 'base-merge', main.why);
+  assert.strictEqual(main.behind_by, 3);
+  assert.ok(/3 commit/.test(main.why), main.why);
 });
 
 test('DIRTY names the conflicts instead of a commit count', () => {
@@ -1993,10 +1995,17 @@ test('DIRTY names the conflicts instead of a commit count', () => {
   assert.ok(/conflict/.test(i.why), i.why);
 });
 
-test('an up-to-date branch still merges, and says the base was checked', () => {
+test('an up-to-date branch still merges, and a stacked one does not claim a base check it skipped', () => {
   const i = bmDuty().items[0];
   assert.strictEqual(i.action, 'merge', i.why);
-  assert.strictEqual(i.base_check, 'clean');
+  assert.strictEqual(i.base_check, 'unknown');
+  assert.strictEqual(mainDuty({ STUB_BEHIND: '0' }).base_check, 'clean');
+});
+
+test('an unreadable compare for a PR into the integration branch is unknown, not zero behind', () => {
+  const i = mainDuty({ STUB_COMPARE_FAIL: '1' });
+  assert.strictEqual(i.base_check, 'unknown');
+  assert.notStrictEqual(i.action, 'base-merge', i.why);
 });
 
 test('a base freshness gh could not answer falls through rather than inventing work', () => {

@@ -212,12 +212,8 @@ d() { node -e 'const s=require(process.argv[1]);process.stdout.write(String(s.it
 [[ "$(d T-01-01 depth)" == "0" && "$(d T-01-02 depth)" == "1" ]] \
   && ok "duty carries the stack depth it sorts by" \
   || bad "duty carries the stack depth" "got: $(d T-01-01 depth) / $(d T-01-02 depth)"
-# The guard reads the base's freshness for every PR it is about to walk towards a
-# merge, off the same `reviewers.cjs unresolved` call plus one compare. `clean`
-# and `unknown` are different answers and only one of them may end in `merge`:
-# before this, `duty` said `merge` and the gate — which does ask — refused.
-[[ "$(d T-01-01 base_check)" == "clean" ]] \
-  && ok "duty records that the base WAS checked, not merely that nothing objected" \
+[[ "$(d T-01-01 base_check)" == "unknown" ]] \
+  && ok "duty does not claim a base check it skipped for a PR into the epic" \
   || bad "duty records the base check" "got: $(d T-01-01 base_check)"
 
 # ── the duty names a remedy that exists ──────────────────────────────────────
@@ -532,32 +528,11 @@ s["T-01-01"].status = "merged"; require("fs").writeFileSync(f, JSON.stringify(s)
 ' "$cpproj/.planning/graph/delivery-state.json"
 
 run_merge SENTINEL_SMOKE_BEHIND=3
-if blockers_match 'the base moved'; then
-  ok "merge refuses a branch whose base moved under it, even with green checks"
-else
-  bad "merge refuses a stale base" "$(head -20 "$mergeout")"
-fi
-if blockers_match '3 commit'; then
-  ok "and says HOW far behind, so the fix is one merge and not a guess"
-else
-  bad "the refusal counts the commits" "$(head -20 "$mergeout")"
-fi
-
-# Zero behind: the staleness rule must not become a blanket refusal.
-run_merge SENTINEL_SMOKE_BEHIND=0
-if blockers_match 'the base moved'; then
-  bad "an up-to-date branch is not called stale" "$(head -20 "$mergeout")"
-else
-  ok "an up-to-date branch is not called stale"
-fi
-# …and it actually LANDS, end to end through the stub. The negative assertion
-# above passed for years while the merge died one line later on a `gh pr merge`
-# the stub did not answer, which proved only that the refusal text differed.
 if node -e '
 const r = require(process.argv[1]).results[0];
 process.exit(r && r.merged === true ? 0 : 1);
 ' "$mergeout" 2>/dev/null; then
-  ok "an up-to-date, green, conform PR inside the stack is squashed in"
+  ok "a green, conform PR inside the stack lands by ancestry although its epic is 3 commits ahead"
 else
   bad "the guard lands the PR it accepted" "$(head -20 "$mergeout")"
 fi

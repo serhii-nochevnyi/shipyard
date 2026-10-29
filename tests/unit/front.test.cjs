@@ -2196,6 +2196,15 @@ test('a commit count alone is enough — a stale-but-clean branch reports CLEAN'
     'without the count the board offers the merge — the defect the writer closes');
 });
 
+test('a commit count is ignored for a PR that does not target the integration branch', () => {
+  const stacked = { ...landed, architecture: { required: false } };
+  const behind = computeFront({ T: {} }, { T: { ...stacked, merge_state: 'CLEAN', behind_by: 3 } }, { autoMerge: true });
+  assert.deepStrictEqual(behind.actionable.merge, ['T']);
+  assert.deepStrictEqual(behind.actionable.fix, []);
+  const github = computeFront({ T: {} }, { T: { ...stacked, merge_state: 'BEHIND', behind_by: 3 } }, { autoMerge: true });
+  assert.deepStrictEqual(github.actionable.fix, ['T'], 'GitHub\'s own BEHIND still stands');
+});
+
 test('DIRTY is the same duty with a different word — conflicts, not staleness', () => {
   const f = computeFront({ T: {} }, { T: { ...landed, merge_state: 'DIRTY' } }, { autoMerge: true });
   assert.deepStrictEqual(f.actionable.fix, ['T']);

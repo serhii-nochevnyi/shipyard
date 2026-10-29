@@ -8354,6 +8354,15 @@ function gitObjectIdentity(input, worktree, revision, label) {
   return { commit: sha(commit, `${label} commit`), tree: sha(tree, `${label} tree`) };
 }
 
+// @invariant: a recorded epic or stacked base stays current while it is an ancestor of the live tip.
+function baseAdvanced(input, worktree, recorded, live) {
+  try {
+    if (gitObjectIdentity(input, worktree, recorded.commit, 'recorded integration base').tree !== recorded.tree) return false;
+    ioFor(input).execFileSync('git', ['-C', worktree, 'merge-base', '--is-ancestor', recorded.commit, live.commit], { stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
+
 function verifyArchivedReference(fsApi, worktree, reference, label, maximum) {
   if (!object(reference)
       || typeof reference.path !== 'string'
@@ -8483,7 +8492,9 @@ function validateRoleManifest(value, options) {
     if (base.tree !== recordedBase.tree) {
       fail('STALE_ARTIFACT', 'historical artifact integration-base tree no longer matches the recorded revision');
     }
-  } else if (recordedBase.commit !== liveBase.commit || recordedBase.tree !== liveBase.tree) {
+  } else if ((recordedBase.commit !== liveBase.commit || recordedBase.tree !== liveBase.tree)
+      && !(role !== 'drift-check' && /^(?:origin[/])?(?:epic|ticket)[/]/.test(identity.base)
+        && baseAdvanced(input, worktree, recordedBase, liveBase))) {
     fail('STALE_ARTIFACT', 'artifact integration-base identity is stale', {
       expected: liveBase,
       actual: recordedBase,
