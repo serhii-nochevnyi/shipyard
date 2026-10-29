@@ -24,6 +24,7 @@ const instructions = childRecorded.split('\n').filter(Boolean).map(JSON.parse)
 const childRaw = childRecorded.replace(JSON.stringify(instructions.slice(0, -1)), JSON.stringify(instructions));
 const records = original.split('\n').filter(Boolean).map(JSON.parse);
 const wait = records.find(r => r.type === 'response_item' && r.payload.type === 'function_call' && r.payload.name === 'wait_agent');
+const waitOutput = records.find(r => r.type === 'response_item' && r.payload.type === 'function_call_output' && r.payload.call_id === wait.payload.call_id);
 const transform = (raw, fn) => raw.split('\n').filter(Boolean).map(line => JSON.stringify(fn(JSON.parse(line)))).join('\n') + '\n';
 const withWait = value => transform(original, r => {
   if (r.type === 'response_item' && r.payload.type === 'function_call_output' && r.payload.call_id === wait.payload.call_id)
@@ -49,8 +50,9 @@ for (const [name, file] of [
   test(`${name}: aborted wait plus ordinary wait still binds the single original spawn`, () => {
     const r = withWait('aborted before dispatch').split('\n').filter(Boolean).map(JSON.parse);
     const call = structuredClone(wait); call.payload.call_id = 'controlled-next-wait';
-    const output = { type: 'response_item', payload: { type: 'function_call_output', call_id: call.payload.call_id,
-      output: '{"message":"Wait completed.","timed_out":false}' } };
+    const output = structuredClone(waitOutput);
+    output.payload.call_id = call.payload.call_id;
+    output.payload.output = '{"message":"Wait completed.","timed_out":false}';
     assert.equal(parse([...r, call, output].map(JSON.stringify).join('\n')).interrupted, true);
   });
   for (const marker of ['Aborted before dispatch', ' aborted before dispatch', 'aborted before dispatch\n',
@@ -81,8 +83,9 @@ for (const [name, file] of [
   test(`${name}: controlled mixed wait aggregation retains timeouts and exact effort/task/child identity`, () => {
     const raw = withWait('aborted before dispatch');
     const call = structuredClone(wait); call.payload.call_id = 'controlled-timed-out-wait';
-    const output = { type: 'response_item', payload: { type: 'function_call_output', call_id: call.payload.call_id,
-      output: '{"timed_out":true}' } };
+    const output = structuredClone(waitOutput);
+    output.payload.call_id = call.payload.call_id;
+    output.payload.output = '{"timed_out":true}';
     const mixed = parse(raw + [call, output].map(JSON.stringify).join('\n') + '\n');
     assert.equal(mixed.interrupted, true);
     assert.equal(mixed.timed_out, true);
