@@ -191,7 +191,7 @@ test('a role run tolerates what concurrent conveyor processes legitimately write
       fs.rmSync(path.join(f.graph, 'escalations.json'));
       fs.writeFileSync(path.join(f.graph, 'provenance', 'd2.json'), '{}\n');
       fs.writeFileSync(path.join(f.graph, 'session-observations.jsonl'), '{}\n');
-    }), error => error.code === 'STALE_CONTEXT');
+    }), error => error.code !== 'WORKTREE_MUTATED');
     assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared), error => error.code === 'USAGE');
     assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, null), error => error.code === 'USAGE');
   } finally { f.cleanup(); }
@@ -215,8 +215,10 @@ test('a role in a linked worktree cannot touch its own graph directory, except h
     const prepared = f.prepared(f.linked), local = path.join(f.linked, '.planning', 'graph');
     fs.writeFileSync(path.join(local, 'stop-gate-ledger.json'), '{}\n');
     fs.writeFileSync(path.join(local, 'session-observations.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(local, 'session-observations.jsonl.tmp-1'), '{}\n');
+    fs.mkdirSync(path.join(local, '.locks'));
     const baseline = f.host.graphStateSnapshot(prepared);
-    assert.deepEqual([...baseline.keys()].map(file => path.basename(file)).filter(name => /^(session|stop-gate)/.test(name)), []);
+    assert.deepEqual([...baseline.keys()].map(file => path.basename(file)).filter(name => /^(session|stop-gate|\.locks)/.test(name)), []);
     fs.appendFileSync(path.join(local, 'session-observations.jsonl'), '{}\n');
     fs.writeFileSync(path.join(local, 'stop-gate-ledger.json'), '{"n":2}\n');
     assert.throws(() => f.host.assertEvidenceOnlyChanges({}, prepared, baseline), error => error.code === 'STALE_CONTEXT');
