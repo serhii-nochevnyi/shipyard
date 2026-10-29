@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { registered, template } = require('../fixtures/phase53/code-review-native-driver.cjs');
 const { root, scripts, runtime, hash, stable, serialize, user, fixtureHelpers,
   initialization, installInstructions, orderedFixture, mutations, coldProcess }
   = require('../fixtures/phase53/codex-preamble-helpers.cjs');
@@ -169,14 +170,28 @@ test('physical global and project overrides pin exact selected bytes', async () 
 });
 
 test('shared data-only extractor requires exact input and all tools after it', () => {
-  const rows = [ { type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn' } }, user('exact'),
-    { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer' } },
-    { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn' } } ];
+  const original = registered('codex-agent-stream', 'codex-agent-stream-parent.jsonl');
+  const frame = predicate => {
+    const row = template(original, predicate);
+    if (row.payload.turn_id !== undefined) row.payload.turn_id = 'turn';
+    if (row.payload.internal_chat_message_metadata_passthrough?.turn_id !== undefined)
+      row.payload.internal_chat_message_metadata_passthrough.turn_id = 'turn';
+    return row;
+  };
+  const start = frame(row => row.payload?.type === 'task_started');
+  const input = frame(row => row.payload?.role === 'user');
+  const final = frame(row => row.payload?.phase === 'final_answer');
+  const end = frame(row => row.payload?.type === 'task_complete');
+  start.payload.turn_id = end.payload.turn_id = 'turn';
+  input.payload.content = [{ type: 'input_text', text: 'exact' }];
+  const rows = [start, input, final, end];
   assert.deepEqual(runtime.extractSemanticInitialInput(rows, { input: 'exact' }), { input_index: 1, final_index: 2, turn_id: 'turn', initial_index: null });
   assert.throws(() => runtime.extractSemanticInitialInput(rows, { input: 'changed' }));
   for (const type of ['function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output']) {
     const changed = structuredClone(rows);
-    changed.splice(1, 0, { type: 'response_item', payload: { type, call_id: 'early' } });
+    const tool = frame(row => row.payload?.type === (type.endsWith('_output') ? 'function_call_output' : 'function_call'));
+    Object.assign(tool.payload, { type, call_id: 'early' });
+    changed.splice(1, 0, tool);
     assert.throws(() => runtime.extractSemanticInitialInput(changed, { input: 'exact' }));
     assert.throws(() => runtime.verifySemanticReads(serialize(changed), { input: 'exact' }));
   }
