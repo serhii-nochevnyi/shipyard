@@ -110,14 +110,15 @@ test('a part result over its byte share is refused so the final always fits', ()
 
 test('the runner checks the final at upper-bound size, then runs every part in order before the final', async () => {
   const groups = [1, 2, 3].map(ordinal => ({ id: 'part-' + ordinal, ordinal, paths: ['p' + ordinal] }));
+  const changes = groups.map(group => change(group.paths[0]));
   const log = [];
-  const result = await core.runParts(groups, { check: parts => { log.push(['check', parts.length, parts[0].summary.length]); },
-    part: async group => { log.push(['part', group.ordinal]); return { id: group.id }; },
+  const result = await core.runParts(groups, { changes, check: parts => { log.push(['check', parts.length, parts[0].summary.length]); },
+    part: async group => { log.push(['part', group.ordinal]); return { id: group.id, paths: group.paths }; },
     final: async parts => { log.push(['final', parts.map(entry => entry.id)]); return 'sealed'; } });
   assert.equal(result, 'sealed');
   assert.deepEqual(log, [['check', 3, 32768], ['part', 1], ['part', 2], ['part', 3], ['final', ['part-1', 'part-2', 'part-3']]]);
   const refused = [];
-  await assert.rejects(core.runParts(groups, { check() { throw Object.assign(new Error('too big'), { code: 'CONTEXT_OVER_BOUND' }); },
+  await assert.rejects(core.runParts(groups, { changes, check() { throw Object.assign(new Error('too big'), { code: 'CONTEXT_OVER_BOUND' }); },
     part: group => refused.push(group), final: () => refused.push('final') }), { code: 'CONTEXT_OVER_BOUND' });
   assert.deepEqual(refused, []);
 });
@@ -136,4 +137,12 @@ test('a part packet drops prior findings and carries only its own changes; the f
   assert.equal(forFinal.change_metadata.changes.length, 2);
   assert.deepEqual(forFinal.parts, [{ id: 'part-1' }]);
   assert.equal(Object.hasOwn(core.assemblePacket(base), 'parts'), false);
+});
+
+test('the runner refuses parts that do not cover every changed path once, before the final', async () => {
+  const groups = [{ id: 'part-1', ordinal: 1, paths: ['a.js'] }];
+  const launched = [];
+  await assert.rejects(core.runParts(groups, { changes: [change('a.js'), change('b.js')], check() {},
+    part: async group => ({ id: group.id, paths: group.paths }), final: () => launched.push('final') }), { code: 'INVALID_RESULT' });
+  assert.deepEqual(launched, []);
 });

@@ -3706,7 +3706,7 @@ async function runCodeReview(parsed, scope, options, stdout) {
       ordinal ? null : stdout, { id: dispatchId, prepared: codeReviewPreparation(parsed, scope, options,
         { inflightDispatchId: dispatchId, ...extra }) });
   };
-  return core.runParts(groups, {
+  return core.runParts(groups, { changes: whole.prepared.packet.role_context.change_metadata.changes,
     check: parts => admitCodeReviewInput(codeReviewPreparation(parsed, scope, options, { inflightDispatchId: newDispatchId(), parts }), options, capabilities),
     part: group => launch({ part: group.ordinal }, group.ordinal), final: parts => launch({ parts }) });
 }
