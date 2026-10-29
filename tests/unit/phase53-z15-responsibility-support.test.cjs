@@ -381,7 +381,7 @@ test('ticket dependencies retain concrete ownership, criteria and unknown depend
   assert.ok(scope.assignments[1].support_reasons['ticket-criterion'].some(reason => reason.kind === 'scoped-criterion'));
 });
 
-for (const mutation of ['unresolved worker seam', 'missing final global seam', 'original required context', 'native resource failure'])
+for (const mutation of ['unresolved independent-final seam', 'missing final global seam', 'original required context', 'native resource failure'])
   test('ordinary independent final refuses ' + mutation + ' and retains original evidence', async () => {
     const h = load('tests/unit/phase53-codex-integration.test.cjs',
       'publicIntegrationFixture, semanticFixture, supportedPartitionCaller, captureOriginals, coldCurrent');
@@ -389,11 +389,12 @@ for (const mutation of ['unresolved worker seam', 'missing final global seam', '
       const prepared = h.semanticFixture(f, { result(result, payload) {
         if (payload.stage === 'final') {
           if (mutation === 'missing final global seam') result.seams.pop();
+          if (mutation === 'unresolved independent-final seam') result.seams[0].disposition = 'unresolved';
           return;
         }
         result.findings = [{ id: 'INFO-SUPPORT', type: 'informational', blocking: false,
           summary: 'Original required view observation.', evidence: 'src/provider.cjs:1', ticket: null }];
-        if (mutation === 'unresolved worker seam') result.seams[0].disposition = 'unresolved';
+        if (mutation === 'unresolved independent-final seam') result.seams[0].disposition = 'unresolved';
         if (mutation === 'original required context') {
           result.completeness = 'blocked'; result.required_context = ['Actual caller remains unread.'];
           result.limitations = ['Original context limitation.']; result.unread = [result.coverage[0]];
@@ -483,3 +484,66 @@ test('real isolated builder preserves exact authority bytes, modes and both cont
     assert.throws(() => staged.assertSemanticSnapshot(s));
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+
+test('an explicit governing directory supplies its actual component without unrelated support', () => {
+  const a = authority(), inv = inventory();
+  const adr = appendSource(inv, '.planning/architecture/ADR-014-component.md',
+    '# ADR-014\nGoverns `src/`. Consumers must use implemented provider exports.\n');
+  const outside = appendSource(inv, 'src-other/disconnected.cjs', 'exports.disconnected = true;\n');
+  const s = snapshot(a, inv, 'arch-review');
+  a.assertSemanticSnapshot(s);
+  const worker = s.assignments.find(item => item.id === 'architecture-obligations');
+  assert.ok(worker.required_material_source_ids.includes(adr.source_id));
+  for (const source of inv.material.filter(item => item.path.startsWith('src/'))) {
+    assert.ok(worker.required_material_source_ids.includes(source.source_id));
+    assert.ok(worker.support_obligation_ids.some(id => worker.support_reasons[id].some(reason =>
+      reason.kind === 'explicit-source-reference' && reason.source_id === source.source_id)));
+  }
+  for (const source of inv.material.filter(item => item.path.startsWith('other/') || item.path.startsWith('tests/')))
+    assert.ok(!worker.required_material_source_ids.includes(source.source_id));
+  assert.ok(!worker.required_material_source_ids.includes(outside.source_id));
+  assert.equal(s.assignments.flatMap(item => item.primary_obligation_ids).length, inv.obligations.length);
+});
+
+for (const runtime of ['codex', 'claude'])
+  test(runtime + ' architecture final independently resolves complete informational worker seam caveats', async () => {
+    const codex = load('tests/unit/phase53-codex-architecture.test.cjs',
+      'architectureFixture, ordinaryArchitecture, publicIntegrationFixture', "test('caller architecture");
+    const claude = load('tests/unit/phase53-claude-review.test.cjs', 'nativeFixture, ordinary', "for (const role of ['integrator'");
+    await codex.publicIntegrationFixture(async f => {
+      const controls = { result(result, payload) {
+        if (payload.stage === 'worker') {
+          result.findings = [{ id: 'INFO-INDEPENDENT', type: 'informational', blocking: false,
+            summary: 'The independent final must jointly judge this complete boundary.', ticket: null }];
+          result.seams.forEach(seam => { seam.disposition = 'unresolved'; });
+        } else {
+          assert.ok(payload.originals.every(original => original.result.findings[0].id === 'INFO-INDEPENDENT'));
+          assert.ok(payload.originals.every(original => original.result.seams.every(seam => seam.disposition === 'unresolved')));
+          result.conclusions = ['Independently compared complete provider/consumer originals and resolved their boundary under ADR-014.'];
+          result.findings = [{ id: 'INFO-FINAL', type: 'informational', blocking: false,
+            summary: 'Original informational caveats were independently resolved.', ticket: null }];
+          result.seams.forEach(seam => {
+            seam.disposition = 'resolved'; seam.rationale = 'Compared the actual provider export and consumer use under ADR-014.';
+          });
+        }
+      } };
+      const prepared = runtime === 'codex' ? codex.architectureFixture(f, controls) : claude.nativeFixture(f, 'arch-review', controls);
+      const completed = runtime === 'codex' ? await codex.ordinaryArchitecture(f, prepared) : await claude.ordinary(f, 'arch-review', prepared);
+      assert.equal(completed.result.outcome, 'passed');
+      assert.equal(completed.result.findings[0].id, 'INFO-FINAL');
+      assert.equal(prepared.launches.length, 3);
+      const final = prepared.launches.at(-1).payload;
+      assert.equal(final.originals.length, 2);
+      for (const original of final.originals) {
+        assert.equal(original.result.findings[0].id, 'INFO-INDEPENDENT');
+        assert.ok(original.result.seams.every(seam => seam.disposition === 'unresolved'));
+        assert.ok(!original.result.required_context.length && !original.result.unread.length);
+      }
+      const file = require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+      const cached = require.cache[file]; delete require.cache[file];
+      try { assert.ok(require(file).currentArchitectureVerdict({ worktreePath: f.worktree, graphDir: f.graphDir,
+        pr: f.pr.number, head: f.head, baseName: 'main', baseCommit: f.base, headBranch: f.pr.headRefName })?.authenticated); }
+      finally { require.cache[file] = cached; }
+    });
+  });

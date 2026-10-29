@@ -4314,7 +4314,10 @@ function semanticResponsibilityMappings(inventory, tickets) {
       || criterion(item) && repositoryPath(alias.path));
     const content = source ? actual ? source.content : ''
       : criterion(item) && typeof item.value === 'string' ? item.value : '';
-    const refs = [...sourcePaths].filter(file => content.includes(file));
+    const directories = criterion(item) ? [...content.matchAll(/`((?:[A-Za-z0-9_.-]+\/)+)`/g)]
+      .map(match => match[1].slice(0, -1)).filter(productPath) : [];
+    const refs = [...sourcePaths].filter(file => content.includes(file)
+      || directories.some(directory => file.startsWith(directory + '/')));
     referenceCache.set(key, refs);
     return refs;
   };
@@ -5201,8 +5204,6 @@ function authenticateSemanticFinal({ trusted, result, evidence, identity, retain
   if (incomplete && (snapshot.role !== 'code-review' || semanticComplete(result) || result.outcome === 'passed'))
     semanticError('incomplete semantic originals or final cannot grant completion credit', 'SEMANTIC_REVIEW_INCOMPLETE');
   if (result.outcome === 'passed' && (result.seams.some(item => item.disposition !== 'resolved')
-      || snapshot.responsibility_view_version === SEMANTIC_RESPONSIBILITY_VIEW_V1
-        && originals.some(item => item.result.seams.some(seam => seam.disposition !== 'resolved'))
       || snapshot.role !== 'code-review' && originals.some(item => item.result.outcome !== 'passed' || item.result.findings.some(finding => finding.blocking))))
     semanticError('unresolved original findings or dependency seams cannot pass');
   return Object.freeze({ schema: SEMANTIC_REVIEW_V1, role: snapshot.role, stage: 'final', contract: SEMANTIC_REVIEW_V1,
