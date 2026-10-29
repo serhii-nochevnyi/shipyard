@@ -275,8 +275,8 @@ Pass the same signature file to `escalation-record.cjs mark` when repository
 remedy declarations exist.
 
 **`base-merge`** — the base moved under the branch. TWO different facts with one
-remedy, and the duty does not blur them: `mergeStateStatus: BEHIND`, or
-`behind_by` above zero, is STALENESS — the branch is simply behind its base;
+remedy, and the duty does not blur them: `mergeStateStatus: BEHIND` (or `behind_by` above zero, only for a PR
+into the integration branch — an epic or stacked PR that is merely behind lands by ancestry) is STALENESS;
 `mergeStateStatus: DIRTY` is a merge CONFLICT — the two editions disagree about a
 line. `front.cjs`'s `baseMoved` reports them under different words for that
 reason, and the second is the one that can hand you real work rather than a

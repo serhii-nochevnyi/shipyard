@@ -708,6 +708,43 @@ test('drift evidence bound to an old integration base cannot be reused as fresh'
   }
 });
 
+for (const [role, base, move, accepted] of [
+  ['review-fix', 'epic/x', 'forward', true],
+  ['review-fix', 'epic/x', 'rewrite', false],
+  ['review-fix', 'main', 'forward', false],
+  ['drift-check', 'epic/x', 'forward', false],
+]) {
+  test(`${role} evidence on ${base} after the base ${move === 'forward' ? 'advances' : 'is rewritten'} is ${accepted ? 'current' : 'stale'}`, async () => {
+    const ticket = 'T-33-03-base-ancestry';
+    const fixture = roleWorkflowFixture({
+      role, ticket, pr: 305,
+      result: role === 'drift-check'
+        ? { id: ticket, verdict: 'fresh', moved: [], reuse_candidates: [], evidence: ['git diff — exit 0'], summary: 'fresh' }
+        : { id: ticket, pr: 305, pushed: false, status: 'no-op', notes: 'checked', hypothesis: 'already handled' },
+      evidenceText: '# Evidence\nChecked before the base moved.\n',
+    });
+    try {
+      git(fixture.root, ['branch', 'epic/x', 'main']);
+      const args = roleArgs(fixture);
+      if (role === 'drift-check') args.tickets[0].baseRef = base; else args.prs[0].base = base;
+      const [bounded] = await fixture.host.run(role === 'drift-check' ? 'drift-gate' : 'fix-round', { args });
+      git(fixture.root, ['switch', '--quiet', base]);
+      fs.writeFileSync(path.join(fixture.root, 'moved.txt'), move);
+      git(fixture.root, ['add', 'moved.txt']);
+      git(fixture.root, ['commit', '--quiet', ...(move === 'rewrite' ? ['--amend'] : []), '-m', 'move base']);
+      git(fixture.root, ['switch', '--quiet', `ticket/${ticket}`]);
+      const read = () => roleArtifact.validate({
+        worktreePath: fixture.root, role, ticket, pr: role === 'drift-check' ? undefined : 305, base, recorder: fixture.recorder,
+        dispatchId: bounded.receipt.dispatch_id, artifactPath: bounded.artifact_ref, artifactDigest: bounded.artifact_digest,
+      });
+      if (accepted) assert.ok(read());
+      else assert.throws(read, (error) => error.code === 'STALE_ARTIFACT');
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
 test('drift evidence bound to an old producer head cannot be reused as current', async () => {
   const ticket = 'T-33-03-stale-drift-head';
   const fixture = roleWorkflowFixture({
