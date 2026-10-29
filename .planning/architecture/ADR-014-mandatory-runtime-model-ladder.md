@@ -1,7 +1,7 @@
 # ADR-014 — mandatory runtime model ladder
 
 - **Status:** accepted
-- **Date:** 2026-09-12; amended 2026-09-16 and 2026-09-22
+- **Date:** 2026-09-12; amended 2026-09-16, 2026-09-22 and 2026-10-29
 - **Decision owner:** repository operator
 - **Scope:** Shipyard roles dispatched through Claude Code and Codex
 - **Supersedes:** ADR-005 and ADR-012 where they define model/effort selection
@@ -196,6 +196,17 @@ matrix and negative tests. Gate each slice on both runtime fixtures. During
 development, a missing adapter or receipt blocks only routed delivery and names
 the repair command; it never falls back to a parent session.
 
-Rollback disables the new policy only through an explicit versioned compatibility
-mode for already-started work. It must not restore silent inheritance. Historical
-records remain unchanged.
+Rollback disables the new policy only by shipping the previous release; no
+compatibility mode keeps older policy versions valid (see the 2026-10-29
+amendment). It must not restore silent inheritance.
+
+## Amendment 2026-10-29: one active policy version
+
+Only the active policy version is recognized. Receipts, dispatch records and run
+records that name an earlier version (`adr-014.v6`, `adr-014.v7`) are no longer
+validated: a live gate refuses them and the work is rerun under the active policy,
+while the run store skips them on read and deletes them at its next write, and
+historical aggregates report them as stale. A version that is neither active nor
+retired stays a refusal everywhere. Integrity checks (hash,
+size, head sha) on current records are unchanged, and no historical dispatch is
+relabeled.

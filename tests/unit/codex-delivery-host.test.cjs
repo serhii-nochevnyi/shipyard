@@ -1349,7 +1349,7 @@ test('recovery CLI derives a legacy candidate version only from bound authentica
           value.receipt_sha256 = crypto.createHash('sha256').update(JSON.stringify(sorted(record.receipt))).digest('hex');
         });
         await assert.rejects(() => recovery(f, { recorder: { getVerifiedRecord() { return record; } } })
-          .resumeFinalization(historicalId, scope), (error) => error.code === 'IDENTITY_CHANGED' && error.invalidated.includes('policy'));
+          .resumeFinalization(historicalId, scope), (error) => error.code === 'MISSING_RECEIPT');
       } else if (variant === 'legacy') {
         await action();
         assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);

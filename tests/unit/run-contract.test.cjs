@@ -190,25 +190,24 @@ test('checkpoint transitions survive canonical revalidation with an absent diges
   assert.equal(checkpointed.checkpoint.digest, null);
 });
 
-// @contract: Synthetic historical metadata does not authenticate runtime execution.
-const historicalHash = '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968';
-const v7Hash = '3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570';
+const retiredHash = '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968';
 const v8Hash = 'fc1706bc9272bd0f539fbd71fa966b736df15c2cadfc2a76a8b84924b33584b8';
-test('recorded Sol preserves its native identity and independently checks concrete model', () => {
-  const input = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6-sol', policy_version: 'adr-014.v6', policy_hash: historicalHash };
+test('the current Sol identity independently checks its concrete model and retired policy versions are refused', () => {
+  const input = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6.1-sol' };
   assert.deepEqual(contract.normalizeDispatchIdentity(input), input);
   assert.throws(() => contract.normalizeDispatchIdentity({ ...input, model: 'gpt-6-luna' }), { code: 'RUNTIME_MODEL_MISMATCH' });
+  for (const policy_version of ['adr-014.v6', 'adr-014.v7']) {
+    assert.throws(() => contract.normalizeDispatchIdentity({ ...input, policy_version, policy_hash: retiredHash }), { code: 'UNSUPPORTED_POLICY_VERSION' });
+  }
 });
 
 const currentPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
 const fixturePalettes = {
-  'adr-014.v6': { codex: { sol: 'gpt-6-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' } },
-  'adr-014.v7': { codex: { sol: 'gpt-6.1-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'fable' } },
   'adr-014.v8': { codex: { sol: 'gpt-6.1-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'fable' } },
 };
-const hashOfVersion = { 'adr-014.v6': historicalHash, 'adr-014.v7': v7Hash, 'adr-014.v8': currentPolicy.POLICY_HASH };
-test('synthetic recorded palette matrix preserves dispatches and receipts, while history stays stale', () => {
+const hashOfVersion = { 'adr-014.v8': currentPolicy.POLICY_HASH };
+test('synthetic recorded palette matrix preserves current dispatches and receipts', () => {
   for (const [version, runtimes] of Object.entries(fixturePalettes)) {
     for (const [runtime, palette] of Object.entries(runtimes)) {
       for (const [key, model] of Object.entries(palette)) {
@@ -223,10 +222,6 @@ test('synthetic recorded palette matrix preserves dispatches and receipts, while
         assert.equal(receipt.observed_model, model);
         assert.equal(receipt.policy_hash, input.policy_hash);
         assert.deepEqual(contract.normalizeReceiptIdentity(receipt), receipt);
-        if (version !== currentPolicy.POLICY_VERSION) {
-          const resolution = currentPolicy.resolveDispatch({ runtime, role: 'executor', signals: {} });
-          assert.throws(() => currentPolicy.validateResolution({ ...resolution, model, model_key: key, policy_version: version, policy_hash: hashOfVersion[version] }), { code: 'STALE_POLICY' });
-        }
       }
     }
   }
@@ -246,19 +241,18 @@ test('recorded metadata and independently supplied identities fail closed', () =
     [{ model_key: '' }, 'UNSUPPORTED_MODEL'],
     [{ model: 'missing' }, 'UNSUPPORTED_MODEL'],
     [{ model_key: 'missing' }, 'UNSUPPORTED_MODEL'],
-    [{ model: 'gpt-6-sol' }, 'RUNTIME_MODEL_MISMATCH'],
+    [{ model: 'gpt-6-sol' }, 'UNSUPPORTED_MODEL'],
     [{ policy_version: 'unknown' }, 'UNSUPPORTED_POLICY_VERSION'],
     [{ policy_version: undefined }, 'MISSING_POLICY_IDENTITY'],
     [{ policy_hash: undefined }, 'MISSING_POLICY_IDENTITY'],
     [{ policy_version: null }, 'MISSING_POLICY_IDENTITY'],
     [{ policy_hash: '' }, 'MISSING_POLICY_IDENTITY'],
     [{ policyVersion: 'adr-014.v6' }, 'POLICY_IDENTITY_CONFLICT'],
-    [{ policyHash: historicalHash }, 'POLICY_IDENTITY_CONFLICT'],
+    [{ policyHash: retiredHash }, 'POLICY_IDENTITY_CONFLICT'],
+    [{ policy_version: 'adr-014.v6' }, 'UNSUPPORTED_POLICY_VERSION'],
   ];
   for (const [patch, code] of cases) assert.throws(() => contract.normalizeDispatchIdentity({ ...base, ...patch }), { code });
-  for (const patch of [{ policy_hash: historicalHash }, { policy_version: 'adr-014.v6' }]) {
-    assert.throws(() => contract.normalizeDispatchIdentity({ dispatch_id: 'fresh', role: 'executor', runtime: 'codex', ...patch }), { code: 'MISSING_POLICY_IDENTITY' });
-  }
+  assert.throws(() => contract.normalizeDispatchIdentity({ dispatch_id: 'fresh', role: 'executor', runtime: 'codex', policy_hash: retiredHash }), { code: 'MISSING_POLICY_IDENTITY' });
   const run = JSON.parse(JSON.stringify(makeScope()));
   delete run.dispatch.schema;
   delete run.dispatch.policy_hash;
@@ -267,7 +261,7 @@ test('recorded metadata and independently supplied identities fail closed', () =
     assert.throws(() => contract.normalizeRunContract({ ...makeScope(), dispatch: { ...base, ...patch } }), { code });
   }
   for (const [runtime, old] of [['codex', 'gpt-6-sol'], ['claude', 'sonnet']]) {
-    assert.throws(() => contract.normalizeReceiptIdentity({ ...base, runtime, provider: undefined, receipt_id: 'r', run_id: 'r', observed_model: old }), { code: 'RUNTIME_MODEL_MISMATCH' });
+    assert.throws(() => contract.normalizeReceiptIdentity({ ...base, runtime, provider: undefined, receipt_id: 'r', run_id: 'r', observed_model: old }), { code: 'UNSUPPORTED_MODEL' });
   }
 });
 
@@ -279,13 +273,11 @@ test('serialized concrete-only dispatch cannot silently turn a symbolic alias in
   assert.equal(contract.normalizeDispatchIdentity(input).model, 'gpt-6.1-sol');
 });
 
- test('authoritative policy pairs reject crossed and arbitrary hashes across dispatch and receipts', () => {
-  for (const [version, hash, model] of [['adr-014.v6', historicalHash, 'gpt-6-sol'], ['adr-014.v7', v7Hash, 'gpt-6.1-sol'], ['adr-014.v8', currentPolicy.POLICY_HASH, 'gpt-6.1-sol']]) {
-    const base = { ...makeScope().dispatch, model_key: 'sol', model, policy_version: version, policy_hash: hash };
-    for (const invalid of [...[historicalHash, v7Hash, v8Hash].filter((other) => other !== hash), 'a'.repeat(64)]) {
-      assert.throws(() => contract.normalizeDispatchIdentity({ ...base, policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
-      assert.throws(() => contract.normalizeReceiptIdentity({ ...base, receipt_id: 'r', run_id: 'r', requested_model: model, policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
-    }
+ test('authoritative policy pairs reject arbitrary hashes across dispatch and receipts', () => {
+  const base = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6.1-sol' };
+  for (const invalid of [retiredHash, 'a'.repeat(64)]) {
+    assert.throws(() => contract.normalizeDispatchIdentity({ ...base, policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
+    assert.throws(() => contract.normalizeReceiptIdentity({ ...base, receipt_id: 'r', run_id: 'r', requested_model: 'gpt-6.1-sol', policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
   }
   assert.equal(currentPolicy.POLICY_HASH, v8Hash);
 });
@@ -298,18 +290,11 @@ test('serialized requested models require recorded native values while fresh Son
     requested_model: 'sonnet', applied_model: 'claude-sonnet-5-5', observed_model: 'claude-sonnet-5-5',
     status: 'verified', usage_status: 'joined',
   };
-  assert.throws(() => contract.normalizeReceiptIdentity(serialized), { code: 'RUNTIME_MODEL_MISMATCH' });
+  assert.throws(() => contract.normalizeReceiptIdentity(serialized), { code: 'UNSUPPORTED_MODEL' });
   const fresh = { ...serialized }; delete fresh.schema;
   assert.equal(scope.createReceiptIdentity(fresh).requested_model, 'claude-sonnet-5-5');
-  const historical = {
-    ...serialized, policy_version: 'adr-014.v6', policy_hash: historicalHash,
-    applied_model: 'sonnet', observed_model: 'sonnet',
-  };
-  const preserved = contract.normalizeReceiptIdentity(historical);
-  for (const field of ['requested_model', 'applied_model', 'observed_model', 'policy_version', 'policy_hash', 'status', 'usage_status']) {
-    assert.equal(preserved[field], historical[field]);
-  }
-  assert.deepEqual(contract.normalizeReceiptIdentity(preserved), preserved);
+  const retired = { ...serialized, policy_version: 'adr-014.v6', policy_hash: retiredHash, applied_model: 'sonnet', observed_model: 'sonnet' };
+  assert.throws(() => contract.normalizeReceiptIdentity(retired), { code: 'UNSUPPORTED_POLICY_VERSION' });
 });
 
 test('fresh receipt constructors default current identity and serialized receipts require it', () => {
