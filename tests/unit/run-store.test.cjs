@@ -114,5 +114,8 @@ test('runs recorded under a retired policy are skipped on read while current-pol
     }
     assert.throws(() => store.transaction(id, record => { record.run = { ...record.run, dispatch: { ...record.run.dispatch, model: 'gpt-6-luna' } }; }), { code: 'RUNTIME_MODEL_MISMATCH' });
     assert.equal(fs.readFileSync(store.storeFile, 'utf8'), valid);
+    const unknown = JSON.parse(valid); unknown.runs[id].run.dispatch.policy_version = 'adr-014.v9';
+    fs.writeFileSync(store.storeFile, JSON.stringify(unknown));
+    assert.throws(() => store.read(), { code: 'UNSUPPORTED_POLICY_VERSION' });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
