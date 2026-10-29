@@ -14,9 +14,14 @@ const TICKET = 'T-53-08';
 const PR = { number: 108, state: 'OPEN', isDraft: false, headRefName: `ticket/${TICKET}`,
   headRefOid: HEAD, baseRefName: 'epic/53', baseRefOid: 'b'.repeat(40), title: TICKET,
   reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN', body: '', author: { login: 'author' } };
-const run = (name = 'build', conclusion = 'success', extra = {}) => ({ id: 1, name,
-  status: 'completed', conclusion, head_sha: HEAD, started_at: '2026-10-01T00:00:00Z',
-  html_url: 'https://github.com/acme/demo/actions/runs/123/job/1', ...extra });
+const run = (name = 'build', conclusion = 'success', extra = {}) => {
+  const id = extra.id || 1;
+  const html_url = extra.html_url ?? `https://github.com/acme/demo/actions/runs/${122 + id}/job/${id}`;
+  const runId = Number(html_url.match(/\/runs\/(\d+)/)?.[1] || 123);
+  return { id, name, status: 'completed', conclusion, head_sha: HEAD,
+    started_at: '2026-10-01T00:00:00Z', app: { id: 15368, slug: 'github-actions' },
+    check_suite: { id: 1000 + runId }, html_url, ...extra };
+};
 
 function fixture(t, data = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'phase53-ci-'));
@@ -58,7 +63,12 @@ else if (a[0] === 'run' && a[1] === 'rerun') {
   const n = Number(fs.existsSync(process.env.CI_PULL_COUNT) ? fs.readFileSync(process.env.CI_PULL_COUNT) : 0) + 1;
   fs.writeFileSync(process.env.CI_PULL_COUNT, String(n));
   emit({ number: 108, state: 'open', head: { sha: d.move && n % 2 === 0 ? 'c'.repeat(40) : '${HEAD}' }, base: { repo: { full_name: 'acme/demo' } } });
- } else if (/\\/actions\\/runs\\/\\d+$/.test(e)) emit({ id: Number(e.split('/').pop()), head_sha: '${HEAD}', name: 'CI', run_attempt: d.attempt || 1 });
+ } else if (/\\/actions\\/runs\\/\\d+$/.test(e)) {
+  const id = Number(e.split('/').pop());
+  emit({ id, head_sha: '${HEAD}', name: 'CI', workflow_id: 50, event: 'pull_request',
+    head_repository: { full_name: 'acme/demo' }, repository: { full_name: 'acme/demo' },
+    check_suite_id: 1000 + id, run_number: id, run_attempt: d.attempt || 1 });
+ }
  else if (e.includes('/check-runs?')) { if (d.failChecks) process.exit(1); emit(d.checkPages); }
  else if (e.includes('/status?')) { if (d.failStatuses) process.exit(1); emit(d.statusPages); }
  else { process.stderr.write('unhandled endpoint ' + e); process.exit(2); }
@@ -269,7 +279,11 @@ for (const superseded of [false, true]) {
     const rows = [cancelled, ...(superseded ? [run('build', 'success', { id: 2, started_at: '2026-10-02T00:00:00Z' })] : [])];
     const direct = rows.map(r => ({ name: r.name, state: r.conclusion.toUpperCase(),
       bucket: r.conclusion === 'cancelled' ? 'cancel' : 'pass',
-      startedAt: r.started_at, link: r.html_url, workflow: 'CI' }));
+      startedAt: r.started_at, link: r.html_url, workflow: 'CI',
+      source: 'check-run', id: r.id, repository: 'acme/demo', head_sha: HEAD,
+      app_id: r.app.id, app_slug: r.app.slug, check_suite_id: r.check_suite.id,
+      workflow_id: 50, event: 'pull_request', job_id: String(r.id),
+      run_id: String(122 + r.id), run_number: 122 + r.id, run_attempt: 1 }));
     f.update({ direct, checkPages: [{ total_count: rows.length, check_runs: rows }] });
     const n = f.calls().length;
     const output = wait(f);
