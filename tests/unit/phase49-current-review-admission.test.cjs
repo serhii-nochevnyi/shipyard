@@ -159,21 +159,20 @@ test('focused incomplete original review retains limitations and findings but ca
   });
 });
 
-for (const producer of ['codex', 'claude']) test(producer + ' focused overflow reaches original finish, archive and live gate without read proof', async () => {
+for (const producer of ['codex', 'claude']) test(producer + ' large diff reaches original finish, archive and live gate while the reviewer reads it through git', async () => {
   await claudeFixture(async f => {
+    const line = 'complete current producer and consumer boundary';
     write(f.worktree, 'src/provider.cjs', Array.from({ length: 24000 }, (_, index) =>
-      'exports.field' + index + ' = "complete current producer and consumer boundary";').join('\n') + '\n');
-    commit(f, 'focused overflow source');
+      'exports.field' + index + ' = "' + line + '";').join('\n') + '\n');
+    commit(f, 'large diff source');
     const reviewed = producer === 'codex' ? await runFocusedArchitecture(f) : await runClaudeCurrentReview(f, 'arch-review');
     const manifest = JSON.parse(fs.readFileSync(reviewed.artifact.ref));
     assert.equal(manifest.current_review.contract, collector.FOCUSED_CONTRACT);
     assert.equal(manifest.current_review.review_completeness, 'complete');
-    if (producer === 'codex') {
-      assert.equal(reviewed.receipt.runtime_evidence.input_transport, 'host-files');
-      assert.equal(reviewed.receipt.runtime_evidence.input_consumption, undefined);
-      const checked = collector.verifyFileInput(reviewed.receipt.runtime_evidence.input_bundle, { sealed: true });
-      assert.ok(checked.manifest.assets.some(asset => asset.source_partition?.source === 'current-pr.diff'));
-    } else assert.match(f.lastClaudeUserInput.message.content, /AUTHENTICATED_FOCUSED_INPUT/);
+    const prompt = producer === 'codex' ? collector.admittedPrompt(f.lastArchitecture) : f.lastClaudeUserInput.message.content;
+    assert.doesNotMatch(prompt, new RegExp(line), 'the diff is not in the prompt');
+    assert.doesNotMatch(prompt, /AUTHENTICATED_FOCUSED_INPUT/);
+    if (producer === 'codex') assert.equal(reviewed.receipt.runtime_evidence.input_transport, undefined);
     for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true, admissionDiagnostic(f, consumer));
   });
 });

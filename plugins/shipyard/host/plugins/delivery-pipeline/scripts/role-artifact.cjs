@@ -3481,14 +3481,13 @@ function originalInlinePacket(trusted) {
     for (const match of text.matchAll(/<AUTHENTICATED_CONTEXT_PACKET>\s*([\s\S]*?)\s*<\/AUTHENTICATED_CONTEXT_PACKET>/g))
       packets.push(require('./context-packet.cjs').decodeUniqueContent(JSON.parse(match[1])));
     for (const match of text.matchAll(/<AUTHENTICATED_FOCUSED_INPUT>\s*([\s\S]*?)\s*<\/AUTHENTICATED_FOCUSED_INPUT>/g)) {
-      if (!['arch-review', 'code-review'].includes(trusted.receipt.role))
-        fail('REVIEW_NATIVE_INVALID', 'focused input belongs only to a phase review');
+      if (trusted.receipt.role !== 'code-review')
+        fail('REVIEW_NATIVE_INVALID', 'focused input belongs only to a code review');
       const collector = require('./codex-arch-review-context.cjs');
       const checked = collector.verifyFileInput(JSON.parse(match[1]), { sealed: true, historical: true,
         association: { role: trusted.receipt.role, dispatch_id: trusted.dispatchId } });
       inputManifest = checked.manifest;
-      if (checked.manifest.binding?.review_contract !== (trusted.receipt.role === 'code-review'
-          ? collector.CODE_REVIEW_CONTRACT : collector.FOCUSED_CONTRACT))
+      if (checked.manifest.binding?.review_contract !== collector.CODE_REVIEW_CONTRACT)
         fail('REVIEW_NATIVE_INVALID', 'original focused manifest contract differs');
       const packet = require('./context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]));
       if (packet.role_context?.planning_reference !== undefined
@@ -3620,8 +3619,7 @@ function originalArchitectureTicketSet(trusted, manifest, findings, evidence, id
     const runtime = trusted.receipt.runtime_evidence;
     const checked = context.verifyFileInput(runtime.input_bundle, { sealed: true, historical: true,
       association: { role: 'arch-review', dispatch_id: runtime.review_continuation?.original_dispatch_id || trusted.dispatchId } });
-    if (checked.material.length !== 1 && checked.manifest.binding?.review_contract !== context.FOCUSED_CONTRACT)
-      fail('REVIEW_COVERAGE_INVALID', 'one original architecture packet is required');
+    if (checked.material.length !== 1) fail('REVIEW_COVERAGE_INVALID', 'one original architecture packet is required');
     packet = semantic.decodeUniqueContent(JSON.parse(checked.material[0]));
   } else if (trusted.receipt.runtime === 'codex'
       && trusted.receipt.runtime_evidence?.focused_review?.review_contract === context.FOCUSED_CONTRACT) {
@@ -3821,25 +3819,33 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
       records = Object.values(authorityState(worktree).payload.records);
     }
     for (const record of records) {
-      if (record.receipt.role !== 'arch-review') continue;
-      const pin = record.pins.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
-      const manifest = JSON.parse(readPinnedArchiveFile(worktree, pin, 'architecture manifest'));
-      if (aggregateRequired && manifest.boundary_subject !== authenticatedRecordSubject(record))
-        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate manifest subject differs');
+      if (record.receipt?.role !== 'arch-review') continue;
+      // @contract: a record of an unrecognised or older shape is not a current verdict; skip it so the review is owed again.
+      const manifestPin = record.pins?.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
+      const owed = message => typeof onCandidateRefusal === 'function'
+        && onCandidateRefusal({ dispatch_id: record.dispatch_id, code: 'ARCHIVE_AUTHORITY_INVALID', message });
+      if (!manifestPin) { owed('architecture manifest pin is missing'); continue; }
+      const manifest = JSON.parse(readPinnedArchiveFile(worktree, manifestPin, 'architecture manifest'));
+      if (typeof manifest?.boundary_subject !== 'string'
+          || aggregateRequired && manifest.boundary_subject !== authenticatedRecordSubject(record)) {
+        owed('architecture manifest subject is missing or differs from its record'); continue;
+      }
       if (manifest.role !== 'arch-review' || manifest.artifact_kind !== 'judgment'
           || manifest.producer_dispatch !== record.dispatch_id || manifest.repository_identity !== common
           || manifest.pr !== pr || manifest.head !== head || manifest.base_commit !== baseCommit
-          || manifest.base.replace(/^(?:refs\/remotes\/origin\/|origin\/)/, '') !== baseName
+          || manifest.base?.replace(/^(?:refs\/remotes\/origin\/|origin\/)/, '') !== baseName
           || manifest.envelope?.verdict !== 'conform') continue;
+      if (!manifest.files?.findings) { owed('architecture findings pin is missing'); continue; }
       const findings = JSON.parse(readPinnedArchiveFile(worktree, manifest.files.findings, 'architecture findings'));
-      if (findings.id !== manifest.boundary_subject || findings.pr !== pr || findings.head !== head
+      if (!object(findings) || findings.id !== manifest.boundary_subject || findings.pr !== pr || findings.head !== head
           || findings.base_tree !== manifest.merge_base_tree || findings.verdict !== 'conform'
           || (manifest.current_review?.contract === require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT
             && findings.review_completeness !== 'complete')) continue;
       let currentBinding;
       if (manifest.boundary_subject.startsWith('phase=')) {
-        if (!manifest.current_review && !object(findings.host_context?.phase_archive_selection))
-          fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict lacks its frozen current phase selection');
+        if (!manifest.current_review && !object(findings.host_context?.phase_archive_selection)) {
+          owed('aggregate verdict lacks its frozen current phase selection'); continue;
+        }
         const directory = graphDir || findings.host_context?.graph_dir || path.join(root, '.planning/graph');
         const graphBytes = readImmutableFile(fs, path.join(directory, 'tickets.json'), 'current complete architecture graph', 8 * 1024 * 1024);
         const graph = JSON.parse(graphBytes);
@@ -3851,8 +3857,9 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
         if (requestedRepo !== undefined && requestedRepo !== repo) continue;
         const phases = new Set(Object.values(graph.tickets || {}).filter(row =>
           (row.repo ?? null) === repo && row.epic === branch).map(row => Number(String(row.phase).match(/^0*(\d+)/)?.[1])));
-        if (phases.size !== 1 || !phases.has(Number(aggregate[1].split('-')[0])))
-          fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict requires one current phase');
+        if (phases.size !== 1 || !phases.has(Number(aggregate[1].split('-')[0]))) {
+          owed('aggregate verdict requires one current phase'); continue;
+        }
         const binding = require('./architecture-target.cjs').phaseBinding({ graph, state: raw.tickets || raw,
           phase: [...phases][0], repository: common, repo, branch, pr, head, base: baseCommit });
         if (binding.subject !== manifest.boundary_subject

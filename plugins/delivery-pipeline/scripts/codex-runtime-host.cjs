@@ -2680,12 +2680,10 @@ function createCodexCliLauncher(options = {}) {
       const normalizeRelay = value => value.replace(/launch_digest=[a-f0-9]{64}/g, 'launch_digest=' + '0'.repeat(64));
       if (typeof prompt !== 'string' || normalizeRelay(prompt) !== normalizeRelay(resumeReview ? resumeReview.prompt : fileInput.prompt))
         fail('INVALID_INPUT', 'native relay differs from private prepared input');
-      if (integrationFile && (typedRole || resumeReview || capacityProbe || focused || codeReview
+      if (focused) fail('INVALID_INPUT', 'focused architecture review reads git itself and takes no file input');
+      if (integrationFile && (typedRole || resumeReview || capacityProbe || codeReview
           || typeof options.integrationIngress !== 'function')) fail('INVALID_INPUT', 'integration file ingress is unavailable');
-      if (!capacityProbe && !focused && !codeReview) collector.requireReaderBatchCapacity(fileInput);
-      if (focused && (fileInput !== collector.admittedFileInput(launchOptions.focused_prepared)
-          || fileInput.manifest.binding?.review_contract !== collector.FOCUSED_CONTRACT))
-        fail('INVALID_INPUT', 'focused files differ from private launch custody');
+      if (!capacityProbe && !codeReview) collector.requireReaderBatchCapacity(fileInput);
       if (fileInput.manifest.transport?.schema === 'shipyard.native-reader-transport.v3'
           && (fileInput.manifest.transport.candidate.instructions_sha256 !== reviewHash(agent ? agent.instructions
             : resumeReview?.progress.original_launch.agent
@@ -2800,7 +2798,7 @@ function createCodexCliLauncher(options = {}) {
       applied_model: model, applied_effort: effort,
       observed_model: model, observed_effort: effort,
     });
-    const observeReview = fileTransport && !focused && !codeReview && !resumeReview && !capacityProbe && (launchOptions.review_progress === true
+    const observeReview = fileTransport && !codeReview && !resumeReview && !capacityProbe && (launchOptions.review_progress === true
       || (fileInput.manifest.binding?.ticket_set && fileInput.manifest.binding?.merge_base))
       ? createReviewObserver(fileInput, { model, effort, sandbox_mode: sandbox,
         agent_file: agent?.file || launchOptions.agent_file || null,
@@ -3048,7 +3046,7 @@ function createCodexCliLauncher(options = {}) {
         allowTimedOutWait: false, startedAt, task,
       });
       const nativeEvidence = verified.native_session_evidence;
-      if (fileTransport && !focused && !codeReview) {
+      if (fileTransport && !codeReview) {
         const message = parsed.records.filter(record => record.type === 'item.completed'
           && record.item?.type === 'agent_message').at(-1);
         if (!message || parsed.records.indexOf(message) > parsed.records.findLastIndex(record => record.type === 'turn.completed'))
@@ -3151,9 +3149,9 @@ function createCodexCliLauncher(options = {}) {
         ...(typedEvidence ? { native_child_evidence: typedEvidence } : {}),
         ...(focused ? { focused_review: focused } : {}),
         ...(codeReview ? { code_review: codeReview } : {}),
-        ...(fileTransport && (focused || codeReview) ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
+        ...(fileTransport && codeReview ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
           input_accounting: fileInput.manifest.accounting } : {}),
-        ...(fileTransport && !focused && !codeReview ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
+        ...(fileTransport && !codeReview ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
           input_accounting: fileInput.manifest.accounting,
           input_consumption: { native_session_sha256: nativeEvidence.sha256,
             manifest_sha256: fileInput.input_bundle.manifest_sha256,

@@ -1610,8 +1610,8 @@ async function inspectFocusedConsumers(hostRoot) {
   const names = [
     'focused original inline judgment reaches finish, archive lookup and the existing live gate without reads',
     'focused incomplete original review retains limitations and findings but cannot grant current conformance',
-    'codex focused overflow reaches original finish, archive and live gate without read proof',
-    'claude focused overflow reaches original finish, archive and live gate without read proof',
+    'codex large diff reaches original finish, archive and live gate while the reviewer reads it through git',
+    'claude large diff reaches original finish, archive and live gate while the reviewer reads it through git',
     'Claude original incomplete focused judgment is archived without granting conformance',
     ...['forged contract', 'wrong repository', 'wrong membership', 'wrong base', 'wrong launch',
       'malformed completeness', 'contradictory complete'].map(name => 'focused original completion refuses ' + name),
