@@ -102,8 +102,9 @@ routed policy; it has no tier or effort resolver of its own. Claude launches use
 `claude-sonnet-5-5` and `claude-opus-5-5`; Codex writes a concrete
 model and effort into generated agent files because its agents are static.
 Codex model ids are resolved from the runtime-native ADR-014 grid; the active
-policy is `adr-014.v8` and historical v6 and v7 receipts remain unchanged. Legacy
-palette input is compatibility-only and cannot authorize a routed dispatch.
+policy is `adr-014.v8`; earlier policy versions are not recognized. A live gate refuses
+a record that names one (rerun the work), the run store skips it and historical
+aggregates report it as stale. Legacy palette input is compatibility-only and cannot authorize a routed dispatch.
 
 Fable is a Claude-only ceiling and is reached only by an explicit measured
 route with `pipeline.fable: auto`. The default remains conservative. A Codex

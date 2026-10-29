@@ -177,10 +177,7 @@ function policyIdentity(input, recorded = false) {
   version = safeId(version, 'policy_version');
   const registered = adapters.recordedPolicyFor(version, { policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH });
   if (!registered) refuse('UNSUPPORTED_POLICY_VERSION', 'unregistered recorded policy');
-  if (!hasHash) {
-    if (version !== policy.POLICY_VERSION) refuse('MISSING_POLICY_IDENTITY', 'historical policy hash is required');
-    hash = policy.POLICY_HASH;
-  }
+  if (!hasHash) hash = policy.POLICY_HASH;
   hash = digestValue(hash, 'policy_hash');
   if (hash !== registered.policy_hash) refuse('POLICY_IDENTITY_CONFLICT', 'policy version and hash disagree with registered authority');
   return { policy_version: version, policy_hash: hash };
@@ -192,8 +189,7 @@ function normalizeModel(runtime, value, field = 'model', version = policy.POLICY
   const entry = Object.entries(map).find(([key, native]) => (keyOnly ? key === value : concreteOnly ? native === value : key === value || native === value));
   if (entry) return { model_key: entry[0], model: entry[1] };
   const foreign = RUNTIMES.some(candidate => candidate !== runtime && Object.entries(adapters.recordedPalette(version, candidate)).some(([key, native]) => key === value || native === value));
-  const crossed = ['adr-014.v6', 'adr-014.v7', 'adr-014.v8'].some(candidate => Object.values(adapters.recordedPalette(candidate, runtime)).includes(value));
-  refuse(foreign || crossed ? 'RUNTIME_MODEL_MISMATCH' : 'UNSUPPORTED_MODEL', `${field} is not registered for recorded runtime/policy`);
+  refuse(foreign ? 'RUNTIME_MODEL_MISMATCH' : 'UNSUPPORTED_MODEL', `${field} is not registered for recorded runtime/policy`);
 }
 
 function normalizeRole(value) {

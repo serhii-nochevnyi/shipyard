@@ -17,44 +17,22 @@ const CLAUDE_MODEL_ALIASES = Object.freeze({
   fable: 'fable',
 });
 
-const RECORDED_PALETTES = Object.freeze({
-  'adr-014.v6': Object.freeze({
-    codex: Object.freeze({ luna: 'gpt-6-luna', astra: 'gpt-6-astra', sol: 'gpt-6-sol' }),
-    claude: Object.freeze({ sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' }),
-  }),
-  'adr-014.v7': Object.freeze({ codex: CODEX_MODEL_IDS, claude: CLAUDE_MODEL_ALIASES }),
-  'adr-014.v8': Object.freeze({ codex: CODEX_MODEL_IDS, claude: CLAUDE_MODEL_ALIASES }),
-});
-
-const RECORDED_POLICIES = Object.freeze({
-  'adr-014.v6': Object.freeze({
-    policy_version: 'adr-014.v6',
-    policy_hash: '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968',
-    palettes: RECORDED_PALETTES['adr-014.v6'],
-  }),
-  'adr-014.v7': Object.freeze({
-    policy_version: 'adr-014.v7',
-    policy_hash: '3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570',
-    palettes: RECORDED_PALETTES['adr-014.v7'],
-  }),
-});
+const ACTIVE_POLICY_VERSION = 'adr-014.v8';
+const ACTIVE_PALETTES = Object.freeze({ codex: CODEX_MODEL_IDS, claude: CLAUDE_MODEL_ALIASES });
 
 function recordedPolicyFor(version, activePolicyIdentity) {
-  if (Object.hasOwn(RECORDED_POLICIES, version)) return RECORDED_POLICIES[version];
-  if (activePolicyIdentity && version === activePolicyIdentity.policy_version
-      && Object.hasOwn(RECORDED_PALETTES, version)) {
+  if (activePolicyIdentity && version === activePolicyIdentity.policy_version && version === ACTIVE_POLICY_VERSION) {
     return Object.freeze({
       policy_version: version,
       policy_hash: activePolicyIdentity.policy_hash,
-      palettes: RECORDED_PALETTES[version],
+      palettes: ACTIVE_PALETTES,
     });
   }
   return undefined;
 }
 
 function recordedPalette(version, runtime) {
-  return Object.prototype.hasOwnProperty.call(RECORDED_PALETTES, version)
-    ? RECORDED_PALETTES[version][runtime] : undefined;
+  return version === ACTIVE_POLICY_VERSION ? ACTIVE_PALETTES[runtime] : undefined;
 }
 
 function modelFor(runtime, modelKey) {
