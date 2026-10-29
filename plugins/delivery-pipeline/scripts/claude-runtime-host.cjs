@@ -434,22 +434,26 @@ function transcriptPathForEvidence(root, transcriptPath, sessionId) {
     fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript path cannot be inspected: ${error.message}`);
   }
   if (projectStat.isSymbolicLink() || !projectStat.isDirectory()) fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript project directory is not a regular directory');
+  let realProject;
+  try { realProject = fs.realpathSync(project); }
+  catch (error) { fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript path cannot be resolved: ${error.message}`); }
+  if (path.dirname(realProject) !== rootReal) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript resolves outside the exact Claude project/session location');
+  }
   let fileStat;
   try { fileStat = fs.lstatSync(file); }
   catch (error) {
-    if (error && error.code === 'ENOENT') return file;
+    if (error && error.code === 'ENOENT') return path.join(realProject, path.basename(file));
     fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript file cannot be inspected: ${error.message}`);
   }
   if (fileStat.isSymbolicLink() || !fileStat.isFile()) fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript file is not a regular file');
-  let realProject;
   let realFile;
   try {
-    realProject = fs.realpathSync(project);
     realFile = fs.realpathSync(file);
   } catch (error) {
     fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript path cannot be resolved: ${error.message}`);
   }
-  if (path.dirname(realProject) !== rootReal || path.dirname(realFile) !== realProject
+  if (path.dirname(realFile) !== realProject
       || path.basename(realFile) !== `${sessionId}.jsonl`) {
     fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript resolves outside the exact Claude project/session location');
   }
@@ -495,31 +499,46 @@ async function readSessionEvidence(startEvidence, sessionId, expectedModel, expe
   const poll = Number.isSafeInteger(options.transcriptPollMs)
     ? Math.max(1, options.transcriptPollMs) : TRANSCRIPT_POLL_MS;
   let priorStamp = '';
-  let stablePolls = 0;
-  while (now() <= deadline) {
+  let stableSince;
+  // @invariant: Inspect the terminal wake once; stability never authorizes a sleep at or beyond the deadline.
+  while (true) {
+    const sampledAt = now();
     {
       const file = transcriptPath;
       let before;
-      try { before = fs.statSync(file); }
+      try {
+        const physical = transcriptPathForEvidence(root, startEvidence.transcript_path, sessionId);
+        if (physical && physical !== file) {
+          fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript physical path changed during observation');
+        }
+        if (physical) before = fs.statSync(file);
+      }
       catch (error) {
+        if (error && error.name === 'ClaudeRuntimeHostError') throw error;
         if (!error || error.code !== 'ENOENT') fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript metadata cannot be read: ${error.message}`);
       }
+      let stamp = '';
       if (before) {
         if (before.size > TRANSCRIPT_MAX_BYTES) fail('RUNTIME_EVIDENCE_INVALID', 'Claude session transcript exceeds the evidence size limit');
-        const stamp = `${before.size}:${before.mtimeMs}`;
-        stablePolls = stamp === priorStamp ? stablePolls + 1 : 0;
-        priorStamp = stamp;
-        if (stablePolls >= 2) {
-          let bytes;
-          let after;
-          try {
-            bytes = fs.readFileSync(file);
-            after = fs.statSync(file);
-          } catch (error) {
-            if (!error || error.code !== 'ENOENT') fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript cannot be read: ${error.message}`);
+        let bytes;
+        let after;
+        try {
+          bytes = fs.readFileSync(file);
+          const physical = transcriptPathForEvidence(root, startEvidence.transcript_path, sessionId);
+          if (physical && physical !== file) {
+            fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript physical path changed during reading');
           }
-          if (bytes && after && before.size === after.size && before.mtimeMs === after.mtimeMs
-              && bytes.length === after.size) {
+          if (physical) after = fs.statSync(file);
+        } catch (error) {
+          if (error && error.name === 'ClaudeRuntimeHostError') throw error;
+          if (!error || error.code !== 'ENOENT') fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript cannot be read: ${error.message}`);
+        }
+        if (bytes && after && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(key => before[key] === after[key])
+            && bytes.length === after.size) {
+          const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+          stamp = `${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}:${after.ctimeMs}:${sha256}`;
+          if (stamp !== priorStamp) stableSince = sampledAt;
+          if (sampledAt - stableSince >= 2 * poll) {
             const selection = parseAssistantTranscript(bytes.toString('utf8'), sessionId, expectedModel, expectedEffort, expectedGsdRole);
             if (selection) {
               return Object.freeze({
@@ -527,19 +546,19 @@ async function readSessionEvidence(startEvidence, sessionId, expectedModel, expe
                 transcript: Object.freeze({
                   path: path.relative(transcriptRoot, file).split(path.sep).join('/'),
                   bytes: bytes.length,
-                  sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+                  sha256,
                 }),
               });
             }
-          } else {
-            priorStamp = '';
-            stablePolls = 0;
           }
         }
       }
+      priorStamp = stamp;
+      if (!stamp) stableSince = undefined;
     }
-    if (now() >= deadline) break;
-    await sleep(Math.min(poll, Math.max(1, deadline - now())));
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(poll, remaining));
   }
   fail('RUNTIME_EVIDENCE_MISSING', 'Claude assistant transcript was not flushed for the launched session');
 }
