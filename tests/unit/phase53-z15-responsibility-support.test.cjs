@@ -10,6 +10,8 @@ const Module = require('node:module');
 const ROOT = path.resolve(__dirname, '../..');
 const VIEW = 'shipyard.semantic-responsibility-view.v1';
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+const snapshots = new Map();
+let syntheticRoot;
 
 function load(file, names, end) {
   const filename = path.resolve(ROOT, file), loaded = new Module(filename, module);
@@ -18,7 +20,14 @@ function load(file, names, end) {
   const original = Module._load;
   try {
     Module._load = function(name, ...args) {
-      return name === 'node:test' ? { test() {}, describe() {} } : original.call(this, name, ...args);
+      if (name === 'node:test') return { test() {}, describe() {} };
+      const api = original.call(this, name, ...args);
+      if (!name.endsWith('/role-artifact.cjs')) return api;
+      return { ...api, prepareSemanticReview(...input) {
+        const snapshot = api.prepareSemanticReview(...input);
+        snapshots.set(snapshot.snapshot_sha256, snapshot);
+        return snapshot;
+      } };
     };
     let source = fs.readFileSync(filename, 'utf8');
     if (end) { assert.ok(source.includes(end)); source = source.slice(0, source.indexOf(end)); }
@@ -58,11 +67,31 @@ function snapshot(a, inv = inventory(), role = 'integrator', runtime = 'codex') 
 
 function assertViews(payload, global) {
   assert.equal(payload.responsibility_view_version, VIEW);
-  const assignment = payload.assignment;
+  const s = snapshots.get(payload.snapshot_sha256), a = authority();
+  assert.ok(s, 'capture the actual complete public preparation');
+  a.assertSemanticSnapshot(s);
+  assert.equal(s.snapshot_sha256, global.snapshot_sha256);
+  assert.deepEqual(payload.reviewed_identity, s.identity);
+  const assignment = s.assignments.find(item => item.id === payload.assignment?.id);
+  assert.equal(payload.assignment?.id || null, assignment?.id || null);
+  const view = a.semanticRequiredView(s, assignment);
+  assert.deepEqual(payload.material.map(({ read_path, ...source }) => source), view.material);
+  assert.deepEqual(payload.obligations, view.obligations);
+  assert.deepEqual(payload.seams, view.seams);
+  assert.deepEqual(payload.required_context, view.required_context);
   if (!assignment) {
+    assert.equal(payload.assignment, null);
     assert.deepEqual(payload.obligation_ids, global.obligation_ids);
+    assert.deepEqual(payload.independent_final_seam_ids, s.independent_final_seam_ids);
+    assert.deepEqual(payload.cross_responsibility_seam_ids, s.cross_responsibility_seam_ids);
     return;
   }
+  const { required_material_source_ids, required_criteria_obligation_ids, required_seam_ids, required_context, ...inline } = assignment;
+  assert.deepEqual(payload.assignment, inline);
+  assert.deepEqual(required_material_source_ids, view.material.map(item => item.source_id));
+  assert.deepEqual(required_criteria_obligation_ids, view.obligations.filter(item => !item.source_id).map(item => item.id));
+  assert.deepEqual(required_seam_ids, view.seams.map(item => item.id));
+  assert.deepEqual(required_context, view.required_context);
   const ids = [...new Set([...assignment.primary_obligation_ids, ...assignment.support_obligation_ids])];
   assert.deepEqual(payload.obligation_ids, global.obligation_ids.filter(id => ids.includes(id)));
   assert.deepEqual(payload.material.map(item => item.source_id), assignment.required_material_source_ids);
@@ -97,6 +126,7 @@ test('ordinary Codex integration scopes support, overlaps physical workers and r
     assert.equal(new Set(primary).size, primary.length);
     assert.deepEqual([...primary].sort(), [...final.obligation_ids].sort());
     for (const worker of workers) assertViews(worker.payload, final);
+    assertViews(final, final);
     const consumer = workers.find(item => item.payload.assignment.id === 'consumer-acceptance').payload;
     const unrelated = final.obligations.filter(item => item.path === 'other/unrelated.cjs');
     assert.ok(unrelated.length);
@@ -254,13 +284,29 @@ test('support retains one concrete witness per justification kind and every requ
 
 function resultFixture(a, final = false) {
   const s = snapshot(a);
+  syntheticRoot ||= fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'z15-canonical-')));
+  const directory = fs.mkdtempSync(path.join(syntheticRoot, 'body-'));
+  fs.mkdirSync(path.join(directory, 'worktree'));
   s.subject = 'fixture'; s.identity = { phase: '53', head: 'head', head_tree: 'head-tree', base_ref: 'main',
-    base_tree: 'base-tree', ticket_set: [], ticket_set_digest: 'members' };
+    base_tree: 'base-tree', ticket_set: [], ticket_set_digest: 'members', worktree: path.join(directory, 'worktree') };
   delete s.snapshot_sha256; s.snapshot_sha256 = hash(a.stable(s));
+  a.assertSemanticSnapshot(s);
   const assignment = final ? null : s.assignments[1], view = a.semanticRequiredView(s, assignment);
+  const material = s.material.map(({ content, ...source }) => {
+    const read_path = path.join(directory, source.source_id + '.txt');
+    fs.writeFileSync(read_path, content);
+    return { ...source, read_path, bytes: Buffer.byteLength(content), sha256: hash(content) };
+  });
+  const catalogText = a.stable({ responsibility_view_version: VIEW, material, obligations: s.obligations, seams: s.seams });
+  const catalog = { read_path: path.join(directory, 'catalog.json'), bytes: Buffer.byteLength(catalogText), sha256: hash(catalogText) };
+  fs.writeFileSync(catalog.read_path, catalogText);
+  const inline = assignment && Object.fromEntries(Object.entries(assignment).filter(([key]) =>
+    !['required_material_source_ids', 'required_criteria_obligation_ids', 'required_seam_ids', 'required_context'].includes(key)));
   const payload = { schema: s.review_contract, review_contract: s.review_contract,
     role: s.role, runtime: s.runtime, stage: final ? 'final' : 'worker', subject: s.subject,
-    snapshot_sha256: s.snapshot_sha256, reviewed_identity: s.identity, ...view, assignment, material: view.material };
+    snapshot_sha256: s.snapshot_sha256, reviewed_identity: s.identity, ...view, assignment: inline,
+    material: material.filter(item => view.material.some(source => source.source_id === item.source_id)),
+    catalog, originals: [], input_transport: 'host-files' };
   payload.binding_sha256 = hash(a.stable(payload));
   const input = '<AUTHENTICATED_SEMANTIC_REVIEW>\n' + a.stable(payload) + '\n</AUTHENTICATED_SEMANTIC_REVIEW>';
   const launch = { responsibility_view_version: VIEW, assignment_id: assignment?.id || null,
@@ -273,8 +319,9 @@ function resultFixture(a, final = false) {
     seams: view.seams.map(item => ({ id: item.id, disposition: 'resolved', rationale: 'Actual endpoint contract agrees.' })),
     ...(final ? { phase: s.identity.phase, head: s.identity.head, head_tree: s.identity.head_tree,
       base: s.identity.base_ref, base_tree: s.identity.base_tree, ticket_set: [], ticket_set_digest: 'members' } : {}) };
-  return { s, payload, launch, result, record: { snapshot: s } };
+  return { s, payload, launch, result, record: { snapshot: s, input_transport: 'host-files', input_root: directory } };
 }
+process.once('exit', () => { if (syntheticRoot) fs.rmSync(syntheticRoot, { recursive: true, force: true }); });
 
 for (const final of [false, true]) test((final ? 'final' : 'worker') + ' validates its exact seam view without shrinking global final coverage', () => {
   const a = authority(), f = resultFixture(a, final);
@@ -447,6 +494,7 @@ for (const runtime of ['codex', 'claude']) for (const role of ['arch-review', 'c
       assert.equal(prepared.launches.length, 3);
       const final = prepared.launches[2].payload;
       for (const worker of prepared.launches.slice(0, 2)) assertViews(worker.payload, final);
+      assertViews(final, final);
       assert.equal(new Set(prepared.launches.map(item => item.session)).size, 3);
       for (const original of final.originals) {
         const worker = prepared.launches.find(item => item.payload.assignment?.id === original.reference.assignment_id);
