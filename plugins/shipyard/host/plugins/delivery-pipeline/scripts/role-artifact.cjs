@@ -4923,8 +4923,8 @@ function validateSemanticResult(result, launch, record, facts) {
         { encoding: 'utf8', timeout: 30000, maxBuffer: maximum }) });
     if (launch.stage === 'final') core.projectSemanticResult(result,
       { packet: snapshot.code_review_packet, identity: snapshot.identity, readSource });
-    else core.normalizeResult({ ...result, review_completeness: result.completeness === 'complete' ? 'complete' : 'incomplete',
-      unresolved_sources: [...result.required_context, ...result.unread] }, { round: context.review_round,
+    else core.normalizeResult({ ...result, ...core.semanticUnresolvedProjection(result,
+      { obligationIds: snapshot.obligations.map(item => item.id) }) }, { round: context.review_round,
       scope: context.review_scope, readSource });
   } else completeFindingIndex(result, snapshot.role);
   if (!Number.isSafeInteger(result.blocking_count) || result.blocking_count < 0)
