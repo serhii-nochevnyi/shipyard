@@ -623,6 +623,27 @@ test('fresh process rejects review decision drift after artifact sealing', async
   } finally { cleanupJudgment(f); }
 });
 
+test('the sealed host context must reproduce the launch attestation of the original receipt', async () => {
+  const f = fixture();
+  try {
+    const { result, validationInput } = await unitJudgment(f);
+    const validated = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').validateJudgmentManifest(validationInput);
+    const input = { receipt: result.receipt, dispatchId: result.receipt.dispatch_id,
+      evidence: Buffer.from(validated.evidence), worktree: f.root };
+    const sealed = validated.findings, context = sealed.host_context;
+    assert.equal(contextBuilder.validateHistoricalContext({ ...input, result: sealed }), true);
+    for (const edit of [{ graph_dir: path.join(f.root, 'elsewhere') }, { bookkeeping: [] },
+      { historical_archives: [{ path: 'forged', sha256: 'a'.repeat(64), bytes: 1 }] },
+      { historical_bookkeeping: [{ path: 'forged', sha256: 'a'.repeat(64) }] },
+      { installation: { ...context.installation, script_root: path.join(f.root, 'elsewhere') } }])
+      assert.throws(() => contextBuilder.validateHistoricalContext({ ...input,
+        result: { ...sealed, host_context: { ...context, ...edit } } }), { code: 'STALE_CONTEXT' }, Object.keys(edit)[0]);
+    const { focused, ...unfocused } = context;
+    assert.throws(() => contextBuilder.validateHistoricalContext({ ...input, result: { ...sealed, host_context: unfocused } }),
+      { code: 'ARCH_REVIEW_CONTEXT_REQUIRED' });
+  } finally { cleanupJudgment(f); }
+});
+
 test('fixture-only import does not load or register a node test suite', () => {
   const modulePath = path.join(__dirname, 'helpers/codex-arch-review-fixtures.cjs');
   const script = `const Module = require('node:module');
