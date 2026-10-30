@@ -361,7 +361,6 @@ for (const scenario of [
           findings: [], blocking_count: 0, ticket_set: value.prepared.binding.ticketSet,
           ticket_set_digest: value.prepared.binding.membership, context_digest: value.prepared.packet.digest,
           launch_digest: context.prompt.match(/launch_digest=([a-f0-9]{64})/)[1], evidence_markdown: 'Complete unit aggregate review.' };
-        write(f.root, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
         const records = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
           .trim().split('\n').map(line => JSON.parse(line));
         const streamRecords = ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
@@ -515,13 +514,22 @@ test('evidence replacement between result validation and sealing refuses before 
         if (!changed && fd === descriptor) { changed = true; fs.writeFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), 'Unauthenticated replacement evidence.'); }
         return bytes;
       };
-    }), /evidence changed before authenticated archival|changed while|grew beyond|changed before/);
+    }), /evidence changed before authenticated archival|changed while|grew beyond|changed before|changed during bounded reading/);
     assert(changed);
     const archive = path.join(f.root, '.shipyard-role-artifacts');
     function manifests(root) { return fs.readdirSync(root, { withFileTypes: true }).flatMap(entry =>
       entry.isDirectory() ? manifests(path.join(root, entry.name)) : [path.join(root, entry.name)]); }
     if (fs.existsSync(archive)) assert(!manifests(archive).some(file => file.endsWith('manifest.json')));
   } finally { fs.readSync = original; fs.openSync = originalOpen; cleanupJudgment(f); }
+});
+
+test('a reviewer-created evidence file is refused before sealing', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(() => unitJudgment(f, () => write(f.root, '.shipyard-arch-review-evidence.md', 'role wrote this')),
+      { code: 'WORKTREE_MUTATED' });
+    assert.deepEqual(require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').authenticatedArchivePins(f.root), []);
+  } finally { cleanupJudgment(f); }
 });
 
 test('unit adapter judgment seals through the actual authenticated recorder and artifact consumer', async () => {
@@ -1177,22 +1185,19 @@ test('original approval table growth refuses before allocation and leaves no reg
   } finally { fs.openSync = original; fs.rmSync(a.directory, { recursive: true, force: true }); cleanupJudgment(f); }
 });
 
-for (const targetKind of ['original native transcript', 'complete reviewer evidence'])
-  test(targetKind + ' growth refuses before allocating expanded content', async () => {
-    const f = fixture(), open = fs.openSync; let changed = false;
-    try {
-      await assert.rejects(() => unitJudgment(f, () => {
-        fs.openSync = function(file, ...args) {
-          const fd = open.call(fs, file, ...args);
-          const target = targetKind === 'original native transcript'
-            ? String(file) === f.transcript : String(file) === path.join(f.root, '.shipyard-arch-review-evidence.md');
-          if (target && !changed) { changed = true; fs.appendFileSync(file, 'unapproved growth'); }
-          return fd;
-        };
-      }), /changed before reading|recorded bounded|transcript|changed while|grew beyond/);
-      assert.equal(changed, true);
-    } finally { fs.openSync = open; cleanupJudgment(f); }
-  });
+test('original native transcript growth refuses before allocating expanded content', async () => {
+  const f = fixture(), open = fs.openSync; let changed = false;
+  try {
+    await assert.rejects(() => unitJudgment(f, () => {
+      fs.openSync = function(file, ...args) {
+        const fd = open.call(fs, file, ...args);
+        if (String(file) === f.transcript && !changed) { changed = true; fs.appendFileSync(file, 'unapproved growth'); }
+        return fd;
+      };
+    }), /changed before reading|recorded bounded|transcript|changed while|grew beyond/);
+    assert.equal(changed, true);
+  } finally { fs.openSync = open; cleanupJudgment(f); }
+});
 
 test('committed-only collection with an absent authority namespace creates no namespace', () => {
   const f = fixture(); const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-absent-authority-'));
@@ -1205,25 +1210,22 @@ test('committed-only collection with an absent authority namespace creates no na
 });
 
 
-for (const targetKind of ['original native transcript', 'complete reviewer evidence'])
-  test(targetKind + ' same-byte replacement between original stat and bounded reader refuses', async () => {
-    const f = fixture(), lstat = fs.lstatSync; let replaced = false;
-    try {
-      await assert.rejects(() => unitJudgment(f, () => {
-        fs.lstatSync = function(file, ...args) {
-          const stat = lstat.call(fs, file, ...args);
-          const target = targetKind === 'original native transcript'
-            ? String(file) === f.transcript : String(file) === path.join(f.root, '.shipyard-arch-review-evidence.md');
-          if (target && !replaced) {
-            replaced = true; const replacement = String(file) + '.replacement';
-            fs.writeFileSync(replacement, fs.readFileSync(file)); fs.renameSync(replacement, file);
-          }
-          return stat;
-        };
-      }), /changed before reading|changed while|transcript/);
-      assert.equal(replaced, true);
-    } finally { fs.lstatSync = lstat; cleanupJudgment(f); }
-  });
+test('original native transcript same-byte replacement between original stat and bounded reader refuses', async () => {
+  const f = fixture(), lstat = fs.lstatSync; let replaced = false;
+  try {
+    await assert.rejects(() => unitJudgment(f, () => {
+      fs.lstatSync = function(file, ...args) {
+        const stat = lstat.call(fs, file, ...args);
+        if (String(file) === f.transcript && !replaced) {
+          replaced = true; const replacement = String(file) + '.replacement';
+          fs.writeFileSync(replacement, fs.readFileSync(file)); fs.renameSync(replacement, file);
+        }
+        return stat;
+      };
+    }), /changed before reading|changed while|transcript/);
+    assert.equal(replaced, true);
+  } finally { fs.lstatSync = lstat; cleanupJudgment(f); }
+});
 
 
 for (const kind of ['current manifest', 'current archive evidence', 'current archive findings', 'current source evidence'])
@@ -1449,7 +1451,6 @@ function aggregateRuntimeFixture({ host: fixtureHost, parsed, storage, capabilit
               ticket_set: packet.ticket_set, ticket_set_digest: packet.ticket_set_digest,
               context_digest: packet.digest, launch_digest: stdin.match(/launch_digest=([a-f0-9]{64})/)[1],
               evidence_markdown: 'Complete unit aggregate review.' };
-            write(parsed.scope.worktree, '.shipyard-arch-review-evidence.md', result.evidence_markdown);
             const resultText = JSON.stringify(result);
             const native = require('./helpers/codex-arch-review-fixtures.cjs').focusedNativeSession({ session: batchSession,
               worktree: parsed.scope.worktree, model: selected.model, effort: selected.effort, text: resultText, prompt: stdin });

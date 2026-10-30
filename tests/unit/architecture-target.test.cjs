@@ -256,7 +256,6 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
           findings: [], blocking_count: 0, ticket_set: value.prepared.binding.ticketSet,
           ticket_set_digest: value.prepared.binding.membership, context_digest: value.prepared.packet.digest,
           launch_digest: context.prompt.match(/launch_digest=([a-f0-9]{64})/)[1], evidence_markdown: 'Complete unit aggregate review.' };
-        write(f.root, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
         const records = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
           .trim().split('\n').map(line => JSON.parse(line));
         const streamRecords = ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
@@ -337,7 +336,6 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
                   ticket_set:packet.role_context.ticket_set,ticket_set_digest:packet.role_context.ticket_set_digest,
                   verdict:'conform',blocking_count:0,summary:'Fixture review',findings:[],
                   evidence_markdown:'Complete fixture architecture review.'};
-                write(f.root,'.shipyard-arch-review-evidence.md','Complete fixture architecture review.');
                 const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
                 const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
                 const init = template(row => row.type === 'system' && row.subtype === 'init');

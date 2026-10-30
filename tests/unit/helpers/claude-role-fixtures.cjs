@@ -228,9 +228,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
               reference_digest: context.reference_digest })).digest('hex'),
             review_completeness: 'complete', limitations: [], unresolved_sources: [],
             summary: 'Reviewed the product changes.', findings: [], dispositions: [] };
-          evidencePath = path.join(fixture.root, '.shipyard-code-review-evidence.md');
           result.evidence_markdown = `Reviewed ${fixture.head}; base tree ${fixture.mergeBaseTree}.\n`;
-          fs.writeFileSync(evidencePath, result.evidence_markdown);
         } else if (packet.role === 'arch-review') {
           result = { ...context.focused, review_completeness: 'complete', limitations: [], unresolved_sources: [],
             context_digest: crypto.createHash('sha256').update(stable(packet)).digest('hex'),
@@ -238,9 +236,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
               reference_digest: context.reference_digest })).digest('hex'),
             id: packet.subject, ...(context.ticket_set ? { ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest } : {}), pr: live.number, verdict: 'conform', head: fixture.head,
             base_tree: fixture.mergeBaseTree, blocking_count: 0, summary: 'No architecture conflict.', findings: [] };
-          evidencePath = path.join(fixture.root, '.shipyard-arch-review-evidence.md');
           result.evidence_markdown = `Reviewed ${fixture.head}; base tree ${fixture.mergeBaseTree}.\n`;
-          fs.writeFileSync(evidencePath, result.evidence_markdown);
         } else if (packet.role === 'pr-sentinel') {
           const ticketSet = context.ticket_set;
           const readOnlySmoke = selection.readOnly === true;
@@ -307,7 +303,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
                 options.onSpawn?.(args);
                 const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
                 const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
-                const { output } = await runtime.agent(userInput.message.content, { model, effort, readOnly: true, schema: JSON.parse(args[args.indexOf('--json-schema') + 1]) });
+                const { output } = await runtime.agent(userInput.message.content, { model, effort, ...(args[args.indexOf('--tools') + 1] === 'Read,Write,Glob,Grep' ? { readOnly: true } : {}), schema: JSON.parse(args[args.indexOf('--json-schema') + 1]) });
                 const init = template(row => row.type === 'system' && row.subtype === 'init');
                 Object.assign(init, { session_id: session, model, cwd: fixture.root });
                 const assistant = template(row => row.type === 'assistant');

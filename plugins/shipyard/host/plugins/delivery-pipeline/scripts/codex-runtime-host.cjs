@@ -1065,16 +1065,8 @@ function signerProtectionPaths(env, worktree) {
 
 function staticEvidenceWritePath(worktree, launchOptions, sandbox) {
   if (sandbox !== 'read-only' || typeof launchOptions.agent_file_content !== 'string') return null;
-  const names = {
-    'shipyard-drift-check.toml': '.shipyard-drift-evidence.md',
-    'shipyard-arch-review.toml': '.shipyard-arch-review-evidence.md',
-    'shipyard-arch-review-critical.toml': '.shipyard-arch-review-evidence.md',
-    'shipyard-code-review.toml': '.shipyard-code-review-evidence.md',
-    'shipyard-code-review-critical.toml': '.shipyard-code-review-evidence.md',
-  };
-  const name = names[launchOptions.agent_file];
-  if (!name) return null;
-  const file = path.join(worktree, name);
+  if (launchOptions.agent_file !== 'shipyard-drift-check.toml') return null;
+  const file = path.join(worktree, '.shipyard-drift-evidence.md');
   try {
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) fail('INVALID_INPUT', 'role evidence path must be a regular file');

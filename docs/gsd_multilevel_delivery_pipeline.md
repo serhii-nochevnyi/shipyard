@@ -623,6 +623,13 @@ fresh final that owns the verdict. A part blocker needs a justified disposition 
 final, and the final cannot pass over an incomplete part. A phase with no product change
 against the default branch is refused as `INTEGRATION_EMPTY`.
 
+The review roles (`arch-review`, `code-review`, `integrator`) take their verdict only
+from the final message and write no file: Claude gets `Bash`, `Read`, `Glob` and `Grep`
+with no write into the worktree or common directory, Codex a `:read-only` profile with
+no write rule. The host writes the complete `evidence_markdown` to the evidence file as
+the seal source, and an architecture or code review that created that file itself is
+refused as `WORKTREE_MUTATED`.
+
 #### Phase code review before the finale
 
 The phase epic PR runs code review, then the integrator, then phase `arch-review`,

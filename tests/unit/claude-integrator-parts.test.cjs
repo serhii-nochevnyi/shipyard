@@ -213,6 +213,7 @@ test('the integrator launch is sandboxed to read git: no write into the worktree
       assert.deepEqual(settings.sandbox.filesystem.allowWrite, []);
       assert.deepEqual(settings.permissions.allow, []);
       assert.deepEqual(settings.sandbox.filesystem.denyWrite, ['/authority', fixture.root, require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').repositoryIdentity(fixture.root)]);
+      assert.equal(value('--tools'), 'Bash,Read,Glob,Grep');
       assert.equal(value('--allowedTools'), 'Bash,Read,Glob,Grep');
     }
   } finally { cleanupFixture(fixture); }

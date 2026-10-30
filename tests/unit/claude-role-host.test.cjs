@@ -669,6 +669,7 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
     const packet = packetFromPrompt(launched.prompt);
     assert.equal(launched.selection.model, 'claude-opus-5-5');
     assert.equal(launched.selection.effort, 'high');
+    assert.equal(launched.selection.readOnly, undefined);
     assert.equal(launched.selection.schema.type, 'object');
     assert.deepEqual(launched.selection.schema.properties.pr, { type: 'integer', minimum: 1 });
     assert.deepEqual(launched.selection.schema.properties.blocking_count, { type: 'integer', minimum: 0 });
@@ -2250,7 +2251,7 @@ test(`code-review authenticates one phase launch and seals its exact identity ${
     assert.equal(launches, 1);
     assert.equal(result.context.model, promoted ? 'claude-opus-5-5' : 'claude-sonnet-5-5');
     assert.equal(result.context.effort, promoted ? 'high' : 'xhigh');
-    assert.equal(launched.selection.readOnly, true);
+    assert.equal(launched.selection.readOnly, undefined);
     assert.equal(launched.selection.schema.properties.review_contract.const, reviewCollector.CODE_REVIEW_CONTRACT);
     assert.equal(result.dispatch.subject_kind, 'phase');
     const parsed = reviewTargets.parseSubject('architecture-review', result.subject);
@@ -2324,7 +2325,7 @@ test(`code-review refuses ${scenario} before launch`, async () => {
   } finally { cleanupFixture(fixture); }
 });
 
-for (const scenario of ['head', 'base', 'outside-evidence', 'scratch-evidence', 'evidence-mismatch', 'new-archive', 'new-empty-archive-directory'])
+for (const scenario of ['head', 'base', 'outside-evidence', 'scratch-evidence', 'new-archive', 'new-empty-archive-directory'])
 test(`code-review refuses ${scenario} changed during launch before sealing`, async () => {
   const fixture = setupCodeReview();
   let launches = 0;
@@ -2339,7 +2340,6 @@ test(`code-review refuses ${scenario} changed during launch before sealing`, asy
         if (scenario === 'new-archive') write(fixture.root, '.shipyard-role-artifacts/unlisted/file', 'unexpected');
         if (scenario === 'new-empty-archive-directory') fs.mkdirSync(path.join(fixture.root, '.shipyard-role-artifacts/unknown'), { recursive: true });
       },
-      mutateResult(result) { if (scenario === 'evidence-mismatch') result.evidence_markdown += 'forged'; },
     });
     options.getPullRequest = () => ({ ...livePr(fixture),
       ...(moved && scenario === 'head' ? { headRefOid: fixture.base } : {}),
@@ -2350,102 +2350,46 @@ test(`code-review refuses ${scenario} changed during launch before sealing`, asy
   } finally { cleanupFixture(fixture); }
 });
 
-for (const mutation of ['replacement', 'in-place'])
-test(`code-review refuses ${mutation} evidence after equality and before the sealer snapshot`, async (t) => {
-  const fixture = setupCodeReview();
-  const evidencePath = path.join(fixture.root, '.shipyard-code-review-evidence.md');
-  const originalLstat = fs.lstatSync;
-  let mutated = false, launches = 0;
+for (const role of ['arch-review', 'code-review'])
+test(`${role} seals the verdict from the final message with no evidence file; the host writes it`, async () => {
+  const fixture = role === 'arch-review' ? setupRepository('arch-review') : setupCodeReview();
+  const file = path.join(fixture.root, role === 'arch-review' ? '.shipyard-arch-review-evidence.md' : '.shipyard-code-review-evidence.md');
+  const seen = [];
   try {
-    await assert.rejects(runCodeReview(fixture, {
-      onLaunch() { launches++; },
-      mutateResult(result) {
-        const different = Buffer.alloc(Buffer.byteLength(result.evidence_markdown), 88);
-        t.mock.method(fs, 'lstatSync', (file, ...args) => {
-          if (!mutated && file === evidencePath) {
-            mutated = true;
-            if (mutation === 'replacement') {
-              const replacement = path.join(fixture.storageRoot, 'replacement-evidence');
-              fs.writeFileSync(replacement, different);
-              fs.renameSync(replacement, evidencePath);
-            } else fs.writeFileSync(evidencePath, different);
-          }
-          return originalLstat(file, ...args);
-        });
-      },
-    }), { code: 'INVALID_RESULT' });
-    assert.equal(mutated, true);
-    assert.equal(launches, 1);
-    assert.equal(reviewHistory(fixture).length, 0);
-    assert.deepEqual(reviewArtifacts.authenticatedArchivePins(fixture.root), []);
-    assert.equal(fs.existsSync(path.join(fixture.root, '.shipyard-role-artifacts')), false);
-  } finally { t.mock.restoreAll(); cleanupFixture(fixture); }
-});
-
-test('code-review compares the bytes consumed by the bounded sealer descriptor', async (t) => {
-  const fixture = setupCodeReview();
-  const evidencePath = path.join(fixture.root, '.shipyard-code-review-evidence.md');
-  const originalRead = fs.readSync;
-  let corrupted = false;
-  try {
-    await assert.rejects(runCodeReview(fixture, { mutateResult() {
-      const source = fs.statSync(evidencePath);
-      t.mock.method(fs, 'readSync', (fd, buffer, offset, length, position) => {
-        const count = originalRead(fd, buffer, offset, length, position);
-        const stat = fs.fstatSync(fd);
-        if (count && stat.dev === source.dev && stat.ino === source.ino) {
-          buffer[offset] ^= 1;
-          corrupted = true;
-        }
-        return count;
-      });
-    } }), { code: 'INVALID_RESULT' });
-    assert.equal(corrupted, true);
-    assert.equal(reviewHistory(fixture).length, 0);
-    assert.deepEqual(reviewArtifacts.authenticatedArchivePins(fixture.root), []);
-  } finally { t.mock.restoreAll(); cleanupFixture(fixture); }
-});
-
-test('code-review refuses invalid UTF-8 evidence that decodes to the returned markdown', async () => {
-  const fixture = setupCodeReview();
-  try {
-    await assert.rejects(runCodeReview(fixture, { mutateResult(result) {
-      result.evidence_markdown = '\ufffd\n';
-      fs.writeFileSync(path.join(fixture.root, '.shipyard-code-review-evidence.md'), Buffer.from([255, 10]));
-    } }), { code: 'INVALID_RESULT' });
-    assert.equal(reviewHistory(fixture).length, 0);
-    assert.deepEqual(reviewArtifacts.authenticatedArchivePins(fixture.root), []);
+    const onLaunch = () => seen.push(fs.existsSync(file));
+    const result = role === 'arch-review'
+      ? await createClaudeRoleHost(hostOptions(fixture, { onLaunch })).run(request(fixture))
+      : await runCodeReview(fixture, { onLaunch });
+    assert.deepEqual(seen, [false]);
+    assert.equal(result.artifact.outcome, role === 'arch-review' ? 'conform' : 'pass');
+    assert.equal(fs.readFileSync(file, 'utf8'), `Reviewed ${fixture.head}; base tree ${fixture.mergeBaseTree}.\n`);
   } finally { cleanupFixture(fixture); }
 });
 
-test('code-review seals exact Unicode and whitespace evidence through partial bounded reads', async (t) => {
+for (const role of ['arch-review', 'code-review'])
+test(`${role} that creates its own evidence file is refused before sealing`, async () => {
+  const fixture = role === 'arch-review' ? setupRepository('arch-review') : setupCodeReview();
+  try {
+    const onLaunch = () => write(fixture.root, role === 'arch-review' ? '.shipyard-arch-review-evidence.md' : '.shipyard-code-review-evidence.md', 'role wrote this\n');
+    await assert.rejects(role === 'arch-review'
+      ? createClaudeRoleHost(hostOptions(fixture, { onLaunch })).run(request(fixture))
+      : runCodeReview(fixture, { onLaunch }), { code: 'WORKTREE_MUTATED' });
+    if (role === 'code-review') assert.equal(reviewHistory(fixture).length, 0);
+  } finally { cleanupFixture(fixture); }
+});
+
+test('code-review seals exact Unicode and whitespace evidence from the final message', async () => {
   const fixture = setupCodeReview();
-  const evidencePath = path.join(fixture.root, '.shipyard-code-review-evidence.md');
   const markdown = '  Reviewed caf\u00e9 and \u4ee3\u7801.\r\n\n';
   const expected = Buffer.from(markdown, 'utf8');
-  const originalRead = fs.readSync;
-  let sourceReads = 0;
   try {
-    const result = await runCodeReview(fixture, { mutateResult(result) {
-      result.evidence_markdown = markdown;
-      fs.writeFileSync(evidencePath, expected);
-      const source = fs.statSync(evidencePath);
-      t.mock.method(fs, 'readSync', (fd, buffer, offset, length, position) => {
-        const stat = fs.fstatSync(fd);
-        if (stat.dev === source.dev && stat.ino === source.ino) {
-          sourceReads++;
-          return originalRead(fd, buffer, offset, Math.min(length, 2), position);
-        }
-        return originalRead(fd, buffer, offset, length, position);
-      });
-    } });
-    assert.ok(sourceReads > 2);
+    const result = await runCodeReview(fixture, { mutateResult(result) { result.evidence_markdown = markdown; } });
     assert.equal(result.artifact.outcome, 'pass');
     const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
     assert.deepEqual(fs.readFileSync(path.join(fixture.root, manifest.files.evidence.path)), expected);
     assert.equal(manifest.files.evidence.sha256, crypto.createHash('sha256').update(expected).digest('hex'));
     assert.equal(reviewHistory(fixture).length, 1);
-  } finally { t.mock.restoreAll(); cleanupFixture(fixture); }
+  } finally { cleanupFixture(fixture); }
 });
 
 for (const field of ['review_contract', 'repository', 'id', 'pr', 'head', 'base_commit', 'merge_base', 'base_tree',
@@ -2848,32 +2792,37 @@ test(`code-review binds repositoryIdentity for ${form} worktrees`, async () => {
   } finally { reviewTargets.phaseBinding = original; cleanupFixture(fixture); }
 });
 
-test('review launches keep Bash but deny writes to the worktree and common dir; only the evidence file stays writable', async (t) => {
-  const fixture = splitReviewFixture({ coordinatorGraph: true });
+test('review launches keep Bash but deny every write: no Write tool, no allowWrite, no evidence rule', async (t) => {
   const spawns = [], launched = [];
-  try {
-    t.mock.method(require('node:child_process'), 'spawn', (_executable, args) => { launched.push(args); return {}; });
-    const options = hostOptions(fixture);
-    options.partBudget = 5;
+  t.mock.method(require('node:child_process'), 'spawn', (_executable, args) => { launched.push(args); return {}; });
+  const capture = options => {
     const factory = options.createRuntimeHost;
     options.createRuntimeHost = input => { spawns.push(input.spawn); return factory(input); };
-    await createClaudeRoleHost(options).run(codeReviewRequest(fixture));
-    const original = { sandbox: { filesystem: { allowWrite: [fixture.root], denyRead: ['/authority'], denyWrite: ['/authority'] } },
-      permissions: { allow: [] } };
+    return options;
+  };
+  const split = splitReviewFixture({ coordinatorGraph: true });
+  const arch = setupRepository('arch-review');
+  try {
+    const options = capture(hostOptions(split));
+    options.partBudget = 5;
+    await createClaudeRoleHost(options).run(codeReviewRequest(split));
+    await createClaudeRoleHost(capture(hostOptions(arch))).run(request(arch));
+    const original = { sandbox: { filesystem: { allowWrite: [split.root], denyRead: ['/authority'], denyWrite: ['/authority'] } },
+      permissions: { allow: ['Edit(/stale)'] } };
     for (const spawn of spawns)
       spawn('claude-fixture', ['--tools', 'Bash,Read,Edit,Write,Glob,Grep', '--allowedTools', 'Bash,Read,Edit,Write,Glob,Grep',
         '--settings', JSON.stringify(original)], {});
-    assert.equal(launched.length, 3);
-    const evidence = path.join(fixture.root, '.shipyard-code-review-evidence.md');
+    assert.equal(launched.length, 4);
     launched.forEach((args, index) => {
       const value = flag => args[args.indexOf(flag) + 1], settings = JSON.parse(value('--settings'));
-      assert.deepEqual(settings.sandbox.filesystem.allowWrite, index < 2 ? [] : [evidence]);
-      assert.deepEqual(settings.permissions.allow, index < 2 ? [] : [`Edit(/${evidence})`]);
+      const fixture = index < 3 ? split : arch;
+      assert.deepEqual(settings.sandbox.filesystem.allowWrite, []);
+      assert.deepEqual(settings.permissions.allow, []);
       assert.deepEqual(settings.sandbox.filesystem.denyWrite, ['/authority', fixture.root, reviewTargets.repositoryIdentity(fixture.root)]);
-      assert.equal(value('--tools'), 'Bash,Read,Write,Glob,Grep');
+      assert.equal(value('--tools'), 'Bash,Read,Glob,Grep');
       assert.equal(value('--allowedTools'), 'Bash,Read,Glob,Grep');
     });
-  } finally { cleanupFixture(fixture); }
+  } finally { t.mock.restoreAll(); cleanupFixture(split); cleanupFixture(arch); }
 });
 
 test('a part that writes an untracked file is refused and no further session launches', async () => {

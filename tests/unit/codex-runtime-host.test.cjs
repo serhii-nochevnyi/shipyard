@@ -481,7 +481,7 @@ for (const key of ['input_transport', 'input_bundle', 'input_prepared']) test('t
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('read-only judgment roles can write only their evidence file', async () => {
+test('drift-check alone holds an evidence write grant; the read-only review profile has no write rule', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-evidence-'));
   const codeHome = path.join(root, 'codex-home');
   const content = staticContent();
@@ -501,7 +501,7 @@ test('read-only judgment roles can write only their evidence file', async () => 
     });
     for (const [agentFile, evidenceName] of [
       ['shipyard-drift-check.toml', '.shipyard-drift-evidence.md'],
-      ['shipyard-arch-review-critical.toml', '.shipyard-arch-review-evidence.md'],
+      ['shipyard-arch-review-critical.toml', null],
     ]) {
       const result = await launch('judge', {
         model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only',
@@ -510,8 +510,8 @@ test('read-only judgment roles can write only their evidence file', async () => 
       });
       const filesystem = calls.at(-1).find((value) => value.startsWith('permissions.shipyard-runtime.filesystem='));
       assert.ok(calls.at(-1).includes('permissions.shipyard-runtime.extends=":read-only"'));
-      assert.ok(filesystem.includes(JSON.stringify(path.join(root, evidenceName)) + '="write"'));
-      assert.equal(result.runtime_evidence.sandbox_evidence.evidence_write_path, path.join(root, evidenceName));
+      assert.equal(filesystem.includes('="write"'), evidenceName !== null);
+      assert.equal(result.runtime_evidence.sandbox_evidence.evidence_write_path, evidenceName && path.join(root, evidenceName));
     }
     fs.symlinkSync(path.join(root, 'outside'), path.join(root, '.shipyard-drift-evidence.md'));
     await assert.rejects(() => launch('judge', {
@@ -1329,7 +1329,7 @@ test('code review runtime requires private custody: ' + JSON.stringify({ critica
 }, critical));
 
 for (const critical of [false, true])
-test('code review runtime records private custody and evidence-only permissions: ' + JSON.stringify({ critical }), () => codeReviewRuntimeFixture(async f => {
+test('code review runtime records private custody and a read-only profile with no write rule: ' + JSON.stringify({ critical }), () => codeReviewRuntimeFixture(async f => {
   const helper = require('./helpers/codex-arch-review-fixtures.cjs');
   const session = crypto.randomUUID(), home = path.join(f.storage, 'home');
   const binding = f.code.authenticateLaunch(f.value, f.context.prompt, { ...f.scope, dispatch_id: f.context.dispatch_id });
@@ -1351,26 +1351,19 @@ test('code review runtime records private custody and evidence-only permissions:
   const result = await host.launchStatic(f.selection, f.context);
   assert.equal(calls.length, 1);
   assert.equal(f.selection.agent_file, critical ? 'shipyard-code-review-critical.toml' : 'shipyard-code-review.toml');
-  const evidencePath = path.join(f.scope.worktree, '.shipyard-code-review-evidence.md');
   const sandbox = result.runtime_evidence.sandbox_evidence;
   const filesystem = calls[0].find(value => value.startsWith('permissions.shipyard-runtime.filesystem='));
   assert.ok(calls[0].includes('default_permissions="shipyard-runtime"'));
   assert.ok(calls[0].includes('permissions.shipyard-runtime.extends=":read-only"'));
   assert.equal(sandbox.base_profile, ':read-only');
-  assert.equal(sandbox.evidence_write_path, evidencePath);
+  assert.equal(sandbox.evidence_write_path, undefined);
   assert.ok(sandbox.protected_paths.includes(path.join(f.storage, '.gnupg')));
   assert.ok(sandbox.protected_paths.includes(path.join(f.storage, '.ssh')));
   assert.equal(filesystem, 'permissions.shipyard-runtime.filesystem={'
-    + sandbox.protected_paths.map(entry => JSON.stringify(entry) + '="deny"')
-      .concat(JSON.stringify(evidencePath) + '="write"').join(',') + '}');
+    + sandbox.protected_paths.map(entry => JSON.stringify(entry) + '="deny"').join(',') + '}');
   assert.deepEqual(result.runtime_evidence.code_review, binding);
   assert.equal(result.runtime_evidence.focused_review, undefined);
   assert.equal(result.runtime_evidence.input_transport, undefined);
-  fs.rmSync(evidencePath, { force: true });
-  fs.symlinkSync(path.join(f.storage, 'outside'), evidencePath);
-  await assert.rejects(host.launchStatic(f.selection, f.context), error => error.code === 'INVALID_INPUT'
-    && /role evidence path must be a regular file/.test(error.message));
-  assert.equal(calls.length, 1);
 }, critical));
 
 

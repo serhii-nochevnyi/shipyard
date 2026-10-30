@@ -143,7 +143,6 @@ async function unitJudgment(f, afterLaunch) {
         findings: [], blocking_count: 0, context_digest: launchContext.focused_prepared.prepared.packet.digest,
         launch_digest: launchContext.prompt.match(/launch_digest=([a-f0-9]{64})/)[1],
         evidence_markdown: 'Complete evidence from the unit adapter.' };
-      write(worktree, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
       const capture = fs.readFileSync(path.join(__dirname,
         '../../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
         .trim().split('\n').map(line => JSON.parse(line));
