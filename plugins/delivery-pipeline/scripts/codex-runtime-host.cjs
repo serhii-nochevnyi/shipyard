@@ -2380,9 +2380,13 @@ function extractSemanticInitialInput(rows, { input, initialContext, sessionId } 
         || e.evidence_write_path !== null && !path.isAbsolute(e.evidence_write_path || '')
         || Buffer.byteLength(pin.instructions) > 32768)
       fail('RUNTIME_EVIDENCE_INVALID', 'unsupported semantic initialization environment pin');
-    if (rows.filter(row => row.type === 'session_meta').length !== 1
-        || rows.filter(row => row.type === 'turn_context').length !== 1)
-      fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic native environment lacks unique session and turn bindings');
+    const sessions = rows.flatMap((row, index) => row.type === 'session_meta' ? [index] : []);
+    const contexts = rows.flatMap((row, index) => row.type === 'turn_context' ? [index] : []);
+    if (sessions.length !== 1 || !contexts.length || sessions[0] >= starts[0] || sessions[0] >= contexts[0]
+        || contexts[0] >= inputIndex || contexts.some(index => index >= finals[0] || !object(rows[index].payload)
+          || rows[index].payload.turn_id !== turn
+          || !require('node:util').isDeepStrictEqual(rows[index].payload, rows[contexts[0]].payload)))
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic native environment lacks ordered equivalent context bindings');
     for (const row of rows) {
       if (row.type === 'session_meta' && (row.payload.cwd !== e.cwd
           || JSON.stringify(row.payload.runtime_workspace_roots) !== JSON.stringify(e.workspace_roots))
