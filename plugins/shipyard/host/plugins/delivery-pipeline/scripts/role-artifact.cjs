@@ -1074,7 +1074,7 @@ function protectedRecordsWithoutKey(directory) {
   let names;
   try { names = fs.readdirSync(directory); }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-  return names.some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-') || name.startsWith('integration-'));
+  return names.some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('planning-containment-') || name.startsWith('review-') || name.startsWith('integration-'));
 }
 
 function authorityState(worktree, create = false, requireCatalogue = true, readCatalogue = true) {
