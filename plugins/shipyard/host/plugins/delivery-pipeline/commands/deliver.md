@@ -1562,9 +1562,8 @@ driving PRs hands the user a half-truth.
      through to the integrator boundary.
    - an integrator run per `${CLAUDE_PLUGIN_ROOT}/references/integrator.md` — the
      epic diff against the default branch, not the individual ticket-PRs →
-     `.planning/phases/<phase>/INTEGRATION.md`. Record descriptive epic size
-     separately from host-owned all-in capacity admission, retain any journal-
-     proven `contested` judgement and `critical`/`checkpoint` evidence, then
+     `.planning/phases/<phase>/INTEGRATION.md`. Record descriptive epic size,
+     retain any journal-proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
 
      **Integrator launch.** Both hosts prepare the integrator from the same
@@ -1626,9 +1625,11 @@ driving PRs hands the user a half-truth.
      **Manual dispatch and sealing.** The host entrypoints above prepare, launch
      and seal in one call, for epic and direct-to-main phases alike. On Claude a
      coordinator may dispatch the integrator itself; Codex refuses any
-     integrator launch without host custody. It clears the role-owned
-     `.planning/phases/<phase>/INTEGRATION.md` scratch file in the integration
-     worktree first; this route grants no inherited authority:
+     integrator launch without host custody. The integrator writes no file: the
+     coordinator clears any stale role-owned
+     `.planning/phases/<phase>/INTEGRATION.md` in the integration worktree first
+     and writes it from the final's `evidence_markdown` before sealing; this
+     route grants no inherited authority:
 
      ```text
      node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
@@ -1643,8 +1644,8 @@ driving PRs hands the user a half-truth.
          dispatch_id, previous_dispatch_id },
        { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/integrator.md",
          ticket: phaseSubject,
-         epic, diff, defaultBranch, measuredInputTokens, contestedEvidence,
-         architecturePath, outputPath: ".planning/phases/<phase>/INTEGRATION.md" }
+         epic, defaultBranch, measuredInputTokens, contestedEvidence,
+         architecturePath }
      )
      ```
 

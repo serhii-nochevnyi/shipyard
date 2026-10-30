@@ -233,6 +233,31 @@ test('a merged PR that changes while the integrator runs is stale', async () => 
   } finally { cleanupFixture(f); }
 });
 
+test('a merged PR that changes after the first part is stale before the next part launches', async () => {
+  const f = integratorFixture({ files: FILES });
+  const prs = [livePr(f)];
+  try {
+    await withHost(f, { prs, partBudget: 5, mutate(_raw, packet) {
+      if (packet.role_context.part?.ordinal === 1) prs[0] = { ...prs[0], mergedAt: '2026-09-24T12:00:00Z' };
+    } }, async ({ calls, run }) => {
+      await assert.rejects(run(), { code: 'STALE_CONTEXT' });
+      assert.equal(calls.length, 1);
+    });
+  } finally { cleanupFixture(f); }
+});
+
+test('an archive member that appears after the first part refuses the next part', async () => {
+  const f = integratorFixture({ files: FILES });
+  try {
+    await withHost(f, { partBudget: 5, mutate(_raw, packet) {
+      if (packet.role_context.part?.ordinal === 1) write(f.root, '.shipyard-role-artifacts/rogue/evidence.md', 'x\n');
+    } }, async ({ calls, run }) => {
+      await assert.rejects(run(), { code: 'ARCHIVE_AUTHORITY_INVALID' });
+      assert.equal(calls.length, 1);
+    });
+  } finally { cleanupFixture(f); }
+});
+
 test('a Codex part that writes an untracked file is refused and no further session launches', async () => {
   const f = integratorFixture({ files: FILES });
   try {
@@ -247,6 +272,23 @@ test('a final that would not fit after the parts refuses before any part launche
   const { fixture, prs } = manyTicketFixture(37, 12000);
   try {
     await withHost(fixture, { prs, partBudget: 4000 }, async ({ calls, run }) => {
+      await assert.rejects(run(), { code: 'CONTEXT_OVER_BOUND' });
+      assert.equal(calls.length, 0);
+    });
+  } finally { cleanupFixture(fixture); }
+});
+
+test('a final that cannot hold every part at its size bound refuses before any part launches although the inventory fits one session', async () => {
+  const single = manyTicketFixture(2, 40);
+  try {
+    await withHost(single.fixture, { prs: single.prs }, async ({ calls, run }) => {
+      assert.equal((await run()).artifact.outcome, 'passed');
+      assert.equal(calls.length, 1);
+    });
+  } finally { cleanupFixture(single.fixture); }
+  const { fixture, prs } = manyTicketFixture(2, 40);
+  try {
+    await withHost(fixture, { prs, partBudget: 2 }, async ({ calls, run }) => {
       await assert.rejects(run(), { code: 'CONTEXT_OVER_BOUND' });
       assert.equal(calls.length, 0);
     });

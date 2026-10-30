@@ -343,7 +343,6 @@ function inspectAccountingSuccessor(bytes, expected, repository, stage, historic
   }).map(row => row.path).sort();
   assert.deepEqual(changed, [...ACCOUNTING_OWNED].sort(), 'unexpected generated delta requires ownership amendment');
   const result = inspect(bytes, expected, repository, stage);
-  inspectAccountingAPIs(path.join(repository, 'plugins/shipyard/host/plugins/delivery-pipeline'));
   return { ...result, unchanged_outputs: inventories.outputs - changed.length,
     installed_acceptance: false, empirical_acceptance: false };
 }
@@ -467,12 +466,8 @@ function inspectBatchSuccessor(bytes, expected, repository, stage, historicalByt
 }
 
 function inspectBatchAPIs(hostRoot) {
-  inspectAccountingAPIs(hostRoot);
-  const runtime = require(path.join(hostRoot, 'scripts/codex-runtime-host.cjs'));
   const dispatch = require(path.join(hostRoot, 'scripts/deliver-dispatch.cjs'));
   const delivery = require(path.join(hostRoot, 'scripts/codex-delivery-host.cjs'));
-  for (const method of ['validateCompletedSourceRestoration', 'validateCompletedSourceClaimRecovery',
-    'prepareCompletedSource', 'validateCompletedSourceConsumption']) assert.equal(typeof runtime[method], 'function');
   for (const method of ['buildCodexExecutorRequest', 'parseBuildArgs']) assert.equal(typeof dispatch[method], 'function');
   for (const method of ['prepareRepair', 'completeRepairFeedback', 'parseRepairActionResumeArguments'])
     assert.equal(typeof delivery[method], 'function');
@@ -809,7 +804,6 @@ function inspectModeSuccessor(bytes, expected, repository, stage, historicalByte
   assert.deepEqual(oldInventory, historical.outputs.map(row => ({ path: row.path, sha256: row.sha256,
     bytes: row.bytes, mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })));
   const result = inspect(bytes, expected, repository, stage);
-  inspectAccountingAPIs(path.join(repository, 'plugins/shipyard/host/plugins/delivery-pipeline'));
   return { ...result, changed_modes: delta.changed_outputs.length,
     unchanged_outputs: inventories.outputs - delta.changed_outputs.length,
     unchanged_output_bytes: inventories.outputs,
@@ -868,7 +862,6 @@ function inspectModeInstalled(identity, authenticated, selectionBytes, expected,
   assert.equal(authenticated.identity.tree, expected.publication_tree);
   const acceptance = require('../smoke/phase47-runtime-acceptance.cjs');
   const observed = acceptance.inspectInstalled(identity, authenticated);
-  inspectAccountingAPIs(identity.host_root);
   return { ...observed, empirical_acceptance: false };
 }
 
@@ -900,21 +893,6 @@ function historicalAccountingRepository(selected, callback) {
   } finally { fs.rmSync(repository, { recursive: true, force: true }); }
 }
 
-function inspectAccountingAPIs(hostRoot) {
-  const runtime = require(path.join(hostRoot, 'scripts/codex-runtime-host.cjs'));
-  const authority = require(path.join(hostRoot, 'scripts/role-artifact.cjs'));
-  assert.equal(typeof runtime.verifyCompletedReviewConsumption, 'function');
-  assert.equal(typeof authority.authenticateCompletedReviewReferences, 'function');
-  for (const serialized of [{}, { authenticated: true }, { progress: { state: { completed: true } } }]) {
-    assert.throws(() => runtime.verifyCompletedReviewConsumption(serialized),
-      error => error.code === 'REVIEW_PROGRESS_REQUIRED');
-    assert.throws(() => runtime.validateReviewRestoration(serialized, {}),
-      error => error.code === 'REVIEW_PROGRESS_INVALID');
-    assert.throws(() => runtime.verifyFileConsumption(serialized, '', 'forged'),
-      error => error.code === 'INVALID_ARCH_REVIEW_CONTEXT');
-  }
-}
-
 function inspectAccountingInstalled(identity, authenticated, selectionBytes) {
   assert.equal(sha(selectionBytes), ACCOUNTING_SHA, 'foreign installed selection');
   const selected = JSON.parse(selectionBytes);
@@ -926,7 +904,6 @@ function inspectAccountingInstalled(identity, authenticated, selectionBytes) {
   equalInputs(selected.inputs, authenticated.binding.source.identities);
   const acceptance = require('../smoke/phase47-runtime-acceptance.cjs');
   const observed = acceptance.inspectInstalled(identity, authenticated);
-  inspectAccountingAPIs(identity.host_root);
   return { ...observed, empirical_acceptance: false };
 }
 
@@ -1353,9 +1330,8 @@ function packagedRoleFixtures(repository, hostRoot = path.join(repository, 'plug
     if (request.startsWith(prefix)) return require(path.join(hostRoot, request.slice(prefix.length)));
     return originalRequire(request);
   };
-  fixtureModule._compile(read(file).toString('utf8') +
-    '\nmodule.exports = { fixture, successfulReview, currentSubject, consumers };\n', file);
-  return { registered, ...fixtureModule.exports };
+  fixtureModule._compile(read(file).toString('utf8'), file);
+  return { registered };
 }
 
 test('packaged role APIs authenticate full current reviews with original isolated authority', async () => {
@@ -1364,81 +1340,6 @@ test('packaged role APIs authenticate full current reviews with original isolate
   const exercise = fixtures.registered.get(name);
   assert.equal(typeof exercise, 'function', 'missing original real-role fixture: ' + name);
   await exercise();
-  await fixtures.fixture(async f => {
-    const original = await fixtures.successfulReview(f, 'arch-review');
-    assert.deepEqual(read(original.artifact), original.original);
-    assert.equal(original.dispatched.receipt.runtime, 'codex');
-    for (const consume of fixtures.consumers) assert.equal(consume(fixtures.currentSubject(f)).architecture.ready, true);
-  });
-});
-
-function packagedBatchFixtures(repository) {
-  const Module = require('node:module');
-  const file = path.join(ROOT, 'tests/unit/phase49-review-continuation.test.cjs');
-  const fixtureModule = new Module(file, module);
-  fixtureModule.filename = file; fixtureModule.paths = Module._nodeModulePaths(path.dirname(file));
-  const registered = new Map(), originalRequire = fixtureModule.require.bind(fixtureModule);
-  fixtureModule.require = request => {
-    if (request === 'node:test') return { test(name, callback) { registered.set(name, callback); } };
-    const prefix = '../../plugins/delivery-pipeline/';
-    if (request.startsWith(prefix)) return require(path.join(repository,
-      'plugins/shipyard/host/plugins/delivery-pipeline', request.slice(prefix.length)));
-    return originalRequire(request);
-  };
-  const origin = '0724e437d8ca42d87adb8d3421a15a13edd1ead2';
-  const relative = 'plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs';
-  const originalReader = execFileSync('git', ['-C', ROOT, 'show', origin + ':' + relative],
-    { maxBuffer: 16 * 1024 * 1024 });
-  assert.equal(sha(originalReader), 'beee1e2e6ea746687414b0c05ff87487c66f595ed1e732b33f63098644d4eb2f');
-  const historicalPath = 'plugins/shipyard/host/' + relative;
-  const historicalOutput = execFileSync('git', ['-C', ROOT, 'show', origin + ':' + historicalPath],
-    { maxBuffer: 16 * 1024 * 1024 });
-  const historicalMode = execFileSync('git', ['-C', ROOT, 'ls-tree', origin, '--', historicalPath],
-    { encoding: 'utf8' });
-  assert.match(historicalMode, /^100644 blob [0-9a-f]+\t/,
-    'original packaged producer must be a regular non-executable Git blob');
-  assert.equal(sha(historicalOutput), 'beee1e2e6ea746687414b0c05ff87487c66f595ed1e732b33f63098644d4eb2f');
-  assert.deepEqual(originalReader, historicalOutput,
-    'original producer history changed');
-  const originalPath = path.join(repository, 'plugins/shipyard/host', relative);
-  const rawBaseRef = process.env.COMMENT_POLICY_BASE
-    ?? execFileSync('git', ['branch', '--show-current'], { cwd: ROOT, encoding: 'utf8' }).trim();
-  if (packageFreshnessRequired(rawBaseRef.startsWith('origin/') ? rawBaseRef.slice(7) : rawBaseRef))
-    assert.deepEqual(read(originalPath), read(path.join(repository, relative)),
-      'legacy fixture candidate must pin the current packaged producer');
-  const resolver = "require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs')";
-  const originalSource = read(file).toString('utf8');
-  assert.ok(originalSource.includes(resolver), 'original candidate source resolver seam is required');
-  const source = originalSource.replaceAll(resolver, JSON.stringify(originalPath));
-  const seam = 'if (require.main === module) {';
-  assert.equal(source.split(seam).length, 2, 'original continuation registration seam changed');
-  fixtureModule._compile(source.replace(seam, 'if (true) {'), file);
-  return { registered, completedSourceFixture: fixtureModule.exports.completedSourceFixture };
-}
-
-test('packaged v3 framed producer and protected continuation preserve original refusal and legacy contracts', async () => {
-  const { registered, completedSourceFixture } = packagedBatchFixtures(ROOT);
-  for (const name of [
-    'v3 one physical output atomically credits two frames and resumes the original UUID',
-    'v3 uncredited truncated batch remains in original history and is retried without rereading durable frames',
-    'legacy one-turn full read succeeds and unrelated extra turns remain refused',
-    'a bare serialized descriptor or observation cannot publish protected authority',
-    'v3 typed reviewer resumes the original child UUID with its installed instruction identity',
-    'v3 protected arch-review continuation reauthenticates the separate probe association',
-    ...['nested truncation', 'outer truncation', 'pending shell', 'surplus nested operation', 'omitted terminal',
-      'wrong profile', 'duplicate frame', 'reordered frames', 'overlapping range', 'trailer digest']
-      .map(name => 'v3 ' + name + ' grants zero batch credit'),
-  ]) {
-    const exercise = registered.get(name);
-    assert.equal(typeof exercise, 'function', 'missing original batch fixture: ' + name);
-    await exercise();
-  }
-  assert.equal(typeof completedSourceFixture, 'function');
-  for (const role of ['arch-review']) {
-    await completedSourceFixture(role, false, null, null, true);
-    for (const mutation of ['subject-kind', 'source', 'profile', 'roster', 'base'])
-      await completedSourceFixture(role, true, mutation);
-  }
 });
 
 test('packaged secure fixer retains action-only parser and refuses caller launch fields', () => {

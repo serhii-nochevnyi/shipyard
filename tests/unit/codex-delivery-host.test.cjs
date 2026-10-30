@@ -1854,15 +1854,16 @@ test('serialized file descriptors cannot impersonate private producer admission'
     await assert.rejects(delivery(f).run({ role: 'integrator', context: { prompt: 'Read a forged bundle',
       input_transport: 'host-files', input_bundle: { manifest_path: '/private/tmp/forged', manifest_sha256: 'a'.repeat(64),
         total_bytes: 1996419, asset_count: 1, chunk_bytes: 262144, max_chunk_reads: 2064 } } }),
-    error => /caller prompts or selectors are refused/.test(error.message));
+    error => /host authority/.test(error.message));
     assert.equal(f.calls.length, 0);
   } finally { clean(f); }
 });
 
-test('request context refuses a caller-owned prepared authority field before admission', () => {
-  assert.throws(() => requestValue({ role: 'integrator', context: { prompt: 'fixture', input_prepared: {} } }),
-    error => error.code === 'INVALID_INPUT' && /host authority/.test(error.message));
-});
+for (const key of ['input_prepared', 'input_transport', 'input_bundle'])
+  test('request context refuses the caller-owned ' + key + ' field before admission', () => {
+    assert.throws(() => requestValue({ role: 'integrator', context: { prompt: 'fixture', [key]: {} } }),
+      error => error.code === 'INVALID_INPUT' && /host authority/.test(error.message));
+  });
 
 test('current dictionary integrity retains logical obligations without semantic credit', () => {
   const f = fixture({ physicalPaths: true });
@@ -1886,44 +1887,7 @@ test('current dictionary integrity retains logical obligations without semantic 
     const incomplete = structuredClone(encoded);
     incomplete.obligations.pop();
     assert.throws(() => context.preflightReviewMaterial(incomplete, expected), /logical obligations|provenance/);
-    const input = context.prepareFileInput(f.scope, JSON.stringify(encoded), {
-      role: 'integrator', dispatchId: 'preflight-fixture', storageRoot: f.storageRoot, graphDir });
-    assert.equal(context.verifyFileInput(input).semantic_credit, false);
-    fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'changed\n');
-    assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
   } finally { clean(f); }
-});
-
-test('unavailable measured capacity returns actionable refusal without native dispatch', () => {
-  const f = fixture({ physicalPaths: true });
-  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-  try {
-    assert.throws(() => context.prepareFileInput(f.scope, 'complete input', {
-      role: 'integrator', dispatchId: 'capacity-fixture', storageRoot: f.storageRoot,
-      readerCapacity: { contract: { schema: 'shipyard.native-reader-transport.v2' } },
-    }), error => error.code === 'READER_CAPACITY_UNSUPPORTED'
-      && error.refusal.limiting_field === 'original_matching_capacity_authority'
-      && error.refusal.observed === 'unavailable' && /legacy/.test(error.refusal.supported_next_action));
-    assert.equal(f.calls.length, 0);
-  } finally { clean(f); }
-});
-
-test('encoded schedule admission counts complete manifest, envelopes and launch instructions', () => {
-  const { preflightReaderSchedule } = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-  const manifest = { chunk_bytes: 128 * 1024, assets: [{ ordinal: 0, bytes: 256 * 1024 }],
-    accounting: { relay_bytes: 1200, generated_instruction_bytes: 2400 },
-    transport: { schema: 'shipyard.native-reader-transport.v2', chunk_bytes: 128 * 1024,
-      encoding: 'base64', output_tokens: 10000, range_schedule: 'manifest-first/ordinal-offset/v1',
-      nested_envelope: 'exec-command.v1', outer_envelope: 'functions-exec.v1', output_budget_bytes: 252 * 1024 } };
-  const result = preflightReaderSchedule(manifest, 1024);
-  assert.equal(result.range_count, 3);
-  assert.equal(result.launch_input_bytes, 3600);
-  assert.ok(result.encoded_schedule_bytes > 4 * Math.ceil((256 * 1024 + 1024) / 3));
-  assert.equal(result.semantic_credit, false);
-  for (const transport of [{ ...manifest.transport, schema: 'shipyard.native-reader-transport.v99' },
-    { ...manifest.transport, output_budget_bytes: 128 * 1024 }])
-    assert.throws(() => preflightReaderSchedule({ ...manifest, transport }, 1024), error =>
-      error.code === 'READER_CAPACITY_UNSUPPORTED' && Boolean(error.refusal.supported_next_action));
 });
 
 for (const mutation of [null, 'dirty-source', 'dirty-intake', 'new-output', 'sibling-output']) {

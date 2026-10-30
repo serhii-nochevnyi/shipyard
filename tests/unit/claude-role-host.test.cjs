@@ -220,31 +220,6 @@ test('a git-visible change is excused only by the exact path of a baseline entry
   } finally { f.cleanup(); }
 });
 
-for (const kind of ['arch-review', 'integrator', 'code-review'])
-test(`${kind} coordinator packet survives real file transport and serialized consumption`, () => {
-  const f = coordinatorOnlyPlanning(kind);
-  try {
-    if (kind === 'arch-review') registerCoordinatorRoster(f);
-    const options = hostOptions(f);
-    if (kind !== 'integrator') options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
-    const host = preparationOnlyHost();
-    const prepared = host.prepareInvocation(options, parseRequest(phasePreparationRequest(f)));
-    const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-    const relay = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-    const input = relay.prepareFileInput({ worktree: f.root, ticket: prepared.ticket, phase: 38 },
-      JSON.stringify(packets.encodeUniqueContent(prepared.packet)), { role: kind, dispatchId: 'coordinator-relay',
-        storageRoot: f.storageRoot, graphDir: f.graphDir });
-    for (const value of [input, JSON.parse(JSON.stringify(input.input_bundle))]) {
-      const checked = relay.verifyFileInput(value, value === input ? {} : { sealed: true });
-      assert.equal(checked.manifest.snapshot.worktree, f.root);
-      assert.equal(checked.manifest.snapshot.head, f.head);
-      assert.equal(packets.decodeUniqueContent(JSON.parse(checked.material[0])).canonical_root, f.project);
-    }
-    fs.appendFileSync(path.join(f.project, '.planning/config.json'), ' ');
-    assert.throws(() => relay.verifyFileInput(input), /changed|stale/i);
-  } finally { cleanupFixture(f); }
-});
-
 test('coordinator architecture completes captured native inline sealing and public current readback', async () => {
   const f = coordinatorOnlyPlanning('arch-review');
   try {
