@@ -384,10 +384,12 @@ test('identity extraction leaves every native resource marker available to the u
   const markers = ['context_compacted', 'compacted', 'thread_rolled_back', 'rollback', 'turn_aborted', 'task_failed',
     'error', 'turn.failed', 'model_rerouted', 'context_length_exceeded', 'context_window_exceeded', 'max_output_tokens',
     'input_truncated', 'output_truncated'].map(type => ({ type: 'event_msg', payload: { type } }));
+  const response = h.orderedFixture().rows.find(row => row.type === 'response_item');
+  assert.ok(response, 'resource mutations retain a registered response fixture');
   markers.push({ type: 'compacted' }, { type: 'system', subtype: 'compact_boundary' },
-    { type: 'system', subtype: 'microcompact_boundary' }, { type: 'response_item', payload: { type: 'compaction' } },
-    { type: 'response_item', payload: { type: 'compacted' } }, { type: 'event_msg', truncated: true },
-    { type: 'event_msg', payload: { truncated: true } });
+    { type: 'system', subtype: 'microcompact_boundary' }, ...['compaction', 'compacted'].map(type => {
+      const row = clone(response); row.payload = { type }; return row;
+    }), { type: 'event_msg', truncated: true }, { type: 'event_msg', payload: { truncated: true } });
   for (const marker of markers) {
     const { rows, options } = h.orderedFixture(); repeated(rows); rows.splice(-3, 0, marker);
     const raw = h.serialize(rows);
