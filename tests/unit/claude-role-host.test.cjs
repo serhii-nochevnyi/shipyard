@@ -307,7 +307,8 @@ test('an architecture verdict sealed without the focused contract is skipped and
   } finally { cleanupFixture(f); }
 });
 
-test('an archive authority file changing while a verdict candidate is verified refuses the candidate', async () => {
+for (const target of ['catalogue.json', 'hmac.key'])
+test(`an archive authority file (${target}) changing while a verdict candidate is verified refuses the candidate`, async () => {
   const f = coordinatorOnlyPlanning('arch-review');
   const previousReaddir = fs.readdirSync;
   try {
@@ -317,13 +318,13 @@ test('an archive authority file changing while a verdict candidate is verified r
     const input = { worktreePath: f.root, pr: 101, head: f.head, baseName: 'integration',
       baseCommit: f.base, graphDir: f.graphDir, headBranch: f.branch };
     assert.equal(reviewArtifacts.currentArchitectureVerdict(input)?.subject, result.subject);
-    const catalogue = path.join(reviewArtifacts.archiveAuthorityDirectory(f.root), 'catalogue.json');
+    const authority = path.join(reviewArtifacts.archiveAuthorityDirectory(f.root), target);
     const family = path.join(f.root, reviewArtifacts.ARTIFACT_ARCHIVE_DIR, fs.readdirSync(
       path.join(f.root, reviewArtifacts.ARTIFACT_ARCHIVE_DIR))[0]);
     let changed = false;
     fs.readdirSync = function(file, ...args) {
       const names = previousReaddir.call(this, file, ...args);
-      if (file === family && !changed) { changed = true; fs.appendFileSync(catalogue, ' '); }
+      if (file === family && !changed) { changed = true; fs.appendFileSync(authority, target === 'hmac.key' ? 'longer' : ' '); }
       return names;
     };
     const refusals = [];
