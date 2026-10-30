@@ -541,6 +541,16 @@ test('a part reviewer that wrote the evidence file is a mutated worktree', () =>
   } finally { f.cleanup(); }
 });
 
+test('a part reviewer that left a dangling evidence symlink is a mutated worktree', () => {
+  const f = twoPartFixture();
+  try {
+    const id = crypto.randomUUID(), v = f.prepare({ inflightDispatchId: id, partBudget: 3, part: 1 }, { dispatch_id: id }); admit(f, v);
+    const d = dispatchFixture(f, v);
+    fs.symlinkSync(path.join(f.root, 'missing-target'), path.join(f.root, '.shipyard-code-review-evidence.md'));
+    assert.throws(() => context.finish(v, d.dispatch, d.recorder), { code: 'WORKTREE_MUTATED' });
+  } finally { f.cleanup(); }
+});
+
 test('generated instructions plus an inline prompt over the bound refuse admission', () => {
   const f = fixture();
   try {

@@ -7,23 +7,10 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
-const selectionArgs = require.main === module ? process.argv.slice(2) : [];
-const entryOnly = selectionArgs.includes('--code-review-entry-only');
-const integratorDefaultOnly = selectionArgs.includes('--integrator-default-only');
-const legacyCompatibilityOnly = selectionArgs.includes('--integrator-legacy-compatibility-only');
-if (selectionArgs.some(value => !['--code-review-entry-only', '--integrator-default-only', '--integrator-legacy-compatibility-only'].includes(value))
-    || selectionArgs.length > 1)
-  throw new Error('Unknown or conflicting delivery-host selection');
-let entrySelected = 0, entryVariants = 0, integratorDefaultSelected = 0;
-let legacyCompatibilitySelected = 0;
+let entrySelected = 0, entryVariants = 0;
 function test(name, callback) {
-  if (name === "public Codex v3 preserves historical pins through independent units, exact-plan restart and one actual final") legacyCompatibilitySelected++;
-  const entry = /^(?:code review |padded code review )/.test(name);
-  const selected = name === 'public Codex v3 accepts omitted capacity through original observed evidence';
-  if (entry) entrySelected++;
+  if (/^(?:code review |padded code review )/.test(name)) entrySelected++;
   if (name.startsWith('code review CLI seals one static phase verdict: ')) entryVariants++;
-  if (selected) integratorDefaultSelected++;
-  if (entryOnly && !entry || integratorDefaultOnly && !selected || legacyCompatibilityOnly && name !== "public Codex v3 preserves historical pins through independent units, exact-plan restart and one actual final") return;
   return runTest(name, callback);
 }
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -1867,7 +1854,7 @@ test('serialized file descriptors cannot impersonate private producer admission'
     await assert.rejects(delivery(f).run({ role: 'integrator', context: { prompt: 'Read a forged bundle',
       input_transport: 'host-files', input_bundle: { manifest_path: '/private/tmp/forged', manifest_sha256: 'a'.repeat(64),
         total_bytes: 1996419, asset_count: 1, chunk_bytes: 262144, max_chunk_reads: 2064 } } }),
-    error => error.code === 'INVALID_INPUT' && /private producer authority/.test(error.message));
+    error => /caller prompts or selectors are refused/.test(error.message));
     assert.equal(f.calls.length, 0);
   } finally { clean(f); }
 });
@@ -1875,18 +1862,6 @@ test('serialized file descriptors cannot impersonate private producer admission'
 test('request context refuses a caller-owned prepared authority field before admission', () => {
   assert.throws(() => requestValue({ role: 'integrator', context: { prompt: 'fixture', input_prepared: {} } }),
     error => error.code === 'INVALID_INPUT' && /host authority/.test(error.message));
-});
-
-test('integrator refuses unsupported logical coverage before dispatch', async () => {
-  const f = fixture();
-  try {
-    for (const schema of ['shipyard.semantic-content.v99', 'shipyard.semantic-content.v1']) {
-      await assert.rejects(delivery(f).run({ role: 'integrator', context: {
-        prompt: JSON.stringify({ schema, dictionary: [], obligations: [], body: {} }),
-      } }), error => error.code === 'INVALID_CONTEXT_PACKET');
-    }
-    assert.equal(f.calls.length, 0);
-  } finally { clean(f); }
 });
 
 test('current dictionary integrity retains logical obligations without semantic credit', () => {
@@ -3451,69 +3426,6 @@ for (const mutation of ['issue-repost', 'issue-oscillation', 'issue-unknown', 'i
 test('known issue history uses the original applied predecessor across reposts: ' + mutation,
   () => withGraphDirEnv(undefined, () => originalFixerFixture('escalate', mutation)));
 
-for (const mutation of ['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal', 'incomplete-turn', 'failed-turn', 'foreign-session'])
-test('original integration boundary completes and retains one terminal contract: ' + mutation, () => withGraphDirEnv(undefined, async () => {
-  const Module = require('node:module');
-  const file = require.resolve('./phase49-incremental-integration.test.cjs');
-  const fixtureModule = new Module(file, module);
-  fixtureModule.filename = file; fixtureModule.paths = Module._nodeModulePaths(path.dirname(file));
-  const load = Module._load;
-  const emit = require('node:events').EventEmitter.prototype.emit;
-  let observed = 0, executeFixture;
-  Module._load = function(name, ...args) {
-    if (name === 'node:test') return { test(name, callback) {
-      if (name === 'owned integration original stream regression') executeFixture = callback;
-    } };
-    return load.call(this, name, ...args);
-  };
-  try {
-    fixtureModule._compile(fs.readFileSync(file, 'utf8')
-      + '\ntest("owned integration original stream regression", () => fixture(f => module.regression(f, null, successfulReview)));\n', file);
-  } finally { Module._load = load; }
-  require('node:events').EventEmitter.prototype.emit = function(event, bytes, ...args) {
-    if (event === 'data' && Buffer.isBuffer(bytes) && bytes.toString().includes('Complete original role review.')) {
-      const rows = bytes.toString().trim().split('\n').map(JSON.parse);
-      const at = rows.findIndex(row => row.item?.type === 'agent_message');
-      const progress = structuredClone(rows[at]); progress.item.id += '-progress';
-      progress.item.text = 'Checking complete integration membership and interactions.';
-      rows.splice(at, 0, progress); observed++;
-      if (['duplicate-contract', 'corrupt-terminal'].includes(mutation)) {
-        const extra = structuredClone(rows[at + 1]); extra.item.id += '-extra';
-        if (mutation === 'corrupt-terminal') extra.item.text = '{"coverage":';
-        rows.splice(at + 2, 0, extra);
-      }
-      if (mutation === 'duplicate-item') rows[at].item.id = rows[at + 1].item.id;
-      if (mutation === 'incomplete-turn') rows.splice(rows.findIndex(row => row.type === 'turn.completed'), 1);
-      if (mutation === 'failed-turn') rows.find(row => row.type === 'turn.completed').type = 'turn.failed';
-      if (mutation === 'foreign-session') rows.find(row => row.type === 'thread.started').thread_id = crypto.randomUUID();
-      bytes = Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + '\n');
-    }
-    return emit.call(this, event, bytes, ...args);
-  };
-  try {
-    fixtureModule.regression = async (f, runIntegration, successfulReview) => {
-      const run = () => successfulReview(f, 'integrator', { legacy: true });
-      if (mutation === 'progress') {
-        const fresh = await run();
-        const dispatched = fresh.dispatched;
-        assert.equal(dispatched.receipt.role, 'integrator');
-        assert.ok(fresh.artifact);
-        const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-        const retained = JSON.parse(fs.readFileSync(path.join(authority.archiveAuthorityDirectory(f.worktree), 'catalogue.json'), 'utf8'));
-        assert.equal(typeof retained.payload.records[dispatched.dispatch_id].receipt_store, 'string');
-        assert.ok(fs.statSync(retained.payload.records[dispatched.dispatch_id].receipt_store).isDirectory());
-      } else if (['duplicate-contract', 'duplicate-item'].includes(mutation)) {
-        const fresh = await run();
-        assert.equal(fresh.dispatched.receipt.role, 'integrator');
-        assert.ok(observed > 0);
-      } else await assert.rejects(run);
-    };
-    assert.equal(typeof executeFixture, 'function');
-    await executeFixture();
-    assert.equal(observed, 1);
-  } finally { require('node:events').EventEmitter.prototype.emit = emit; }
-}));
-
 suite('codex-delivery-host — T-50-14 shared preflight');
 
 const scriptsSource = path.join(__dirname, '../../plugins/delivery-pipeline/scripts');
@@ -3758,7 +3670,7 @@ test('code review builder request admits graph_dir and refuses serialized privat
     assert.throws(() => readRequestFile(file), error => error.code === 'INVALID_INPUT');
   }
   for (const role of ['code-review', 'arch-review', 'executor']) {
-    const launch = { role, context: { code_review_prepared: {} } };
+    const launch = { role, context: { review_prepared: {} } };
     assert.throws(() => requestValue(launch), error => error.code === 'INVALID_INPUT');
     fs.writeFileSync(file, JSON.stringify({ scope: {}, ...launch }));
     assert.throws(() => readRequestFile(file), error => error.code === 'INVALID_INPUT');
@@ -3816,7 +3728,7 @@ async function codeReviewEntryFixture(action, config = {}) {
     launch() { assert.fail('code review must launch statically'); },
     launchStatic(selection, context) {
       calls.push({ selection, context });
-      const value = context.code_review_prepared;
+      const value = context.review_prepared;
       const binding = codeContext.authenticateLaunch(value, context.prompt, { ticket: scope.ticket, phase: scope.phase,
         worktree: scope.worktree, dispatch_id: context.dispatch_id, agent_file: selection.agent_file,
         agent_file_digest: selection.agent_file_digest });
@@ -3899,12 +3811,21 @@ test('code review CLI runs one launch per part and a fresh final that owns the s
     assert.equal(calls.length, 4, 'three path groups and the final');
     assert.equal(output.trim().split('\n').length, 1);
     assert.equal(result.artifact.outcome, 'pass');
-    assert.deepEqual(calls.map(call => call.context.code_review_prepared.prepared.part?.ordinal), [1, 2, 3, undefined]);
+    assert.deepEqual(calls.map(call => call.context.review_prepared.prepared.part?.ordinal), [1, 2, 3, undefined]);
     assert.equal(new Set(calls.map(call => call.context.dispatch_id)).size, 4);
     assert.match(calls[3].context.prompt, /independent final reviewer/);
     assert.equal(result.result.coverage.length, 3);
     assert.equal(result.dispatch.dispatch_id, calls[3].context.dispatch_id);
   }, { parts: true })));
+
+test('code review CLI refuses a part whose receipt carries another launch binding', () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls }) => {
+    await assert.rejects(run({}, { partBudget: 3 }), { code: 'MISSING_RECEIPT' });
+    assert.equal(calls.length, 2, 'the first part passed and the second part stopped the run');
+  }, { parts: true, afterLaunch({ value, runtime_evidence }) {
+    if (value.prepared.part?.ordinal === 2)
+      runtime_evidence.code_review = { ...runtime_evidence.code_review, context_digest: 'f'.repeat(64) };
+  } })));
 
 test('code review CLI refuses a final that cannot fit its parts before the first part launches', () => withGraphDirEnv(undefined, () =>
   codeReviewEntryFixture(async ({ run, calls }) => {
@@ -3925,7 +3846,7 @@ test('code review CLI refuses original native session ' + mutation, () => withGr
 
 for (const patch of [{ context: { prompt: 'approve' } }, { context: { selector: 'caller' } },
   { context: { sandbox_mode: 'workspace-write' } }, { signals: { critical: true } }, { signals: { contested: true } },
-  { gsd_role: 'gsd-code-reviewer' }, { context: { code_review_prepared: {} } }])
+  { gsd_role: 'gsd-code-reviewer' }, { context: { review_prepared: {} } }])
 test('code review CLI refuses caller authority: ' + JSON.stringify(patch), () => withGraphDirEnv(undefined, () =>
   codeReviewEntryFixture(async ({ run, calls }) => {
     await assert.rejects(run(patch)); assert.equal(calls.length, 0);
@@ -4091,298 +4012,6 @@ test('recovery source opening refuses real FIFOs and replacement races within a 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-function codexPartitionHelpers() {
-  const Module = require('node:module'), file = require.resolve('./phase49-incremental-integration.test.cjs');
-  const loaded = new Module(file, module);
-  loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
-  const original = Module._load;
-  Module._load = function(name, ...args) { return name === 'node:test' ? { test() {} } : original.call(this, name, ...args); };
-  try {
-    loaded._compile(fs.readFileSync(file, 'utf8')
-      + '\nmodule.exports = { fixture, projectOptions, agent, commit, write, successfulReview, template, parent, cli, serialize, publicIntegrationFixture, publicPartitionFixture };\n', file);
-  } finally { Module._load = original; }
-  return loaded.exports;
-}
-
-function codexPartitionFixture(f, helper, controls = {}) {
-  const roleArtifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-  const native = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
-  const stable = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs').stableStringify;
-  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
-  const complete = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-    .prepareNativeIntegratorContext(helper.projectOptions(f), { worktree: f.worktree, phase: '49',
-      review_contract: roleArtifacts.INTEGRATION_REVIEW_V3 });
-  const a = helper.agent(f, 'integrator', complete.signals);
-  const frameRows = () => {
-    const meta = helper.template(helper.parent, row => row.type === 'session_meta');
-    const context = helper.template(helper.parent, row => row.type === 'turn_context');
-    Object.assign(context.payload, { model: a.selection.model, effort: a.selection.effort, cwd: f.worktree, workspace_roots: [f.worktree] });
-    context.payload.sandbox_policy.type = 'read-only';
-    Object.assign(context.payload.collaboration_mode.settings, { model: a.selection.model, reasoning_effort: a.selection.effort });
-    const developer = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.role === 'developer');
-    developer.payload.content = [{ type: 'input_text', text: native.generatedInstructions(a.text) }];
-    return { meta, context, developer };
-  };
-  const directory = path.join(f.root, 'codex-behavior-only-capacity'); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const retain = proof => {
-    const raw = stable({ ...proof, behavior_only: true }), file = path.join(directory, digest(raw) + '.json');
-    if (!fs.existsSync(file)) fs.writeFileSync(file, raw, { mode: 0o600 });
-    return { path: file, bytes: Buffer.byteLength(raw), sha256: digest(raw) };
-  };
-  const capacity = { max_input_bytes: 8 * 1024 * 1024, unit_input_bytes: 256 * 1024, segment_bytes: 16 * 1024,
-    output_reserve_tokens: 32000, tool_reserve_tokens: 10000,
-    output_limits: { conclusions: 1024, findings: 2048, limitations: 1024, required_context: 1024, seams: 16384 },
-    recipe: { rendering: 'shipyard.integration-partition-render.v1', measurement: 'native-exact' } };
-  const resources = { capacity, counterSource: 'codex-behavior-only-counter', windowSource: 'codex-behavior-only-window',
-    renderLaunch(launch) {
-      controls.render?.(launch);
-      const { meta, context, developer } = frameRows(), { turn_id, ...framing } = context.payload;
-      const frame = { developers: [{ role: developer.payload.role, content: developer.payload.content }], other_users: [],
-        base_instructions: meta.payload.base_instructions || null, contexts: [framing] };
-      const request = { schema: 'shipyard.integration-native-request.v1', runtime: 'codex', model: launch.model,
-        effort: launch.effort, input: launch.input, instruction_sha256: launch.instruction_sha256,
-        recipe_sha256: digest(stable(capacity.recipe)), frame, tools: [],
-        native_payload: stable({ frame, tools: [], input: launch.input, model: launch.model, effort: launch.effort }) };
-      controls.mutate?.(request, 'request', launch);
-      return request;
-    },
-    readWindow(identity) {
-      if (controls.noWindow) throw new Error('fixture window unavailable');
-      const proof = { schema: 'shipyard.integration-runtime-window.v1', ...identity,
-        source: 'codex-behavior-only-window', evidence_id: 'codex-behavior-only-window', window_tokens: 100000000 };
-      controls.mutate?.(proof, 'window');
-      return retain(proof);
-    },
-    measureInput(request, identity) {
-      const payload = JSON.parse(request.input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
-      (controls.measured ||= []).push(payload);
-      const proof = { schema: 'shipyard.integration-input-measurement.v1', ...identity, runtime: 'codex', model: request.model,
-        source: 'codex-behavior-only-counter', evidence_id: 'codex-behavior-only-count-' + identity.launch_sha256,
-        input_tokens_upper_bound: 1000 };
-      controls.mutate?.(proof, 'measurement', payload);
-      return retain(proof);
-    } };
-  const options = { ...helper.projectOptions(f), scope: { worktree: f.worktree, phase: 49,
-    repository: complete.canonical.commonPath, ticket: complete.ticket, run_id: 'public-codex-v3-' + ++f.count },
-    storageRoot: path.join(f.root, 'public-codex-v3-' + f.count), agentDir: a.dir, agentManifest: a.manifest,
-    capabilities: a.capabilities, env: { ...process.env, CODEX_HOME: process.env.CODEX_HOME },
-    probe: { status: 'available', executable: 'codex-fixture', runtime_version: 'fixture', capabilities: a.capabilities },
-    integrationCapacity: resources,
-    spawn(_file, _args) {
-      const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = process.pid;
-      let input = '';
-      child.stdin = { write(raw) { input += raw; }, end() { process.nextTick(() => {
-        try {
-          input = input.replace(/\n$/, '');
-          const wire = input, readRows = [];
-          assert.ok(wire.length <= 1048576, 'actual native CLI physical character ceiling');
-          if (/^INPUT_MANIFEST=/m.test(wire)) {
-            const manifestPath = /^INPUT_MANIFEST=(.+)$/m.exec(wire)[1];
-            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-            const bundle = { manifest_path: manifestPath, chunk_bytes: manifest.chunk_bytes };
-            const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-            const material = manifest.assets.map(asset => fs.readFileSync(asset.path));
-            const reads = collector.integrationTextReads(bundle, { manifest, manifest_bytes: fs.readFileSync(manifestPath), material });
-            assert.equal(/^MANIFEST_READ=(.+)$/m.exec(wire)?.[1], reads[0].command,
-              'actual relay and native verifier prescribe the same first manifest command');
-            for (const read of reads) {
-              const call = 'integration-read-' + readRows.length;
-              const output = require('node:child_process').execSync(read.command, { maxBuffer: 252 * 1024 });
-              assert.deepEqual(output, read.bytes);
-              const invocation = helper.template(helper.parent, row => row.payload?.type === 'function_call');
-              Object.assign(invocation.payload, { name: 'exec_command', call_id: call,
-                arguments: JSON.stringify({ cmd: read.command, max_output_tokens: 10000 }) });
-              delete invocation.payload.namespace;
-              const response = helper.template(helper.parent, row => row.payload?.type === 'function_call_output');
-              Object.assign(response.payload, { call_id: call,
-                output: JSON.stringify({ exit_code: 0, output: output.toString('utf8') }) });
-              readRows.push(invocation, response);
-            }
-            input = Buffer.concat(material).toString('utf8');
-          }
-          const payload = JSON.parse(input.match(/<AUTHENTICATED_INTEGRATION_PARTITION>\s*([\s\S]*?)\s*<\/AUTHENTICATED_INTEGRATION_PARTITION>/)[1]);
-          (controls.launches ||= []).push({ input, payload, wire, readRows });
-          controls.onLaunch?.(input, payload, wire, readRows);
-          const identity = payload.reviewed_identity, assignment = payload.assignment;
-          const result = { review_contract: roleArtifacts.INTEGRATION_REVIEW_V3, kind: payload.kind, runtime: 'codex',
-            subject: payload.subject, plan_sha256: payload.plan_sha256, input_sha256: digest(input), reviewed_identity: identity,
-            completeness: 'complete', outcome: 'passed', blocking_count: 0, findings: [], evidence_markdown: 'Original Codex fixture evidence; behavior only.' };
-          if (payload.kind === 'unit') Object.assign(result, { schema: 'shipyard.integration-unit-result.v1', unit_id: assignment.unit_id,
-            coverage: { primary_segments: assignment.primary_segments, primary_obligation_ids: assignment.primary_obligation_ids,
-              support_segments: assignment.support_segments, support_obligation_ids: assignment.support_obligation_ids },
-            conclusions: ['All exact primary fixture bytes and obligations evaluated.'], limitations: [], required_context: [],
-            seams: assignment.seam_ids.map(id => ({ id, disposition: 'unresolved', rationale: 'Final must independently judge the interaction.' })) });
-          else Object.assign(result, { phase: identity.phase, head: identity.head, head_tree: identity.head_tree,
-            base: identity.base_ref.replace(new RegExp('^refs/remotes/'), ''), base_tree: identity.base_tree,
-            ticket_set: identity.ticket_set, ticket_set_digest: identity.ticket_set_digest, summary: 'Separate Codex fixture final.',
-            coverage: { ...payload.coverage, limitations: [], seam_dispositions: payload.seams.map(seam => ({
-              id: seam.id, disposition: 'resolved', rationale: 'Independent fixture final judged complete acceptance and this seam.' })) } });
-          controls.result?.(result, payload);
-          const session = crypto.randomUUID(), text = JSON.stringify(result), { meta, context, developer } = frameRows();
-          Object.assign(meta.payload, { id: session, session_id: session, cwd: f.worktree, runtime_workspace_roots: [f.worktree] });
-          const start = helper.template(helper.parent, row => row.payload?.type === 'task_started'), turn = start.payload.turn_id;
-          context.payload.turn_id = turn;
-          const user = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.role === 'user');
-          user.payload.content = [{ type: 'input_text', text: wire }];
-          const final = helper.template(helper.parent, row => row.type === 'response_item' && row.payload?.phase === 'final_answer');
-          final.payload.content.forEach(block => { block.text = text; }); final.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
-          const completion = helper.template(helper.parent, row => row.payload?.type === 'task_complete');
-          Object.assign(completion.payload, { turn_id: turn, last_agent_message: text });
-          for (const row of readRows) row.payload.internal_chat_message_metadata_passthrough = { turn_id: turn };
-          const rows = [meta, context, start, developer, user, ...readRows,
-            helper.template(helper.parent, row => row.payload?.type === 'token_count'), final, completion];
-          controls.native?.(rows);
-          const now = new Date(), root = path.join(process.env.CODEX_HOME, 'sessions', String(now.getFullYear()),
-            String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
-          fs.mkdirSync(root, { recursive: true }); fs.writeFileSync(path.join(root, session + '.jsonl'), helper.serialize(rows));
-          const cli = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
-            .map(type => helper.template(helper.cli, row => row.type === type));
-          cli[0].thread_id = session; cli[2].item.text = text;
-          child.stdout.emit('data', Buffer.from(helper.serialize(cli))); child.emit('close', 0);
-        } catch (error) { child.emit('error', error); }
-      }); } };
-      return child;
-    } };
-  return { options, resources, controls };
-}
-
-test('public Codex v3 preserves historical pins through independent units, exact-plan restart and one actual final', () => withGraphDirEnv(undefined, async () => {
-  const helper = codexPartitionHelpers();
-  await helper.fixture(async f => {
-    const roleArtifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-    const prior = await helper.successfulReview(f, 'integrator', { legacy: true });
-    const historical = roleArtifacts.authenticatedArchivePins(f.worktree);
-    const receipt = structuredClone(prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt);
-    const evidencePath = path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md');
-    helper.write(f.worktree, 'src/consumer.cjs', 'exact Codex primary line Ω\n'.repeat(3000)); helper.commit(f, 'complete partitioned source');
-    const { options, controls } = codexPartitionFixture(f, helper);
-    options.integrationCapacity.capacity.unit_input_bytes = 128 * 1024;
-    let interrupted = false;
-    controls.render = launch => {
-      if (controls.launches?.length === 2 && launch.kind !== 'reserved-template' && !interrupted) {
-        interrupted = true; throw new Error('fixture interruption before next native reservation');
-      }
-    };
-    controls.onLaunch = (input, payload) => {
-      assert.equal(input.includes('<AUTHENTICATED_CONTEXT_PACKET>'), false);
-      assert.equal(controls.measured.filter(item => item.reserved_template).length, 1);
-      assert.ok(controls.measured.filter(item => item.kind === 'unit').length > 1);
-      assert.equal(fs.existsSync(evidencePath), false);
-      if (payload.kind === 'phase') assert.ok(payload.unit_artifacts.length > 1);
-    };
-    const host = createCodexDeliveryHost(options), selected = { role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } };
-    await assert.rejects(host.run(selected), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
-    assert.equal(controls.launches.length, 2);
-    for (const pin of historical) roleArtifacts.assertArchivePin(f.worktree, pin);
-    const old = fs.readFileSync(path.join(f.worktree, historical[0].path));
-    fs.appendFileSync(path.join(f.worktree, historical[0].path), 'tamper');
-    await assert.rejects(host.run(selected), /archive|pin|changed|digest/i);
-    fs.writeFileSync(path.join(f.worktree, historical[0].path), old);
-    helper.write(f.worktree, roleArtifacts.ARTIFACT_ARCHIVE_DIR + '/unlisted/unrelated.json', '{}');
-    await assert.rejects(host.run(selected), /archive|membership/i);
-    fs.rmSync(path.join(f.worktree, roleArtifacts.ARTIFACT_ARCHIVE_DIR, 'unlisted'), { recursive: true });
-    options.integrationCapacity.plan_sha256 = controls.measured[0].plan_sha256;
-    const restarted = createCodexDeliveryHost(options);
-    const result = await restarted.run(selected);
-    assert.equal(result.result.kind, 'phase');
-    assert.equal(result.result.outcome, 'passed');
-    assert.equal(result.receipt.runtime, 'codex');
-    assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
-    const units = controls.launches.filter(item => item.payload.kind === 'unit');
-    assert.equal(new Set(units.map(item => item.payload.assignment.unit_id)).size, units.length);
-    assert.equal(controls.measured.length, controls.launches.length + 1);
-    const final = controls.measured.at(-1);
-    assert.equal(final.kind, 'phase'); assert.equal(final.reserved_template, undefined);
-    assert.notEqual(final.verified_index_sha256, '0'.repeat(64));
-    assert.equal(final.unit_artifacts.length, units.length);
-    assert.deepEqual(prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt, receipt);
-    for (const pin of historical) roleArtifacts.assertArchivePin(f.worktree, pin);
-    const manifests = roleArtifacts.authenticatedArchivePins(f.worktree).filter(pin => pin.path.endsWith('/.shipyard-role-artifact.json'))
-      .map(pin => JSON.parse(fs.readFileSync(path.join(f.worktree, pin.path))));
-    assert.equal(new Set(manifests.map(item => item.producer_launch)).size, manifests.length);
-    assert.equal(manifests.filter(item => item.artifact_kind === 'integration-unit').length, units.length);
-    await assert.rejects(restarted.run(selected), /reserved|archive|membership|baseline/i);
-    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
-  });
-}));
-
-test('public Codex v3 accepts omitted capacity through original observed evidence', () => withGraphDirEnv(undefined, async () => {
-  const helper = codexPartitionHelpers();
-  await helper.publicIntegrationFixture(async f => {
-    const { options, controls } = helper.publicPartitionFixture(f, 'codex', { observed: true });
-    delete options.integrationCapacity;
-    const result = await createCodexDeliveryHost(options).run({ role: 'integrator',
-      context: { review_contract: 'shipyard.integration-review.v3' } });
-    assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(result.result.outcome, 'passed');
-    assert.equal(controls.measured, undefined);
-    assert.ok(controls.launches.filter(item => item.payload.kind === 'unit').length > 0);
-    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
-    assert.equal(result.operational_diagnostic.authoritative, false);
-    assert.ok(result.operational_diagnostic.actual_final_input_bytes <= 4194304);
-  });
-}));
-
-for (const scenario of ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
-  'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'over-bound-actual-final', 'changed-exact-input',
-  'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'state-substitution', 'native-input-substitution', 'native-result-substitution'])
-test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () => withGraphDirEnv(undefined, async () => {
-  const helper = codexPartitionHelpers();
-  await helper.fixture(async f => {
-    const { options, resources, controls } = codexPartitionFixture(f, helper);
-    if (scenario === 'missing-renderer') delete resources.renderLaunch;
-    if (scenario === 'unknown-window') controls.noWindow = true;
-    controls.mutate = (proof, kind, payload) => {
-      if (scenario === 'foreign-window' && kind === 'window') proof.runtime = 'claude';
-      if (scenario === 'foreign-counter' && kind === 'measurement') proof.runtime = 'claude';
-      if (scenario === 'unknown-instructions' && kind === 'request') delete proof.frame.base_instructions;
-      if (scenario === 'over-bound-unit' && kind === 'measurement' && payload.kind === 'unit'
-          || scenario === 'over-bound-template' && kind === 'measurement' && payload.reserved_template
-          || scenario === 'over-bound-actual-final' && kind === 'measurement' && payload.kind === 'phase' && !payload.reserved_template)
-        proof.input_tokens_upper_bound = 100000000;
-      if (scenario === 'changed-exact-input' && kind === 'request' && controls.measured?.length >= 2) proof.input += 'changed';
-    };
-    controls.onLaunch = () => {
-      if (scenario === 'source-substitution') fs.appendFileSync(path.join(f.worktree, 'src/provider.cjs'), 'changed');
-      if (scenario === 'state-substitution') fs.appendFileSync(path.join(f.worktree, '.planning/graph/tickets.json'), ' ');
-    };
-    controls.result = result => {
-      if (scenario === 'wrong-output') result.runtime = 'claude';
-      if (scenario === 'incomplete-unit') result.completeness = 'incomplete';
-      if (scenario === 'failed-unit') { result.outcome = 'human-review-required'; result.required_context = ['Unresolved interaction.']; }
-    };
-    controls.native = rows => {
-      if (scenario === 'native-input-substitution') rows.find(row => row.payload?.role === 'user').payload.content[0].text += 'changed';
-      if (scenario === 'native-result-substitution') {
-        const final = rows.find(row => row.payload?.phase === 'final_answer');
-        const result = JSON.parse(final.payload.content[0].text); result.conclusions = ['Substituted original native result.'];
-        final.payload.content[0].text = JSON.stringify(result);
-        rows.find(row => row.payload?.type === 'task_complete').payload.last_agent_message = JSON.stringify(result);
-      }
-    };
-    await assert.rejects(createCodexDeliveryHost(options).run({ role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } }),
-      error => scenario === 'state-substitution' ? error.code === 'WORKTREE_MUTATED'
-        : /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_|RUNTIME_/.test(error.code || ''));
-    const prelaunch = ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
-      'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'changed-exact-input'].includes(scenario);
-    assert.equal(controls.launches?.length || 0, prelaunch ? 0 : 1);
-    assert.equal(fs.existsSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md')), false);
-  });
-}));
-
-test('public Codex v3 rejects caller prompt, stage, receipt, capacity and producer authority', () => {
-  const selected = { role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } };
-  assert.equal(requestValue(selected).context.review_contract, selected.context.review_contract);
-  for (const field of ['prompt', 'kind', 'unit_id', 'plan_sha256', 'partitions', 'verified_index_sha256', 'receipt',
-    'integrationCapacity', 'renderLaunch', 'measureInput', 'readWindow', 'capacity_certificate', 'input_prepared'])
-    assert.throws(() => requestValue({ ...selected, context: { ...selected.context, [field]: {} } }), /host-owned/);
-  for (const extra of [{ dispatch_id: 'caller-stage' }, { signals: { critical: true } }, { gsd_role: 'integrator' }])
-    assert.throws(() => requestValue({ ...selected, ...extra }), /host-owned/);
-});
-
-assert.equal(entrySelected, 42, 'exact code-review entry registration');
+assert.equal(entrySelected, 43, 'exact code-review entry registration');
 assert.equal(entryVariants, 7, 'all original CLI variants');
-assert.equal(integratorDefaultSelected, 1, 'exact integrator default registration');
-assert.equal(legacyCompatibilitySelected, 1, 'exact legacy compatibility registration');
 done();

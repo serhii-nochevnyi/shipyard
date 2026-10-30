@@ -27,6 +27,9 @@ function fail(message, code = 'INVALID_CODE_REVIEW_CONTEXT') {
   throw Object.assign(new Error('codex-code-review-context: ' + message), { code });
 }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+function present(file) {
+  try { fs.lstatSync(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -204,19 +207,27 @@ function collect(scope, options) {
 }
 
 function launchBinding(prepared) {
+  if (prepared.role === 'integrator')
+    return { phase: prepared.phase, head: prepared.canonical.head, head_tree: prepared.canonical.headTree, base: prepared.base,
+      base_tree: prepared.defaultBaseTree, ticket_set_digest: prepared.ticketSetDigest,
+      part: prepared.part?.id ?? null, context_digest: prepared.contextDigest };
   return { review_contract: CODE_REVIEW_CONTRACT, repository: prepared.repository, id: prepared.ticket,
     pr: prepared.pr, head: prepared.canonical.head, base_commit: prepared.baseCommit, merge_base: prepared.mergeBase,
     base_tree: prepared.mergeBaseTree, ticket_set_digest: prepared.binding.membership, context_digest: prepared.packet.digest };
 }
 
-function verifyLivePullRequest(prepared, options) {
+function verifyLivePullRequest(prepared, options, live = true) {
+  if (prepared.role === 'integrator') {
+    require('./claude-role-host.cjs').revalidateIntegrator(options, prepared, live);
+    return null;
+  }
   const current = collect({ worktree: prepared.canonical.worktree, ticket: prepared.ticket, phase: prepared.phaseNumber }, { ...options });
   if (current.packet.digest !== prepared.packet.digest) fail('authenticated PR, graph or packet changed', 'STALE_CONTEXT');
   return current.livePullRequests[0];
 }
 
 function prepare(scope, launch, options = {}) {
-  if (!object(scope) || !object(launch) || launch.role !== 'code-review') fail('scope and code-review launch are required');
+  if (!object(scope) || !object(launch) || !['code-review', 'integrator'].includes(launch.role)) fail('scope and code-review or integrator launch are required');
   if (launch.context !== undefined && !object(launch.context)) fail('context must be a host-built object');
   if (launch.signals !== undefined && !object(launch.signals)) fail('signals must be a host-derived object');
   const context = launch.context || {};
@@ -225,6 +236,7 @@ function prepare(scope, launch, options = {}) {
   if (launch.gsd_role !== undefined) fail('code-review cannot use a typed GSD role');
   options = { ...options, phaseRepo: context.repo ?? null,
     inflightDispatchId: options.inflightDispatchId || launch.dispatch_id || crypto.randomUUID() };
+  if (launch.role === 'integrator') return prepareIntegrator(scope, launch, options);
   roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'code-review' });
   const collected = collect(scope, options);
   const { readSource, ...prepared } = collected;
@@ -265,6 +277,29 @@ function prepare(scope, launch, options = {}) {
   return value;
 }
 
+function prepareIntegrator(scope, launch, options) {
+  if (options.phaseRepo !== null) fail('integrator takes no repository selector');
+  const host = require('./claude-role-host.cjs');
+  const facts = options.reuse?.prepared.facts ?? host.prepareIntegratorContext(
+    { ...options, partBudget: options.partBudget ?? core.PART_BUDGET.codex }, { worktree: scope.worktree, phase: String(scope.phase) });
+  if (facts.ticket !== scope.ticket || facts.canonical.worktree !== fs.realpathSync(scope.worktree))
+    fail('integrator scope differs from the authenticated phase', 'SCOPE_MISMATCH');
+  const part = options.part === undefined ? undefined : facts.groups[options.part - 1];
+  if (options.part !== undefined && !part) fail('part is not among the host path groups', 'STALE_CONTEXT');
+  const launched = facts.launchFor({ part, parts: options.parts });
+  roleArtifact.prepareRoleArtifact({ worktreePath: facts.canonical.worktree, role: 'integrator', phase: facts.phase, evidencePath: facts.evidencePath });
+  const contextDigest = digest(JSON.stringify(launched.packet));
+  const prompt = 'context_digest=' + contextDigest + '\n\nlaunch_digest=' + '0'.repeat(64) + '\n\n' + launched.prompt;
+  if (Buffer.byteLength(prompt) > INPUT_MAX_BYTES) fail('complete integrator prompt exceeds the launch bound', 'CONTEXT_OVER_BOUND');
+  const prepared = { ...facts, ...launched, facts, prompt, contextDigest, parts: options.parts };
+  const value = deepFreeze({ schema: SCHEMA, launch: { ...launch, role: 'integrator', dispatch_id: options.inflightDispatchId,
+    signals: facts.signals, context: { prompt } }, prepared, evidence: { ticket: facts.ticket, head: facts.canonical.head,
+    packet_digest: contextDigest, input_tokens: facts.signals.inputTokens } });
+  preparedContexts.add(value);
+  preparedOptions.set(value, { ...options, scope: { ...scope }, baseline: host.graphStateSnapshot(prepared) });
+  return value;
+}
+
 function isPreparedContext(value) { return object(value) && preparedContexts.has(value); }
 function requirePrepared(value) { if (!isPreparedContext(value)) fail('private prepared context required', 'CODE_REVIEW_CONTEXT_REQUIRED'); }
 
@@ -297,7 +332,7 @@ function recheckInstalledLaunch(value) {
   if (!installedLaunches.has(value)) fail('private installed admission required');
   for (const pin of installedLaunches.get(value).files)
     if (file(pin.root, pin.path).sha256 !== pin.sha256) fail('installed source or instructions changed', 'STALE_CONTEXT');
-  verifyLivePullRequest(value.prepared, preparedOptions.get(value));
+  verifyLivePullRequest(value.prepared, preparedOptions.get(value), false);
 }
 
 function packetForCoverage(value) {
@@ -310,8 +345,8 @@ function launchDigest(value) {
   const installation = installedLaunches.get(value);
   if (!installation) fail('private installed admission required');
   const options = preparedOptions.get(value);
-  return digest(stable({ graph_dir: value.prepared.graphDir, code_review: launchBinding(value.prepared), installation,
-    packet_digest: value.prepared.packet.digest, archive_pins: options.archivePins }));
+  return digest(stable({ graph_dir: value.prepared.graphDir ?? value.prepared.graph.directory, code_review: launchBinding(value.prepared), installation,
+    packet_digest: value.prepared.packet.digest ?? value.prepared.contextDigest, archive_pins: options.archivePins ?? value.prepared.archivePins }));
 }
 
 function admittedPrompt(value) {
@@ -343,17 +378,33 @@ function writeEvidence(prepared, text) {
   return { path: absolute, sha256: digest(bytes) };
 }
 
+function finishIntegrator(value, dispatch, recorder) {
+  const prepared = value.prepared, options = preparedOptions.get(value), host = require('./claude-role-host.cjs');
+  const { result, usage } = codexResultText(dispatch);
+  host.assertEvidenceOnlyChanges(options, prepared, options.baseline);
+  if (prepared.part) return { ...core.normalizePart(result, prepared.part, true), dispatch_id: dispatch.dispatch_id };
+  verifyLivePullRequest(prepared, options);
+  const { evidence_markdown: evidenceMarkdown, ...judgment } = host.validateResult(prepared, result);
+  host.writeIntegratorEvidence(prepared, evidenceMarkdown);
+  const { artifact, validated } = host.sealResult(prepared, judgment, recorder, dispatch.dispatch_id, evidenceMarkdown);
+  return deepFreeze({ schema: 'shipyard.codex-delivery-result.v1', role: 'integrator', subject: prepared.ticket,
+    phase: prepared.phase, ticket_set_digest: prepared.ticketSetDigest, result: judgment, dispatch, receipt: dispatch.receipt,
+    artifact: { ref: validated.artifact_ref, digest: validated.artifact_digest, outcome: validated.envelope.outcome || validated.envelope.verdict },
+    context: { source_revision: prepared.canonical.head, packet_digest: prepared.contextDigest,
+      model: dispatch.receipt.applied_model, effort: dispatch.receipt.applied_effort, ...(usage ? { usage } : {}) } });
+}
+
 function finish(value, dispatch, recorder) {
   requirePrepared(value);
   const prepared = value.prepared, options = preparedOptions.get(value);
   const recorded = object(recorder) && typeof recorder.getVerifiedRecord === 'function'
     ? recorder.getVerifiedRecord(dispatch?.dispatch_id) : null;
-  if (!recorded || recorded.role !== 'code-review' || recorded.ticket !== prepared.ticket
-      || !object(dispatch) || dispatch.role !== 'code-review' || dispatch.runtime !== 'codex'
+  if (!recorded || recorded.role !== prepared.role || recorded.ticket !== prepared.ticket
+      || !object(dispatch) || dispatch.role !== prepared.role || dispatch.runtime !== 'codex'
       || dispatch.dispatch_id !== options.inflightDispatchId || dispatch.ticket !== prepared.ticket
       || JSON.stringify(recorded.receipt) !== JSON.stringify(dispatch.receipt)
       || JSON.stringify(dispatch.application_evidence?.runtime_evidence) !== JSON.stringify(recorded.receipt?.runtime_evidence)
-      || dispatch.receipt?.role !== 'code-review' || dispatch.receipt.compliance !== 'verified'
+      || dispatch.receipt?.role !== prepared.role || dispatch.receipt.compliance !== 'verified'
       || dispatch.receipt.runtime_evidence?.ticket !== prepared.ticket
       || dispatch.receipt.runtime_evidence?.worktree !== prepared.canonical.worktree
       || dispatch.receipt.runtime_evidence?.phase !== prepared.phaseNumber)
@@ -364,12 +415,13 @@ function finish(value, dispatch, recorder) {
       && pin.sha256 === dispatch.receipt.agent_file_digest))
     fail('receipt agent differs from installed admission', 'MISSING_RECEIPT');
   const binding = { ...launchBinding(prepared), launch_digest: launchDigest(value) };
-  if (stable(dispatch.receipt.runtime_evidence.code_review) !== stable(binding))
-    fail('original receipt lacks code-review launch custody', 'MISSING_RECEIPT');
+  if (stable(dispatch.receipt.runtime_evidence[prepared.role === 'integrator' ? 'integrator_review' : 'code_review']) !== stable(binding))
+    fail('original receipt lacks ' + prepared.role + ' launch custody', 'MISSING_RECEIPT');
+  if (prepared.role === 'integrator') return finishIntegrator(value, dispatch, recorder);
   // @contract: Project only the shared parser's role guard after authenticating the code-review receipt.
   const { result, usage } = codexResultText({ ...dispatch, role: 'arch-review', receipt: { ...dispatch.receipt, role: 'arch-review' } });
   if (prepared.part) {
-    if (fs.existsSync(path.join(prepared.canonical.worktree, CODE_REVIEW_EVIDENCE_NAME))) fail('a part reviewer wrote the evidence file', 'WORKTREE_MUTATED');
+    if (present(path.join(prepared.canonical.worktree, CODE_REVIEW_EVIDENCE_NAME))) fail('a part reviewer wrote the evidence file', 'WORKTREE_MUTATED');
     return { ...core.normalizePart(result, prepared.part), dispatch_id: dispatch.dispatch_id };
   }
   for (const [key, expected] of Object.entries(binding))

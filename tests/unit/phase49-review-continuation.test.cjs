@@ -1557,7 +1557,7 @@ async function completedSourceReceiptRecoveryFixture(role, cold, fault, mutation
   }
 }
 
-async function automaticCompletedReviewFixture(role, cold, ordinary = false, moveBase = false, recordingFailure = null, beforeRecovery = null) {
+async function automaticCompletedReviewFixture(role, cold, recordingFailure = null, beforeRecovery = null) {
   const helper = require('./helpers/codex-arch-review-fixtures.cjs');
   const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
   const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
@@ -1572,75 +1572,18 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
     const graphDir = path.join(f.root, '.planning/graph');
     const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
     const epic = 'epic/38-codex-arch-review';
-    const base = role === 'integrator' && !ordinary ? epic : 'main';
+    const base = 'main';
     graph.tickets[ticket] = { ...graph.tickets[helper.TICKET], branch, epic, pr_base: base };
-    const governingSources = new Map(), productSources = new Map(), previousProductSources = new Map();
-    if (role === 'integrator' && !ordinary) {
-      // @contract: complete governing records and product modules retain the existing per-file and diff bounds.
-      for (const [name, document] of [
-        ['ADR-014-host-bound-review.md', 'docs/gsd_multilevel_delivery_pipeline.md'],
-        ['ADR-014-DISPATCH.md', 'docs/dispatch-record.md'],
-      ]) {
-        const relative = '.planning/architecture/' + name;
-        const content = (name === 'ADR-014-host-bound-review.md' ? helper.ADR + '\n' : '')
-          + fs.readFileSync(path.join(fixtureRoot, document), 'utf8');
-        assert.ok(Buffer.byteLength(content) < 192 * 1024, 'complete bounded governing record');
-        governingSources.set(relative, content); helper.write(f.root, relative, content);
-      }
-      for (const name of ['role-artifact', 'codex-runtime-host', 'codex-delivery-host', 'codex-arch-review-context', 'context-packet']) {
-        const relative = 'src/' + name + '.cjs';
-        const canonical = path.join(fixtureRoot, 'plugins/delivery-pipeline/scripts', name + '.cjs');
-        const retainedPath = 'plugins/delivery-pipeline/scripts/' + name + '.cjs';
-        const retainedRevision = 'b3eab6c12ecebed1b14947fe5e037f93b549c524:' + retainedPath;
-        const previous = helper.git(fixtureRoot, ['show', retainedRevision]) + '\n';
-        const previousBytes = Buffer.from(previous);
-        assert.equal(crypto.createHash('sha1').update(Buffer.from('blob ' + previousBytes.length + '\0'))
-          .update(previousBytes).digest('hex'), helper.git(fixtureRoot, ['rev-parse', retainedRevision]),
-        'complete retained baseline module bytes: ' + retainedPath);
-        previousProductSources.set(relative, previous); helper.write(f.root, relative, previous);
-        const content = "'use strict';\n// Delegate to the canonical implementation instead of retaining a divergent copy.\n"
-          + 'module.exports = require(' + JSON.stringify(canonical) + ');\n';
-        productSources.set(relative, content);
-      }
-      graph.tickets[ticket].files = ['src/reviewed.txt', ...productSources.keys()];
-      const planPath = helper.planPath();
-      const plan = fs.readFileSync(path.join(f.root, planPath), 'utf8')
-        .replace('- Follows ADR-014.', '- Follows ADR-014 and its complete governing companions:\n'
-          + [...governingSources.keys()].map(relative => '- ' + relative).join('\n'))
-        .replace('- Review the authenticated PR diff against ADR-014.',
-          '- Review the complete product custody, runtime, delivery, reader and packet modules against ADR-014 and the dispatch contract.');
-      helper.write(f.root, planPath, plan);
-      governingSources.set(planPath, plan);
-      // @contract: the full previous modules and current delegating exports remain distinct review obligations.
-      helper.git(f.root, ['add', '.planning', 'src']); helper.git(f.root, ['commit', '-m', 'Seed legacy product module copies and governing contracts']);
-      f.base = helper.git(f.root, ['rev-parse', 'HEAD']);
-      helper.git(f.root, ['update-ref', 'refs/heads/main', f.base]);
-      helper.git(f.root, ['update-ref', 'refs/remotes/origin/main', f.base]);
-      for (const [relative, content] of productSources) {
-        helper.write(f.root, relative, content);
-        const name = path.basename(relative);
-        assert.equal(require(path.join(f.root, relative)), require(path.join(fixtureRoot, 'plugins/delivery-pipeline/scripts', name)),
-          'refactored facade retains the canonical public exports');
-      }
-    } else if (role === 'arch-review') {
-      helper.write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', helper.ADR + 'Complete preserved architectural obligation.\n'.repeat(27000));
-    }
+    helper.write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', helper.ADR + 'Complete preserved architectural obligation.\n'.repeat(27000));
     delete graph.tickets[helper.TICKET];
     fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify(graph));
     fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify({ [ticket]: {
-      status: role === 'integrator' ? 'merged' : 'pr-open', pr: 301, branch, base, epic,
-      ...(role === 'integrator' ? { merged_into: epic } : {}) } }));
+      status: 'pr-open', pr: 301, branch, base, epic } }));
     helper.git(f.root, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
     helper.git(f.root, ['branch', '-m', branch]);
     helper.git(f.root, ['add', '.planning', 'src']); helper.git(f.root, ['commit', '-m', 'Canonical complete large review subject']);
     f.head = helper.git(f.root, ['rev-parse', 'HEAD']);
     Object.assign(f.pr, { headRefName: branch, headRefOid: f.head, title: 'feat(' + ticket + '): source', body: ticket });
-    if (role === 'integrator') {
-      helper.git(f.root, ['checkout', '-b', epic]);
-      helper.git(f.root, ['update-ref', 'refs/remotes/origin/' + epic, f.head]);
-      Object.assign(f.pr, { state: 'MERGED', baseRefName: base, baseRefOid: f.base,
-        mergedAt: new Date().toISOString(), mergeCommit: { oid: f.head } });
-    }
     const gh = (program, args, options) => {
       if (program === 'git' && args.includes('fetch')) return '';
       if (program === 'gh') return JSON.stringify(f.pr);
@@ -1648,24 +1591,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
     };
     const canonicalOptions = { graphDir, refreshGit: false, getPullRequest: () => f.pr,
       listPullRequests: () => [f.pr], execFileSync: gh };
-    const ordinaryMaterial = 'Complete ordinary integration input, including € source obligations.\n'.repeat(20000);
-    const integration = role === 'integrator' && !ordinary ? require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(canonicalOptions, { worktree: f.root, phase: '38' }) : null;
-    const subject = integration ? integration.ticket : ticket;
-    if (integration) {
-      const completeDiff = helper.git(f.root, ['diff', '--no-ext-diff', '--unified=50', 'HEAD~1...HEAD']) + '\n';
-      assert.ok(Buffer.byteLength(completeDiff) > 850 * 1024, 'complete fixture Git diff remains large');
-      assert.ok(Buffer.byteLength(completeDiff) < 1024 * 1024, 'complete fixture Git diff retains the integration bound');
-      assert.ok([...governingSources].filter(([relative]) => relative.startsWith('.planning/architecture/'))
-        .reduce((bytes, [, content]) => bytes + Buffer.byteLength(content), 0) < 768 * 1024,
-      'complete governing corpus retains the existing aggregate limit');
-      assert.ok(Buffer.byteLength(integration.packet.role_context.combined_diff.content) > 850 * 1024,
-        'meaningful complete product diff remains large');
-      assert.ok(Buffer.byteLength(integration.packet.role_context.combined_diff.content) < 1024 * 1024);
-      assert.ok(Buffer.byteLength(integration.prompt) > 1000000, 'complete canonical aggregate remains over one megabyte');
-      assert.ok(Buffer.byteLength(integration.prompt) <= 1500000, 'unchanged legacy preparation launch bound');
-      assert.ok(integration.packet.accounting.overflow === false, 'unchanged integration packet token bound');
-    }
+    const subject = ticket;
     const scope = { repository: f.root, worktree: f.root, phase: 38, ticket: subject, run_id: 'automatic-' + role, runtime: 'codex', provider: 'openai' };
     const home = path.join(store, 'codex'), agents = path.join(home, 'agents'); fs.mkdirSync(agents, { recursive: true });
     const selectedFiles = [policy.resolveDispatch({ runtime: 'codex', role, signals: {} }),
@@ -1716,41 +1642,10 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
         assert.match(manifest.binding.base_ref, new RegExp('^refs/(?:heads|remotes)/'));
         assert.equal(helper.git(f.root, ['rev-parse', manifest.binding.base_ref + '^{commit}']), manifest.binding.base);
         assert.equal(helper.git(f.root, ['merge-base', manifest.binding.base, f.head]), manifest.binding.merge_base);
-        if (ordinary) {
-          assert.match(manifest.binding.base_ref, /^refs\/(?:heads\/main|remotes\/origin\/main)$/,
-            'canonical main resolves to its actual qualified local or tracking ref');
-          assert.equal(manifest.binding.base, f.base, 'the resolved baseline commit remains exact');
-          assert.equal(manifest.binding.merge_base, f.base, 'the original baseline remains an ancestor of this source');
-          assert.notEqual(manifest.binding.base, f.head, 'the ordinary positive path reviews an actual changed subject');
-        }
         if (index === 1) {
           originalManifest = manifestBytes;
           originalBaseRef = manifest.binding.base_ref;
-          if (ordinary) assert.deepEqual(Buffer.concat(manifest.assets.map(asset => fs.readFileSync(asset.path))), Buffer.from(ordinaryMaterial));
-          else originalPacket = packets.decodeUniqueContent(JSON.parse(fs.readFileSync(manifest.assets[0].path)));
-          if (integration) {
-            assert.equal(originalPacket.role_context.combined_diff.content, integration.packet.role_context.combined_diff.content,
-              'entire meaningful product diff reaches original physical source input');
-            assert.deepEqual(originalPacket.immutable_scope.files_modified, integration.packet.immutable_scope.files_modified);
-            for (const [relative, content] of governingSources) {
-              const reference = originalPacket.required_refs.find(item => item.path === relative);
-              assert.ok(reference, 'required source purpose remains: ' + relative);
-              assert.equal(reference.content, content, 'complete governing bytes: ' + relative);
-              assert.equal(reference.sha256, sha(content));
-              assert.equal(reference.bytes, Buffer.byteLength(content));
-            }
-            for (const [relative, content] of productSources) {
-              assert.equal(fs.readFileSync(path.join(f.root, relative), 'utf8'), content);
-              const patch = originalPacket.role_context.combined_diff.content.split('diff --git a/' + relative + ' b/' + relative + '\n')[1]
-                ?.split('\ndiff --git ')[0];
-              assert.ok(patch, 'complete product module has its own diff purpose');
-              const hunk = patch.slice(patch.indexOf('@@')).split('\n').filter(line => /^[ +\-]/.test(line));
-              const added = hunk.filter(line => line[0] !== '-').map(line => line.slice(1)).join('\n') + '\n';
-              assert.equal(added, content, 'every exact current module byte reaches review: ' + relative);
-              const removed = hunk.filter(line => line[0] !== '+').map(line => line.slice(1)).join('\n') + '\n';
-              assert.equal(removed, previousProductSources.get(relative), 'every exact previous module byte reaches review: ' + relative);
-            }
-          }
+          originalPacket = packets.decodeUniqueContent(JSON.parse(fs.readFileSync(manifest.assets[0].path)));
         } else {
           assert.deepEqual(manifestBytes, originalManifest, 'finalized candidate remains byte-identical');
           assert.equal(manifest.binding.base_ref, originalBaseRef, 'fresh final preserves the exact selected canonical ref');
@@ -1765,20 +1660,6 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
             summary: 'Fresh full current architectural judgment.', context_digest: originalPacket.digest,
             launch_digest: prompt.match(/launch_digest=([a-f0-9]{64})/)[1], evidence_markdown: 'Complete freshly evaluated current source evidence.' };
           result.context_digest = manifest.binding.packet_digest;
-        }
-        if (index === 2 && ordinary) result = { ...echo, judgment: 'Fresh complete ordinary integration judgment.' };
-        if (index === 2 && role === 'integrator' && !ordinary) {
-          const context = originalPacket.role_context, coverage = context.review_coverage;
-          result = { ...echo, id: subject, phase: context.phase, outcome: 'passed', findings: [], blocking_count: 0,
-            summary: 'Fresh complete current integration judgment.', head: f.head,
-            head_tree: helper.git(f.root, ['rev-parse', 'HEAD^{tree}']), base: context.integration_base.ref,
-            base_tree: context.integration_base.tree, ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest,
-            context_digest: manifest.binding.packet_digest, reviewed_identity: coverage.reviewed_identity,
-            coverage: { schema: 'shipyard.integration-coverage-result.v1', mode: coverage.mode, lineage_digest: coverage.digest,
-              inherited_obligations: coverage.current_logical_obligations.filter(item => item.coverage === 'inherited').map(item => item.identity),
-              newly_reviewed_obligations: coverage.current_logical_obligations.filter(item => item.coverage !== 'inherited').map(item => item.identity),
-              impact_paths: coverage.impact.paths, limitations: coverage.limitations },
-            evidence_markdown: 'Complete fresh integration evidence and all membership/ancestry obligations.' };
         }
         const text = JSON.stringify(result), context = nativeContext(turn, f.root);
         Object.assign(context.payload, { model, effort }); Object.assign(context.payload.collaboration_mode.settings, { model, reasoning_effort: effort });
@@ -1830,23 +1711,11 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
         const capacity = await nativeHost.measureBatchReaderCapacity(applied, input, { onCompleted(completion) {
           probeCallbacks++; originalProbeCompletion = completion;
         } });
-        if (moveBase) {
-          assert.ok(originalBaseRef, 'the completed probe observed the actual sealed canonical ref');
-          assert.equal(helper.git(f.root, ['rev-parse', originalBaseRef + '^{commit}']), f.base);
-          helper.git(f.root, ['update-ref', originalBaseRef, f.head]);
-          assert.equal(helper.git(f.root, ['rev-parse', originalBaseRef + '^{commit}']), f.head,
-            'move the exact production-selected ref, preserving the alternate main ref');
-          const alternate = originalBaseRef === 'refs/heads/main' ? 'refs/remotes/origin/main' : 'refs/heads/main';
-          assert.equal(helper.git(f.root, ['rev-parse', alternate + '^{commit}']), f.base,
-            'an unchanged alternate ref cannot replace the sealed baseline');
-        }
         return capacity;
       },
       resumeCompletedSource(applied, context) {
         assert.ok(!Object.prototype.hasOwnProperty.call(context, 'review_contract'),
           'the preparation selector does not become runtime resume authority');
-        if (integration) assert.equal(context.input_prepared.manifest.binding.review_contract, 'shipyard.integration-review.v2',
-          'the private finalized candidate retains the complete integration contract');
         const originalCompleted = context.onCompleted;
         const observed = { ...context, onCompleted(completion) {
           finalCallbacks++;
@@ -1861,7 +1730,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
     };
     const options = { ...canonicalOptions, scope, storageRoot: store, host, agentDir: agents, agentManifest,
       env: { CODEX_HOME: home } };
-    let request = { role, context: ordinary ? { prompt: ordinaryMaterial } : { review_contract: 'shipyard.integration-review.v2' }, signals: {}, dispatch_id: 'automatic-final-' + crypto.randomUUID() };
+    let request = { role, context: {}, signals: {}, dispatch_id: 'automatic-final-' + crypto.randomUUID() };
     if (role === 'arch-review') {
       const selected = selectedFiles[0];
       const readerProfile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 3,
@@ -1927,17 +1796,6 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       }
       fs.writeFileSync = originalWrite; fs.fsyncSync = originalFsync;
     }
-    if (moveBase) {
-      await assert.rejects(run, error => ['REVIEW_RESTART_REQUIRED', 'BASE_MISMATCH', 'STALE_CONTEXT'].includes(error.code)
-        && /base/i.test(error.message));
-      assert.equal(launches, 1, 'a moved canonical baseline refuses before the fresh final native turn');
-      assert.equal(probeCallbacks, 1);
-      assert.equal(finalCallbacks, 0);
-      assert.ok(recorder.getVerifiedRecord(originalProbeCompletion.runtime_evidence.dispatch_id),
-        'base movement preserves the original actually completed probe record');
-      assert.equal(recorder.getVerifiedRecord(request.dispatch_id), null, 'no final authority is fabricated');
-      return;
-    }
     if (recordingFailure?.startsWith('seal-')) {
       fs.linkSync = (from, to) => {
         if (!failedWrites && path.basename(to).startsWith(recordingFailure === 'seal-envelope' ? 'review-progress-' : 'review-tip-')
@@ -1984,36 +1842,10 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
     assert.equal(stable(recordedFinal.receipt), stable(final.receipt), 'consumer receives the original fresh receipt');
     for (const field of ['role', 'requested_model', 'applied_model', 'observed_model', 'requested_effort', 'applied_effort', 'observed_effort', 'agent_file', 'agent_file_digest', 'policy_hash'])
       assert.equal(probe.receipt[field], final.receipt[field], 'unchanged original policy/selection identity: ' + field);
-    if (ordinary) {
-      authority.validateCompletedSourceEvidence(final.receipt.runtime_evidence);
-      const consumed = collector.verifyFileInput(final.receipt.runtime_evidence.input_bundle, { sealed: true, historical: true });
-      assert.deepEqual(Buffer.concat(consumed.material), Buffer.from(ordinaryMaterial));
-    } else {
-      assert.ok(final.artifact, 'unchanged final semantic/artifact consumer admitted current judgment');
-      assert.equal(role === 'arch-review' ? final.artifact.outcome : final.artifact.envelope.outcome, role === 'arch-review' ? 'conform' : 'passed');
-      if (role === 'arch-review') assert.equal(fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), 'utf8'),
-        'Complete freshly evaluated current source evidence.', 'host materializes the original fresh evidence without a model tool call');
-      if (integration && cold) {
-        const selectors = { worktreePath: f.root, role, phase: integration.phase,
-          ticket: integration.ticket, base: integration.base, ticketSet: integration.ticketSet,
-          ticketSetDigest: integration.ticketSetDigest, boundaryStore: recorder.storeDir,
-          dispatchId: final.dispatch_id, artifactPath: final.artifact.artifact_path,
-          artifactDigest: final.artifact.artifact_digest };
-        const script = `
-          const fs = require('node:fs'), path = require('node:path');
-          require('node:os').homedir = () => process.argv[2];
-          const authority = require(path.join(process.argv[1], 'plugins/delivery-pipeline/scripts/role-artifact.cjs'));
-          const input = JSON.parse(fs.readFileSync(0, 'utf8'));
-          const checked = authority.validateJudgmentManifest(input);
-          process.stdout.write(JSON.stringify({ role: checked.role, digest: checked.artifact_digest }));
-        `;
-        const restored = JSON.parse(execFileSync(process.execPath, ['-e', script, fixtureRoot, store],
-          { input: JSON.stringify(selectors), encoding: 'utf8' }));
-        assert.equal(restored.role, role);
-        assert.equal(restored.digest, final.artifact.artifact_digest,
-          'cold standalone consumer retains the exact sealed original current judgment');
-      }
-    }
+    assert.ok(final.artifact, 'unchanged final semantic/artifact consumer admitted current judgment');
+    assert.equal(final.artifact.outcome, 'conform');
+    assert.equal(fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), 'utf8'),
+      'Complete freshly evaluated current source evidence.', 'host materializes the original fresh evidence without a model tool call');
     const accounting = runtime.verifyCompletedReviewConsumption({ worktree: f.root, source: final.receipt.runtime_evidence.completed_source.source,
       receipt_store: recorder.storeDir, dispatch_id: final.receipt.dispatch_id });
     assert.equal(accounting.successful_physical_calls, physicalReads);
@@ -2049,7 +1881,7 @@ async function coldRecordedSourceControllerFixture(role) {
   const header = fs.readFileSync(__filename, 'utf8').split('async function recordedBatchApplication')[0];
   const script = header + '\n' + automaticCompletedReviewFixture.toString()
     + '\nautomaticCompletedReviewFixture(' + JSON.stringify(role)
-    + ", false, false, false, 'outcome-write-host-exit').catch(error => { console.error(error); process.exitCode = 1; });";
+    + ", false, 'outcome-write-host-exit').catch(error => { console.error(error); process.exitCode = 1; });";
   const origin = JSON.parse(execFileSync(process.execPath, ['-e', script], {
     cwd: path.dirname(__filename), encoding: 'utf8', maxBuffer: 1024 * 1024 }));
   const previousHome = os.homedir; os.homedir = () => origin.store;
@@ -2524,14 +2356,6 @@ test('an intervening unrelated native turn cannot supply semantic continuation',
   });
 });
 
-test('integrator role uses its own protected subject and fresh final', async () => {
-  await fixture(async f => {
-    const completed = await f.host.resumeReview(f.selection, { progress: f.progress, dispatch_id: 'integration-resume', role: 'integrator' });
-    assert.equal(authority.validateReviewContinuationEvidence(completed.runtime_evidence).identity.role, 'integrator');
-    assert.equal(completed.runtime_evidence.input_consumption.chunk_reads, f.reads.length);
-  }, { role: 'integrator' });
-});
-
 test('a bare serialized descriptor or observation cannot publish protected authority', async () => {
   await fixture(async f => {
     assert.throws(() => collector.verifyFileInput(JSON.parse(JSON.stringify(f.input))));
@@ -2758,7 +2582,7 @@ test('v3 typed reviewer resumes the original child UUID with its installed instr
   }, { batch: true, typed: true });
 });
 
-for (const role of ['arch-review', 'integrator']) test('v3 protected ' + role + ' continuation reauthenticates the separate probe association', async () => {
+test('v3 protected arch-review continuation reauthenticates the separate probe association', async () => {
   await fixture(async f => {
     const capacity = f.input.input_bundle.reader_capacity;
     assert.notEqual(capacity.application_dispatch_id, f.input.manifest.dispatch_id);
@@ -2770,8 +2594,8 @@ for (const role of ['arch-review', 'integrator']) test('v3 protected ' + role + 
     assert.equal(completed.runtime_evidence.session_id, f.reviewerSession);
     assert.equal(completed.runtime_evidence.review_continuation.inherited_ranges, 2);
     assert.ok(!f.resumedCommands.includes(f.reads[0].command));
-    assert.equal(authority.validateReviewContinuationEvidence(completed.runtime_evidence).identity.role, role);
-  }, { batch: true, role, separateProbe: true });
+    assert.equal(authority.validateReviewContinuationEvidence(completed.runtime_evidence).identity.role, 'arch-review');
+  }, { batch: true, role: 'arch-review', separateProbe: true });
 });
 
 for (const [name, mutate] of [
@@ -2788,46 +2612,6 @@ for (const [name, mutate] of [
   }), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
 });
 
-
-test('four continuation entries preserve the exact original registration names and callback bodies', () => {
-  const entries = ['phase49-review-continuation.test.cjs', 'phase49-review-continuation-completed.test.cjs',
-    'phase49-review-continuation-source.test.cjs', 'phase49-review-continuation-recovery.test.cjs'];
-  const collect = `
-    const fs = require('node:fs'), path = require('node:path'), Module = require('node:module');
-    const crypto = require('node:crypto'), children = require('node:child_process');
-    for (const key of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'])
-      children[key] = () => { throw new Error('registration inventory must not launch children'); };
-    const cases = [], load = Module._load;
-    Module._load = function(name, ...args) {
-      if (name === 'node:test') return { test(name, ...rest) {
-        const callback = rest.at(-1);
-        if (typeof callback !== 'function' || rest.slice(0, -1).some(value =>
-          value && (value.skip || value.todo || value.concurrent || value.concurrency)))
-          throw new Error('every registration must contain an ordinary sequential callback');
-        cases.push([name, crypto.createHash('sha256').update(callback.toString()).digest('hex')]);
-      } };
-      return load.call(this, name, ...args);
-    };
-    const filename = path.resolve(process.argv[1]), entry = new Module(filename);
-    entry.filename = filename; entry.paths = Module._nodeModulePaths(path.dirname(filename));
-    process.mainModule = entry; require.cache[filename] = entry;
-    entry._compile(fs.readFileSync(filename, 'utf8'), filename);
-    process.stdout.write(JSON.stringify(cases));
-  `;
-  const inventories = entries.map(entry => JSON.parse(execFileSync(process.execPath,
-    ['-e', collect, path.join(__dirname, entry)], { encoding: 'utf8', maxBuffer: 1024 * 1024 })));
-  assert.deepEqual(inventories[0].slice(-2).map(record => record[0]), [
-    'four continuation entries preserve the exact original registration names and callback bodies',
-    'continuation helper import registers zero genuine tests and launches zero children',
-  ]);
-  const groups = [inventories[0].slice(0, -2), ...inventories.slice(1)];
-  assert.deepEqual(groups.map(group => group.length), [90, 100, 93, 91]);
-  const original = groups.flat(), names = original.map(record => record[0]);
-  assert.equal(original.length, 374);
-  assert.equal(new Set(names).size, 374);
-  assert.equal(sha(JSON.stringify(names)), '9eb654b2db7b57316a6f6a4da8b14196f2b1e05048cefd367877866074b0ef93');
-  assert.equal(sha(JSON.stringify(original)), '8b313921e2eb04d543380430a345f1ba3b7b938e8acb1108833955355d3be371');
-});
 
 test('continuation helper import registers zero genuine tests and launches zero children', () => {
   const probe = `

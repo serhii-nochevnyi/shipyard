@@ -374,3 +374,8 @@ test('coverage and permanent round costs stay independent across expanding and n
   assert.throws(() => core.coverageComplete({ verdict: full, priorVerdicts: [], mergeBase: 'B',
     isAncestor() { throw Error('Git unavailable'); } }), /Git unavailable/);
 });
+
+test('the part budget is one weight bound per runtime', () => {
+  assert.deepEqual({ ...core.PART_BUDGET }, { claude: 40000, codex: 10000 });
+  assert.ok(Object.isFrozen(core.PART_BUDGET));
+});

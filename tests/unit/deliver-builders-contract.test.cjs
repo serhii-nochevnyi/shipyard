@@ -2,18 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
-const integratorCallerOnly = process.argv.includes('--integrator-caller-only');
-if (process.argv.slice(2).some(value => value !== '--integrator-caller-only') || process.argv.slice(2).length > 1)
-  throw new Error('Unknown integrator caller selection');
-let integratorCallerSelected = 0;
-function test(name, callback) {
-  const selected = name === 'both supported integrator callers select v3 before legacy full-inline formatting';
-  if (integratorCallerOnly && !selected) return;
-  if (selected) integratorCallerSelected++;
-  return runTest(name, callback);
-}
-
+const { suite, test, done, assert } = require('./assert-harness.cjs');
 const repositoryRoot = path.resolve(__dirname, '../..');
 const deliverPath = path.join(repositoryRoot, 'plugins/delivery-pipeline/commands/deliver.md');
 const scriptPath = path.join(repositoryRoot, 'plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
@@ -95,29 +84,25 @@ test('review roles use the prepared-context CLI and preserve the integrator in-p
   assert.match(step5, /createCodexDeliveryHost\(\{[\s\S]*?role: 'integrator'/);
 });
 
-test('both supported integrator callers select v3 before legacy full-inline formatting', () => {
-  const start = step5.indexOf('**Fresh final integration contract.**');
-  const end = step5.indexOf('**Legacy full-input compatibility.', start);
+test('both supported integrator callers use the part runner and no selector, capacity or stage authority', () => {
+  const start = step5.indexOf('**Integrator launch.**');
+  const end = step5.indexOf('**Manual dispatch and sealing.', start);
   assert.ok(start >= 0 && end > start);
   const integration = step5.slice(start, end);
   const caller = integration.match(/```javascript\n([\s\S]*?)\n\s*```/)[1];
-  assert.match(caller, /const current = prepareNativeIntegratorContext\(options, \{\s*worktree, phase: String\(phase\), review_contract: 'shipyard\.integration-review\.v3' \}\)/);
-  assert.ok(!caller.includes('prepareIntegratorContext'));
-  assert.strictEqual((caller.match(/review_contract: 'shipyard\.integration-review\.v3'/g) || []).length, 3);
+  assert.match(caller, /const current = prepareIntegratorContext\(options, \{ worktree, phase: String\(phase\) \}\)/);
   assert.match(caller, /scope: \{[\s\S]*run_id, worktree, repository: current.canonical.commonPath,[\s\S]*phase: current.phaseNumber, ticket: phaseSubject/);
+  assert.match(caller, /\.run\(\{ role: 'integrator', context: \{\} \}\)/);
   assert.match(caller, /schema: 'shipyard.claude-role-request.v1',[\s\S]*role: 'integrator', worktree, phase: String\(phase\)/);
-  for (const field of ['dispatch_id', 'stage', 'unit_id', 'index', 'receipt', 'model', 'capacity', 'input_budget'])
+  for (const field of ['review_contract', 'dispatch_id', 'stage', 'unit_id', 'index', 'receipt', 'model', 'capacity', 'input_budget'])
     assert.ok(!new RegExp('\\b' + field + '\\s*:').test(caller), `caller must not serialize ${field} authority`);
-  assert.match(integration, /Omit `options\.integrationCapacity` entirely for this production observed\s+default on both runtimes/);
-  assert.match(integration, /Supplied strict capacity resources retain their original exact\/certified/);
-  assert.match(integration, /Malformed supplied resources refuse rather than fall back to observed mode/);
-  assert.match(integration, /original receipt-pinned CLI\/session/);
-  assert.match(integration, /actual per-request usage/);
-  assert.match(integration, /overflow, compaction,[\s\S]*truncation and incomplete answers produce HOLD/);
-  assert.match(integration, /same-plan completed-unit reuse/);
-  assert.match(integration, /separate.*Codex.*Claude/s);
+  assert.ok(!/integrationCapacity|selectReviewBaseline|buildReviewImpactPacket|prepareNativeIntegratorContext/.test(integration));
+  assert.match(integration, /git merge-base --is-ancestor/);
+  assert.match(integration, /every part is its own session with its own dispatch\s+and receipt/);
+  assert.match(integration, /fresh final session/);
+  assert.match(integration, /STALE_CONTEXT/);
   assert.match(integration, /R8 INCOMPLETE/);
-  assert.match(integration, /human.*merge/s);
+  assert.match(integration, /human\s+epic-to-main merge/);
 });
 
 test('restore runs after live evidence reads and before every integrator outcome branch', () => {
@@ -256,5 +241,4 @@ for (const outcome of ['passed', 'needs-fix', 'human-review-required']) {
   });
 }
 
-if (integratorCallerOnly && integratorCallerSelected !== 1) throw new Error('Expected exactly one integrator caller case');
 done();

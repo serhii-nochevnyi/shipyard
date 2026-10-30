@@ -95,7 +95,7 @@ Assumption, with the next check: the earlier-head explanation is an inference. T
 
 ### Limits of this measurement
 
-- The tool counts product paths only, as the plan specifies. Both current arch-review paths read the complete PR diff with no pathspec (`prepareArch` in `claude-role-host.cjs`; the focused path of `codex-arch-review-context.cjs`, where `development` reports "included in the complete PR diff"). Only the Claude integrator (`diffText` with `productPathspec()`) and the Codex `legacy` path exclude artifacts. For the one landing measured both ways (phase 49) the difference is 6,167 bytes (0.17 percent); it is not measured for the other 29.
+- The tool counts product paths only, as the plan specifies. Both current arch-review paths read the complete PR diff with no pathspec (`prepareArch` in `claude-role-host.cjs`; the focused path of `codex-arch-review-context.cjs`, where `development` reports "included in the complete PR diff"). Only the integrators (their path inventory is built with `productPathspec()`) exclude artifacts. For the one landing measured both ways (phase 49) the difference is 6,167 bytes (0.17 percent); it is not measured for the other 29.
 - A merge or squash commit measures the net result against its first parent, not the diff a reviewer saw while the epic head moved. The two can differ when the base moved after the review.
 - Phases 31 and 34 are single commits, not epic merges, and phases 36 and 42 have two landings each. All 30 rows are counted as separate landings.
 
@@ -107,18 +107,18 @@ Status: verified. Every row names the symbol; no line numbers are cited because 
 
 | Bound | Value | Applies to | Effect when exceeded |
 |---|---|---|---|
-| `DIFF_MAX_BYTES` in `diffText` | 2 MiB (2,097,152) | integrator only (`prepareIntegrator` calls `diffText` with `productPathspec()`) | refuses with "role diff exceeds the bounded context packet"; a git output over the buffer is mapped from `INPUT_TOO_LARGE` to the same refusal |
+| `DIFF_MAX_BYTES` as `maxBuffer` of the name-status and numstat inventories in `prepareIntegrator` | 6 MiB (6,291,456) | integrator | `command` raises `INPUT_TOO_LARGE`; the integrator packet carries no diff, only the changed-path inventory |
 | `DIFF_MAX_BYTES` as `maxBuffer` of the name-only, name-status and numstat inventories in `prepareArch` | 2 MiB each | arch-review | `command` raises `INPUT_TOO_LARGE`; these outputs are about one line per changed file, so they are far below the bound (phase 43 changed 136 product files) |
 | `FILE_LIMITS.material` as `maxBuffer` of the diff read in `prepareArch` | 16 MiB (16,777,216) | arch-review | `INPUT_TOO_LARGE` from `command` |
 | `ARCH_REVIEW_PACKET_TOKENS` through `packetBound` and `buildPacket` | 60,000 estimated tokens | arch-review | **does not refuse.** `buildPacket` rejects overflow only for roles other than `arch-review`; for `arch-review` the packet records `accounting.overflow = true`. In `buildContextPacket` an estimate over the ceiling only strips the content of optional references (it keeps their digest references) and adds the `overflow` record. The packet `prepareArch` builds passes no optional references (assumption read from `buildPacket`: `selectedBacklogIds` is `[]` for `arch-review` and only `requiredRefs` are given), so today the ceiling is a marker and changes no content |
 | `PROMPT_MAX_BYTES` in `makePrompt` | 3,000,000 | arch-review (non-focused) and integrator | refuses `CONTEXT_PACKET_OVER_BOUND` with `limiting_field: complete_inline_prompt_bytes`; **skipped when `packet.role_context.focused` is set**, which `prepareArch` always sets |
-| `INTEGRATOR_MAX_PACKET_TOKENS` through `packetBound` | 750,000 estimated tokens (`min(750000, 60000 + ceil(diffBytes / 3))`) | integrator | `buildPacket` rejects with `CONTEXT_PACKET_OVER_BOUND` |
+| `ARCH_REVIEW_PACKET_TOKENS` through `packetBound` for the integrator | 550,000 estimated tokens | integrator | `buildPacket` rejects with `CONTEXT_PACKET_OVER_BOUND`; the host also checks, before the first part launches, that the final (every changed path plus every part result) fits |
 | literal `1024 * 1024` in `createClaudeRoleHost` `run` | 1,048,576 | arch-review | not a refusal: a prompt over it is relayed through `prepareFileInput`; the relay is refused only if prompt plus `generated_instruction_bytes` still exceed 1,048,576 ("focused file relay and instructions exceed ordinary launch capacity") |
 | `prepareFileInput` material and reads (`codex-arch-review-context.cjs`, called by `run`) | `FILE_LIMITS.material` 16 MiB total; `FILE_LIMITS.reads` 2,064 reads at `INPUT_CHUNK_BYTES` 8 KiB (about 16.1 MiB) | arch-review above 1 MiB | `CONTEXT_OVER_BOUND` "complete material exceeds its bound" |
 
 Which bound refuses a large review on Claude:
 
-- **Integrator:** `DIFF_MAX_BYTES` (2 MiB) refuses first. Four of 30 landings exceed it (phases 40, 43, 47, 49: 2,442,219; 2,656,479; 3,438,635; 3,598,345 bytes). Phase 50's landing (2,043,597 B) is 53,555 bytes under it, which is consistent with 2 MiB having been chosen to fit that phase. `INTEGRATOR_MAX_PACKET_TOKENS` would refuse the two landings over 750,000 estimated tokens next.
+- **Integrator:** the packet carries no diff, so diff size alone refuses nothing. A diff above one part budget (`PART_BUDGET`: 40,000 weight units on Claude and 10,000 on Codex, one unit per path plus its added and deleted lines) is split into path-group parts, each its own session, and a fresh final judges them. The bounds that refuse are `ARCH_REVIEW_PACKET_TOKENS` over plans, ADR references and the path inventory, and `PROMPT_MAX_BYTES`.
 - **Arch-review:** no constant refuses a 3.6 MB diff. The first refusing bound is the relay material ceiling, `FILE_LIMITS.material` (about 16 MiB of material, which is about 8 MiB of diff less references, because the diff is carried twice). `ARCH_REVIEW_PACKET_TOKENS` and `PROMPT_MAX_BYTES` do not refuse it.
 - **Not expressed by any host constant:** the model's own context window. The diff alone of the four largest landings is 610,555 to 899,587 estimated tokens. Whether a reviewer can read that is the question section 3 exists to answer, and the host would admit the input either way.
 
@@ -133,7 +133,7 @@ Which bound refuses a large review on Claude:
 | `FILE_LIMITS.relay` | 64 KiB | refuses a relay prefix over it |
 | batch transport (`preflightReaderSchedule`) | 252 KiB per batch envelope (`output_budget_bytes`), 128 MiB total encoded schedule | `capacityRefusal('finite_batch_envelope_bound' ...)` and `complete_encoded_schedule_bytes` |
 
-Which bound refuses a large review on Codex: the 16 MiB material bound of `prepareFileInput` (or the 2,064-read bound just before it at the default 8 KiB chunk). `INPUT_MAX_BYTES` does not refuse a large review; it decides that the review goes through file input and caps the launch prompt itself. The recorded phase-49 Codex benchmark (6,530,992 B of material, 830 successful reads; the acceptance record requires `runtime: codex`) was inside both bounds. The Codex integrator host was not read for this table, so no integrator bound is claimed for Codex.
+Which bound refuses a large review on Codex: the 16 MiB material bound of `prepareFileInput` (or the 2,064-read bound just before it at the default 8 KiB chunk). `INPUT_MAX_BYTES` does not refuse a large review; it decides that the review goes through file input and caps the launch prompt itself. The recorded phase-49 Codex benchmark (6,530,992 B of material, 830 successful reads; the acceptance record requires `runtime: codex`) was inside both bounds. The Codex integrator reads git itself like the Codex code review: its complete prompt, generated instructions included, must fit `INPUT_MAX_BYTES` (1 MiB) or it refuses `CONTEXT_OVER_BOUND`; it never moves to file input.
 
 ## 3. Model context windows (runtime-reported)
 

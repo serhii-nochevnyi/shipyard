@@ -4,27 +4,20 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function assertNestedInstructions(text) {
-  assert.ok(text.includes('coverage.seam_dispositions'));
-  assert.ok(text.includes('coverage.limitations'));
-  const template = text.slice(text.indexOf('The following shape is scoped to the v3 phase final')).match(/```json\n(\{[\s\S]*?\})\n```/);
-  assert.ok(template, 'explicit v3 template');
-  const result = JSON.parse(template[1]);
-  assert.equal(result.review_contract, 'shipyard.integration-review.v3');
-  for (const key of ['schema', 'plan_sha256', 'coverage_sha256', 'unit_artifacts',
-    'primary_segment_ids', 'primary_obligation_ids', 'seam_dispositions', 'limitations'])
-    assert.ok(Object.hasOwn(result.coverage, key), key);
-  assert.equal(Object.hasOwn(result, 'seam_dispositions'), false);
-  assert.equal(Object.hasOwn(result, 'limitations'), false);
+function assertPartInstructions(text) {
+  assert.ok(text.includes('## Git-read parts and independent final'));
+  assert.ok(text.includes('role_context.parts'));
+  assert.ok(text.includes('evidence_markdown'));
+  assert.ok(!text.includes('integration-review.v3') && !text.includes('integration-partition'));
 }
 
-test('the Claude loader and all generated Codex integrator rungs carry the nested v3 contract', () => {
+test('the Claude loader and all generated Codex integrator rungs carry the part-runner reference', () => {
   const root = path.resolve(__dirname, '../..');
   const plugin = path.join(root, 'plugins/delivery-pipeline');
   const loader = require(path.join(plugin, 'scripts/claude-reference-content.cjs'));
   const canonical = fs.readFileSync(path.join(plugin, 'references/integrator.md'), 'utf8');
   assert.equal(loader.loadClaudeReferenceContent('integrator'), canonical);
-  assertNestedInstructions(canonical);
+  assertPartInstructions(canonical);
   const os = require('node:os');
   const { spawnSync } = require('node:child_process');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 't38-instructions-'));
@@ -55,7 +48,7 @@ test('the Claude loader and all generated Codex integrator rungs carry the neste
     for (const file of files) {
       const text = fs.readFileSync(path.join(out, 'agents', file), 'utf8');
       const body = text.slice(text.indexOf('developer_instructions = ')).replace(/\\"/g, '"');
-      assertNestedInstructions(body);
+      assertPartInstructions(body);
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

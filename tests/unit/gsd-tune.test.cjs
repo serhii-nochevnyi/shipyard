@@ -1331,10 +1331,10 @@ test('Codex tuning preserves foreign planner and executor skills', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('Codex static variants: research is workspace-write, arch-review, code-review and drift-check stay read-only', () => {
+test('Codex static variants: research is workspace-write, arch-review, code-review, integrator and drift-check are read-only', () => {
   const { codexStaticVariants } = require(SCRIPT);
   const variants = codexStaticVariants(2);
-  for (const role of ['research', 'arch-review', 'code-review', 'drift-check']) {
+  for (const role of ['research', 'arch-review', 'code-review', 'integrator', 'drift-check']) {
     const sandboxes = new Set(variants.filter((variant) => variant.role === role).map((variant) => variant.sandbox));
     assert.deepEqual([...sandboxes], [role === 'research' ? 'workspace-write' : 'read-only']);
   }

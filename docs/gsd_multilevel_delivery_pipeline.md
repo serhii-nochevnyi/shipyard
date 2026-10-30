@@ -614,10 +614,10 @@ criteria. The verdict `passed | needs-fix | human-review-required` goes into
 `INTEGRATION.md`; `needs-fix` spawns fix tickets that go through the same
 delivery loop (section 6.1) — this is the feedback cycle.
 
-On Claude the integrator packet carries the changed-path inventory and the merged
+On both runtimes the integrator packet carries the changed-path inventory and the merged
 ticket set, not the diff; the reviewer reads the epic diff with read-only `git` in
-its own worktree sandbox. The host checks that every merged ticket PR is included in
-the epic head, splits a large inventory into path-group parts (each product path in
+its own worktree sandbox (Claude's tool profile, Codex's `:read-only` sandbox). The host
+checks that every merged ticket PR is included in the epic head, splits a large inventory into path-group parts (each product path in
 exactly one part), reviews every part in its own session and then runs an independent
 fresh final that owns the verdict. A part blocker needs a justified disposition from the
 final, and the final cannot pass over an incomplete part. A phase with no product change

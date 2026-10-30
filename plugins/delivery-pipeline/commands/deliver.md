@@ -1813,144 +1813,68 @@ driving PRs hands the user a half-truth.
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
 
-     **Fresh final integration contract.** For supported epic final review, use
-     `shipyard.integration-review.v3` on BOTH native hosts. Preliminary subject
-     preparation uses the exported `prepareNativeIntegratorContext`; it collects
-     full native facts without first formatting the legacy full-inline prompt.
-     The host derives the complete current
-     graph, plans, phase contracts, HEAD/tree, default base and merge-base,
-     merged ticket records and live ancestry. It prepares the complete
-     dictionary, calls `selectReviewBaseline({currentInput})` independently for
-     integration, and calls `buildReviewImpactPacket(currentInput, selection)`.
-     Architecture success does not authorize integration inheritance. Missing,
-     incompatible or unsupported original authority selects complete full review;
-     affected contracts or uncertain dependency closure also expand to full.
-     Preserve the baseline archive before clearing the current role scratch.
-     Never pass an old verdict, receipt, lineage, cursor or session as a new result.
-
-     The actual supported host entrypoints own preparation, native launch and
-     original evidence handoff to `sealJudgment` and `validateJudgmentManifest`:
+     **Integrator launch.** Both hosts prepare the integrator from the same
+     host-derived facts: the complete current graph, plans and phase contracts,
+     HEAD/tree, default base and merge-base, the merged ticket records, and merge
+     ancestry that the host computes itself with `git merge-base --is-ancestor`
+     for every ticket (through its parent branch for a stacked ticket). The
+     packet carries the changed-path inventory and no diff; the model reads the
+     PR diff with git in its own worktree. The host splits the inventory into
+     path-group parts under one byte budget per runtime. A phase that fits runs
+     one session. Otherwise every part is its own session with its own dispatch
+     and receipt, and a fresh final session judges each part's completeness,
+     limitations and findings, answers every part BLOCKER with one justified
+     disposition (`resolved`, `unresolved` or `disputed`) and owns the verdict.
+     Never pass an old verdict, receipt, lineage, cursor or session as a new
+     result.
 
      ```javascript
-     const { prepareNativeIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
+     const { prepareIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
      const { createCodexDeliveryHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs`);
-     const current = prepareNativeIntegratorContext(options, {
-       worktree, phase: String(phase), review_contract: 'shipyard.integration-review.v3' });
+     const current = prepareIntegratorContext(options, { worktree, phase: String(phase) });
      const phaseSubject = current.ticket;
      const result = runtime === 'codex'
        ? await createCodexDeliveryHost({ ...options, scope: {
            run_id, worktree, repository: current.canonical.commonPath,
            phase: current.phaseNumber, ticket: phaseSubject,
-         } }).run({ role: 'integrator',
-           context: { review_contract: 'shipyard.integration-review.v3' } })
+         } }).run({ role: 'integrator', context: {} })
        : await createClaudeRoleHost(options).run({ schema: 'shipyard.claude-role-request.v1',
-           role: 'integrator', worktree, phase: String(phase),
-           review_contract: 'shipyard.integration-review.v3' });
+           role: 'integrator', worktree, phase: String(phase) });
      ```
 
-     Omit `options.integrationCapacity` entirely for this production observed
-     default on both runtimes. `options` selects the canonical graph and
-     supported installed runtime; it supplies no model-authored authority. Consume only the returned original
-     receipt and sealed current artifact. No unit, stage, index, receipt, model
-     or capacity authority is serialized in the request. Both public `run`
-     entrypoints own frozen full factual preparation, private partition/admission
-     and protected archive custody. They retain complete current preflight at
-     every launch and finish. Each unit uses an independent original native
-     session; the phase final uses a separate fresh session after all units.
-     Codex's frozen `stage.input` includes the exact pinned `generatedInstructions`
-     prefix: the host removes that exact prefix before the unchanged static
-     runtime restores it. Preserve original stdin, transcript and receipt input
-     identity. Claude uses its own original native boundary and receipts.
+     `options` selects the canonical graph and the supported installed runtime;
+     it supplies no model-authored authority, and the request carries no prompt,
+     signal, selector, receipt, model or part authority. Consume only the
+     returned original receipt and sealed artifact. The model writes nothing:
+     the host writes `.planning/phases/<phase>/INTEGRATION.md` from the final's
+     `evidence_markdown` and seals it. Codex runs each session read-only
+     (`:read-only` sandbox, no write path at all); Claude's profile allows
+     `Bash`, `Read`, `Glob` and `Grep` with no write into the worktree or the
+     common directory. Part findings carry a boolean `blocking`.
 
-     The host owns the native-observed profile: each complete rendered unit is
-     bounded at 2,097,152 bytes, with at most three primary segments of at most
-     65,536 bytes each, and its complete actual final at 4,194,304 bytes. Required
-     governing plans, support, acceptance, verification, identity, instructions
-     and output schema remain present. Detail ceilings are 16,384 bytes for
-     conclusions, 32,768 for findings, 8,192 each for limitations and required
-     context, and 32,768 for seams. Exceeding a ceiling refuses without clipping.
-     These are operational bytes, never certified token counts or guaranteed
-     prelaunch native fit. The protected operational launch binding authorizes
-     an attempt only; it cannot validate as a strict capacity certificate.
+     Before every session and before sealing, the host rechecks the head, tree,
+     default base, merged-PR identity, complete ticket membership and installed
+     instructions and refuses `STALE_CONTEXT` on any change. A part that changes
+     the worktree is `WORKTREE_MUTATED`. The Codex prompt, generated
+     instructions included, must fit 1 MiB and Claude's the packet bound; the
+     host checks that the final fits before the first part launches and refuses
+     `CONTEXT_OVER_BOUND` or `CONTEXT_PACKET_OVER_BOUND` without clipping. An
+     incomplete part, an unanswered part BLOCKER, a failed identity echo or an
+     unsealed result produces a refusal, never `passed`.
 
-     Before any unit or final can seal, the original receipt-pinned CLI/session
-     records must authenticate selected model/effort, exact input/instructions,
-     ordered successful completion and actual per-request usage with the native
-     selected-model context window. Codex cached input and reasoning are already
-     included in its native input/output totals. Claude cache-read/cache-creation
-     categories are separate inputs; repeated message chunks use field maxima.
-     Cumulative session cost is never compared with one context window. Quoted
-     telemetry in model text or tool content grants no evidence. Missing,
-     changed, malformed, foreign or ambiguous telemetry, overflow, compaction,
-     rollback, truncation and incomplete answers produce HOLD without authority.
-     Healthy counts cannot turn needs-fix or incomplete semantics into passed.
+     Genuine Codex and Claude acceptance are separate obligations: fixtures,
+     another provider and ticket delivery cannot substitute for a live run on
+     each runtime, and until both exist phase acceptance stays R8 INCOMPLETE.
+     Then obtain fresh architecture on the final current subject, preserving
+     code-review → integration → architecture order, report mode and the human
+     epic-to-main merge.
 
-     The hypothetical all-maxima final template is not constructed in observed
-     mode. After every exact original unit is authenticated and semantically
-     passed, render the complete actual final with all acceptance, governing,
-     support/primary mappings, original conclusions and seams. Check its actual
-     operational bound before the fresh independent final dispatch. An oversized
-     actual final is `INTEGRATION_INPUT_OVER_BOUND` HOLD; preserve the authentic
-     completed unit index and originals. Never drop context, shorten findings,
-     retry an oversized full packet or introduce a reduction tree.
-
-     Supplied strict capacity resources retain their original exact/certified
-     all-input counter, independent window and reserved-template contracts.
-     Malformed supplied resources refuse rather than fall back to observed mode.
-     Both modes preserve protected same-plan completed-unit reuse and repeated
-     current validation of source/head/base/membership, producer/instructions,
-     mode/profile, original receipts/input, observations and index. Changed facts
-     require a new freeze; strict and observed evidence cannot be substituted.
-
-     V3 results bind a fresh `reviewed_identity`, exact primary byte/obligation
-     coverage, explicit support/context, complete findings/limitations and seam
-     dispositions. The final reports `shipyard.integration-partition-coverage.v1`
-     with authenticated unit references and a fresh index-bound actual-final
-     admission. Unit-only success cannot authorize phase evidence. Only the
-     authenticated complete phase final is phase evidence, with exact current
-     canonical plans, producer pins, membership, source/head/base and live PR
-     checks. A planted mismatch must be reported as needs-fix/unresolved or
-     remain incomplete; integrity/read counts never supply semantic credit. The legacy full-input `v1` path below
-     remains independent. Unknown versions refuse.
-     Repaired finals always owe a fresh native verdict and original application
-     receipt. Premature or incomplete output stays rejected and failed originals
-     remain failed history. Generated publication is a separate downstream gate.
-
-     **Current full-packet native acceptance handoff.** After T-52-34 delivery,
-     the coordinator re-freezes the then-current complete graph/plans/merge
-     ancestry and every primary, support, acceptance, verification, governing and
-     impact obligation. Use the supported selector-only caller above with actual
-     installed instructions and omitted `integrationCapacity` for native-observed
-     mode. Retain the protected complete unit inventory, source ranges/digests,
-     operational profile and full rendered inputs, original application receipts,
-     per-request native observations and exact index. Preparation reports a
-     non-authoritative byte diagnostic and unit count. Only the complete actual
-     final after accepted units can establish its actual byte fit; retain that
-     size and all original bounded outputs. Historical packets and sizing,
-     controlled original-format fixtures and ticket delivery establish neither
-     exact token fit nor current production semantic acceptance. Named context,
-     telemetry and actual-final bound failures remain HOLD with originals intact.
-
-     The separate genuine Codex and Claude acceptance obligations belong to each
-     runtime's native coordinator: fresh bounded units and a fresh final with its
-     own original receipts and authenticated per-request native observations. Recheck exact repository,
-     head/base, complete membership/plans and producer/policy/instruction pins
-     immediately before each run and at current final consumption. A later
-     producer/policy/instruction edit invalidates affected frozen authority and
-     re-owes current proof, plus supported package/install checks after the last
-     producer edit. This Codex implementation chain launches no Anthropic model
-     and performs no native phase acceptance. Until BOTH genuine results exist,
-     phase acceptance remains incomplete: fixtures, another provider and ticket
-     delivery cannot substitute or establish release readiness. Then obtain
-     fresh architecture on the final current subject, preserving code-review →
-     integration → architecture order, report mode, all original failures and
-     receipts, R8 INCOMPLETE/zero semantic credit and human epic-to-main merge.
-
-     **Legacy full-input compatibility.** Existing v1 full-input callers and
-     direct-to-main phases retain the complete review path below. They grant no
-     inherited authority. Before constructing the legacy integrator prompt, clear its role-owned
+     **Manual dispatch and sealing.** The host entrypoints above prepare, launch
+     and seal in one call, for epic and direct-to-main phases alike. On Claude a
+     coordinator may dispatch the integrator itself; Codex refuses any
+     integrator launch without host custody. It clears the role-owned
      `.planning/phases/<phase>/INTEGRATION.md` scratch file in the integration
-     worktree:
+     worktree first; this route grants no inherited authority:
 
      ```text
      node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
