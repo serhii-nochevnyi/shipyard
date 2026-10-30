@@ -214,21 +214,78 @@ function packageParity(candidate) {
   }
   return record;
 }
+// @contract: Static original bytes survive final squash and branch/object reaping.
+const HISTORICAL_REVISIONS = ['cfc5bcc51be8815b09d1c5a64f038715f316cf76', '2e9890bddd11a062b56f3d41c222bc59ffbc4e58'];
+const HISTORICAL_SOURCES = {
+  'role-artifact.cjs': { uncompressed_bytes: 700187, uncompressed_sha256: '8bbca68a49a1029bcc29dd9f81046cab0241617f39bcf711238a55925456e94f', blob: '12f5aec2819e1179ddaadea0765f9a70d62ef559' },
+  'codex-delivery-host.cjs': { uncompressed_bytes: 282399, uncompressed_sha256: '0c7fc0c69e28770a53b108957cb5704c44dd6434d42fb14e7922784b0f605b85', blob: 'bafb153b3c6e88177b1497c5abf608d277e1a01e' },
+  'claude-role-host.cjs': { uncompressed_bytes: 170119, uncompressed_sha256: '0a7669a6cfc890ee5fcad129cf463fb8e9b65a13859a110de7833952f9743f7f', blob: '53b71ef1d86c9bc669fc32095019df8829aa697f' },
+};
+function historicalSources(names) {
+  const directory = path.join(__dirname, 'historical-semantic-producer');
+  assert.equal(fs.realpathSync(__dirname), __dirname, 'physical fixture ancestry');
+  assert.equal(fs.lstatSync(directory).isDirectory(), true, 'physical fixture directory');
+  assert.equal(fs.realpathSync(directory), directory, 'contained fixture directory');
+  function read(name, bound) {
+    const file = path.join(directory, name), stat = fs.lstatSync(file);
+    assert.equal(stat.isFile(), true, 'historical fixture must be a regular nonsymlink file');
+    assert.equal(fs.realpathSync(file), file, 'historical fixture must be physically contained');
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const opened = fs.fstatSync(fd);
+      assert.equal(opened.isFile(), true); assert.equal(opened.dev, stat.dev); assert.equal(opened.ino, stat.ino);
+      assert.ok(opened.size <= bound, 'historical fixture exceeds byte bound');
+      const bytes = Buffer.alloc(bound + 1); let count = 0, size;
+      do { size = fs.readSync(fd, bytes, count, bytes.length - count, null); count += size; }
+      while (size && count < bytes.length);
+      assert.ok(count <= bound, 'historical fixture exceeds byte bound');
+      assert.equal(count, opened.size, 'historical fixture changed while reading');
+      const after = fs.lstatSync(file);
+      assert.equal(after.isFile(), true); assert.equal(after.dev, opened.dev); assert.equal(after.ino, opened.ino);
+      return bytes.subarray(0, count);
+    } finally { fs.closeSync(fd); }
+  }
+  const keys = (value, expected) => {
+    assert.ok(value && typeof value === 'object' && !Array.isArray(value), 'historical manifest object');
+    assert.deepEqual(Object.keys(value).sort(), [...expected].sort(), 'closed historical manifest fields');
+  };
+  const manifest = JSON.parse(read('manifest.json', 16384).toString('utf8'));
+  keys(manifest, ['schema', 'version', 'compression', 'revisions', 'sources']);
+  assert.equal(manifest.schema, 'shipyard.historical-semantic-producer-fixture');
+  assert.equal(manifest.version, 1); assert.equal(manifest.compression, 'gzip');
+  assert.deepEqual(manifest.revisions, HISTORICAL_REVISIONS);
+  keys(manifest.sources, Object.keys(HISTORICAL_SOURCES));
+  for (const [name, original] of Object.entries(HISTORICAL_SOURCES)) {
+    const row = manifest.sources[name];
+    keys(row, ['fixture', 'source_path', 'mode', 'blob', 'uncompressed_bytes', 'uncompressed_sha256', 'compressed_bytes', 'compressed_sha256']);
+    for (const [key, value] of Object.entries({ ...original, mode: '100644', fixture: name + '.gz',
+      source_path: 'plugins/delivery-pipeline/scripts/' + name })) assert.equal(row[key], value, 'immutable original ' + name + ' ' + key);
+    assert.ok(Number.isSafeInteger(row.compressed_bytes) && row.compressed_bytes > 0 && row.compressed_bytes <= 262144);
+    assert.match(row.compressed_sha256, /^[a-f0-9]{64}$/);
+  }
+  return names.map(name => {
+    assert.ok(Object.hasOwn(HISTORICAL_SOURCES, name), 'closed historical module name');
+    const row = manifest.sources[name], original = HISTORICAL_SOURCES[name];
+    const compressed = read(name + '.gz', 262144);
+    assert.equal(compressed.length, row.compressed_bytes, 'exact compressed byte count');
+    assert.equal(hash(compressed), row.compressed_sha256, 'exact compressed digest');
+    assert.deepEqual([...compressed.subarray(0, 10)], [31, 139, 8, 0, 0, 0, 0, 0, 2, 255], 'deterministic gzip format');
+    const bytes = require('node:zlib').gunzipSync(compressed, { maxOutputLength: original.uncompressed_bytes });
+    assert.equal(bytes.length, original.uncompressed_bytes, 'exact decoded byte count');
+    assert.equal(hash(bytes), original.uncompressed_sha256, 'exact original digest');
+    assert.equal(crypto.createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex'), original.blob, 'exact original Git blob identity');
+    return [name, bytes];
+  });
+}
 async function publicRole(role, runtime, options = {}) {
   const home = fs.realpathSync(process.env.HOME);
   assert.ok(path.basename(home).startsWith('z21-case-'));
   os.homedir = () => home;
+  const historical = options.historical ? historicalSources(options.historicalShared ? ['role-artifact.cjs']
+    : ['role-artifact.cjs', 'codex-delivery-host.cjs', 'claude-role-host.cjs']) : [];
   const plugin = fs.mkdtempSync(path.join(home, 'producer-'));
   fs.cpSync(path.dirname(SCRIPTS), plugin, { recursive: true });
-  if (options.historical) {
-    const { execFileSync } = require('node:child_process');
-    for (const name of options.historicalShared ? ['role-artifact.cjs']
-      : ['role-artifact.cjs', 'codex-delivery-host.cjs', 'claude-role-host.cjs']) {
-      const bytes = execFileSync('git', ['show', 'cfc5bcc51be8815b09d1c5a64f038715f316cf76:plugins/delivery-pipeline/scripts/' + name],
-        { cwd: ROOT, maxBuffer: 4 * 1024 * 1024 });
-      fs.writeFileSync(physical(home, path.join(plugin, 'scripts', name)), bytes);
-    }
-  }
+  for (const [name, bytes] of historical) fs.writeFileSync(physical(home, path.join(plugin, 'scripts', name)), bytes);
   const smoke = setup('../smoke/phase53-review-acceptance.cjs', 'async function observeRetirement', 'routePayload');
   const restore = smoke.routePayload(plugin), originalLoad = Module._load;
   const api = require(path.join(plugin, 'scripts/role-artifact.cjs')), snapshots = new Map();
