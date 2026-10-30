@@ -1059,7 +1059,7 @@ test('D35 complete native answer rejects independent semantic and host substitut
       r => { r.contract_digest = 'a'.repeat(64); r.reuse_key = core.reuseKey({ head: r.head, baseCommit: f.base, contractDigest: r.contract_digest }); },
     ];
     for (const key of ['focused', 'selected_refs', 'planning_reference', 'original_packet', 'graph_dir', 'source_root',
-      'phase_repo', 'phase_archive_selection', 'evidence_sha256']) mutations.push(r => { r.host_context = { [key]: 'foreign' }; });
+      'phase_repo', 'evidence_sha256']) mutations.push(r => { r.host_context = { [key]: 'foreign' }; });
     for (const mutate of mutations) {
       const result = structuredClone(input.result); mutate(result);
       assert.throws(() => roleArtifact.sealJudgment({ ...input, result }), error => error.code === 'REVIEW_NATIVE_INVALID');

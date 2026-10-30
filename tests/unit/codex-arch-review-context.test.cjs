@@ -265,43 +265,6 @@ test('document-relative decision links are collected completely and missing auth
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-function guardExcludedArchives(foreignPaths) {
-  const fs = require('node:fs');
-  const crypto = require('node:crypto');
-  const previous = { openSync: fs.openSync, readFileSync: fs.readFileSync, realpathSync: fs.realpathSync };
-  const authority = foreignPaths.map(root => crypto.createHash('sha256').update(root).digest('hex'));
-  let deniedReads = 0;
-  const check = (file, physical) => {
-    if (typeof file !== 'string') return;
-    if ((physical && foreignPaths.some(root => file === root || file.startsWith(root + '/')))
-        || authority.some(id => file.includes('/role-artifact-authority/' + id))
-        || foreignPaths.some(root => file.startsWith(root + '/') && /(?:evidence\.md|findings\.json)$/.test(file))) {
-      deniedReads++; throw new Error('Excluded foreign archive was accessed: ' + file);
-    }
-  };
-  fs.openSync = function(file, ...args) { check(file, false); return previous.openSync.call(this, file, ...args); };
-  fs.readFileSync = function(file, ...args) { check(file, false); return previous.readFileSync.call(this, file, ...args); };
-  fs.realpathSync = function(file, ...args) { check(file, true); return previous.realpathSync.call(this, file, ...args); };
-  return () => { Object.assign(fs, previous); return deniedReads; };
-}
-
-function registerAggregateRoster(f, original, graphDir, storage) {
-  const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-  const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
-  const raw = JSON.parse(fs.readFileSync(path.join(graphDir, 'delivery-state.json')));
-  const binding = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').phaseBinding({ graph,
-    state: raw.tickets || raw, phase: 38, repository: git(f.root, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
-    branch: f.pr.headRefName, pr: f.pr.number, head: f.head, base: f.base });
-  const pins = role.authenticatedArchivePins(f.root);
-  const inventory = { rows: [{ worktree: f.root, ticket: f.ticket || TICKET,
-    dispatch_id: original.result.receipt.dispatch_id, receipt: original.result.receipt,
-    receipt_store: path.join(f.storage, 'receipts'), pins }] };
-  const inventoryPath = path.join(storage, 'phase-inventory.json');
-  fs.writeFileSync(inventoryPath, JSON.stringify(inventory), { mode: 0o600 });
-  return role.registerPhaseArchiveRoster({ worktreePath: f.root, binding, graphDir, inventoryPath,
-    expectedInventoryDigest: require('node:crypto').createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
-}
-
 function canonicalReviewMember(f, aggregate = false) {
   const ticket = 'T-38-01';
   const branch = 'ticket/' + ticket;
@@ -332,15 +295,8 @@ function canonicalReviewMember(f, aggregate = false) {
 for (const scenario of [
   { productBytes: 0, name: 'small packet' },
   { productBytes: 2600000, name: 'large diff stays out of the packet' },
-  { scoped: true, mutation: 'foreign', name: '1001 foreign families per worktree preserve current evidence' },
-  { scoped: true, mutation: 'bytes', name: 'selected bytes refuse' },
-  { scoped: true, mutation: 'membership', name: 'selected membership refuses' },
-  { scoped: true, mutation: 'omission', name: 'relabelled current manifest and removed authority refuse before discovery' },
-  { scoped: true, mutation: 'family', name: 'removed current family refuses before discovery' },
-]) test((scenario.scoped ? 'phase-local archive scope: ' : 'fixture: ') +
-    'public Codex host seals and consumes a complete aggregate phase architecture verdict (' + scenario.name + ')', async () => {
-  const { scoped = false, productBytes = 0, mutation } = scenario;
-  let restoreForeignGuard;
+]) test('fixture: public Codex host seals and consumes a complete aggregate phase architecture verdict (' + scenario.name + ')', async () => {
+  const { productBytes = 0 } = scenario;
   const f = fixture();
   const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase-architecture-host-')));
   try {
@@ -370,40 +326,6 @@ for (const scenario of [
     const hostModule = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
     const parsed = hostModule.readRequestFile(requestPath);
     const options = { graphDir, refreshGit: false, getPullRequest: () => f.pr };
-    const roster = registerAggregateRoster(f, originalTicketReview, graphDir, storage);
-    assert.equal(roster.records[0].ticket, member);
-    const foreignPaths = [];
-    if (scoped) {
-      write(f.root, '.shipyard-role-artifacts/foreign-history/.shipyard-role-artifact.json', JSON.stringify({ ticket: 'T-37-01', boundary_subject: 'T-37-01' }));
-      write(f.root, '.shipyard-role-artifacts/foreign-history/evidence.md', 'Foreign evidence');
-      write(f.root, '.shipyard-role-artifacts/foreign-history/findings.json', 'Foreign findings');
-      const foreignRoot = path.join(fs.realpathSync(storage), 'foreign-worktree');
-      git(f.root, ['worktree', 'add', '--detach', foreignRoot, 'HEAD']);
-      write(foreignRoot, '.shipyard-role-artifacts/foreign-history/.shipyard-role-artifact.json', JSON.stringify({ ticket: 'T-37-01' }));
-      write(foreignRoot, '.shipyard-role-artifacts/foreign-history/evidence.md', 'Foreign evidence');
-      write(foreignRoot, '.shipyard-role-artifacts/foreign-history/findings.json', 'Foreign findings');
-      foreignPaths.push(path.join(f.root, '.shipyard-role-artifacts/foreign-history'), foreignRoot);
-      if (mutation === 'foreign') for (const root of [f.root, foreignRoot]) {
-        for (let index = 0; index < 1001; index++) {
-          const family = '.shipyard-role-artifacts/foreign-volume-' + String(index).padStart(4, '0');
-          write(root, family + '/.shipyard-role-artifact.json', JSON.stringify({
-            ticket: 'T-37-01', boundary_subject: 'T-37-01' }));
-          write(root, family + '/evidence.md', 'Foreign evidence');
-          write(root, family + '/findings.json', 'Foreign findings');
-          if (root === f.root) foreignPaths.push(path.join(root, family));
-        }
-      }
-      restoreForeignGuard = guardExcludedArchives(foreignPaths);
-    }
-    if (mutation === 'omission' || mutation === 'family') {
-      const manifestPin = roster.records[0].pins.find(pin => pin.path.endsWith('/.shipyard-role-artifact.json'));
-      if (mutation === 'omission') {
-        write(f.root, manifestPin.path, JSON.stringify({ ticket: 'T-37-01', boundary_subject: 'T-37-01' }));
-        fs.unlinkSync(path.join(require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').archiveAuthorityDirectory(f.root), 'catalogue.json'));
-      } else fs.rmSync(path.dirname(path.join(f.root, manifestPin.path)), { recursive: true });
-      assert.throws(() => contextBuilder.prepare(parsed.scope, parsed.launch, options), /selected|catalogue|archive|family|ENOENT/i);
-      return;
-    }
     let value;
     assert.doesNotThrow(() => { value = contextBuilder.prepare(parsed.scope, parsed.launch, options); });
     const originalPacket = JSON.stringify(value.prepared.packet);
@@ -466,14 +388,12 @@ for (const scenario of [
           value.prepared.rows.map(item => item.row.plan));
         assert.ok(packet.refs.some(ref => ref.path.endsWith('ADR-014-host-bound-review.md')));
         assert.deepEqual(packet.refs, expectedPacket.refs);
-        assert.deepEqual(packet.retained_evidence, value.prepared.packet.retained_evidence);
       } });
     let output = '';
     await hostModule.runCli(['--args-file', requestPath], { write: text => { output += text; } },
       { ...options, host, capabilities, recorder, agentDir, agentManifest, storageRoot: storage });
     const result = JSON.parse(output);
     assert.equal(result.subject, request.scope.ticket);
-    assert(value.prepared.packet.retained_evidence.some(item => item.dispatch_id === originalTicketReview.result.receipt.dispatch_id));
     assert.notEqual(result.receipt.dispatch_id, originalTicketReview.result.receipt.dispatch_id);
     assert.equal(result.receipt.runtime_evidence.focused_review.review_contract, contextBuilder.FOCUSED_CONTRACT);
     assert.equal(result.result.review_completeness, 'complete');
@@ -483,75 +403,18 @@ for (const scenario of [
     const current = { worktreePath: f.root, pr: f.pr.number, head: f.head, headBranch: f.pr.headRefName,
       baseName: 'main', baseCommit: f.base, graphDir };
     assert.equal(artifacts.currentArchitectureVerdict(current).subject, request.scope.ticket);
-    if (scoped) {
-      assert.equal(value.prepared.packet.retained_evidence.length, 1);
-      assert.equal(value.prepared.packet.retained_evidence[0].files.length, 3);
-      const retained = value.prepared.packet.retained_evidence[0];
-      assert.deepEqual(retained.files, roster.records[0].pins);
-      assert.equal(Object.hasOwn(retained, 'receipt'), false);
-      assert.ok(retained.files.every(pin => !Object.hasOwn(pin, 'content')));
-      assert.deepEqual(originalTicketReview.recorder.getVerifiedRecord(retained.dispatch_id).receipt, originalTicketReview.result.receipt);
-      const manifestPin = retained.files.find(pin => pin.path.endsWith(artifacts.MANIFEST_NAME));
-      assert.notEqual(JSON.parse(fs.readFileSync(path.join(retained.worktree, manifestPin.path))).head, f.head);
-      const input = { worktreePath: f.root, role: 'arch-review', ticket: request.scope.ticket, pr: f.pr.number,
-        base: 'refs/remotes/origin/main', ticketSet: value.prepared.binding.ticketSet,
-        ticketSetDigest: value.prepared.binding.membership, boundaryStore: path.join(storage, 'receipts'),
-        dispatchId: result.receipt.dispatch_id, artifactPath: result.artifact.ref, artifactDigest: result.artifact.digest };
-      const consumer = `const fs=require('node:fs'), cp=require('node:child_process');
-        const x=JSON.parse(fs.readFileSync(0,'utf8'));
-        const restore=(${guardExcludedArchives.toString()})(x.foreignPaths);
-        x.input.io={execFileSync(exe,args,opts){if(exe==='gh')return JSON.stringify(x.pr);
-          if(exe==='git'&&args.includes('fetch'))return '';return cp.execFileSync(exe,args,opts);}};
-        const role=require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))});
-        if(x.verdict) {
-          const refusals=[]; x.current.onCandidateRefusal=e=>refusals.push(e);
-          const result=role.currentArchitectureVerdict(x.current);
-          if(x.refused) { require('node:assert/strict').equal(result,null);
-            require('node:assert/strict').ok(refusals.some(e=>/selected|archive|family|pin|membership/i.test(e.message))); }
-          else require('node:assert/strict').equal(result.subject,x.input.ticket);
-        }
-        else role.validateJudgmentManifest(x.input);
-        require('node:assert/strict').equal(restore(),0);`;
-      const fresh = (verdict, refused = false) => execFileSync(process.execPath, [...testAuthorityArgs, '-e', consumer], {
-        input: JSON.stringify({ input, current, pr: f.pr, verdict, refused, foreignPaths }), stdio: ['pipe', 'pipe', 'pipe'] });
-      fresh(false); fresh(true);
-      const selectedDigest = value.prepared.packet.retained_history_digest;
-      if (mutation === 'foreign') {
-        for (const root of [f.root, foreignPaths[1]]) {
-          for (const name of fs.readdirSync(path.join(root, '.shipyard-role-artifacts')).filter(name => name.startsWith('foreign-'))) {
-            const family = path.join(root, '.shipyard-role-artifacts', name);
-            fs.appendFileSync(path.join(family, 'evidence.md'), 'changed foreign body');
-            fs.appendFileSync(path.join(family, 'findings.json'), 'changed foreign body');
-          }
-        }
-        assert.equal(artifacts.phaseArchitectureEvidenceDigest(artifacts.phaseArchitectureEvidence(f.root, value.prepared.binding,
-          { graphDir, phaseArchiveSelection: value.prepared.packet.phase_archive_selection })), selectedDigest);
-        fresh(false); fresh(true);
-      } else {
-        const pin = roster.records[0].pins.find(pin => pin.path.endsWith('/findings.json'));
-        if (mutation === 'bytes') fs.appendFileSync(path.join(f.root, pin.path), 'changed selected bytes');
-        else fs.writeFileSync(path.join(path.dirname(path.join(f.root, pin.path)), 'unexpected-member'), 'changed selected membership');
-        assert.throws(() => fresh(false), /selected|archive|family|pin|membership/i);
-        fresh(true, true);
-        const refusals = [];
-        assert.equal(artifacts.currentArchitectureVerdict({ ...current, onCandidateRefusal: error => refusals.push(error) }), null);
-        assert.ok(refusals.some(error => /selected|archive|family|pin|membership/i.test(error.message)));
-        return;
-      }
-    }
 
     assert.equal(artifacts.currentArchitectureVerdict({ ...current, head: 'f'.repeat(40) }), null);
     fs.appendFileSync(path.join(f.root, '.planning/architecture/ADR-014-host-bound-review.md'), '\nChanged governing decision.');
     assert.equal(artifacts.currentArchitectureVerdict(current), null);
   } finally {
-    if (restoreForeignGuard) assert.equal(restoreForeignGuard(), 0);
     cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true });
   }
 });
 
 
 module.exports = { fixture, unitJudgment, cleanupJudgment, registerTests, registerCases, testAuthorityArgs,
-  canonicalReviewMember, registerAggregateRoster, aggregateRuntimeFixture };
+  canonicalReviewMember, aggregateRuntimeFixture };
 
 test('large complete architecture context is included once within final prompt capacity', () => {
   const f = fixture();
@@ -1694,7 +1557,6 @@ for (const [label, parentName] of [['plain', 'plain'], ['space', 'with space'], 
       const parsed = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').readRequestFile(requestPath);
       const calls = [];
       const recorder = (...args) => { calls.push(args); return execFileSync(...args); };
-      registerAggregateRoster(c.f, c.original, c.graphDir, c.storage);
       const value = contextBuilder.prepare(parsed.scope, parsed.launch,
         { graphDir: c.graphDir, refreshGit: false, getPullRequest: () => c.f.pr, execFileSync: recorder });
       const identity = architecture.repositoryIdentity(c.f.root);

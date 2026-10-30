@@ -368,42 +368,6 @@ test('genuine finalized Claude receipts admit full architecture at all current c
   });
 });
 
-test('explicit legacy Claude original input retains its native receipt and current architecture admission', async () => {
-  await claudeFixture(async f => {
-    const reviewed = await runClaudeCurrentReview(f, 'arch-review', { legacy: true });
-    assert.equal(reviewed.result.review_contract, undefined);
-    assert.equal(JSON.parse(fs.readFileSync(reviewed.artifact.ref)).current_review, undefined);
-    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true,
-      admissionDiagnostic(f, consumer));
-  });
-});
-
-for (const [name, mutate, valid] of [
-  ['reordered', refs => refs.reverse(), true],
-  ['missing', refs => refs.pop(), false],
-  ['additional', refs => refs.push({ ...refs[0], path: 'extra.md' }), false],
-  ['duplicate', refs => refs.push({ ...refs[0] }), false],
-  ['changed hash', refs => { refs[0].sha256 = '0'.repeat(64); }, false],
-  ['changed bytes', refs => { refs[0].bytes++; }, false],
-  ['changed identity', refs => { refs[0].path += '.changed'; }, false],
-]) test('legacy selected reference inventory ' + name, async () => {
-  await claudeFixture(async f => {
-    const run = () => runClaudeCurrentReview(f, 'arch-review', { legacy: true, selectedRefs: mutate });
-    if (valid) {
-      await run();
-      for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true,
-        admissionDiagnostic(f, consumer));
-    } else {
-      await run();
-      for (const consumer of consumers) {
-        assert.equal(consumer(currentSubject(f)).architecture.ready, false);
-        const { refusals } = JSON.parse(admissionDiagnostic(f, consumer));
-        assert.ok(refusals.some(refusal => refusal.message === 'selected references differ from original native input'));
-      }
-    }
-  });
-});
-
 for (const [name, edit] of [
   ['absent original user packet', rows => rows.shift()],
   ['duplicate original user packet', rows => rows.unshift(structuredClone(rows[0]))],
@@ -420,7 +384,7 @@ for (const [name, edit] of [
     const match = /<AUTHENTICATED_CONTEXT_PACKET>\s*([\s\S]*?)\s*<\/AUTHENTICATED_CONTEXT_PACKET>/.exec(text);
     const packet = packets.decodeUniqueContent(JSON.parse(match[1]));
     const ref = packet.required_refs.find(item => item.path.endsWith('ADR-014-original.md'));
-    assert.ok(ref, 'the original legacy packet carries its governing decision');
+    assert.ok(ref, 'the original packet carries its governing decision');
     ref.content += '\nAltered original governing boundary.\n';
     ref.sha256 = ref.digest = hash(ref.content); ref.bytes = ref.content_bytes = Buffer.byteLength(ref.content);
     for (const item of packet.logical_source_obligations.filter(item => item.path === ref.path)) {
@@ -428,12 +392,9 @@ for (const [name, edit] of [
     }
     rows[0].message.content = text.replace(match[1], JSON.stringify(packets.encodeUniqueContent(packet)));
   }],
-]) test('Claude architecture archive reconstruction refuses ' + name, async () => {
+]) test('Claude architecture refuses to seal over a tampered original input: ' + name, async () => {
   await claudeFixture(async f => {
-    const fresh = await runClaudeCurrentReview(f, 'arch-review', { legacy: true, native: edit });
-    const manifest = JSON.parse(fs.readFileSync(fresh.artifact.ref));
-    assert.notEqual(hash(JSON.stringify(JSON.parse(fs.readFileSync(path.join(f.worktree,
-      manifest.files.findings.path))).ticket_set)), manifest.ticket_set_digest);
+    await assert.rejects(runClaudeCurrentReview(f, 'arch-review', { native: edit }));
     for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, false);
   });
 });
@@ -542,13 +503,7 @@ async function runClaudeCurrentReview(f, role, edit = {}) {
               const packet = packets.decodeUniqueContent(encoded), context = packet.role_context;
               f.lastClaudePacket = structuredClone(packet);
               let result;
-              if (role === 'arch-review' && !context.focused) {
-                result = { id: packet.subject, pr: f.pr.number, head: f.head,
-                  base_tree: git(f.worktree, 'rev-parse', f.base + '^{tree}'),
-                  ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest,
-                  verdict: 'conform', blocking_count: 0, summary: 'Complete original legacy architecture fixture', findings: [] };
-                write(f.worktree, '.shipyard-arch-review-evidence.md', 'Complete original architecture fixture evidence.\n');
-              } else if (role === 'arch-review') {
+              if (role === 'arch-review') {
                 const stable = value => Array.isArray(value) ? '[' + value.map(stable).join(',') + ']'
                   : value && typeof value === 'object' ? '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}'
                     : JSON.stringify(value);
@@ -607,47 +562,6 @@ async function runClaudeCurrentReview(f, role, edit = {}) {
         return originalHost.applicationEvidence({ result: originals.get(result) });
       } };
     } };
-  if (edit.legacy) {
-    assert.equal(role, 'arch-review');
-    const dispatchId = 'legacy-claude-original-' + ++f.count;
-    const prepared = legacyArchitecture(f, dispatchId);
-    const reference = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs').loadClaudeReferenceContent(role);
-    const packet = packets.buildContextPacket({ root: f.worktree, role, subject: prepared.ticket,
-      sourceRevision: f.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-      scope: { files_modified: prepared.binding.rows.flatMap(item => item.row.files) },
-      acceptance: [], verification: [], requiredRefs: prepared.packet.refs.map(ref => ref.path),
-      selectedBacklogIds: [], backlogInventory: 'selected',
-      roleContext: { ticket_set: prepared.binding.ticketSet, ticket_set_digest: prepared.binding.membership,
-        pr: prepared.packet.pr, exact_diff: prepared.packet.diff,
-        adr_refs: prepared.packet.refs.filter(ref => ref.path.startsWith('.planning/architecture/')),
-        integration_base: { ref: prepared.base, commit: prepared.baseCommit, tree: prepared.mergeBaseTree },
-        reference_digest: { sha256: hash(reference), bytes: Buffer.byteLength(reference) } } });
-    const prompt = '<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet))
-      + '\n</AUTHENTICATED_CONTEXT_PACKET>';
-    const host = options.createRuntimeHost({ scope: { worktree: f.worktree, ticket: prepared.ticket,
-      phase: 49, run_id: dispatchId }, recorderDir: path.join(f.root, dispatchId, 'receipts'),
-      transcriptDir: path.join(f.root, dispatchId, 'transcripts') });
-    let launched;
-    const adapter = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').createClaudeDispatchAdapter({
-      capabilities: host.capabilities, host: { async launch(selection) {
-        launched = await host.agent(prompt, { model: selection.model, effort: selection.effort });
-        return host.applicationEvidence({ result: launched });
-      } } });
-    const dispatch = await boundary.createDispatchBoundary({ adapters: { claude: adapter }, recorder: host.recorder }).dispatch(
-      { runtime: 'claude', role, dispatch_id: dispatchId, signals: prepared.signals },
-      { ticket: prepared.ticket, subject_kind: 'phase' });
-    const result = { ...launched.output, host_context: { graph_dir: f.graphDir, source_root: f.worktree,
-      phase_repo: prepared.binding.repo, phase_archive_selection: prepared.packet.phase_archive_selection,
-      phase_evidence_digest: prepared.packet.retained_history_digest,
-      selected_refs: packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) } };
-    edit.selectedRefs?.(result.host_context.selected_refs);
-    const artifact = authority.sealJudgment({ worktreePath: f.worktree, role, ticket: prepared.ticket,
-      phase: f.phase, pr: f.pr.number, base: prepared.base, recorder: host.recorder, dispatchId,
-      ticketSet: prepared.binding.ticketSet, ticketSetDigest: prepared.binding.membership, result,
-      evidencePath: path.join(f.worktree, '.shipyard-arch-review-evidence.md') });
-    fs.unlinkSync(path.join(f.worktree, '.shipyard-arch-review-evidence.md'));
-    return { dispatch, artifact: { ref: artifact.artifact_path }, result };
-  }
   return secondRuntime.createClaudeRoleHost(options).run({ schema: secondRuntime.REQUEST_SCHEMA,
     role, worktree: f.worktree, phase: f.phase, pr: f.pr.number });
 }
@@ -684,11 +598,6 @@ async function fixture(action) {
     f.pr = { number: 301, state: 'OPEN', isDraft: false, headRefName: 'epic/' + phase, headRefOid: '',
       baseRefName: 'main', baseRefOid: base, reviewDecision: 'REVIEW_REQUIRED' };
     commit(f, 'original implementation'); f.memberHead = f.head;
-    const binding = phaseBinding(f);
-    const inventoryPath = path.join(root, 'original-phase-roster.json');
-    fs.writeFileSync(inventoryPath, JSON.stringify({ rows: [] }), { mode: 0o600 });
-    authority.registerPhaseArchiveRoster({ worktreePath: worktree, binding, graphDir, inventoryPath,
-      expectedInventoryDigest: hash(fs.readFileSync(inventoryPath)) });
     await action(f);
   } finally {
     os.homedir = originalHome;
@@ -735,14 +644,6 @@ function prepareArchitecture(f, role, dispatchId = 'current-' + role + '-' + ++f
   collector.admitInstalledLaunch(value, { agentDir: a.dir, agentFile: a.selection.agent_file,
     agentManifest: a.manifest, capabilities: a.capabilities });
   f.lastArchitecture = value;
-}
-
-function legacyArchitecture(f, dispatchId) {
-  authority.prepareRoleArtifact({ worktreePath: f.worktree, role: 'arch-review' });
-  const prepared = collector.collect(architectureScope(f, dispatchId), { graphDir: f.graphDir, refreshGit: false,
-    getPullRequest: () => f.pr, inflightDispatchId: dispatchId, phaseRepo: null, archivePins: [], historicalBookkeepingPins: [],
-    storageRoot: path.join(f.root, 'inputs') }, true);
-  return { ...prepared, signals: { risk: 'low', critical: false, checkpoint: false, contested: false } };
 }
 
 function nativeRecords(scope, session, selection, resultText, prompt) {

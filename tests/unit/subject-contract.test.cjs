@@ -368,10 +368,6 @@ for (const [label, dirName] of PATH_FORMS) {
       assert.equal(captured.binding.subject, launched);
       assert.equal(target.parseSubject('architecture-review', launched).repository, identity);
       assert.equal(normalizeTicketIdentity(launched, { role: 'arch-review', phase: 38 }).ticket, launched);
-      const inventoryPath = path.join(authorityHome, `inventory-${dirName}.json`);
-      fs.writeFileSync(inventoryPath, JSON.stringify({ rows: [] }), { mode: 0o600 });
-      roleArtifact.registerPhaseArchiveRoster({ worktreePath: f.root, binding: captured.binding, graphDir: f.graphDir, inventoryPath,
-        expectedInventoryDigest: require('node:crypto').createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
       const prepared = context.prepare(codexRequest.scope, { role: 'arch-review', signals: {}, context: codexRequest.context }, f.options);
       assert.equal(prepared.prepared.pr, 801);
     } finally { fs.rmSync(roleArtifact.archiveAuthorityDirectory(f.root), { recursive: true, force: true }); }

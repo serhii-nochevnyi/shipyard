@@ -59,18 +59,12 @@ function phasePreparationRequest(fixture) {
     ...(fixture.kind === 'integrator' ? {} : { pr: 101 }) };
 }
 
-function registerCoordinatorRoster(fixture) {
+function coordinatorBinding(fixture) {
   const graph = JSON.parse(fs.readFileSync(path.join(fixture.graphDir, 'tickets.json')));
   const state = JSON.parse(fs.readFileSync(path.join(fixture.graphDir, 'delivery-state.json')));
-  const binding = reviewTargets.phaseBinding({ graph, state, phase: 38,
+  return reviewTargets.phaseBinding({ graph, state, phase: 38,
     repository: reviewTargets.repositoryIdentity(fixture.root), branch: fixture.branch,
     pr: 101, head: fixture.head, base: fixture.base });
-  const inventoryPath = path.join(fixture.storageRoot, 'empty-roster.json');
-  fs.writeFileSync(inventoryPath, JSON.stringify({ rows: [] }), { mode: 0o600 });
-  reviewArtifacts.registerPhaseArchiveRoster({ worktreePath: fixture.root, binding,
-    graphDir: fixture.graphDir, inventoryPath,
-    expectedInventoryDigest: crypto.createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
-  return binding;
 }
 
 for (const kind of ['code-review', 'arch-review', 'integrator'])
@@ -78,7 +72,6 @@ test(`${kind} completes preparation from coordinator-only planning without movin
   const fixture = coordinatorOnlyPlanning(kind);
   const host = preparationOnlyHost();
   try {
-    if (kind === 'arch-review') registerCoordinatorRoster(fixture);
     const options = hostOptions(fixture);
     if (kind !== 'integrator') options.getPullRequest = () => ({ ...livePr(fixture), baseRefName: 'integration' });
     const prepared = host.prepareInvocation(options, parseRequest(phasePreparationRequest(fixture)));
@@ -223,7 +216,7 @@ test('a git-visible change is excused only by the exact path of a baseline entry
 test('coordinator architecture completes captured native inline sealing and public current readback', async () => {
   const f = coordinatorOnlyPlanning('arch-review');
   try {
-    const binding = registerCoordinatorRoster(f);
+    const binding = coordinatorBinding(f);
     let launches = 0;
     const options = hostOptions(f, { originalStream: true, onLaunch(prompt) {
       launches++;
@@ -265,7 +258,6 @@ test('coordinator architecture completes captured native inline sealing and publ
 test('an older-shaped architecture record in the catalogue is skipped so the verdict is owed, not an exception', async () => {
   const f = coordinatorOnlyPlanning('arch-review');
   try {
-    registerCoordinatorRoster(f);
     const options = hostOptions(f, { originalStream: true });
     options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
     const result = await createClaudeRoleHost(options).run(phasePreparationRequest(f));
@@ -282,6 +274,36 @@ test('an older-shaped architecture record in the catalogue is skipped so the ver
     const refusals = [];
     assert.equal(reviewArtifacts.currentArchitectureVerdict({ ...input, onCandidateRefusal: item => refusals.push(item) }), null);
     assert.deepEqual(refusals.map(item => item.message), ['architecture manifest pin is missing']);
+  } finally { cleanupFixture(f); }
+});
+
+test('an architecture verdict sealed without the focused contract is skipped and owes the review, not an exception', async () => {
+  const f = coordinatorOnlyPlanning('arch-review');
+  try {
+    const options = hostOptions(f, { originalStream: true });
+    options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
+    const result = await createClaudeRoleHost(options).run(phasePreparationRequest(f));
+    const input = { worktreePath: f.root, pr: 101, head: f.head, baseName: 'integration',
+      baseCommit: f.base, graphDir: f.graphDir, headBranch: f.branch };
+    assert.equal(reviewArtifacts.currentArchitectureVerdict(input)?.subject, result.subject);
+    const directory = reviewArtifacts.archiveAuthorityDirectory(f.root);
+    const file = path.join(directory, 'catalogue.json');
+    const envelope = JSON.parse(fs.readFileSync(file));
+    const record = envelope.payload.records[result.dispatch.receipt.dispatch_id];
+    const pin = record.pins.find(item => item.path.endsWith('/.shipyard-role-artifact.json'));
+    const manifestFile = path.join(f.root, pin.path);
+    const manifest = JSON.parse(fs.readFileSync(manifestFile));
+    assert.ok(manifest.current_review, 'the focused contract is declared by the current form');
+    delete manifest.current_review;
+    const bytes = Buffer.from(JSON.stringify(manifest) + '\n');
+    fs.writeFileSync(manifestFile, bytes);
+    Object.assign(pin, { bytes: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+    envelope.mac = crypto.createHmac('sha256', fs.readFileSync(path.join(directory, 'hmac.key')))
+      .update(stable(envelope.payload)).digest('hex');
+    fs.writeFileSync(file, JSON.stringify(envelope));
+    const refusals = [];
+    assert.equal(reviewArtifacts.currentArchitectureVerdict({ ...input, onCandidateRefusal: item => refusals.push(item) }), null);
+    assert.deepEqual(refusals.map(item => item.message), ['architecture verdict predates the focused review contract']);
   } finally { cleanupFixture(f); }
 });
 
@@ -361,7 +383,6 @@ test(`coordinator planning refuses ${scenario}`, (t) => {
 test('coordinator relocation does not authorize dirty architecture sources', () => {
   const fixture = coordinatorOnlyPlanning('arch-review');
   try {
-    registerCoordinatorRoster(fixture);
     fs.appendFileSync(path.join(fixture.project, '.planning/architecture/ADR-014-test.md'), 'Unapproved architecture bytes.\n');
     const options = hostOptions(fixture);
     options.getPullRequest = () => ({ ...livePr(fixture), baseRefName: 'integration' });
@@ -671,7 +692,6 @@ test('aggregate architecture seals a phase verdict without a registered roster a
     const result = await launched;
     assert.match(result.subject, /^phase=38-/);
     assert.equal(packet.role_context.ticket_set.length, 1);
-    assert.deepStrictEqual(result.result.host_context.phase_archive_selection, packet.role_context.phase_archive_selection);
     assert.ok(packet.role_context.change_metadata.name_status.includes('SUMMARY.md'));
     const input = { worktreePath: fixture.root, pr: 101, head: fixture.head, baseName: 'main', baseCommit: fixture.base };
     assert.equal(artifact.currentArchitectureVerdict(input).subject, result.subject);
