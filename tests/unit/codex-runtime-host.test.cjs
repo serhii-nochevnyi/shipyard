@@ -618,8 +618,10 @@ test('--capability-only explains missing evidence on stderr, exits 0 and keeps s
     assert.match(missing.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
     const dflt = path.join(root, '.codex', 'shipyard', 'codex-capabilities.json');
     fs.mkdirSync(path.dirname(dflt), { recursive: true });
-    fs.writeFileSync(dflt, '{}');
-    assert.equal(JSON.parse(runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root }, ['--executable', executable]).stdout).reason, 'capability_evidence_missing');
+    for (const invalid of ['{}', '{"supportedEfforts":["low"]}', '{"supportedModels":["gpt-6.1-sol"]}']) {
+      fs.writeFileSync(dflt, invalid);
+      assert.equal(JSON.parse(runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root }, ['--executable', executable]).stdout).reason, 'capability_evidence_missing', invalid);
+    }
     const file = path.join(root, 'capabilities.json');
     fs.writeFileSync(file, JSON.stringify(capabilities));
     const healthy = runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root }, ['--executable', executable, '--capabilities-file', file]);

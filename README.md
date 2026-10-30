@@ -192,10 +192,12 @@ needs neither `CODEX_HOME` nor `SHIPYARD_CODEX_CAPABILITIES_FILE` exported.
   bundle is refused with an `ENV_CONFLICT` message naming both values. Either
   unset the variable, or reinstall into the named home so both agree.
 - A source checkout reads the evidence an install left at
-  `${CODEX_HOME:-~/.codex}/shipyard/codex-capabilities.json`. One on a machine
-  with no install, and a direct installer run
-  (`scripts/install-shipyard-codex.sh`), still need explicit evidence through
-  `SHIPYARD_CODEX_CAPABILITIES_FILE`. This is the only case that does.
+  `${CODEX_HOME:-~/.codex}/shipyard/codex-capabilities.json`, so it needs no
+  variable. Three cases still need explicit evidence: a machine with no install,
+  the direct installer run (`scripts/install-shipyard-codex.sh`) and
+  `codex-agent.cjs select` from a source checkout. Pass it as
+  `SHIPYARD_CODEX_CAPABILITIES_FILE` (`--capabilities-file` for `select`).
+  These are the only cases that do.
 - Check a host from the project root before launching. Every host entry takes
   `--preflight`, alone or with the host's usual request argument:
   `node <bundle>/scripts/<host>.cjs --preflight`, for `claude-delivery-host.cjs`,
