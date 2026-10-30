@@ -1092,7 +1092,15 @@ async function runCodexSemanticReview(review, runtimeHost, scope, options) {
         throw error;
       } finally { if (heartbeat) clearInterval(heartbeat); }
     }
-    const result = partitionedCodexResult(dispatch, recorder, role);
+    const carrier = partitionedCodexResult(dispatch, recorder, role);
+    // @security: Previous full APIs authenticate workers on retention and finals before publication callbacks.
+    if (!roleArtifact.authenticateSemanticStageResult && (['result_format', 'reviewed_identity_sha256',
+      'coverage_indices', 'unread_indices', 'seam_rows'].some(key => Object.hasOwn(carrier, key))
+      || carrier.seams?.some(row => Object.hasOwn(row, 'index'))))
+      fail('INVALID_RESULT', 'indexed semantic result requires its authenticated decoder');
+    const result = roleArtifact.authenticateSemanticStageResult
+      ? roleArtifact.authenticateSemanticStageResult({ prepared: stage, recorder, result: carrier })
+      : stage.stage === 'worker' ? roleArtifact.retainSemanticOriginal({ prepared: stage, recorder }).result : carrier;
     if (stage.stage === 'worker') return Object.freeze({ ...dispatch, result });
     return roleArtifact.publishSemanticFinal({ prepared: stage, recorder, publish: () => {
       if (codeReview) return codeReviewContext.finishSemantic(codeReview, dispatch, result, recorder);

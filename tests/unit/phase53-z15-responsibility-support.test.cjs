@@ -304,7 +304,7 @@ function resultFixture(a, final = false) {
     !['required_material_source_ids', 'required_criteria_obligation_ids', 'required_seam_ids', 'required_context'].includes(key)));
   const payload = { schema: s.review_contract, review_contract: s.review_contract,
     role: s.role, runtime: s.runtime, stage: final ? 'final' : 'worker', subject: s.subject,
-    snapshot_sha256: s.snapshot_sha256, reviewed_identity: s.identity, ...view, assignment: inline,
+    snapshot_sha256: s.snapshot_sha256, reviewed_identity: s.identity, result_formats: ['full', 'snapshot-indexed.v1'], ...view, assignment: inline,
     material: material.filter(item => view.material.some(source => source.source_id === item.source_id)),
     catalog, originals: [], input_transport: 'host-files' };
   payload.binding_sha256 = hash(a.stable(payload));
@@ -318,7 +318,8 @@ function resultFixture(a, final = false) {
     coverage: assignment?.primary_obligation_ids || view.obligation_ids, originals: [], evidence_markdown: 'Complete original report.',
     seams: view.seams.map(item => ({ id: item.id, disposition: 'resolved', rationale: 'Actual endpoint contract agrees.' })),
     ...(final ? { phase: s.identity.phase, head: s.identity.head, head_tree: s.identity.head_tree,
-      base: s.identity.base_ref, base_tree: s.identity.base_tree, ticket_set: [], ticket_set_digest: 'members' } : {}) };
+      base: s.identity.base_ref, base_tree: s.identity.base_tree, ticket_set: [], ticket_set_digest: 'members',
+      summary: 'Actual endpoints and every required dependency seam were evaluated independently.' } : {}) };
   return { s, payload, launch, result, record: { snapshot: s, input_transport: 'host-files', input_root: directory } };
 }
 process.once('exit', () => { if (syntheticRoot) fs.rmSync(syntheticRoot, { recursive: true, force: true }); });

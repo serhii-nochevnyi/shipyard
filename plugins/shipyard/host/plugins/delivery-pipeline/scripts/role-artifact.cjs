@@ -4160,7 +4160,7 @@ function semanticWrite(worktree, kind, hash, payload) {
   }
   return writePartitionEnvelope(worktree, 'semantic-' + kind, hash, payload);
 }
-function semanticInputFiles(record, originals = [], publish = false) {
+function semanticInputFiles(record, originals = [], publish = false, sizing = false) {
   const { snapshot } = record, worktree = snapshot.identity.worktree;
   const directory = record.input_root;
   if (typeof directory !== 'string' || !path.isAbsolute(directory)
@@ -4179,7 +4179,7 @@ function semanticInputFiles(record, originals = [], publish = false) {
     const retain = (name, content) => {
       const file = path.join(directory, name), value = Buffer.from(content, 'utf8');
       if (publish) writeImmutableArtifactFile(fs, file, value, 'complete semantic input');
-      else if (!readImmutableFile(fs, file, 'complete semantic input', value.length, value.length).equals(value))
+      else if (!sizing && !readImmutableFile(fs, file, 'complete semantic input', value.length, value.length).equals(value))
         semanticError('complete semantic input bytes changed', 'ARTIFACT_MUTATED');
       return { read_path: file, bytes: value.length, sha256: digest(value) };
     };
@@ -4190,7 +4190,9 @@ function semanticInputFiles(record, originals = [], publish = false) {
         responsibility_view_version: snapshot.responsibility_view_version,
         material, obligations: snapshot.obligations, seams: snapshot.seams })) } : {}),
       originals: originals.map(original => ({ reference: original.reference, native: original.native,
-        ...retain('original-' + digest(stable(original.reference)) + '.json', original.original_text) })) };
+        ...retain('original-' + digest(stable(original.reference)) + '.json', original.original_text),
+        ...(JSON.parse(original.original_text).result_format === 'snapshot-indexed.v1' ? { expanded_view:
+          retain('original-view-' + digest(stable(original.reference)) + '.json', stable(original.result)) } : {}) })) };
   };
   return publish ? withArchivePublication(worktree, collect) : collect();
 }
@@ -4484,7 +4486,7 @@ function recheckSemanticSnapshot(record, options = {}, facts) {
     collector.recheckSemanticArchitecture(snapshot, options);
     return record;
   }
-  const checked = collector.verifyFileInput(record.original_input_bundle, { sealed: true });
+  const checked = semanticIntegrationInput(record, collector);
   const binding = [record.original_input_bundle, checked.manifest, checked.manifest_bytes.toString('base64')];
   const { packet, packet_sha256 } = immutableFileFact(facts, 'semantic-packet',
     record.original_input_bundle.manifest_path, checked.material[0], binding, () => {
@@ -4501,6 +4503,61 @@ function recheckSemanticSnapshot(record, options = {}, facts) {
   require('./claude-role-host.cjs').assertNativeIntegrationMergeProof(identity.preflight,
     { worktree, graphDir: identity.graph_directory }, options);
   return record;
+}
+// @security: Revalidate live input facts and the exact pinned producer without rebinding the recorded input.
+function semanticIntegrationInput(record, collector) {
+  const { snapshot } = record, { identity } = snapshot, worktree = identity.worktree;
+  const checked = collector.verifyFileInput(record.original_input_bundle, { sealed: true, historical: true });
+  const { manifest } = checked, original = manifest.snapshot;
+  const packets = require('./context-packet.cjs');
+  const root = packets.authenticatedPlanningRoot(worktree, original.planning_reference);
+  const planning = packets.resolvePlanningReference({ worktree, graphDir: identity.graph_directory,
+    repo: original.planning_reference?.repo ?? null });
+  const config = path.join(root, '.planning/config.json');
+  const output = original.integration_output;
+  const phaseRoot = path.join(worktree, '.planning/phases');
+  const phaseNames = fs.existsSync(phaseRoot) ? fs.readdirSync(phaseRoot).filter(name => /^\d+-/.test(name)
+    && Number(name.split('-')[0]) === Number(manifest.phase)) : [];
+  if (phaseNames.length > 1 || phaseNames.length === 1 && (!output || output.worktree !== worktree
+      || output.role !== 'integrator' || output.phase !== Number(manifest.phase)
+      || output.path !== '.planning/phases/' + phaseNames[0] + '/INTEGRATION.md'
+      || fs.realpathSync(path.join(phaseRoot, phaseNames[0])) !== path.join(phaseRoot, phaseNames[0]))
+      || !phaseNames.length && output !== undefined)
+    semanticError('semantic original integration output association changed', 'STALE_CONTEXT');
+  const sources = original.sources.map(source => {
+    const pin = snapshot.pins.find(pin => pin.path === source.path && pin.sha256 === source.sha256 && pin.bytes === source.bytes);
+    if (!pin) semanticError('semantic original input source lacks its exact frozen producer pin', 'STALE_CONTEXT');
+    const { content, ...actual } = collector.file(pin.root, pin.path);
+    if (stable(actual) !== stable(source)) semanticError('semantic original input producer changed', 'STALE_CONTEXT');
+    return actual;
+  });
+  const current = { worktree, repository: identity.repository, common: identity.repository,
+    head: identity.head, head_tree: identity.head_tree, ...(output ? { integration_output: output } : {}),
+    ...(original.planning_reference ? { planning_reference: planning } : {}),
+    graph: ['tickets.json', 'delivery-state.json'].filter(name => fs.existsSync(path.join(identity.graph_directory, name)))
+      .map(name => ({ path: path.join(identity.graph_directory, name), sha256: digest(readImmutableFile(fs,
+        path.join(identity.graph_directory, name), 'semantic current graph', 8 * 1024 * 1024)) })),
+    config_sha256: fs.existsSync(config) ? digest(readImmutableFile(fs, config, 'semantic current config', collector.FILE_LIMITS.manifest)) : null,
+    policy_hash: require('./model-policy.cjs').POLICY_HASH,
+    live_inputs_sha256: digest(JSON.stringify(require('./conveyor-scratch.cjs').statusIgnoringScratch(worktree,
+      { untracked: 'all', forJudge: false }).entries.filter(entry => !entry.path.startsWith('.planning/graph/') && entry.path !== output?.path)
+      .map(entry => ({ ...entry, sha256: fs.existsSync(path.join(worktree, entry.path))
+        ? digest(readImmutableFile(fs, path.join(worktree, entry.path), 'semantic current input', collector.FILE_LIMITS.material)) : null })))),
+    sources };
+  if (manifest.role !== snapshot.role || stable(current) !== stable(original))
+    semanticError('semantic original input current source or policy changed', 'STALE_CONTEXT');
+  for (const pin of manifest.binding?.installed_files || []) {
+    if (!snapshot.pins.some(original => stable(original) === stable(pin))
+        || collector.file(pin.root, pin.path).sha256 !== pin.sha256)
+      semanticError('semantic original installed launch source changed', 'STALE_CONTEXT');
+  }
+  if (manifest.binding?.agent_path && digest(readImmutableFile(fs, manifest.binding.agent_path,
+    'semantic original selected instructions', collector.INPUT_MAX_BYTES)) !== manifest.binding.agent_sha256)
+    semanticError('semantic original selected instructions changed', 'STALE_CONTEXT');
+  for (const material of checked.material) collector.preflightReviewMaterial(material, { root, role: manifest.role,
+    sourceRevision: original.head, policyHash: original.policy_hash, packetDigest: manifest.binding?.packet_digest,
+    semanticMaximumBytes: 32 * 1024 * 1024 });
+  return checked;
 }
 function prepareSemanticReview({ review, architecture, codeReview, runtime: codeRuntime } = {}) {
   if (codeReview) return prepareSemanticRole(codeReview, codeRuntime || 'codex');
@@ -4746,6 +4803,90 @@ function semanticNative(trusted, launch, record, result, facts, binding = [recor
       : { input: launch.input, initialContext: initial?.launch, sessionId: runtime.session_id });
   return { native_pin: pin, output_pin: runtime.transcript, observation, accounting, resource_failure, reads, session_id: runtime.session_id };
 }
+// @security: Reconstruct only pinned facts; preserve all native judgments.
+function semanticFinalFacts(snapshot) {
+  const identity = snapshot.identity;
+  return { phase: identity.phase, head: identity.head, head_tree: identity.head_tree, base: identity.base_ref,
+    base_tree: ['arch-review', 'code-review'].includes(snapshot.role) ? identity.merge_base_tree : identity.base_tree,
+    ticket_set: identity.ticket_set, ticket_set_digest: identity.ticket_set_digest,
+    ...(['arch-review', 'code-review'].includes(snapshot.role) ? { repository: identity.repository,
+      id: snapshot.subject, pr: identity.pr, base_commit: identity.base, merge_base: identity.merge_base } : {}) };
+}
+function decodeSemanticResult(wire, launch, snapshot) {
+  if (!object(wire)) semanticError('semantic result must be a complete whole report');
+  const mandatory = ['schema', 'review_contract', 'role', 'runtime', 'stage', 'subject', 'snapshot_sha256',
+    'assignment_id', 'binding_sha256', 'completeness', 'outcome', 'blocking_count', 'evidence_markdown',
+    'findings', 'conclusions', 'limitations', 'required_context', 'originals',
+    ...(launch.stage === 'final' ? ['summary', ...(snapshot.role === 'arch-review' ? ['verdict'] : []),
+      ...(snapshot.role === 'code-review' ? ['dispositions'] : [])] : [])];
+  if (mandatory.some(key => !Object.hasOwn(wire, key))) semanticError('semantic whole report omits mandatory native fields');
+  const indexed = wire.result_format === 'snapshot-indexed.v1';
+  const indexFields = ['reviewed_identity_sha256', 'coverage_indices', 'unread_indices', 'seam_rows'];
+  if (!indexed) {
+    if (Object.hasOwn(wire, 'result_format') || indexFields.some(key => Object.hasOwn(wire, key))
+        || Array.isArray(wire.seams) && wire.seams.some(row => object(row) && Object.hasOwn(row, 'index')))
+      semanticError('unknown or mixed semantic result whole form');
+    if (['reviewed_identity', 'coverage', 'unread', 'seams',
+      ...(launch.stage === 'final' ? Object.keys(semanticFinalFacts(snapshot)) : [])].some(key => !Object.hasOwn(wire, key)))
+      semanticError('full semantic report omits complete original facts');
+    return wire;
+  }
+  const payload = JSON.parse(launch.input.match(/<AUTHENTICATED_SEMANTIC_REVIEW>\n([\s\S]*)\n<\/AUTHENTICATED_SEMANTIC_REVIEW>$/)?.[1] || 'null');
+  if (stable(payload?.result_formats) !== stable(['full', 'snapshot-indexed.v1']))
+    semanticError('indexed report requires its exact supporting original launch');
+  const final = launch.stage === 'final' ? semanticFinalFacts(snapshot) : {};
+  if (['reviewed_identity', 'coverage', 'unread', 'seams', ...Object.keys(final)].some(key => Object.hasOwn(wire, key))
+      || indexFields.some(key => !Object.hasOwn(wire, key))
+      || wire.reviewed_identity_sha256 !== digest(stable(snapshot.identity)))
+    semanticError('indexed whole report mixes facts or differs from complete identity');
+  const resolve = (indices, domain, label) => {
+    if (!Array.isArray(indices) || indices.some(index => !Number.isSafeInteger(index) || index < 0 || index >= domain.length)
+        || new Set(indices).size !== indices.length) semanticError('invalid global semantic ' + label + ' indices');
+    return indices.map(index => domain[index].id);
+  };
+  const coverage = resolve(wire.coverage_indices, snapshot.obligations, 'coverage');
+  const unread = resolve(wire.unread_indices, snapshot.obligations, 'unread');
+  if (!Array.isArray(wire.seam_rows) || wire.seam_rows.some(row => !object(row) || Object.hasOwn(row, 'id')
+      || !['resolved', 'unresolved'].includes(row.disposition) || typeof row.rationale !== 'string' || !row.rationale.trim()))
+    semanticError('indexed seams require explicit unmixed records');
+  const ids = resolve(wire.seam_rows.map(row => row.index), snapshot.seams, 'seam');
+  const assignment = snapshot.assignments.find(item => item.id === launch.assignment_id);
+  if (stable(coverage) !== stable(assignment ? assignment.primary_obligation_ids : snapshot.obligations.map(item => item.id)))
+    semanticError('indexed coverage must preserve complete ordered primary ownership');
+  if (stable(ids) !== stable(semanticRequiredView(snapshot, assignment).seams.map(item => item.id)))
+    semanticError('indexed seams must preserve the complete required deterministic order');
+  const { result_format, reviewed_identity_sha256, coverage_indices, unread_indices, seam_rows, ...native } = wire;
+  return { ...native, reviewed_identity: partitionCopy(snapshot.identity), coverage, unread,
+    seams: seam_rows.map(({ index, ...row }, position) => ({ ...row, id: ids[position] })), ...final };
+}
+function semanticWireBound(original) {
+  const resultBytes = Buffer.byteLength(stable(original.result)), terminalBytes = Buffer.byteLength(original.text);
+  if (resultBytes > PARTITION_RESULT_LIMIT || terminalBytes > PARTITION_RESULT_LIMIT)
+    fail('SEMANTIC_REVIEW_RESULT_OVER_BOUND', 'complete original semantic wire exceeds native report bound',
+      { result_bytes: resultBytes, terminal_bytes: terminalBytes, limit_bytes: PARTITION_RESULT_LIMIT });
+}
+function authenticatedSemanticResult(trusted, launch, record, facts = immutableVerificationFacts(), carrier) {
+  const original = semanticOriginalResult(trusted, facts);
+  semanticWireBound(original);
+  if (carrier !== undefined && stable(carrier) !== stable(original.result))
+    semanticError('supplied native semantic carrier differs from the original wire');
+  // @security: Authenticate native custody and exact wire before reconstruction.
+  const native = semanticNative(trusted, launch, record, original.result, facts);
+  const result = validateSemanticResult(original.result, launch, record, facts);
+  return { original, result, native };
+}
+function authenticateSemanticStageResult({ prepared, recorder, result: carrier } = {}) {
+  const state = semanticStages.get(prepared);
+  if (!state) semanticError('original private semantic stage is required');
+  const { record, launch } = state, facts = immutableVerificationFacts();
+  recheckSemanticSnapshot(record, {}, facts);
+  const saved = semanticEnvelope(record.snapshot.identity.worktree, 'launch',
+    semanticKey(launch.snapshot_sha256, launch.stage, launch.assignment_id));
+  if (saved.receipt_store !== recorder.storeDir || stable(saved) !== stable({ ...launch, receipt_store: saved.receipt_store }))
+    semanticError('stage requires the exact recorded original launch');
+  const trusted = trustedRecord({ recorder, dispatchId: launch.dispatch_id });
+  return partitionFreeze(partitionCopy(authenticatedSemanticResult(trusted, launch, record, facts, carrier).result));
+}
 function validateSemanticResult(result, launch, record, facts) {
   let inputs;
   if (record.input_transport === 'host-files') {
@@ -4754,6 +4895,8 @@ function validateSemanticResult(result, launch, record, facts) {
   }
   assertSemanticLaunchView(launch, record, inputs);
   const { snapshot } = record;
+  if (Buffer.byteLength(stable(result)) > PARTITION_RESULT_LIMIT) semanticError('semantic original wire exceeds its bound');
+  result = decodeSemanticResult(result, launch, snapshot);
   if (!object(result) || result.schema !== SEMANTIC_REVIEW_V1 || result.review_contract !== SEMANTIC_REVIEW_V1
       || result.role !== snapshot.role || result.stage !== launch.stage || result.runtime !== snapshot.runtime
       || result.subject !== snapshot.subject || result.snapshot_sha256 !== snapshot.snapshot_sha256
@@ -4763,11 +4906,12 @@ function validateSemanticResult(result, launch, record, facts) {
       || !['passed', 'needs-fix', 'human-review-required'].includes(result.outcome)) semanticError('semantic original result identity differs');
   for (const field of ['findings', 'conclusions', 'limitations', 'required_context', 'unread', 'coverage', 'seams', 'originals'])
     if (!Array.isArray(result[field])) semanticError('semantic original must retain complete ' + field);
-  if (typeof result.evidence_markdown !== 'string' || !result.evidence_markdown.trim()
-      || Buffer.byteLength(stable(result)) > PARTITION_RESULT_LIMIT) semanticError('semantic original complete report exceeds its bound');
+  if (typeof result.evidence_markdown !== 'string' || !result.evidence_markdown.trim())
+    semanticError('semantic original must retain complete native evidence');
   const assignment = snapshot.assignments.find(item => item.id === launch.assignment_id);
   const expected = assignment ? assignment.primary_obligation_ids : snapshot.obligations.map(item => item.id);
   if (stable(result.coverage) !== stable(expected) || new Set(result.coverage).size !== result.coverage.length
+      || new Set(result.unread).size !== result.unread.length
       || result.unread.some(id => !snapshot.obligations.some(item => item.id === id))) semanticError('semantic primary ownership or unread inventory differs');
   if (snapshot.role === 'code-review') {
     const core = require('./code-review-core.cjs');
@@ -4786,6 +4930,8 @@ function validateSemanticResult(result, launch, record, facts) {
     semanticError('semantic blocking count must be a non-negative integer');
   if (result.outcome === 'passed' && result.blocking_count) semanticError('semantic pass retains blocking findings');
   if (stable(result.originals) !== stable(launch.originals)) semanticError('semantic original references differ');
+  if (launch.stage === 'final' && (typeof result.summary !== 'string' || !result.summary.trim()))
+    semanticError('semantic final must retain its complete native summary');
   if (launch.stage === 'final' && (result.phase !== snapshot.identity.phase || result.head !== snapshot.identity.head
       || result.head_tree !== snapshot.identity.head_tree || result.base !== snapshot.identity.base_ref
       || result.base_tree !== (['arch-review', 'code-review'].includes(snapshot.role) ? snapshot.identity.merge_base_tree : snapshot.identity.base_tree) || result.ticket_set_digest !== snapshot.identity.ticket_set_digest
@@ -4809,7 +4955,7 @@ function validateSemanticResult(result, launch, record, facts) {
 function semanticLaunchPayload(snapshot, stage, assignment, view, inputs, transport) {
   return { schema: SEMANTIC_REVIEW_V1, review_contract: SEMANTIC_REVIEW_V1, role: snapshot.role, stage,
     runtime: snapshot.runtime, subject: snapshot.subject, snapshot_sha256: snapshot.snapshot_sha256,
-    reviewed_identity: snapshot.identity, assignment: semanticInlineAssignment(assignment),
+    reviewed_identity: snapshot.identity, result_formats: ['full', 'snapshot-indexed.v1'], assignment: semanticInlineAssignment(assignment),
     ...view, ...inputs, ...(transport === 'host-files' ? { input_transport: 'host-files' } : {}),
     ...(snapshot.role === 'code-review' ? { code_review_context: Object.fromEntries(
       ['review_round', 'review_scope', 'prior_head', 'prior_findings', 'dispositions_digest'].map(key =>
@@ -4842,23 +4988,29 @@ function assertSemanticLaunchView(launch, record, inputs) {
       || digest(stable(body)) !== binding_sha256)
     semanticError('semantic launch required responsibility view differs');
   if (stable(body) === stable(expected)) return;
-  const legacy = { ...expected, assignment: assignment || null,
+  const { result_formats, ...previous } = expected;
+  const legacy = { ...previous, assignment: assignment || null,
     required_context: assignment ? assignment.required_context : snapshot.assignments.flatMap(item => item.required_context) };
-  if (stable(body) !== stable(legacy)) semanticError('semantic launch required responsibility view differs');
+  if (stable(body) !== stable(previous) && stable(body) !== stable(legacy))
+    semanticError('semantic launch required responsibility view differs from current or exact recorded original launch');
   const recorded = semanticEnvelope(snapshot.identity.worktree, 'launch',
     semanticKey(snapshot.snapshot_sha256, launch.stage, launch.assignment_id));
   if (stable(recorded) !== stable({ ...launch, receipt_store: recorded.receipt_store }))
     semanticError('semantic legacy view requires its exact recorded original launch');
 }
 function semanticLaunch(prepared, stage, assignment_id, originals = [], facts) {
-  const { record } = semanticPreparation(prepared, facts), { snapshot } = record;
+  const { record } = semanticPreparation(prepared, facts);
+  return semanticBuildLaunch(record, stage, assignment_id, originals);
+}
+function semanticBuildLaunch(record, stage, assignment_id, originals = [], sizing = false) {
+  const { snapshot } = record;
   if (snapshot.responsibility_view_version !== SEMANTIC_RESPONSIBILITY_VIEW_V1)
     semanticError('a new semantic launch requires the current responsibility view');
   const assignment = snapshot.assignments.find(item => item.id === assignment_id);
   if (stage === 'worker' && !assignment || stage === 'final' && assignment_id !== null) semanticError('foreign semantic assignment');
   const dispatch_id = 'semantic-' + stage + '-' + semanticKey(snapshot.snapshot_sha256, stage, assignment_id);
   const view = semanticRequiredView(snapshot, assignment);
-  const inputs = record.input_transport === 'host-files' ? semanticInputFiles(record, originals, stage === 'final')
+  const inputs = record.input_transport === 'host-files' ? semanticInputFiles(record, originals, false, true)
     : { material: snapshot.material, originals };
   inputs.material = inputs.material.filter(item => view.material.some(source => source.source_id === item.source_id));
   const payload = semanticLaunchPayload(snapshot, stage, assignment, view, inputs, record.input_transport);
@@ -4871,7 +5023,8 @@ function semanticLaunch(prepared, stage, assignment_id, originals = [], facts) {
     ? '' : snapshot.criteria + '\n\n';
   const input = prefix + criteria + 'Evaluate the actual product obligations and dependency seams under the installed ' + snapshot.role + ' criteria. '
     + 'Read every required material read_path as an ordinary file; it contains the complete exact source bytes. '
-    + 'Read originals read_path as the complete original JSON report, preserving every field and INFO. '
+    + 'Read originals read_path as the exact original wire JSON, preserving every field and INFO. '
+    + 'When supplied, originals expanded_view.read_path is the separately authenticated complete report view; read it too. '
     + 'Use ordinary source/diff and metadata reads as needed. All exact source aliases and support context remain available. '
     + 'For workers, supplied material and obligations are the required primary/support view. '
     + 'The immutable catalog read_path makes the complete inventory available for optional additional reads; '
@@ -4888,24 +5041,82 @@ function semanticLaunch(prepared, stage, assignment_id, originals = [], facts) {
     + 'completeness (complete/incomplete/blocked), outcome, blocking_count, coverage (exact primary ids or all obligation_ids for final), '
     + 'conclusions, findings, limitations, required_context, unread (obligation ids), seams (id/disposition/rationale), originals '
     + '(exact reference objects; empty for workers), evidence_markdown. Final also echoes phase, head, head_tree, base=base_ref, '
-    + 'ticket_set, ticket_set_digest and summary from identity. '
+    + 'ticket_set, ticket_set_digest and a native-authored summary. '
     + (snapshot.role === 'code-review'
       ? 'Code-review final also reports repository, id=subject, pr, base_commit=identity.base, merge_base, '
         + 'base_tree=merge_base_tree and dispositions for carried BLOCKER refs; findings use severity BLOCKER/WARNING/INFO. '
       : 'Architecture final also reports repository, id=subject, pr, base_commit=identity.base, merge_base, '
         + 'base_tree=merge_base_tree and verdict (conform|violation|adr-outdated); other finals report base_tree from identity. ')
+    + 'Alternatively return the COMPLETE snapshot-indexed.v1 whole form: result_format="snapshot-indexed.v1", '
+    + 'reviewed_identity_sha256=SHA256 of the canonical complete reviewed_identity (sorted JSON object keys), '
+    + 'coverage_indices and unread_indices are explicit ordered global indices into catalog.obligations, '
+    + 'seam_rows are every required seam in order, replacing ONLY id with its global catalog.seams index named index. '
+    + 'Keep every native disposition, full rationale and other seam field. Replace reviewed_identity, coverage, unread, seams '
+    + 'and final echoed identity fields with these indexed facts; never mix forms. Keep ALL other fields including summary, '
+    + 'verdict/dispositions, full findings, conclusions, limitations, required_context, originals and evidence_markdown. '
+    + 'No implied coverage, default disposition or omitted rationale is allowed. Identity acknowledgement grants no read credit. '
     + 'Never pass with missing context or unresolved seams.\n'
     + '<AUTHENTICATED_SEMANTIC_REVIEW>\n' + stable(payload) + '\n</AUTHENTICATED_SEMANTIC_REVIEW>';
-  const inputBytes = Buffer.byteLength(input);
-  if (inputBytes > 1048576) fail('SEMANTIC_REVIEW_INPUT_OVER_BOUND', 'complete semantic input exceeds native prompt bound',
-    { input_bytes: inputBytes, limit_bytes: 1048576 });
   const launch = { schema: SEMANTIC_REVIEW_V1, role: snapshot.role, stage, assignment_id, dispatch_id,
     responsibility_view_version: snapshot.responsibility_view_version,
     snapshot_sha256: snapshot.snapshot_sha256, binding_sha256: payload.binding_sha256, input, input_sha256: digest(input), prefix_bytes: Buffer.byteLength(prefix),
     originals: originals.map(item => item.reference) };
+  semanticPreflight(snapshot, launch);
+  if (!sizing && stage === 'final' && record.input_transport === 'host-files') semanticInputFiles(record, originals, true);
   const value = partitionFreeze(partitionCopy(launch));
-  semanticStages.set(value, { record, launch });
+  if (!sizing) semanticStages.set(value, { record, launch });
   return value;
+}
+// @contract: Structural sizing supplies no semantic or reading credit.
+function semanticStructuralResult(snapshot, launch) {
+  const assignment = snapshot.assignments.find(item => item.id === launch.assignment_id);
+  const indices = ids => ids.map(id => snapshot.obligations.findIndex(item => item.id === id));
+  return { schema: SEMANTIC_REVIEW_V1, review_contract: SEMANTIC_REVIEW_V1, role: snapshot.role,
+    runtime: snapshot.runtime, stage: launch.stage, subject: snapshot.subject,
+    snapshot_sha256: snapshot.snapshot_sha256, assignment_id: launch.assignment_id, binding_sha256: launch.binding_sha256,
+    result_format: 'snapshot-indexed.v1', reviewed_identity_sha256: digest(stable(snapshot.identity)),
+    coverage_indices: indices(assignment ? assignment.primary_obligation_ids : snapshot.obligations.map(item => item.id)),
+    unread_indices: [], seam_rows: semanticRequiredView(snapshot, assignment).seams.map(seam => ({
+      index: snapshot.seams.findIndex(item => item.id === seam.id), disposition: 'unresolved', rationale: 'x' })),
+    completeness: 'incomplete', outcome: 'human-review-required', blocking_count: 0,
+    findings: [], conclusions: [], limitations: [], required_context: [], originals: launch.originals,
+    evidence_markdown: 'x', ...(launch.stage === 'final' ? { summary: 'x',
+      ...(snapshot.role === 'arch-review' ? { verdict: 'violation' } : {}),
+      ...(snapshot.role === 'code-review' ? { dispositions: [] } : {}) } : {}) };
+}
+function semanticPreflight(snapshot, launch) {
+  const minimum = semanticStructuralResult(snapshot, launch);
+  const resultBytes = Buffer.byteLength(stable(minimum));
+  const schemaBytes = snapshot.runtime === 'claude'
+    ? Buffer.byteLength(stable(require('./claude-role-host.cjs').semanticStageSchema(launch))) : 0;
+  const inputBytes = Buffer.byteLength(launch.input) + schemaBytes;
+  const assignment = snapshot.assignments.find(item => item.id === launch.assignment_id);
+  const details = { stage: launch.stage, assignment_id: launch.assignment_id, input_bytes: inputBytes,
+    prompt_bytes: Buffer.byteLength(launch.input), schema_bytes: schemaBytes, result_bytes: resultBytes,
+    input_limit_bytes: 1048576, result_limit_bytes: PARTITION_RESULT_LIMIT,
+    limit_bytes: inputBytes > 1048576 ? 1048576 : PARTITION_RESULT_LIMIT,
+    obligation_count: snapshot.obligations.length, coverage_count: minimum.coverage_indices.length,
+    seam_count: semanticRequiredView(snapshot, assignment).seams.length,
+    original_count: launch.originals.length, structural_lower_bound_only: true };
+  if (inputBytes > 1048576 || resultBytes > PARTITION_RESULT_LIMIT)
+    fail(inputBytes > 1048576 ? 'SEMANTIC_REVIEW_INPUT_OVER_BOUND' : 'SEMANTIC_REVIEW_RESULT_OVER_BOUND',
+      'complete mandatory semantic structure exceeds native bound: ' + stable(details), details);
+  return details;
+}
+function semanticPreflightReview(record) {
+  const { snapshot } = record, hash = '0'.repeat(64);
+  const originals = snapshot.assignments.map(assignment => {
+    const launch = semanticBuildLaunch(record, 'worker', assignment.id, [], true);
+    const wire = semanticStructuralResult(snapshot, launch);
+    const reference = { assignment_id: assignment.id, dispatch_id: launch.dispatch_id,
+      artifact_ref: archiveRelative(launch.dispatch_id, MANIFEST_NAME), artifact_sha256: hash };
+    const pin = { path: path.join(record.input_root || snapshot.identity.worktree, '0'.repeat(36) + '.jsonl'), bytes: 1, sha256: hash };
+    return { reference, result: decodeSemanticResult(wire, launch, snapshot), original_text: stable(wire), native: {
+      native_pin: pin, output_pin: pin, observation: [], accounting: { status: 'unknown' }, resource_failure: null,
+      reads: { schema: 'shipyard.semantic-native-reads.v1', completed: [], incomplete: [], output_bytes: 0, semantic_credit: false },
+      session_id: '0'.repeat(36) } };
+  });
+  semanticBuildLaunch(record, 'final', null, originals, true);
 }
 function prepareSemanticWorker({ prepared, assignment_id } = {}) { return semanticLaunch(prepared, 'worker', assignment_id); }
 function readSemanticOriginal({ worktreePath, snapshot_sha256, assignment_id } = {}) {
@@ -4939,11 +5150,9 @@ function validateSemanticOriginal(record, assignment_id, facts) {
   if (immutableFileFact(facts, 'sha256', path.resolve(worktree, retained.pins[0].path), manifestRaw, [binding, retained.pins[0]],
     () => digest(manifestRaw)) !== saved.reference.artifact_sha256
       || evidence.toString('utf8') !== result.evidence_markdown) semanticError('semantic original artifact differs');
-  validateSemanticResult(result, launch, record, facts);
-  const original = semanticOriginalResult(trusted, facts, binding);
-  const native = semanticNative(trusted, launch, record, result, facts, binding);
+  const { original, result: expanded, native } = authenticatedSemanticResult(trusted, launch, record, facts, result);
   if (stable(native) !== stable(saved.native)) semanticError('semantic original native evidence changed');
-  return { reference: saved.reference, result, original_text: original.text, native };
+  return { reference: saved.reference, result: expanded, original_text: original.text, native };
 }
 function prepareSemanticFinal({ prepared } = {}) {
   const facts = immutableVerificationFacts();
@@ -4960,6 +5169,8 @@ function reserveSemanticLaunch({ prepared, recorder } = {}) {
   if (!state || !recorder?.storeDir) semanticError('private semantic stage and durable recorder required');
   const { record, launch } = state, worktree = record.snapshot.identity.worktree;
   recheckSemanticSnapshot(record);
+  if (launch.stage === 'worker') semanticPreflightReview(record);
+  else semanticPreflight(record.snapshot, launch);
   const key = semanticKey(launch.snapshot_sha256, launch.stage, launch.assignment_id);
   return withArchiveAuthorityLock(worktree, () => {
     recheckSemanticSnapshot(record);
@@ -4980,9 +5191,7 @@ function reserveSemanticLaunch({ prepared, recorder } = {}) {
       const trusted = { recorder: originalRecorder, dispatchId: launch.dispatch_id,
         record: original.record, receipt: original.record.receipt };
       const facts = immutableVerificationFacts();
-      const result = semanticOriginalResult(trusted, facts).result;
-      validateSemanticResult(result, launch, record, facts);
-      semanticNative(trusted, launch, record, result, facts);
+      authenticatedSemanticResult(trusted, launch, record, facts);
       boundary.createDispatchBoundary({ recorder: originalRecorder }).reconcileOriginal(launch.dispatch_id, {
         ticket: record.snapshot.subject,
         ...(original.record.subject_kind ? { subject_kind: original.record.subject_kind } : {}) });
@@ -5016,9 +5225,7 @@ function retainSemanticOriginal({ prepared, recorder } = {}) {
   recheckSemanticSnapshot(record, {}, facts);
   const trusted = trustedRecord({ recorder, dispatchId: launch.dispatch_id });
   const binding = [snapshot.snapshot_sha256, snapshot.pins, record.historical, trusted.receipt, launch];
-  const original = semanticOriginalResult(trusted, facts, binding), result = original.result;
-  validateSemanticResult(result, launch, record, facts);
-  const native = semanticNative(trusted, launch, record, result, facts, binding);
+  const { original, result, native } = authenticatedSemanticResult(trusted, launch, record, facts);
   const key = semanticKey(snapshot.snapshot_sha256, 'worker', launch.assignment_id);
   return withArchivePublication(worktree, () => {
     recheckSemanticSnapshot(record);
@@ -5056,9 +5263,8 @@ function publishSemanticFinal({ prepared, recorder, publish } = {}) {
   return withArchiveAuthorityLock(worktree, () => {
     recheckSemanticSnapshot(record);
     const trusted = trustedRecord({ recorder, dispatchId: launch.dispatch_id });
-    const facts = immutableVerificationFacts(), result = semanticOriginalResult(trusted, facts).result;
-    validateSemanticResult(result, launch, record, facts);
-    semanticNative(trusted, launch, record, result, facts);
+    const facts = immutableVerificationFacts();
+    authenticatedSemanticResult(trusted, launch, record, facts);
     const key = semanticKey(launch.snapshot_sha256, 'final', null);
     let delivered;
     try { delivered = semanticEnvelope(worktree, 'delivered', key); }
@@ -5211,11 +5417,13 @@ function authenticateSemanticFinal({ trusted, result, evidence, identity, retain
   const key = semanticKey(snapshot.snapshot_sha256, 'final', null);
   const launch = semanticEnvelope(identity.worktree, 'launch', key);
   const originals = snapshot.assignments.map(item => validateSemanticOriginal(record, item.id, facts));
-  validateSemanticResult({ ...result, evidence_markdown: evidence.toString('utf8') }, launch, record, facts);
+  const authenticated = authenticatedSemanticResult(trusted, launch, record, facts);
+  if (stable(authenticated.result) !== stable({ ...result, evidence_markdown: evidence.toString('utf8') }))
+    semanticError('sealed semantic view differs from independently decoded original');
   if (launch.receipt_store !== trusted.recorder.storeDir || launch.dispatch_id !== trusted.dispatchId
       || stable(launch.originals) !== stable(originals.map(item => item.reference))
       || stable(result.originals) !== stable(launch.originals)) semanticError('semantic final exact original references differ');
-  const native = semanticNative(trusted, launch, record, { ...result, evidence_markdown: evidence.toString('utf8') }, facts);
+  const native = authenticated.native;
   if (originals.some(item => item.reference.dispatch_id === trusted.dispatchId || item.native.session_id === native.session_id))
     semanticError('semantic final requires a distinct original dispatch and native session');
   const incomplete = originals.some(item => !semanticComplete(item.result) || item.native.resource_failure || item.native.reads.incomplete.length)
@@ -8185,7 +8393,8 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
     const historical = replay === HISTORICAL_CODE_REVIEW_REPLAY;
     const record = semanticRecord(identity.worktree, result.snapshot_sha256, historical);
     if (record.snapshot.role !== 'code-review') semanticError('foreign code-review final authority');
-    const original = semanticOriginalResult(trusted).result;
+    const launch = semanticEnvelope(identity.worktree, 'launch', semanticKey(record.snapshot.snapshot_sha256, 'final', null));
+    const original = authenticatedSemanticResult(trusted, launch, record).result;
     const { evidence_markdown, ...judgment } = original;
     const authenticated = authenticateSemanticFinal({ trusted, result: judgment, evidence, identity, retained, historical });
     const core = require('./code-review-core.cjs');
@@ -10366,6 +10575,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   SEMANTIC_REVIEW_V1,
   semanticCodeReviewSnapshot,
   semanticLaunchSnapshot,
+  authenticateSemanticStageResult,
   SEMANTIC_SNAPSHOT_V1,
   prepareSemanticReview,
   prepareSemanticWorker,
