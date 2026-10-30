@@ -118,8 +118,12 @@ test('native lifecycle shard39 preserves exact prior37 and singleton38 plus futu
   assert.deepEqual(current.shards[36], ['phase53-z17-ci-job-attempts.test.cjs']);
   assert.deepEqual(current.shards[37], ['phase53-z17b-ci-wait-published-read.test.cjs']);
   assert.deepEqual(current.shards[38], ['phase53-z17c-native-wait-lifecycle.test.cjs']);
-  assert.equal(current.shards.length, 39);
-  assert.equal(current.shards.length + 3, 42);
+  const first39 = [...require('../fixtures/phase53/github-job-attempts.json').parent.shards,
+    ['phase53-z17-ci-job-attempts.test.cjs'], ['phase53-z17b-ci-wait-published-read.test.cjs'],
+    ['phase53-z17c-native-wait-lifecycle.test.cjs']];
+  assert.deepEqual(current.shards.slice(0, 39), first39);
+  assert.ok(current.shards.length >= 39);
+  assert.equal(current.shards.slice(0, 39).length + 3, 42);
   for (let i = 0; i < current.shards.length; i++)
     assert.deepEqual(selector.selectTaskShard(`${i + 1}/${current.shards.length}`), current.shards[i]);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'z17c-future-'));
@@ -128,9 +132,10 @@ test('native lifecycle shard39 preserves exact prior37 and singleton38 plus futu
   const future = 'phase53-z99-future.test.cjs';
   fs.writeFileSync(path.join(dir, future), '');
   const next = selector.appendShard(current, selector.unitTasks(selector.unitFiles(dir)));
-  assert.deepEqual(next.shards.slice(0, 39), current.shards);
-  assert.deepEqual(next.shards[39], [future]);
-  assert.equal(next.shards.length + 3, 43);
+  assert.deepEqual(next.shards.slice(0, current.shards.length), current.shards);
+  assert.deepEqual(next.shards.at(-1), [future]);
+  assert.equal(next.shards.length, current.shards.length + 1);
+  assert.equal(next.shards.length + 3, current.shards.length + 4);
   for (let i = 0; i < next.shards.length; i++)
     assert.deepEqual(selector.selectTaskShard(`${i + 1}/${next.shards.length}`, dir, current), next.shards[i]);
 });

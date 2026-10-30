@@ -4395,15 +4395,30 @@ function semanticScopeResponsibilities(inventory, assignments, seams, mappings) 
       .map(seam => ({ seam_id: seam.id, source_path: seam.consumer, target: seam.producer, reason: seam.reason }));
   }
 }
+function semanticInlineAssignment(assignment) {
+  if (!assignment) return null;
+  const { required_material_source_ids, required_criteria_obligation_ids, required_seam_ids,
+    required_context, ...inline } = assignment;
+  return inline;
+}
 function semanticRequiredView(snapshot, assignment) {
   const scoped = assignment && snapshot.responsibility_view_version === SEMANTIC_RESPONSIBILITY_VIEW_V1;
   const ids = scoped ? new Set([...assignment.primary_obligation_ids, ...assignment.support_obligation_ids]) : null;
   const obligations = snapshot.obligations.filter(item => !ids || ids.has(item.id));
+  const context = !snapshot.responsibility_view_version ? []
+    : scoped ? assignment.required_context : snapshot.assignments.flatMap(item => item.required_context);
+  const seen = new Set();
+  const required_context = scoped ? context : context.filter(item => {
+    const key = stable(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return { obligation_ids: obligations.map(item => item.id), obligations,
     material: snapshot.material.filter(item => !scoped || assignment.required_material_source_ids.includes(item.source_id)),
     seams: snapshot.seams.filter(item => !scoped || assignment.required_seam_ids.includes(item.id)),
     ...(snapshot.responsibility_view_version ? { responsibility_view_version: snapshot.responsibility_view_version,
-      required_context: scoped ? assignment.required_context : snapshot.assignments.flatMap(item => item.required_context),
+      required_context,
       ...(scoped ? {} : { independent_final_seam_ids: snapshot.independent_final_seam_ids,
         cross_responsibility_seam_ids: snapshot.cross_responsibility_seam_ids }) } : {}) };
 }
@@ -4791,6 +4806,21 @@ function validateSemanticResult(result, launch, record, facts) {
     semanticError('semantic result must retain every actual dependency seam');
   return result;
 }
+function semanticLaunchPayload(snapshot, stage, assignment, view, inputs, transport) {
+  return { schema: SEMANTIC_REVIEW_V1, review_contract: SEMANTIC_REVIEW_V1, role: snapshot.role, stage,
+    runtime: snapshot.runtime, subject: snapshot.subject, snapshot_sha256: snapshot.snapshot_sha256,
+    reviewed_identity: snapshot.identity, assignment: semanticInlineAssignment(assignment),
+    ...view, ...inputs, ...(transport === 'host-files' ? { input_transport: 'host-files' } : {}),
+    ...(snapshot.role === 'code-review' ? { code_review_context: Object.fromEntries(
+      ['review_round', 'review_scope', 'prior_head', 'prior_findings', 'dispositions_digest'].map(key =>
+        [key, snapshot.code_review_packet.role_context[key]])) } : {}),
+    ...(snapshot.role === 'arch-review' ? { architecture_context: {
+      change_metadata: snapshot.architecture_packet.change_metadata,
+      adr_selection: snapshot.architecture_packet.adr_selection,
+      decision_cycles: snapshot.architecture_packet.decision_cycles || [],
+      source_authority: snapshot.architecture_packet.source_authority,
+      retained_evidence: snapshot.architecture_packet.retained_evidence || [] } } : {}) };
+}
 function assertSemanticLaunchView(launch, record, inputs) {
   const { snapshot } = record;
   if (!snapshot.responsibility_view_version) return;
@@ -4800,26 +4830,25 @@ function assertSemanticLaunchView(launch, record, inputs) {
   const match = launch.input.match(/<AUTHENTICATED_SEMANTIC_REVIEW>\n([\s\S]*)\n<\/AUTHENTICATED_SEMANTIC_REVIEW>$/);
   if (!match) semanticError('semantic required view is missing');
   const payload = JSON.parse(match[1]), { binding_sha256, ...body } = payload;
-  for (const [key, value] of Object.entries({ schema: SEMANTIC_REVIEW_V1, review_contract: SEMANTIC_REVIEW_V1,
-    role: snapshot.role, runtime: snapshot.runtime, stage: launch.stage, subject: snapshot.subject,
-    snapshot_sha256: snapshot.snapshot_sha256, reviewed_identity: snapshot.identity }))
-    if (stable(payload[key]) !== stable(value)) semanticError('semantic launch governing identity differs: ' + key);
   const view = semanticRequiredView(snapshot, assignment);
   if (record.input_transport === 'host-files') inputs ||= semanticInputFiles(record);
-  const material = inputs ? inputs.material : snapshot.material;
-  const expectedMaterial = material.filter(item => view.material.some(source => source.source_id === item.source_id));
+  inputs ||= { material: snapshot.material, originals: assignment ? []
+    : snapshot.assignments.map(item => validateSemanticOriginal(record, item.id)) };
+  const expectedInputs = { ...inputs,
+    material: inputs.material.filter(item => view.material.some(source => source.source_id === item.source_id)) };
+  const expected = semanticLaunchPayload(snapshot, launch.stage, assignment, view, expectedInputs, record.input_transport);
   if (launch.responsibility_view_version !== snapshot.responsibility_view_version
-      || payload.responsibility_view_version !== snapshot.responsibility_view_version
       || digest(launch.input) !== launch.input_sha256 || binding_sha256 !== launch.binding_sha256
-      || digest(stable(body)) !== binding_sha256 || stable(payload.assignment) !== stable(assignment || null)
-      || stable(payload.obligations) !== stable(view.obligations) || stable(payload.obligation_ids) !== stable(view.obligation_ids)
-      || stable(payload.material) !== stable(expectedMaterial) || stable(payload.seams) !== stable(view.seams)
-      || stable(payload.required_context) !== stable(view.required_context)
-      || stable(payload.independent_final_seam_ids) !== stable(view.independent_final_seam_ids)
-      || stable(payload.cross_responsibility_seam_ids) !== stable(view.cross_responsibility_seam_ids)
-      || inputs && (payload.input_transport !== 'host-files' || stable(payload.catalog) !== stable(inputs.catalog)
-        || stable(payload.originals) !== stable(inputs.originals)))
+      || digest(stable(body)) !== binding_sha256)
     semanticError('semantic launch required responsibility view differs');
+  if (stable(body) === stable(expected)) return;
+  const legacy = { ...expected, assignment: assignment || null,
+    required_context: assignment ? assignment.required_context : snapshot.assignments.flatMap(item => item.required_context) };
+  if (stable(body) !== stable(legacy)) semanticError('semantic launch required responsibility view differs');
+  const recorded = semanticEnvelope(snapshot.identity.worktree, 'launch',
+    semanticKey(snapshot.snapshot_sha256, launch.stage, launch.assignment_id));
+  if (stable(recorded) !== stable({ ...launch, receipt_store: recorded.receipt_store }))
+    semanticError('semantic legacy view requires its exact recorded original launch');
 }
 function semanticLaunch(prepared, stage, assignment_id, originals = [], facts) {
   const { record } = semanticPreparation(prepared, facts), { snapshot } = record;
@@ -4832,19 +4861,7 @@ function semanticLaunch(prepared, stage, assignment_id, originals = [], facts) {
   const inputs = record.input_transport === 'host-files' ? semanticInputFiles(record, originals, stage === 'final')
     : { material: snapshot.material, originals };
   inputs.material = inputs.material.filter(item => view.material.some(source => source.source_id === item.source_id));
-  const payload = { schema: SEMANTIC_REVIEW_V1, review_contract: SEMANTIC_REVIEW_V1, role: snapshot.role, stage,
-    runtime: snapshot.runtime, subject: snapshot.subject, snapshot_sha256: snapshot.snapshot_sha256,
-    reviewed_identity: snapshot.identity, assignment: assignment || null,
-    ...view, ...inputs, ...(record.input_transport === 'host-files' ? { input_transport: 'host-files' } : {}),
-    ...(snapshot.role === 'code-review' ? { code_review_context: Object.fromEntries(
-      ['review_round', 'review_scope', 'prior_head', 'prior_findings', 'dispositions_digest'].map(key =>
-        [key, snapshot.code_review_packet.role_context[key]])) } : {}),
-    ...(snapshot.role === 'arch-review' ? { architecture_context: {
-      change_metadata: snapshot.architecture_packet.change_metadata,
-      adr_selection: snapshot.architecture_packet.adr_selection,
-      decision_cycles: snapshot.architecture_packet.decision_cycles || [],
-      source_authority: snapshot.architecture_packet.source_authority,
-      retained_evidence: snapshot.architecture_packet.retained_evidence || [] } } : {}) };
+  const payload = semanticLaunchPayload(snapshot, stage, assignment, view, inputs, record.input_transport);
   payload.binding_sha256 = digest(stable(payload));
   const agent = snapshot.pins.find(item => item.sha256 === snapshot.agent_sha256);
   const prefix = (snapshot.runtime === 'claude'
@@ -4879,7 +4896,9 @@ function semanticLaunch(prepared, stage, assignment_id, originals = [], facts) {
         + 'base_tree=merge_base_tree and verdict (conform|violation|adr-outdated); other finals report base_tree from identity. ')
     + 'Never pass with missing context or unresolved seams.\n'
     + '<AUTHENTICATED_SEMANTIC_REVIEW>\n' + stable(payload) + '\n</AUTHENTICATED_SEMANTIC_REVIEW>';
-  if (Buffer.byteLength(input) > 1048576) semanticError('complete semantic input exceeds native prompt bound', 'SEMANTIC_REVIEW_INPUT_OVER_BOUND');
+  const inputBytes = Buffer.byteLength(input);
+  if (inputBytes > 1048576) fail('SEMANTIC_REVIEW_INPUT_OVER_BOUND', 'complete semantic input exceeds native prompt bound',
+    { input_bytes: inputBytes, limit_bytes: 1048576 });
   const launch = { schema: SEMANTIC_REVIEW_V1, role: snapshot.role, stage, assignment_id, dispatch_id,
     responsibility_view_version: snapshot.responsibility_view_version,
     snapshot_sha256: snapshot.snapshot_sha256, binding_sha256: payload.binding_sha256, input, input_sha256: digest(input), prefix_bytes: Buffer.byteLength(prefix),

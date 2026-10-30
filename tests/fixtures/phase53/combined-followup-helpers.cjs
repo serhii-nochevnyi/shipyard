@@ -12,6 +12,7 @@ const SOURCE = path.join(ROOT, 'plugins/delivery-pipeline');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const LIMIT = 180000;
 const OUTPUT = 8 * 1024 * 1024;
+const snapshots = new Map();
 
 function setup(name, boundary, names, plugin, adapt = source => source) {
   const filename = path.join(ROOT, 'tests', name), loaded = new Module(filename, module);
@@ -24,7 +25,14 @@ function setup(name, boundary, names, plugin, adapt = source => source) {
   const original = Module._load;
   try {
     Module._load = function(request, ...args) {
-      return request === 'node:test' ? { test() {}, describe() {} } : original.call(this, request, ...args);
+      if (request === 'node:test') return { test() {}, describe() {} };
+      const api = original.call(this, request, ...args);
+      if (!request.endsWith('/role-artifact.cjs')) return api;
+      return { ...api, prepareSemanticReview(...input) {
+        const snapshot = api.prepareSemanticReview(...input);
+        snapshots.set(snapshot.snapshot_sha256, snapshot);
+        return snapshot;
+      } };
     };
     loaded._compile(source + '\nmodule.exports = { ' + names + ' };', filename);
   } finally { Module._load = original; }
@@ -95,10 +103,33 @@ function shards() {
   return denominator;
 }
 
-function scoped(payload) {
-  const assignment = payload.assignment;
+function scoped(payload, snapshot, validation) {
+  assert.ok(snapshot, 'capture the complete actual public preparation');
+  validation.assertSemanticSnapshot(snapshot);
+  assert.equal(payload.snapshot_sha256, snapshot.snapshot_sha256);
+  assert.deepEqual(payload.reviewed_identity, snapshot.identity);
+  const assignment = snapshot.assignments.find(item => item.id === payload.assignment?.id);
+  assert.equal(payload.assignment?.id || null, assignment?.id || null);
   assert.equal(payload.responsibility_view_version, 'shipyard.semantic-responsibility-view.v1');
-  if (!assignment) return;
+  const view = validation.semanticRequiredView(snapshot, assignment);
+  assert.deepEqual(payload.material.map(({ read_path, ...source }) => source), view.material);
+  assert.deepEqual(payload.obligations, view.obligations);
+  assert.deepEqual(payload.obligation_ids, view.obligation_ids);
+  assert.deepEqual(payload.seams, view.seams);
+  assert.deepEqual(payload.required_context, view.required_context);
+  if (!assignment) {
+    assert.equal(payload.assignment, null);
+    assert.deepEqual(payload.material.map(item => item.source_id), snapshot.material.map(item => item.source_id));
+    assert.deepEqual(payload.independent_final_seam_ids, snapshot.independent_final_seam_ids);
+    assert.deepEqual(payload.cross_responsibility_seam_ids, snapshot.cross_responsibility_seam_ids);
+    return;
+  }
+  const { required_material_source_ids, required_criteria_obligation_ids, required_seam_ids, required_context, ...inline } = assignment;
+  assert.deepEqual(payload.assignment, inline);
+  assert.deepEqual(required_material_source_ids, view.material.map(item => item.source_id));
+  assert.deepEqual(required_criteria_obligation_ids, view.obligations.filter(item => !item.source_id).map(item => item.id));
+  assert.deepEqual(required_seam_ids, view.seams.map(item => item.id));
+  assert.deepEqual(required_context, view.required_context);
   assert.deepEqual(payload.material.map(item => item.source_id), assignment.required_material_source_ids);
   assert.deepEqual(payload.seams.map(item => item.id), assignment.required_seam_ids);
   for (const id of assignment.support_obligation_ids) assert.ok(assignment.support_reasons[id]?.length);
@@ -120,6 +151,10 @@ async function combined(plugin, runtime, deadline, kind) {
   const restore = smoke.routePayload(plugin);
   const completed = [];
   try {
+    const filename = path.join(plugin, 'scripts/role-artifact.cjs'), validation = new Module(filename, module);
+    validation.filename = filename; validation.paths = Module._nodeModulePaths(path.dirname(filename));
+    validation._compile(fs.readFileSync(filename, 'utf8')
+      + '\nmodule.exports = { assertSemanticSnapshot, semanticRequiredView };', filename);
     const h = setup('unit/phase53-codex-integration.test.cjs', "test('ordinary Codex caller",
       'publicIntegrationFixture, semanticFixture, supportedPartitionCaller, captureOriginals, write, commit');
     const claude = runtime === 'claude' ? setup('unit/phase53-claude-review.test.cjs',
@@ -141,7 +176,9 @@ async function combined(plugin, runtime, deadline, kind) {
         require('node:child_process').execFileSync('git', ['-C', f.worktree, 'add', '--', 'other/unrelated.cjs']);
         h.commit(f, 'fixture: separate unrelated component');
         let prepared;
-        const controls = { onLaunch(launch) { scoped(launch.payload); }, result(result, payload) {
+        const controls = { onLaunch(launch) {
+          scoped(launch.payload, snapshots.get(launch.payload.snapshot_sha256), validation.exports);
+        }, result(result, payload) {
           finding(result);
           if (variant === 'unread-support' && payload.stage === 'worker') {
             result.unread = [payload.assignment.support_obligation_ids[0]];

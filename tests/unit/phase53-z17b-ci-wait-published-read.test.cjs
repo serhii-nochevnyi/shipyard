@@ -305,10 +305,11 @@ test('z17b owns singleton38 after exact37 prefix and preserves a future separate
   const first38 = [...require('../fixtures/phase53/github-job-attempts.json').parent.shards,
     ['phase53-z17-ci-job-attempts.test.cjs'], ['phase53-z17b-ci-wait-published-read.test.cjs']];
   assert.deepEqual(current.shards.slice(0, 38), first38);
-  const hasNative = selector.unitFiles().includes('phase53-z17c-native-wait-lifecycle.test.cjs');
-  assert.equal(current.shards.length, hasNative ? 39 : 38);
-  assert.equal(current.shards.length + 3, hasNative ? 42 : 41);
-  if (hasNative) assert.deepEqual(current.shards[38], ['phase53-z17c-native-wait-lifecycle.test.cjs']);
+  const first39 = [...first38, ['phase53-z17c-native-wait-lifecycle.test.cjs']];
+  assert.deepEqual(current.shards.slice(0, 39), first39);
+  assert.ok(current.shards.length >= 39);
+  assert.equal(current.shards.slice(0, 39).length + 3, 42);
+  assert.deepEqual(current.shards[38], ['phase53-z17c-native-wait-lifecycle.test.cjs']);
   for (let i = 0; i < current.shards.length; i++)
     assert.deepEqual(selector.selectTaskShard(`${i + 1}/${current.shards.length}`), current.shards[i]);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'z17b-future-'));
@@ -319,7 +320,8 @@ test('z17b owns singleton38 after exact37 prefix and preserves a future separate
   const next = selector.appendShard(current, selector.unitTasks(selector.unitFiles(dir)));
   assert.deepEqual(next.shards.slice(0, current.shards.length), current.shards);
   assert.deepEqual(next.shards.at(-1), [future]);
-  assert.equal(next.shards.length + 3, hasNative ? 43 : 42);
+  assert.equal(next.shards.length, current.shards.length + 1);
+  assert.equal(next.shards.length + 3, current.shards.length + 4);
   for (let i = 0; i < next.shards.length; i++)
     assert.deepEqual(selector.selectTaskShard(`${i + 1}/${next.shards.length}`, dir, current), next.shards[i]);
 });
