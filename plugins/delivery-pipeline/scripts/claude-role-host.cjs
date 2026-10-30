@@ -2152,7 +2152,24 @@ function semanticStageSchema(stage) {
     if (stage.role === 'code-review') properties.dispositions = { type: 'array' };
     if (stage.role === 'arch-review') properties.verdict = { enum: ['conform', 'violation', 'adr-outdated'] };
   }
-  return { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
+  const full = { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
+  if (!Object.hasOwn(payload, 'result_formats')) return full;
+  if (require('./model-policy-internal.cjs').stableStringify(payload.result_formats)
+      !== JSON.stringify(['full', 'snapshot-indexed.v1']))
+    reject('unknown semantic result whole forms in protected launch', 'INVALID_INPUT');
+  const indexed = { ...properties };
+  for (const key of ['reviewed_identity', 'coverage', 'unread', 'seams',
+    ...(stage.stage === 'final' ? ['phase', 'head', 'head_tree', 'base', 'base_tree', 'ticket_set', 'ticket_set_digest',
+      ...(['arch-review', 'code-review'].includes(stage.role) ? ['repository', 'id', 'pr', 'base_commit', 'merge_base'] : [])] : [])]) delete indexed[key];
+  Object.assign(indexed, { result_format: { const: 'snapshot-indexed.v1' },
+    reviewed_identity_sha256: { const: sha(require('./model-policy-internal.cjs').stableStringify(payload.reviewed_identity)) },
+    coverage_indices: { type: 'array', items: { type: 'integer', minimum: 0 }, uniqueItems: true },
+    unread_indices: { type: 'array', items: { type: 'integer', minimum: 0 }, uniqueItems: true },
+    seam_rows: { type: 'array', items: { type: 'object', properties: { index: { type: 'integer', minimum: 0 },
+      disposition: { enum: ['resolved', 'unresolved'] }, rationale: { type: 'string', minLength: 1 } },
+      required: ['index', 'disposition', 'rationale'], additionalProperties: true } } });
+  return { type: 'object', properties: Object.fromEntries(['runtime', 'role', 'stage', 'review_contract'].map(key => [key, properties[key]])),
+    oneOf: [full, { type: 'object', properties: indexed, required: Object.keys(indexed), additionalProperties: false }] };
 }
 
 function recordedClaudeLaunch(recorder, stage, original) {
@@ -2232,7 +2249,15 @@ async function runClaudeSemanticReview(options, request) {
       ...(codeReview ? { archivePins: roleArtifact.authenticatedArchivePins(scope.worktree) } : {}), integrationReview: review
       ? { ...review, archivePins: roleArtifact.authenticatedArchivePins(scope.worktree) } : undefined });
   };
-  const finish = (stage, record, result) => {
+  const finish = (stage, record, carrier) => {
+    // @security: Previous full APIs authenticate workers on retention and finals before publication callbacks.
+    if (!roleArtifact.authenticateSemanticStageResult && (['result_format', 'reviewed_identity_sha256',
+      'coverage_indices', 'unread_indices', 'seam_rows'].some(key => Object.hasOwn(carrier, key))
+      || carrier.seams?.some(row => Object.hasOwn(row, 'index'))))
+      reject('indexed semantic result requires its authenticated decoder', 'INVALID_RESULT');
+    const result = roleArtifact.authenticateSemanticStageResult
+      ? roleArtifact.authenticateSemanticStageResult({ prepared: stage, recorder, result: carrier })
+      : stage.stage === 'worker' ? roleArtifact.retainSemanticOriginal({ prepared: stage, recorder }).result : carrier;
     const dispatch = { runtime: 'claude', role: original.role, dispatch_id: stage.dispatch_id,
       receipt: record.receipt, application_evidence: record.application_evidence, dispatch: record, result };
     if (stage.stage === 'worker') return dispatch;
