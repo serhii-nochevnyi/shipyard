@@ -47,7 +47,7 @@ function fixture(raw = {}) {
     manifest.agent_digests[r.agent_file] = crypto.createHash('sha256').update(text).digest('hex');
   }
   fs.writeFileSync(path.join(agentDir, '.shipyard-manifest.json'), JSON.stringify(manifest));
-  return { root, agentDir, options: { cwd: root, agentDir, capabilities, env: {} } };
+  return { root, agentDir, options: { cwd: root, agentDir, capabilities, env: { HOME: root } } };
 }
 function clean(f) { fs.rmSync(f.root, { recursive: true, force: true }); }
 
@@ -274,6 +274,20 @@ test('selector accepts capabilities from the host integration boundary', () => {
   } finally { clean(f); }
 });
 
+test('a source checkout reads the evidence its install left in the Codex home', () => {
+  const f = fixture();
+  try {
+    const { capabilities: _omitted, ...options } = f.options;
+    assert.throws(() => selectAgent('executor', options), /capabilities-file/);
+    const evidence = path.join(f.root, '.codex/shipyard/codex-capabilities.json');
+    fs.mkdirSync(path.dirname(evidence), { recursive: true });
+    fs.writeFileSync(evidence, JSON.stringify(capabilities));
+    assert.equal(selectAgent('executor', options).model, 'gpt-6.1-sol');
+    fs.writeFileSync(evidence, JSON.stringify({ ...capabilities, supportedModels: [] }));
+    assert.throws(() => selectAgent('executor', options), /explicitly support/);
+  } finally { clean(f); }
+});
+
 test('malformed project config does not fall through to defaults or the GSD catalog', () => {
   const f = fixture();
   try {
@@ -334,8 +348,9 @@ test('CLI plain and JSON output both preserve explicit dynamic model and effort'
     assert.equal(staticPlain.status, 0, staticPlain.stderr);
     assert.equal(staticPlain.stdout.trim(), 'shipyard-inv-research.toml high');
 
+    const { CODEX_HOME: _ambient, ...ambient } = process.env;
     const refused = spawnSync(process.execPath, [SCRIPT, 'select', 'executor', '--project-dir', f.root],
-      { encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
+      { encoding: 'utf8', env: { ...ambient, GSD_RUNTIME: 'codex', HOME: f.root } });
     assert.notEqual(refused.status, 0);
     assert.equal(refused.stdout, '');
     assert.match(refused.stderr, /capabilities-file/);

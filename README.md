@@ -193,11 +193,13 @@ needs neither `CODEX_HOME` nor `SHIPYARD_CODEX_CAPABILITIES_FILE` exported.
   unset the variable, or reinstall into the named home so both agree.
 - A source checkout reads the evidence an install left at
   `${CODEX_HOME:-~/.codex}/shipyard/codex-capabilities.json`, so it needs no
-  variable. Three cases still need explicit evidence: a machine with no install,
-  the direct installer run (`scripts/install-shipyard-codex.sh`) and
-  `codex-agent.cjs select` from a source checkout. Pass it as
-  `SHIPYARD_CODEX_CAPABILITIES_FILE` (`--capabilities-file` for `select`).
-  These are the only cases that do.
+  variable, including `codex-agent.cjs select`. The direct installer
+  (`scripts/install-shipyard-codex.sh`, `make install-shipyard-dogfood-codex`)
+  reads that evidence from `codex debug models` itself, as the marketplace
+  bootstrap does. Only a machine with no Codex install and no Codex CLI has
+  none: install first, or set `SHIPYARD_CODEX_CAPABILITIES_FILE`
+  (`--capabilities-file` for `select`) to a host JSON document, which always
+  wins over discovery. Nothing is ever synthesized from the policy.
 - Check a host from the project root before launching. Every host entry takes
   `--preflight`, alone or with the host's usual request argument:
   `node <bundle>/scripts/<host>.cjs --preflight`, for `claude-delivery-host.cjs`,

@@ -17,7 +17,7 @@ const { renderRemedy } = require('./refusal-hints.cjs');
 const runtimeContext = require('./runtime-context.cjs');
 
 const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
-const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
+const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json>, or install Shipyard so its evidence is read from $CODEX_HOME/shipyard/codex-capabilities.json (supportedModels and supportedEfforts)';
 
 function fail(message, code = 'INVALID_INPUT', details = {}) {
   throw policy.policyError(code, message + '. ' + repairFor(code, details), details);
@@ -127,7 +127,9 @@ function capabilitiesFrom(options, flags, env = process.env) {
   });
   if (!file) {
     if (resolved.mode === 'installed') return resolved.capabilities;
-    fail(CAPABILITIES_CONTRACT, 'UNSUPPORTED_SELECTION');
+    const home = runtimeContext.resolveCodexHome({ scriptDir: __dirname, env, flags: hostFlags(flags) });
+    const evidence = path.join(home, 'shipyard', 'codex-capabilities.json');
+    return readCapabilities(fs.existsSync(evidence) ? evidence : null);
   }
   return readCapabilities(file);
 }

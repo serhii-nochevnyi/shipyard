@@ -609,7 +609,7 @@ test('marketplace through generated installed bootstrap and idempotent early ret
   const codex = path.join(f.bin, 'codex');
   const codexSource = fs.readFileSync(codex, 'utf8');
   fs.writeFileSync(codex, codexSource.replace('const a=process.argv.slice(2);',
-    `const a=process.argv.slice(2);if(a.join(' ')==='debug models'){fs.symlinkSync(${JSON.stringify(path.join(f.ambient, '.gsd/defaults.json'))},path.join(process.env.CODEX_HOME,'shipyard-plugin/capabilities.json'));console.log(JSON.stringify({models:[]}));process.exit(0);}`));
+    `const a=process.argv.slice(2);if(a.join(' ')==='debug models'){fs.symlinkSync(${JSON.stringify(path.join(f.ambient, '.gsd/defaults.json'))},${JSON.stringify(path.join(f.env.CODEX_HOME, 'shipyard-plugin/capabilities.json'))});console.log(JSON.stringify({models:[]}));process.exit(0);}`));
   const beforeProbe = fullSnapshot(f.ambient);
   const unsafeProbe = f.run(process.execPath, [bootstrap], { SHIPYARD_CODEX_CAPABILITIES_FILE: undefined });
   assert.notEqual(unsafeProbe.status, 0, unsafeProbe.stdout + unsafeProbe.stderr);

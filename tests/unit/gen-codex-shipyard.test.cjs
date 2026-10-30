@@ -567,28 +567,32 @@ test('capabilities can be supplied by the installer environment', () => {
   });
 });
 
+function useCatalogCli(f) {
+  const selectionsByModel = CAPABILITIES.supportedSelections.reduce((grouped, selection) => {
+    const levels = grouped.get(selection.model) || [];
+    levels.push(selection);
+    grouped.set(selection.model, levels);
+    return grouped;
+  }, new Map());
+  const entries = [...selectionsByModel]
+    .map(([slug, levels]) => ({
+      slug, visibility: 'list', supported_in_api: true,
+      supported_reasoning_levels: levels.map(({ effort }) => ({ effort })),
+    }));
+  entries.push(
+    { slug: 'private-model', visibility: 'list', supported_in_api: false,
+      supported_reasoning_levels: [{ effort: 'max' }] },
+    { slug: 'hidden-model', visibility: 'hide', supported_in_api: true,
+      supported_reasoning_levels: [{ effort: 'max' }] },
+  );
+  writeJson(f.catalogFile, { models: entries });
+  write(f.codexFile, `#!/bin/sh\n[ "$*" = "debug models" ] || exit 98\nmkdir -p "$CODEX_HOME/tmp/arg0"\ncat "${f.catalogFile}"\n`);
+  fs.chmodSync(f.codexFile, 0o755);
+}
+
 test('the local CLI catalog supplies listed API models and declared efforts', () => {
   withFixture({}, (f) => {
-    const selectionsByModel = CAPABILITIES.supportedSelections.reduce((grouped, selection) => {
-      const levels = grouped.get(selection.model) || [];
-      levels.push(selection);
-      grouped.set(selection.model, levels);
-      return grouped;
-    }, new Map());
-    const entries = [...selectionsByModel]
-      .map(([slug, levels]) => ({
-        slug, visibility: 'list', supported_in_api: true,
-        supported_reasoning_levels: levels.map(({ effort }) => ({ effort })),
-      }));
-    entries.push(
-      { slug: 'private-model', visibility: 'list', supported_in_api: false,
-        supported_reasoning_levels: [{ effort: 'max' }] },
-      { slug: 'hidden-model', visibility: 'hide', supported_in_api: true,
-        supported_reasoning_levels: [{ effort: 'max' }] },
-    );
-    writeJson(f.catalogFile, { models: entries });
-    write(f.codexFile, `#!/bin/sh\n[ "$*" = "debug models" ] || exit 98\ncat "${f.catalogFile}"\n`);
-    fs.chmodSync(f.codexFile, 0o755);
+    useCatalogCli(f);
     const result = f.run([]);
     assert.strictEqual(result.status, 0, result.stderr);
     const emitted = json(path.join(f.out, 'bundle', CODEX_CAPABILITIES_BUNDLE_FILE));
@@ -859,14 +863,38 @@ test('install and reinstall preserve foreign GSD skills, agents and registration
   });
 });
 
-test('the installer refuses a bare install without explicit host capability evidence', () => {
+test('the installer refuses a bare install when the Codex CLI cannot supply capability evidence', () => {
   withFixture({}, (f) => {
     const result = install(f, 2, { capabilities: false });
     assert.strictEqual(result.status, 2, result.stderr + result.stdout);
-    assert.match(result.stderr, /SHIPYARD_CODEX_CAPABILITIES_FILE/);
+    assert.match(result.stderr, /install the Codex CLI.*SHIPYARD_CODEX_CAPABILITIES_FILE/);
     assert.ok(!fs.existsSync(path.join(f.codexHome, 'agents/.shipyard-manifest.json')));
     assert.ok(!fs.existsSync(path.join(f.codexHome, 'shipyard')));
     assert.ok(!fs.existsSync(f.env.AGENTS_SKILLS_DIR));
+  });
+});
+
+test('a bare install reads the Codex CLI catalog and leaves no temporary evidence behind', () => {
+  withFixture({}, (f) => {
+    useCatalogCli(f);
+    const result = install(f, 2, { capabilities: false });
+    assert.strictEqual(result.status, 0, result.stderr + result.stdout);
+    const installed = json(path.join(f.codexHome, 'shipyard', CODEX_CAPABILITIES_BUNDLE_FILE));
+    assert.deepStrictEqual(installed.supportedModels, [...CAPABILITIES.supportedModels].sort());
+    assert.ok(!installed.supportedModels.includes('private-model'));
+    assert.deepStrictEqual(fs.readdirSync(f.dir).filter((name) => name.startsWith('shipyard-capabilities.')), []);
+    assert.ok(!fs.existsSync(path.join(f.codexHome, 'tmp')), 'the probe leaves no helper links in the install root');
+  });
+});
+
+test('an explicit capability file takes priority over the Codex CLI', () => {
+  withFixture({}, (f) => {
+    write(f.codexFile, '#!/bin/sh\n[ "$*" = "debug models" ] && touch "' + path.join(f.dir, 'cli-probed') + '"\necho "codex-cli 0.147.0"\n');
+    fs.chmodSync(f.codexFile, 0o755);
+    const result = install(f);
+    assert.strictEqual(result.status, 0, result.stderr + result.stdout);
+    assert.ok(!fs.existsSync(path.join(f.dir, 'cli-probed')), 'the model catalog is not consulted');
+    assert.strictEqual(read(path.join(f.codexHome, 'shipyard', CODEX_CAPABILITIES_BUNDLE_FILE)), read(f.capabilitiesFile));
   });
 });
 
