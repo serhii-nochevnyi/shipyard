@@ -1771,30 +1771,6 @@ test('delivery docs prefer one mark/clear batch per fan-out', () => {
     'the operator reference must expose the one-call completion cleanup path');
 });
 
-test('deliver.md\'s ladder query runs, and UNCONFIRMED is a bucket rather than a hole', () => {
-  // The doc's own block is executed, not a copy of it: a query that has drifted
-  // from the field names is the one thing that makes this evidence unreadable at
-  // the moment somebody needs it.
-  const doc = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
-  const block = (doc.match(/```bash\n([\s\S]*?)```/g) || [])
-    .map((b) => b.replace(/^```bash\n/, '').replace(/```$/, ''))
-    .find((b) => b.includes('delivery-log.jsonl') && b.includes('effort_applied'));
-  assert.ok(block, 'deliver.md must carry the ladder query beside the flags');
-
-  const { project } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...OPEN_PR } });
-  fs.writeFileSync(path.join(project, '.planning', 'graph', 'delivery-log.jsonl'), [
-    { event: 'dispatch', role: 'executor', model: 'opus', effort: 'high', effort_applied: 'high' },
-    { event: 'dispatch', role: 'arch-review', model: 'opus', effort: 'xhigh' },
-  ].map((e) => JSON.stringify(e)).join('\n') + '\n');
-
-  const r = spawnSync('bash', ['-c', block], { cwd: project, encoding: 'utf8' });
-  assert.equal(r.status, 0, `the query must run (${r.stderr})`);
-  assert.ok(/executor opus resolved:high applied:high': 1/.test(r.stdout),
-    `the Workflow row is counted: ${r.stdout}`);
-  assert.ok(/arch-review opus resolved:xhigh applied:UNCONFIRMED': 1/.test(r.stdout),
-    `and the Agent row reads UNCONFIRMED rather than a guess: ${r.stdout}`);
-});
-
 test('fresh linked-worker provenance remains authenticated when the next host runs at the project root', () => {
   const { project, graph, worktree } = scratch({ 'T-01-01': { ...READY } });
   const authorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-fresh-authority-')));

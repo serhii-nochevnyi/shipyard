@@ -118,6 +118,7 @@ const PR_SENTINEL = path.join(PLUGIN, 'references', 'pr-sentinel.md');
 const DELIVER = path.join(PLUGIN, 'commands', 'deliver.md');
 const STATE_SYNC = path.join(PLUGIN, 'scripts', 'state-sync.cjs');
 const FRONT = path.join(PLUGIN, 'scripts', 'front.cjs');
+const TRACKER_REF = path.join(PLUGIN, 'references', 'tracker.md');
 
 // One subject = one mechanism with two entry points. `canonical` is the
 // document that STATES the procedure; `referencing` is the one that must point
@@ -231,7 +232,7 @@ const TRACKER_PROJECTION_CALL = {
 // configuration. Keep its invocation in the eligibility paragraph's bounded
 // slice so deleting the caller cannot be hidden by the surrounding explanation.
 const TRACKER_ELIGIBILITY_CALL = {
-  name: 'deliver.md § tracker eligibility — exact-ticket override',
+  name: 'tracker.md § tracker eligibility — exact-ticket override',
   start: /^\*\*Tracker eligibility is opt-in by status NAME\.\*\*/m,
   end: /^Each emitted item carries/m,
 };
@@ -332,7 +333,7 @@ const WIRED = [
     kind: 'wired',
     mechanism: '`tracker-record.cjs override` — the exact-ticket eligibility escape hatch',
     reader: '`front.cjs` — the pending → execute boundary that consumes the generation-bound record',
-    homes: [{ doc: DELIVER, slice: TRACKER_ELIGIBILITY_CALL, caller: [/tracker-record\.cjs override <T> <KEY>/] }],
+    homes: [{ doc: TRACKER_REF, slice: TRACKER_ELIGIBILITY_CALL, caller: [/tracker-record\.cjs override <T> <KEY>/] }],
     why: 'the bypass is valid only for one named ticket and must retain the tracker observation; a set-level shortcut would silently turn the holding rule off for every pending ticket',
   },
   {

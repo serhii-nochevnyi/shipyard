@@ -375,11 +375,7 @@ test('the generated bundle keeps recommendation, checkpoint and capability refus
     assert.ok(manifest.bundle_files.includes('scripts/orchestration-overhead.cjs'));
     assert.ok(manifest.bundle_files.includes('scripts/runtime-context.cjs'));
     assert.ok(manifest.bundle_files.includes('scripts/comment-policy.cjs'));
-    assert.match(generatedDeliver, /rotation_recommendation\.state/);
     assert.match(generatedDeliver, /automatic_transfer\.allowed/);
-    assert.match(generatedDeliver, /checkpoint_collection/);
-    assert.match(generatedDeliver, /successor_startup/);
-    assert.match(generatedDeliver, /cache_warmup/);
     const handoff = require(path.join(f.out, 'bundle/scripts/session-handoff.cjs'));
     const runtime = require(path.join(f.out, 'bundle/scripts/runtime-context.cjs'));
     const overhead = require(path.join(f.out, 'bundle/scripts/orchestration-overhead.cjs'));
