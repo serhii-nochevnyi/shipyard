@@ -92,7 +92,7 @@ const HINTS = Object.freeze({
   }),
   RUNTIME_CAPABILITY_MISSING: Object.freeze({
     hint: 'The runtime host has no capability evidence for the requested selection.',
-    remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). If the runtime CLI itself reports an unsupported option, upgrade that CLI instead. Then retry.`,
+    remedy: `Installed bundle: its capability evidence is missing or stale, so upgrade and reinstall (${UPGRADE}). Source checkout without an install, or direct installer run: point SHIPYARD_CODEX_CAPABILITIES_FILE at a capability evidence file (README, Launch and upgrade). If the runtime CLI itself reports an unsupported option, upgrade that CLI instead. Then retry.`,
   }),
   CLAUDE_GSD_AGENT_UNAVAILABLE: Object.freeze({
     hint: 'The GSD agent definition for this role is missing, unreadable, or lacks the scoped tools the launch needs.',
