@@ -5,20 +5,6 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const originals = new WeakMap();
-const inputStorage = new WeakMap();
-const retainedInputRoots = new Set();
-process.once('exit', () => {
-  for (const root of retainedInputRoots) fs.rmSync(root, { recursive: true, force: true });
-});
-function privateInputStorage(f) {
-  if (!inputStorage.has(f)) {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'code-review-inputs-')));
-    fs.chmodSync(root, 0o700);
-    inputStorage.set(f, root);
-    retainedInputRoots.add(root);
-  }
-  return inputStorage.get(f);
-}
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? '[' + value.map(stable).join(',') + ']'
   : value && typeof value === 'object' ? '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}' : JSON.stringify(value);
@@ -73,20 +59,15 @@ function setOriginalReview(input, raw, priorFindings = []) {
 function retainPlanningInput(f, input, planningRoot = f.root, repo = null, options = {}) {
   const packets = require('../../../plugins/delivery-pipeline/scripts/context-packet.cjs');
   const policy = require('../../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-  const collector = require('../../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
   const snapshot = originals.get(input);
   if (!snapshot) throw new Error('A separately retained original raw review is required');
   const raw = structuredClone(snapshot.raw), priorFindings = snapshot.priorFindings;
   const refs = input.result.ticket_set.map(item => item.row.plan);
-  const requestedPartitions = raw.coverage?.length || 0;
-  const useCodex = options.runtime ? options.runtime === 'codex' : requestedPartitions > 0;
-  const hostFiles = options.transport === 'host-files' || requestedPartitions > 0;
+  const useCodex = options.runtime === 'codex';
   for (const plan of refs) {
     const absolute = path.join(planningRoot, plan);
     fs.mkdirSync(path.dirname(absolute), { recursive: true });
     if (!fs.existsSync(absolute)) fs.writeFileSync(absolute, '# Original complete acceptance\n');
-    if (requestedPartitions && fs.statSync(absolute).size < requestedPartitions)
-      fs.appendFileSync(absolute, 'x'.repeat(requestedPartitions));
   }
   const graphDir = path.join(planningRoot, '.planning/graph');
   const phase = path.basename(path.dirname(refs[0]));
@@ -102,12 +83,9 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
     ticket_set_digest: input.ticketSetDigest };
   const round = { round: input.result.review_round, scope: input.result.review_scope, priorHead: input.result.prior_head };
   const roleContext = core.assemblePacket({ subject: input.ticket, identity: focused,
-    exactDiff: { from: round.scope === 'delta' ? round.priorHead : mergeBase, to: head,
-      content: git(f.root, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-        round.scope === 'delta' ? round.priorHead : mergeBase, head,
-        ...require('../../../plugins/delivery-pipeline/scripts/development-artifacts.cjs').productPathspec()]) },
+    exactDiff: { from: round.scope === 'delta' ? round.priorHead : mergeBase, to: head },
     integrationBase: { commit: base }, ticketSet: input.result.ticket_set, planAcceptance: [], priorFindings, round,
-    changeMetadata: {}, referenceDigest: referenceDigest.sha256 });
+    changeMetadata: options.changes ? { changes: options.changes } : {}, referenceDigest: referenceDigest.sha256, parts: options.parts, groups: options.parts });
   Object.assign(roleContext, { planning_reference: packets.resolvePlanningReference({ worktree: f.root, graphDir, repo }),
     dispositions_digest: dispositionsDigest, reference_digest: referenceDigest });
   if (useCodex) roleContext.reference = { path: 'references/code-review.md', content: reference, ...referenceDigest };
@@ -117,41 +95,12 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
   const contextDigest = hash(useCodex ? JSON.stringify(packets.encodeUniqueContent(packet)) : stable(packet));
   const binding = { ...packet.role_context.focused, context_digest: contextDigest,
     launch_digest: hash(stable({ packet_digest: contextDigest, reference_digest: referenceDigest })) };
-  Object.assign(raw, binding, { ticket_set: packet.role_context.ticket_set, coverage: raw.coverage || [],
+  Object.assign(raw, binding, { ticket_set: packet.role_context.ticket_set,
     evidence_markdown: raw.evidence_markdown || fs.readFileSync(path.join(f.root, '.shipyard-code-review-evidence.md'), 'utf8') });
   const dispatchId = crypto.randomUUID();
-  let fileInput;
-  if (useCodex) raw.coverage = raw.coverage.map((entry, index) => ({ partition: index + 1, status: entry.status }));
-  if (hostFiles) {
-    const sources = [{ path: 'current-pr.diff', content: packet.role_context.exact_diff.content }, ...packet.required_refs];
-    const count = Math.max(requestedPartitions, sources.filter(source => source.content.length).length);
-    const lastPartitionedSource = sources.findLastIndex(source => source.content.length);
-    const material = [JSON.stringify(packets.encodeUniqueContent(packet))], spans = [], inventory = [];
-    for (const [index, source] of sources.entries()) {
-      const bytes = Buffer.from(source.content), partitions = [];
-      const n = index === lastPartitionedSource ? count - spans.length : 1;
-      let offset = 0;
-      for (let part = 0; bytes.length && part < n; part++) {
-        const end = part === n - 1 ? bytes.length : offset + 1;
-        const ordinal = material.length;
-        material.push(bytes.subarray(offset, end).toString('utf8')); partitions.push(ordinal);
-        spans.push({ source: source.path, source_sha256: hash(bytes), source_bytes: bytes.length,
-          start: offset, end, partition: ordinal }); offset = end;
-      }
-      inventory.push({ path: source.path, sha256: hash(bytes), bytes: bytes.length, start: 0, end: bytes.length,
-        inline_asset: 0, partitions });
-    }
-    fileInput = collector.prepareFileInput({ worktree: f.root, phase: Number(phase.split('-')[0]), ticket: input.ticket }, material,
-      { role: 'code-review', dispatchId, graphDir, phaseRepo: repo, storageRoot: privateInputStorage(f),
-        focusedPartitions: spans, focusedSources: inventory,
-        binding: { review_contract: core.CONTRACT_ID, packet_digest: contextDigest,
-          focused: { ...packet.role_context.focused, context_digest: contextDigest } } });
-    raw.coverage = spans.map((span, index) => ({ partition: span.partition, status: snapshot.raw.coverage?.[index]?.status || 'reviewed' }));
-  }
   const normalization = { round: round.round, scope: round.scope, priorFindings,
     readSource: core.createSourceReader({ head, git: (args, maximum) => execFileSync('git', ['-C', f.root, ...args], { encoding: 'utf8', maxBuffer: maximum }) }) };
-  const semantic = useCodex ? core.normalizeResult(raw, normalization) : core.normalizeFinal(raw, [], normalization);
-  if (useCodex && fileInput) Object.assign(semantic, collector.validateCodeReviewCoverage(semantic, fileInput.manifest));
+  const semantic = core.normalizeFinal(raw, options.parts ?? [], normalization);
   const { evidence_markdown: _markdown, host_context: _context, ...result } = semantic;
   Object.assign(result, { prior_head: round.priorHead, contract_digest: roleContext.contract_digest,
     dispositions_digest: dispositionsDigest,
@@ -167,7 +116,7 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
         content: [{ type: 'tool_use', name: 'StructuredOutput', input: raw }] } }];
     const streamRows = [{ type: 'system', subtype: 'init', session_id: session, model: r.model },
       { type: 'result', subtype: 'success', session_id: session, is_error: false, structured_output: raw, result: JSON.stringify(raw) }];
-    options.mutateNative?.(rows, streamRows, { packet, fileInput });
+    options.mutateNative?.(rows, streamRows, { packet });
     const nativeText = rows.map(row => JSON.stringify(row)).join('\n') + '\n';
     const streamText = streamRows.map(row => JSON.stringify(row)).join('\n') + '\n';
     fs.writeFileSync(native, nativeText); fs.writeFileSync(stream, streamText);
@@ -180,8 +129,8 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
         transcript: { path: native, bytes: Buffer.byteLength(nativeText), sha256: hash(nativeText) } } };
   } } } });
   if (useCodex) {
-    const dispatch = retainCodexReview(f, dispatchId, raw, packet, binding, fileInput, options);
-    result.host_context = { ...(!fileInput ? { original_packet: packets.encodeUniqueContent(packet) } : {}), planning_reference: roleContext.planning_reference,
+    const dispatch = retainCodexReview(f, dispatchId, raw, packet, binding, options);
+    result.host_context = { original_packet: packets.encodeUniqueContent(packet), planning_reference: roleContext.planning_reference,
       selected_refs: packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) };
     input.result = result; input.dispatchId = dispatch.dispatch_id;
     originals.set(input, { raw: structuredClone(raw), priorFindings: structuredClone(priorFindings) });
@@ -195,7 +144,7 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
   return input;
 }
 
-function retainCodexReview(f, dispatchId, raw, packet, binding, fileInput, options) {
+function retainCodexReview(f, dispatchId, raw, packet, binding, options) {
   const packets = require('../../../plugins/delivery-pipeline/scripts/context-packet.cjs');
   const codexHome = path.join(f.root, '.planning/codex-fixture');
   process.env.CODEX_HOME = codexHome;
@@ -205,11 +154,10 @@ function retainCodexReview(f, dispatchId, raw, packet, binding, fileInput, optio
       agent_file: r.agent_file, agent_file_content: agent, agent_file_digest: hash(agent) }; },
     launchStatic(r) {
       const session = crypto.randomUUID(), text = JSON.stringify(raw);
-      const prompt = 'launch_digest=' + binding.launch_digest + (fileInput
-        ? '\n<AUTHENTICATED_FOCUSED_INPUT>\n' + JSON.stringify(fileInput.input_bundle) + '\n</AUTHENTICATED_FOCUSED_INPUT>'
-        : '\n<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet)) + '\n</AUTHENTICATED_CONTEXT_PACKET>');
+      const prompt = 'launch_digest=' + binding.launch_digest
+        + '\n<AUTHENTICATED_CONTEXT_PACKET>\n' + JSON.stringify(packets.encodeUniqueContent(packet)) + '\n</AUTHENTICATED_CONTEXT_PACKET>';
       const { native, nativeText } = writeCodexSession({ home: codexHome, session, worktree: f.root,
-        model: r.model, effort: r.effort, prompt, raw, mutate: rows => options.mutateNative?.(rows, null, { packet, fileInput }) });
+        model: r.model, effort: r.effort, prompt, raw, mutate: rows => options.mutateNative?.(rows, null, { packet }) });
       const stream = path.join(codexHome, session + '.stream.jsonl');
       const cli = [{ type: 'thread.started', thread_id: session }, { type: 'turn.started' },
         { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text } },
@@ -222,8 +170,6 @@ function retainCodexReview(f, dispatchId, raw, packet, binding, fileInput, optio
         policy_hash: r.policy_hash, agent_file: r.agent_file, agent_file_digest: r.agent_file_digest,
         runtime_evidence: { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai', session_id: session, ticket: packet.subject,
           worktree: f.root, code_review: binding,
-          ...(fileInput ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
-            input_consumption: { native_session_sha256: hash(nativeText) } } : {}),
           native_session_evidence: { session_id: session, bytes: Buffer.byteLength(nativeText), sha256: hash(nativeText) },
           transcript: { path: stream, bytes: Buffer.byteLength(streamText), sha256: hash(streamText) } } };
     },

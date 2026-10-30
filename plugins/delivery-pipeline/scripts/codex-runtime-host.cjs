@@ -2652,8 +2652,6 @@ function createCodexCliLauncher(options = {}) {
     if (codeReview && (typedRole || launchOptions.resume_review || launchOptions.review_progress || launchOptions.reader_capacity_probe
         || launchOptions.sandbox_mode !== 'read-only'))
       fail('INVALID_INPUT', 'code-review requires its original static read-only launch');
-    if (codeReview && (fileInput || null) !== codeContext.admittedFileInput(launchOptions.code_review_prepared))
-      fail('INVALID_INPUT', 'code-review files differ from private launch custody');
     const focused = launchOptions.focused_prepared === undefined ? null
       : require('./codex-arch-review-context.cjs').authenticateFocusedLaunch(launchOptions.focused_prepared, prompt, {
         ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree, dispatch_id: launchOptions.dispatch_id,
@@ -2669,6 +2667,7 @@ function createCodexCliLauncher(options = {}) {
     const resumeReview = launchOptions.resume_review ? reviewResumptions.get(launchOptions.resume_review) : null;
     if (launchOptions.resume_review && !resumeReview) fail('REVIEW_PROGRESS_INVALID', 'serialized continuation has no host claim');
     const fileTransport = launchOptions.input_transport !== undefined || launchOptions.input_bundle !== undefined || fileInput !== undefined;
+    if (codeReview && fileTransport) fail('INVALID_INPUT', 'code-review reads git itself and takes no file input');
     const integrationFile = fileTransport && require('./codex-arch-review-context.cjs').isIntegrationFileInput(fileInput);
     if (fileInput?.input_bundle?.integration_input_sha256 && !integrationFile)
       fail('INVALID_INPUT', 'integration files lack private stage transport custody');
@@ -2681,9 +2680,9 @@ function createCodexCliLauncher(options = {}) {
       if (typeof prompt !== 'string' || normalizeRelay(prompt) !== normalizeRelay(resumeReview ? resumeReview.prompt : fileInput.prompt))
         fail('INVALID_INPUT', 'native relay differs from private prepared input');
       if (focused) fail('INVALID_INPUT', 'focused architecture review reads git itself and takes no file input');
-      if (integrationFile && (typedRole || resumeReview || capacityProbe || codeReview
+      if (integrationFile && (typedRole || resumeReview || capacityProbe
           || typeof options.integrationIngress !== 'function')) fail('INVALID_INPUT', 'integration file ingress is unavailable');
-      if (!capacityProbe && !codeReview) collector.requireReaderBatchCapacity(fileInput);
+      if (!capacityProbe) collector.requireReaderBatchCapacity(fileInput);
       if (fileInput.manifest.transport?.schema === 'shipyard.native-reader-transport.v3'
           && (fileInput.manifest.transport.candidate.instructions_sha256 !== reviewHash(agent ? agent.instructions
             : resumeReview?.progress.original_launch.agent
@@ -2692,8 +2691,7 @@ function createCodexCliLauncher(options = {}) {
         fail('READER_CAPACITY_UNSUPPORTED', 'review changed its measured instructions or selection');
       const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: capacityProbe ? probeState.association.review_dispatch_id
         : resumeReview ? resumeReview.progress.identity.dispatch_id : launchOptions.dispatch_id,
-        run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase,
-        ...(codeReview ? { role: 'code-review' } : {}) } });
+        run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase } });
       if (checked.manifest.snapshot.worktree !== fs.realpathSync(scope.worktree))
         fail('SCOPE_MISMATCH', 'prepared review input belongs to a different physical worktree');
       if ((checked.manifest.binding?.agent_sha256 && checked.manifest.binding.agent_sha256 !== launchOptions.agent_file_digest)
@@ -2798,7 +2796,7 @@ function createCodexCliLauncher(options = {}) {
       applied_model: model, applied_effort: effort,
       observed_model: model, observed_effort: effort,
     });
-    const observeReview = fileTransport && !codeReview && !resumeReview && !capacityProbe && (launchOptions.review_progress === true
+    const observeReview = fileTransport && !resumeReview && !capacityProbe && (launchOptions.review_progress === true
       || (fileInput.manifest.binding?.ticket_set && fileInput.manifest.binding?.merge_base))
       ? createReviewObserver(fileInput, { model, effort, sandbox_mode: sandbox,
         agent_file: agent?.file || launchOptions.agent_file || null,
@@ -3046,7 +3044,7 @@ function createCodexCliLauncher(options = {}) {
         allowTimedOutWait: false, startedAt, task,
       });
       const nativeEvidence = verified.native_session_evidence;
-      if (fileTransport && !codeReview) {
+      if (fileTransport) {
         const message = parsed.records.filter(record => record.type === 'item.completed'
           && record.item?.type === 'agent_message').at(-1);
         if (!message || parsed.records.indexOf(message) > parsed.records.findLastIndex(record => record.type === 'turn.completed'))
@@ -3149,9 +3147,7 @@ function createCodexCliLauncher(options = {}) {
         ...(typedEvidence ? { native_child_evidence: typedEvidence } : {}),
         ...(focused ? { focused_review: focused } : {}),
         ...(codeReview ? { code_review: codeReview } : {}),
-        ...(fileTransport && codeReview ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
-          input_accounting: fileInput.manifest.accounting } : {}),
-        ...(fileTransport && !codeReview ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
+        ...(fileTransport ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
           input_accounting: fileInput.manifest.accounting,
           input_consumption: { native_session_sha256: nativeEvidence.sha256,
             manifest_sha256: fileInput.input_bundle.manifest_sha256,

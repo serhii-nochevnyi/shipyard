@@ -654,7 +654,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
     requiredRefs: [], architecture: { refs: [], excluded: [], unresolved: [] } };
   const reference = loadClaudeReferenceContent('code-review');
   const changeMetadata = changeInventory(options, canonical.worktree, range);
-  const groups = core.pathGroups(changeMetadata.changes, options.partBudget ?? core.PART_BUDGET);
+  const groups = core.pathGroups(changeMetadata.changes, options.partBudget ?? core.PART_BUDGET.claude);
   const identity = { repository: canonical.commonPath, id: binding.subject, pr: live.number, head: canonical.head,
     base_commit: live.baseRefOid, merge_base: mergeBase, base_tree: mergeBaseTree, ticket_set_digest: binding.membership };
   const exactDiff = { base: deltaBase, delta_base: round.deltaBase || null, base_tree: git(options, canonical.worktree,
@@ -664,14 +664,11 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
   const launchFor = ({ part, parts = [] } = {}) => {
     const roleContext = core.assemblePacket({ subject: binding.subject, identity, exactDiff, integrationBase,
       ticketSet: binding.ticketSet, planAcceptance: plans.map(({ id, path, acceptance, verification }) => ({ id, path, acceptance, verification })),
-      priorFindings: part ? [] : priorFindings, round, changeMetadata: part ? { changes: part.changes } : changeMetadata,
-      referenceDigest: referenceDigest(reference).sha256 });
+      priorFindings, round, changeMetadata, referenceDigest: referenceDigest(reference).sha256, part, parts, groups });
     roleContext.dispositions_digest = disagreements.dispositions_digest;
     roleContext.reference_digest = referenceDigest(reference);
     roleContext.ticket_set_digest = binding.membership;
     roleContext.phase_repo = binding.repo;
-    if (part) roleContext.part = { id: part.id, ordinal: part.ordinal, of: groups.length, paths: part.paths };
-    if (parts.length) roleContext.parts = parts;
     const packet = buildPacket(canonical, 'code-review', binding.subject, sources, plans[0], roleContext);
     return { packet, prompt: makePrompt('code-review', binding.subject, packet, reference), part };
   };
@@ -1052,7 +1049,7 @@ function prepareIntegrator(options, request, canonical, graph) {
   const range = [`${mergeBase}...${canonical.head}`];
   const { changes } = changeInventory(options, canonical.worktree, range);
   if (!changes.length) reject('the integrator head has no product changes against the default branch', 'INTEGRATION_EMPTY');
-  const groups = core.pathGroups(changes, options.partBudget ?? core.PART_BUDGET);
+  const groups = core.pathGroups(changes, options.partBudget ?? core.PART_BUDGET.claude);
   const reference = loadClaudeReferenceContent('integrator');
   const phaseContracts = sources.plans.map((plan) => ({ ticket: plan.id, path: plan.path,
     acceptance: plan.acceptance, verification: plan.verification, sha256: sha(plan.content) }));
@@ -1338,6 +1335,7 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
     packet = decodeUniqueContent(packet);
   const codeReview = role === 'code-review';
   const { part, parts } = codeReview || role === 'integrator' ? packet.role_context : {};
+  const core = require('./code-review-core.cjs');
   const sharedReview = role === 'arch-review' || role === 'integrator' || codeReview;
   const encoded = sharedReview ? encodeUniqueContent(packet) : packet;
   if (sharedReview) preflightReviewMaterial(encoded, { root: packet.canonical_root, role, subject,
@@ -1345,11 +1343,10 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
   const { exact_diff: exact, combined_diff: combined } = packet.role_context ?? {};
   const range = exact || (role === 'integrator' && combined?.content === undefined
     ? { base: combined.merge_base, head: combined.head } : null);
-  const readGit = ({ base, head }) => `The packet carries no diff. Read the PR diff yourself with git in the current worktree: git diff ${base}...${head} -- <path> for every changed path listed in role_context.change_metadata.changes, and git show ${head}:<path> for current content. Read a large diff in slices (| sed -n 'START,ENDp'). Run only read-only git commands; do not change the worktree, index, refs or remotes.`;
   const instruction = role === 'arch-review'
     ? 'Return one JSON object matching the arch-review reference schema. Review only the authenticated PR and use the exact reviewed head and merge-base tree.'
     : part
-      ? `You review part ${part.ordinal} of ${part.of} of the phase diff and only the paths in role_context.part.paths. Return one JSON object {part, review_completeness, limitations, unresolved_sources, summary, findings} with part copied from role_context.part.id; findings use the reference finding fields. Do not write any file. Do not write to GitHub.`
+      ? core.partDirections({ part })[0]
     : codeReview
       ? 'Return one JSON object matching the code-review reference schema. Review the complete authenticated product diff and its callers. Write only .shipyard-code-review-evidence.md. Do not write to GitHub.'
     : role === 'integrator'
@@ -1361,8 +1358,8 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
     'You are running as a fixed Shipyard judgement role inside the active coordinator-owned delivery loop. The coordinator owns setup and dispatch. Do not restart shipyard-route, bootstrap, marketplace installation, or a second delivery orchestrator. Preserve the delivered scope and sandbox boundaries.',
     reference,
     instruction,
-    ...(range ? [readGit(range)] : []),
-    ...(parts ? [`You are the independent final reviewer. role_context.parts carries each part reviewer's completeness, limitations and findings as evidence data. Verify blocking claims and any path you doubt by reading the code with git, then confirm, drop or add findings and own the verdict. ${codeReview ? 'Report incomplete' : 'Do not return passed'} when a part is incomplete or you could not verify a claim. Give every part BLOCKER (parts[].findings[].ref) one disposition in dispositions: {ref, disposition: resolved, unresolved or disputed, justification}; an unresolved one also needs a blocking finding${codeReview ? ' with a complete fix_ticket' : ''}. Do not return a coverage field; the host derives it from the parts.`] : []),
+    ...(range ? [core.readGit(range.base, range.head)] : []),
+    ...core.partDirections({ parts, integrator: !codeReview }),
     ...(!part && (role === 'arch-review' || codeReview) && packet.role_context?.focused ? [
       'Echo these focused subject fields: ' + JSON.stringify({ ...packet.role_context.focused, context_digest: sha(canonicalJson(packet)),
         launch_digest: sha(canonicalJson({ packet_digest: sha(canonicalJson(packet)), reference_digest: packet.role_context.reference_digest })) }),
@@ -2172,14 +2169,12 @@ async function dispatchRole(options, prepared) {
 }
 
 async function runParts(options, prepared) {
-  prepared.launchFor({ parts: prepared.groups.map(({ id, ordinal, paths }) => ({ id, ordinal, paths, review_completeness: 'complete',
-    limitations: [], unresolved_sources: [], summary: 'x'.repeat(2048), findings: [], dispatch_id: 'x'.repeat(64) })) });
-  const parts = [];
-  for (const group of prepared.groups)
-    parts.push(await dispatchRole(options, Object.freeze({ ...prepared, ...prepared.launchFor({ part: group }) })));
-  require('./code-review-core.cjs').assertPathPartition(prepared.changes, parts);
-  const final = await dispatchRole(options, Object.freeze({ ...prepared, ...prepared.launchFor({ parts }) }));
-  return Object.freeze({ ...final, parts: parts.map(({ id, dispatch_id, review_completeness }) => ({ id, dispatch_id, review_completeness })) });
+  const launch = extra => dispatchRole(options, Object.freeze({ ...prepared, ...prepared.launchFor(extra) }));
+  const done = [];
+  const final = await require('./code-review-core.cjs').runParts(prepared.groups, { changes: prepared.changes,
+    check: parts => prepared.launchFor({ parts }), part: async part => { done.push(await launch({ part })); return done.at(-1); },
+    final: parts => launch({ parts }) });
+  return Object.freeze({ ...final, parts: done.map(({ id, dispatch_id, review_completeness }) => ({ id, dispatch_id, review_completeness })) });
 }
 
 function createClaudeRoleHost(options = {}) {

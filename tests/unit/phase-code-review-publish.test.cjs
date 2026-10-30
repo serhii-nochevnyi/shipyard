@@ -23,8 +23,7 @@ const blocker = { id: 'repair-source', rule: 'source-error', severity: 'BLOCKER'
   line_text: sourceLine, summary: 'Repair the failing source', failure_scenario: 'A caller receives the wrong result.',
   fix_ticket: { title: 'Repair source', scope: 'Correct the cited failure', files: ['source.js'], depends_on: [] } };
 const raw = (complete = true, findings = []) => ({ review_completeness: complete ? 'complete' : 'incomplete',
-  limitations: complete ? [] : ['unread partition'], unresolved_sources: [], findings, dispositions: [],
-  coverage: complete ? [] : [{ status: 'not-reviewed' }] });
+  limitations: complete ? [] : ['unread partition'], unresolved_sources: [], findings, dispositions: [] });
 
 function fixture(jira = null, mode = 'report', pr = 52) {
   const f = artifactFixture('publish');
@@ -170,7 +169,7 @@ for (const jira of [null, 'PRJ-42']) {
 
   for (const [name, result, description] of [
     ['needs-fix', raw(true, [blocker]), 'code review: 1 blocking issues, 0 notes'],
-    ['incomplete', raw(false), 'code review incomplete: 1 partitions not reviewed'],
+    ['incomplete', raw(false), 'code review incomplete: 0 partitions not reviewed'],
   ]) test('publish ' + name + ' as pending: ' + jira, () => {
     const f = fixture(jira, 'hold');
     try {

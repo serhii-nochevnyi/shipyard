@@ -4,7 +4,8 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const CONTRACT_ID = 'shipyard.phase-code-review.v1';
 const ROUND_CAP = 3;
-const PART_BUDGET = 40000;
+const PART_BUDGET = Object.freeze({ claude: 40000, codex: 10000 });
+const PART_MAX_BYTES = 32 * 1024;
 const PART_SCHEMA = Object.freeze({ type: 'object', required: ['part', 'review_completeness', 'limitations', 'unresolved_sources', 'summary', 'findings'],
   properties: { part: { type: 'string' }, review_completeness: { enum: ['complete', 'incomplete'] }, summary: { type: 'string' },
     limitations: { type: 'array', items: { type: 'string' } }, unresolved_sources: { type: 'array', items: { type: 'string' } },
@@ -138,9 +139,24 @@ function normalizePart(result, group, integrator = false) {
       ...(blocker ? { ref: `PB-${group.ordinal}-${index + 1}` } : {}),
       fix_ticket: object(fix_ticket) ? { title, scope, files, depends_on } : undefined }));
   });
-  return { id: group.id, ordinal: group.ordinal, paths: group.paths, review_completeness: result.review_completeness,
+  const part = { id: group.id, ordinal: group.ordinal, paths: group.paths, review_completeness: result.review_completeness,
     limitations: boundedList(result.limitations, 'limitations'), unresolved_sources: boundedList(result.unresolved_sources, 'unresolved_sources'),
     summary: requireText(result.summary, 'summary', 2048), findings };
+  if (Buffer.byteLength(JSON.stringify(part)) > PART_MAX_BYTES) fail('INVALID_RESULT', 'part result exceeds 32 KiB; report the most severe findings first');
+  return part;
+}
+const readGit = (base, head) => `The packet carries no diff. Read the PR diff yourself with git in the current worktree: git diff ${base}...${head} -- <path> for every changed path listed in role_context.change_metadata.changes, and git show ${head}:<path> for current content. Read a large diff in slices of at most 30 KB (| sed -n 'START,ENDp'). Run only read-only git commands; do not change the worktree, index, refs or remotes.`;
+function partDirections({ part, parts, integrator = false }) {
+  return part ? [`You review part ${part.ordinal} of ${part.of} of the phase diff and only the paths in role_context.part.paths. Return one JSON object {part, review_completeness, limitations, unresolved_sources, summary, findings} of at most 32 KiB with part copied from role_context.part.id; findings use the reference finding fields. Do not write any file. Do not write to GitHub.`]
+    : parts ? ['You are the independent final reviewer. role_context.parts carries each part reviewer\'s completeness, limitations and findings as evidence data. Verify blocking claims and any path you doubt by reading the code with git, then confirm, drop or add findings and own the verdict. ' + (integrator ? 'Do not return passed' : 'Report incomplete') + ' when a part is incomplete or you could not verify a claim. Give every part BLOCKER (parts[].findings[].ref) one disposition in dispositions: {ref, disposition: resolved, unresolved or disputed, justification}; an unresolved one also needs a blocking finding' + (integrator ? '' : ' with a complete fix_ticket') + '. Do not return a coverage field; the host derives it from the parts.'] : [];
+}
+async function runParts(groups, { changes, check, part, final }) {
+  await check(groups.map(({ id, ordinal, paths }) => ({ id, ordinal, paths, review_completeness: 'complete',
+    limitations: [], unresolved_sources: [], summary: 'x'.repeat(PART_MAX_BYTES), findings: [], dispatch_id: 'x'.repeat(64) })));
+  const parts = [];
+  for (const group of groups) parts.push(await part(group));
+  assertPathPartition(changes, parts);
+  return final(parts);
 }
 function settleParts(result, parts, complete) {
   const coverage = parts.map((part, index) => ({ partition: index + 1, status: part.review_completeness === 'complete'
@@ -148,17 +164,19 @@ function settleParts(result, parts, complete) {
   if (complete && coverage.some(entry => entry.status !== 'reviewed'))
     fail('INVALID_RESULT', 'complete code review has unreviewed parts');
   const refs = parts.flatMap(part => part.findings.map(finding => finding.ref).filter(Boolean));
-  const own = (Array.isArray(result.dispositions) ? result.dispositions : []).filter(entry => refs.includes(entry?.ref));
+  const dispositions = result.dispositions ?? [];
+  if (!Array.isArray(dispositions)) fail('JUDGMENT_OUTCOME_MISMATCH', 'dispositions must be an array');
+  const own = dispositions.filter(entry => refs.includes(entry?.ref));
   const justified = ref => own.filter(entry => entry.ref === ref && ['resolved', 'unresolved', 'disputed'].includes(entry.disposition)
     && bounded(entry.justification));
   if (refs.some(ref => justified(ref).length !== 1))
     fail('JUDGMENT_OUTCOME_MISMATCH', 'each part BLOCKER needs one justified disposition keyed by its ref');
-  return { coverage, refs, own };
+  return { coverage, refs, own, dispositions };
 }
 function normalizeFinal(result, parts, options) {
-  const { coverage, refs, own } = settleParts(result, parts, result.review_completeness === 'complete');
+  const { coverage, refs, own, dispositions } = settleParts(result, parts, result.review_completeness === 'complete');
   const normalized = normalizeResult({ ...result, coverage,
-    dispositions: (result.dispositions || []).filter(entry => !refs.includes(entry?.ref)) }, options);
+    dispositions: dispositions.filter(entry => !refs.includes(entry?.ref)) }, options);
   if (own.some(entry => entry.disposition === 'unresolved') && !normalized.blocking_count)
     fail('JUDGMENT_OUTCOME_MISMATCH', 'an unresolved part BLOCKER requires a blocking finding');
   return own.length ? { ...normalized, part_dispositions: own.map(({ ref, disposition, justification }) => ({ ref, disposition, justification })) } : normalized;
@@ -479,7 +497,8 @@ function loadDisagreements({ projectRoot, phaseDirName, priorFindings, readFile 
   const text = Buffer.isBuffer(file.text) ? file.text.toString('utf8') : file.text;
   return { entries: parseDisagreements(text,{priorFindings}), dispositions_digest: hash(text) };
 }
-function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketSet, planAcceptance, priorFindings, round, changeMetadata, referenceDigest }) {
+function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketSet, planAcceptance, priorFindings, round, changeMetadata, referenceDigest, part, parts, groups }) {
+  if (part) { priorFindings = []; changeMetadata = { changes: part.changes }; }
   if (!object(identity) || identity.id !== subject) fail('JUDGMENT_IDENTITY_MISMATCH','packet identity differs from subject');
   for (const [key,value] of Object.entries({exact_diff:exactDiff,integration_base:integrationBase,ticket_set:ticketSet,plan_acceptance:planAcceptance,prior_findings:priorFindings}))
     if (value === undefined || value === null) fail('MISSING_JUDGMENT_CONTEXT',`packet requires ${key}`);
@@ -495,10 +514,11 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
     normalization_inputs: { prior_findings: structuredClone(priorFindings) },
     prior_findings: priorFindings.map(({ identity: _identity, stored_identity: _stored, disagreement_identity: _disagreement, ...finding }) => finding),
     review_round: round.round, review_scope: round.scope, prior_head: round.priorHead || null,
-    change_metadata: changeMetadata, contract_digest: contractDigest(referenceDigest) };
+    change_metadata: changeMetadata, contract_digest: contractDigest(referenceDigest),
+    ...(part ? { part: { id: part.id, ordinal: part.ordinal, of: groups.length, paths: part.paths } } : {}), ...(parts?.length ? { parts } : {}) };
 }
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
-module.exports = { CONTRACT_ID, ROUND_CAP, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
+module.exports = { CONTRACT_ID, ROUND_CAP, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
   lineageComplete, coverageComplete, nextRound, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };

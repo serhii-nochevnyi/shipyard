@@ -3779,7 +3779,12 @@ async function codeReviewEntryFixture(action, config = {}) {
   const row = Object.values(graph.tickets)[0];
   row.epic = 'epic/38-code-review'; row.human_checkpoint = config.checkpoint || false; row.critical = config.critical || false;
   helper.write(f.root, '.planning/graph/tickets.json', JSON.stringify(graph));
-  if (config.partitioned) helper.write(f.root, 'src/reviewed.txt', ('large line ' + 'x'.repeat(240) + '\n').repeat(5000));
+  helper.write(f.root, '.gitignore', '.planning/graph/*\n!.planning/graph/tickets.json\n');
+  helper.git(f.root, ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '.planning/graph/delivery-state.json']);
+  if (config.parts) {
+    for (let i = 0; i < (config.many ? 40 : 1); i++) helper.write(f.root, 'extra' + i + '/a.txt', 'a\n');
+    helper.write(f.root, 'src/reviewed.txt', 'b\n');
+  }
   helper.git(f.root, ['add', '.']); helper.git(f.root, ['commit', '-m', 'code review phase fixture']);
   helper.git(f.root, ['switch', '-c', row.epic]);
   Object.assign(f.pr, { headRefName: row.epic, headRefOid: helper.git(f.root, ['rev-parse', 'HEAD']) });
@@ -3815,12 +3820,13 @@ async function codeReviewEntryFixture(action, config = {}) {
       const binding = codeContext.authenticateLaunch(value, context.prompt, { ticket: scope.ticket, phase: scope.phase,
         worktree: scope.worktree, dispatch_id: context.dispatch_id, agent_file: selection.agent_file,
         agent_file_digest: selection.agent_file_digest });
-      const raw = { ...binding, ticket_set: value.prepared.binding.ticketSet, findings: [], dispositions: [],
+      const part = value.prepared.part;
+      const raw = part ? { part: part.id, summary: 'Reviewed the part', review_completeness: 'complete', limitations: [],
+        unresolved_sources: [], findings: [] }
+        : { ...binding, ticket_set: value.prepared.binding.ticketSet, findings: [], dispositions: [],
         summary: 'Reviewed complete phase input', review_completeness: config.incomplete ? 'incomplete' : 'complete',
         limitations: config.incomplete ? ['unresolved source'] : [], unresolved_sources: [], evidence_markdown: 'Code review evidence.\n' };
-      if (context.input_prepared) raw.coverage = context.input_prepared.manifest.assets.filter(asset => asset.source_partition)
-        .map(asset => ({ partition: asset.ordinal, status: 'reviewed' }));
-      helper.write(f.root, '.shipyard-code-review-evidence.md', raw.evidence_markdown);
+      if (!part) helper.write(f.root, '.shipyard-code-review-evidence.md', raw.evidence_markdown);
       const session = crypto.randomUUID();
       const records = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
         .trim().split('\n').map(JSON.parse);
@@ -3836,7 +3842,6 @@ async function codeReviewEntryFixture(action, config = {}) {
         native_session_evidence: { session_id: session, bytes: Buffer.byteLength(nativeText),
           sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
         input_consumption: { native_session_sha256: crypto.createHash('sha256').update(nativeText).digest('hex') },
-        ...(context.input_prepared ? { input_transport: 'host-files', input_bundle: context.input_prepared.input_bundle } : {}),
         transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: crypto.createHash('sha256').update(stream).digest('hex') } };
       config.afterLaunch?.({ f, value, selection, context, runtime_evidence, agentDir, nativePath });
       return { launch_id: 'code-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
@@ -3870,7 +3875,7 @@ async function codeReviewEntryFixture(action, config = {}) {
   }
 }
 
-for (const config of [{}, { role: ' code-review ' }, { critical: true }, { checkpoint: 'merge' }, { incomplete: true }, { partitioned: true }, { label: 'with space' }, { label: 'répertoire-ü' }])
+for (const config of [{}, { role: ' code-review ' }, { critical: true }, { checkpoint: 'merge' }, { incomplete: true }, { label: 'with space' }, { label: 'répertoire-ü' }])
 test('code review CLI seals one static phase verdict: ' + JSON.stringify(config), () => withGraphDirEnv(undefined, () =>
   codeReviewEntryFixture(async ({ run, calls, request }) => {
     const { result, output } = await run(config.role ? { role: config.role } : {});
@@ -3886,18 +3891,33 @@ test('code review CLI seals one static phase verdict: ' + JSON.stringify(config)
     assert.equal(result.dispatch.ticket, request.scope.ticket);
     assert.equal(result.receipt.runtime_evidence.ticket, request.scope.ticket);
     assert.ok(result.receipt.runtime_evidence.code_review.launch_digest);
-    if (config.partitioned) {
-      assert.equal(result.context.input_transport, 'host-files');
-      assert.ok(calls[0].context.input_prepared.manifest.assets.some(asset => asset.source_partition));
-    }
   }, config)));
 
-for (const partitioned of [false, true]) for (const mutation of ['missing', 'changed'])
-test('code review CLI refuses original native session ' + mutation + ': partitions=' + partitioned, () => withGraphDirEnv(undefined, () =>
+test('code review CLI runs one launch per part and a fresh final that owns the sealed verdict', () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls }) => {
+    const { result, output } = await run({}, { partBudget: 3 });
+    assert.equal(calls.length, 4, 'three path groups and the final');
+    assert.equal(output.trim().split('\n').length, 1);
+    assert.equal(result.artifact.outcome, 'pass');
+    assert.deepEqual(calls.map(call => call.context.code_review_prepared.prepared.part?.ordinal), [1, 2, 3, undefined]);
+    assert.equal(new Set(calls.map(call => call.context.dispatch_id)).size, 4);
+    assert.match(calls[3].context.prompt, /independent final reviewer/);
+    assert.equal(result.result.coverage.length, 3);
+    assert.equal(result.dispatch.dispatch_id, calls[3].context.dispatch_id);
+  }, { parts: true })));
+
+test('code review CLI refuses a final that cannot fit its parts before the first part launches', () => withGraphDirEnv(undefined, () =>
+  codeReviewEntryFixture(async ({ run, calls }) => {
+    await assert.rejects(run({}, { partBudget: 1 }), { code: 'CONTEXT_OVER_BOUND' });
+    assert.equal(calls.length, 0);
+  }, { parts: true, many: true })));
+
+for (const mutation of ['missing', 'changed'])
+test('code review CLI refuses original native session ' + mutation, () => withGraphDirEnv(undefined, () =>
   codeReviewEntryFixture(async ({ run, calls }) => {
     await assert.rejects(run());
     assert.equal(calls.length, 1);
-  }, { partitioned, afterLaunch({ nativePath, runtime_evidence }) {
+  }, { afterLaunch({ nativePath, runtime_evidence }) {
     assert.ok(fs.existsSync(runtime_evidence.transcript.path));
     if (mutation === 'missing') fs.rmSync(nativePath);
     else fs.appendFileSync(nativePath, 'changed');
@@ -3934,19 +3954,15 @@ test('padded code review request file refuses caller authority: ' + JSON.stringi
     assert.equal(options.host.recorder.getVerifiedRecord(dispatchId), null);
   })));
 
-for (const mutation of ['agent', 'head', 'base', 'file-input', 'receipt'])
+for (const mutation of ['agent', 'head', 'base', 'receipt'])
 test('code review refuses changes before verdict sealing: ' + mutation, () => withGraphDirEnv(undefined, () =>
   codeReviewEntryFixture(async ({ run, calls }) => {
     await assert.rejects(run()); assert.equal(calls.length, 1);
-  }, { partitioned: mutation === 'file-input', afterLaunch({ f, selection, context, runtime_evidence, agentDir }) {
+  }, { afterLaunch({ f, selection, runtime_evidence, agentDir }) {
     if (mutation === 'agent') fs.appendFileSync(path.join(agentDir, selection.agent_file), '\nchanged');
     if (mutation === 'head') f.pr.headRefOid = 'a'.repeat(40);
     if (mutation === 'base') f.pr.baseRefOid = 'b'.repeat(40);
     if (mutation === 'receipt') delete runtime_evidence.code_review;
-    if (mutation === 'file-input') {
-      const filename = context.input_prepared.manifest.assets.find(asset => asset.source_partition).path;
-      fs.chmodSync(filename, 0o600); fs.appendFileSync(filename, 'changed');
-    }
   } })));
 
 for (const mutation of ['look-alike', 'ticket', 'phase', 'worktree', 'prompt', 'signals', 'dispatch', 'sandbox', 'selector'])
@@ -4365,8 +4381,8 @@ test('public Codex v3 rejects caller prompt, stage, receipt, capacity and produc
     assert.throws(() => requestValue({ ...selected, ...extra }), /host-owned/);
 });
 
-assert.equal(entrySelected, 44, 'exact code-review entry registration');
-assert.equal(entryVariants, 8, 'all original CLI variants');
+assert.equal(entrySelected, 42, 'exact code-review entry registration');
+assert.equal(entryVariants, 7, 'all original CLI variants');
 assert.equal(integratorDefaultSelected, 1, 'exact integrator default registration');
 assert.equal(legacyCompatibilitySelected, 1, 'exact legacy compatibility registration');
 done();

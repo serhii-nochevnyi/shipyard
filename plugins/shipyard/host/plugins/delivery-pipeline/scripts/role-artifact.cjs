@@ -6519,11 +6519,10 @@ function authenticateCarriedCodeReviewFindings({ trusted, identity, packet, prio
 
 function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, retained }, replay, lineage = codeReviewReplayState()) {
   const core = require('./code-review-core.cjs'), packets = require('./context-packet.cjs');
-  const collector = require('./codex-arch-review-context.cjs');
   const retention = retained || currentReviewRetention(identity.worktree, trusted);
   const original = originalCurrentResponse(trusted, result, evidence, retention);
   const runtime = currentRuntimeEvidence(trusted), candidates = [];
-  let manifest = null, prompt = null;
+  let prompt = null;
   if (trusted.receipt.runtime === 'claude') {
     if (retention?.native && stable(retention.native) !== stable(currentClaudeSemanticPin(trusted)))
       fail('REVIEW_NATIVE_INVALID', 'original code-review semantic pin differs from retained authority');
@@ -6544,20 +6543,6 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
     for (const match of prompt.matchAll(/<AUTHENTICATED_CONTEXT_PACKET>\s*([\s\S]*?)\s*<\/AUTHENTICATED_CONTEXT_PACKET>/g))
       candidates.push(packets.decodeUniqueContent(JSON.parse(match[1])));
     if (candidates.length > 1) fail('REVIEW_NATIVE_INVALID', 'original code-review launch has multiple inline packets');
-  }
-  if (runtime.input_transport === 'host-files') {
-    const checked = collector.verifyFileInput(runtime.input_bundle, { sealed: true, historical: true,
-      association: { role: 'code-review', dispatch_id: trusted.dispatchId } });
-    if (!checked.material.length) fail('REVIEW_NATIVE_INVALID', 'original code-review material packet is required');
-    manifest = checked.manifest;
-    const packet = packets.decodeUniqueContent(JSON.parse(checked.material[0]));
-    if (manifest.binding?.packet_digest !== (trusted.receipt.runtime === 'codex'
-        ? digest(JSON.stringify(packets.encodeUniqueContent(packet))) : digest(stable(packet)))
-        || stable(manifest.binding.focused) !== stable({ ...packet.role_context?.focused,
-          context_digest: manifest.binding.packet_digest })
-        || stable(manifest.snapshot.planning_reference) !== stable(packet.role_context?.planning_reference))
-      fail('REVIEW_NATIVE_INVALID', 'original code-review manifest and packet differ');
-    candidates.push(packet);
   }
   if (result.host_context?.original_packet !== undefined) {
     if (!object(result.host_context.original_packet)) fail('REVIEW_NATIVE_INVALID', 'retained original code-review packet is malformed');
@@ -6632,24 +6617,16 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
   }
   authenticateCarriedCodeReviewFindings({ trusted, identity, packet, prior, readSource, state: lineage });
   const options = { round: context.review_round, scope: context.review_scope, priorFindings: prior, readSource };
-  let normalized;
-  if (trusted.receipt.runtime === 'claude') {
-    const parts = context.parts ?? [];
-    if (parts.length) core.assertPathPartition(context.change_metadata.changes, parts);
-    normalized = core.normalizeFinal(original, parts, options);
-  } else {
-    normalized = core.normalizeResult(original, options);
-    if (manifest) Object.assign(normalized, collector.validateCodeReviewCoverage(normalized, manifest));
-  }
+  const parts = context.parts ?? [];
+  if (parts.length) core.assertPathPartition(context.change_metadata.changes, parts);
+  const normalized = core.normalizeFinal(original, parts, options);
   const { evidence_markdown: markdown, host_context: _host, ...expected } = normalized;
   if (typeof markdown !== 'string' || !markdown.trim() || Buffer.byteLength(markdown) > HISTORICAL_ARCHIVE_MAX_BYTES
       || !Buffer.from(markdown).equals(evidence)) fail('REVIEW_NATIVE_INVALID', 'original code-review evidence differs');
   Object.assign(expected, { ticket_set: context.ticket_set, prior_head: context.prior_head,
     contract_digest: context.contract_digest, dispositions_digest: context.dispositions_digest,
     reuse_key: core.reuseKey({ head: identity.head, baseCommit: identity.base_commit, contractDigest: context.contract_digest }) });
-  if (trusted.receipt.runtime === 'codex') expected.host_context = {
-    ...(!manifest ? { original_packet: packets.encodeUniqueContent(packet) } : {}),
-    ...planningContext };
+  if (trusted.receipt.runtime === 'codex') expected.host_context = { original_packet: packets.encodeUniqueContent(packet), ...planningContext };
   const { ticketSetDigest: aliasDigest, ...sealed } = result;
   if ((sealed.ticket_set_digest ?? aliasDigest ?? focused.ticket_set_digest) !== focused.ticket_set_digest
       || aliasDigest !== undefined && aliasDigest !== focused.ticket_set_digest)
@@ -6670,10 +6647,6 @@ function codeReviewCoverageRange(trusted, findings, identity) {
   try {
     if (trusted.receipt.runtime === 'claude' && trusted.receipt.selection_evidence?.transcript) {
       packet = originalInlinePacket(trusted).packet;
-    } else if (runtime?.input_transport === 'host-files') {
-      const checked = require('./codex-arch-review-context.cjs').verifyFileInput(runtime.input_bundle,
-        { sealed: true, historical: true, association: { role: 'code-review', dispatch_id: trusted.dispatchId } });
-      packet = packets.decodeUniqueContent(JSON.parse(checked.material[0]));
     } else if (findings.host_context?.original_packet) {
       const encoded = findings.host_context.original_packet;
       if (digest(JSON.stringify(encoded)) !== runtime?.code_review?.context_digest
@@ -6701,11 +6674,6 @@ function codeReviewCoverageRange(trusted, findings, identity) {
       || (context.prior_head !== undefined && context.prior_head !== findings.prior_head)
       || ((material?.from ?? material?.base) !== undefined && (material.from ?? material.base) !== from)
       || ((material?.to ?? material?.head) !== undefined && (material.to ?? material.head) !== identity.head)) return null;
-  if (trusted.receipt.runtime === 'codex') {
-    const actual = reviewGit(identity.worktree, ['diff', '--no-ext-diff', '--no-textconv', '--unified=50',
-      from, identity.head, ...require('./development-artifacts.cjs').productPathspec()]);
-    if (typeof material.content !== 'string' || material.content.trimEnd() !== actual.trimEnd()) return null;
-  }
   for (const [key, flag] of [['name_status', '--name-status'], ['numstat', '--numstat']]) {
     const declared = context.change_metadata?.[key];
     if (declared !== undefined && (typeof declared !== 'string' || declared.trimEnd() !== reviewGit(identity.worktree,

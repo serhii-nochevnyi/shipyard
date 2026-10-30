@@ -2842,7 +2842,7 @@ for (const changed of ['plan', 'config', 'transcript'])
     } finally { f.cleanup(); }
   });
 
-test('code-review carrier freshness authentic canonical lifecycle on both runtimes and transports', async () => {
+test('code-review carrier freshness authentic canonical lifecycle on both runtimes', async () => {
   if (process.env.SHIPYARD_CARRIER_FRESHNESS_CHILD !== '1') {
     const selection = `(function(h,run,n){h.test=function(name,fn){if(name.startsWith("code-review carrier freshness")){n.count++;return run(name,fn)}};process.on("beforeExit",function(){if(n.count===0)throw Error("No selected tests")});require(${JSON.stringify(__filename)})})(require(${JSON.stringify(path.join(__dirname, 'assert-harness.cjs'))}),require(${JSON.stringify(path.join(__dirname, 'assert-harness.cjs'))}).test,{count:0})`;
     const child = spawnSync(process.execPath, ['-e', selection], {
@@ -2878,11 +2878,9 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
     const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
     const flow = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
     const originalCarrier = Buffer.from(JSON.stringify({ schema: 'shipyard.code-review-disagreements.v1', entries: [] }) + '\n');
-    for (const [runtime, partitioned] of [['codex', false], ['codex', true], ['claude', false]]) for (const present of [false, true]) {
-      const source = ('const captured = "' + 'x'.repeat(1024) + '";\n').repeat(1020);
+    for (const runtime of ['codex', 'claude']) for (const present of [false, true]) {
       const f = runtime === 'codex' ? codex.fixture() : claude.coordinatorOnlyPlanning('code-review');
       try {
-        if (runtime === 'codex' && partitioned) f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), source));
         const phase = runtime === 'codex' ? path.basename(path.dirname(f.row.plan)) : claude.PHASE;
         const configFile = path.join(f.project, '.planning/config.json');
         const config = JSON.parse(fs.readFileSync(configFile));
@@ -2901,7 +2899,6 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
           const review = codex.review(f);
           result = review.result; recorder = review.recorder; dispatchId = review.dispatch.dispatch_id;
           packet = review.value.prepared.packet;
-          assert.equal(!!context.admittedFileInput(review.value), partitioned);
         } else {
           const options = claude.hostOptions(f, { originalStream: true, onLaunch(prompt) {
             assert.ok(!prompt.includes('<AUTHENTICATED_FOCUSED_INPUT>'));
