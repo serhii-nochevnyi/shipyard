@@ -586,7 +586,7 @@ function useCatalogCli(f) {
       supported_reasoning_levels: [{ effort: 'max' }] },
   );
   writeJson(f.catalogFile, { models: entries });
-  write(f.codexFile, `#!/bin/sh\n[ "$*" = "debug models" ] || exit 98\ncat "${f.catalogFile}"\n`);
+  write(f.codexFile, `#!/bin/sh\n[ "$*" = "debug models" ] || exit 98\nmkdir -p "$CODEX_HOME/tmp/arg0"\ncat "${f.catalogFile}"\n`);
   fs.chmodSync(f.codexFile, 0o755);
 }
 
@@ -882,7 +882,8 @@ test('a bare install reads the Codex CLI catalog and leaves no temporary evidenc
     const installed = json(path.join(f.codexHome, 'shipyard', CODEX_CAPABILITIES_BUNDLE_FILE));
     assert.deepStrictEqual(installed.supportedModels, [...CAPABILITIES.supportedModels].sort());
     assert.ok(!installed.supportedModels.includes('private-model'));
-    assert.deepStrictEqual(fs.readdirSync(f.dir).filter((name) => name.startsWith('tmp.')), []);
+    assert.deepStrictEqual(fs.readdirSync(f.dir).filter((name) => name.startsWith('shipyard-capabilities.')), []);
+    assert.ok(!fs.existsSync(path.join(f.codexHome, 'tmp')), 'the probe leaves no helper links in the install root');
   });
 });
 

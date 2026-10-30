@@ -35,12 +35,18 @@ function fail(msg) {
   process.exit(1);
 }
 
+// @contract: Codex probes run against a throwaway CODEX_HOME so helper links never land in the install root.
+function runCodexProbe(args, options) {
+  const scratch = fs.mkdtempSync(path.join(require('os').tmpdir(), 'shipyard-codex-probe-'));
+  try {
+    return spawnSync('codex', args, { encoding: 'utf8', ...options, env: { ...process.env, CODEX_HOME: scratch } });
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 function readCodexCliCapabilities() {
-  const result = spawnSync('codex', ['debug', 'models'], {
-    encoding: 'utf8',
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: 20_000,
-  });
+  const result = runCodexProbe(['debug', 'models'], { maxBuffer: 10 * 1024 * 1024, timeout: 20_000 });
   if (result.error || result.status !== 0) {
     const detail = result.error ? result.error.message : `exit ${result.status}`;
     fail(`read Codex CLI model catalog with codex debug models: ${detail}`);
@@ -68,16 +74,11 @@ function readCodexCliCapabilities() {
 }
 
 function readCodexCliVersion() {
-  // @contract: the version probe runs against a throwaway CODEX_HOME so its helper links never land in the install root.
-  let scratch;
   let result;
   try {
-    scratch = fs.mkdtempSync(path.join(require('os').tmpdir(), 'shipyard-codex-version-'));
-    result = spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 10_000, env: { ...process.env, CODEX_HOME: scratch } });
+    result = runCodexProbe(['--version'], { timeout: 10_000 });
   } catch (_) {
     return null;
-  } finally {
-    if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
   }
   if (!result || result.error || result.status !== 0) return null;
   const match = /(\d+\.\d+(?:\.\d+)*)/.exec(`${result.stdout || ''} ${result.stderr || ''}`);

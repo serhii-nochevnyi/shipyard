@@ -124,7 +124,7 @@ if [[ -L "$AGENTS_MD" ]]; then
 fi
 # @contract: Without an explicit file the Codex CLI answers for the host; nothing is synthesized from the policy.
 if [[ -z "$CAPABILITIES_FILE" ]]; then
-  CAP_TMP="$(mktemp)"
+  CAP_TMP="$(mktemp "${TMPDIR:-/tmp}/shipyard-capabilities.XXXXXX")"
   trap 'rm -f "$CAP_TMP"' EXIT
   node -e "process.stdout.write(JSON.stringify(require(process.argv[1]).readCodexCliCapabilities(), null, 2) + '\\n')" \
     "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" >"$CAP_TMP" || {
@@ -318,7 +318,6 @@ RUNTIME_BACKUP="$STAGE/runtime-before"
 RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
 mkdir -p "$RUNTIME_BACKUP"
 : > "$RUNTIME_BACKUP_INDEX"
-
 
 # ── generate ─────────────────────────────────────────────────────────────────
 echo "→ generating Codex bundle (phase $PHASE)…"

@@ -348,8 +348,9 @@ test('CLI plain and JSON output both preserve explicit dynamic model and effort'
     assert.equal(staticPlain.status, 0, staticPlain.stderr);
     assert.equal(staticPlain.stdout.trim(), 'shipyard-inv-research.toml high');
 
+    const { CODEX_HOME: _ambient, ...ambient } = process.env;
     const refused = spawnSync(process.execPath, [SCRIPT, 'select', 'executor', '--project-dir', f.root],
-      { encoding: 'utf8', env: { ...process.env, GSD_RUNTIME: 'codex' } });
+      { encoding: 'utf8', env: { ...ambient, GSD_RUNTIME: 'codex', HOME: f.root } });
     assert.notEqual(refused.status, 0);
     assert.equal(refused.stdout, '');
     assert.match(refused.stderr, /capabilities-file/);
