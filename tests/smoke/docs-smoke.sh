@@ -111,10 +111,13 @@ launch_section="$(awk '/^### Launch and upgrade$/{on=1; next} on && /^#+ /{exit}
 [[ -n "$launch_section" ]] || fail "README Launch and upgrade section is empty"
 grep -qE 'needs neither `CODEX_HOME` nor `SHIPYARD_CODEX_CAPABILITIES_FILE`' <<<"$launch_section" \
   || fail "Launch and upgrade must say a launch needs no exported CODEX_HOME or capability path"
-grep -qE 'These are the only cases that do' <<<"$launch_section" \
-  || fail "Launch and upgrade must name the remaining cases that need SHIPYARD_CODEX_CAPABILITIES_FILE"
-[[ "$(grep -c 'These are the only cases that do' <<<"$launch_section")" -eq 1 ]] \
-  || fail "Launch and upgrade must name the remaining cases once"
+grep -qE 'reads that evidence from `codex debug models` itself' <<<"$launch_section" \
+  || fail "Launch and upgrade must say the direct installer finds Codex capability evidence itself"
+grep -q 'wins over discovery' <<<"$launch_section" \
+  || fail "Launch and upgrade must say an explicit capability file wins over discovery"
+if grep -qE 'These are the only cases that do|direct installer run' <<<"$launch_section"; then
+  fail "Launch and upgrade still lists the retired manual-evidence cases"
+fi
 
 grep -q 'make test-fast-rest' .github/workflows/test.yml || fail "CI must run the non-unit part of make test-fast"
 grep -q 'UNIT_SHARD' .github/workflows/test.yml || fail "CI must run the sharded unit suite"

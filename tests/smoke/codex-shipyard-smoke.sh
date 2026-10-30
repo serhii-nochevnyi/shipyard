@@ -142,14 +142,15 @@ grep -q 'shipyard-integrator-critical' "$SKILLS/shipyard-deliver/SKILL.md" \
 cmp -s "$SHIPYARD_CODEX_CAPABILITIES_FILE" "$CODEX_HOME/shipyard/codex-capabilities.json" \
   || { echo "installed capability evidence is not the supplied host document"; exit 1; }
 
-# A bare install is refused before gsd-core bootstrap or staging. The policy is
-# not host evidence, so the installer never fabricates a capability document.
 cp -a "$CODEX_HOME" "$WORK/bare-before"
-if env -u SHIPYARD_CODEX_CAPABILITIES_FILE \
+mkdir "$WORK/no-codex-bin"
+printf '#!/bin/sh\nexit 99\n' >"$WORK/no-codex-bin/codex"
+chmod +x "$WORK/no-codex-bin/codex"
+if env -u SHIPYARD_CODEX_CAPABILITIES_FILE PATH="$WORK/no-codex-bin:$PATH" \
   bash scripts/install-shipyard-codex.sh --phase 2 >"$WORK/bare-install.log" 2>&1; then
-  echo "bare install unexpectedly passed without explicit host evidence"; exit 1
+  echo "bare install unexpectedly passed without host evidence"; exit 1
 fi
-grep -q 'explicit Codex host capability evidence is required' "$WORK/bare-install.log" \
+grep -q 'Codex host capability evidence is required' "$WORK/bare-install.log" \
   || { cat "$WORK/bare-install.log"; exit 1; }
 diff -ruN "$WORK/bare-before" "$CODEX_HOME" >/dev/null \
   || { echo "bare-install refusal changed the destination"; exit 1; }

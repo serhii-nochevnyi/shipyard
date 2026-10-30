@@ -47,7 +47,7 @@ function fixture(raw = {}) {
     manifest.agent_digests[r.agent_file] = crypto.createHash('sha256').update(text).digest('hex');
   }
   fs.writeFileSync(path.join(agentDir, '.shipyard-manifest.json'), JSON.stringify(manifest));
-  return { root, agentDir, options: { cwd: root, agentDir, capabilities, env: {} } };
+  return { root, agentDir, options: { cwd: root, agentDir, capabilities, env: { HOME: root } } };
 }
 function clean(f) { fs.rmSync(f.root, { recursive: true, force: true }); }
 
@@ -271,6 +271,20 @@ test('selector accepts capabilities from the host integration boundary', () => {
     const result = selectAgent('executor', { ...withoutCapabilities, host: { capabilities } });
     assert.equal(result.model, 'gpt-6.1-sol');
     assert.throws(() => selectAgent('executor', { ...withoutCapabilities, host: {} }), /capabilities-file/);
+  } finally { clean(f); }
+});
+
+test('a source checkout reads the evidence its install left in the Codex home', () => {
+  const f = fixture();
+  try {
+    const { capabilities: _omitted, ...options } = f.options;
+    assert.throws(() => selectAgent('executor', options), /capabilities-file/);
+    const evidence = path.join(f.root, '.codex/shipyard/codex-capabilities.json');
+    fs.mkdirSync(path.dirname(evidence), { recursive: true });
+    fs.writeFileSync(evidence, JSON.stringify(capabilities));
+    assert.equal(selectAgent('executor', options).model, 'gpt-6.1-sol');
+    fs.writeFileSync(evidence, JSON.stringify({ ...capabilities, supportedModels: [] }));
+    assert.throws(() => selectAgent('executor', options), /explicitly support/);
   } finally { clean(f); }
 });
 

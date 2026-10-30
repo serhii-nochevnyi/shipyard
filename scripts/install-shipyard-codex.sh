@@ -19,7 +19,7 @@ set -euo pipefail
 #   AGENTS_SKILLS_DIR  Codex/cursor/cline skills dir (default: ~/.agents/skills)
 #   SHIPYARD_CODEX_PHASE  1 = investigate+decompose only; 2 = + deliver (default 2)
 #   SHIPYARD_PROJECT_DIR  conveyor project root whose .planning/config.json is read
-#   SHIPYARD_CODEX_CAPABILITIES_FILE  required host JSON: supportedModels,
+#   SHIPYARD_CODEX_CAPABILITIES_FILE  host JSON: supportedModels,
 #                                    supportedEfforts, optional
 #                                    supportedSelections [{model, effort}]
 #
@@ -122,9 +122,16 @@ if [[ -L "$AGENTS_MD" ]]; then
   echo "error: refusing to manage symlinked AGENTS.md target: $AGENTS_MD" >&2
   exit 2
 fi
+# @contract: Without an explicit file the Codex CLI answers for the host; nothing is synthesized from the policy.
 if [[ -z "$CAPABILITIES_FILE" ]]; then
-  echo "error: explicit Codex host capability evidence is required; set SHIPYARD_CODEX_CAPABILITIES_FILE" >&2
-  exit 2
+  CAP_TMP="$(mktemp)"
+  trap 'rm -f "$CAP_TMP"' EXIT
+  node -e "process.stdout.write(JSON.stringify(require(process.argv[1]).readCodexCliCapabilities(), null, 2) + '\\n')" \
+    "$REPO_ROOT/scripts/gen-codex-shipyard.cjs" >"$CAP_TMP" || {
+    echo "error: Codex host capability evidence is required: install the Codex CLI so codex debug models answers, or set SHIPYARD_CODEX_CAPABILITIES_FILE" >&2
+    exit 2
+  }
+  CAPABILITIES_FILE="$CAP_TMP"
 fi
 if [[ "$CAPABILITIES_FILE" != /* ]]; then
   CAPABILITIES_FILE="$(cd "$(dirname "$CAPABILITIES_FILE")" && pwd)/$(basename "$CAPABILITIES_FILE")" || {
@@ -172,7 +179,7 @@ cleanup() {
     restore_config 2>/dev/null || echo "warning: config rollback was incomplete; inspect ${CONFIG_TARGET:-$CODEX_HOME/config.toml}" >&2
     restore_agents 2>/dev/null || echo "warning: agent rollback was incomplete; inspect ${AGENTS_DIR:-$CODEX_HOME/agents}" >&2
   fi
-  rm -rf "$STAGE"
+  rm -rf "$STAGE" "${CAP_TMP:-}"
   trap - EXIT
   exit "$status"
 }
@@ -312,10 +319,6 @@ RUNTIME_BACKUP_INDEX="$STAGE/runtime-before.tsv"
 mkdir -p "$RUNTIME_BACKUP"
 : > "$RUNTIME_BACKUP_INDEX"
 
-# Never synthesize capabilities from ADR-014 here. The policy describes what
-# Shipyard requires; only the caller's explicit host-evidence document can say
-# what this Codex installation actually supports. The generator copies that
-# document into the staged bundle for the runtime selector to consume later.
 
 # ── generate ─────────────────────────────────────────────────────────────────
 echo "→ generating Codex bundle (phase $PHASE)…"
