@@ -177,10 +177,7 @@ function capabilitiesFrom(options = {}) {
     flags: { capabilitiesFile: options.capabilitiesFile },
   });
   if (installed.mode === 'installed') return clone(installed.capabilities);
-  const file = explicit
-    || (process.env.CODEX_HOME && path.join(process.env.CODEX_HOME, 'shipyard', 'codex-capabilities.json'));
-  if (!file) fail('RUNTIME_CAPABILITY_MISSING', 'explicit Codex capability evidence is required');
-  return readCapabilities(file);
+  return readCapabilities(explicit || path.join(codexHomeOf(), 'shipyard', 'codex-capabilities.json'));
 }
 
 function probeCodexRuntime(options = {}) {

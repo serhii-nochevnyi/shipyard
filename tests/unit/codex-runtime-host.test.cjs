@@ -616,12 +616,25 @@ test('--capability-only explains missing evidence on stderr, exits 0 and keeps s
     assert.equal(JSON.parse(missing.stdout).status, 'unavailable');
     assert.equal(JSON.parse(missing.stdout).reason, 'capability_evidence_missing');
     assert.match(missing.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
+    const dflt = path.join(root, '.codex', 'shipyard', 'codex-capabilities.json');
+    fs.mkdirSync(path.dirname(dflt), { recursive: true });
+    fs.writeFileSync(dflt, '{}');
+    assert.equal(JSON.parse(runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root }, ['--executable', executable]).stdout).reason, 'capability_evidence_missing');
     const file = path.join(root, 'capabilities.json');
     fs.writeFileSync(file, JSON.stringify(capabilities));
     const healthy = runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root }, ['--executable', executable, '--capabilities-file', file]);
     assert.equal(healthy.status, 0);
     assert.equal(JSON.parse(healthy.stdout).status, 'available');
     assert.doesNotMatch(healthy.stderr, /hint\[/);
+    fs.writeFileSync(dflt, JSON.stringify(capabilities));
+    const found = runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root }, ['--executable', executable]);
+    assert.equal(JSON.parse(found.stdout).status, 'available');
+    fs.renameSync(dflt, path.join(root, 'moved.json'));
+    const home = path.join(root, 'elsewhere', 'shipyard');
+    fs.mkdirSync(home, { recursive: true });
+    fs.copyFileSync(path.join(root, 'moved.json'), path.join(home, 'codex-capabilities.json'));
+    const viaHome = runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root, CODEX_HOME: path.join(root, 'elsewhere') }, ['--executable', executable]);
+    assert.equal(JSON.parse(viaHome.stdout).status, 'available');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

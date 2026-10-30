@@ -191,7 +191,9 @@ needs neither `CODEX_HOME` nor `SHIPYARD_CODEX_CAPABILITIES_FILE` exported.
 - An explicit `CODEX_HOME` or capability path that disagrees with the installed
   bundle is refused with an `ENV_CONFLICT` message naming both values. Either
   unset the variable, or reinstall into the named home so both agree.
-- A source checkout without an installed bundle, and a direct installer run
+- A source checkout reads the evidence an install left at
+  `${CODEX_HOME:-~/.codex}/shipyard/codex-capabilities.json`. One on a machine
+  with no install, and a direct installer run
   (`scripts/install-shipyard-codex.sh`), still need explicit evidence through
   `SHIPYARD_CODEX_CAPABILITIES_FILE`. This is the only case that does.
 - Check a host from the project root before launching. Every host entry takes
