@@ -132,12 +132,6 @@ function stable(value) {
 }
 
 function packetFromPrompt(prompt) {
-  const focused = /<AUTHENTICATED_FOCUSED_INPUT>\s*([\s\S]*?)\s*<\/AUTHENTICATED_FOCUSED_INPUT>/.exec(prompt);
-  if (focused) {
-    const checked = require('../../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs')
-      .verifyFileInput(JSON.parse(focused[1]), { sealed: true });
-    return require('../../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(JSON.parse(checked.material[0]));
-  }
   const startTag = '<AUTHENTICATED_CONTEXT_PACKET>\n\n';
   const endTag = '\n\n</AUTHENTICATED_CONTEXT_PACKET>';
   const start = prompt.indexOf(startTag);

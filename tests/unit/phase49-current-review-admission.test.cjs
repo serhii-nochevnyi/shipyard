@@ -27,7 +27,6 @@ function captured(name) {
 }
 const cli = captured('exec');
 const parent = captured('parent');
-const child = captured('child');
 function template(records, predicate) {
   const original = records.find(predicate);
   assert.ok(original, 'registered native template is required');
@@ -47,7 +46,6 @@ function commit(f, message) {
   git(f.worktree, 'update-ref', 'refs/remotes/origin/' + f.pr.headRefName, f.head);
 }
 
-const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
 const secondRuntime = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
 
 test('focused original inline judgment reaches finish, archive lookup and the existing live gate without reads', async () => {
@@ -206,7 +204,7 @@ test('Claude original incomplete focused judgment is archived without granting c
 
 async function runFocusedArchitecture(f, edit = () => {}) {
   const dispatchId = 'focused-original-' + ++f.count;
-  const auxiliary = currentInput(f, 'arch-review', dispatchId);
+  prepareArchitecture(f, 'arch-review', dispatchId);
   const prepared = f.lastArchitecture;
   const scope = { worktree: f.worktree, ticket: prepared.prepared.ticket, phase: 49, run_id: dispatchId };
   const prompt = collector.admittedPrompt(prepared);
@@ -217,7 +215,7 @@ async function runFocusedArchitecture(f, edit = () => {}) {
     evidence_markdown: 'Complete independent review of the current diff and selected governing ADR.' };
   edit(result);
   const a = f.agents['arch-review'], session = crypto.randomUUID(), text = JSON.stringify(result);
-  const native = nativeRecords(scope, auxiliary, session, a.selection, text, true, prompt);
+  const native = nativeRecords(scope, session, a.selection, text, prompt);
   const now = new Date(), dir = path.join(process.env.CODEX_HOME, 'sessions', String(now.getFullYear()),
     String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
   fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, session + '.jsonl'), serialize(native));
@@ -235,8 +233,7 @@ async function runFocusedArchitecture(f, edit = () => {}) {
     } });
   const launched = await host.launchStatic({ model: a.selection.model, effort: a.selection.effort, sandbox_mode: 'read-only',
     agent_file: a.selection.agent_file, agent_file_content: a.text, agent_file_digest: hash(a.text) },
-    { dispatch_id: dispatchId, prompt, focused_prepared: prepared,
-      ...(collector.admittedFileInput(prepared) ? { input_transport: 'host-files', input_bundle: collector.admittedFileInput(prepared).input_bundle, input_prepared: collector.admittedFileInput(prepared) } : {}) });
+    { dispatch_id: dispatchId, prompt, focused_prepared: prepared });
   const adapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
     agentsDir: a.dir, agentManifest: a.manifest, capabilities: a.capabilities,
     host: { requireRuntimeEvidence: true, launchStatic: () => launched } });
@@ -283,19 +280,9 @@ function projectOptions(f) {
     } };
 }
 
-test('original fresh v1 full reviews remain current and tree-equal stale reviews do not', async () => {
-  await fixture(async f => {
-    await successfulReview(f, 'arch-review');
-    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true);
-    git(f.worktree, 'commit', '--allow-empty', '-qm', 'new identity with identical tree');
-    f.head = git(f.worktree, 'rev-parse', 'HEAD'); f.pr.headRefOid = f.head;
-    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, false);
-  });
-});
-
 test('last-moment live PR or membership drift re-owes the architecture verdict', async () => {
-  await fixture(async f => {
-    await successfulReview(f, 'arch-review');
+  await claudeFixture(async f => {
+    await runClaudeCurrentReview(f, 'arch-review');
     for (const [field, changed] of [['headRefOid', 'f'.repeat(40)], ['baseRefOid', 'f'.repeat(40)],
       ['baseRefName', 'another-target'], ['headRefName', 'another-branch']]) {
       for (const consumer of consumers) {
@@ -551,9 +538,7 @@ async function runClaudeCurrentReview(f, role, edit = {}) {
               const userInput = JSON.parse(framedInput.slice(0, -1));
               f.lastClaudeUserInput = structuredClone(userInput);
               const prompt = userInput.message.content;
-              const fileMatch = /<AUTHENTICATED_FOCUSED_INPUT>\s*([\s\S]*?)\s*<\/AUTHENTICATED_FOCUSED_INPUT>/.exec(prompt);
-              const encoded = fileMatch ? JSON.parse(collector.verifyFileInput(JSON.parse(fileMatch[1]), { sealed: true }).material[0])
-                : JSON.parse(prompt.split('<AUTHENTICATED_CONTEXT_PACKET>')[1].split('</AUTHENTICATED_CONTEXT_PACKET>')[0]);
+              const encoded = JSON.parse(prompt.split('<AUTHENTICATED_CONTEXT_PACKET>')[1].split('</AUTHENTICATED_CONTEXT_PACKET>')[0]);
               const packet = packets.decodeUniqueContent(encoded), context = packet.role_context;
               f.lastClaudePacket = structuredClone(packet);
               let result;
@@ -625,8 +610,7 @@ async function runClaudeCurrentReview(f, role, edit = {}) {
   if (edit.legacy) {
     assert.equal(role, 'arch-review');
     const dispatchId = 'legacy-claude-original-' + ++f.count;
-    currentInput(f, role, dispatchId, { legacy: true });
-    const prepared = f.lastArchitecture.prepared;
+    const prepared = legacyArchitecture(f, dispatchId);
     const reference = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs').loadClaudeReferenceContent(role);
     const packet = packets.buildContextPacket({ root: f.worktree, role, subject: prepared.ticket,
       sourceRevision: f.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
@@ -739,37 +723,29 @@ function agent(f, role, signals) {
     capabilities: { supportedModels: [selection.model], supportedEfforts: [selection.effort] } };
 }
 
-function currentInput(f, role, dispatchId = 'current-' + role + '-' + ++f.count, options = {}) {
+function architectureScope(f, dispatchId) {
   const binding = f.directTicket ? null : phaseBinding(f);
-  const storage = path.join(f.root, 'inputs');
-  const scope = { worktree: f.worktree, phase: 49, ticket: f.directTicket || binding.subject, run_id: dispatchId };
-  const value = collector.prepare(scope, { role, context: {}, signals: {} }, { graphDir: f.graphDir,
-    refreshGit: false, getPullRequest: () => f.pr, inflightDispatchId: dispatchId, storageRoot: storage,
-    ...(options.legacy ? { readerProfile: collector.createReaderBatchProfile({
-      chunk_bytes: 8192, ranges_per_batch: 3,
-      candidate: { source_sha256: hash(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
-        instructions_sha256: '0'.repeat(64), model: 'gpt-6.1-sol', effort: 'low', provider: 'openai' },
-    }) } : {}) });
+  return { worktree: f.worktree, phase: 49, ticket: f.directTicket || binding.subject, run_id: dispatchId };
+}
+
+function prepareArchitecture(f, role, dispatchId = 'current-' + role + '-' + ++f.count) {
+  const value = collector.prepare(architectureScope(f, dispatchId), { role, context: {}, signals: {} }, { graphDir: f.graphDir,
+    refreshGit: false, getPullRequest: () => f.pr, inflightDispatchId: dispatchId, storageRoot: path.join(f.root, 'inputs') });
   const a = agent(f, role, value.launch.signals);
   collector.admitInstalledLaunch(value, { agentDir: a.dir, agentFile: a.selection.agent_file,
     agentManifest: a.manifest, capabilities: a.capabilities });
   f.lastArchitecture = value;
-  const admitted = collector.admittedFileInput(value);
-  if (admitted) return admitted;
-  const instructions = collector.instructionEvidence(a.dir, a.selection.agent_file, a.manifest);
-  return collector.prepareFileInput(scope, JSON.stringify(packets.encodeUniqueContent(value.prepared.packet)), {
-    role, dispatchId, storageRoot: storage, graphDir: f.graphDir, architecturePacket: value.prepared.packet,
-    generatedInstructionBytes: instructions.generated_instruction_bytes,
-    relayPrefix: collector.admittedPrompt(value).split('<AUTHENTICATED_CONTEXT_PACKET>')[0],
-    binding: { packet_digest: value.prepared.packet.digest, base: f.base, base_ref: 'refs/remotes/origin/main',
-      merge_base: value.prepared.packet.diff.merge_base,
-      ticket_set: f.directTicket ? [f.directTicket] : binding.ticketSet.map(item => item.id),
-      ticket_set_digest: f.directTicket ? hash(JSON.stringify([f.directTicket])) : binding.membership,
-      agent_sha256: instructions.sha256, agent_path: path.join(a.dir, a.selection.agent_file),
-      installed_files: instructions.installed_files } });
 }
 
-function nativeRecords(scope, input, session, selection, resultText, legacy = false, prompt) {
+function legacyArchitecture(f, dispatchId) {
+  authority.prepareRoleArtifact({ worktreePath: f.worktree, role: 'arch-review' });
+  const prepared = collector.collect(architectureScope(f, dispatchId), { graphDir: f.graphDir, refreshGit: false,
+    getPullRequest: () => f.pr, inflightDispatchId: dispatchId, phaseRepo: null, archivePins: [], historicalBookkeepingPins: [],
+    storageRoot: path.join(f.root, 'inputs') }, true);
+  return { ...prepared, signals: { risk: 'low', critical: false, checkpoint: false, contested: false } };
+}
+
+function nativeRecords(scope, session, selection, resultText, prompt) {
   const meta = template(parent, record => record.type === 'session_meta');
   Object.assign(meta.payload, { id: session, session_id: session, cwd: scope.worktree, runtime_workspace_roots: [scope.worktree] });
   const context = template(parent, record => record.type === 'turn_context');
@@ -779,26 +755,6 @@ function nativeRecords(scope, input, session, selection, resultText, legacy = fa
   const start = template(parent, record => record.payload?.type === 'task_started');
   const turn = start.payload.turn_id;
   context.payload.turn_id = turn;
-  const wrap = (type, fields) => {
-    const record = template(child, record => record.type === 'response_item' && record.payload.type === type);
-    Object.assign(record.payload, fields); record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
-    return record;
-  };
-  const checked = collector.verifyFileInput(input);
-  const assets = legacy ? [] : [{ path: input.input_bundle.manifest_path, bytes: checked.manifest_bytes },
-    ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
-  const reads = [];
-  for (const asset of assets) for (let index = 0; index < Math.ceil(asset.bytes.length / input.input_bundle.chunk_bytes); index++) {
-    const callId = 'original-' + reads.length;
-    const cmd = "dd if='" + asset.path.replaceAll("'", "'\\''") + "' bs=" + input.input_bundle.chunk_bytes
-      + ' skip=' + index + ' count=1 2>/dev/null | base64';
-    const output = wrap('custom_tool_call_output', { call_id: callId });
-    output.payload.output[0].text = 'Script completed\nWall time 0.1 seconds\nOutput:\n';
-    output.payload.output[1].text = JSON.stringify({ exit_code: 0,
-      output: asset.bytes.subarray(index * input.input_bundle.chunk_bytes, (index + 1) * input.input_bundle.chunk_bytes).toString('base64') });
-    reads.push(wrap('custom_tool_call', { name: 'exec', call_id: callId,
-      input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));' }), output);
-  }
   const final = template(parent, record => record.type === 'response_item' && record.payload.phase === 'final_answer');
   final.payload.content.forEach(block => { block.text = resultText; });
   final.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
@@ -810,65 +766,5 @@ function nativeRecords(scope, input, session, selection, resultText, legacy = fa
     user[0].payload.content = [{ type: 'input_text', text: prompt }];
     user[0].payload.internal_chat_message_metadata_passthrough.turn_id = turn;
   }
-  return [meta, context, start, ...user, ...reads, final, completion];
-}
-
-async function successfulReview(f, role, options = {}) {
-  const dispatchId = 'original-' + role + '-' + ++f.count;
-  const input = currentInput(f, role, dispatchId, { legacy: role === 'arch-review' });
-  const value = f.lastArchitecture;
-  const a = f.agents[role];
-  const checked = collector.verifyFileInput(input);
-  const ticketSet = value.prepared.binding.ticketSet;
-  assert.equal(hash(JSON.stringify(ticketSet)), input.manifest.binding.ticket_set_digest);
-  const scope = { worktree: f.worktree, phase: 49, ticket: input.manifest.ticket, run_id: dispatchId };
-  const result = { head: f.head, base_tree: git(f.worktree, 'rev-parse', f.base + '^{tree}'),
-    id: scope.ticket, pr: f.pr.number, verdict: 'conform',
-    summary: 'Original complete fixture review', findings: [], blocking_count: 0,
-    ticket_set: ticketSet, ticket_set_digest: input.manifest.binding.ticket_set_digest,
-    context_digest: input.manifest.binding.packet_digest,
-    launch_digest: collector.admittedPrompt(value).match(/launch_digest=([a-f0-9]{64})/)[1],
-    input_manifest_sha256: input.input_bundle.manifest_sha256, input_material_bytes: input.input_bundle.total_bytes,
-    input_asset_count: input.input_bundle.asset_count, input_chunk_reads: checked.chunk_reads,
-    evidence_markdown: 'Complete original role review.', ...options.result };
-  if (options.legacy) for (const field of ['input_manifest_sha256', 'input_material_bytes', 'input_asset_count', 'input_chunk_reads']) delete result[field];
-  const resultText = JSON.stringify(result), session = crypto.randomUUID();
-  const native = nativeRecords(scope, input, session, a.selection, resultText, options.legacy);
-  if (options.nativeMutation) options.nativeMutation(native);
-  const now = new Date();
-  const nativeDir = path.join(process.env.CODEX_HOME, 'sessions', String(now.getFullYear()),
-    String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
-  fs.mkdirSync(nativeDir, { recursive: true });
-  const nativeFile = path.join(nativeDir, session + '.jsonl');
-  fs.writeFileSync(nativeFile, serialize(native));
-  const records = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
-    .map(type => template(cli, record => record.type === type));
-  records[0].thread_id = session; records[2].item.text = resultText;
-  const recorder = boundary.createDurableRecorder(path.join(f.root, 'receipts'));
-  const host = runtime.createCodexRuntimeHost({ scope, recorder, capabilities: a.capabilities,
-    env: { CODEX_HOME: process.env.CODEX_HOME }, transcriptDir: path.join(f.root, 'transcripts'),
-    probe: { status: 'available', executable: 'codex', runtime_version: 'fixture', capabilities: a.capabilities },
-    spawn() {
-      const processFixture = new EventEmitter();
-      processFixture.stdout = new EventEmitter(); processFixture.stderr = new EventEmitter(); processFixture.pid = process.pid;
-      processFixture.stdin = { write() {}, end() { process.nextTick(() => {
-        processFixture.stdout.emit('data', Buffer.from(serialize(records))); processFixture.emit('close', 0);
-      }); } };
-      return processFixture;
-    } });
-  const launched = await host.launchStatic({ model: a.selection.model, effort: a.selection.effort,
-    sandbox_mode: 'read-only', agent_file: a.selection.agent_file, agent_file_content: a.text, agent_file_digest: hash(a.text) },
-  { dispatch_id: dispatchId, prompt: options.legacy ? checked.material[0].toString('utf8') : input.prompt,
-    ...(options.legacy ? {} : { input_transport: 'host-files', input_bundle: input.input_bundle, input_prepared: input }) });
-  const adapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
-    agentsDir: a.dir, agentManifest: a.manifest,
-    host: { requireRuntimeEvidence: true, launchStatic: () => launched }, capabilities: a.capabilities });
-  const dispatched = boundary.createDispatchBoundary({ adapters: { codex: adapter }, recorder }).dispatch(
-    { runtime: 'codex', role, dispatch_id: dispatchId, signals: value.launch.signals },
-    { ticket: scope.ticket, subject_kind: 'phase' });
-  write(f.worktree, '.shipyard-arch-review-evidence.md', result.evidence_markdown);
-  const sealed = collector.finish(value, dispatched, recorder).artifact;
-  const review = { head: f.head, artifact: sealed.ref, original: fs.readFileSync(sealed.ref),
-    dispatched, nativeFile, input, recorder, role };
-  f.reviews.push(review); return review;
+  return [meta, context, start, ...user, final, completion];
 }

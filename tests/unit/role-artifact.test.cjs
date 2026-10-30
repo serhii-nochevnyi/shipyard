@@ -217,7 +217,7 @@ function judgmentReceipt(resolution) {
   };
 }
 
-function judgmentFixture(ticket = 'T-43-05-role-artifact-judgment') {
+function judgmentFixture(ticket = 'T-43-05-role-artifact-judgment', runtimeEvidence) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-role-artifact-judgment-'));
   git(root, ['init', '--quiet', '--initial-branch=main']);
   git(root, ['config', 'user.email', 'role-artifact-judgment@example.test']);
@@ -234,7 +234,8 @@ function judgmentFixture(ticket = 'T-43-05-role-artifact-judgment') {
 
   const recorder = createDurableRecorder(path.join(root, 'receipts'));
   const boundary = createDispatchBoundary({
-    adapters: { claude: { launch: judgmentReceipt } },
+    adapters: { claude: { launch: resolution => ({ ...judgmentReceipt(resolution),
+      ...(runtimeEvidence ? { runtime_evidence: runtimeEvidence } : {}) }) } },
     recorder,
   });
   const dispatch = boundary.dispatch(
@@ -344,6 +345,14 @@ for (const size of [96 * 1024, 96 * 1024 + 1, 4 * 1024 * 1024, 4 * 1024 * 1024 +
     } finally { clean(value); }
   });
 }
+
+for (const key of ['input_transport', 'completed_source', 'review_continuation', 'reader_capacity_probe'])
+  test('a receipt carrying the removed Codex ' + key + ' transport is not authenticated', () => {
+    const value = judgmentFixture('T-43-05-role-artifact-judgment', { [key]: {} });
+    try {
+      rejectsCode(() => sealArchReview(value, archReviewResult(value)), 'NONCOMPLIANT_RECEIPT');
+    } finally { clean(value); }
+  });
 
 suite('role-artifact — bounded executor evidence');
 
@@ -2143,48 +2152,6 @@ for (const repo of [null, 'acme/selected']) test('mixed repository archive scope
   } finally {cleanPhaseScope(value);}
 });
 
-test('completed reference authentication rejects caller authority with no filesystem mutation', () => {
-  const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-  for (const selectors of [null, {}, { worktree: '/missing', progress: {}, receipt_store: '/missing', dispatch_id: 'missing',
-    evidence: {} }, { worktree: '/missing', progress: {}, receipt_store: '/missing', dispatch_id: 'missing',
-    completed: true }, ...['gsd_role', 'gsd_launch_mechanism', 'native_child_evidence', 'task_relay'].map(key => ({
-      worktree: '/missing', progress: {}, receipt_store: '/missing', dispatch_id: 'missing', [key]: {} }))]) {
-    assert.throws(() => authority.authenticateCompletedReviewReferences(selectors),
-      error => error.code === 'REVIEW_PROGRESS_REQUIRED');
-  }
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'completed-reference-refusal-'));
-  try {
-    git(root, ['init', '--quiet']);
-    const store = path.join(root, 'absent-original-store');
-    const source = `
-      const fs = require('node:fs');
-      const authority = require(process.env.REFERENCE_MODULE);
-      const selectors = JSON.parse(process.env.REFERENCE_SELECTORS);
-      for (const name of ['mkdirSync', 'writeFileSync', 'renameSync', 'unlinkSync', 'appendFileSync', 'fsyncSync'])
-        fs[name] = () => { throw new Error('unexpected authority mutation: ' + name); };
-      const original = fs.openSync;
-      fs.openSync = (file, flags, ...args) => {
-        if (typeof flags === 'string' ? flags !== 'r' : flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT))
-          throw new Error('unexpected authority write-open');
-        return original(file, flags, ...args);
-      };
-      try { authority.authenticateCompletedReviewReferences(selectors); process.exit(2); }
-      catch (error) {
-        if (error.message.includes('unexpected authority')) throw error;
-        process.stdout.write('REFUSED_WITHOUT_WRITES');
-      }
-    `;
-    const output = execFileSync(process.execPath, [...testAuthorityArgs, '-e', source], { encoding: 'utf8',
-      env: { ...process.env, REFERENCE_MODULE: require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs'),
-        REFERENCE_SELECTORS: JSON.stringify({ worktree: root, receipt_store: store, dispatch_id: 'missing-original',
-          progress: { reference: 'review-progress-' + '0'.repeat(64) + '.json', sha256: '0'.repeat(64) } }) } });
-    assert.equal(output, 'REFUSED_WITHOUT_WRITES');
-    assert.equal(fs.existsSync(store), false);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-
-
 test('focused completeness and subject declarations fail closed without consumption inference', () => {
   const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
   const binding = { review_contract: context.FOCUSED_CONTRACT, repository: '/repo/.git', id: 'T-49-20',
@@ -2344,11 +2311,11 @@ test('role-artifact holds no private subject grammar or home expression', () => 
   assert.ok(!/process\.env\.CODEX_HOME/.test(source), 'the Codex home has one resolver');
   assert.ok(!/process\.env\.CLAUDE_CONFIG_DIR/.test(source), 'the Claude home has one resolver');
   assert.ok(!/'\.codex'/.test(source) && !/'\.claude'/.test(source), 'no private home fallback');
-  assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 8, 'definition plus the architecture and code-review phase-record sites and authenticated lineage readers');
+  assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 6, 'definition plus the architecture and code-review phase-record sites and authenticated lineage readers');
   assert.equal((source.match(/parseSubject\('integrator'/g) || []).length >= 2, true);
-  assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 3);
-  assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 3,
-    'all three Codex session sites follow the executing bundle like every converted site');
+  assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 2);
+  assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 2,
+    'both Codex session sites follow the executing bundle like every converted site');
   assert.equal((source.match(/resolveClaudeHome\(/g) || []).length, 1);
   assert.ok(!/^(?:const|let|var) [^\n]*require\(['"]\.\/runtime-context\.cjs['"]\)/m.test(source),
     'runtime-context is required lazily at each site');

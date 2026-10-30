@@ -4,6 +4,8 @@ status: measured
 date: 2026-10-19
 host: executor sandbox, macOS Darwin 27.0.0, node v24.21.0, git 2.54.0 (Apple Git-157), worktree T-52-02 at HEAD e8299ce01e729f5e0c19e99477a33bb066ef4806 (main 1c34583b, Shipyard 0.73.0)
 
+> Removed in HS-20: `prepareFileInput`, `preflightReaderSchedule`, `INPUT_CHUNK_BYTES`, `FILE_LIMITS.relay`, `FILE_LIMITS.reads`, the file relay and the reader batch transport no longer exist. Rows that name them record the state on the measurement date, not current bounds; a prompt over `INPUT_MAX_BYTES` is now refused (`CONTEXT_OVER_BOUND`), and part reviewers read the diff with git.
+
 Section status:
 
 | Section | Status | Why |

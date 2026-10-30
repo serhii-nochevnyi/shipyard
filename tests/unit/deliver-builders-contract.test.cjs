@@ -105,6 +105,15 @@ test('both supported integrator callers use the part runner and no selector, cap
   assert.match(integration, /human\s+epic-to-main merge/);
 });
 
+test('the manual integrator dispatch passes no output path because the integrator writes no file', () => {
+  const start = step5.indexOf('**Manual dispatch and sealing.');
+  const end = step5.indexOf('After the receipt, seal', start);
+  assert.ok(start >= 0 && end > start);
+  assert.ok(!/outputPath/.test(step5.slice(start, end)));
+  assert.match(step5.slice(start, end), /writes no file/);
+  assert.ok(!/capacity admission/.test(step5), 'the integrator takes no capacity admission');
+});
+
 test('restore runs after live evidence reads and before every integrator outcome branch', () => {
   const restore = step5.indexOf('Restore the epic worktree (every integrator outcome)');
   assert.ok(restore > step5.indexOf("role: 'integrator'"));
