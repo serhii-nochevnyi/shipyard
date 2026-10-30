@@ -1450,7 +1450,7 @@ function registeredPhaseWorktrees(root) {
     .split('\n').filter(line => line.startsWith('worktree ')).map(line => path.resolve(line.slice(9)));
 }
 
-function phaseSelectionVerification() {
+function archiveVerification() {
   const authorities = new Map(), objects = new Map();
   const snapshot = state => [state.directory, path.join(state.directory, 'hmac.key'), state.file]
     .map(file => ({ file, real: fs.realpathSync(file), stat: fs.lstatSync(file, { bigint: true }) }));
@@ -1459,7 +1459,7 @@ function phaseSelectionVerification() {
       const stat = fs.lstatSync(entry.file, { bigint: true });
       if (fs.realpathSync(entry.file) !== entry.real
           || ['dev', 'ino', 'mode', 'size', 'mtimeNs', 'ctimeNs'].some(field => stat[field] !== entry.stat[field]))
-        fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority changed during phase selection');
+        fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority changed during verification');
     }
   };
   return {
@@ -1976,7 +1976,7 @@ function authenticatedCurrentArchive(worktree, record, manifest, findings, ident
   if (stable(trusted.receipt) !== stable(record.receipt) || record.receipt.role !== manifest.role
       || record.receipt.policy_hash !== require('./model-policy.cjs').POLICY_HASH)
     fail('REVIEW_COVERAGE_INVALID', 'original current catalogue role or policy differs');
-  const verification = phaseSelectionVerification();
+  const verification = archiveVerification();
   selectedArchiveRecord({ identity: { repository: identity.repository.identity }, verification }, {
     worktree, dispatch_id: record.dispatch_id, ticket: manifest.boundary_subject,
     receipt: record.receipt, pins: record.pins,
@@ -3369,7 +3369,7 @@ function replayCodeReviewRecord(worktree, record, repository, lineage) {
   const trusted = trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: record.receipt_store });
   if (stable(trusted.receipt) !== stable(record.receipt) || reconciledRecordTicket(trusted) !== subject)
     fail('ARCHIVE_AUTHORITY_INVALID', 'original code-review receipt or subject differs');
-  const verification = phaseSelectionVerification();
+  const verification = archiveVerification();
   const selected = selectedArchiveRecord({ identity: { repository }, verification }, {
     worktree, dispatch_id: record.dispatch_id, ticket: subject, receipt: record.receipt, pins: record.pins,
   }, trusted);

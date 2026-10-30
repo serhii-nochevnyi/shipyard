@@ -307,6 +307,32 @@ test('an architecture verdict sealed without the focused contract is skipped and
   } finally { cleanupFixture(f); }
 });
 
+test('an archive authority file changing while a verdict candidate is verified refuses the candidate', async () => {
+  const f = coordinatorOnlyPlanning('arch-review');
+  const previousReaddir = fs.readdirSync;
+  try {
+    const options = hostOptions(f, { originalStream: true });
+    options.getPullRequest = () => ({ ...livePr(f), baseRefName: 'integration' });
+    const result = await createClaudeRoleHost(options).run(phasePreparationRequest(f));
+    const input = { worktreePath: f.root, pr: 101, head: f.head, baseName: 'integration',
+      baseCommit: f.base, graphDir: f.graphDir, headBranch: f.branch };
+    assert.equal(reviewArtifacts.currentArchitectureVerdict(input)?.subject, result.subject);
+    const catalogue = path.join(reviewArtifacts.archiveAuthorityDirectory(f.root), 'catalogue.json');
+    const family = path.join(f.root, reviewArtifacts.ARTIFACT_ARCHIVE_DIR, fs.readdirSync(
+      path.join(f.root, reviewArtifacts.ARTIFACT_ARCHIVE_DIR))[0]);
+    let changed = false;
+    fs.readdirSync = function(file, ...args) {
+      const names = previousReaddir.call(this, file, ...args);
+      if (file === family && !changed) { changed = true; fs.appendFileSync(catalogue, ' '); }
+      return names;
+    };
+    const refusals = [];
+    assert.equal(reviewArtifacts.currentArchitectureVerdict({ ...input, onCandidateRefusal: item => refusals.push(item) }), null);
+    assert.equal(changed, true);
+    assert.ok(refusals.some(item => /archive authority changed during verification/.test(item.message)), JSON.stringify(refusals));
+  } finally { fs.readdirSync = previousReaddir; cleanupFixture(f); }
+});
+
 for (const kind of ['code-review', 'integrator'])
 test(`${kind} coordinator input seals captured native bytes and reads its current verdict`, async () => {
   const f = coordinatorOnlyPlanning(kind);
