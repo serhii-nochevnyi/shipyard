@@ -217,7 +217,6 @@ const HOME_ALLOWLIST = new Map([
   ['runtime-context.cjs', 'the one implementation of the home rule'],
   ['codex-notify.cjs', 'derives its home from its install location when the variable is absent'],
   ['claude-runtime-host.cjs', 'forwards the variable into the child environment and builds no home path'],
-  ['codex-runtime-host.cjs', 'source-layout fallback to explicit CODEX_HOME evidence when no installed bundle resolves'],
 ]);
 
 test('no module builds its own Codex or Claude home expression outside the allowlist', () => {
