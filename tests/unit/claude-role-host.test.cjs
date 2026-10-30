@@ -2839,6 +2839,22 @@ test('a part that writes an untracked file is refused and no further session lau
   } finally { cleanupFixture(fixture); }
 });
 
+test('an unlisted archive appearing between code-review parts is refused before the next part launches', async () => {
+  const fixture = splitReviewFixture({ coordinatorGraph: true });
+  let launches = 0, hosts = 0;
+  try {
+    const options = hostOptions(fixture, { onLaunch() { launches++; } });
+    options.partBudget = 5;
+    const factory = options.createRuntimeHost;
+    options.createRuntimeHost = input => {
+      if (++hosts === 2) write(fixture.root, '.shipyard-role-artifacts/unlisted/file', 'forged');
+      return factory(input);
+    };
+    await assert.rejects(createClaudeRoleHost(options).run(codeReviewRequest(fixture)), { code: 'ARCHIVE_AUTHORITY_INVALID' });
+    assert.equal(launches, 1);
+  } finally { cleanupFixture(fixture); }
+});
+
 for (const scenario of ['pointer', 'commondir'])
 test(`a reviewer that repoints the repository (${scenario}) is refused although the tree looks clean`, async () => {
   const fixture = splitReviewFixture({ coordinatorGraph: true });
