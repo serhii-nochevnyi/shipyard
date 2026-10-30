@@ -548,7 +548,7 @@ for (const runtime of ['codex', 'claude']) for (const failure of ['native-read',
     } finally { h.restore(); }
   });
 for (const kind of ['worker', 'final']) test(`complete large ${kind}: observed pinned baseline RED then canonical GREEN with both full originals`, async () => {
-  const shape = kind === 'worker' ? [73, 0, 2300] : [65, 0, 2300];
+  const shape = kind === 'worker' ? [24, 0, 9000] : [24, 0, 7000];
   let sourceHash;
   const old = setup(true);
   try {
