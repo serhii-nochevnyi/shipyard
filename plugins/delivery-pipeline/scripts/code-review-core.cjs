@@ -193,14 +193,38 @@ function normalizeResult(result, { round, scope, priorFindings = [], readSource 
     review_round: round, review_scope: scope, review_completeness: complete ? 'complete' : 'incomplete',
     limitations, unresolved_sources: unresolvedSources, ...stats };
 }
+function semanticUnresolvedProjection(result, { obligationIds = result?.coverage } = {}) {
+  if (result?.review_contract !== 'shipyard.semantic-review.v1' || result.role !== 'code-review'
+      || !['complete', 'incomplete', 'blocked'].includes(result.completeness))
+    fail('INVALID_RESULT', 'code-review projection requires its explicit semantic contract and completeness');
+  for (const field of ['required_context', 'unread']) {
+    if (!Array.isArray(result[field])) fail('INVALID_RESULT', `semantic ${field} must be an array`);
+    for (const entry of result[field]) requireText(entry, `semantic ${field} entry`);
+  }
+  if (!Array.isArray(obligationIds)) fail('INVALID_RESULT', 'semantic projection requires the complete obligation domain');
+  for (const id of obligationIds) requireText(id, 'semantic obligation identity');
+  const domain = new Set(obligationIds);
+  if (new Set(result.unread).size !== result.unread.length || result.unread.some(id => !domain.has(id)))
+    fail('INVALID_RESULT', 'semantic unread identities must be unique members of the complete obligation domain');
+  const limitations = boundedList(result.limitations, 'limitations');
+  const review_completeness = result.completeness === 'complete' && !result.required_context.length
+    && !result.unread.length && !limitations.length ? 'complete' : 'incomplete';
+  if (result.required_context.length + result.unread.length <= 128)
+    return { review_completeness, unresolved_sources: [...result.required_context, ...result.unread] };
+  if (!/^[a-f0-9]{64}$/.test(result.snapshot_sha256) || !/^[a-f0-9]{64}$/.test(result.binding_sha256)
+      || !['worker', 'final'].includes(result.stage) || (result.stage === 'final'
+        ? result.assignment_id !== null : !bounded(result.assignment_id)))
+    fail('INVALID_RESULT', 'semantic overflow requires the original snapshot, stage, assignment and binding');
+  const reference = `semantic-report:${result.snapshot_sha256}:${result.stage}:${result.assignment_id ?? 'final'}:${result.binding_sha256}`;
+  return { review_completeness: 'incomplete', unresolved_sources: [requireText(reference, 'semantic report reference')] };
+}
 function projectSemanticResult(result, { packet, identity, readSource } = {}) {
   if (result?.review_contract !== 'shipyard.semantic-review.v1' || result.role !== 'code-review')
     fail('INVALID_RESULT', 'code-review projection requires its explicit semantic contract');
   const context = packet.role_context;
-  const unresolved = [...result.required_context, ...result.unread];
+  const unresolved = semanticUnresolvedProjection(result);
   const normalized = normalizeResult({ ...result, coverage: [], semantic_coverage: result.coverage,
-    review_completeness: result.completeness === 'complete' ? 'complete' : 'incomplete',
-    unresolved_sources: unresolved }, { round: context.review_round, scope: context.review_scope,
+    ...unresolved }, { round: context.review_round, scope: context.review_scope,
     priorFindings: context.normalization_inputs.prior_findings, readSource });
   return { ...normalized, prior_head: context.prior_head, contract_digest: context.contract_digest,
     dispositions_digest: context.dispositions_digest,
@@ -437,7 +461,7 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
     change_metadata: changeMetadata, contract_digest: contractDigest(referenceDigest) };
 }
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
-module.exports = { CONTRACT_ID, ROUND_CAP, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult, projectSemanticResult,
+module.exports = { CONTRACT_ID, ROUND_CAP, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult, semanticUnresolvedProjection, projectSemanticResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
   lineageComplete, coverageComplete, nextRound, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };
