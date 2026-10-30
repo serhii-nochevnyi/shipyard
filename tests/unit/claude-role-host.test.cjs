@@ -1089,31 +1089,6 @@ test('arch-review routing still sees the diff size although the diff is not in t
 
 
 
-test('native integrator collection retains overflowing accounting without admitting an inline launch', () => {
-  const fixture = setupRepository('integrator', { sourceContent: bulkSource(50000) });
-  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
-  try {
-    const options = hostOptions(fixture);
-    const original = request(fixture);
-    const prepared = host.prepareNativeIntegratorContext(options, original);
-    assert.equal(host.isPreparedIntegratorContext(prepared), true);
-    assert.equal(prepared.prompt, undefined);
-    assert.equal(prepared.packet.accounting.overflow, true);
-    assert.ok(prepared.packet.accounting.estimated_tokens > 750000);
-    assert.ok(prepared.packet.role_context.combined_diff.content.includes('+00049999 ' + 'x'.repeat(70)));
-    const enriched = host.integrationPacketWithCoverage(prepared, { complete: false });
-    assert.equal(enriched.accounting.overflow, true);
-    assert.equal(enriched.role_context.combined_diff.content, prepared.packet.role_context.combined_diff.content);
-    for (const copy of [{ ...prepared }, JSON.parse(JSON.stringify(prepared))]) {
-      assert.equal(host.isPreparedIntegratorContext(copy), false);
-      assert.throws(() => host.integrationPacketWithCoverage(copy, {}), /over its bound of 750000/);
-    }
-    assert.throws(() => host.prepareInlineReview('integrator', prepared.ticket, prepared.packet, 'reference'),
-      /bound|too large|exceed/i);
-  } finally { cleanupFixture(fixture); }
-});
-
-
 test('an overflowing change-metadata listing is refused as too large with the bound named', async () => {
   const fixture = setupRepository('arch-review');
   try {
@@ -1201,30 +1176,16 @@ function reverseSquashRepository() {
   return f;
 }
 
-test('D-34 real reverse squash reaches the Codex shared lineage entry without a provider', () => {
+test('D-34 a reverse squash chain is included through its parent heads', () => {
   const f = reverseSquashRepository();
-  const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
   try {
-    const codex = host.prepareNativeIntegratorContext(f.options, request(f));
-    const proof = host.createNativeIntegrationMergeProof(codex, f.options);
-    assert.equal(proof.schema, 'shipyard.native-integration-merge-proof.v1');
-    assert.deepEqual(proof.paths.map(item => item.tickets), [
-      ['T-38-01', 'T-38-02', 'T-38-03'], ['T-38-02', 'T-38-03'], ['T-38-03']]);
-    assert.equal(proof.ticket_set_digest, crypto.createHash('sha256').update(JSON.stringify(codex.ticketSet)).digest('hex'));
-    const scope = { worktree: f.root, ticket: codex.ticket, phase: 38, run_id: 'd34-codex' };
-    const review = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').prepareIntegrationLineage(scope, codex,
-      { ...f.options, nativeRuntime: 'codex', dispatchId: scope.run_id, storageRoot: f.storageRoot, instructionBinding: {} });
-    assert.deepEqual(review.proof, proof);
-    assert.deepEqual(review.currentInput.manifest.binding.preflight, proof);
-    f.prs[0].mergedAt = '2026-10-10T12:00:00Z';
-    assert.throws(() => require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs').recheckIntegrationReview(review),
-      error => error.code === 'STALE_CONTEXT');
-    assert.throws(() => host.createNativeIntegrationMergeProof({ ...codex }, f.options), /private|original/);
+    assert.deepEqual(require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
+      .prepareIntegratorContext(f.options, request(f)).ticketSet.map(member => member.id), ['T-38-01', 'T-38-02', 'T-38-03']);
   } finally { cleanupFixture(f); }
 });
 
 for (const scenario of ['equal tree without inclusion', 'wrong base', 'open parent', 'missing parent', 'duplicate PR',
-  'duplicate head branch', 'foreign repository', 'foreign phase', 'cycle', 'missing head', 'missing merge', 'terminal noninclusion'])
+  'duplicate head branch', 'cycle', 'missing head', 'missing merge', 'terminal noninclusion'])
 test('D-34 reverse squash refuses ' + scenario, () => {
   const f = reverseSquashRepository();
   try {
@@ -1241,8 +1202,6 @@ test('D-34 reverse squash refuses ' + scenario, () => {
       state['T-38-02'].branch = graph.tickets['T-38-02'].branch;
       fs.writeFileSync(statePath, JSON.stringify(state));
     }
-    if (scenario === 'foreign repository') graph.tickets['T-38-02'].repo = 'foreign/repository';
-    if (scenario === 'foreign phase') graph.tickets['T-38-02'].phase = '39';
     if (scenario === 'cycle') {
       f.prs[1].baseRefName = f.prs[0].headRefName;
       f.prs[0].headRefOid = f.prs[1].headRefOid;
@@ -1251,52 +1210,13 @@ test('D-34 reverse squash refuses ' + scenario, () => {
     if (scenario === 'missing head') f.prs[1].headRefOid = 'e'.repeat(40);
     if (scenario === 'missing merge') f.prs[0].mergeCommit.oid = 'e'.repeat(40);
     if (scenario === 'terminal noninclusion') f.prs[2].mergeCommit.oid = f.prs[2].headRefOid;
-    if (scenario.startsWith('foreign') || scenario === 'duplicate head branch') {
+    if (scenario === 'duplicate head branch') {
       fs.writeFileSync(f.graphPath, JSON.stringify(graph));
       git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'adversarial graph']);
       git(f.root, ['update-ref', 'refs/remotes/origin/' + f.branch, git(f.root, ['rev-parse', 'HEAD'])]);
     }
     assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(f.options, request(f)), /included|inclusion|parent|merged|identity|phase|repository|ambiguous|duplicate|cycle|object|plan set|delivery state/i);
-  } finally { cleanupFixture(f); }
-});
-
-for (const field of ['headRefOid', 'baseRefName', 'baseRefOid', 'mergedAt', 'mergeCommit'])
-test('D-34 collection refuses concurrent PR drift in ' + field, () => {
-  const f = reverseSquashRepository();
-  try {
-    const get = f.options.getPullRequest; let calls = 0;
-    f.options.getPullRequest = input => {
-      const pr = get(input);
-      if (++calls > 3 && input.pr === 101) pr[field] = field === 'mergeCommit' ? { oid: f.start }
-        : field.endsWith('Oid') ? f.start : field === 'mergedAt' ? 'changed-time' : 'changed/base';
-      return pr;
-    };
-    assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(f.options, request(f)), error => error.code === 'STALE_CONTEXT');
-  } finally { cleanupFixture(f); }
-});
-
-for (const scenario of ['epic head', 'integration base', 'graph membership', 'complete plan set'])
-test('D-34 collection refuses concurrent ' + scenario + ' drift', () => {
-  const f = reverseSquashRepository();
-  try {
-    const get = f.options.getPullRequest; let calls = 0;
-    f.options.getPullRequest = input => {
-      const pr = get(input);
-      if (++calls === 4) {
-        if (scenario === 'epic head') git(f.root, ['update-ref', 'refs/heads/' + f.branch, f.start]);
-        if (scenario === 'integration base') git(f.root, ['update-ref', 'refs/remotes/origin/main', f.head]);
-        if (scenario === 'graph membership') {
-          const graph = JSON.parse(fs.readFileSync(f.graphPath)); delete graph.tickets['T-38-02'];
-          fs.writeFileSync(f.graphPath, JSON.stringify(graph));
-        }
-        if (scenario === 'complete plan set') write(f.root, `.planning/phases/${PHASE}/38-04-PLAN.md`, planText());
-      }
-      return pr;
-    };
-    assert.throws(() => require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
-      .prepareNativeIntegratorContext(f.options, request(f)), error => error.code === 'STALE_CONTEXT');
+      .prepareIntegratorContext(f.options, request(f)), /included|inclusion|parent|merged|identity|phase|repository|ambiguous|duplicate|cycle|object|plan set|delivery state|exactly one/i);
   } finally { cleanupFixture(f); }
 });
 

@@ -1012,8 +1012,6 @@
             "--test",
             "tests/unit/architecture-target.test.cjs",
             "tests/unit/codex-arch-review-context.test.cjs",
-            "tests/unit/phase49-review-lineage.test.cjs",
-            "tests/unit/phase49-incremental-integration.test.cjs",
             "tests/unit/deliver-builders-contract.test.cjs"
           ],
           "profile": "host",

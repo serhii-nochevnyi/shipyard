@@ -1093,203 +1093,6 @@ test('actual launcher refuses a nonexistent worktree without requiring Git for e
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-for (const transport of ['function', 'custom'])
-for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [1996419, 'missing-read'], [1996419, 'truncated'], [1996419, 'source-drift'], [1996419, 'wrong-echo'], [1996419, 'after-complete'], [1996419, 'foreign-completion'], [1996419, 'failed-read'], [1996419, 'surplus-output'], [1996419, 'known-count-early-asset'], [1996419, 'known-count-complete'], [1996419, 'duplicate-read'], [1996419, 'overlapping-read']].concat(transport === 'custom'
-  ? [[1996419, 'unsafe-wrapper']] : [])) test('fixture: ' + transport + ' ' + (tamper || 'complete') + ' ' + materialBytes + '-byte input traverses delivery, static native relay and fresh consumer', async () => {
-  const { execFileSync } = require('node:child_process');
-  const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
-  const { createCodexDeliveryHost } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
-  const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'complete-input-fixture-')));
-  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'complete-input-store-')));
-  const scope = { ...SCOPE, worktree: root, run_id: 'complete-input-' + materialBytes };
-  const material = 'BEGIN COMPLETE INPUT\n' + 'é'.repeat(Math.floor((materialBytes - 43) / 2))
-    + 'x'.repeat((materialBytes - 43) % 2) + '\nEND COMPLETE INPUT!!\n';
-  try {
-    assert.equal(Buffer.byteLength(material), materialBytes);
-    fs.mkdirSync(path.join(root, '.planning'));
-    fs.writeFileSync(path.join(root, '.planning/config.json'), '{}');
-    for (const args of [['init', '-q'],
-      ['config', '--local', 'user.name', 'Shipyard Test'],
-      ['config', '--local', 'user.email', 'shipyard-test@example.invalid'],
-      ['add', '-A'], ['commit', '-qm', 'fixture']])
-      execFileSync('git', ['-C', root, '-c', 'commit.gpgsign=false', ...args]);
-    const agents = path.join(store, 'agents'); fs.mkdirSync(agents, { mode: 0o700 });
-    const variants = codexStaticVariants().filter(value => value.role === 'integrator');
-    const agentDigests = {};
-    for (const variant of variants) {
-      const content = ['# shipyard-policy-id = "' + policy.POLICY.id + '"',
-        '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
-        '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"',
-        '# shipyard-policy-runtime = "codex"', '# shipyard-policy-role = "integrator"',
-        '# shipyard-policy-rung = "' + variant.rung + '"', 'name = "' + variant.file.replace(/\.toml$/, '') + '"',
-        'model = "' + variant.model + '"', 'model_reasoning_effort = "' + variant.effort + '"',
-        'sandbox_mode = "workspace-write"', "developer_instructions = '''",
-        'GENERATED INTEGRATOR INSTRUCTIONS', "'''", ''].join('\n');
-      fs.writeFileSync(path.join(agents, variant.file), content);
-      agentDigests[variant.file] = require('node:crypto').createHash('sha256').update(content).digest('hex');
-    }
-    const agentManifest = path.join(agents, '.shipyard-manifest.json');
-    fs.writeFileSync(agentManifest, JSON.stringify({ policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
-      policy_hash: policy.POLICY_HASH, agent_files: Object.keys(agentDigests), agent_digests: agentDigests }));
-    const finiteFixture = ['known-count-early-asset', 'known-count-complete', 'duplicate-read', 'overlapping-read'].includes(tamper);
-    let fileInputContext;
-    if (finiteFixture) {
-      const selection = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: { inputTokens: Math.ceil(materialBytes / 4) } });
-      const instructions = collector.instructionEvidence(agents, selection.agent_file, agentManifest);
-      const parts = material.match(/[\s\S]{1,5000}/gu);
-      fileInputContext = collector.prepareFileInput(scope, parts, { role: 'integrator', dispatchId: 'complete-input-dispatch',
-        storageRoot: store, generatedInstructionBytes: instructions.generated_instruction_bytes,
-        binding: { agent_file: selection.agent_file, agent_path: path.join(agents, selection.agent_file),
-          agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selection.policy_hash } });
-      const checked = collector.verifyFileInput(fileInputContext);
-      assert.ok(Math.ceil(checked.manifest_bytes.length / fileInputContext.input_bundle.chunk_bytes) > 7);
-      assert.deepEqual(Buffer.concat(checked.material), Buffer.from(material));
-      assert.equal(policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: { inputTokens: fileInputContext.inputTokens } }).agent_file, selection.agent_file);
-    }
-    let consumed, stdin, launchedArgs;
-    const home = path.join(store, 'codex-home');
-    const nativeOptions = { scope, capabilities, env: { CODEX_HOME: home },
-      transcriptDir: path.join(store, 'transcripts'), spawn(executable, args) {
-        launchedArgs = args;
-        const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = 24037;
-        child.stdin = { write(text) { stdin = text; }, end() {
-          try {
-            const manifestPath = /^INPUT_MANIFEST=(.*)$/m.exec(stdin)[1];
-            const manifest = JSON.parse(fs.readFileSync(manifestPath));
-            const bundle = { manifest_path: manifestPath, manifest_sha256: /^INPUT_MANIFEST_SHA256=(.*)$/m.exec(stdin)[1],
-              total_bytes: manifest.accounting.material_bytes, asset_count: manifest.assets.length,
-              chunk_bytes: manifest.chunk_bytes, max_chunk_reads: manifest.max_chunk_reads,
-              manifest_identity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode'].map(key => [key, fs.statSync(manifestPath)[key]])) };
-            consumed = collector.verifyFileInput(bundle, { sealed: true });
-            assert.deepEqual(Buffer.concat(consumed.material), Buffer.from(material));
-            const selectedModel = args[args.indexOf('--model') + 1];
-            const selectedEffort = args.find(value => value.startsWith('model_reasoning_effort=')).split('"')[1];
-            const session = '11111111-1111-4111-8111-111111111111';
-            const native = writeSession(home, session, selectedModel, selectedEffort);
-            const assets = [{ path: manifestPath, bytes: consumed.manifest_bytes },
-              ...manifest.assets.map((asset, index) => ({ path: asset.path, bytes: consumed.material[index] }))];
-            const templates = captured(PARENT_FIXTURE).split('\n').filter(Boolean).map(JSON.parse);
-            const response = templates.find(record => record.type === 'response_item');
-            const wrap = payload => ({ ...structuredClone(response), payload });
-            const records = [];
-            let ordinal = 0;
-            for (const asset of assets) for (let index = 0; index < Math.ceil(asset.bytes.length / manifest.chunk_bytes); index++) {
-              const cmd = "dd if='" + asset.path + "' bs=" + manifest.chunk_bytes + ' skip=' + index + ' count=1 2>/dev/null | base64';
-              const callId = 'fixture-read-' + ordinal++;
-              const encoded = asset.bytes.subarray(index * manifest.chunk_bytes, (index + 1) * manifest.chunk_bytes).toString('base64');
-              if (transport === 'custom') records.push(wrap({
-                type: 'custom_tool_call', name: 'exec', call_id: callId,
-                input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));',
-              }), wrap({ type: 'custom_tool_call_output', call_id: callId,
-                output: [{ type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
-                  { type: 'input_text', text: JSON.stringify({ chunk_id: callId, wall_time_seconds: 0.1,
-                    exit_code: 0, output: encoded }) }],
-              }));
-              else records.push(wrap({ type: 'function_call', name: 'exec_command', call_id: callId,
-                arguments: JSON.stringify({ cmd }) }), wrap({ type: 'function_call_output', call_id: callId,
-                output: JSON.stringify({ exit_code: 0, output: encoded }) }));
-            }
-            if (finiteFixture) {
-              const manifestCount = Math.ceil(consumed.manifest_bytes.length / manifest.chunk_bytes);
-              assert.ok(consumed.manifest_bytes.subarray(0, manifest.chunk_bytes).includes(Buffer.from('"manifest_bytes":' + consumed.manifest_bytes.length)));
-              const checksum = JSON.stringify({ sha256: require('node:crypto').createHash('sha256').update(consumed.manifest_bytes).digest('hex'), chunk_count: manifestCount });
-              assert.equal(JSON.parse(checksum).sha256, bundle.manifest_sha256);
-              const checksumProgram = 'const fs=require("node:fs"),crypto=require("node:crypto");const bytes=fs.readFileSync(' + JSON.stringify(manifestPath) + ');console.log(JSON.stringify({sha256:crypto.createHash("sha256").update(bytes).digest("hex"),chunk_count:Math.ceil(bytes.length/' + manifest.chunk_bytes + ')}));';
-              const cmd = "node -e '" + checksumProgram.replaceAll("'", "'\\''") + "'";
-              const checksumRecords = transport === 'custom'
-                ? [wrap({ type: 'custom_tool_call', name: 'exec', call_id: 'fixture-checksum',
-                  input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));' }),
-                wrap({ type: 'custom_tool_call_output', call_id: 'fixture-checksum', output: [
-                  { type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
-                  { type: 'input_text', text: JSON.stringify({ exit_code: 0, output: checksum }) }] })]
-                : [wrap({ type: 'function_call', name: 'exec_command', call_id: 'fixture-checksum', arguments: JSON.stringify({ cmd }) }),
-                  wrap({ type: 'function_call_output', call_id: 'fixture-checksum', output: JSON.stringify({ exit_code: 0, output: checksum }) })];
-              if (tamper === 'known-count-early-asset') records.splice(14, records.length - 14, ...records.slice(manifestCount * 2, manifestCount * 2 + 2));
-              if (tamper === 'duplicate-read') {
-                const duplicate = structuredClone(records.slice(0, 2));
-                duplicate.forEach(record => { record.payload.call_id = 'fixture-duplicate'; });
-                records.splice(2, 0, ...duplicate);
-              }
-              if (tamper === 'overlapping-read') records.splice(1, 0, records.splice(2, 1)[0]);
-              records.unshift(...checksumRecords);
-            }
-            if (tamper === 'missing-read') records.pop();
-            if (tamper === 'unsafe-wrapper') records[0].payload.input += '\ntext("untrusted extra statement");';
-            if (tamper === 'failed-read' || tamper === 'surplus-output') {
-              if (transport === 'custom') {
-                const block = records.at(-1).payload.output[1];
-                const captured = JSON.parse(block.text);
-                block.text = JSON.stringify(tamper === 'failed-read'
-                  ? { ...captured, exit_code: 1 } : { ...captured, output: captured.output + 'AAAA' });
-              } else records.at(-1).payload.output = JSON.stringify({
-                exit_code: tamper === 'failed-read' ? 1 : 0,
-                output: JSON.parse(records.at(-1).payload.output).output + (tamper === 'surplus-output' ? 'AAAA' : ''),
-              });
-            }
-            if (tamper === 'truncated') {
-              if (transport === 'custom') {
-                const block = records.at(-1).payload.output[1];
-                block.text = JSON.stringify({ ...JSON.parse(block.text), output: 'truncated' });
-              } else records.at(-1).payload.output = records.at(-1).payload.output.slice(0, 8);
-            }
-            if (tamper === 'source-drift') fs.writeFileSync(path.join(root, '.planning/config.json'), '{"tampered":true}');
-
-            const output = transformJsonl(stream(session), record => {
-              if (record.type === 'item.completed' && record.item.type === 'agent_message') record.item.text = JSON.stringify({
-                input_manifest_sha256: tamper === 'wrong-echo' ? 'f'.repeat(64) : bundle.manifest_sha256,
-                input_material_bytes: bundle.total_bytes, input_asset_count: bundle.asset_count, input_chunk_reads: consumed.chunk_reads,
-              });
-              return record;
-            });
-            const resultText = output.split('\n').filter(Boolean).map(JSON.parse).find(record => record.item?.type === 'agent_message').item.text;
-            const parentRecords = fs.readFileSync(native, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
-            for (const record of parentRecords) if (record.payload?.type === 'task_complete') record.payload.last_agent_message = tamper === 'foreign-completion' ? 'foreign result' : resultText;
-            for (const record of parentRecords) if (record.payload?.type === 'message' && record.payload.phase === 'final_answer') record.payload.content.forEach(block => { block.text = resultText; });
-            const boundary = parentRecords.findIndex(record => (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
-              || (record.payload?.type === 'item_completed' && record.payload.item?.phase === 'final_answer'));
-            parentRecords.splice(tamper === 'after-complete' ? parentRecords.length : boundary, 0, ...records);
-            fs.writeFileSync(native, parentRecords.map(JSON.stringify).join('\n') + '\n');
-            process.nextTick(() => { child.stdout.emit('data', Buffer.from(output)); child.emit('close', 0, null); });
-          } catch (error) { process.nextTick(() => child.emit('error', error)); }
-        } };
-        return child;
-      } };
-    const host = createCodexRuntimeHost({ ...nativeOptions, probe: probe(),
-      recorderDir: path.join(store, 'receipts') });
-    const run = () => createCodexDeliveryHost({ scope, host, agentDir: agents, agentManifest, storageRoot: store, fileInputContext })
-      .run({ role: 'integrator', ...(fileInputContext ? { signals: { inputTokens: fileInputContext.inputTokens } } : {}), context: fileInputContext
-        ? { prompt: fileInputContext.prompt, input_transport: 'host-files', input_bundle: fileInputContext.input_bundle }
-        : { prompt: material }, dispatch_id: 'complete-input-dispatch' });
-    if (tamper && tamper !== 'known-count-complete') {
-      await assert.rejects(run, error => tamper === 'source-drift'
-        ? error.code === 'RUNTIME_EVIDENCE_INVALID' && /current source or policy changed/.test(error.message)
-        : tamper === 'known-count-early-asset'
-          ? error.code === 'RUNTIME_EVIDENCE_MISMATCH' && /reordered, duplicated or exceeds its budget/.test(error.message)
-          : ['RUNTIME_EVIDENCE_MISMATCH', 'STALE_CONTEXT'].includes(error.code));
-      assert.equal(host.recorder.getVerifiedRecord('complete-input-dispatch'), null);
-      return;
-    }
-    let result;
-    await assert.doesNotReject(async () => { result = await run(); },
-      'complete input must traverse the supported ' + transport + ' tool ABI');
-    assert.ok(stdin.startsWith('GENERATED INTEGRATOR INSTRUCTIONS\n\n'));
-    assert.ok(Buffer.byteLength(stdin) < collector.FILE_LIMITS.relay + 100);
-    assert.equal(result.receipt.runtime_evidence.input_transport, 'host-files');
-    const accounting = result.receipt.runtime_evidence.input_accounting;
-    assert.equal(accounting.material_bytes, materialBytes);
-    assert.equal(accounting.generated_instruction_bytes, Buffer.byteLength('GENERATED INTEGRATOR INSTRUCTIONS\n\n'));
-    assert.equal(result.signals.inputTokens, Math.ceil(Object.values(accounting).reduce((sum, bytes) => sum + bytes, 0) / 4));
-    assert.equal(launchedArgs[launchedArgs.indexOf('--model') + 1], result.receipt.applied_model);
-    const descriptor = result.receipt.runtime_evidence.input_bundle;
-    const inputFile = path.join(store, 'fresh-input.json'); fs.writeFileSync(inputFile, JSON.stringify(descriptor));
-    const output = execFileSync(process.execPath, ['-e', `const c=require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))});
-      const fs=require('node:fs'); const v=c.verifyFileInput(JSON.parse(fs.readFileSync(process.argv[1])),{sealed:true});
-      process.stdout.write(require('node:crypto').createHash('sha256').update(Buffer.concat(v.material)).digest('hex'));`, inputFile], { encoding: 'utf8' });
-    assert.equal(output, require('node:crypto').createHash('sha256').update(material).digest('hex'));
-  } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
-});
-
 for (const tamper of [null, 'missing', 'missing-start', 'missing-final', 'duplicate', 'duplicate-start', 'duplicate-final', 'reordered', 'foreign-turn', 'foreign-final', 'altered-final', 'divergent-cli', 'late-cli', 'altered-transcript']) {
   test('non-typed runtime completion carries original final: ' + (tamper || 'genuine'), async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-native-final-'));
@@ -1723,7 +1526,7 @@ async function fixture(action, options = {}) {
     }
     return records;
   };
-  const typedRole = options.role === 'integrator' ? 'shipyard-integrator' : 'shipyard-arch-review';
+  const typedRole = 'shipyard-arch-review';
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-continuation-')));
   const oldHome = os.homedir;
   os.homedir = () => root;
@@ -1977,7 +1780,7 @@ function accountingChild(f, selectors, operation = 'account') {
     ACCOUNTING_AUTHORITY: require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs') } }));
 }
 
-for (const role of ['arch-review', 'integrator']) for (const typed of [false, true]) {
+for (const role of ['arch-review']) for (const typed of [false, true]) {
   test(`completed accounting independently replays ${role} ${typed ? 'typed' : 'direct'} references in a read-only cold process`, async () => {
     await fixture(async f => {
       const { selectors } = await completedFixture(f);
@@ -2033,7 +1836,7 @@ for (const role of ['arch-review', 'integrator']) for (const typed of [false, tr
         text => text.slice(0, -1),
         text => text.replace('resumed-turn', 'foreign-turn'),
         ...(typed ? [
-          text => text.replace(role === 'integrator' ? 'shipyard-integrator' : 'shipyard-arch-review', 'foreign-reviewer'),
+          text => text.replace('shipyard-arch-review', 'foreign-reviewer'),
           text => text.replace('/root/gsd_task', '/root/foreign_task'),
           text => text.replace(session, '00000000-0000-4000-8000-000000000099'),
         ] : []),
@@ -2436,7 +2239,7 @@ async function productionBatchProbeFixture(f, mutation, role = 'arch-review', co
   assert.throws(() => runtime.readerCapacityContract(capacity, input.manifest), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
 }
 
-for (const role of ['arch-review', 'integrator']) for (const configured of [false, true]) {
+for (const role of ['arch-review']) for (const configured of [false, true]) {
   test('v3 ' + role + ' distinct probe then fresh final preserves ' + (configured ? 'configured' : 'default') + ' transcript custody', async () => {
     await fixture(f => productionBatchProbeFixture(f, null, role, configured), { batch: true });
   });
@@ -2448,7 +2251,7 @@ for (const mutation of ['missing-recorder', 'stale-agent', 'requested-model', 'r
   });
 }
 
-for (const role of ['arch-review', 'integrator']) {
+for (const role of ['arch-review']) {
   for (const fault of ['unmeasured-empty', 'unmeasured-failed']) test('cold unused original reservation recovers ' + role + ' ' + fault, async () => {
     await require('./phase49-review-continuation.test.cjs').coldMeasuredSourceFixture(role, fault);
   });
@@ -2470,7 +2273,7 @@ for (const role of ['arch-review', 'integrator']) {
   });
 }
 
-for (const role of ['arch-review', 'integrator']) {
+for (const role of ['arch-review']) {
   for (const cold of [false, true])
     test('completed ' + role + ' authenticates and accounts for progress before the last final ' + (cold ? 'cold' : 'live'),
       () => require('./phase49-review-continuation.test.cjs').completedSourceFixture(role, cold, null, null, false, false, false, true));
@@ -2483,7 +2286,7 @@ for (const role of ['arch-review', 'integrator']) {
       () => require('./phase49-review-continuation.test.cjs').completedSourceReceiptRecoveryFixture(role, cold, fault));
   if (role === 'arch-review') for (const cold of [false, true]) for (const fault of ['record-link-response', 'outcome-write', 'outcome-file-fsync'])
     test('automatic original recorded ' + role + ' completes unchanged consumers after ' + fault + ' ' + (cold ? 'restored' : 'live'),
-      () => require('./phase49-review-continuation.test.cjs').automaticCompletedReviewFixture(role, cold, false, false, fault));
+      () => require('./phase49-review-continuation.test.cjs').automaticCompletedReviewFixture(role, cold, fault));
   if (role === 'arch-review') test('automatic original recorded ' + role + ' cold controller releases only its actually dead owner',
     () => require('./phase49-review-continuation.test.cjs').coldRecordedSourceControllerFixture(role));
   for (const mutation of ['tampered-receipt', 'foreign-receipt', 'source', 'base', 'agent', 'native', 'unknown-pid', 'live-pid'])
@@ -2597,7 +2400,7 @@ async function codeReviewRuntimeFixture(action, critical = false) {
     code.admitInstalledLaunch(value, { agentDir, agentFile: selected.agent_file, agentManifest, capabilities });
     const selection = { model: selected.model, effort: selected.effort, sandbox_mode: 'read-only', agent_file: selected.agent_file,
       agent_file_content: content, agent_file_digest: digest };
-    const context = { dispatch_id: value.launch.dispatch_id, prompt: code.admittedPrompt(value), code_review_prepared: value };
+    const context = { dispatch_id: value.launch.dispatch_id, prompt: code.admittedPrompt(value), review_prepared: value };
     await action({ f, storage, scope, code, value, selection, context });
   } finally {
     os.homedir = originalHome;
@@ -2618,7 +2421,7 @@ test('code review runtime refuses foreign private custody: ' + mutation, () => c
   }
   if (mutation === 'dispatch') context.dispatch_id += 'changed';
   if (mutation === 'agent') selection.agent_file_digest = 'a'.repeat(64);
-  if (mutation === 'look-alike') context.code_review_prepared = { ...f.value };
+  if (mutation === 'look-alike') context.review_prepared = { ...f.value };
   if (mutation === 'cross-role') selection.agent_file = 'shipyard-arch-review.toml';
   if (mutation === 'focused-key') context.focused_prepared = {};
   if (mutation === 'file-input') context.input_transport = 'host-files';
@@ -2627,6 +2430,7 @@ test('code review runtime refuses foreign private custody: ' + mutation, () => c
     transcriptDir: path.join(f.storage, 'transcripts'), spawn() { launches++; throw new Error('unexpected spawn'); } });
   await assert.rejects(host.launchStatic(selection, context), error => mutation === 'worktree'
     ? error.code === 'STALE_CONTEXT' && /launch association differs/.test(error.message)
+    : mutation === 'file-input' ? error.code === 'INVALID_INPUT' && /takes no file input/.test(error.message)
     : error.message !== 'unexpected spawn');
   assert.equal(launches, 0);
   assert.equal(host.recorder.getVerifiedRecord(context.dispatch_id), null);
@@ -2636,7 +2440,7 @@ for (const critical of [false, true])
 test('code review runtime requires private custody: ' + JSON.stringify({ critical }), () => codeReviewRuntimeFixture(async f => {
   let launches = 0;
   const context = { ...f.context };
-  delete context.code_review_prepared;
+  delete context.review_prepared;
   const host = createCodexRuntimeHost({ scope: f.scope, capabilities, probe: probe(),
     env: { CODEX_HOME: path.join(f.storage, 'home') }, recorderDir: path.join(f.storage, 'receipts'),
     transcriptDir: path.join(f.storage, 'transcripts'), spawn() { launches++; throw new Error('unexpected spawn'); } });

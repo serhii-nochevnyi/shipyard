@@ -408,4 +408,92 @@ function request(fixture) {
     : { schema: REQUEST_SCHEMA, role: 'integrator', worktree: fixture.root, phase: PHASE };
 }
 
-module.exports = { PHASE, TICKET, POLICY_MD, git, fileSha, write, planText, writeCorpus, setupRepository, livePr, stable, packetFromPrompt, fakeEvidence, fakeEvidenceLines, fakeRuntimeFactory, hostOptions, cleanupFixture, request };
+function integratorFixture(options = {}) {
+  const fixture = setupRepository('integrator');
+  if (options.files) {
+    for (const file of options.files) write(fixture.root, file, 'changed ' + file + '\n');
+    git(fixture.root, ['add', 'src']);
+    git(fixture.root, ['commit', '-m', 'feat: more product changes']);
+    fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
+    git(fixture.root, ['update-ref', `refs/remotes/origin/${fixture.branch}`, fixture.head]);
+  }
+  return fixture;
+}
+
+function commit(fixture, message) {
+  git(fixture.root, ['add', '-A']);
+  git(fixture.root, ['commit', '-q', '-m', message]);
+  return git(fixture.root, ['rev-parse', 'HEAD']);
+}
+
+function ticketRow(fixture, index, branch, base) {
+  const plan = `.planning/phases/${PHASE}/38-${String(index).padStart(2, '0')}-PLAN.md`;
+  return { id: `T-38-${String(index).padStart(2, '0')}-extra`, plan, row: { title: 'Extra ticket', plan, phase: '38', repo: null, wave: 1,
+    depends_on: [], cross_phase_deps: [], cross_repo_deps: [], files: [`src/t${index}.txt`], risk: 'high', type: 'implementation',
+    human_checkpoint: true, branch, pr_base: base, epic: fixture.branch } };
+}
+
+function recordTickets(fixture, entries) {
+  const graphFile = path.join(fixture.root, '.planning/graph/tickets.json'), stateFile = path.join(fixture.root, '.planning/graph/delivery-state.json');
+  const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8')), state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  for (const { id, row, pr } of entries) {
+    graph.tickets[id] = row;
+    state[id] = { status: 'merged', pr: pr.number, branch: row.branch, base: pr.baseRefName };
+    write(fixture.root, row.plan, planText());
+  }
+  write(fixture.root, '.planning/graph/tickets.json', JSON.stringify(graph));
+  write(fixture.root, '.planning/graph/delivery-state.json', JSON.stringify(state));
+}
+
+function mergedPr(fixture, number, id, branch, base, head, merge) {
+  return { ...livePr(fixture), number, title: `feat(${id}): change`, body: `Implements ${id}.`, headRefName: branch,
+    headRefOid: head, baseRefName: base, baseRefOid: head, mergeCommit: { oid: merge } };
+}
+
+function withPrs(options, prs) {
+  return { ...options, listPullRequests: ({ branch, state }) => state === 'closed' ? prs.filter(pr => pr.headRefName === branch) : [],
+    getPullRequest: ({ pr }) => prs.find(item => item.number === pr) };
+}
+
+function manyTicketFixture(count, bulk = 0) {
+  const fixture = setupRepository('integrator');
+  const prs = [livePr(fixture)], entries = [];
+  for (let index = 2; index <= count; index++) {
+    write(fixture.root, `src/t${index}.txt`, `ticket ${index}\n`);
+    const oid = commit(fixture, `feat: ticket ${index}`);
+    const branch = `ticket/extra-${index}`, { id, row } = ticketRow(fixture, index, branch, fixture.branch);
+    const pr = mergedPr(fixture, 100 + index, id, branch, fixture.branch, oid, oid);
+    entries.push({ id, row, pr }); prs.push(pr);
+  }
+  for (let index = 0; index < bulk; index++) write(fixture.root, `src/d${index % 60}/f${index}.txt`, 'x\n');
+  recordTickets(fixture, entries);
+  fixture.head = commit(fixture, 'feat: bulk and ticket records');
+  git(fixture.root, ['update-ref', `refs/remotes/origin/${fixture.branch}`, fixture.head]);
+  return { fixture, prs };
+}
+
+function stackedFixture(childMerge) {
+  const fixture = setupRepository('integrator');
+  const epic = fixture.branch, entries = [];
+  git(fixture.root, ['checkout', '-q', '-b', 'ticket/p']);
+  write(fixture.root, 'src/p.txt', 'parent\n');
+  commit(fixture, 'feat: parent');
+  git(fixture.root, ['checkout', '-q', '-b', 'ticket/c']);
+  write(fixture.root, 'src/c.txt', 'child\n');
+  const childHead = commit(fixture, 'feat: child');
+  git(fixture.root, ['checkout', '-q', 'ticket/p']);
+  git(fixture.root, ['merge', '-q', '--no-ff', 'ticket/c', '-m', 'merge child into parent']);
+  const childMergeCommit = git(fixture.root, ['rev-parse', 'HEAD']), parentHead = childMergeCommit;
+  git(fixture.root, ['checkout', '-q', epic]);
+  git(fixture.root, ['merge', '-q', '--squash', 'ticket/p']);
+  const squash = commit(fixture, 'feat: squash parent');
+  const parent = ticketRow(fixture, 2, 'ticket/p', epic), child = ticketRow(fixture, 3, 'ticket/c', 'ticket/p');
+  const prs = [livePr(fixture), mergedPr(fixture, 102, parent.id, 'ticket/p', epic, parentHead, squash),
+    mergedPr(fixture, 103, child.id, 'ticket/c', 'ticket/p', childHead, childMerge?.(childMergeCommit) ?? childMergeCommit)];
+  recordTickets(fixture, [{ ...parent, pr: prs[1] }, { ...child, pr: prs[2] }]);
+  fixture.head = commit(fixture, 'chore: ticket records');
+  git(fixture.root, ['update-ref', `refs/remotes/origin/${epic}`, fixture.head]);
+  return { fixture, prs, entries };
+}
+
+module.exports = { integratorFixture, commit, ticketRow, recordTickets, mergedPr, withPrs, manyTicketFixture, stackedFixture, PHASE, TICKET, POLICY_MD, git, fileSha, write, planText, writeCorpus, setupRepository, livePr, stable, packetFromPrompt, fakeEvidence, fakeEvidenceLines, fakeRuntimeFactory, hostOptions, cleanupFixture, request };

@@ -11,9 +11,6 @@ suite('unit-test sharding');
 const root = path.resolve(__dirname, '../..');
 const files = shards.unitFiles();
 const weights = shards.readWeights();
-const integrationOwner = 'phase49-incremental-integration.test.cjs';
-const integrationTasks = [1, 2, 3, 4, 5, 6].map(number => integrationOwner + '#integration-partition=' + number);
-const expectedTasks = [...files.filter(file => file !== integrationOwner), ...integrationTasks].sort();
 
 test('every unit-test file is in exactly one shard, for any shard count', () => {
   assert.ok(files.length > 100);
@@ -42,48 +39,12 @@ test('a file with no recorded weight is still assigned, not skipped', () => {
   assert.ok(split.includes('brand-new.test.cjs'));
 });
 
-test('the weight table names only existing ordinary owners or the six integration tasks in seconds', () => {
-  const stale = Object.keys(weights).filter((name) => !expectedTasks.includes(name));
+test('the weight table names only existing test files, in seconds', () => {
+  const stale = Object.keys(weights).filter((name) => !files.includes(name));
   assert.deepEqual(stale, [], 'remove stale entries from tests/unit/shard-weights.json');
-  assert.ok(!Object.hasOwn(weights, integrationOwner));
-  assert.ok(integrationTasks.every(task => Object.hasOwn(weights, task)), 'every integration task has a recorded weight');
   for (const [name, seconds] of Object.entries(weights)) {
     assert.ok(Number.isFinite(seconds) && seconds > 0, `${name} weight must be a positive number`);
   }
-});
-
-test('virtual integration tasks expand before assignment with complete disjoint coverage for every supported count', () => {
-  assert.deepEqual(shards.unitTasks(files), expectedTasks);
-  assert.deepEqual(shards.unitTasks([...files].reverse()), expectedTasks);
-  assert.deepEqual(shards.unitTasks(['ordinary.test.cjs']), ['ordinary.test.cjs']);
-  for (let count = 1; count <= 8; count++) {
-    const selections = Array.from({ length: count }, (_, index) => shards.selectTaskShard(`${index + 1}/${count}`));
-    const selected = selections.flat();
-    assert.deepEqual([...selected].sort(), expectedTasks, `count ${count}`);
-    assert.equal(new Set(selected).size, expectedTasks.length);
-    assert.equal(selected.filter(task => task === 'integration-test-partitions.test.cjs').length, 1);
-    assert.ok(!selected.includes(integrationOwner));
-    assert.deepEqual(selections, shards.assign(expectedTasks, weights, count).map(shard => shard.files));
-  }
-  const split = shards.assign(shards.unitTasks([...files, 'brand-new.test.cjs']), weights, 6);
-  assert.equal(split.flatMap(shard => shard.files).filter(task => task === 'brand-new.test.cjs').length, 1);
-  assert.deepEqual(shards.assign(integrationTasks, {}, 6).map(shard => shard.files), integrationTasks.map(task => [task]));
-  assert.deepEqual(shards.assign([...integrationTasks].reverse(), {}, 6), shards.assign(integrationTasks, {}, 6));
-});
-
-test('task decoding refuses malformed virtual tasks without changing the physical file API', () => {
-  assert.deepEqual(shards.parseTask('ordinary.test.cjs'), { file: 'ordinary.test.cjs', partition: null });
-  for (const [index, task] of integrationTasks.entries())
-    assert.deepEqual(shards.parseTask(task), { file: integrationOwner, partition: index + 1 });
-  for (const task of [integrationOwner + '#integration-partition=0', integrationOwner + '#integration-partition=7',
-    integrationOwner + '#integration-partition=01', integrationOwner + '#integration-partition=1.0',
-    integrationOwner + '#integration-partition=', integrationOwner + '#unknown=1',
-    integrationTasks[0] + '#integration-partition=2', 'other.test.cjs#integration-partition=1',
-    '../ordinary.test.cjs', 'unknown']) assert.throws(() => shards.parseTask(task), /task/, task);
-  for (const task of [...integrationTasks, 'other.test.cjs#unknown=1'])
-    assert.throws(() => shards.unitTasks([task]), /task/, task);
-  for (const spec of ['7/6', '0/6', 'unknown']) assert.throws(() => shards.selectTaskShard(spec), /shard/);
-  assert.deepEqual(shards.selectShard('1/1'), files);
 });
 
 test('a malformed or out-of-range shard is refused', () => {
@@ -117,9 +78,9 @@ test('CI runs as many unit shards as the workflow matrix declares', () => {
     assert.match(workflow, pattern);
   }
   const count = declared.length;
-  const selections = declared.map((index) => shards.selectTaskShard(`${index}/${count}`));
+  const selections = declared.map((index) => shards.selectShard(`${index}/${count}`));
   assert.ok(selections.every((selection) => selection.length > 0), 'every CI shard selects work');
-  assert.deepEqual(selections.flat().sort(), expectedTasks, 'the CI shards together are the whole suite, once');
+  assert.deepEqual(selections.flat().sort(), files, 'the CI shards together are the whole suite, once');
 });
 
 test('the test-fast job is the single result and waits for every part', () => {
@@ -132,6 +93,16 @@ test('the test-fast job is the single result and waits for every part', () => {
   const makefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8');
   assert.match(makefile, /^test-fast: test-unit \$\(TEST_FAST_REST\)$/m);
   assert.match(makefile, /^test-fast-rest: \$\(TEST_FAST_REST\)$/m);
+});
+
+test('the runner refuses a malformed shard before running anything', () => {
+  for (const spec of ['0/6', '7/6', '1/0', '1/6/6', 'unknown']) {
+    const result = spawnSync('bash', [path.join(__dirname, 'run.sh')], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, UNIT_SHARD: spec } });
+    assert.equal(result.status, 2, spec);
+    assert.match(result.stderr, /shard/);
+    assert.ok(!/unit worker start/.test(result.stdout), spec);
+  }
 });
 
 test('the runner refuses a malformed worker count before running anything', () => {

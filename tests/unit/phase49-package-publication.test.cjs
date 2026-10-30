@@ -1272,10 +1272,8 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     }
     const claude = require(path.join(publicationRoot, OWNED[5]));
     const request = { schema: claude.REQUEST_SCHEMA, role: 'integrator', worktree: repository, phase: '49' };
-    assert.equal(claude.parseRequest({ ...request, review_contract: 'shipyard.integration-review.v3' }).review_contract, undefined);
-    for (const contract of ['shipyard.integration-review.v1', 'shipyard.integration-review.v999'])
-      assert.throws(() => claude.parseRequest({ ...request, review_contract: contract }), error => error.code === 'INVALID_INPUT');
-    assert.equal(claude.isPreparedIntegratorContext({}), false);
+    assert.equal(claude.parseRequest(request).role, 'integrator');
+    assert.throws(() => claude.parseRequest({ ...request, review_contract: 'shipyard.integration-review.v3' }), /review_contract is not permitted/);
     inspectRuntimeConsumers(repository);
 
     const originalStageInventory = inventory(stage, '', true);
@@ -1355,26 +1353,17 @@ function packagedRoleFixtures(repository, hostRoot = path.join(repository, 'plug
     if (request.startsWith(prefix)) return require(path.join(hostRoot, request.slice(prefix.length)));
     return originalRequire(request);
   };
-  const canonicalProducerRoot = "path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts')";
-  const packagedProducerRoot = path.join(hostRoot, 'scripts');
-  const source = read(file).toString('utf8');
-  assert.equal(source.split(canonicalProducerRoot).length, 2, 'original integration producer pin seam changed');
-  const packagedSource = source.replace(canonicalProducerRoot, JSON.stringify(packagedProducerRoot));
-  fixtureModule._compile(packagedSource +
+  fixtureModule._compile(read(file).toString('utf8') +
     '\nmodule.exports = { fixture, successfulReview, currentSubject, consumers };\n', file);
   return { registered, ...fixtureModule.exports };
 }
 
 test('packaged role APIs authenticate full current reviews with original isolated authority', async () => {
   const fixtures = packagedRoleFixtures(ROOT);
-  for (const name of [
-    'fresh native architecture delta reaches sealer, exact-current lookup and all consumers',
-    'genuine finalized Claude receipts admit full architecture at all current consumers',
-  ]) {
-    const exercise = fixtures.registered.get(name);
-    assert.equal(typeof exercise, 'function', 'missing original real-role fixture: ' + name);
-    await exercise();
-  }
+  const name = 'genuine finalized Claude receipts admit full architecture at all current consumers';
+  const exercise = fixtures.registered.get(name);
+  assert.equal(typeof exercise, 'function', 'missing original real-role fixture: ' + name);
+  await exercise();
   await fixtures.fixture(async f => {
     const original = await fixtures.successfulReview(f, 'arch-review');
     assert.deepEqual(read(original.artifact), original.original);
@@ -1436,7 +1425,6 @@ test('packaged v3 framed producer and protected continuation preserve original r
     'a bare serialized descriptor or observation cannot publish protected authority',
     'v3 typed reviewer resumes the original child UUID with its installed instruction identity',
     'v3 protected arch-review continuation reauthenticates the separate probe association',
-    'v3 protected integrator continuation reauthenticates the separate probe association',
     ...['nested truncation', 'outer truncation', 'pending shell', 'surplus nested operation', 'omitted terminal',
       'wrong profile', 'duplicate frame', 'reordered frames', 'overlapping range', 'trailer digest']
       .map(name => 'v3 ' + name + ' grants zero batch credit'),
@@ -1446,7 +1434,7 @@ test('packaged v3 framed producer and protected continuation preserve original r
     await exercise();
   }
   assert.equal(typeof completedSourceFixture, 'function');
-  for (const role of ['arch-review', 'integrator']) {
+  for (const role of ['arch-review']) {
     await completedSourceFixture(role, false, null, null, true);
     for (const mutation of ['subject-kind', 'source', 'profile', 'roster', 'base'])
       await completedSourceFixture(role, true, mutation);
@@ -1479,9 +1467,6 @@ test('same-generation packaged fixer authenticates source publication and comple
     'original feedback action recovers resolve-response-loss without reply replay',
     ...['issue-repost', 'issue-oscillation', 'issue-unknown', 'issue-ambiguous', 'issue-shift'].map(mutation =>
       'known issue history uses the original applied predecessor across reposts: ' + mutation),
-    ...['progress', 'duplicate-contract', 'duplicate-item', 'corrupt-terminal',
-      'incomplete-turn', 'failed-turn', 'foreign-session'].map(mutation =>
-      'original integration boundary completes and retains one terminal contract: ' + mutation),
   ];
   const exercise = `
     const fs = require('node:fs'), path = require('node:path'), Module = require('node:module');
@@ -1499,13 +1484,6 @@ test('same-generation packaged fixer authenticates source publication and comple
       const resolved = Module._resolveFilename(request, parent, main);
       return load.call(this, typeof resolved === 'string' && resolved.startsWith(canonical + path.sep)
         ? packaged + resolved.slice(canonical.length) : request, parent, main);
-    };
-    const originalRead = fs.readFileSync;
-    fs.readFileSync = function(target, ...args) {
-      const value = originalRead.call(this, target, ...args);
-      if (String(target).endsWith('/phase49-incremental-integration.test.cjs') && typeof value === 'string')
-        return value.split('../../plugins/delivery-pipeline/').join('../../plugins/shipyard/host/plugins/delivery-pipeline/');
-      return value;
     };
     const source = fs.readFileSync(file, 'utf8');
     const prefix = '../../plugins/delivery-pipeline/';

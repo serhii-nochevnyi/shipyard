@@ -38,8 +38,6 @@ const RESULT_MAX_BYTES = 128 * 1024;
 const ARCH_REVIEW_PACKET_TOKENS = 550000;
 const CODE_REVIEW_PACKET_TOKENS = 262144;
 const PR_SENTINEL_PACKET_TOKENS = 40000;
-const INTEGRATOR_CONTEXT_TOKENS = 60000;
-const INTEGRATOR_MAX_PACKET_TOKENS = 750000;
 const ROLES = Object.freeze(['arch-review', 'integrator', 'pr-sentinel', 'code-review']);
 const BACKLOG_EXCLUDED_STATUSES = new Set(['verified_closed', 'deferred', 'superseded']);
 const ADR_ID_RE = /\bADR-(\d{3})\b/g;
@@ -49,8 +47,6 @@ const DECISIONS_PATH_RE = /\.planning\/investigations\/[A-Za-z0-9._/-]+\/DECISIO
 const HEX64_RE = /^[a-f0-9]{64}$/i;
 const TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 const USAGE_FIELDS = Object.freeze(['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens']);
-const integratorContexts = new WeakSet();
-const nativeIntegratorCollection = Symbol('native integrator collection');
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -96,11 +92,8 @@ function parseRequest(value) {
     ? new Set(['schema', 'role', 'worktree', 'ticket', 'phase', 'pr', 'signals', 'repo'])
     : role === 'code-review'
       ? new Set(['schema', 'role', 'worktree', 'phase', 'pr', 'repo', 'signals'])
-    : new Set(['schema', 'role', 'worktree', 'phase', 'signals', ...(role === 'integrator' ? ['review_contract'] : [])]);
+    : new Set(['schema', 'role', 'worktree', 'phase', 'signals']);
   for (const key of Object.keys(value)) if (!allowed.has(key)) reject(`request field ${key} is not permitted`);
-  // @invariant: review_contract v3 is accepted and ignored; the integrator has one path.
-  if (value.review_contract !== undefined && value.review_contract !== roleArtifact.INTEGRATION_REVIEW_V3)
-    reject('unsupported integration review contract', 'INVALID_INPUT');
   if (role === 'arch-review' && value.phase !== undefined && (value.ticket !== undefined || value.pr === undefined))
     reject('phase architecture review requires an explicit PR and no ticket selector');
   if (role === 'code-review' && (value.phase === undefined || value.pr === undefined))
@@ -467,18 +460,6 @@ function phaseSelection(graph, requested) {
   return { phase: phaseDir, phaseNumber, rows: rows.map(([id, row]) => ({ id, row })).sort((a, b) => a.id.localeCompare(b.id)) };
 }
 
-function diffText(options, worktree, base, head, pathspec = productPathspec()) {
-  let diff;
-  try {
-    diff = git(options, worktree, ['diff', '--no-ext-diff', '--unified=50', `${base}...${head}`, ...pathspec], DIFF_MAX_BYTES + 1);
-  } catch (error) {
-    if (error?.code === 'INPUT_TOO_LARGE') reject('role diff exceeds the bounded context packet');
-    throw error;
-  }
-  if (Buffer.byteLength(diff, 'utf8') > DIFF_MAX_BYTES) reject('role diff exceeds the bounded context packet');
-  return diff;
-}
-
 function requestRows(request, graph, canonical) {
   if (request.role === 'arch-review' || request.role === 'code-review') {
     if (request.phase) return require('./architecture-target.cjs').phaseRows(graph, phaseNumberOf(request.phase), request.repo).map(([id, row]) => ({ id, row }));
@@ -682,115 +663,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
     livePullRequests: [live], canonical, graph, rows, sources, ...launch, signals, evidencePath: CODE_REVIEW_EVIDENCE });
 }
 
-const NATIVE_MERGE_PROOF_SCHEMA = 'shipyard.native-integration-merge-proof.v1';
-const NATIVE_MERGE_PROOF_MAX_BYTES = 64 * 1024;
-
-// Keep ticket-set serialization unchanged; merge facts have their own hash domain.
-function nativeMemberObservations(options, canonical, graph, selection) {
-  if (options.integrationCapacity !== undefined || typeof options.listPullRequests === 'function'
-      || typeof options.getPullRequest === 'function')
-    return options;
-  const descriptors = selection.rows.map(({ id }) => {
-    const row = rowFor(graph, id), state = graph.state[id];
-    return { branch: state?.pr_branch !== undefined && state.pr_branch !== row.branch
-      ? safeBranch(state.pr_branch, `${id} merged PR branch`) : row.branch, repo: row.repo || null };
-  });
-  const repos = new Set(descriptors.map(item => item.repo));
-  if (repos.size !== 1) reject('native phase tickets span foreign repositories');
-  const repo = descriptors[0]?.repo;
-  let identityRaw;
-  try {
-    identityRaw = command(options, 'gh', ['repo', 'view', ...(repo ? [repo] : []),
-      '--json', 'nameWithOwner,url'], canonical.worktree, 4096);
-  } catch (error) {
-    if (error?.code !== 'PREFLIGHT_FAILED' || String(error.cause?.stdout || '').trim()) throw error;
-    return options;
-  }
-  const identity = JSON.parse(identityRaw);
-  if (!object(identity) || typeof identity.nameWithOwner !== 'string'
-      || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(identity.nameWithOwner)
-      || (repo && repo.toLowerCase() !== identity.nameWithOwner.toLowerCase()))
-    reject('native merge transport repository identity differs');
-  let url;
-  try { url = new URL(identity.url); } catch { reject('native merge transport repository URL is invalid'); }
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash
-      || url.pathname.replace(/\/$/, '').toLowerCase() !== '/' + identity.nameWithOwner.toLowerCase())
-    reject('native merge transport repository URL differs');
-  const [owner, name] = identity.nameWithOwner.split('/');
-  const fields = ['number', 'state', 'isDraft', 'title', 'body', 'headRefName', 'headRefOid',
-    'baseRefName', 'baseRefOid', 'mergedAt', 'mergeCommit', 'reviewDecision'];
-  const branches = descriptors.map(item => item.branch);
-  if (new Set(branches).size !== branches.length) reject('duplicate native merge transport branch');
-  const aliases = branches.map((branch, index) => `p${index}:pullRequests(first:100,states:[CLOSED,MERGED],headRefName:${JSON.stringify(branch)}){nodes{number state isDraft title body headRefName headRefOid baseRefName baseRefOid mergedAt mergeCommit{oid} reviewDecision}pageInfo{hasNextPage}}`);
-  const query = `query{repository(owner:${JSON.stringify(owner)},name:${JSON.stringify(name)}){nameWithOwner ${aliases.join(' ')}}}`;
-  if (Buffer.byteLength(query) > 256 * 1024) reject('native merge query exceeds its bounded size', 'INPUT_TOO_LARGE');
-  let raw;
-  try {
-    raw = command(options, 'gh', ['api', '--hostname', url.host, 'graphql', '-f', 'query=' + query],
-      canonical.worktree, 256 * 1024);
-  } catch (error) {
-    if (error?.code !== 'PREFLIGHT_FAILED' || String(error.cause?.stdout || '').trim()) throw error;
-    return options;
-  }
-  if (Buffer.byteLength(raw) > 256 * 1024) reject('native merge response exceeds its bounded size', 'INPUT_TOO_LARGE');
-  const response = JSON.parse(raw);
-  if (!object(response) || Object.hasOwn(response, 'errors') || !object(response.data)
-      || Object.keys(response.data).length !== 1 || !object(response.data.repository))
-    reject('native merge batch is incomplete or malformed');
-  const repository = response.data.repository;
-  const expected = ['nameWithOwner', ...branches.map((_, index) => 'p' + index)].sort();
-  if (repository.nameWithOwner !== identity.nameWithOwner
-      || canonicalJson(Object.keys(repository).sort()) !== canonicalJson(expected))
-    reject('native merge batch repository or alias set differs');
-  const lists = new Map(), details = new Map();
-  for (let index = 0; index < branches.length; index++) {
-    const connection = repository['p' + index];
-    if (!object(connection) || canonicalJson(Object.keys(connection).sort()) !== canonicalJson(['nodes', 'pageInfo'])
-        || !Array.isArray(connection.nodes) || connection.nodes.length > 100
-        || !object(connection.pageInfo) || connection.pageInfo.hasNextPage !== false
-        || Object.keys(connection.pageInfo).length !== 1)
-      reject('native merge batch is truncated or malformed');
-    const list = [];
-    for (const live of connection.nodes) {
-      if (!object(live) || canonicalJson(Object.keys(live).sort()) !== canonicalJson([...fields].sort())
-          || !Number.isSafeInteger(live.number) || live.number < 1 || details.has(live.number)
-          || !['CLOSED', 'MERGED'].includes(live.state) || typeof live.isDraft !== 'boolean'
-          || typeof live.title !== 'string' || typeof live.body !== 'string'
-          || live.headRefName !== branches[index] || typeof live.baseRefName !== 'string'
-          || !(live.headRefOid === null || typeof live.headRefOid === 'string')
-          || !(live.baseRefOid === null || typeof live.baseRefOid === 'string')
-          || !(live.mergedAt === null || typeof live.mergedAt === 'string')
-          || !(live.reviewDecision === null || ['APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED'].includes(live.reviewDecision))
-          || !(live.mergeCommit === null || (object(live.mergeCommit)
-            && Object.keys(live.mergeCommit).length === 1 && typeof live.mergeCommit.oid === 'string')))
-        reject('native merge batch has foreign, duplicate or malformed PR data');
-      if (Buffer.byteLength(JSON.stringify(live)) > 65536)
-        reject('native merged PR exceeds its bounded size', 'INPUT_TOO_LARGE');
-      live.reviewDecision ??= '';
-      details.set(live.number, live);
-      const { title, body, ...listed } = live;
-      list.push(listed);
-    }
-    if (Buffer.byteLength(JSON.stringify(list)) > 256 * 1024)
-      reject('native merged PR list exceeds its bounded size', 'INPUT_TOO_LARGE');
-    lists.set(branches[index], list);
-  }
-  return { ...options,
-    listPullRequests(input) {
-      if (input.worktree !== canonical.worktree || input.repo !== repo
-          || input.state !== 'closed' || !lists.has(input.branch))
-        reject('native merge batch list association differs');
-      return structuredClone(lists.get(input.branch));
-    },
-    getPullRequest(input) {
-      if (input.worktree !== canonical.worktree || input.repo !== repo || !details.has(input.pr))
-        reject('native merge batch detail association differs');
-      return structuredClone(details.get(input.pr));
-    } };
-}
-
-function collectIntegrationMembers(options, canonical, graph, selection, nativeObservation = false) {
-  if (nativeObservation) options = nativeMemberObservations(options, canonical, graph, selection);
+function collectIntegrationMembers(options, canonical, graph, selection) {
   const ticketSet = [];
   const livePullRequests = [];
   for (const item of selection.rows) {
@@ -833,175 +706,6 @@ function collectIntegrationMembers(options, canonical, graph, selection, nativeO
   }
   ticketSet.sort((a, b) => a.id.localeCompare(b.id));
   return { ticketSet, livePullRequests };
-}
-
-function nativeProofDigest(proof) {
-  const { proof_digest: _ignored, ...body } = proof;
-  return sha(canonicalJson(body));
-}
-
-function nativeProofPlans(canonical, selection) {
-  const planning = require('./context-packet.cjs');
-  const directories = new Set(selection.rows.map(({ row }) => path.dirname(row.plan)));
-  if (directories.size !== 1) reject('native phase tickets resolve to multiple plan directories');
-  const planDir = [...directories][0];
-  const directory = planning.planningReferencePath(canonical.projectRoot, planDir);
-  const plans = fs.readdirSync(directory).filter(name => /^\d+-\d+-PLAN\.md$/.test(name))
-    .map(name => path.join(planDir, name)).sort();
-  if (canonicalJson(plans) !== canonicalJson(selection.rows.map(({ row }) => path.normalize(row.plan)).sort()))
-    reject('canonical graph does not match the complete phase plan set');
-  return { planDir, plans: plans.map(relative => planning.planningReferencePin(canonical.projectRoot, relative)) };
-}
-
-function nativeMergedFact(id, repo, live) {
-  return { id, pr: live.number, repository: repo || null, state: live.state,
-    head_branch: live.headRefName, head: live.headRefOid, base_branch: live.baseRefName,
-    base: live.baseRefOid ?? null, merged_at: live.mergedAt, merge_commit: live.mergeCommit?.oid,
-    review_decision: live.reviewDecision ?? null };
-}
-
-function buildNativeMergeProof(options, canonical, graph, selection, members, base) {
-  const { planDir, plans } = nativeProofPlans(canonical, selection);
-  const repos = new Set(selection.rows.map(({ row }) => row.repo || null));
-  if (repos.size !== 1) reject('native phase tickets span foreign repositories');
-  if (canonical.planningReference.repo && !repos.has(canonical.planningReference.repo))
-    reject('native phase repository differs from its authenticated planning association');
-  const repo = [...repos][0];
-  if (repo && (typeof repo !== 'string' || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)
-      || !require('./architecture-target.cjs').legacyRepositoryForms(canonical.worktree).includes(repo.toLowerCase())))
-    reject('native phase PR repository differs from the reviewed Git repository');
-  const epics = new Set(selection.rows.map(({ row }) => row.epic));
-  if (epics.size !== 1 || !epics.has(canonical.branch)) reject('native phase epic identity differs');
-  for (const { id, row } of selection.rows) {
-    const match = /^T-(\d+)-(\d+)(?:-|$)/.exec(id);
-    if (!match || Number(match[1]) !== selection.phaseNumber || phaseNumberOf(row.phase) !== selection.phaseNumber)
-      reject(`${id} has a foreign phase identity`);
-  }
-  const byPr = new Map(members.livePullRequests.map(live => [live.number, live]));
-  const branches = new Map();
-  const merges = members.ticketSet.map(member => {
-    if (branches.has(member.branch)) reject('duplicate head branch makes the native path ambiguous');
-    branches.set(member.branch, member.id);
-    return nativeMergedFact(member.id, [...repos][0], byPr.get(member.pr));
-  });
-  if (byPr.size !== members.ticketSet.length) reject('duplicate PR identity in native membership');
-  const byId = new Map(merges.map(member => [member.id, member]));
-  const ancestor = (child, parent) => {
-    try { git(options, canonical.worktree, ['merge-base', '--is-ancestor', child, parent]); return true; }
-    catch { return false; }
-  };
-  for (const member of merges) {
-    for (const oid of [member.head, member.merge_commit]) {
-      try {
-        if (git(options, canonical.worktree, ['rev-parse', '--verify', `${oid}^{commit}`]) !== oid)
-          reject('merged PR object identity differs');
-      } catch { reject(`merged PR ${member.pr} object is missing or not included in the integrator worktree`); }
-    }
-    if (member.base !== null && !/^[a-f0-9]{40}$/i.test(member.base)) reject('merged PR base identity is incomplete');
-  }
-  const edges = merges.map(member => {
-    if (ancestor(member.merge_commit, canonical.head))
-      return { id: member.id, merge_commit: member.merge_commit, epic: canonical.head };
-    const parentId = branches.get(member.base_branch);
-    const parent = byId.get(parentId);
-    if (!parent || parent.id === member.id || !ancestor(member.merge_commit, parent.head))
-      reject(`merged PR ${member.pr} is not included in the integrator worktree through an authenticated parent`);
-    return { id: member.id, merge_commit: member.merge_commit, parent: parent.id, parent_head: parent.head };
-  });
-  const byEdge = new Map(edges.map(edge => [edge.id, edge]));
-  const paths = merges.map(member => {
-    const tickets = [], seen = new Set();
-    let id = member.id;
-    while (id) {
-      if (seen.has(id) || tickets.length >= merges.length) reject('native merge path contains a cycle');
-      seen.add(id); tickets.push(id);
-      id = byEdge.get(id).parent;
-    }
-    return { id: member.id, tickets };
-  });
-  const proof = { schema: NATIVE_MERGE_PROOF_SCHEMA, phase: String(selection.phaseNumber), plan_dir: planDir,
-    repository: canonical.commonPath, planning_reference: canonical.planningReference, plans,
-    graph: { directory: graph.directory, path: 'tickets.json',
-      digest: canonical.planningReference.graph.find(pin => pin.path.endsWith('/tickets.json')).sha256,
-      phase_rows_digest: sha(canonicalJson(selection.rows)) },
-    epic: { branch: canonical.branch, commit: canonical.head, tree: canonical.headTree },
-    integration_base: base, ticket_set: members.ticketSet, ticket_set_json: JSON.stringify(members.ticketSet),
-    ticket_set_digest: sha(JSON.stringify(members.ticketSet)), merges, edges, paths };
-  proof.proof_digest = nativeProofDigest(proof);
-  if (Buffer.byteLength(JSON.stringify(proof)) > NATIVE_MERGE_PROOF_MAX_BYTES) reject('native merge proof exceeds its bounded size');
-  return proof;
-}
-
-function collectNativeMergeProof(input, options) {
-  const worktree = fs.realpathSync(input.worktree);
-  const planning = require('./context-packet.cjs');
-  const reference = planning.resolvePlanningReference({ worktree, graphDir: input.graphDir });
-  const canonical = { worktree, projectRoot: reference.root, planningReference: reference,
-    commonPath: repositoryIdentity(worktree),
-    head: git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
-    headTree: git(options, worktree, ['rev-parse', '--verify', 'HEAD^{tree}']),
-    branch: git(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) };
-  const graph = graphData({ ...options, graphDir: reference.directory }, reference.root);
-  const selection = phaseSelection(graph, String(input.phase));
-  const directorySelection = phaseSelection(graph, selection.phase);
-  if (canonicalJson(directorySelection.rows) !== canonicalJson(selection.rows))
-    reject('canonical phase membership contains a foreign phase');
-  const epic = branchOid(options, worktree, canonical.branch);
-  if (epic.oid !== canonical.head) reject('integrator worktree is not at the pinned epic head', 'STALE_CONTEXT');
-  const defaultBranch = input.baseRef || baseDefaultBranch(options, worktree, reference.root);
-  const base = branchOid(options, worktree, defaultBranch);
-  const baseIdentity = { ref: base.ref, commit: base.oid,
-    tree: git(options, worktree, ['rev-parse', '--verify', `${base.oid}^{tree}`]) };
-  const members = collectIntegrationMembers(options, canonical, graph, selection, true);
-  const proof = buildNativeMergeProof(options, canonical, graph, selection, members, baseIdentity);
-  let again;
-  try { again = collectIntegrationMembers(options, canonical, graph, selection, true); }
-  catch (error) { reject('merged PR selection changed during collection', 'STALE_CONTEXT', error); }
-  const facts = inventory => inventory.ticketSet.map(member => nativeMergedFact(member.id,
-    selection.rows.find(row => row.id === member.id).row.repo,
-    inventory.livePullRequests.find(live => live.number === member.pr)));
-  if (canonicalJson(facts(again)) !== canonicalJson(proof.merges)
-      || canonicalJson(again.ticketSet) !== canonicalJson(members.ticketSet))
-    reject('merged PR identity changed during collection', 'STALE_CONTEXT');
-  try { planning.authenticatedPlanningRoot(worktree, reference); }
-  catch (error) { reject('canonical planning membership changed during collection', 'STALE_CONTEXT', error); }
-  const currentGraph = graphData({ ...options, graphDir: reference.directory }, reference.root);
-  if (canonicalJson(currentGraph) !== canonicalJson(graph))
-    reject('canonical graph/state selection changed during collection', 'STALE_CONTEXT');
-  let currentPlans;
-  try { currentPlans = nativeProofPlans(canonical, selection).plans; }
-  catch (error) { reject('complete phase plans changed during collection', 'STALE_CONTEXT', error); }
-  if (canonicalJson(currentPlans) !== canonicalJson(proof.plans)
-      || git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']) !== canonical.head
-      || git(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== canonical.branch
-      || branchOid(options, worktree, canonical.branch).oid !== canonical.head
-      || canonicalJson(branchOid(options, worktree, defaultBranch)) !== canonicalJson(base))
-    reject('native phase head, base or complete plans changed during collection', 'STALE_CONTEXT');
-  return proof;
-}
-
-function createNativeIntegrationMergeProof(prepared, options = {}) {
-  if (!integratorContexts.has(prepared) || !prepared.nativeMergeProof)
-    reject('native merge proof requires original private integrator preparation');
-  return assertNativeIntegrationMergeProof(prepared.nativeMergeProof, {
-    worktree: prepared.canonical.worktree, graphDir: prepared.graph.directory,
-  }, options);
-}
-
-function assertNativeIntegrationMergeProof(proof, input, options = {}) {
-  if (!object(proof) || proof.schema !== NATIVE_MERGE_PROOF_SCHEMA
-      || Buffer.byteLength(JSON.stringify(proof)) > NATIVE_MERGE_PROOF_MAX_BYTES
-      || nativeProofDigest(proof) !== proof.proof_digest
-      || !Array.isArray(proof.ticket_set)
-      || proof.ticket_set_json !== JSON.stringify(proof.ticket_set.map(({ id, pr, head, base, branch }) => ({ id, pr, head, base, branch })))
-      || sha(proof.ticket_set_json) !== proof.ticket_set_digest)
-    reject('original native merge proof schema, size or digest differs', 'STALE_CONTEXT');
-  if (path.resolve(input.graphDir) !== proof.graph.directory) reject('native merge proof graph association differs', 'STALE_CONTEXT');
-  let current;
-  try { current = collectNativeMergeProof({ worktree: input.worktree, graphDir: input.graphDir, phase: proof.phase, baseRef: proof.integration_base.ref }, options); }
-  catch (error) { reject('native merge proof is no longer current: ' + error.message, 'STALE_CONTEXT', error); }
-  if (canonicalJson(current) !== canonicalJson(proof)) reject('native merge facts, membership or path changed', 'STALE_CONTEXT');
-  return current;
 }
 
 function integrationBase(options, request, canonical, graph) {
@@ -1080,74 +784,9 @@ function prepareIntegrator(options, request, canonical, graph) {
     ...launch, signals, evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
 }
 
-function prepareNativeIntegrator(options, request, canonical, graph) {
-  const { selection, defaultBase, defaultOid, defaultBaseTree, sources } = integrationBase(options, request, canonical, graph);
-  const { phase, phaseNumber } = selection;
-  const nativeMergeProof = collectNativeMergeProof({ worktree: canonical.worktree,
-    graphDir: graph.directory, phase: String(phaseNumber) }, options);
-  const ticketSet = nativeMergeProof.ticket_set;
-  const livePullRequests = nativeMergeProof.merges.map(member => ({
-    number: member.pr, state: member.state, headRefName: member.head_branch, headRefOid: member.head,
-    baseRefName: member.base_branch, baseRefOid: member.base, mergedAt: member.merged_at,
-    mergeCommit: { oid: member.merge_commit }, reviewDecision: member.review_decision }));
-  const ticketSetDigest = sha(JSON.stringify(ticketSet));
-  const subject = buildSubject('integrator', { phase, repository: canonical.commonPath, tickets: ticketSetDigest });
-  const mergeBase = git(options, canonical.worktree, ['merge-base', defaultBase, canonical.head]);
-  const mergeBaseTree = git(options, canonical.worktree, ['rev-parse', '--verify', `${mergeBase}^{tree}`]);
-  const combinedDiff = diffText(options, canonical.worktree, mergeBase, canonical.head, productPathspec());
-  const reference = loadClaudeReferenceContent('integrator');
-  const phaseContracts = sources.plans.map((plan) => ({ ticket: plan.id, path: plan.path,
-    acceptance: plan.acceptance, verification: plan.verification, sha256: sha(plan.content) }));
-  const roleContext = {
-    phase,
-    phase_number: phaseNumber,
-    phase_contracts: phaseContracts,
-    native_merge_proof: nativeMergeProof,
-    combined_diff: { base: defaultBase, base_commit: defaultOid, merge_base: mergeBase,
-      merge_base_tree: mergeBaseTree, head: canonical.head, head_tree: canonical.headTree, content: combinedDiff },
-    integration_base: { ref: defaultBase, commit: defaultOid, tree: defaultBaseTree },
-    ticket_set: ticketSet,
-    ticket_set_digest: ticketSetDigest,
-    adr_refs: sources.architecture.refs,
-    adr_excluded: sources.architecture.excluded,
-    adr_unresolved: sources.architecture.unresolved,
-    reference_digest: referenceDigest(reference),
-  };
-  const synthetic = { plans: sources.plans, requiredRefs: sources.requiredRefs, files: sources.files };
-  const plan = { id: subject, path: sources.plans[0].path,
-    content: sources.plans.map((item) => item.content).join('\n'),
-    acceptance: [],
-    verification: [] };
-  const packet = buildPacket(canonical, 'integrator', subject, synthetic, plan, roleContext, nativeIntegratorCollection);
-  const signals = observedSignals(request, selection.rows, livePullRequests, packet.accounting.estimated_tokens);
-  const prepared = Object.freeze({ role: 'integrator', ticket: subject, phase, phaseNumber,
-    base: defaultBase, baseCommit: defaultOid, defaultBaseTree, mergeBase, mergeBaseTree, ticketSet,
-    ticketSetDigest, livePullRequests, canonical, graph, rows: selection.rows, sources, packet, prompt: undefined, signals, nativeMergeProof,
-    evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
-  if (nativeMergeProof.epic.commit !== canonical.head
-      || nativeMergeProof.epic.tree !== canonical.headTree
-      || canonicalJson(nativeMergeProof.planning_reference) !== canonicalJson(canonical.planningReference)
-      || canonicalJson(nativeMergeProof.integration_base) !== canonicalJson(roleContext.integration_base))
-    reject('native merge subject changed during preparation', 'STALE_CONTEXT');
-  if (sources.plans.some(plan =>
-      nativeMergeProof.plans.find(pin => pin.path === plan.path)?.sha256 !== sha(plan.content)))
-    reject('complete phase plan bytes changed during preparation', 'STALE_CONTEXT');
-  integratorContexts.add(prepared);
-  return prepared;
-}
-
-function prepareNativeIntegratorContext(options, request) {
-  const canonical = canonicalWorktree(options, request.worktree, true);
-  const graph = graphData(options, canonical.projectRoot);
-  return prepareNativeIntegrator(options, request, canonical, graph);
-}
-
-function isPreparedIntegratorContext(value) { return integratorContexts.has(value); }
-
-function integrationPacketWithCoverage(prepared, coverage) {
-  return buildPacket(prepared.canonical, 'integrator', prepared.ticket, prepared.sources,
-    { acceptance: [], verification: [] }, { ...prepared.packet.role_context, review_coverage: coverage },
-    integratorContexts.has(prepared) ? nativeIntegratorCollection : undefined);
+function prepareIntegratorContext(options, request) {
+  const canonical = canonicalWorktree(options, request.worktree, false, true);
+  return prepareIntegrator(options, { phase: String(request.phase) }, canonical, graphData(options, canonical.projectRoot));
 }
 
 function sentinelPreflightRound(options, canonical, graph, selection) {
@@ -1289,12 +928,10 @@ function prepareSentinel(options, request, canonical, graph) {
     evidencePath: SENTINEL_EVIDENCE });
 }
 
-function packetBound(role, roleContext) {
-  if (role === 'arch-review' || (role === 'integrator' && roleContext.combined_diff.content === undefined)) return ARCH_REVIEW_PACKET_TOKENS;
+function packetBound(role) {
+  if (role === 'arch-review' || role === 'integrator') return ARCH_REVIEW_PACKET_TOKENS;
   if (role === 'code-review') return CODE_REVIEW_PACKET_TOKENS;
-  if (role === 'pr-sentinel') return PR_SENTINEL_PACKET_TOKENS;
-  const diffBytes = Buffer.byteLength(roleContext.combined_diff.content, 'utf8');
-  return Math.min(INTEGRATOR_MAX_PACKET_TOKENS, INTEGRATOR_CONTEXT_TOKENS + Math.ceil(diffBytes / 3));
+  return PR_SENTINEL_PACKET_TOKENS;
 }
 
 function packetRemedy(role) {
@@ -1303,7 +940,7 @@ function packetRemedy(role) {
   return 'drop ADR and backlog references the phase plans do not rely on';
 }
 
-function buildPacket(canonical, role, subject, sources, plan, roleContext, collection) {
+function buildPacket(canonical, role, subject, sources, plan, roleContext) {
   const packet = buildContextPacket({
     root: canonical.projectRoot,
     role,
@@ -1318,11 +955,11 @@ function buildPacket(canonical, role, subject, sources, plan, roleContext, colle
     roleContext: { ...roleContext, planning_reference: canonical.planningReference },
     selectedBacklogIds: role === 'arch-review' ? [] : selectedBacklogIds(canonical.projectRoot, sources.plans),
     backlogInventory: 'selected',
-    tokenCeiling: packetBound(role, roleContext),
+    tokenCeiling: packetBound(role),
   });
   validateContextPacket(packet, { root: canonical.projectRoot, role, subject,
     sourceRevision: canonical.head, policyHash: policy.POLICY_HASH });
-  if (packet.accounting.overflow === true && !(role === 'integrator' && collection === nativeIntegratorCollection)) {
+  if (packet.accounting.overflow === true) {
     reject(`${role} context packet is ${packet.accounting.estimated_tokens} tokens, over its bound of `
       + `${packet.accounting.soft_ceiling}; remedy: ${packetRemedy(role)}`, 'CONTEXT_PACKET_OVER_BOUND');
   }
@@ -1664,6 +1301,16 @@ function runtimeFor(options, scope, controller, storage, prepared) {
     ? options.createRuntimeHost(runtimeOptions) : createClaudeRuntimeHost(runtimeOptions);
 }
 
+function revalidateIntegrator(options, prepared, live = true) {
+  roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
+  if (live) revalidateLiveInputs(options, prepared);
+  if (git(options, prepared.canonical.worktree, ['rev-parse', 'HEAD']) !== prepared.canonical.head)
+    reject('review HEAD changed before native launch', 'STALE_CONTEXT');
+  const current = phaseSelection(graphData(options, prepared.canonical.projectRoot), prepared.phase);
+  if (canonicalJson(current.rows) !== canonicalJson(prepared.rows))
+    reject('complete integration ticket membership changed before launch', 'STALE_CONTEXT');
+}
+
 function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
   if (!object(runtime) || typeof runtime.agent !== 'function' || typeof runtime.applicationEvidence !== 'function'
       || !object(runtime.capabilities) || !isDurableRecorder(runtime.recorder)) {
@@ -1689,22 +1336,19 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
           for (const pin of prepared.preflightPins)
             if (sha(fs.readFileSync(pin.path)) !== pin.sha256)
               reject('trusted preflight implementation changed before launch', 'STALE_CONTEXT');
-          if (prepared.role === 'code-review' || prepared.role === 'integrator')
-            roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
-          revalidateLiveInputs(options, prepared, dispatchId);
-          if (git(options, prepared.canonical.worktree, ['rev-parse', 'HEAD']) !== prepared.canonical.head)
-            reject('review HEAD changed before native launch', 'STALE_CONTEXT');
+          if (prepared.role === 'integrator') revalidateIntegrator(options, prepared);
+          else {
+            if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
+            revalidateLiveInputs(options, prepared, dispatchId);
+            if (git(options, prepared.canonical.worktree, ['rev-parse', 'HEAD']) !== prepared.canonical.head)
+              reject('review HEAD changed before native launch', 'STALE_CONTEXT');
+          }
           preflightReviewMaterial(encodeUniqueContent(prepared.packet), { root: prepared.canonical.projectRoot,
             role: prepared.role, subject: prepared.packet.subject, sourceRevision: prepared.canonical.head,
             policyHash: policy.POLICY_HASH });
           if (canonicalJson(referenceDigest(loadClaudeReferenceContent(prepared.role)))
               !== canonicalJson(prepared.packet.role_context.reference_digest))
             reject('role instructions changed before native launch', 'STALE_CONTEXT');
-          if (prepared.role === 'integrator') {
-            const current = phaseSelection(graphData(options, prepared.canonical.projectRoot), prepared.phase);
-            if (canonicalJson(current.rows) !== canonicalJson(prepared.rows))
-              reject('complete integration ticket membership changed before launch', 'STALE_CONTEXT');
-          }
         }
         if (prepared.role === 'pr-sentinel') {
           require('./dispatch-record.cjs').reserveRound(
@@ -1783,28 +1427,16 @@ async function withStateGuard(options, prepared, run) {
 
 function assertEvidenceOnlyChanges(options, prepared, graphBaseline) {
   if (!(graphBaseline instanceof Map)) reject('role state baseline is required', 'USAGE');
-  let integrationPins;
-  if (prepared.integrationPartitions) {
-    roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.integrationReview.archivePins,
-      { partitions: prepared.integrationPartitions });
-    integrationPins = roleArtifact.authenticatedArchivePins(prepared.canonical.worktree);
-  }
   const changed = git(options, prepared.canonical.worktree, ['diff', '--name-only', '-z', 'HEAD'], 256 * 1024, true)
     .split('\0').filter(Boolean);
   const untracked = git(options, prepared.canonical.worktree, ['ls-files', '--others', '--exclude-standard', '-z'], 256 * 1024, true)
     .split('\0').filter(Boolean);
   const unexpected = [...new Set([...changed, ...untracked])].filter((file) => {
     if (file === prepared.evidencePath) return false;
-    if (integrationPins && untracked.includes(file) && !changed.includes(file)
-        && integrationPins.some(pin => pin.path === file)) return false;
     if (prepared.role !== 'code-review' && prepared.binding && untracked.includes(file) && !changed.includes(file)
         && file.startsWith(roleArtifact.ARTIFACT_ARCHIVE_DIR + '/')) return false;
     if ((prepared.role === 'code-review' || prepared.role === 'integrator') && untracked.includes(file) && !changed.includes(file)) {
       const pin = prepared.archivePins.find(pin => pin.path === file);
-      if (pin) { roleArtifact.assertArchivePin(prepared.canonical.worktree, pin); return false; }
-    }
-    if (prepared.integrationReview && untracked.includes(file) && !changed.includes(file)) {
-      const pin = prepared.integrationReview.archivePins.find(pin => pin.path === file);
       if (pin) { roleArtifact.assertArchivePin(prepared.canonical.worktree, pin); return false; }
     }
     const scratchDigest = prepared.canonical.scratchDigests.get(file);
@@ -1829,9 +1461,9 @@ function assertEvidenceOnlyChanges(options, prepared, graphBaseline) {
   }
   require('./context-packet.cjs').authenticatedPlanningRoot(prepared.canonical.worktree,
     prepared.canonical.planningReference);
-  if (!prepared.integrationPartitions) validateContextPacket(prepared.packet, { root: prepared.canonical.projectRoot, role: prepared.role,
+  validateContextPacket(prepared.packet, { root: prepared.canonical.projectRoot, role: prepared.role,
     subject: prepared.packet.subject, sourceRevision: prepared.canonical.head, policyHash: policy.POLICY_HASH });
-  if (prepared.role === 'code-review' || (prepared.role === 'integrator' && !prepared.integrationPartitions))
+  if (prepared.role === 'code-review' || prepared.role === 'integrator')
     roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
 }
 
@@ -2052,6 +1684,14 @@ function sealResult(prepared, result, recorder, dispatchId, evidenceMarkdown) {
   return { artifact, validated };
 }
 
+function writeIntegratorEvidence(prepared, markdown) {
+  if (typeof markdown !== 'string' || !markdown.trim())
+    reject('integrator result requires its complete evidence_markdown', 'INVALID_RESULT');
+  const file = path.join(prepared.canonical.worktree, prepared.evidencePath);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, markdown);
+}
+
 async function dispatchRole(options, prepared) {
   const runId = `claude-role-${crypto.randomUUID()}`;
   const dispatchId = newDispatchId();
@@ -2102,13 +1742,7 @@ async function dispatchRole(options, prepared) {
     const evidence_markdown = originalResult.evidence_markdown;
     const validatedResult = { ...originalResult };
     if (['arch-review', 'code-review', 'integrator'].includes(prepared.role)) delete validatedResult.evidence_markdown;
-    if (prepared.role === 'integrator') {
-      if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
-        reject('integrator result requires its complete evidence_markdown', 'INVALID_RESULT');
-      const evidenceFile = path.join(prepared.canonical.worktree, prepared.evidencePath);
-      fs.mkdirSync(path.dirname(evidenceFile), { recursive: true });
-      fs.writeFileSync(evidenceFile, evidence_markdown);
-    }
+    if (prepared.role === 'integrator') writeIntegratorEvidence(prepared, evidence_markdown);
     if (prepared.role === 'arch-review' && (typeof evidence_markdown !== 'string'
         || evidence_markdown.trim() !== fs.readFileSync(path.join(prepared.canonical.worktree, prepared.evidencePath), 'utf8').trim()))
       reject('focused original evidence differs from the role-owned file', 'INVALID_RESULT');
@@ -2277,11 +1911,11 @@ module.exports = Object.freeze({
   parseCli,
   firstResponseUsage,
   prepareInlineReview: makePrompt,
-  prepareNativeIntegratorContext,
-  createNativeIntegrationMergeProof,
-  assertNativeIntegrationMergeProof,
-  isPreparedIntegratorContext,
-  integrationPacketWithCoverage,
+  prepareIntegratorContext,
+  revalidateIntegrator,
+  validateResult,
+  writeIntegratorEvidence,
+  sealResult,
   assertEvidenceOnlyChanges,
   graphStateSnapshot,
   withStateGuard,
