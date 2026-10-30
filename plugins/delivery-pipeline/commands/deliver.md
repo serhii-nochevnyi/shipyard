@@ -762,21 +762,17 @@ prints `0 agents` the project config does not parse: fix the file.
    `launch` reads the board and the dispatch and escalation records from the main
    checkout's `.planning/graph` of this worktree's repository, never from the
    worktree's own copy; pass `--graph-dir` only for a graph outside that
-   repository (a cross-repo ticket). It resolves the ticket's row from the
-   canonical graph itself, maps its evidence to `signals` (`risk`, `checkpoint`
-   when `human_checkpoint: true`, `critical` when declared; never the ticket's
-   `type`), builds the fenced context packet (the plan's path and SHA-256; the host
-   delivers the verified plan content) and submits one scoped request to the
-   selected host. A packet authorizes no mutation or merge; the sentinel, scope,
-   review, architecture and integration gates still run after the child returns.
-   The `<TICKET-CONTRACT>` carries the full plan text + Context reads + the rule
-   "work ONLY within files_modified; commit atomically with the prefix (T): ...;
-   run the plan's Verification commands to green locally — exactly those, never
-   widened to the full suite or e2e, which CI owns; do NOT push and do NOT open a
-   PR", plus the ticket's `reuse_candidates` (read each before writing and build on
-   it). `launch` returns immediately with `{dispatch_id, ticket, role, runtime,
-   log, result}`; the host runs DETACHED, never in the foreground. Collect the
-   result with:
+   repository (a cross-repo ticket). It derives the signals (`risk`, `checkpoint`,
+   `critical`; never the ticket's `type`) and the fenced context packet from the
+   canonical graph itself and submits one scoped request to the selected host. The
+   executor's `<TICKET-CONTRACT>` says: work ONLY within `files_modified`, commit
+   atomically with the prefix `(T): ...`, run the plan's Verification commands to
+   green locally — exactly those, never widened to the full suite or e2e, which CI
+   owns — and do NOT push or open a PR; the ticket's `reuse_candidates` ride along.
+   A packet authorizes no mutation or merge: the sentinel, scope, review,
+   architecture and integration gates still run after the child returns. `launch`
+   returns immediately with `{dispatch_id, ticket, role, runtime, log, result}` and
+   the host runs DETACHED, never in the foreground. Collect the result with:
 
    ```bash
    node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs wait --dispatch <dispatch_id> [--timeout-ms <ms>]
