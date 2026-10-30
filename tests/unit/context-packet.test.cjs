@@ -456,15 +456,8 @@ test('unique semantic content preserves distinct governing obligations and refus
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test('retained role evidence shares exact complete bytes while preserving both locations', () => {
+test('encoding refuses a required governing source the packet does not carry', () => {
   const api = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
-  const evidence = [{ role: 'integrator', receipt: 'original', findings: ['unresolved'], content: 'complete evidence' }];
-  const packet = { source_revision: 'a'.repeat(40), binding: { retained_evidence: evidence }, retained_evidence: evidence };
-  const encoded = api.encodeUniqueContent(packet);
-  assert.equal(encoded.dictionary.length, 1);
-  assert.equal(encoded.obligations.length, 2);
-  assert.deepEqual(api.decodeUniqueContent(encoded), packet);
-  assert.equal(encoded.accounting.logical_content_bytes, 2 * encoded.accounting.unique_content_bytes);
   const broken = { source_revision: 'a'.repeat(40), required_refs: [{ path: 'ADR.md', sha256: 'b'.repeat(64), bytes: 4 }], refs: [] };
   assert.throws(() => api.encodeUniqueContent(broken));
 });

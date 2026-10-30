@@ -1074,7 +1074,7 @@ function protectedRecordsWithoutKey(directory) {
   let names;
   try { names = fs.readdirSync(directory); }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-  return names.some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-') || name.startsWith('integration-'));
+  return names.some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('planning-containment-') || name.startsWith('review-') || name.startsWith('integration-'));
 }
 
 function authorityState(worktree, create = false, requireCatalogue = true, readCatalogue = true) {
@@ -1425,38 +1425,6 @@ function authenticatedArchivePins(worktreePath) {
   return pins.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function phaseArchiveScope(worktreePath, binding, graphDir) {
-  const root = fs.realpathSync(worktreePath);
-  const directory = path.resolve(graphDir || path.join(root, '.planning/graph'));
-  if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning'
-      || fs.realpathSync(directory) !== directory)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'canonical phase graph directory is required');
-  const project = fs.realpathSync(path.resolve(directory, '../..'));
-  const repository = value => fs.realpathSync(execFileSync('git', ['-C', value, 'rev-parse',
-    '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim());
-  const common = repository(root);
-  if (repository(project) !== common) fail('ARCHIVE_AUTHORITY_INVALID', 'phase graph belongs to another repository');
-  const graph = JSON.parse(readImmutableFile(fs, path.join(directory, 'tickets.json'), 'phase graph'));
-  const rows = require('./architecture-target.cjs').phaseRows(graph, Number(binding.phase.split('-')[0]), binding.repo ?? null);
-  if (!rows.length || stable(rows.map(([id, row]) => ({ id, row }))) !== stable(binding.rows))
-    fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase graph membership differs');
-  const subject = require('./architecture-target.cjs').PHASE_SUBJECT.exec(binding.subject);
-  if (!subject || subject[1] !== binding.phase || subject[2] !== common || subject[3] !== binding.membership)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase repository identity differs');
-  const raw = JSON.parse(readImmutableFile(fs, path.join(directory, 'delivery-state.json'), 'phase state'));
-  const actual = require('./architecture-target.cjs').phaseBinding({ graph, state: raw.tickets || raw,
-    phase: Number(binding.phase.split('-')[0]), repository: common, repo: binding.repo ?? null, branch: rows[0][1].epic,
-    pr: Number(subject[4]), head: subject[5], base: subject[6] });
-  if (actual.subject !== binding.subject) fail('ARCHIVE_AUTHORITY_INVALID', 'actual current phase ticket-set digest differs');
-  return { root, project, identity: { repository: common, graph_dir: directory,
-    phase: binding.phase, ticket_set_digest: binding.membership,
-    tickets: rows.map(([id]) => id) } };
-}
-
-function phaseRosterPath(scope) {
-  return path.join(archiveAuthorityDirectory(scope.project), 'phase-archive-roster-' + digest(stable(scope.identity)) + '.json');
-}
-
 function reconciledRecordTicket(trusted) {
   const identities = [trusted.record.ticket, trusted.record.trace?.ticket,
     ...(Array.isArray(trusted.record.trace) ? trusted.record.trace.map(stage => stage?.ticket) : []),
@@ -1482,86 +1450,7 @@ function registeredPhaseWorktrees(root) {
     .split('\n').filter(line => line.startsWith('worktree ')).map(line => path.resolve(line.slice(9)));
 }
 
-function verifyPhaseRosterRecord(scope, row) {
-  if (!object(row) || !scope.identity.tickets.includes(row.ticket)
-      || !registeredPhaseWorktrees(scope.root).includes(row.worktree)
-      || fs.realpathSync(row.worktree) !== row.worktree)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'retained current dispatch worktree or ticket differs');
-  const trusted = trustedRecord({ dispatchId: row.dispatch_id, boundaryStore: row.receipt_store });
-  if (reconciledRecordTicket(trusted) !== row.ticket || stable(trusted.receipt) !== stable(row.receipt))
-    fail('ARCHIVE_AUTHORITY_INVALID', 'retained original current receipt differs');
-  const repository = fs.realpathSync(execFileSync('git', ['-C', row.worktree, 'rev-parse',
-    '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim());
-  if (repository !== scope.identity.repository || (trusted.receipt.runtime_evidence?.worktree !== undefined
-      && trusted.receipt.runtime_evidence.worktree !== row.worktree))
-    fail('ARCHIVE_AUTHORITY_INVALID', 'retained current dispatch repository or worktree differs');
-  return trusted;
-}
-
-function registerPhaseArchiveRoster(input) {
-  if (!object(input) || !/^[a-f0-9]{64}$/.test(input.expectedInventoryDigest || ''))
-    fail('ARCHIVE_AUTHORITY_REQUIRED', 'independently retained current inventory digest is required');
-  const scope = phaseArchiveScope(input.worktreePath, input.binding, input.graphDir);
-  const bytes = authorityFile(path.resolve(input.inventoryPath));
-  if (digest(bytes) !== input.expectedInventoryDigest)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'independently retained current inventory differs');
-  const inventory = JSON.parse(bytes);
-  if (!Array.isArray(inventory.rows) || inventory.rows.length > 1000)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'complete retained current inventory rows are required');
-  const records = inventory.rows.map(row => {
-    verifyPhaseRosterRecord(scope, row);
-    return { worktree: row.worktree, ticket: row.ticket, dispatch_id: row.dispatch_id,
-      receipt_store: nonEmpty(row.receipt_store, 'original receipt store'), receipt: row.receipt,
-      pins: phaseRecordPins(row.dispatch_id, row.pins) };
-  }).sort((a, b) => a.dispatch_id.localeCompare(b.dispatch_id));
-  if (new Set(records.map(row => row.dispatch_id)).size !== records.length)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'duplicate retained current dispatch');
-  const payload = { schema: 'shipyard.phase-archive-roster.v1', identity: scope.identity,
-    inventory_digest: input.expectedInventoryDigest, records };
-  const state = authorityState(scope.project, true, false, false);
-  const file = phaseRosterPath(scope);
-  const serialized = JSON.stringify({ payload, mac: crypto.createHmac('sha256', state.key).update(stable(payload)).digest('hex') }) + '\n';
-  if (Buffer.byteLength(serialized) > HISTORICAL_ARCHIVE_MAX_BYTES)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'complete phase roster exceeds its byte bound');
-  const temporary = file + '.' + crypto.randomUUID() + '.tmp';
-  try {
-    fs.writeFileSync(temporary, serialized, { flag: 'wx', mode: 0o600 });
-    try { fs.linkSync(temporary, file); }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      if (!authorityFile(file).equals(Buffer.from(serialized)))
-        fail('ARCHIVE_AUTHORITY_INVALID', 'phase roster cannot replace original independently retained membership');
-    }
-  } finally { try { fs.unlinkSync(temporary); } catch {} }
-  return { ...payload, roster_digest: digest(stable(payload)), record_path: file };
-}
-
-function readPhaseArchiveRoster(input) {
-  const scope = phaseArchiveScope(input.worktreePath, input.binding, input.graphDir);
-  const file = phaseRosterPath(scope);
-  if (!fs.existsSync(file)) {
-    const payload = { schema: 'shipyard.phase-archive-roster.v1', identity: scope.identity,
-      inventory_digest: digest(Buffer.from('{"rows":[]}')), records: [] };
-    return { ...payload, roster_digest: digest(stable(payload)), record_path: file };
-  }
-  const state = authorityState(scope.project, false, false, false);
-  const envelope = JSON.parse(authorityFile(file));
-  const mac = crypto.createHmac('sha256', state.key).update(stable(envelope.payload)).digest('hex');
-  if (!object(envelope.payload) || !/^[a-f0-9]{64}$/.test(envelope.mac || '')
-      || !crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex'))
-      || envelope.payload.schema !== 'shipyard.phase-archive-roster.v1'
-      || stable(envelope.payload.identity) !== stable(scope.identity)
-      || !Array.isArray(envelope.payload.records) || envelope.payload.records.length > 1000
-      || !/^[a-f0-9]{64}$/.test(envelope.payload.inventory_digest || ''))
-    fail('ARCHIVE_AUTHORITY_INVALID', 'current phase roster authentication or membership differs');
-  const records = envelope.payload.records;
-  if (new Set(records.map(row => row.dispatch_id)).size !== records.length)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'duplicate protected current dispatch');
-  for (const row of records) { verifyPhaseRosterRecord(scope, row); phaseRecordPins(row.dispatch_id, row.pins); }
-  return { ...envelope.payload, roster_digest: digest(stable(envelope.payload)), record_path: file };
-}
-
-function phaseSelectionVerification() {
+function archiveVerification() {
   const authorities = new Map(), objects = new Map();
   const snapshot = state => [state.directory, path.join(state.directory, 'hmac.key'), state.file]
     .map(file => ({ file, real: fs.realpathSync(file), stat: fs.lstatSync(file, { bigint: true }) }));
@@ -1570,7 +1459,7 @@ function phaseSelectionVerification() {
       const stat = fs.lstatSync(entry.file, { bigint: true });
       if (fs.realpathSync(entry.file) !== entry.real
           || ['dev', 'ino', 'mode', 'size', 'mtimeNs', 'ctimeNs'].some(field => stat[field] !== entry.stat[field]))
-        fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority changed during phase selection');
+        fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority changed during verification');
     }
   };
   return {
@@ -1647,7 +1536,7 @@ function phaseSubjectFields(subject) {
 }
 
 function authenticatedRecordSubject(record) {
-  const retained = record.review_current || record.review_baseline;
+  const retained = record.review_current;
   const original = record.receipt?.role === 'integrator'
     ? trustedRecord({ dispatchId: record.dispatch_id,
       boundaryStore: nonEmpty(retained?.receipt_store || record.receipt_store, 'aggregate original receipt store') }) : null;
@@ -1660,54 +1549,6 @@ function authenticatedRecordSubject(record) {
     fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate original receipt identity differs');
   return identities[0];
 }
-
-function selectedPhaseJudgments(scope, binding, roster) {
-  const candidates = [];
-  const worktrees = [...new Set([scope.root, scope.project, ...roster.records.map(row => row.worktree)])];
-  for (const worktree of worktrees) {
-    const catalogue = path.join(archiveAuthorityDirectory(worktree), 'catalogue.json');
-    if (!fs.existsSync(catalogue)) continue;
-    const state = scope.verification ? scope.verification.authority(worktree) : authorityState(worktree);
-    for (const record of Object.values(state.payload.records)) {
-      if (record.receipt?.role !== 'arch-review') continue;
-      if (authenticatedRecordSubject(record) !== binding.subject) continue;
-      if (candidates.length >= 1000)
-        fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase judgments exceed their total bound');
-      candidates.push({ worktree, record });
-    }
-  }
-  return candidates;
-}
-
-function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
-  return selectedPhaseJudgments(scope, binding, roster)
-    .filter(({ record }) => record.dispatch_id !== currentDispatchId)
-    .map(({ worktree, record }) => selectedArchiveRecord(scope, {
-      worktree, dispatch_id: record.dispatch_id, ticket: binding.subject,
-      receipt: record.receipt, pins: record.pins,
-    }));
-}
-
-function selectPhaseArchives(worktreePath, binding, options = {}) {
-  const scope = phaseArchiveScope(worktreePath, binding, options.graphDir);
-  scope.verification = phaseSelectionVerification();
-  const roster = readPhaseArchiveRoster({ worktreePath, binding, graphDir: options.graphDir });
-  const selection = { identity: roster.identity, roster_digest: roster.roster_digest,
-    inventory_digest: roster.inventory_digest, records: roster.records };
-  if (options.phaseArchiveSelection && stable(options.phaseArchiveSelection) !== stable(selection))
-    fail('ARCHIVE_AUTHORITY_INVALID', 'frozen current phase archive selection differs');
-  const evidence = roster.records.map(row => selectedArchiveRecord(scope, row, verifyPhaseRosterRecord(scope, row)));
-  const candidates = phaseArchiveHints(scope, binding, roster, options.currentDispatchId);
-  scope.verification.finish();
-  return { selection, evidence: evidence.sort((a, b) => a.dispatch_id.localeCompare(b.dispatch_id)), candidates,
-    pins: roster.records.filter(row => row.worktree === scope.root).flatMap(row => row.pins).sort((a, b) => a.path.localeCompare(b.path)) };
-}
-
-function phaseArchitectureEvidence(worktreePath, binding, options = {}) {
-  return selectPhaseArchives(worktreePath, binding, options).evidence;
-}
-
-function phaseArchitectureEvidenceDigest(evidence) { return digest(stable(evidence)); }
 
 function originalReviewRetention(worktree, trusted) {
   const store = trusted.recorder.storeDir;
@@ -1808,9 +1649,6 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
     ({ text, result: original } = completedCurrentContract(parsed));
     const nativePin = retained?.native;
     if (!object(nativePin) || nativePin.sha256 !== runtime.native_session_evidence?.sha256
-        || (!(receipt.role === 'arch-review' && runtime.focused_review?.review_contract === require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT)
-          && receipt.role !== 'code-review'
-          && runtime.input_consumption?.native_session_sha256 !== nativePin.sha256)
         || runtime.native_session_evidence?.session_id !== runtime.session_id)
       fail('REVIEW_NATIVE_REQUIRED', 'original current semantic consumption authority is required');
     const native = readImmutableFile(fs, nativePin.path, 'current native transcript', 128 * 1024 * 1024);
@@ -1952,7 +1790,7 @@ function authenticateCurrentCoverage({ trusted, result, evidence, identity, reta
       if (record) {
         if (record.dispatch_id !== trusted.dispatchId || stable(record.receipt) !== stable(trusted.receipt))
           fail('REVIEW_NATIVE_INVALID', 'focused retained receipt differs from original authority');
-        retained = record.review_current || record.review_baseline;
+        retained = record.review_current;
       }
     }
     retained ||= currentReviewRetention(identity.worktree, trusted);
@@ -2068,9 +1906,6 @@ function originalArchitectureTicketSet(trusted, manifest, findings, evidence, id
   const target = require('./architecture-target.cjs');
   const subject = target.PHASE_SUBJECT.exec(manifest.boundary_subject);
   if (manifest.role !== 'arch-review' || !subject) return findings.ticket_set;
-  if (trusted.receipt.runtime !== 'claude'
-      && trusted.receipt.runtime_evidence?.focused_review === undefined
-      && digest(JSON.stringify(findings.ticket_set)) === manifest.ticket_set_digest) return findings.ticket_set;
   const context = require('./codex-arch-review-context.cjs'), semantic = require('./context-packet.cjs');
   let packet;
   if (trusted.receipt.runtime === 'claude') {
@@ -2115,69 +1950,33 @@ function originalArchitectureTicketSet(trusted, manifest, findings, evidence, id
       || (packet.pr?.head || packet.source_revision) !== identity.head
       || !Array.isArray(membership) || !membership.length || !object(membership[0].row))
     fail('REVIEW_COVERAGE_INVALID', 'original complete architecture membership differs');
-  if (manifest.current_review?.contract === context.FOCUSED_CONTRACT
-      || packet.review_contract === context.FOCUSED_CONTRACT || packet.role_context?.review_contract === context.FOCUSED_CONTRACT) {
-    if (!currentBinding || currentBinding.subject !== manifest.boundary_subject
-        || currentBinding.membership !== manifest.ticket_set_digest
-        || stable(currentBinding.ticketSet) !== stable(membership)
-        || (trusted.receipt.runtime === 'codex' && packet.graph?.sha256 !== currentBinding.graph_sha256))
-      fail('REVIEW_COVERAGE_INVALID', 'focused original membership differs from the current binding');
-    if (trusted.receipt.runtime === 'claude') {
-      if (packet.role_context?.graph_source?.path !== '.planning/graph/tickets.json'
-          || packet.role_context.graph_source.sha256 !== currentBinding.graph_sha256)
-        fail('REVIEW_COVERAGE_INVALID', 'focused original graph source changed');
-      const statePath = '.planning/graph/delivery-state.json';
-      const stateRef = refs.find(ref => ref.path === statePath);
-      originalSource(statePath);
-      const bytes = readImmutableFile(fs, path.join(originalPacketRoot(identity.worktree, packet), statePath), 'current focused membership state', 8 * 1024 * 1024);
-      if (digest(bytes) !== stateRef.sha256) fail('REVIEW_COVERAGE_INVALID', 'focused original state source changed');
-    }
-    if (packet.retained_evidence?.length) {
-      const directory = path.resolve(findings.host_context?.graph_dir || path.join(identity.worktree, '.planning/graph'));
-      const archives = selectPhaseArchives(identity.worktree, currentBinding, { graphDir: directory,
-        phaseArchiveSelection: packet.phase_archive_selection, currentDispatchId: trusted.dispatchId });
-      if (phaseArchitectureEvidenceDigest(archives.evidence) !== packet.retained_history_digest
-          || stable(archives.evidence.map(record => ({ worktree: record.worktree, dispatch_id: record.dispatch_id,
-            files: record.files.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) }))) !== stable(packet.retained_evidence))
-        fail('ARCHIVE_AUTHORITY_INVALID', 'selected original archive evidence differs');
-    }
-    return currentBinding.ticketSet;
+  if (!currentBinding || currentBinding.subject !== manifest.boundary_subject
+      || currentBinding.membership !== manifest.ticket_set_digest
+      || stable(currentBinding.ticketSet) !== stable(membership)
+      || (trusted.receipt.runtime === 'codex' && packet.graph?.sha256 !== currentBinding.graph_sha256))
+    fail('REVIEW_COVERAGE_INVALID', 'focused original membership differs from the current binding');
+  if (trusted.receipt.runtime === 'claude') {
+    if (packet.role_context?.graph_source?.path !== '.planning/graph/tickets.json'
+        || packet.role_context.graph_source.sha256 !== currentBinding.graph_sha256)
+      fail('REVIEW_COVERAGE_INVALID', 'focused original graph source changed');
+    const statePath = '.planning/graph/delivery-state.json';
+    const stateRef = refs.find(ref => ref.path === statePath);
+    originalSource(statePath);
+    const bytes = readImmutableFile(fs, path.join(originalPacketRoot(identity.worktree, packet), statePath), 'current focused membership state', 8 * 1024 * 1024);
+    if (digest(bytes) !== stateRef.sha256) fail('REVIEW_COVERAGE_INVALID', 'focused original state source changed');
   }
-  const state = originalSource('.planning/graph/delivery-state.json');
-  let graph;
-  if (refs.some(ref => ref.path === '.planning/graph/tickets.json')) {
-    graph = originalSource('.planning/graph/tickets.json');
-  } else {
-    if (!currentBinding
-        || currentBinding.subject !== manifest.boundary_subject
-        || subject[3] !== manifest.ticket_set_digest
-        || currentBinding.membership !== manifest.ticket_set_digest
-        || digest(JSON.stringify(currentBinding.ticketSet)) !== manifest.ticket_set_digest
-        || stable(currentBinding.ticketSet) !== stable(membership))
-      fail('REVIEW_COVERAGE_INVALID', 'verified current architecture binding and original complete membership are required');
-    if (trusted.receipt.runtime === 'codex' && (packet.graph?.path !== '.planning/graph/tickets.json'
-        || packet.graph.sha256 !== currentBinding.graph_sha256))
-      fail('REVIEW_COVERAGE_INVALID', 'original architecture graph source digest differs from the verified current graph');
-    graph = { tickets: Object.fromEntries(currentBinding.rows.map(({ id, row }) => [id, row])) };
-  }
-  const binding = target.phaseBinding({ graph, state: state.tickets || state, phase: Number(subject[1].split('-')[0]),
-    repository: identity.repository.identity, repo: membership[0].row.repo ?? null,
-    branch: membership[0].row.epic, pr: manifest.pr, head: identity.head, base: identity.base_commit });
-  if (binding.subject !== manifest.boundary_subject || binding.membership !== manifest.ticket_set_digest
-      || stable(binding.ticketSet) !== stable(membership))
-    fail('REVIEW_COVERAGE_INVALID', 'original architecture representation digest or complete roster differs');
-  return binding.ticketSet;
+  return currentBinding.ticketSet;
 }
 
 function authenticatedCurrentArchive(worktree, record, manifest, findings, identity, currentBinding) {
-  const retention = record.review_current || record.review_baseline;
+  const retention = record.review_current;
   const trusted = retention?.receipt_store
     ? trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: retention.receipt_store })
     : { dispatchId: record.dispatch_id, receipt: record.receipt, record: { ...record, ticket: manifest.boundary_subject } };
   if (stable(trusted.receipt) !== stable(record.receipt) || record.receipt.role !== manifest.role
       || record.receipt.policy_hash !== require('./model-policy.cjs').POLICY_HASH)
     fail('REVIEW_COVERAGE_INVALID', 'original current catalogue role or policy differs');
-  const verification = phaseSelectionVerification();
+  const verification = archiveVerification();
   selectedArchiveRecord({ identity: { repository: identity.repository.identity }, verification }, {
     worktree, dispatch_id: record.dispatch_id, ticket: manifest.boundary_subject,
     receipt: record.receipt, pins: record.pins,
@@ -2200,7 +1999,6 @@ function authenticatedCurrentArchive(worktree, record, manifest, findings, ident
   const contract = authenticateCurrentCoverage({ trusted, result: findings, evidence, identity, retained: retention });
   if (stable(contract) !== stable(manifest.current_review || null))
     fail('REVIEW_COVERAGE_INVALID', 'declared original current contract differs');
-  if (!contract && record.receipt.runtime === 'claude') originalCurrentResponse(trusted, findings, evidence);
   return contract;
 }
 
@@ -2292,17 +2090,16 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
           || manifest.pr !== pr || manifest.head !== head || manifest.base_commit !== baseCommit
           || manifest.base?.replace(/^(?:refs\/remotes\/origin\/|origin\/)/, '') !== baseName
           || manifest.envelope?.verdict !== 'conform') continue;
+      if (manifest.current_review?.contract !== require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT) {
+        owed('architecture verdict predates the focused review contract'); continue;
+      }
       if (!manifest.files?.findings) { owed('architecture findings pin is missing'); continue; }
       const findings = JSON.parse(readPinnedArchiveFile(worktree, manifest.files.findings, 'architecture findings'));
       if (!object(findings) || findings.id !== manifest.boundary_subject || findings.pr !== pr || findings.head !== head
           || findings.base_tree !== manifest.merge_base_tree || findings.verdict !== 'conform'
-          || (manifest.current_review?.contract === require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT
-            && findings.review_completeness !== 'complete')) continue;
+          || findings.review_completeness !== 'complete') continue;
       let currentBinding;
       if (manifest.boundary_subject.startsWith('phase=')) {
-        if (!manifest.current_review && !object(findings.host_context?.phase_archive_selection)) {
-          owed('aggregate verdict lacks its frozen current phase selection'); continue;
-        }
         const directory = graphDir || findings.host_context?.graph_dir || path.join(root, '.planning/graph');
         const graphBytes = readImmutableFile(fs, path.join(directory, 'tickets.json'), 'current complete architecture graph', 8 * 1024 * 1024);
         const graph = JSON.parse(graphBytes);
@@ -2319,9 +2116,7 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
         }
         const binding = require('./architecture-target.cjs').phaseBinding({ graph, state: raw.tickets || raw,
           phase: [...phases][0], repository: common, repo, branch, pr, head, base: baseCommit });
-        if (binding.subject !== manifest.boundary_subject
-            || (!manifest.current_review && findings.host_context?.phase_evidence_digest !== phaseArchitectureEvidenceDigest(phaseArchitectureEvidence(root, binding, { graphDir: directory,
-              phaseArchiveSelection: findings.host_context?.phase_archive_selection })))) continue;
+        if (binding.subject !== manifest.boundary_subject) continue;
         currentBinding = { ...binding, graph_sha256: digest(graphBytes) };
       }
       try {
@@ -2331,9 +2126,6 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
           merge_base_tree: manifest.merge_base_tree };
         if (reviewGit(root, ['rev-parse', identity.merge_base + '^{tree}']) !== identity.merge_base_tree) continue;
         authenticatedCurrentArchive(worktree, record, manifest, findings, identity, currentBinding);
-        if (record.receipt.runtime === 'codex' && !manifest.current_review) require('./codex-arch-review-context.cjs').validateHistoricalContext({
-          result: findings, receipt: record.receipt, dispatchId: record.dispatch_id,
-          evidence: readPinnedArchiveFile(worktree, manifest.files.evidence, 'architecture evidence') });
       } catch (error) {
         if (typeof onCandidateRefusal === 'function') onCandidateRefusal({ dispatch_id: record.dispatch_id,
           code: error.code || 'ARCHIVE_AUTHORITY_INVALID', message: error.message });
@@ -2742,15 +2534,6 @@ function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest)
     if (trusted.receipt.runtime === 'codex' && !retention)
       fail('REVIEW_NATIVE_REQUIRED', 'current native retention is unavailable');
     record.review_current = retention || { schema: 'shipyard.current-review-authority.v2', receipt_store: trusted.recorder.storeDir };
-  }
-  if (previous?.review_baseline) record.review_baseline = previous.review_baseline;
-  else if (!previous) {
-    const retention = originalReviewRetention(worktree, trusted);
-    if (retention) {
-      const last = Math.max(0, ...Object.values(state.payload.records).map(item => Date.parse(item.review_baseline?.finalized_at) || 0));
-      retention.finalized_at = new Date(Math.max(Date.parse(retention.finalized_at), last + 1)).toISOString();
-      record.review_baseline = retention;
-    }
   }
   if (bookkeeping.length) state.payload.latest_bookkeeping = bookkeeping;
   if (state.payload.records[trusted.dispatchId]
@@ -3586,7 +3369,7 @@ function replayCodeReviewRecord(worktree, record, repository, lineage) {
   const trusted = trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: record.receipt_store });
   if (stable(trusted.receipt) !== stable(record.receipt) || reconciledRecordTicket(trusted) !== subject)
     fail('ARCHIVE_AUTHORITY_INVALID', 'original code-review receipt or subject differs');
-  const verification = phaseSelectionVerification();
+  const verification = archiveVerification();
   const selected = selectedArchiveRecord({ identity: { repository }, verification }, {
     worktree, dispatch_id: record.dispatch_id, ticket: subject, receipt: record.receipt, pins: record.pins,
   }, trusted);
@@ -4666,8 +4449,7 @@ function validateJudgmentManifest(value, options) {
       ? authenticateCurrentCoverage({ trusted, result, evidence: evidence.content, identity }) : null;
   if (stable(manifest.current_review || null) !== stable(currentReview))
     fail('REVIEW_COVERAGE_INVALID', 'sealed current contract differs from original native authority');
-  if (role === 'arch-review' && trusted.receipt.runtime === 'codex'
-      && (!currentReview || result.review_contract === require('./codex-arch-review-context.cjs').FOCUSED_CONTRACT)) {
+  if (role === 'arch-review' && trusted.receipt.runtime === 'codex') {
     require('./codex-arch-review-context.cjs').validateSealedContext({
       result, receipt: trusted.receipt, dispatchId, worktree, ticket: metadata.ticket, pr: data.pr,
       evidence: evidence.content,
@@ -5436,15 +5218,10 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   archiveAuthorityNamespace,
   archiveAuthorityDirectory,
   authenticatedArchivePins,
-  registerPhaseArchiveRoster,
-  readPhaseArchiveRoster,
-  selectPhaseArchives,
   currentArchitectureVerdict,
   currentCodeReviewVerdict,
   codeReviewPlanningReference,
   priorCodeReviewVerdicts,
-  phaseArchitectureEvidence,
-  phaseArchitectureEvidenceDigest,
   assertArchiveInventory,
   historicalBookkeepingPins,
   classifyLegacyProvenance,

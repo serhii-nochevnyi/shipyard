@@ -137,15 +137,6 @@ test('public phase builder and native context use the explicit aggregate PR and 
     const args = ['arch-review','38-codex-arch-review','--phase','38','--pr','801'];
     const request = builder.build([...args,'--runtime','codex'],options);
     assert(PHASE_SUBJECT.test(request.scope.ticket));
-    const rawState = JSON.parse(fs.readFileSync(path.join(graphDir,'delivery-state.json')));
-    const binding = phaseBinding({ graph, state: rawState.tickets || rawState, phase: 38,
-      repository: git(f.root,['rev-parse','--path-format=absolute','--git-common-dir']),
-      branch: f.pr.headRefName, pr: f.pr.number, head: f.pr.headRefOid, base: f.base });
-    const inventoryPath = path.join(authorityHome,'current-phase-inventory.json');
-    fs.writeFileSync(inventoryPath,JSON.stringify({rows:[]}),{mode:0o600});
-    require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').registerPhaseArchiveRoster({
-      worktreePath: f.root, binding, graphDir, inventoryPath,
-      expectedInventoryDigest: require('node:crypto').createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
     const prepared = context.prepare(request.scope,{role:'arch-review',signals:{},context:{}},options);
     assert.equal(prepared.prepared.pr,801);
     assert.equal(prepared.prepared.rows[0].id,TICKET);
@@ -201,12 +192,6 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     const args = ['arch-review','38-codex-arch-review','--phase','38','--pr','801', ...(repo ? ['--repo',repo] : [])];
     const request = builder.build([...args,'--runtime','codex'],options);
     assert(PHASE_SUBJECT.test(request.scope.ticket));
-    const rawState = JSON.parse(fs.readFileSync(path.join(graphDir,'delivery-state.json')));
-    const binding = phaseBinding({ graph, state: rawState.tickets || rawState, phase: 38,
-      repository: git(f.root,['rev-parse','--path-format=absolute','--git-common-dir']), repo,
-      branch: f.pr.headRefName, pr: f.pr.number, head: f.pr.headRefOid, base: f.base });
-    const inventoryPath = path.join(authorityHome,'current-phase-inventory.json');
-    fs.writeFileSync(inventoryPath,JSON.stringify({rows:[]}),{mode:0o600});
     const claudeRequest = builder.build([...args,'--runtime','claude'],options);
     assert.equal(claudeRequest.repo,repo);
     const claude = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
@@ -216,9 +201,6 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
       throw new Error('selected repository reached live PR lookup');
     }}).run(claudeRequest), /selected repository reached live PR lookup/);
     assert.throws(()=>builder.build([...args.slice(0,6),'--repo','acme/missing','--runtime','codex'],options), /phase absent/);
-    require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').registerPhaseArchiveRoster({
-      worktreePath: f.root, binding, graphDir, inventoryPath,
-      expectedInventoryDigest: require('node:crypto').createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
     const prepared = context.prepare(request.scope,{role:'arch-review',signals:{},context:request.context},options);
     assert.equal(prepared.prepared.pr,801);
     assert.equal(prepared.prepared.rows[0].id,TICKET);
@@ -240,10 +222,6 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
       'Original acceptance: installed obligations remain HOLD.');
     assert.deepEqual(prepared.prepared.rows.map(x=>x.id),[TICKET]);
     const artifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-    for (const edit of [{repo: 'acme/missing'}, {repo: repo === null ? 'acme/other' : null},
-      {rows: [...binding.rows, {id:'foreign',row:graph.tickets.foreign}]}, {membership: '0'.repeat(64)}]) {
-      assert.throws(() => artifacts.selectPhaseArchives(f.root, {...binding,...edit}, {graphDir}), /phase absent|membership|identity|digest/);
-    }
     if (runtime === 'codex') {
     const storage = fs.mkdtempSync(path.join(authorityHome,'codex-mixed-'));
     const value = prepared;

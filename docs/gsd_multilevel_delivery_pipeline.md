@@ -1075,8 +1075,6 @@ human's, so GSD's "no auto-merge" boundary is preserved where it matters.
   call GitHub/Jira or remove worktrees.
 - **`ship.pr_body_sections`** seeded into the recommended decompose config
   (Acceptance Criteria + Risks & Dependencies from PLAN.md).
-- **Pre-push review** — an optional step 4b in deliver
-  (`/gsd-code-review --fix` / `/gsd-review --coderabbit --opencode`).
 - validate-graph is deliberately NOT slimmed down to a delta over plan-checker:
   the import flow (Jira → PLAN.md in deliver) does not go through plan-checker,
   so a standalone full DAG check remains necessary.

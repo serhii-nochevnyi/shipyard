@@ -205,6 +205,19 @@ test('signer permission profile denies host signing paths and preserves the sele
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('signer protection covers the configured user.signingkey file, absolute or home-relative', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-signer-key-')));
+  try {
+    const git = (...args) => require('node:child_process').execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
+    git('init', '-q');
+    const absolute = path.join(root, 'signing key');
+    git('config', 'user.signingkey', absolute);
+    assert.ok(signerProtectionPaths({}, root).includes(absolute));
+    git('config', 'user.signingkey', '~/.shipyard-signing-test-key');
+    assert.ok(signerProtectionPaths({}, root).includes(path.resolve(path.join(os.homedir(), '.shipyard-signing-test-key'))));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('parses thread and completed-turn evidence', () => {
   const parsed = parseCodexStream(stream());
   const native = parseNativeCodexTranscript(sessionTranscript(parsed.session_id), parsed.session_id);

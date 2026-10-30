@@ -237,6 +237,19 @@ const TRACKER_ELIGIBILITY_CALL = {
   end: /^Each emitted item carries/m,
 };
 
+// Both deliver.md entry points to the tracker procedure name the reference that
+// holds it; the procedure itself lives only in tracker.md.
+const TRACKER_PROJECTION_REFERENCE = {
+  name: 'deliver.md § tracker projection — the reference it performs the items by',
+  start: /^\*\*Where it runs, and why nothing waits on it\.\*\*/m,
+  end: /^\*\*A pending projection is not actionable/m,
+};
+const TRACKER_ELIGIBILITY_READ = {
+  name: 'deliver.md § tracker eligibility read — the reference it records the observation by',
+  start: /^### Tracker eligibility read/m,
+  end: /^unavailable Jira MCP is a per-ticket/m,
+};
+
 // The invocation template a log line writes and a sentence about the field does
 // not: `effort_applied=<level|unknown>` in the command, versus "the honest
 // record is `effort_applied=unknown`" in the paragraph beside it — which is
@@ -328,6 +341,17 @@ const WIRED = [
       + 'it computes nothing, the watermark never moves, and the whole acting half under it is a '
       + 'procedure nobody is ever told to begin. A tested, complete, inert mechanism is ADR-007\'s '
       + 'entire subject and the exact defect phase 28 shipped a fix for',
+  },
+  {
+    kind: 'wired',
+    mechanism: '`references/tracker.md` — the tracker procedure deliver.md points at',
+    reader: 'the orchestrator: deliver.md states only when to project or read, and the procedure is in the reference',
+    homes: [
+      { doc: DELIVER, slice: TRACKER_PROJECTION_REFERENCE, caller: [/references\/tracker\.md/] },
+      { doc: DELIVER, slice: TRACKER_ELIGIBILITY_READ, caller: [/references\/tracker\.md/] },
+    ],
+    why: 'deliver.md holds no copy of the procedure; with either pointer gone the projection or the eligibility read '
+      + 'is a step nobody is told how to perform',
   },
   {
     kind: 'wired',

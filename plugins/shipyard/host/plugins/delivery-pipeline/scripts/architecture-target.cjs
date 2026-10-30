@@ -70,22 +70,6 @@ function phaseBinding({ graph, state, phase, repository, repo = null, pr, head, 
     rows: rows.map(([id, row]) => ({ id, row })), repo: [...repos][0] });
 }
 
-function phaseEvidencePaths(project, binding) {
-  const directory = path.posix.dirname(binding.rows[0].row.plan);
-  const paths = [];
-  function walk(relative) {
-    for (const entry of fs.readdirSync(path.join(project, relative), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (entry.isSymbolicLink()) throw new Error('phase evidence contains a symlink');
-      const child = relative + '/' + entry.name;
-      if (entry.isDirectory()) walk(child);
-      else if (entry.isFile()) paths.push(child);
-      if (paths.length > 2000) throw new Error('complete phase evidence exceeds its file-count bound');
-    }
-  }
-  walk(directory);
-  return paths;
-}
-
 function repositoryInvalid(message, reason = 'value') {
   const error = new Error(`repository identity: ${message}`);
   error.code = 'REPOSITORY_IDENTITY_INVALID';
@@ -163,5 +147,5 @@ function parseSubject(name, text) {
 }
 
 module.exports = { GIT_SCOPE_KEYS, repositoryIdentity, legacyRepositoryForms, acceptedRepositoryValues, buildSubject, parseSubject,
-  REPOSITORY_CLASS, resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, phaseEvidencePaths, PHASE_SUBJECT,
+  REPOSITORY_CLASS, resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, PHASE_SUBJECT,
   PHASE_SUBJECT_ROLES, PHASE_ONLY_ROLES };

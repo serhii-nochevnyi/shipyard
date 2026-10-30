@@ -764,13 +764,12 @@ function encodeUniqueContent(packet, maximumBytes = 16 * 1024 * 1024) {
     const result = Object.create(null);
     for (const key of Object.keys(value).sort()) {
       const pointer = location + '/' + key.replace(/~/g, '~0').split('/').join('~1');
-      const jsonContent = key === 'retained_evidence' && (object(value[key]) || Array.isArray(value[key]));
-      if (!jsonContent && (key !== 'content' || typeof value[key] !== 'string')) {
+      if (key !== 'content' || typeof value[key] !== 'string') {
         result[key] = visit(value[key], pointer); continue;
       }
-      const content = jsonContent ? JSON.stringify(value[key]) : value[key];
+      const content = value[key];
       const sha256 = hash(content), bytes = Buffer.byteLength(content);
-      if (!jsonContent && value.path && value.sha256 && (value.sha256 !== sha256 || (value.bytes !== undefined && value.bytes !== bytes)))
+      if (value.path && value.sha256 && (value.sha256 !== sha256 || (value.bytes !== undefined && value.bytes !== bytes)))
         fail('INVALID_CONTEXT_PACKET', 'source content conflicts with its immutable identity');
       const previous = entries.get(sha256);
       if (previous && previous.content !== content) fail('INVALID_CONTEXT_PACKET', 'conflicting content digest');
@@ -779,7 +778,7 @@ function encodeUniqueContent(packet, maximumBytes = 16 * 1024 * 1024) {
         source_revision: revision, source_sha256: value.sha256 || value.source_hash || sha256,
         source_bytes: value.bytes ?? bytes, mandatory: !location.startsWith('/optional_refs/'),
         purpose: location, provenance: [pointer] });
-      result[key] = { $semantic_content: sha256, encoding: jsonContent ? 'json' : 'utf8' };
+      result[key] = { $semantic_content: sha256, encoding: 'utf8' };
     }
     return result;
   }
@@ -811,11 +810,9 @@ function decodeUniqueContent(value, maximumBytes = 16 * 1024 * 1024) {
     if (Array.isArray(item)) return item.map(child => restore(child, depth + 1));
     if (!object(item)) return item;
     if (Object.hasOwn(item, '$semantic_content')) {
-      if (Object.keys(item).length !== 2 || !['json', 'utf8'].includes(item.encoding) || !dictionary.has(item.$semantic_content))
+      if (Object.keys(item).length !== 2 || item.encoding !== 'utf8' || !dictionary.has(item.$semantic_content))
         fail('INVALID_CONTEXT_PACKET', 'dangling or aliased semantic content');
-      const content = dictionary.get(item.$semantic_content);
-      if (item.encoding === 'utf8') return content;
-      try { return JSON.parse(content); } catch { fail('INVALID_CONTEXT_PACKET', 'invalid complete JSON evidence'); }
+      return dictionary.get(item.$semantic_content);
     }
     return Object.fromEntries(Object.keys(item).map(key => [key, restore(item[key], depth + 1)]));
   }

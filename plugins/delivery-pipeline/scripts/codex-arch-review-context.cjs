@@ -3,12 +3,11 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { productPathspec } = require('./development-artifacts.cjs');
 const { execFileSync } = require('node:child_process');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const { statusIgnoringScratch } = require('./conveyor-scratch.cjs');
 const roleArtifact = require('./role-artifact.cjs');
-const { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, phaseEvidencePaths, PHASE_SUBJECT, repositoryIdentity } = require('./architecture-target.cjs');
+const { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, PHASE_SUBJECT, repositoryIdentity } = require('./architecture-target.cjs');
 const { parseCodexStream } = require('./codex-runtime-host.cjs');
 
 const FOCUSED_CONTRACT = 'shipyard.focused-architecture-review.v1';
@@ -219,7 +218,7 @@ function assertAggregateGraph(directory, options) {
   catch { fail('untracked graph copy inside a non-main worktree', 'GRAPH_NOT_CANONICAL'); }
 }
 
-function collect(scope, options, legacyArchitecture = false) {
+function collect(scope, options) {
   const worktree = fs.realpathSync(scope.worktree);
   const initialHead = git(options, worktree, ['rev-parse', 'HEAD']);
   if (git(options, worktree, ['rev-parse', '--show-toplevel']) !== worktree)
@@ -292,17 +291,8 @@ function collect(scope, options, legacyArchitecture = false) {
       pr: number, head, base: live.baseRefOid, branch });
     if (binding.subject !== scope.ticket) fail('aggregate phase identity changed', 'STALE_CONTEXT');
   }
-  let selectedArchives;
-  if (binding) {
-    selectedArchives = roleArtifact.selectPhaseArchives(worktree, binding, { graphDir: directory,
-      phaseArchiveSelection: options.phaseArchiveSelection, currentDispatchId: options.inflightDispatchId });
-    options.phaseArchiveSelection = selectedArchives.selection;
-    options.archivePins = selectedArchives.pins;
-  } else {
-    roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
-  }
-  if (binding && selectedArchives.pins.length && !options.historicalBookkeepingPins?.length)
-    options.historicalBookkeepingPins = roleArtifact.historicalBookkeepingPins(worktree);
+  if (binding) options.archivePins = [];
+  else roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
   for (const pin of options.historicalBookkeepingPins || []) {
     if (!bookkeeping.has(pin.path) && file(worktree, pin.path).sha256 !== pin.sha256)
       fail('authenticated historical bookkeeping changed', 'STALE_CONTEXT');
@@ -324,9 +314,8 @@ function collect(scope, options, legacyArchitecture = false) {
     fail('live PR base differs from fetched base', 'STALE_CONTEXT');
   const mergeBase = git(options, worktree, ['merge-base', base, head]);
   const mergeBaseTree = git(options, worktree, ['rev-parse', mergeBase + '^{tree}']);
-  const legacy = legacyArchitecture;
   const diff = String(run(options, 'git', ['-C', worktree, 'diff', '--no-ext-diff', '--no-textconv',
-    '--unified=50', mergeBase + '...' + head, ...(legacy ? productPathspec() : [])], worktree, FILE_LIMITS.material));
+    '--unified=50', mergeBase + '...' + head], worktree, FILE_LIMITS.material));
   const developmentPaths = String(run(options, 'git', ['-C', worktree, 'diff', '--name-only', '--no-renames', '-z',
     mergeBase + '...' + head], worktree, FILE_LIMITS.material)).split('\0').filter(name => name && require('./development-artifacts.cjs').isDevelopmentArtifact(name));
   const plans = (binding ? binding.rows : [{ row }]).map(item => file(project, item.row.plan));
@@ -344,21 +333,8 @@ function collect(scope, options, legacyArchitecture = false) {
   const names = architectureNames().sort();
   const changedPaths = String(run(options, 'git', ['-C', worktree, 'diff', '--name-only', '--no-renames', '-z',
     mergeBase + '...' + head], worktree, FILE_LIMITS.material)).split('\0').filter(Boolean);
-  const focused = legacy ? { refs: [], inventory: [] } : selectFocusedArchitecture({ root: project, changedPaths, plans });
-  const refs = legacy ? [...plans] : [...focused.refs];
-  if (legacy) {
-    const ids = new Set(Array.from(plans.map(ref => ref.content).join('\n').matchAll(/ADR-(\d{3})/g), match => 'ADR-' + match[1]));
-    for (const id of ids) if (!names.some(name =>
-      (path.posix.basename(name) === id + '.md' || path.posix.basename(name).startsWith(id + '-'))
-        && !/-(?:DATA-MODEL|INTERFACES|ROLLOUT)\.md$/.test(name)))
-      fail('required architecture record is missing: ' + id);
-    if (binding) {
-      for (const relative of phaseEvidencePaths(project, binding))
-        if (!refs.some(ref => ref.path === relative)) refs.push(file(project, relative));
-      refs.push(stateFile);
-    }
-    for (const name of names) refs.push(file(project, '.planning/architecture/' + name));
-  }
+  const focused = selectFocusedArchitecture({ root: project, changedPaths, plans });
+  const refs = [...focused.refs];
   let corpusBytes = refs.reduce((sum, ref) => sum + ref.bytes, 0);
   const visited = new Set(refs.map(ref => ref.path));
   const decisionEdges = new Map();
@@ -400,29 +376,22 @@ function collect(scope, options, legacyArchitecture = false) {
   }
   for (const name of decisionEdges.keys()) visitDecision(name);
   if (refs.length + 2 > FILE_LIMITS.assets) fail('complete context asset inventory exceeds its bound');
-  const sourceAuthority = roleArtifact.authenticateArchitectureSources(worktree, project, (legacy ? refs : focused.authorityRefs).filter(ref => /^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(ref.path)));
-  const packet = { ...(!legacy
-    ? { review_contract: FOCUSED_CONTRACT } : {}), adr_selection: focused.inventory,
+  const sourceAuthority = roleArtifact.authenticateArchitectureSources(worktree, project, focused.authorityRefs.filter(ref => /^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(ref.path)));
+  const packet = { review_contract: FOCUSED_CONTRACT, adr_selection: focused.inventory,
     change_metadata: { name_status: String(run(options, 'git', ['-C', worktree, 'diff', '--name-status', '-z', '--find-renames', mergeBase + '...' + head], worktree, FILE_LIMITS.material)),
       numstat: String(run(options, 'git', ['-C', worktree, 'diff', '--numstat', '-z', '--find-renames', mergeBase + '...' + head], worktree, FILE_LIMITS.material)) },
     source_authority: sourceAuthority,
-    ...(!legacy && project !== worktree ? { planning_reference: require('./context-packet.cjs')
+    ...(project !== worktree ? { planning_reference: require('./context-packet.cjs')
       .resolvePlanningReference({ worktree, graphDir: directory, repo: options.phaseRepo ?? scope.repo ?? null }) } : {}),
     schema: SCHEMA, ticket: scope.ticket, phase: Number(scope.phase),
     ...(cycles.length ? { decision_cycles: cycles } : {}),
     graph: { path: graphFile.path, sha256: graphFile.sha256, row, ...(binding ? { binding } : {}) },
-    ...(binding ? { ticket_set: binding.ticketSet, ticket_set_digest: binding.membership,
-      phase_archive_selection: selectedArchives.selection, retained_history_digest: roleArtifact.phaseArchitectureEvidenceDigest(selectedArchives.evidence),
-      retained_evidence: selectedArchives.evidence.map(record => ({ worktree: record.worktree, dispatch_id: record.dispatch_id,
-        files: record.files.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) })) } : {}),
+    ...(binding ? { ticket_set: binding.ticketSet, ticket_set_digest: binding.membership } : {}),
     pr: { number, head, branch, base: live.baseRefName, base_commit: live.baseRefOid, draft: live.isDraft, review_decision: live.reviewDecision },
-    ...(legacy ? { post_change_inventory: String(run(options, 'git', ['-C', worktree, 'ls-tree', '-r', '--name-only', head], worktree, FILE_LIMITS.material)) } : {}),
     acceptance: plans.map(ref => ({ path: ref.path, sha256: ref.sha256,
       criteria: ref.content.match(/## (?:Acceptance|Success|Verification)[^#]*/gi) || [] })),
-    diff: { merge_base: mergeBase, merge_base_tree: mergeBaseTree, ...(legacy ? { content: diff } : {}) },
-    development: legacy ? { paths: developmentPaths, content: developmentPaths.length ? String(run(options, 'git',
-      ['-C', worktree, 'diff', '--no-ext-diff', '--no-textconv', '--unified=50', mergeBase + '...' + head, '--', ...developmentPaths],
-      worktree, FILE_LIMITS.material)) : '' } : { paths: developmentPaths, classification: 'included in the complete PR diff' }, refs };
+    diff: { merge_base: mergeBase, merge_base_tree: mergeBaseTree },
+    development: { paths: developmentPaths, classification: 'included in the complete PR diff' }, refs };
   packet.change_metadata.changes = focusedChangeInventory(packet.change_metadata.name_status, packet.change_metadata.numstat);
   const serialized = JSON.stringify(packet);
   if (Buffer.byteLength(serialized) > FILE_LIMITS.material) fail('complete review input exceeds its bound');
@@ -447,9 +416,7 @@ function collect(scope, options, legacyArchitecture = false) {
     if (current !== pin.sha256 && !(options.allowClearedBookkeeping === true && current === pin.cleared_sha256))
       fail('authenticated bookkeeping changed while collecting', 'STALE_CONTEXT');
   }
-  if (binding) roleArtifact.selectPhaseArchives(worktree, binding, { graphDir: directory,
-    phaseArchiveSelection: options.phaseArchiveSelection, currentDispatchId: options.inflightDispatchId });
-  else roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
+  if (!binding) roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
   const finalStatus = statusIgnoringScratch(worktree, { untracked: 'all', forJudge: true });
   if (!finalStatus.ok || finalStatus.entries.some(entry => !bookkeeping.has(entry.path)
       && !archiveBookkeeping(entry)))
@@ -461,7 +428,7 @@ function collect(scope, options, legacyArchitecture = false) {
   return { role: 'arch-review', ticket: scope.ticket, phaseNumber: Number(scope.phase), pr: number,
     base, baseName: live.baseRefName, baseCommit: live.baseRefOid, mergeBaseTree,
     canonical: { worktree, head, branch }, rows: binding ? binding.rows : [{ id: scope.ticket, row }],
-    diffBytes: legacy ? 0 : Buffer.byteLength(diff),
+    diffBytes: Buffer.byteLength(diff),
     ...(binding ? { binding } : {}),
     packet: { ...packet, digest: digest(serialized), required_refs: refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })),
       accounting: { estimated_bytes: Buffer.byteLength(serialized), typical_target_bytes: 200 * 1024,
@@ -567,8 +534,6 @@ function finish(value, dispatch, recorder) {
       selected_refs: value.evidence.selected_refs,
       ...(prepared.packet.planning_reference ? { planning_reference: prepared.packet.planning_reference } : {}),
       ...(prepared.binding ? { phase_repo: prepared.binding.repo } : {}),
-      ...(prepared.binding ? { phase_evidence_digest: prepared.packet.retained_history_digest,
-        phase_archive_selection: preparedOptions.get(value).phaseArchiveSelection } : {}),
       installation,
       bookkeeping: preparedOptions.get(value).bookkeepingPins || [],
       historical_archives: preparedOptions.get(value).archivePins || [],
@@ -915,7 +880,6 @@ function launchDigest(value, installation = installedLaunches.get(value)) {
     historical_archives: options.archivePins || [], historical_bookkeeping: options.historicalBookkeepingPins || [],
     ...(value.prepared.packet.planning_reference ? { planning_reference: value.prepared.packet.planning_reference } : {}),
     ...(value.prepared.binding ? { phase_repo: value.prepared.binding.repo } : {}),
-    ...(options.phaseArchiveSelection ? { phase_archive_selection: options.phaseArchiveSelection } : {}),
   })));
 }
 
@@ -931,24 +895,21 @@ function refuseFileTransport(context) {
 
 function validateHistoricalContext(input) {
   const context = input.result?.host_context;
-  if (!object(context) || context.schema !== SCHEMA || !object(context.installation) || !Array.isArray(context.bookkeeping))
+  if (!object(context) || context.schema !== SCHEMA || !object(context.focused) || !object(context.installation)
+      || !Array.isArray(context.bookkeeping))
     fail('historical architecture authority is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   const original = codexResultText({ runtime: input.receipt.runtime, role: input.receipt.role,
     dispatch_id: input.dispatchId, receipt: input.receipt,
     application_evidence: { runtime_evidence: input.receipt.runtime_evidence } }).result;
   const focused = input.receipt.runtime_evidence?.focused_review;
-  if (context.focused !== undefined || input.result.review_contract === FOCUSED_CONTRACT || focused !== undefined) {
-    validateFocusedResult(original, context.focused);
-    if (input.receipt.role !== 'arch-review' || JSON.stringify(canonical(focused)) !== JSON.stringify(canonical({ ...context.focused, launch_digest: original.launch_digest })))
-      fail('historical focused contract lacks original launch authority', 'STALE_CONTEXT');
-  }
-  const attestation = { ...(context.focused ? { focused: context.focused, source_authority: context.source_authority } : {}), graph_dir: context.graph_dir, packet_digest: context.packet_digest,
-    installation: context.installation, bookkeeping: context.bookkeeping };
+  validateFocusedResult(original, context.focused);
+  if (input.receipt.role !== 'arch-review' || JSON.stringify(canonical(focused)) !== JSON.stringify(canonical({ ...context.focused, launch_digest: original.launch_digest })))
+    fail('historical focused contract lacks original launch authority', 'STALE_CONTEXT');
+  const attestation = { focused: context.focused, source_authority: context.source_authority, graph_dir: context.graph_dir,
+    packet_digest: context.packet_digest, installation: context.installation, bookkeeping: context.bookkeeping,
+    historical_archives: context.historical_archives, historical_bookkeeping: context.historical_bookkeeping };
   if (context.planning_reference !== undefined) attestation.planning_reference = context.planning_reference;
-  if (context.historical_archives !== undefined) attestation.historical_archives = context.historical_archives;
   if (context.phase_repo !== undefined) attestation.phase_repo = context.phase_repo;
-  if (context.phase_archive_selection !== undefined) attestation.phase_archive_selection = context.phase_archive_selection;
-  if (context.historical_bookkeeping !== undefined) attestation.historical_bookkeeping = context.historical_bookkeeping;
   refuseFileTransport(context);
   const { evidence_markdown: markdown, host_context: _nativeContext, ...native } = original;
   const { host_context: _sealedContext, ...sealed } = input.result;
@@ -957,114 +918,44 @@ function validateHistoricalContext(input) {
       || JSON.stringify(canonical(native)) !== JSON.stringify(canonical(sealed))
       || typeof markdown !== 'string' || input.evidence.toString('utf8').trim() !== markdown.trim())
     fail('historical bookkeeping differs from original authenticated launch identity', 'STALE_CONTEXT');
-  if (focused) {
-    if (context.planning_reference !== undefined) {
-      const root = require('./context-packet.cjs').authenticatedPlanningRoot(input.worktree || context.worktree, context.planning_reference);
-      if (root !== context.source_authority?.source?.root || context.graph_dir !== context.planning_reference.directory)
-        fail('focused planning root differs from original source authority', 'STALE_CONTEXT');
-    }
-    const authority = context.source_authority;
-    if (!object(authority) || !object(authority.source) || !Array.isArray(authority.pins))
-      fail('focused source authority is missing', 'STALE_CONTEXT');
-    const current = roleArtifact.authenticateArchitectureSources(context.worktree, authority.source.root, authority.pins);
-    if (JSON.stringify(canonical(current)) !== JSON.stringify(canonical(authority)))
-      fail('focused original source authority changed', 'STALE_CONTEXT');
+  if (context.planning_reference !== undefined) {
+    const root = require('./context-packet.cjs').authenticatedPlanningRoot(input.worktree || context.worktree, context.planning_reference);
+    if (root !== context.source_authority?.source?.root || context.graph_dir !== context.planning_reference.directory)
+      fail('focused planning root differs from original source authority', 'STALE_CONTEXT');
   }
+  const authority = context.source_authority;
+  if (!object(authority) || !object(authority.source) || !Array.isArray(authority.pins))
+    fail('focused source authority is missing', 'STALE_CONTEXT');
+  const current = roleArtifact.authenticateArchitectureSources(context.worktree, authority.source.root, authority.pins);
+  if (JSON.stringify(canonical(current)) !== JSON.stringify(canonical(authority)))
+    fail('focused original source authority changed', 'STALE_CONTEXT');
   return true;
 }
 
 function validateSealedContext(input, options = {}) {
   const context = input.result?.host_context;
-  const receipt = input.receipt;
-  if (context?.focused !== undefined || receipt?.runtime_evidence?.focused_review !== undefined) {
-    for (const required of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs',
-      'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs',
-      'claude-runtime-host.cjs', 'lock.cjs', 'architecture-target.cjs'])
-      if (!context?.installation?.files?.some(pin => pin.root === context.installation.script_root && pin.path === required))
-        fail('required installed source pin is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
-    validateHistoricalContext(input);
-    if (context.worktree !== input.worktree || context.ticket !== input.ticket || context.pr !== input.pr)
-      fail('focused sealed subject identity differs', 'STALE_CONTEXT');
-    for (const pin of context.installation.files) {
-      if (file(pin.root, pin.path).sha256 !== pin.sha256)
-        fail('installed architecture source changed', 'STALE_CONTEXT');
-    }
-    const current = collect({ worktree: input.worktree, ticket: input.ticket, phase: context.phase }, {
-      ...options, phaseRepo: context.phase_repo ?? null, graphDir: context.graph_dir, inflightDispatchId: input.dispatchId,
-      bookkeepingPins: context.bookkeeping, historicalBookkeepingPins: context.historical_bookkeeping,
-      allowClearedBookkeeping: true, phaseArchiveSelection: context.phase_archive_selection,
-      archivePins: [...context.historical_archives, ...(input.archivePins || [])],
-    });
-    if (current.pr !== input.pr || current.packet.digest !== context.packet_digest
-        || JSON.stringify(canonical(focusedBinding(current))) !== JSON.stringify(canonical(context.focused)))
-      fail('sealed architecture context changed: focused subject or source membership differs before artifact consumption', 'STALE_CONTEXT');
-    return true;
-  }
-  if (!object(context) || context.schema !== SCHEMA || context.worktree !== input.worktree
-      || context.ticket !== input.ticket || context.pr !== input.pr
-      || context.phase !== receipt?.runtime_evidence?.phase
-      || receipt.runtime !== 'codex' || receipt.role !== 'arch-review'
-      || receipt.dispatch_id !== input.dispatchId || receipt.runtime_evidence.worktree !== input.worktree
-      || receipt.runtime_evidence.ticket !== input.ticket
-      || typeof context.graph_dir !== 'string' || !path.isAbsolute(context.graph_dir)
-      || !/^[a-f0-9]{64}$/.test(context.packet_digest || '')
-      || context.transcript_sha256 !== receipt.runtime_evidence.transcript?.sha256
-      || context.evidence_sha256 !== digest(input.evidence)
-      || !Array.isArray(context.selected_refs) || !Array.isArray(context.bookkeeping)
-      || !Array.isArray(context.historical_archives) || !Array.isArray(context.historical_bookkeeping)
-      || !object(context.installation) || !Array.isArray(context.installation.files))
+  if (!object(context) || !object(context.focused))
     fail('missing or malformed required Codex architecture context', 'ARCH_REVIEW_CONTEXT_REQUIRED');
-  const installation = context.installation;
-  if (installation.script_root !== fs.realpathSync(__dirname)
-      || !Number.isSafeInteger(installation.capacity?.complete_upper_bound_bytes)
-      || installation.capacity.complete_upper_bound_bytes < 1
-      || installation.capacity.complete_upper_bound_bytes > INPUT_MAX_BYTES
-      || installation.capacity.maximum_bytes !== INPUT_MAX_BYTES)
-    fail('installed launch authority differs from sealed context', 'STALE_CONTEXT');
-  refuseFileTransport(context);
-  for (const required of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs', 'architecture-target.cjs']) {
-    if (!installation.files.some(pin => pin.root === installation.script_root && pin.path === required))
+  for (const required of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs',
+    'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs',
+    'claude-runtime-host.cjs', 'lock.cjs', 'architecture-target.cjs'])
+    if (!context.installation?.files?.some(pin => pin.root === context.installation.script_root && pin.path === required))
       fail('required installed source pin is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
-  }
-  for (const pin of installation.files) {
-    if (!object(pin) || typeof pin.root !== 'string' || !path.isAbsolute(pin.root)
-        || !/^[a-f0-9]{64}$/.test(pin.sha256 || '') || file(pin.root, pin.path).sha256 !== pin.sha256)
+  validateHistoricalContext(input);
+  if (context.worktree !== input.worktree || context.ticket !== input.ticket || context.pr !== input.pr)
+    fail('focused sealed subject identity differs', 'STALE_CONTEXT');
+  for (const pin of context.installation.files) {
+    if (file(pin.root, pin.path).sha256 !== pin.sha256)
       fail('installed architecture source changed', 'STALE_CONTEXT');
   }
-  if (!installation.files.some(pin => pin.path === receipt.agent_file && pin.sha256 === receipt.agent_file_digest))
-    fail('installed agent differs from original receipt', 'STALE_CONTEXT');
-  const original = codexResultText({ runtime: receipt.runtime, role: receipt.role,
-    dispatch_id: input.dispatchId, receipt, application_evidence: { runtime_evidence: receipt.runtime_evidence } }).result;
-  if (original.context_digest !== context.packet_digest
-      || original.launch_digest !== digest(JSON.stringify(canonical({ graph_dir: context.graph_dir,
-        packet_digest: context.packet_digest, installation, bookkeeping: context.bookkeeping,
-        historical_archives: context.historical_archives, historical_bookkeeping: context.historical_bookkeeping,
-        ...(context.phase_repo !== undefined ? { phase_repo: context.phase_repo } : {}),
-        ...(context.phase_archive_selection ? { phase_archive_selection: context.phase_archive_selection } : {}) }))))
-    fail('sealed context differs from original authenticated launch identity', 'STALE_CONTEXT');
-  const { evidence_markdown: evidenceMarkdown, host_context: _originalContext, ...originalJudgment } = original;
-  const { host_context: _sealedContext, ...sealedJudgment } = input.result;
-  if (JSON.stringify(canonical(originalJudgment)) !== JSON.stringify(canonical(sealedJudgment))
-      || typeof evidenceMarkdown !== 'string' || input.evidence.toString('utf8').trim() !== evidenceMarkdown.trim())
-    fail('sealed result differs from original completed native judgment', 'STALE_CONTEXT');
-  const expectedBookkeeping = new Set(['.planning/graph/dispatches.json',
-    '.planning/graph/provenance/' + input.dispatchId + '.json']);
-  if (context.bookkeeping.some(pin => !object(pin) || !expectedBookkeeping.has(pin.path)
-      || !/^[a-f0-9]{64}$/.test(pin.sha256 || '')
-      || (pin.cleared_sha256 !== undefined && !/^[a-f0-9]{64}$/.test(pin.cleared_sha256))))
-    fail('malformed authenticated bookkeeping pin', 'ARCH_REVIEW_CONTEXT_REQUIRED');
-  if (PHASE_SUBJECT.test(input.ticket) && !object(context.phase_archive_selection))
-    fail('sealed aggregate current phase archive selection is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   const current = collect({ worktree: input.worktree, ticket: input.ticket, phase: context.phase }, {
     ...options, phaseRepo: context.phase_repo ?? null, graphDir: context.graph_dir, inflightDispatchId: input.dispatchId,
     bookkeepingPins: context.bookkeeping, historicalBookkeepingPins: context.historical_bookkeeping,
-    allowClearedBookkeeping: true, phaseArchiveSelection: context.phase_archive_selection, archivePins: [...context.historical_archives, ...(input.archivePins || [])],
-  }, true);
-  if ((current.binding && context.phase_evidence_digest !== current.packet.retained_history_digest)
-      || current.pr !== input.pr || current.packet.digest !== context.packet_digest
-      || JSON.stringify(canonical(current.packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes }))))
-        !== JSON.stringify(canonical(context.selected_refs)))
-    fail('sealed architecture context changed before artifact consumption', 'STALE_CONTEXT');
+    allowClearedBookkeeping: true, archivePins: [...context.historical_archives, ...(input.archivePins || [])],
+  });
+  if (current.pr !== input.pr || current.packet.digest !== context.packet_digest
+      || JSON.stringify(canonical(focusedBinding(current))) !== JSON.stringify(canonical(context.focused)))
+    fail('sealed architecture context changed: focused subject or source membership differs before artifact consumption', 'STALE_CONTEXT');
   return true;
 }
 
@@ -1073,4 +964,4 @@ module.exports = Object.freeze({
   focusedProducerFiles, focusedChangeInventory, selectFocusedArchitecture, validateFocusedResult, authenticateFocusedLaunch,
   SCHEMA, FILE_LIMITS, preflightReviewMaterial, recheckInstalledLaunch,
   prepare, finish, isPreparedContext, admitInstalledLaunch, admitBookkeeping, admittedPrompt,
-  validateHistoricalContext, validateSealedContext, collect });
+  validateHistoricalContext, validateSealedContext });

@@ -482,7 +482,6 @@ function prepareArch(options, request, canonical, graph, rows) {
   const { id: ticketId, row } = rows[0];
   let id = ticketId;
   let binding;
-  let selectedArchives;
   if (canonical.branch !== (request.phase ? row.epic : row.branch)) reject('architecture worktree branch differs from the canonical ticket branch');
   const pr = request.phase ? { number: request.pr } : selectPullRequest(options, canonical.worktree, row, request, 'open');
   const live = getPullRequest(options, canonical.worktree, pr.number, row.repo || null);
@@ -515,7 +514,6 @@ function prepareArch(options, request, canonical, graph, rows) {
     requiredRefs: [...focused.refs.map(ref => ref.path), ...(binding ? ['.planning/graph/delivery-state.json'] : [])], architecture: {
       refs: focused.inventory.filter(ref => ref.selected), excluded: focused.inventory.filter(ref => !ref.selected && ref.reasons.includes('superseded')).map(ref => ({
         id: /ADR-\d{3}/.exec(path.basename(ref.path))?.[0], path: ref.path, reason: 'superseded' })), unresolved: [] } };
-  if (binding) selectedArchives = roleArtifact.selectPhaseArchives(canonical.worktree, binding, { graphDir: graph.directory });
   const sourceAuthority = roleArtifact.authenticateArchitectureSources(canonical.worktree, canonical.projectRoot, focused.authorityRefs);
   const reference = loadClaudeReferenceContent('arch-review');
   const plan = sources.plans[0];
@@ -542,10 +540,7 @@ function prepareArch(options, request, canonical, graph, rows) {
     adr_excluded: sources.architecture.excluded,
     adr_unresolved: sources.architecture.unresolved,
     reference_digest: referenceDigest(reference),
-    ...(binding ? { ticket_set: binding.ticketSet, ticket_set_digest: binding.membership,
-      phase_archive_selection: selectedArchives.selection, retained_history_digest: roleArtifact.phaseArchitectureEvidenceDigest(selectedArchives.evidence),
-      retained_evidence: selectedArchives.evidence.map(record => ({ worktree: record.worktree, dispatch_id: record.dispatch_id,
-        files: record.files.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) })) } : {}),
+    ...(binding ? { ticket_set: binding.ticketSet, ticket_set_digest: binding.membership } : {}),
   };
   roleContext.change_metadata.changes = require('./codex-arch-review-context.cjs').focusedChangeInventory(
     roleContext.change_metadata.name_status, roleContext.change_metadata.numstat);
@@ -556,7 +551,7 @@ function prepareArch(options, request, canonical, graph, rows) {
   const prompt = makePrompt('arch-review', id, packet, reference);
   return Object.freeze({ role: 'arch-review', ticket: id, phase: String(row.phase), phaseNumber: phaseNumberOf(row.phase),
     pr: live.number, base, baseName, baseCommit: live.baseRefOid, mergeBase, mergeBaseTree,
-    ...(binding ? { binding, phaseArchiveSelection: selectedArchives.selection, ticketSet: binding.ticketSet, ticketSetDigest: binding.membership } : {}),
+    ...(binding ? { binding, ticketSet: binding.ticketSet, ticketSetDigest: binding.membership } : {}),
     livePullRequests: [live], canonical, graph, rows, sources, packet, prompt, signals, evidencePath: ARCH_EVIDENCE });
 }
 
@@ -1339,7 +1334,7 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId, options) {
           if (prepared.role === 'integrator') revalidateIntegrator(options, prepared);
           else {
             if (prepared.role === 'code-review') roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
-            revalidateLiveInputs(options, prepared, dispatchId);
+            revalidateLiveInputs(options, prepared);
             if (git(options, prepared.canonical.worktree, ['rev-parse', 'HEAD']) !== prepared.canonical.head)
               reject('review HEAD changed before native launch', 'STALE_CONTEXT');
           }
@@ -1467,7 +1462,7 @@ function assertEvidenceOnlyChanges(options, prepared, graphBaseline) {
     roleArtifact.assertArchiveInventory(prepared.canonical.worktree, prepared.archivePins);
 }
 
-function revalidateLiveInputs(options, prepared, currentDispatchId) {
+function revalidateLiveInputs(options, prepared) {
   require('./context-packet.cjs').authenticatedPlanningRoot(prepared.canonical.worktree,
     prepared.canonical.planningReference);
   const worktree = prepared.canonical.worktree;
@@ -1491,8 +1486,6 @@ function revalidateLiveInputs(options, prepared, currentDispatchId) {
         phase: prepared.phaseNumber, repository: prepared.canonical.commonPath, repo: prepared.binding.repo, branch: prepared.canonical.branch,
         pr: live.number, head: live.headRefOid, base: live.baseRefOid });
       if (binding.subject !== prepared.ticket) reject('phase membership changed while architecture review ran', 'STALE_CONTEXT');
-      if (prepared.role !== 'code-review') roleArtifact.selectPhaseArchives(worktree, binding, { graphDir: prepared.graph.directory,
-        phaseArchiveSelection: prepared.phaseArchiveSelection, currentDispatchId });
     }
     return;
   }
@@ -1732,7 +1725,7 @@ async function dispatchRole(options, prepared) {
     if (getLaunchCount() !== 1 || !getLaunched()) reject('boundary did not perform exactly one authenticated model launch', 'MISSING_RECEIPT');
     if (heartbeatError) throw heartbeatError;
     assertEvidenceOnlyChanges(options, prepared, getGraphBaseline());
-    const expiredTickets = revalidateLiveInputs(options, prepared, record.receipt.dispatch_id) || [];
+    const expiredTickets = revalidateLiveInputs(options, prepared) || [];
     const output = resultFrom(getLaunched().output);
     if (prepared.part) {
       if (controller) controller.complete(scope.run_id);
@@ -1749,7 +1742,7 @@ async function dispatchRole(options, prepared) {
     const result = prepared.role === 'arch-review' ? { ...validatedResult, host_context: {
       focused: { ...prepared.packet.role_context.focused, context_digest: sha(canonicalJson(prepared.packet)) },
       graph_dir: prepared.graph.directory, source_root: prepared.canonical.projectRoot,
-      ...(prepared.binding ? { phase_repo: prepared.binding.repo, phase_archive_selection: prepared.phaseArchiveSelection, phase_evidence_digest: prepared.packet.role_context.retained_history_digest } : {}),
+      ...(prepared.binding ? { phase_repo: prepared.binding.repo } : {}),
       selected_refs: prepared.packet.required_refs.map(ref => ({ path: ref.path, sha256: ref.sha256, bytes: ref.bytes })),
     } } : validatedResult;
     const { artifact, validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id, evidence_markdown);
