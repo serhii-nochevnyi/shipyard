@@ -1,0 +1,41 @@
+{
+  "schema": "shipyard.historical-semantic-producer-fixture",
+  "version": 1,
+  "compression": "gzip",
+  "revisions": [
+    "cfc5bcc51be8815b09d1c5a64f038715f316cf76",
+    "2e9890bddd11a062b56f3d41c222bc59ffbc4e58"
+  ],
+  "sources": {
+    "role-artifact.cjs": {
+      "fixture": "role-artifact.cjs.gz",
+      "source_path": "plugins/delivery-pipeline/scripts/role-artifact.cjs",
+      "mode": "100644",
+      "blob": "12f5aec2819e1179ddaadea0765f9a70d62ef559",
+      "uncompressed_bytes": 700187,
+      "uncompressed_sha256": "8bbca68a49a1029bcc29dd9f81046cab0241617f39bcf711238a55925456e94f",
+      "compressed_bytes": 146138,
+      "compressed_sha256": "901d06c5a0231fc0993b05b9cdb039e0d3b9fb0dac0bfd5a5a5b2a05fe8370a9"
+    },
+    "codex-delivery-host.cjs": {
+      "fixture": "codex-delivery-host.cjs.gz",
+      "source_path": "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+      "mode": "100644",
+      "blob": "bafb153b3c6e88177b1497c5abf608d277e1a01e",
+      "uncompressed_bytes": 282399,
+      "uncompressed_sha256": "0c7fc0c69e28770a53b108957cb5704c44dd6434d42fb14e7922784b0f605b85",
+      "compressed_bytes": 63176,
+      "compressed_sha256": "e8b9829143bd5f120634c75324ac7e7f3fd7d8715b94eda4f8df9f60142667e3"
+    },
+    "claude-role-host.cjs": {
+      "fixture": "claude-role-host.cjs.gz",
+      "source_path": "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+      "mode": "100644",
+      "blob": "53b71ef1d86c9bc669fc32095019df8829aa697f",
+      "uncompressed_bytes": 170119,
+      "uncompressed_sha256": "0a7669a6cfc890ee5fcad129cf463fb8e9b65a13859a110de7833952f9743f7f",
+      "compressed_bytes": 39581,
+      "compressed_sha256": "bb2466836f4106b12d515cafccb57a3717b751482894a065c36ba9a5130db9fb"
+    }
+  }
+}
