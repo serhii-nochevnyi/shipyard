@@ -541,7 +541,7 @@ function scopedTreeOf(prepared, options) {
   }
 }
 
-function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
+function collectVerificationEvidence(prepared, verificationSpec, options = {}, renewOwner) {
   const allowList = prepared.verificationAllowList;
   if (Array.isArray(allowList)) {
     const verified = hostVerification.collectVerificationEvidence({ planText: prepared.plan.text, allowList,
@@ -549,7 +549,7 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
       planSha256: prepared.plan.sha256, expectedHead: prepared.commit.expectedHead,
       files_modified: prepared.commit.files_modified, sandboxRunner: options.verificationRunner,
       hostRunner: options.hostVerificationRunner,
-      treeDigest: options.scopedTree ? () => scopedTreeOf(prepared, options).tree : undefined });
+      treeDigest: options.scopedTree ? () => scopedTreeOf(prepared, options).tree : undefined }, renewOwner);
     return Object.freeze(Object.assign(verificationSpec.spec.commands.map((command) => Object.freeze({
       id: command.id, record_sha256: verified.digest, outcome: 'passed',
       host_evidence_digest: verified.digest,
@@ -559,27 +559,51 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
   const directory = privateDirectory(prepared.stateRoot, 'verification');
   const records = [];
   const failed = [];
+  const tree = () => {
+    try { return { digest: scopedTreeOf(prepared, options).tree, error: null }; }
+    catch (error) { return { digest: null, error: error.code || 'SCOPED_TREE_UNAVAILABLE' }; }
+  };
+  let authorityError = null;
+  let failedCommand = null;
   for (const command of verificationSpec.spec.commands) {
-    const before = scopedTreeOf(prepared, options).tree;
-    let result;
+    const before = tree();
+    let result = { status: null, stdout_sha256: sha256(''), stderr_sha256: sha256('') };
+    let invoked = false;
     try {
-      result = runner.run({ ...command, cwd: path.join(prepared.commit.worktree, command.cwd) });
+      if (before.error) fail(before.error, 'scoped tree unavailable before verification');
+      const spec = { ...command, cwd: path.join(prepared.commit.worktree, command.cwd) };
+      try { renewOwner?.(); }
+      catch (error) { authorityError = error.code || 'VERIFICATION_AUTHORITY_LOST'; }
+      if (!authorityError) {
+        invoked = true;
+        result = runner.run(spec);
+      }
     } catch (error) {
-      result = { status: null, signal: null, error_code: error.code || 'RUNNER_FAILED', timed_out: false,
-        stdout_sha256: sha256(''), stderr_sha256: sha256(String(error.message)), backend: null, profile_sha256: null };
+      result = { status: error.status ?? null, signal: error.signal || null, error_code: error.code || 'RUNNER_FAILED',
+        timed_out: Boolean(error.timed_out), stdout_sha256: error.stdout_sha256 || sha256(error.stdout || ''),
+        stderr_sha256: error.stderr_sha256 || sha256(error.stderr || String(error.message)),
+        backend: null, profile_sha256: null };
+    } finally {
+      if (invoked) {
+        try { renewOwner?.(); }
+        catch (error) { authorityError = error.code || 'VERIFICATION_AUTHORITY_LOST'; }
+      }
     }
-    const after = scopedTreeOf(prepared, options).tree;
-    const passed = result.status === 0 && !result.signal && !result.error_code && !result.timed_out && before === after;
+    const after = tree();
+    const passed = result.status === 0 && !result.signal && !result.error_code && !result.timed_out
+      && !authorityError && !before.error && !after.error && before.digest === after.digest;
     const payload = {
       schema: VERIFICATION_SCHEMA, version: 1,
       run_id: prepared.identity.run_id, dispatch_id: prepared.identity.dispatch_id,
       launch_id: prepared.identity.launch_id, ticket: prepared.commit.ticket,
       command_id: command.id, command_sha256: sha256(canonical(command)), spec_sha256: verificationSpec.digest,
       plan_sha256: prepared.plan.sha256, graph_sha256: prepared.graphDigest, policy_hash: prepared.identity.policy_hash,
-      tree_before: before, tree_after: after,
+      tree_before: before.digest, tree_after: after.digest,
       status: result.status === undefined ? null : result.status, signal: result.signal || null,
-      error_code: result.error_code || null, timed_out: Boolean(result.timed_out),
-      stdout_sha256: result.stdout_sha256 || null, stderr_sha256: result.stderr_sha256 || null,
+      error_code: result.error_code || before.error || after.error || null,
+      authority_error_code: authorityError, timed_out: Boolean(result.timed_out),
+      stdout_sha256: result.stdout_sha256 || sha256(result.stdout || ''),
+      stderr_sha256: result.stderr_sha256 || sha256(result.stderr || ''),
       backend: object(result.backend) ? { kind: result.backend.kind, path: result.backend.path, digest: result.backend.digest } : null,
       profile_sha256: result.profile_sha256 || null,
       outcome: passed ? 'passed' : 'failed',
@@ -588,7 +612,8 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
     const digest = sha256(canonical(envelope));
     atomicWrite(path.join(directory, digest + '.json'), JSON.stringify(envelope) + '\n', { exclusive: true });
     records.push(Object.freeze({ id: command.id, record_sha256: digest, outcome: payload.outcome }));
-    if (!passed) failed.push(command.id + (before !== after ? ' (changed scoped tree)' : ''));
+    if (!passed) failed.push(command.id + (before.digest !== after.digest ? ' (changed scoped tree)' : ''));
+    if (authorityError) { failedCommand = command; break; }
   }
   const missing = verificationSpec.spec.required.filter((id) => !records.some((record) => record.id === id));
   if (failed.length || missing.length) {
@@ -596,6 +621,13 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
       + [...failed.map((id) => 'failed ' + id), ...missing.map((id) => 'missing ' + id)].join(', '));
     error.code = 'VERIFICATION_FAILED';
     error.gates = { pre_commit: records, downstream: pendingGates() };
+    if (authorityError) {
+      error.status = 'verification_failed';
+      error.retryable = false;
+      error.command = [failedCommand.executable, ...failedCommand.argv];
+      error.evidence_digest = hostVerification.evidence(records, { stateRoot: prepared.stateRoot,
+        ticket: prepared.commit.ticket, plan_sha256: prepared.plan.sha256, configured: true }).digest;
+    }
     throw error;
   }
   const unconfigured = hostVerification.evidence([], { stateRoot: prepared.stateRoot,
@@ -2964,7 +2996,7 @@ function verificationAssignmentBlock(assignment) {
     + 'Historical GPG cause remains unknown. Actual assertion failures block; denial, missing evidence and unknown or unapproved commands remain HOLD.';
 }
 
-function finalizedArtifact(result, prepared, options) {
+function finalizedArtifact(result, prepared, options, renewOwner) {
   if (!object(result) || !object(result.receipt) || result.receipt.compliance !== 'verified') {
     fail('MISSING_RECEIPT', 'executor has no verified dispatch receipt');
   }
@@ -2999,12 +3031,12 @@ function finalizedArtifact(result, prepared, options) {
   });
   const staged = { ...prepared, identity };
   let records;
-  try { records = collectVerificationEvidence(staged, prepared.verification, options); }
+  try { records = collectVerificationEvidence(staged, prepared.verification, options, renewOwner); }
   catch (error) {
     if (error.status !== 'verification_failed') throw error;
     return Object.freeze({ ...result, status: 'verification_failed', command: error.command,
       evidence_digest: error.evidence_digest, retryable: error.retryable === true,
-      summary: error.message.slice(0, 500) });
+      summary: error.message.slice(0, 500), ...(error.gates ? { gates: error.gates } : {}) });
   }
   if (prepared.repair) recheckRepair(prepared, options);
   const candidate = admitCandidate(staged, prepared.verification, records, tree);
@@ -3325,6 +3357,27 @@ function createCodexDeliveryHost(options = {}) {
       fail('WRITER_FENCED', 'host writer lease is not bound to the scoped phase');
     }
   }
+  const verificationController = options.controller;
+  const verificationAuthority = verificationController?.authority(scope.run_id);
+  const verificationWriter = writerSession && { lease: writerSession.lease,
+    token: writerSession.handle?.token, epoch: writerSession.handle?.epoch,
+    base_revision: writerSession.base_revision };
+  const renewVerificationOwner = verificationController && (() => {
+    verificationController.assertOwner(scope.run_id);
+    if (!verificationAuthority || verificationController.authority(scope.run_id) !== verificationAuthority) {
+      fail('SESSION_FENCED', 'verification requires its original process-local owner');
+    }
+    if (verificationWriter) {
+      const { lease, token, epoch, base_revision: baseRevision } = verificationWriter;
+      if (lease?.schema !== 'shipyard.planning-writer-lease.v1'
+          || typeof lease.heartbeatFenced !== 'function' || typeof token !== 'string'
+          || !Number.isSafeInteger(epoch) || typeof baseRevision !== 'string') {
+        fail('WRITER_FENCED', 'verification requires its original complete writer session');
+      }
+      lease.heartbeatFenced({ token, epoch, base_revision: baseRevision });
+    }
+    verificationController.heartbeat(scope.run_id);
+  });
   const completedTyped = new Map();
   const preRecordValidation = writerSession && function validateHostWriter({ dispatch_id: dispatchId, gsd_role: gsdRole, receipt }) {
     const { lease, handle, base_revision: baseRevision, snapshot, phaseDir } = writerSession;
@@ -3802,7 +3855,8 @@ function createCodexDeliveryHost(options = {}) {
         if (delta.length && output.status !== 'fixed') fail('REPAIR_COMPLETION_INVALID', 'only fixed repairs may change source');
         recheckRepair(repairPrepared, options);
         retainRepairAttempt(repairPrepared, sealed, output, repairRecorder, result.receipt.dispatch_id);
-        const signed = delta.length ? finalizedArtifact(result, repairPrepared, { ...options, scope, recorder: repairRecorder }) : result;
+        const signed = delta.length ? finalizedArtifact(result, repairPrepared,
+          { ...options, scope, recorder: repairRecorder }, renewVerificationOwner) : result;
         if (signed.status === 'verification_failed') return signed;
         const actionSubject = delta.length ? publishSignedRepair(repairPrepared, signed, options) : repairPrepared;
         const actions = applyRepairActions(actionSubject, output, options, result.receipt.dispatch_id);
@@ -3810,7 +3864,8 @@ function createCodexDeliveryHost(options = {}) {
           ...(delta.length ? { publication: { status: 'confirmed', transition: actionSubject.repair.signed_transition } } : {}) });
       }
       if (!committing) return result;
-      let artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
+      let artifact = finalizedArtifact(result, prepared,
+        { ...options, scope, recorder: runtimeHost.recorder }, renewVerificationOwner);
       if (retryableVerificationFailure(artifact)) {
         const failure = verificationFailureContext(artifact);
         if (scheduleVerificationRetry(options.controller, scope.run_id, failure)) {
@@ -3829,7 +3884,8 @@ function createCodexDeliveryHost(options = {}) {
           if (prepared.verificationAssignment) retryContext.verification_assignment = prepared.verificationAssignment;
           result = await dispatchAgent(newDispatchId(), retryContext);
           options.controller?.assertOwner(scope.run_id);
-          artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
+          artifact = finalizedArtifact(result, prepared,
+            { ...options, scope, recorder: runtimeHost.recorder }, renewVerificationOwner);
         }
       }
       return artifact;

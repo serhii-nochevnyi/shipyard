@@ -558,6 +558,8 @@ test('real isolated builder reproduces complete inventory and independently load
     'codex-delivery-host.cjs': { mode: 420, digest: '0c7fc0c69e28770a53b108957cb5704c44dd6434d42fb14e7922784b0f605b85' },
     'claude-role-host.cjs': { mode: 420, digest: '0a7669a6cfc890ee5fcad129cf463fb8e9b65a13859a110de7833952f9743f7f' },
     'code-review-core.cjs': { mode: 420, digest: 'bf804fda349e2d21a0023e6f95a6dc32737e0016dfff743081092b1fa425b4a5' },
+    'host-verification.cjs': { mode: 420, digest: '7821d83325758e5b71c7d25604556ff41a495bcccaacbbe1fb9ca8813a417d86' },
+    'planning-writer-lease.cjs': { mode: 420, digest: 'abef7cd685442eb5c0d2f0cec5a3e1ec94c0ba3865b767bcb5f664f13b106200' },
   };
   const previous = actual.filter(r => !owned.has(r.path)).map(row => {
     const name = Object.keys(priorMirrors).find(name => row.path === `host/plugins/delivery-pipeline/scripts/${name}`);
@@ -569,7 +571,7 @@ test('real isolated builder reproduces complete inventory and independently load
     assert.equal(row.mode, priorMirrors[name].mode);
     return { ...row, ...priorMirrors[name], directory: false };
   });
-  assert.equal(previous.filter(r => Object.values(priorMirrors).some(prior => prior.digest === r.digest)).length, 6);
+  assert.equal(previous.filter(r => Object.values(priorMirrors).some(prior => prior.digest === r.digest)).length, 8);
   assert.equal(hash(JSON.stringify(previous)), capture.parent.other_package_inventory_sha256);
   const mirror = path.join(candidate, 'host/plugins/delivery-pipeline/scripts/check-state.cjs');
   assert.deepEqual(fs.readFileSync(mirror), fs.readFileSync(path.join(SCRIPTS, 'check-state.cjs')));

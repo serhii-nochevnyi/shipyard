@@ -174,7 +174,7 @@ function defaultSandboxRunner(worktree, stateRoot, program) {
     envAllowlist: ['PATH', 'LANG', 'LC_ALL'] });
 }
 
-function run(admitted, options = {}) {
+function run(admitted, options = {}, renewOwner) {
   if (!admitted.configured) return [];
   const worktree = fs.realpathSync(options.worktree);
   const treeDigest = options.treeDigest || (() => scopedTree({ worktree,
@@ -184,16 +184,18 @@ function run(admitted, options = {}) {
     catch (error) { return { digest: null, error: error.code || 'TREE_UNAVAILABLE' }; }
   };
   const results = admitted.not_allowed.map((argv) => Object.freeze({ argv, profile: null,
-    outcome: 'not_allowed', status: null, signal: null, timed_out: false,
+    outcome: 'not_allowed', status: null, signal: null, timed_out: false, authority_error_code: null,
     stdout_sha256: sha256(''), stderr_sha256: sha256(''), tree_before: tree().digest, tree_after: tree().digest }));
   const skipped = (command) => Object.freeze({ argv: [...command.argv], profile: command.profile,
-    timeout_ms: command.timeout_ms, backend: null, status: null, signal: null, timed_out: false,
+    timeout_ms: command.timeout_ms, backend: null, status: null, signal: null, timed_out: false, authority_error_code: null,
     stdout_sha256: sha256(''), stderr_sha256: sha256(''), tree_before: null, tree_after: null,
     outcome: 'skipped' });
   if (results.length) return Object.freeze([...results, ...admitted.commands.map(skipped)]);
   for (const [index, command] of admitted.commands.entries()) {
     const before = tree();
-    let result;
+    let result = { status: null, stdout: '', stderr: '' };
+    let authorityError = null;
+    let invoked = false;
     try {
       if (before.error) throw refusal('scoped tree unavailable before verification');
       const spec = { id: 'plan-' + (results.length + 1), executable: executable(command.argv[0], worktree),
@@ -202,19 +204,31 @@ function run(admitted, options = {}) {
         ? options.hostRunner || createHostProfileRunner({ timeoutMs: command.timeout_ms, maxOutput: MAX_OUTPUT,
           envAllowList: ['PATH', 'LANG', 'LC_ALL'] })
         : options.sandboxRunner || defaultSandboxRunner(worktree, options.stateRoot, spec.executable);
-      result = runner.run(spec);
+      try { renewOwner?.(); }
+      catch (error) { authorityError = error.code || 'VERIFICATION_AUTHORITY_LOST'; }
+      if (!authorityError) {
+        invoked = true;
+        result = runner.run(spec);
+      }
     } catch (error) {
-      result = { status: null, signal: null, timed_out: false, error_code: error.code || 'RUNNER_FAILED',
-        stdout: '', stderr: error.message };
+      result = { status: error.status ?? null, signal: error.signal || null, timed_out: Boolean(error.timed_out),
+        error_code: error.code || 'RUNNER_FAILED', stdout: error.stdout || '', stderr: error.stderr || error.message,
+        stdout_sha256: error.stdout_sha256, stderr_sha256: error.stderr_sha256 };
+    } finally {
+      if (invoked) {
+        try { renewOwner?.(); }
+        catch (error) { authorityError = error.code || 'VERIFICATION_AUTHORITY_LOST'; }
+      }
     }
     const after = tree();
     const passed = result.status === 0 && !result.signal && !result.timed_out && !result.error_code
-      && !after.error && before.digest === after.digest;
+      && !authorityError && !after.error && before.digest === after.digest;
     results.push(Object.freeze({ argv: [...command.argv], profile: command.profile,
       timeout_ms: command.timeout_ms, backend: result.backend?.kind || (command.profile === 'host' ? 'host' : null),
       backend_digest: result.backend?.digest || null, profile_sha256: result.profile_sha256 || null,
       status: result.status ?? null, signal: result.signal || null, timed_out: Boolean(result.timed_out),
       error_code: result.error_code || before.error || after.error || null,
+      authority_error_code: authorityError,
       stdout_sha256: result.stdout_sha256 || sha256(result.stdout || ''),
       stderr_sha256: result.stderr_sha256 || sha256(result.stderr || ''),
       tree_before: before.digest, tree_after: after.digest, outcome: passed ? 'passed' : 'failed' }));
@@ -280,10 +294,10 @@ function readEvidence(file, digest) {
 }
 
 function verifyPlan({ planText, allowList, worktree, stateRoot, ticket, planSha256,
-  expectedHead, files_modified, sandboxRunner, hostRunner, treeDigest }) {
+  expectedHead, files_modified, sandboxRunner, hostRunner, treeDigest }, renewOwner) {
   const admitted = Array.isArray(allowList) ? admit(planCommands(planText), allowList) : admit([], null);
   const results = run(admitted, { worktree, stateRoot, expectedHead, files_modified,
-    sandboxRunner, hostRunner, treeDigest });
+    sandboxRunner, hostRunner, treeDigest }, renewOwner);
   const sealed = evidence(results, { stateRoot, ticket, plan_sha256: planSha256,
     configured: admitted.configured });
   if (admitted.configured && (!results.length || sealed.outcome !== 'passed')) {
@@ -295,7 +309,8 @@ function verifyPlan({ planText, allowList, worktree, stateRoot, ticket, planSha2
     error.evidence_digest = sealed.digest;
     error.retryable = Boolean(failure && failure.outcome === 'failed' && failure.profile
       && Number.isSafeInteger(failure.status) && failure.status !== 0 && !failure.signal
-      && !failure.timed_out && !failure.error_code && failure.tree_before === failure.tree_after);
+      && !failure.timed_out && !failure.error_code && !failure.authority_error_code
+      && failure.tree_before === failure.tree_after);
     throw error;
   }
   return sealed;
