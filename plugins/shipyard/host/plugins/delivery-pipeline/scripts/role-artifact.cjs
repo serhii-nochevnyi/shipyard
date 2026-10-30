@@ -4866,12 +4866,13 @@ function semanticWireBound(original) {
       { result_bytes: resultBytes, terminal_bytes: terminalBytes, limit_bytes: PARTITION_RESULT_LIMIT });
 }
 function authenticatedSemanticResult(trusted, launch, record, facts = immutableVerificationFacts(), carrier) {
-  const original = semanticOriginalResult(trusted, facts);
+  const binding = [record.snapshot.snapshot_sha256, record.snapshot.pins, record.historical, trusted.receipt, launch];
+  const original = semanticOriginalResult(trusted, facts, binding);
   semanticWireBound(original);
   if (carrier !== undefined && stable(carrier) !== stable(original.result))
     semanticError('supplied native semantic carrier differs from the original wire');
   // @security: Authenticate native custody and exact wire before reconstruction.
-  const native = semanticNative(trusted, launch, record, original.result, facts);
+  const native = semanticNative(trusted, launch, record, original.result, facts, binding);
   const result = validateSemanticResult(original.result, launch, record, facts);
   return { original, result, native };
 }
