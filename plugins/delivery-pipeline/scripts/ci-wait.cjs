@@ -88,7 +88,7 @@ const lockModule = require(path.join(__dirname, 'lock.cjs'));
 const { withLock, lockDirFor, writeAtomic } = lockModule;
 const sharedWithLock = lockModule.withLock;
 lockModule.withLock = (dir, name, fn, options = {}) => {
-  if (!['wait-events', 'state', 'orchestration-overhead', 'run-waker-events'].includes(name)
+  if (!['wait-events', 'state', 'run-waker-events'].includes(name)
       || !Number.isFinite(activeSharedLockDeadline)) {
     return sharedWithLock(dir, name, fn, options);
   }

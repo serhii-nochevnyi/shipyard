@@ -335,7 +335,6 @@ test('the bundle carries canonical payloads and rewrites installed Shipyard refe
       'claude-dispatch-adapter.cjs',
       'claude-workflow-host.cjs',
       'session-handoff.cjs',
-      'orchestration-overhead.cjs',
       'runtime-context.cjs',
       'comment-policy.cjs',
     ]) {
@@ -367,24 +366,19 @@ test('the bundle carries canonical payloads and rewrites installed Shipyard refe
   });
 });
 
-test('the generated bundle keeps recommendation, checkpoint and capability refusals executable', () => {
+test('the generated bundle keeps checkpoint and capability refusals executable', () => {
   withFixture({}, (f) => {
     const manifest = generated(f);
     const generatedDeliver = read(path.join(f.out, 'skills/shipyard-deliver/SKILL.md'));
     assert.ok(manifest.bundle_files.includes('scripts/session-handoff.cjs'));
-    assert.ok(manifest.bundle_files.includes('scripts/orchestration-overhead.cjs'));
     assert.ok(manifest.bundle_files.includes('scripts/runtime-context.cjs'));
     assert.ok(manifest.bundle_files.includes('scripts/comment-policy.cjs'));
     assert.match(generatedDeliver, /automatic_transfer\.allowed/);
     const handoff = require(path.join(f.out, 'bundle/scripts/session-handoff.cjs'));
     const runtime = require(path.join(f.out, 'bundle/scripts/runtime-context.cjs'));
-    const overhead = require(path.join(f.out, 'bundle/scripts/orchestration-overhead.cjs'));
-    assert.equal(typeof handoff.recommendRotation, 'function');
     assert.equal(typeof handoff.createSessionHandoff, 'function');
     assert.equal(typeof runtime.reportTransferCapability, 'function');
     assert.equal(runtime.TRANSFER_PROOF_CATEGORIES.length, 6);
-    assert.equal(typeof overhead.recordHandoffCost, 'function');
-    assert.ok(overhead.STAGES.has('successor_startup'));
   });
 });
 
