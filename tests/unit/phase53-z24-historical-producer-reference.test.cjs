@@ -21,7 +21,8 @@ const ORIGINALS = {
   'codex-delivery-host.cjs': [282399, '0c7fc0c69e28770a53b108957cb5704c44dd6434d42fb14e7922784b0f605b85', 'bafb153b3c6e88177b1497c5abf608d277e1a01e', '100644'],
   'claude-role-host.cjs': [170119, '0a7669a6cfc890ee5fcad129cf463fb8e9b65a13859a110de7833952f9743f7f', '53b71ef1d86c9bc669fc32095019df8829aa697f', '100644'],
 };
-const OWNED = [HELPER, SELF, FIXTURES + '/manifest.json', ...Object.keys(ORIGINALS).map(name => FIXTURES + '/' + name + '.gz')];
+const OWNED = [HELPER, SELF, 'tests/unit/phase53-z25-historical-fixture-text-transport.test.cjs',
+  FIXTURES + '/manifest.json', ...Object.keys(ORIGINALS).flatMap(name => [FIXTURES + '/' + name + '.gz', FIXTURES + '/' + name + '.gz.b64'])];
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const blob = bytes => crypto.createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
 function cleanEnv(home, temporary) {
@@ -62,12 +63,12 @@ function absentHistory(root, env) {
 function fixtureIdentity(root) {
   const directory = path.join(root, FIXTURES), manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json')));
   assert.equal(manifest.schema, 'shipyard.historical-semantic-producer-fixture');
-  assert.equal(manifest.version, 1); assert.equal(manifest.compression, 'gzip');
+  assert.equal(manifest.version, 2); assert.equal(manifest.compression, 'gzip');
   assert.deepEqual(manifest.revisions, REVISIONS);
   assert.deepEqual(Object.keys(manifest.sources).sort(), Object.keys(ORIGINALS).sort());
   for (const [name, [count, digest, identity, mode]] of Object.entries(ORIGINALS)) {
-    const row = manifest.sources[name], compressed = fs.readFileSync(path.join(directory, name + '.gz'));
-    assert.equal(row.fixture, name + '.gz'); assert.equal(row.source_path, 'plugins/delivery-pipeline/scripts/' + name);
+    const row = manifest.sources[name], compressed = Buffer.from(fs.readFileSync(path.join(directory, name + '.gz.b64'), 'ascii').trimEnd(), 'base64');
+    assert.equal(row.fixture, name + '.gz.b64'); assert.equal(row.source_path, 'plugins/delivery-pipeline/scripts/' + name);
     assert.equal(row.mode, mode); assert.equal(row.blob, identity);
     assert.equal(row.uncompressed_bytes, count); assert.equal(row.uncompressed_sha256, digest);
     assert.equal(compressed.length, row.compressed_bytes); assert.equal(sha(compressed), row.compressed_sha256);
@@ -99,6 +100,7 @@ function squashCandidate(directory, env) {
   }
   for (const relative of OWNED) {
     const source = path.join(ROOT, relative), target = path.join(checkout, relative);
+    if (!fs.existsSync(source)) { fs.rmSync(target, { force: true }); continue; }
     assert.equal(fs.lstatSync(source).isFile(), true); assert.equal(fs.lstatSync(source).isSymbolicLink(), false);
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.copyFileSync(source, target);
     fs.chmodSync(target, fs.statSync(source).mode & 0o777);
@@ -167,19 +169,20 @@ async function corruptionChecks(root) {
     const manifest = JSON.parse(fs.readFileSync(manifestFile)); change(manifest);
     fs.writeFileSync(manifestFile, JSON.stringify(manifest));
   };
-  const name = 'role-artifact.cjs', file = path.join(directory, name + '.gz');
+  const name = 'role-artifact.cjs', file = path.join(directory, name + '.gz.b64');
   const outer = bytes => {
-    fs.writeFileSync(file, bytes);
+    fs.writeFileSync(file, bytes.toString('base64') + '\n');
     edit(m => { m.sources[name].compressed_bytes = bytes.length; m.sources[name].compressed_sha256 = sha(bytes); });
   };
   const encode = bytes => { const compressed = zlib.gzipSync(bytes, { level: 9 }); compressed[9] = 255; return compressed; };
-  const decoded = zlib.gunzipSync(original.get(name + '.gz'), { maxOutputLength: ORIGINALS[name][0] });
+  const compressed = Buffer.from(original.get(name + '.gz.b64').toString('ascii').trimEnd(), 'base64');
+  const decoded = zlib.gunzipSync(compressed, { maxOutputLength: ORIGINALS[name][0] });
   const mutations = [
     ['missing manifest', () => fs.unlinkSync(manifestFile)],
-    ...Object.keys(ORIGINALS).map(source => ['missing ' + source, () => fs.unlinkSync(path.join(directory, source + '.gz'))]),
+    ...Object.keys(ORIGINALS).map(source => ['missing ' + source, () => fs.unlinkSync(path.join(directory, source + '.gz.b64'))]),
     ['malformed JSON', () => fs.writeFileSync(manifestFile, '{')],
     ['wrong schema', () => edit(m => { m.schema = 'other'; })],
-    ['wrong version', () => edit(m => { m.version = 2; })],
+    ['wrong version', () => edit(m => { m.version = 1; })],
     ['wrong compression', () => edit(m => { m.compression = 'deflate'; })],
     ['wrong original revision', () => edit(m => { m.revisions[0] = '0'.repeat(40); })],
     ['extra top field', () => edit(m => { m.fallback = true; })],
@@ -191,8 +194,8 @@ async function corruptionChecks(root) {
     ['wrong original blob', () => edit(m => { m.sources[name].blob = '0'.repeat(40); })],
     ['wrong decoded hash pin', () => edit(m => { m.sources[name].uncompressed_sha256 = '0'.repeat(64); })],
     ['false decoded byte count', () => edit(m => { m.sources[name].uncompressed_bytes++; })],
-    ['wrong fixture filename', () => edit(m => { m.sources[name].fixture = 'other.cjs.gz'; })],
-    ['traversal fixture filename', () => edit(m => { m.sources[name].fixture = '../role-artifact.cjs.gz'; })],
+    ['wrong fixture filename', () => edit(m => { m.sources[name].fixture = 'other.cjs.gz.b64'; })],
+    ['traversal fixture filename', () => edit(m => { m.sources[name].fixture = '../role-artifact.cjs.gz.b64'; })],
     ['absolute fixture filename', () => edit(m => { m.sources[name].fixture = file; })],
     ['traversal source path', () => edit(m => { m.sources[name].source_path = '../role-artifact.cjs'; })],
     ['absolute source path', () => edit(m => { m.sources[name].source_path = path.join(root, 'plugins/delivery-pipeline/scripts', name); })],
@@ -201,9 +204,9 @@ async function corruptionChecks(root) {
     ['over-limit compressed metadata', () => edit(m => { m.sources[name].compressed_bytes = 262145; })],
     ['wrong compressed hash', () => edit(m => { m.sources[name].compressed_sha256 = '0'.repeat(64); })],
     ['malformed compressed hash', () => edit(m => { m.sources[name].compressed_sha256 = null; })],
-    ['corrupt compressed bytes', () => { const bytes = Buffer.from(original.get(name + '.gz')); bytes[30] ^= 1; fs.writeFileSync(file, bytes); }],
-    ['truncated gzip with valid outer hash', () => outer(original.get(name + '.gz').subarray(0, -8))],
-    ['invalid gzip with valid outer hash', () => outer(Buffer.concat([original.get(name + '.gz').subarray(0, 10), Buffer.alloc(40, 255)]))],
+    ['corrupt compressed bytes', () => { const bytes = Buffer.from(compressed); bytes[30] ^= 1; fs.writeFileSync(file, bytes.toString('base64') + '\n'); }],
+    ['truncated gzip with valid outer hash', () => outer(compressed.subarray(0, -8))],
+    ['invalid gzip with valid outer hash', () => outer(Buffer.concat([compressed.subarray(0, 10), Buffer.alloc(40, 255)]))],
     ['changed decoded bytes with valid outer hash', () => { const bytes = Buffer.from(decoded); bytes[100] ^= 1; outer(encode(bytes)); }],
     ['short decoded bytes with valid outer hash', () => outer(encode(decoded.subarray(0, -1)))],
     ['bounded over-expansion with valid outer hash', () => outer(encode(Buffer.alloc(ORIGINALS[name][0] + 1)))],
@@ -211,11 +214,11 @@ async function corruptionChecks(root) {
     ['over-limit manifest', () => fs.writeFileSync(manifestFile, Buffer.alloc(16385, 32))],
     ['nonregular gzip', () => { fs.unlinkSync(file); fs.mkdirSync(file); }],
     ['nonregular manifest', () => { fs.unlinkSync(manifestFile); fs.mkdirSync(manifestFile); }],
-    ['symlink gzip escape', () => { fs.unlinkSync(file); fs.symlinkSync(path.join(process.env.HOME, 'escape.gz'), file); }],
+    ['symlink gzip escape', () => { fs.unlinkSync(file); fs.symlinkSync(path.join(process.env.HOME, 'escape.gz.b64'), file); }],
     ['symlink manifest escape', () => { fs.unlinkSync(manifestFile); fs.symlinkSync(path.join(process.env.HOME, 'escape.json'), manifestFile); }],
     ['symlink fixture directory escape', () => { fs.rmSync(directory, { recursive: true }); fs.symlinkSync(path.join(process.env.HOME, 'escape-fixtures'), directory); }],
   ];
-  fs.writeFileSync(path.join(process.env.HOME, 'escape.gz'), original.get(name + '.gz'));
+  fs.writeFileSync(path.join(process.env.HOME, 'escape.gz.b64'), original.get(name + '.gz.b64'));
   fs.writeFileSync(path.join(process.env.HOME, 'escape.json'), original.get('manifest.json'));
   const escape = path.join(process.env.HOME, 'escape-fixtures'); fs.mkdirSync(escape);
   for (const [name, bytes] of original) fs.writeFileSync(path.join(escape, name), bytes);
@@ -291,7 +294,7 @@ if (isMainThread) {
         const home = fs.realpathSync(fs.mkdtempSync(path.join(directory, 'z21-case-'))), temporary = path.join(home, 'worker-tmp');
         fs.mkdirSync(temporary);
         const root = path.join(home, 'candidate'); fs.cpSync(checkout, root, { recursive: true });
-        for (const relative of OWNED) assert.deepEqual(fs.readFileSync(path.join(root, relative)), fs.readFileSync(path.join(ROOT, relative)));
+        for (const relative of OWNED.filter(relative => fs.existsSync(path.join(ROOT, relative)))) assert.deepEqual(fs.readFileSync(path.join(root, relative)), fs.readFileSync(path.join(ROOT, relative)));
         const worker = new Worker(path.join(root, SELF), { workerData: { root, runtime, shared, cache: runtime === 'codex' && shared }, env: cleanEnv(home, temporary) });
         t.after(async () => { await worker.terminate(); fs.rmSync(home, { recursive: true, force: true }); });
         await new Promise((resolve, reject) => {
@@ -327,8 +330,8 @@ if (isMainThread) {
   await flow(workerData.root, workerData.runtime, workerData.shared);
   if (workerData.cache) {
     const h = require(path.join(workerData.root, HELPER));
-    const file = path.join(workerData.root, FIXTURES, 'role-artifact.cjs.gz');
-    const bytes = fs.readFileSync(file); bytes[30] ^= 1; fs.writeFileSync(file, bytes);
+    const file = path.join(workerData.root, FIXTURES, 'role-artifact.cjs.gz.b64');
+    const bytes = Buffer.from(fs.readFileSync(file, 'ascii').trimEnd(), 'base64'); bytes[30] ^= 1; fs.writeFileSync(file, bytes.toString('base64') + '\n');
     await assert.rejects(h.publicRole('integrator', 'codex', { historical: true, historicalShared: true, full: true }),
       /exact compressed digest/, 'same-process successful setup must not cache away subsequent disk corruption');
   }

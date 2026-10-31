@@ -242,6 +242,9 @@ function historicalSources(names) {
       assert.equal(count, opened.size, 'historical fixture changed while reading');
       const after = fs.lstatSync(file);
       assert.equal(after.isFile(), true); assert.equal(after.dev, opened.dev); assert.equal(after.ino, opened.ino);
+      const finished = fs.fstatSync(fd);
+      for (const observed of [finished, after]) for (const key of ['size', 'mtimeMs', 'ctimeMs'])
+        assert.equal(observed[key], opened[key], 'historical fixture changed while reading');
       return bytes.subarray(0, count);
     } finally { fs.closeSync(fd); }
   }
@@ -250,23 +253,33 @@ function historicalSources(names) {
     assert.deepEqual(Object.keys(value).sort(), [...expected].sort(), 'closed historical manifest fields');
   };
   const manifest = JSON.parse(read('manifest.json', 16384).toString('utf8'));
-  keys(manifest, ['schema', 'version', 'compression', 'revisions', 'sources']);
+  keys(manifest, ['schema', 'version', 'encoding', 'compression', 'revisions', 'sources']);
   assert.equal(manifest.schema, 'shipyard.historical-semantic-producer-fixture');
-  assert.equal(manifest.version, 1); assert.equal(manifest.compression, 'gzip');
+  assert.equal(manifest.version, 2); assert.equal(manifest.encoding, 'base64');
+  assert.equal(manifest.compression, 'gzip');
   assert.deepEqual(manifest.revisions, HISTORICAL_REVISIONS);
   keys(manifest.sources, Object.keys(HISTORICAL_SOURCES));
   for (const [name, original] of Object.entries(HISTORICAL_SOURCES)) {
     const row = manifest.sources[name];
     keys(row, ['fixture', 'source_path', 'mode', 'blob', 'uncompressed_bytes', 'uncompressed_sha256', 'compressed_bytes', 'compressed_sha256']);
-    for (const [key, value] of Object.entries({ ...original, mode: '100644', fixture: name + '.gz',
+    for (const [key, value] of Object.entries({ ...original, mode: '100644', fixture: name + '.gz.b64',
       source_path: 'plugins/delivery-pipeline/scripts/' + name })) assert.equal(row[key], value, 'immutable original ' + name + ' ' + key);
     assert.ok(Number.isSafeInteger(row.compressed_bytes) && row.compressed_bytes > 0 && row.compressed_bytes <= 262144);
+    assert.ok(4 * Math.ceil(row.compressed_bytes / 3) + 1 <= 262144, 'encoded historical fixture exceeds byte bound');
     assert.match(row.compressed_sha256, /^[a-f0-9]{64}$/);
   }
   return names.map(name => {
     assert.ok(Object.hasOwn(HISTORICAL_SOURCES, name), 'closed historical module name');
     const row = manifest.sources[name], original = HISTORICAL_SOURCES[name];
-    const compressed = read(name + '.gz', 262144);
+    const encoded = read(name + '.gz.b64', 262144);
+    assert.equal(encoded.length, 4 * Math.ceil(row.compressed_bytes / 3) + 1, 'exact encoded byte count');
+    assert.ok(encoded.every(byte => byte <= 127), 'historical transport must be raw ASCII');
+    const text = encoded.toString('ascii');
+    assert.match(text, /^[A-Za-z0-9+/]+={0,2}\n(?![\s\S])/, 'canonical base64 plus one LF');
+    const body = text.slice(0, -1), padding = (3 - row.compressed_bytes % 3) % 3;
+    assert.equal(body.indexOf('='), padding ? body.length - padding : -1, 'canonical base64 padding');
+    const compressed = Buffer.from(body, 'base64');
+    assert.equal(compressed.toString('base64'), body, 'canonical base64 pad bits');
     assert.equal(compressed.length, row.compressed_bytes, 'exact compressed byte count');
     assert.equal(hash(compressed), row.compressed_sha256, 'exact compressed digest');
     assert.deepEqual([...compressed.subarray(0, 10)], [31, 139, 8, 0, 0, 0, 0, 0, 2, 255], 'deterministic gzip format');
