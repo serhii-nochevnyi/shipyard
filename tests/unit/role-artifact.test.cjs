@@ -2225,7 +2225,6 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
     const codex = loadFixture('codex-code-review-context.test.cjs', 'fixture, review');
     const claude = loadFixture('claude-role-host.test.cjs',
       'coordinatorOnlyPlanning, hostOptions, livePr, phasePreparationRequest, cleanupFixture, PHASE');
-    const context = require('../../plugins/delivery-pipeline/scripts/codex-code-review-context.cjs');
     const host = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
     const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
     const flow = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
