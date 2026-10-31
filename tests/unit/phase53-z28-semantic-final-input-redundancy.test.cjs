@@ -40,7 +40,46 @@ function publicRole(role, runtime, options) {
   for (const file of Object.keys(require.cache)) if (file.startsWith(source + path.sep)
       || file.startsWith(path.join(process.env.HOME, 'producer-'))
       || file.startsWith(path.join(h.ROOT, 'tests/fixtures/phase53') + path.sep)) delete require.cache[file];
-  return h.publicRole(role, runtime, options);
+  const filename = require.resolve('../fixtures/phase53/semantic-result-helpers.cjs');
+  const loaded = new Module(filename, module);
+  loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+  let text = fs.readFileSync(filename, 'utf8');
+  for (const [before, after] of [
+    ['let completed, failure;', 'let completed, failure, current;'],
+    ['api[consumer(role)](inputFor(f))?.authenticated', '(current = api[consumer(role)](inputFor(f)))?.authenticated'],
+    ['completed, failure, nativeViews };', 'completed, failure, nativeViews, current };'],
+    ['cold(f, role, shipped)?.authenticated', '(context.shippedVerdict = cold(f, role, shipped))?.authenticated'],
+    ['cold(f, role, shipped, originals), originals', '(context.shippedOriginals = cold(f, role, shipped, originals)), originals'],
+    ['const recovered = await prepared.run();',
+      "context.recoveryArchive = inventory(path.join(f.worktree, '.shipyard-role-artifacts'));\n"
+        + '        context.recoveryAuthority = inventory(api.archiveAuthorityDirectory(f.worktree));\n'
+        + '        context.recoveryLaunchCount = launches;\n        const recovered = await prepared.run();'],
+    ['assert.deepEqual(recovered.result, completed.result);',
+      'assert.deepEqual(recovered.result, completed.result); context.recovered = recovered;'],
+    ["else assert.equal(cold(f, role, plugin), null);", "else assert.equal(context.producerVerdict = cold(f, role, plugin), null);"],
+  ]) {
+    assert.equal(text.split(before).length, 2);
+    text = text.replace(before, after);
+  }
+  loaded._compile(text, filename);
+  let fixture, installed = false;
+  return loaded.exports.publicRole(role, runtime, { ...options,
+    async configureFixture(f) {
+      fixture = f;
+      await options.configureFixture?.(f);
+    },
+    onLaunch(...args) {
+      if (!installed && runtime === 'codex') {
+        const { fastPullRequestFixture } = h.setup('phase53-claude-review.test.cjs',
+          "for (const role of ['integrator'", 'fastPullRequestFixture');
+        const { projectOptions } = h.setup('phase49-incremental-integration.test.cjs',
+          '\nif (require.main === module && integrationSelection.list)', 'projectOptions');
+        fastPullRequestFixture(fixture, projectOptions(fixture));
+        installed = true;
+      }
+      options.onLaunch?.(...args);
+    },
+  });
 }
 
 function git(root, ...args) {
@@ -211,6 +250,7 @@ function bounds(a, snapshot, launches, originals, record) {
 function coldCustody({ f, api, a, snapshot, prepared, originals, current, consumers }) {
   const directory = api.archiveAuthorityDirectory(f.worktree), archive = h.inventory(path.join(f.worktree, '.shipyard-role-artifacts'));
   const authority = h.inventory(directory), original = originals[0];
+  const receipts = h.inventory(prepared.recorder.storeDir);
   const envelopes = fs.readdirSync(directory).filter(name => name.endsWith('.json')).map(name => {
     const file = h.physical(f.root, path.join(directory, name));
     return { file, bytes: fs.readFileSync(file), value: JSON.parse(fs.readFileSync(file)) };
@@ -274,8 +314,12 @@ function coldCustody({ f, api, a, snapshot, prepared, originals, current, consum
       assert.equal(api.currentCodeReviewVerdict(h.inputFor(f)), null, label);
       assert.equal(h.cold(f, 'code-review', consumers.at(-1)), null, label);
     });
-    assert.deepEqual(api.currentCodeReviewVerdict(h.inputFor(f)), current, label + ' restored');
+    assert.deepEqual(h.inventory(path.join(f.worktree, '.shipyard-role-artifacts')), archive, label + ' restored archive');
+    assert.deepEqual(h.inventory(directory), authority, label + ' restored authority');
+    assert.deepEqual(h.inventory(prepared.recorder.storeDir), receipts, label + ' restored receipts');
   }
+  const restored = api.currentCodeReviewVerdict(h.inputFor(f));
+  for (const [label] of mutations) assert.deepEqual(restored, current, label + ' restored');
   const staged = consumers.at(-1), root = path.resolve(staged, '../../..');
   for (const relative of ['host/plugins/delivery-pipeline/scripts/role-artifact.cjs',
     '.codex-plugin/plugin.json', 'package-build.json']) {
@@ -302,13 +346,16 @@ function coldCustody({ f, api, a, snapshot, prepared, originals, current, consum
   prior.withBytes(producer, fs.readFileSync(producer, 'utf8') + '\n', () => {
     for (const owner of consumers) assert.equal(h.cold(f, 'code-review', owner), null);
   });
-  for (const owner of consumers) {
-    assert.deepEqual(h.cold(f, 'code-review', owner), current);
-    assert.deepEqual(h.cold(f, 'code-review', owner, originals), originals);
+  const observations = consumers.map(owner => ({ verdict: h.cold(f, 'code-review', owner),
+    originals: h.cold(f, 'code-review', owner, originals) }));
+  for (const observed of observations) {
+    assert.deepEqual(observed.verdict, current);
+    assert.deepEqual(observed.originals, originals);
   }
   assert.deepEqual(h.inventory(path.join(f.worktree, '.shipyard-role-artifacts')), archive);
   assert.deepEqual(h.inventory(directory), authority);
   assert.equal(final.payload.stage, 'final');
+  return observations;
 }
 
 for (const runtime of ['codex', 'claude']) test(runtime + ' current public final omits only the duplicate ordered seam vector', async () => {
@@ -317,7 +364,7 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' current public final
     onLaunch(launch) {
       if (launch.payload.stage === 'final') assert.equal(Object.hasOwn(launch.payload, 'independent_final_seam_ids'), false);
     },
-    inspect({ f, api, plugin, prepared, originals, snapshots, completed, expected }) {
+    inspect({ f, api, plugin, prepared, originals, snapshots, completed, expected, current }) {
       const a = internals(plugin), snapshot = [...snapshots.values()][0], beforeSnapshot = h.stable(snapshot);
       const record = a.semanticRecord(f.worktree, snapshot.snapshot_sha256);
       assert.equal(prepared.launches.length, 3); assert.equal(originals.length, 2);
@@ -363,7 +410,6 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' current public final
           assert.throws(() => a.decodeSemanticResult(bad, launch, snapshot));
         }
       }
-      const current = api.currentCodeReviewVerdict(h.inputFor(f));
       assert.equal(current.authenticated, true);
       assert.equal(snapshot.identity.ticket_set.length, 28);
       assert.equal(snapshot.responsibility_tickets.length, 28);
@@ -398,10 +444,6 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' current public final
       assert.deepEqual(fs.readFileSync(path.join(candidate, 'host/plugins/delivery-pipeline/scripts/role-artifact.cjs')),
         fs.readFileSync(path.join(source, 'scripts/role-artifact.cjs')));
       const consumers = [source, shipped, staged];
-      for (const owner of consumers) {
-        assert.deepEqual(h.cold(f, 'code-review', owner), current);
-        assert.deepEqual(h.cold(f, 'code-review', owner, originals), originals);
-      }
       const launches = prepared.launches.map(item => a.semanticEnvelope(f.worktree, 'launch',
         a.semanticKey(snapshot.snapshot_sha256, item.payload.stage, item.payload.assignment?.id || null)));
       const final = launches.at(-1);
@@ -409,7 +451,11 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' current public final
         trusted: a.trustedRecord({ recorder: prepared.recorder, dispatchId: final.dispatch_id }), report: expected.get('final') });
       const observations = bounds(a, snapshot, launches, originals, record);
       f.producer = plugin;
-      coldCustody({ f, api, a, snapshot, prepared, originals, current, consumers });
+      const observationsCold = coldCustody({ f, api, a, snapshot, prepared, originals, current, consumers });
+      for (const observed of observationsCold) {
+        assert.deepEqual(observed.verdict, current);
+        assert.deepEqual(observed.originals, originals);
+      }
       assert.equal(h.stable(snapshot), beforeSnapshot);
       process.stdout.write(JSON.stringify({ runtime, prospective28_complete_request: observations,
         final_wire_bytes: Buffer.byteLength(h.stable(finalObserved.result)), final_terminal_bytes: Buffer.byteLength(finalText),
@@ -430,11 +476,12 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' exact recorded previ
       result(result) {
         if (generation === 'previous' && result.assignment_id === 'code-correctness') result.completeness = 'blocked';
       },
-      async inspect({ f, api, plugin, prepared, snapshots, originals, expected, completed }) {
+      async inspect({ f, api, plugin, prepared, snapshots, originals, expected, completed, current, recovered,
+        shippedVerdict, shippedOriginals, recoveryLaunchCount, recoveryArchive, recoveryAuthority }) {
         const a = internals(), currentApi = a, snapshot = [...snapshots.values()][0];
         const before = h.stable(snapshot), record = a.semanticRecord(f.worktree, snapshot.snapshot_sha256);
-        const archive = h.inventory(path.join(f.worktree, '.shipyard-role-artifacts'));
-        const authority = h.inventory(api.archiveAuthorityDirectory(f.worktree));
+        const archive = recoveryArchive;
+        const authority = recoveryAuthority;
         assert.equal(prepared.launches.length, 3); assert.equal(new Set(prepared.launches.map(item => item.session)).size, 3);
         assert.equal(completed.result.verdict, generation === 'previous' ? 'incomplete' : 'pass');
         for (const observed of prepared.launches) {
@@ -484,17 +531,19 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' exact recorded previ
             assert.ok(original.result.seams.every(row => row.disposition === 'unresolved'));
           }
         }
-        const current = api.currentCodeReviewVerdict(h.inputFor(f));
-        for (const owner of consumers) {
-          assert.deepEqual(h.cold(f, 'code-review', owner), current);
-          assert.deepEqual(h.cold(f, 'code-review', owner, originals), originals);
-        }
+        let observationsCold;
         if (generation === 'previous') {
           f.producer = plugin;
-          coldCustody({ f, api, a, snapshot, prepared, originals, current, consumers });
+          observationsCold = coldCustody({ f, api, a, snapshot, prepared, originals, current, consumers });
+        } else observationsCold = consumers.map(owner => owner === shipped
+          ? { verdict: shippedVerdict, originals: shippedOriginals }
+          : { verdict: h.cold(f, 'code-review', owner), originals: h.cold(f, 'code-review', owner, originals) });
+        for (const observed of observationsCold) {
+          assert.deepEqual(observed.verdict, current);
+          assert.deepEqual(observed.originals, originals);
         }
-        const count = prepared.launches.length;
-        assert.deepEqual((await prepared.run()).result, completed.result);
+        const count = recoveryLaunchCount;
+        assert.deepEqual(recovered.result, completed.result);
         assert.equal(prepared.launches.length, count);
         assert.equal(h.stable(snapshot), before);
         assert.deepEqual(h.inventory(path.join(f.worktree, '.shipyard-role-artifacts')), archive);
@@ -508,7 +557,7 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' exact recorded previ
 
 for (const runtime of ['codex', 'claude']) test(runtime + ' unchanged integration architecture and recorded resource refusals', async () => {
   for (const role of ['integrator', 'arch-review']) await publicRole(role, runtime, {
-    inspect({ f, api, prepared, snapshots, originals }) {
+    inspect({ f, api, prepared, snapshots, originals, current }) {
       const a = internals(), snapshot = [...snapshots.values()][0], before = h.stable(snapshot);
       const record = a.semanticRecord(f.worktree, snapshot.snapshot_sha256);
       for (const observed of prepared.launches) {
@@ -523,7 +572,7 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' unchanged integratio
         if (!assignment) assert.deepEqual(body.independent_final_seam_ids, snapshot.independent_final_seam_ids);
       }
       for (const original of originals) assert.ok(original.result.findings.some(item => item.id.startsWith('INFO-')));
-      assert.equal(api[h.consumer(role)](h.inputFor(f)).authenticated, true);
+      assert.equal(current.authenticated, true);
       assert.equal(h.stable(snapshot), before);
     },
   });
@@ -545,7 +594,7 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' unchanged integratio
         output.message.content[0].is_error = true;
       }
     },
-    inspect({ f, plugin, originals, prepared, completed }) {
+    inspect({ f, plugin, originals, prepared, completed, producerVerdict }) {
       assert.equal(completed, undefined); assert.equal(prepared.launches.length, 3);
       assert.equal(new Set(prepared.launches.map(item => item.session)).size, 3);
       assert.equal(Object.hasOwn(payloadFor(prepared.launches.at(-1)), 'independent_final_seam_ids'), false);
@@ -556,7 +605,7 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' unchanged integratio
         assert.equal(original.result.findings[0].severity, 'INFO');
       }
       for (const owner of [source, shipped, plugin]) {
-        assert.equal(h.cold(f, 'code-review', owner), null);
+        assert.equal(owner === plugin ? producerVerdict : h.cold(f, 'code-review', owner), null);
         assert.deepEqual(h.cold(f, 'code-review', owner, originals), originals);
       }
     },
@@ -564,14 +613,14 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' unchanged integratio
   await publicRole('code-review', runtime, {
     refusal: /SEMANTIC_REVIEW_INCOMPATIBLE/,
     result(result) { if (result.stage === 'final') result.seams[0].disposition = 'unresolved'; },
-    inspect({ f, plugin, prepared, originals, completed, failure }) {
+    inspect({ f, plugin, prepared, originals, completed, failure, producerVerdict }) {
       assert.match(failure.message, /unresolved original findings or dependency seams cannot pass/);
       assert.equal(completed, undefined); assert.equal(prepared.launches.length, 3);
       assert.equal(new Set(prepared.launches.map(item => item.session)).size, 3);
       assert.equal(prepared.launches.at(-1).result.seam_rows[0].disposition, 'unresolved');
       assert.ok(originals.every(item => item.result.seams.every(seam => seam.disposition === 'resolved')));
       for (const owner of [source, shipped, plugin]) {
-        assert.equal(h.cold(f, 'code-review', owner), null);
+        assert.equal(owner === plugin ? producerVerdict : h.cold(f, 'code-review', owner), null);
         assert.deepEqual(h.cold(f, 'code-review', owner, originals), originals);
       }
     },
