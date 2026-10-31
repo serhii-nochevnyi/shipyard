@@ -495,10 +495,10 @@ Rules:
   call is scoped to one ticket or PR, Codex gets one typed role request per call.
 - **Publishing stays with the main loop.** Workers edit and verify, they do not
   commit or push; the host validates scope and finalizes the signed commit. The
-  main loop gates, pushes and opens the PR through the trusted
-  `role-artifact.cjs validate` → `read` procedure (Step 3): `prBodyPath` and
-  `evidencePath` are diagnostic references only — never `cat` them or pass an
-  unvalidated body to `gh pr create`.
+  main loop gates, pushes and opens the PR through
+  `deliver-dispatch.cjs publish` (Step 3): `prBodyPath` and `evidencePath` are
+  diagnostic references only — never `cat` them or pass an unvalidated body to
+  `gh pr create`.
 - Gates stay with the main loop (attempts, waiting for CI, arch-review, the
   conform gate, human checkpoints, escalations); the host performs only the role.
 - Submit each role's scope, complete signals and task context to the host; the
@@ -821,133 +821,43 @@ prints `0 agents` the project config does not parse: fix the file.
    `dispatch-record.cjs clear <T> <dispatch_id> --graph <project>/.planning/graph`
    (a record left standing over an escalation would hide it from the next run).
 
-5. **The "did work" gate (MECHANICAL).** Check the worktree, not the agent's words:
-   `git -C <worktree> log --oneline <base>..HEAD` — zero commits (or
-   `no-contract`/`blocked`) → do NOT push or open a PR: status `blocked`, escalate
-   with the reason. This is why the executor does not publish.
+5. **Gate and publish (MECHANICAL — one command).** A `no-contract`/`blocked`
+   result is never published: status `blocked`, escalate with the reason. Otherwise
+   seal a Codex-host result as above and, standing in the ticket's worktree:
 
-5b. **The scope gate (MECHANICAL).**
-   `node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <worktree> --base <base>`
-   — non-zero → do NOT push or open the PR. A branch editing outside the declared
-   `files_modified` voids the "parallel tickets never collide" guarantee. A
-   violation is a decision, never a retry: revert the stray edit and escalate, or
-   re-plan with the path declared.
-
-5c. **Comment policy gate (MECHANICAL).** Before any publication:
-
-   ```text
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/comment-policy.cjs check <T> \
-     --worktree <worktree> --base <state[T].base> --json
-   ```
-
-   Non-zero blocks the push (only required directives, licence/generated markers
-   and one-line `@invariant:`, `@security:` or `@contract:` markers up to 120
-   characters pass in added lines of code/config files). Preview the cleanup with
-   `comment-policy.cjs clean <T> --worktree <worktree> --base <state[T].base> --json`,
-   review the listed lines, then `clean --apply --json` (full-line additions only),
-   rerun the ticket Verification, amend the commit and rerun the did-work, scope and
-   comment gates plus the artifact validation/read below. A remaining manual
-   finding is a refusal. `publish-gate.cjs` in CI and the host `PreToolUse` hook
-   enforce the same policy on every `git push`.
-
-5d. **Validate executor evidence (TRUSTED CONSUMER).** After the three gates pass,
-   seal a Codex-host result as above; the Claude host's `artifact_ref` is only a
-   reference, never proof. Validate against the authenticated boundary-store record
-   and the live worktree:
-
-   ```text
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate \
-     --worktree <worktree> --role executor --ticket <T> --base <state[T].base> \
-     --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
-     --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
-   ```
-
-   Missing or surplus result IDs, missing files, escaped/symlinked paths, wrong
-   dispatch, stale HEAD/base, policy mismatch, forged receipt or digest mismatch
-   are refusals; cached metadata and digests never authorize a mutation or merge.
-
-6. Revalidate at the publication boundary and take one validated byte snapshot (if
-   `git -C <worktree> rev-parse HEAD` differs from the sealed manifest, rerun
-   `role-artifact validate` and stop if it refuses):
-
-   ```text
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs read \
-     --worktree <worktree> --role executor --ticket <T> --base <state[T].base> \
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs publish <T> \
      --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
      --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest> \
-     --pr-body-out <validated-body-file> --evidence-out <validated-evidence-file>
+     [--graph-dir <project>/.planning/graph]
    ```
 
-   Keep the evidence as a reference, never in parent context (findings come as a
-   bounded `--evidence-start <offset> --evidence-end <offset>` range). Then push
-   (`git -C <worktree> push -u origin <branch>`). `--base` is the RESOLVED base,
-   not main in epic-stacked: **the base decides what the review diff shows AND
-   where the squash LANDS.** A parent's branch is a legal base only while the
-   parent's PR is OPEN; once it MERGED the base is the EPIC (`state[T].base_reason`
-   says which rule applied) — never re-derive it from the graph's decompose-time
-   `pr_base`. When the base is the epic and the ticket HAS a primary parent, merge
-   the base in first so the diff is one slice, then open the PR:
+   It takes the base from `state[T].base`, never from the graph's decompose-time
+   `pr_base`: **the base decides what the review diff shows AND where the squash
+   LANDS** (a parent's branch is a legal base only while its PR is OPEN; once it
+   MERGED the base is the EPIC). In order, it stops at the first refusal and names
+   it: the did-work gate (no commit in `<base>..HEAD`), `scope-gate.cjs`,
+   `comment-policy.cjs check`, `role-artifact.cjs validate` then `read` (the
+   authenticated boundary-store record decides; the Claude host's `artifact_ref` is
+   only a reference), `base-merge.cjs` (base is the epic and the ticket HAS a primary
+   parent), PR hygiene, `publish-gate.cjs`, `git push`, `gh pr create --draft`,
+   the ledger entry and the first `reviewers.cjs reinit`. On a refusal:
+   - scope: a decision, never a retry — revert the stray edit and escalate, or
+     re-plan with the path declared;
+   - comment policy: `comment-policy.cjs clean <T> --worktree <worktree> --base
+     <state[T].base> --json` previews, review the lines, `clean --apply --json`
+     (full-line additions only), rerun the ticket Verification, amend the commit and
+     rerun `publish`; a remaining manual finding is a refusal;
+   - hygiene (every repository except Shipyard's own, whose `plugin.json` `name` is
+     `"shipyard"`): fix the named violation (title format, a leaked internal
+     identifier, a diff path under `.planning/`/`.shipyard/`); the body is the
+     executor's validated neutral body AS-IS. Shipyard is exempt and its body must
+     start with the marker `Ticket: <T>`; never mutate the agent file to add it.
 
-   ```
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <state[T].base>
-   ```
-
-   Publication branches on PR hygiene: read
-   `plugins/delivery-pipeline/.claude-plugin/plugin.json` in the ticket's own
-   repository; its `name` is `"shipyard"` only for the Shipyard repository itself.
-
-   - **Every other repository (a target project).** Render the title — never
-     `<T>: <title>` or a hand-composed subject:
-
-     ```text
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/pr-hygiene.cjs format --project-root <repo root> \
-       [--repo <state[T].repo>] --type <conventional-type> [--jira <jira-key>] \
-       --subject "<ticket title>"
-     ```
-
-     `--type` is the ticket's GSD `type`: `implementation`/`tdd`/`execute` → `feat`;
-     `fix`/`bugfix`/`gap_closure` → `fix`; `docs` → `docs`; `refactor` →
-     `refactor`; `test` → `test`; `chore`/`config` → `chore`; else `feat`. `--jira`
-     is the ticket's `delivery.jira` key when present. Then, with the SAME
-     `--repo`, validate before opening the PR:
-
-     ```text
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/pr-hygiene.cjs check --project-root <repo root> \
-       [--repo <state[T].repo>] --base <state[T].base> --head <branch> \
-       --title "<rendered title>" --body-file <validated-body-file> --json
-     ```
-
-     A non-zero exit or `ok: false` BLOCKS the push like the other Phase C gates —
-     fix the named violation (title format, a leaked internal identifier, a diff
-     path under `.planning/`/`.shipyard/`) and re-run. The body is the executor's
-     validated neutral body AS-IS (no `Ticket:`, phase, ADR or plan identifier):
-
-     ```
-     gh pr create --base <state[T].base> --head <branch> --draft \
-       --title "<rendered title>" --body-file <validated-body-file> \
-       [--repo <state[T].repo>]
-     ```
-
-   - **The Shipyard repository itself** is exempt (`pr-hygiene.cjs check` reports
-     `{"exempt":true}`) and keeps today's convention — the body's FIRST line is the
-     marker `Ticket: <T>` (verify it in the validated snapshot; a missing marker is
-     a publication refusal, not an invitation to mutate the agent file):
-
-     ```
-     gh pr create --base <state[T].base> --head <branch> --draft --title \
-       "<T>: <title>" --body-file <validated-body-file>
-     ```
-
-   EITHER WAY, record the ticket ↔ PR match right after `gh pr create` returns its
-   number (the exact head branch plus this number is what a re-read matches on):
-
-   ```
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/pr-ledger.cjs record --ticket <T> \
-     --number <the number gh pr create returned> --head <branch> \
-     [--repo <state[T].repo>]
-   ```
-7. Immediately the first `reviewers.cjs reinit <pr>`.
-8. Update delivery-state (`state-sync.cjs`) — once, AFTER all of Phase C (it also
+   It prints `{ticket, pr, head, base, url, evidence}`. Keep the evidence file as a
+   reference, never in parent context (findings come as a bounded
+   `--evidence-start <offset> --evidence-end <offset>` range).
+6. Update delivery-state (`state-sync.cjs`) — once, AFTER all of Phase C (it also
    finalizes the native GSD projection).
 
 File conflicts between parallel tickets are ruled out by Gate 2.

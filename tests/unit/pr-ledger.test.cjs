@@ -3,7 +3,6 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const SCRIPT = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pr-ledger.cjs');
@@ -14,10 +13,6 @@ function graphDir() {
   const g = path.join(dir, '.planning', 'graph');
   fs.mkdirSync(g, { recursive: true });
   return g;
-}
-
-function run(args) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', timeout: 20000 });
 }
 
 suite('recordPr / readLedger — round trip');
@@ -139,46 +134,6 @@ test('rejects a malformed repo', () => {
     }),
     /not a valid repo/
   );
-});
-
-suite('pr-ledger.cjs record — CLI');
-
-test('records via the CLI and exits 0', () => {
-  const g = graphDir();
-  const r = run([
-    'record', '--ticket', 'T-01-02', '--number', '7',
-    '--head', 'ticket/T-01-02-add-undo-endpoint', '--repo', 'acme/widgets', '--graph-dir', g,
-  ]);
-  assert.strictEqual(r.status, 0, r.stderr);
-  const stored = readLedger(g).entries['T-01-02'];
-  assert.strictEqual(stored.number, 7);
-  assert.strictEqual(stored.repo, 'acme/widgets');
-});
-
-test('the CLI refuses a malformed ticket id, naming the field, with a non-zero exit', () => {
-  const r = run(['record', '--ticket', 'nope', '--number', '1', '--head', 'ticket/x', '--graph-dir', graphDir()]);
-  assert.notStrictEqual(r.status, 0);
-  assert.match(r.stderr, /ticket id/);
-});
-
-test('the CLI refuses a malformed branch, naming the field, with a non-zero exit', () => {
-  const r = run(['record', '--ticket', 'T-01-02', '--number', '1', '--head', '-bad', '--graph-dir', graphDir()]);
-  assert.notStrictEqual(r.status, 0);
-  assert.match(r.stderr, /branch/);
-});
-
-test('the CLI refuses a malformed number, naming the field, with a non-zero exit', () => {
-  const r = run(['record', '--ticket', 'T-01-02', '--number', 'abc', '--head', 'ticket/x', '--graph-dir', graphDir()]);
-  assert.notStrictEqual(r.status, 0);
-  assert.match(r.stderr, /PR number/);
-});
-
-test('the CLI refuses a conflicting overwrite without --replace, naming the number', () => {
-  const g = graphDir();
-  recordPr({ graphDir: g, ticket: 'T-01-02', number: 5, head: 'ticket/T-01-02-a' });
-  const r = run(['record', '--ticket', 'T-01-02', '--number', '6', '--head', 'ticket/T-01-02-b', '--graph-dir', g]);
-  assert.notStrictEqual(r.status, 0);
-  assert.match(r.stderr, /already recorded against PR #5/);
 });
 
 done();
