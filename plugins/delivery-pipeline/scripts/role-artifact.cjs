@@ -4954,10 +4954,12 @@ function validateSemanticResult(result, launch, record, facts) {
   return result;
 }
 function semanticLaunchPayload(snapshot, stage, assignment, view, inputs, transport) {
+  const { obligation_ids, ...workerView } = view;
+  const emittedView = snapshot.role === 'code-review' && stage === 'worker' ? workerView : view;
   return { schema: SEMANTIC_REVIEW_V1, review_contract: SEMANTIC_REVIEW_V1, role: snapshot.role, stage,
     runtime: snapshot.runtime, subject: snapshot.subject, snapshot_sha256: snapshot.snapshot_sha256,
     reviewed_identity: snapshot.identity, result_formats: ['full', 'snapshot-indexed.v1'], assignment: semanticInlineAssignment(assignment),
-    ...view, ...inputs, ...(transport === 'host-files' ? { input_transport: 'host-files' } : {}),
+    ...emittedView, ...inputs, ...(transport === 'host-files' ? { input_transport: 'host-files' } : {}),
     ...(snapshot.role === 'code-review' ? { code_review_context: Object.fromEntries(
       ['review_round', 'review_scope', 'prior_head', 'prior_findings', 'dispositions_digest'].map(key =>
         [key, snapshot.code_review_packet.role_context[key]])) } : {}),
@@ -4989,10 +4991,12 @@ function assertSemanticLaunchView(launch, record, inputs) {
       || digest(stable(body)) !== binding_sha256)
     semanticError('semantic launch required responsibility view differs');
   if (stable(body) === stable(expected)) return;
-  const { result_formats, ...previous } = expected;
+  const predecessor = snapshot.role === 'code-review' && launch.stage === 'worker'
+    ? { ...expected, obligation_ids: view.obligations.map(item => item.id) } : expected;
+  const { result_formats, ...previous } = predecessor;
   const legacy = { ...previous, assignment: assignment || null,
     required_context: assignment ? assignment.required_context : snapshot.assignments.flatMap(item => item.required_context) };
-  if (stable(body) !== stable(previous) && stable(body) !== stable(legacy))
+  if (stable(body) !== stable(predecessor) && stable(body) !== stable(previous) && stable(body) !== stable(legacy))
     semanticError('semantic launch required responsibility view differs from current or exact recorded original launch');
   const recorded = semanticEnvelope(snapshot.identity.worktree, 'launch',
     semanticKey(snapshot.snapshot_sha256, launch.stage, launch.assignment_id));
