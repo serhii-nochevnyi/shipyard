@@ -1193,5 +1193,12 @@ for (const jira of [null, 'PRJ-42']) test(`default hold guards phase architectur
   } finally { f.cleanup(); }
 });
 
+test('fix builds refuse caller-supplied launch fields even when the required file is given', () => {
+  for (const [role, required] of [['review-fix', '--review-file'], ['ci-fix', '--failure-file']])
+    for (const field of ['--model', '--effort', '--prompt', '--prepared'])
+      assert.throws(() => deliverDispatch.parseBuildArgs([role, '01-demo', required, '/tmp/input.json', field, 'x']),
+        (error) => error.code === 'BUILD_REFUSED' && /unsupported build field/.test(error.message));
+});
+
 assert.equal(d37Selected, 2, 'exact dispatch D37 registration');
 done();

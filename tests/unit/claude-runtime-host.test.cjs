@@ -148,6 +148,12 @@ test('stream identifies the process session but does not establish model or effo
   assert.deepEqual(parsed.efforts, []);
 });
 
+test('a second session identity in the stream is refused', () => {
+  const foreign = JSON.stringify({ type: 'system', session_id: 'foreign' });
+  assert.throws(() => parseClaudeStream([...capturedLines(EXECUTOR_STREAM), foreign].join('\n')),
+    (error) => error.code === 'RUNTIME_EVIDENCE_INVALID' && /conflicting session identities/.test(error.message));
+});
+
 test('the captured result record carries the schema-bound structured_output', () => {
   for (const rel of [EXECUTOR_STREAM, RESEARCH_STREAM]) {
     const parsed = parseClaudeStream(capturedLines(rel).join('\n'));
