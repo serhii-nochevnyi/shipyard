@@ -219,7 +219,9 @@ test('signer protection covers the configured user.signingkey file, absolute or 
 });
 
 test('a second thread identity in the stream is refused', () => {
-  const foreign = JSON.stringify({ type: 'thread.started', thread_id: 'foreign' });
+  const started = stream().split('\n').find((line) => line.includes('"thread.started"'));
+  const foreign = started.replace('11111111-1111-4111-8111-111111111111', 'foreign');
+  assert.notEqual(foreign, started);
   assert.throws(() => parseCodexStream(stream() + foreign + '\n'),
     (error) => error.code === 'RUNTIME_EVIDENCE_INVALID' && /conflicting thread identities/.test(error.message));
 });
