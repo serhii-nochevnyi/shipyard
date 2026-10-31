@@ -15,19 +15,29 @@ const core = require(path.join(scripts, 'code-review-core.cjs'));
 const target = require(path.join(scripts, 'architecture-target.cjs'));
 const { fixture, retainPlanningInput } = require('../fixtures/code-review/artifact-fixture.cjs');
 
-function laterRelease() {
+function release(patches) {
   const Module = require('node:module');
   const file = path.join(scripts, 'role-artifact.cjs');
-  const reference = path.join(fs.realpathSync(os.tmpdir()), 'later-code-review-' + process.pid + '.md');
-  fs.writeFileSync(reference, fs.readFileSync(path.join(scripts, '../references/code-review.md'), 'utf8') + '\nA later instruction.\n');
-  const source = fs.readFileSync(file, 'utf8');
-  const marker = "path.join(__dirname, '../references/code-review.md')";
-  assert.ok(source.includes(marker));
+  let source = fs.readFileSync(file, 'utf8');
+  for (const [from, to] of patches) {
+    assert.ok(source.includes(from));
+    source = source.split(from).join(to);
+  }
   const loaded = new Module(file, module);
   loaded.filename = file; loaded.paths = Module._nodeModulePaths(path.dirname(file));
-  loaded._compile(source.split(marker).join(JSON.stringify(reference)), file);
+  loaded._compile(source, file);
   return loaded.exports;
 }
+
+function laterRelease() {
+  const reference = path.join(fs.realpathSync(os.tmpdir()), 'later-code-review-' + process.pid + '.md');
+  fs.writeFileSync(reference, fs.readFileSync(path.join(scripts, '../references/code-review.md'), 'utf8') + '\nA later instruction.\n');
+  return release([["path.join(__dirname, '../references/code-review.md')", JSON.stringify(reference)]]);
+}
+
+const withoutCurrentAuthority = () => release([
+  ['if (currentReview) manifest.current_review = currentReview;', ''],
+  ['if (stable(manifest.current_review || null) !== stable(currentReview))', 'if (false)']]);
 
 function history(reader, f) {
   return reader.priorCodeReviewVerdicts({ worktreePath: f.root, repository: target.repositoryIdentity(f.root),
@@ -45,7 +55,8 @@ for (const runtime of ['claude', 'codex'])
 test('a release with another contract skips a sealed ' + runtime + ' verdict: no round counts and the review is owed', () => {
   const f = fixture();
   try {
-    const input = retainPlanningInput(f, f.input(f.advance(1)), f.root, null, { runtime });
+    const input = retainPlanningInput(f, f.input(f.advance(1)), f.root, null,
+      { runtime, runtimeEvidence: runtime === 'codex' ? { review_continuation: { removed: true } } : undefined });
     artifact.sealJudgment(input);
     const head = input.result.head, later = laterRelease();
     assert.equal(history(artifact, f).length, 1);
@@ -55,6 +66,28 @@ test('a release with another contract skips a sealed ' + runtime + ' verdict: no
     assert.equal(roundsUsed(history(later, f), head), 0);
     assert.equal(current(later, f, head), null);
   } finally { f.cleanup(); fs.rmSync(path.join(fs.realpathSync(os.tmpdir()), 'later-code-review-' + process.pid + '.md'), { force: true }); }
+});
+
+for (const runtime of ['claude', 'codex'])
+test('a verdict sealed without the current review authority is skipped: no round counts, status owed, gate closed: ' + runtime, () => {
+  const flow = require(path.join(scripts, 'phase-code-review.cjs'));
+  const f = fixture();
+  try {
+    f.graph.epics = { 52: { branch: f.branch, phaseDir: f.phase, repos: [null] } };
+    Object.assign(f.graph.tickets['T-52-01'], { epic: f.branch, branch: 'feat/old-ticket', repo: null, phaseDir: f.phase });
+    fs.writeFileSync(path.join(f.root, '.planning/config.json'), JSON.stringify({ git: { base_branch: 'main' } }));
+    const input = retainPlanningInput(f, f.input(f.advance(1)), f.root, null, { runtime });
+    const sealed = withoutCurrentAuthority().sealJudgment(input), head = input.result.head;
+    assert.throws(() => artifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref,
+      artifactDigest: sealed.artifact_digest }), { code: 'REVIEW_COVERAGE_INVALID' });
+    assert.deepEqual(history(artifact, f), []);
+    assert.equal(roundsUsed(history(artifact, f), head), 0);
+    assert.equal(current(artifact, f, head), null);
+    const live = { number: 52, state: 'OPEN', headRefName: f.branch, headRefOid: head, baseRefName: 'main', baseRefOid: f.base };
+    const status = flow.status({ worktree: f.root, graphDir: f.graphDir, phase: 52, pr: 52, live }, { defaultBranch: 'main' });
+    assert.equal(status.state, 'owed'); assert.equal(status.rounds_used, 0);
+    assert.equal(flow.evaluateGate(status).ok, false);
+  } finally { f.cleanup(); }
 });
 
 const changed = file => ({ status: 'M', old_path: file, new_path: file, additions: 1, deletions: 0, paths: [file] });

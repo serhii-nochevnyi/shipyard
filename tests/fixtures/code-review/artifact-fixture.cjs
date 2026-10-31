@@ -169,7 +169,7 @@ function retainCodexReview(f, dispatchId, raw, packet, binding, options) {
         applied_model: r.model, applied_effort: r.effort, observed_model: r.model, observed_effort: r.effort,
         policy_hash: r.policy_hash, agent_file: r.agent_file, agent_file_digest: r.agent_file_digest,
         runtime_evidence: { schema: 'shipyard.codex-runtime-evidence.v1', runtime: 'codex', provider: 'openai', session_id: session, ticket: packet.subject,
-          worktree: f.root, code_review: binding,
+          worktree: f.root, code_review: binding, ...options.runtimeEvidence,
           native_session_evidence: { session_id: session, bytes: Buffer.byteLength(nativeText), sha256: hash(nativeText) },
           transcript: { path: stream, bytes: Buffer.byteLength(streamText), sha256: hash(streamText) } } };
     },
@@ -196,22 +196,4 @@ function writeCodexSession({ home, session, worktree, model, effort, prompt, raw
   return { native, nativeText };
 }
 
-function originalHistoricalProducer() {
-  const source = fs.readFileSync(path.join(__dirname, '../../unit/judgment-artifacts.test.cjs'), 'utf8');
-  const gzip = /const preCoverageRepairProducer = \{[\s\S]*?gzip: '([^']+)'/.exec(source)?.[1];
-  const bytes = require('node:zlib').gunzipSync(Buffer.from(gzip, 'base64'));
-  if (hash(bytes) !== 'd0f5bbba03b66e3c3142c040e37fec87ece7457197ac7013db027c52fdff6428')
-    throw new Error('Original historical producer fixture changed');
-  const Module = require('node:module');
-  const filename = require.resolve('../../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-  const producer = new Module(filename, module);
-  producer.filename = filename; producer.paths = Module._nodeModulePaths(path.dirname(filename));
-  producer._compile(bytes.toString('utf8'), filename);
-  return producer.exports;
-}
-
-function sealInputOnlyHistory(input) {
-  return originalHistoricalProducer().sealJudgment(input);
-}
-
-module.exports = { originalHistoricalProducer, fixture, retainPlanningInput, setOriginalReview, sealInputOnlyHistory, writeCodexSession };
+module.exports = { fixture, retainPlanningInput, setOriginalReview, writeCodexSession };

@@ -3130,10 +3130,10 @@ function d35t36Review(mode = 'deletion', options = {}) {
     }
     const first = f.input(firstBinding, 1, null, firstRaw);
     if (options.originScope === 'foreign-pr') { first.pr = 53; first.result.pr = 53; }
-    if (!options.inputOnly || options.inputOnly === 'native') retain(first);
+    retain(first);
     let firstSeal = null;
     if (!options.unsealed) {
-      firstSeal = options.inputOnly ? fixtures.sealInputOnlyHistory(first) : artifacts.sealJudgment(first);
+      firstSeal = artifacts.sealJudgment(first);
       remember(firstSeal);
     }
     f.writeGraph();
@@ -3307,17 +3307,18 @@ test('D35T36 claude arbitrary historical Git text and an unsealed native finding
   } finally { r.f.cleanup(); }
 });
 
-for (const inputOnly of [true, 'native'])
-test('D35T36 claude input-only sealed history remains readable but supplies neither origin nor pass coverage: ' + inputOnly, () => {
-  const r = d35t36Review('deletion', { inputOnly });
+test('D35T36 claude a predecessor that lost its original custody counts as history but supplies neither origin nor pass coverage', () => {
+  const r = d35t36Review('deletion');
   try {
+    const receipt = r.f.recorder.getVerifiedRecord(r.first.dispatchId).receipt;
+    fs.unlinkSync(receipt.transcript.path);
     const history = r.artifacts.priorCodeReviewVerdicts({ worktreePath: r.f.root,
       repository: r.targets.repositoryIdentity(r.f.root), phaseDir: r.f.phase });
     assert.equal(history.length, 1); assert.equal(history[0].answer_authenticated, false);
     assert.equal(history[0].coverage_range, null);
     assert.equal(r.core.coverageComplete({ verdict: history[0], priorVerdicts: [], mergeBase: r.f.base, isAncestor: () => true }), false);
     assert.throws(() => r.next(2, { mutateAnswer(answer) {
-      answer.review_completeness = 'incomplete'; answer.limitations = ['Controlled input-only origin refusal'];
+      answer.review_completeness = 'incomplete'; answer.limitations = ['Controlled lost-custody origin refusal'];
     } }), error => error.code === 'REVIEW_NATIVE_INVALID');
     assert.equal(r.cold().current, null); r.assertOriginals();
   } finally { r.f.cleanup(); }
