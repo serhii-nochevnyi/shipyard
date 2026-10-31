@@ -4534,7 +4534,6 @@ function sealRole(value, options) {
   if (bytes(JSON.stringify(envelope)) > ENVELOPE_MAX_BYTES) {
     fail('ENVELOPE_TOO_LARGE', `role result envelope exceeds ${ENVELOPE_MAX_BYTES} UTF-8 bytes`);
   }
-  const resolution = trusted.record.resolution || {};
   const manifest = {
     schema: ROLE_ARTIFACT_SCHEMA,
     version: ENVELOPE_VERSION,

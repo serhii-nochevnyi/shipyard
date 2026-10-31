@@ -399,7 +399,7 @@ const oneOpenThread = JSON.stringify({
   } } } },
 });
 
-const { gateFromStatus, readGate, STATUS_MAX } = require(TRAILER);
+const { gateFromStatus, readGate } = require(TRAILER);
 
 function postedIn(dir) {
   const log = path.join(dir, 'posted.log');

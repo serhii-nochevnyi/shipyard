@@ -430,7 +430,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
 }
 
 test('public live verifier skips an epic and refuses bare status authority on a non-main integration branch', () => {
-  const { fixture, write, git } = require('./helpers/codex-arch-review-fixtures.cjs');
+  const { fixture, write } = require('./helpers/codex-arch-review-fixtures.cjs');
   const { verifyArchitectureTarget } = require('../../plugins/delivery-pipeline/scripts/gate-trailer.cjs');
   const f=fixture();
   try {

@@ -9,7 +9,6 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
 const RECORD = path.join(SCRIPTS, 'tracker-record.cjs');
-const PROJECTION = path.join(SCRIPTS, 'jira-project.cjs');
 
 function scratch(generation = 7) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-tracker-'));

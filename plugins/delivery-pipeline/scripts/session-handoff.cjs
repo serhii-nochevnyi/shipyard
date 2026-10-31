@@ -17,9 +17,7 @@ const ENVELOPE = 'shipyard.session-handoff-envelope.v1';
 const MANUAL_RESUME_INSTRUCTION = 'checkpoint at a clean boundary, then explicitly resume and acknowledge the successor after live revalidation';
 const LOCK_GRACE_MS = 2000;
 const CAPABILITIES = new WeakSet();
-const CONTROLLERS = new WeakSet();
 const CAPABILITY_DATA = new WeakMap();
-const CONTROLLER_DATA = new WeakMap();
 const HANDOFF_CONTEXT = new AsyncLocalStorage();
 
 function object(value) {
@@ -532,8 +530,6 @@ function createSessionHandoff(options = {}) {
   const store = path.resolve(options.storeDir || ownershipStorePath(identity));
   const clock = options.clock || (() => Date.now());
   const controller = {};
-  const data = { identity, store, clock, controller };
-  CONTROLLERS.add(controller); CONTROLLER_DATA.set(controller, data);
 
   function read(scopeId) {
     const state = readEnvelope(store, identity);
@@ -757,12 +753,7 @@ function createSessionHandoff(options = {}) {
   return Object.freeze(controller);
 }
 
-const createSessionHandoffController = createSessionHandoff;
-const createHandoffController = createSessionHandoff;
-
 function isOwnerCapability(value) { return CAPABILITIES.has(value) && CAPABILITY_DATA.get(value).kind === 'owner'; }
-function isSessionCapability(value) { return CAPABILITIES.has(value); }
-function isSessionHandoff(value) { return CONTROLLERS.has(value); }
 function capabilityForBoundary(value) {
   if (isOwnerCapability(value)) return value;
   if (object(value) && isOwnerCapability(value.capability)) return value.capability;
@@ -813,8 +804,8 @@ function runCli(argv = process.argv.slice(2)) {
 
 module.exports = Object.freeze({
   SCHEMA,
-  resolveRepositoryIdentity, ownershipStorePath, createSessionHandoff, createSessionHandoffController,
-  createHandoffController, isOwnerCapability, isSessionCapability, isSessionHandoff,
+  resolveRepositoryIdentity, ownershipStorePath, createSessionHandoff,
+  isOwnerCapability,
   capabilityForBoundary, withSessionHandoff, currentSessionHandoff, handoffError,
 });
 

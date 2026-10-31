@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('node:fs');
-const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');

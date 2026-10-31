@@ -319,7 +319,6 @@ function collect(scope, options) {
   const developmentPaths = String(run(options, 'git', ['-C', worktree, 'diff', '--name-only', '--no-renames', '-z',
     mergeBase + '...' + head], worktree, FILE_LIMITS.material)).split('\0').filter(name => name && require('./development-artifacts.cjs').isDevelopmentArtifact(name));
   const plans = (binding ? binding.rows : [{ row }]).map(item => file(project, item.row.plan));
-  const plan = plans[0];
   let inventoryCount = 0;
   function architectureNames(relative = '.planning/architecture') {
     return fs.readdirSync(path.join(project, relative), { withFileTypes: true }).flatMap(entry => {
@@ -431,8 +430,7 @@ function collect(scope, options) {
     diffBytes: Buffer.byteLength(diff),
     ...(binding ? { binding } : {}),
     packet: { ...packet, digest: digest(serialized), required_refs: refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })),
-      accounting: { estimated_bytes: Buffer.byteLength(serialized), typical_target_bytes: 200 * 1024,
-        above_typical_target: Buffer.byteLength(serialized) > 200 * 1024 } },
+      accounting: { estimated_bytes: Buffer.byteLength(serialized) } },
     draft: live.isDraft, livePullRequests: [{ ...live }], evidencePath: '.shipyard-arch-review-evidence.md' };
 }
 

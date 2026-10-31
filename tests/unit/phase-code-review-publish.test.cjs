@@ -11,7 +11,6 @@ const homedir = os.homedir;
 os.homedir = () => home;
 process.on('exit', () => { os.homedir = homedir; fs.rmSync(home, { recursive: true, force: true }); });
 const scripts = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts');
-const { createDispatchBoundary } = require(path.join(scripts, 'dispatch-boundary.cjs'));
 const flow = require(path.join(scripts, 'phase-code-review.cjs'));
 const artifact = require(path.join(scripts, 'role-artifact.cjs'));
 const target = require(path.join(scripts, 'architecture-target.cjs'));
