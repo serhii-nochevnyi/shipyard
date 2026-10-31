@@ -382,7 +382,7 @@ function finishIntegrator(value, dispatch, recorder) {
   verifyLivePullRequest(prepared, options);
   const { evidence_markdown: evidenceMarkdown, ...judgment } = host.validateResult(prepared, result);
   host.writeEvidence(prepared, evidenceMarkdown);
-  const { artifact, validated } = host.sealResult(prepared, judgment, recorder, dispatch.dispatch_id);
+  const { validated } = host.sealResult(prepared, judgment, recorder, dispatch.dispatch_id);
   return deepFreeze({ schema: 'shipyard.codex-delivery-result.v1', role: 'integrator', subject: prepared.ticket,
     phase: prepared.phase, ticket_set_digest: prepared.ticketSetDigest, result: judgment, dispatch, receipt: dispatch.receipt,
     artifact: { ref: validated.artifact_ref, digest: validated.artifact_digest, outcome: validated.envelope.outcome || validated.envelope.verdict },

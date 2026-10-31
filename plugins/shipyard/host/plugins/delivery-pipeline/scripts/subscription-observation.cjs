@@ -18,10 +18,6 @@ const RESET_TOLERANCE_SECONDS = 60;
 
 const CODEX_SLOTS = Object.freeze(['primary', 'secondary']);
 
-const DISCONTINUITY_REASONS = Object.freeze([
-  'reset', 'decrease', 'account_label_change', 'unattributed', 'unknown_concurrency', 'window_change',
-]);
-
 const LABEL_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 const ENVELOPE_FIELDS = Object.freeze([
@@ -336,7 +332,6 @@ module.exports = Object.freeze({
   CLAUDE_WINDOW_MINUTES,
   COVERAGE,
   RESET_TOLERANCE_SECONDS,
-  DISCONTINUITY_REASONS,
   LABEL_PATTERN,
   normalizeLabel,
   buildEnvelope,

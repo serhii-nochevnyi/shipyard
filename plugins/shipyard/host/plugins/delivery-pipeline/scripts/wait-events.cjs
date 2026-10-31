@@ -9,7 +9,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
-const { normalizeTreatment } = require(path.join(__dirname, 'orchestration-overhead.cjs'));
 
 const SCHEMA_VERSION = 1;
 const STORE_NAME = 'wait-events.json';
@@ -20,11 +19,36 @@ const DEFAULT_INTERVAL_MS = 30 * 1000;
 const DEFAULT_DEADLINE_MS = 15 * 60 * 1000;
 const DEFAULT_MAX_BACKOFF_MS = 15 * 60 * 1000;
 const ACTION_PREFIX = 'wait-event-';
+const TREATMENT_VALUES = Object.freeze({
+  wait_events: ['baseline', 'opt-06'],
+  bounded_context: ['baseline', 'opt-07'],
+});
+const TREATMENT_ALIASES = {
+  wait: 'wait_events', waitEvents: 'wait_events', 'opt-06': 'wait_events',
+  context: 'bounded_context', boundedContext: 'bounded_context', 'opt-07': 'bounded_context',
+};
 
 const TIME_KEYS = new Set([
   'at', 'created_at', 'updated_at', 'observed_at', 'generated_at', 'timestamp',
   'submitted_at', 'started_at', 'completed_at', 'next_wake_at', 'deadline',
 ]);
+
+function normalizeTreatment(value) {
+  const raw = value === undefined || value === null ? {} : value;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('treatment must be an object');
+  const out = { wait_events: 'baseline', bounded_context: 'baseline' };
+  for (const [rawKey, rawValue] of Object.entries(raw)) {
+    const key = TREATMENT_ALIASES[rawKey] || rawKey;
+    if (!Object.hasOwn(TREATMENT_VALUES, key)) throw new Error(`unknown treatment dimension ${rawKey}`);
+    if (typeof rawValue !== 'string' || !rawValue.trim() || rawValue.length > 512 || /[\u0000-\u001f\u007f]/.test(rawValue)) {
+      throw new Error(`treatment.${key} must be non-empty text`);
+    }
+    const canonical = rawValue === 'on' ? TREATMENT_VALUES[key][1] : rawValue === 'off' ? 'baseline' : rawValue;
+    if (!TREATMENT_VALUES[key].includes(canonical)) throw new Error(`unsupported ${key} treatment ${rawValue}`);
+    out[key] = canonical;
+  }
+  return out;
+}
 
 function clone(value) {
   return value === undefined ? value : JSON.parse(JSON.stringify(value));
