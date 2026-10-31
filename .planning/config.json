@@ -210,7 +210,6 @@
             "tests/unit/context-packet.test.cjs",
             "tests/unit/dispatch-record.test.cjs",
             "tests/unit/harness.test.cjs",
-            "tests/unit/orchestration-overhead.test.cjs",
             "tests/unit/pipeline-stats.test.cjs",
             "tests/unit/planning-artifacts.test.cjs",
             "tests/unit/repair-artifacts.test.cjs",
