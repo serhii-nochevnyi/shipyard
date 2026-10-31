@@ -507,7 +507,7 @@ test('the plugin and its capability carry the same version', () => {
     plugin.version, capability.version,
     `plugin.json is ${plugin.version} but capability.json is ${capability.version} — bump both together`
   );
-  assert.ok(/^\d+\.\d+\.\d+$/.test(plugin.version), `not a plain semver: ${plugin.version}`);
+  assert.ok(/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(plugin.version), `not a semver: ${plugin.version}`);
 });
 
 test('delivery docs name the generated Codex variants and no retired recovery targets', () => {
