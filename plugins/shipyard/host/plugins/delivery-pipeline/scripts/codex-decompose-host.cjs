@@ -23,7 +23,8 @@ const { hintForError } = require('./refusal-hints.cjs');
 const { sealDecomposition, assertContained, captureContainmentBaseline,
   persistContainmentBaseline, restoreContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
-  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
+  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest, pidAlive,
+  phaseDirectory: sharedPhaseDirectory, writeDurableFile } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const LAUNCH_SCHEMA = 'shipyard.codex-decompose-launch.v1';
@@ -115,21 +116,7 @@ function defaultRunStoreDir(scope, stateRoot = path.join(os.homedir(), '.local',
   return path.join(root, key, 'runs');
 }
 
-function phaseDirectory(worktree, phase) {
-  const root = path.join(fs.realpathSync(worktree), '.planning', 'phases');
-  let names;
-  try { names = fs.readdirSync(root); }
-  catch (error) { fail('PHASE_DIRECTORY_MISSING', 'phase directory root is unavailable: ' + error.message); }
-  if (fs.realpathSync(root) !== root) fail('PHASE_DIRECTORY_MISSING', 'phase directory root is not canonical');
-  const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === Number(phase)
-    && fs.lstatSync(path.join(root, name)).isDirectory());
-  if (matches.length !== 1) {
-    fail('PHASE_DIRECTORY_MISSING', 'expected exactly one phase directory for phase ' + phase + ', found ' + matches.length);
-  }
-  const directory = path.join(root, matches[0]);
-  if (fs.realpathSync(directory) !== directory) fail('PHASE_DIRECTORY_MISSING', 'phase directory is not canonical');
-  return directory;
-}
+const phaseDirectory = (worktree, phase) => sharedPhaseDirectory(fs.realpathSync(worktree), phase, fail);
 
 function researchArtifact(worktree, phase) {
   const directory = phaseDirectory(worktree, phase);
@@ -229,17 +216,7 @@ function launchFile(directory, dispatchId) {
 function writeLaunchRecord(directory, record) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const file = launchFile(directory, record.dispatch_id);
-  const temporary = file + '.' + process.pid + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
-  try {
-    fs.writeFileSync(temporary, JSON.stringify({ schema: LAUNCH_SCHEMA, version: 1, ...record }) + '\n', { mode: 0o600 });
-    const handle = fs.openSync(temporary, 'r');
-    try { fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
-    fs.renameSync(temporary, file);
-    const directoryHandle = fs.openSync(directory, 'r');
-    try { fs.fsyncSync(directoryHandle); } finally { fs.closeSync(directoryHandle); }
-  } finally {
-    try { fs.unlinkSync(temporary); } catch (_) {}
-  }
+  writeDurableFile(file, JSON.stringify({ schema: LAUNCH_SCHEMA, version: 1, ...record }) + '\n');
   return file;
 }
 
@@ -472,12 +449,6 @@ function verifyRuntimeEvidence(record, scope, binding, transcriptDir) {
       || stream.usage_records !== evidence.stream_evidence.usage_records) {
     fail('RECOVERY_ARTIFACT_ALTERED', 'completed runtime evidence does not match the host transcript');
   }
-}
-
-function pidAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return !error || error.code !== 'ESRCH'; }
 }
 
 function recoverAgent(role, options) {

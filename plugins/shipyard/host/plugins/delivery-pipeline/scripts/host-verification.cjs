@@ -301,5 +301,54 @@ function verifyPlan({ planText, allowList, worktree, stateRoot, ticket, planSha2
   return sealed;
 }
 
+const CONTROL = /[\u0000-\u001f\u007f]/g;
+
+function retryableFailure(failure) {
+  return failure?.status === 'verification_failed' && failure.retryable === true
+    && Array.isArray(failure.command) && failure.command.length > 0
+    && /^[0-9a-f]{64}$/.test(failure.evidence_digest || '');
+}
+
+function failureContext(failure, overflow) {
+  const diagnostic = {
+    attempt: 1,
+    limit: 1,
+    command: failure.command.slice(0, 64).map((part) => String(part).replace(CONTROL, ' ').slice(0, 256)),
+    evidence_digest: failure.evidence_digest,
+    summary: String(failure.summary || 'host verification failed').replace(CONTROL, ' ').slice(0, 500),
+  };
+  while (Buffer.byteLength(JSON.stringify(diagnostic), 'utf8') > 2048) {
+    if (diagnostic.command.length && diagnostic.command[diagnostic.command.length - 1].length > 16) {
+      const index = diagnostic.command.length - 1;
+      diagnostic.command[index] = diagnostic.command[index].slice(0, Math.max(16, Math.floor(diagnostic.command[index].length / 2)));
+    } else if (diagnostic.command.length > 1) diagnostic.command.pop();
+    else if (diagnostic.summary.length > 32) diagnostic.summary = diagnostic.summary.slice(0, Math.floor(diagnostic.summary.length / 2));
+    else if (diagnostic.command.length) diagnostic.command.pop();
+    else overflow('verification failure diagnostic cannot fit its 2 KiB bound');
+  }
+  return Object.freeze({ ...diagnostic, command: Object.freeze(diagnostic.command) });
+}
+
+function scheduleRetry(controller, runId, failure) {
+  if (!controller || typeof controller.retry !== 'function' || typeof controller.wake !== 'function') return false;
+  const current = typeof controller.status === 'function' ? controller.status(runId) : null;
+  if (current?.retry && (current.retry.exhausted === true
+      || (Number.isSafeInteger(current.retry.max_attempts)
+        && current.retry.attempts >= current.retry.max_attempts - 1))) return false;
+  const reason = `host verification failed; one bounded executor repair: ${JSON.stringify(failure)}`.slice(0, 400);
+  const scheduled = controller.retry(runId, { target_state: 'retryable', reason, delay_ms: 0, capability_recheck_ms: 0 });
+  if (!scheduled?.result?.scheduled || scheduled.result.exhausted === true) return false;
+  const woken = controller.wake(runId, { force: true, reason: 'bounded host-verification repair' });
+  return Boolean(woken?.result?.woken === true);
+}
+
+function failureReason(failure) {
+  const command = Array.isArray(failure?.command) && failure.command.length
+    ? failure.command.map((part) => String(part)).join(' ') : 'no allow-listed verification command matched';
+  const summary = String(failure?.summary || 'host verification failed').replace(CONTROL, ' ').slice(0, 300);
+  return `host verification failed (${command}): ${summary}`.slice(0, 400);
+}
+
 module.exports = Object.freeze({ planCommands, admit, assignPlan, run, evidence, readEvidence,
-  collectVerificationEvidence: verifyPlan, verifyPlan });
+  collectVerificationEvidence: verifyPlan, verifyPlan,
+  retryableFailure, failureContext, scheduleRetry, failureReason });

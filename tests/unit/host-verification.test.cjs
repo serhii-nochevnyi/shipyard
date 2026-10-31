@@ -244,3 +244,20 @@ test('one extra trailing argument is never admitted through a host entry', () =>
     assert.ok(!admit([extended], configured).commands.some((item) => item.profile === 'host'), entry.argv.join(' '));
   }
 });
+
+test('both delivery hosts share the bounded verification-retry rules', () => {
+  const claude = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+  const codex = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const failure = { status: 'verification_failed', retryable: true, command: ['make', 'check'], evidence_digest: 'a'.repeat(64) };
+  for (const [host, wrap] of [[claude, (value) => [value]], [codex, (value) => value]]) {
+    assert.ok(host.retryableVerificationFailure(wrap(failure)));
+    assert.ok(!host.retryableVerificationFailure(wrap({ ...failure, retryable: 1 })));
+    const controller = (retry, woken) => ({ status: () => ({ retry }), retry: () => ({ result: { scheduled: true } }),
+      wake: (runId, options) => { woken.push(options.force); return { result: { woken: true } }; } });
+    const woken = [];
+    assert.equal(host.scheduleVerificationRetry(controller({ attempts: 0, max_attempts: 2 }, woken), 'run', failure), true);
+    assert.deepEqual(woken, [true]);
+    assert.equal(host.scheduleVerificationRetry(controller({ attempts: 1, max_attempts: 2 }, woken), 'run', failure), false);
+    assert.equal(host.scheduleVerificationRetry(controller({ exhausted: true }, woken), 'run', failure), false);
+  }
+});
