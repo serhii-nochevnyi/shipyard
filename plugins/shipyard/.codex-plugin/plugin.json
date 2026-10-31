@@ -1,6 +1,6 @@
 {
   "name": "shipyard",
-  "version": "0.74.0+codex.fdb058ed77242285",
+  "version": "0.74.0+codex.2c53a51f0089d4a9",
   "description": "Artifact-driven delivery pipeline on top of GSD: deep investigation, ticket decomposition with a dependency graph, and per-ticket worktree->PR delivery babysat to green (CI + CodeRabbit/Copilot re-review). See docs/gsd_multilevel_delivery_pipeline.md.",
   "author": {
     "name": "Nochevnyi Serhii"
