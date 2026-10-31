@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
@@ -235,6 +235,28 @@ test('inspect reports the unproven transfer capability: automatic transfer is ne
     assert.equal(scope.transfer_capability.status, 'unsupported');
     assert.equal(scope.transfer_capability.automatic_transfer.allowed, false);
     assert.equal(scope.transfer_capability.manual_resume.status, 'available');
+  } finally {
+    clean(root);
+  }
+});
+
+test('the inspect CLI reports a synthetic capability claim as unsupported and never allows automatic transfer', () => {
+  const root = repoFixture();
+  try {
+    createSessionHandoff({ cwd: root }).begin({ runId: 'run-cli', sessionId: 'session-cli', phase: '33', tickets: ['T-33-08'] });
+    const evidence = Object.fromEntries(require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs').TRANSFER_PROOF_CATEGORIES
+      .map((category) => [category, { status: 'proven', source: 'synthetic-fixture', runtime: 'codex', host_version: '999.0.0', evidence_id: category }]));
+    const file = path.join(root, 'capability.json');
+    fs.writeFileSync(file, JSON.stringify(evidence));
+    const cli = spawnSync(process.execPath, [
+      path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/session-handoff.cjs'),
+      'inspect', '--cwd', root, '--runtime', 'codex', '--host-version', '999.0.0', '--capability-file', file, '--json',
+    ], { encoding: 'utf8', env: { ...process.env, SHIPYARD_RUNTIME: '', GSD_RUNTIME: '' } });
+    assert.equal(cli.status, 0, cli.stderr);
+    const capability = JSON.parse(cli.stdout).scopes[0].transfer_capability;
+    assert.equal(capability.status, 'unsupported');
+    assert.equal(capability.automatic_transfer.allowed, false);
+    assert.equal(capability.manual_resume.status, 'available');
   } finally {
     clean(root);
   }

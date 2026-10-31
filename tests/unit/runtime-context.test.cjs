@@ -4,7 +4,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
-const { resolveRuntime, resolveDispatchContext, readInheritedConfig } = require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs');
+const crypto = require('crypto');
+const {
+  resolveRuntime, resolveDispatchContext, readInheritedConfig, reportTransferCapability, TRANSFER_PROOF_CATEGORIES,
+} = require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs');
 
 function project(runtime) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-runtime-context-'));
@@ -171,6 +174,24 @@ test('malformed supplied launch identity is not replaced or generated', () => {
     assert.throws(() => resolveDispatchContext(null, { runtime: 'codex', env: {}, dispatch_id }), /dispatch_id/);
   }
   assert.equal(resolveDispatchContext(null, { runtime: 'codex', env: {} }).dispatch_id, undefined);
+});
+
+test('capability evidence is strict: synthetic or stale claims cannot enable automatic transfer', () => {
+  const context = resolveDispatchContext(project('codex'), { runtime: 'codex', env: {} });
+  const synthetic = Object.fromEntries(TRANSFER_PROOF_CATEGORIES.map((category) => [category, {
+    status: 'proven', source: 'synthetic-fixture', runtime: 'codex', host_version: '999.0.0',
+    evidence_id: crypto.randomUUID(),
+  }]));
+  const report = reportTransferCapability({
+    runtime_context: context, host: { runtime: 'codex', version: '999.0.0' }, evidence: synthetic, automatic: true,
+  });
+  assert.equal(report.status, 'unsupported');
+  assert.equal(report.confidence, 'unproven');
+  assert.equal(report.automatic_transfer.allowed, false);
+  assert.match(report.reason, /proving ground|unproven|review/i);
+  assert.ok(report.missing_evidence.length > 0);
+  assert.equal(report.runtime, 'codex');
+  assert.equal(report.policy_hash, context.policy_hash);
 });
 
 done();
