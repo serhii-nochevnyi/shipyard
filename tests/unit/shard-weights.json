@@ -18,7 +18,6 @@
  "phase-code-review.test.cjs": 266,
  "phase47-research-handback.test.cjs": 20,
  "phase49-current-review-admission.test.cjs": 120,
- "phase49-package-publication.test.cjs": 110,
  "release-gate.test.cjs": 30,
  "role-artifact.test.cjs": 628,
  "sentinel.test.cjs": 23,

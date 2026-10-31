@@ -218,6 +218,14 @@ test('signer protection covers the configured user.signingkey file, absolute or 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a second thread identity in the stream is refused', () => {
+  const started = stream().split('\n').find((line) => line.includes('"thread.started"'));
+  const foreign = started.replace('11111111-1111-4111-8111-111111111111', 'foreign');
+  assert.notEqual(foreign, started);
+  assert.throws(() => parseCodexStream(stream() + foreign + '\n'),
+    (error) => error.code === 'RUNTIME_EVIDENCE_INVALID' && /conflicting thread identities/.test(error.message));
+});
+
 test('parses thread and completed-turn evidence', () => {
   const parsed = parseCodexStream(stream());
   const native = parseNativeCodexTranscript(sessionTranscript(parsed.session_id), parsed.session_id);
