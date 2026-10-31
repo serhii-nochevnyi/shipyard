@@ -2852,7 +2852,8 @@ function resolveProtectedPath(entry) {
 }
 
 function normalizeProtectedPaths(paths) {
-  return [...new Set((Array.isArray(paths) ? paths : []).filter(Boolean).map(resolveProtectedPath))];
+  return [...new Set((Array.isArray(paths) ? paths : []).filter(Boolean).map(resolveProtectedPath))]
+    .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
 }
 
 function signerProtectionPaths(env, worktree) {
