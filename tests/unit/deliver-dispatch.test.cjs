@@ -1200,5 +1200,114 @@ test('fix builds refuse caller-supplied launch fields even when the required fil
         (error) => error.code === 'BUILD_REFUSED' && /unsupported build field/.test(error.message));
 });
 
+function publishFixture({ row = {}, board = {}, manifestName = 'shipyard' } = {}) {
+  const f = shipyardFixture();
+  writeJson(path.join(f.root, 'plugins', 'delivery-pipeline', '.claude-plugin', 'plugin.json'), { name: manifestName });
+  writeJson(path.join(f.graphDir, 'tickets.json'), { tickets: { [f.id]: ticketRow({ title: 'Demo ticket', epic: 'epic/demo', ...row }) } });
+  writeJson(path.join(f.graphDir, 'delivery-state.json'), { [f.id]: { base: 'main', ...(board.repo && !('repo_resolution' in board) ? { repo_resolution: { repository_root: `${f.root}-checkout` } } : {}), ...board } });
+  const calls = [];
+  const flags = ['--boundary-store', '/s', '--dispatch-id', 'd', '--artifact', 'a', '--artifact-digest', 'x'];
+  const publish = (refusing = {}, extra = flags) => deliverDispatch.publish([f.id, ...extra], {
+    cwd: f.root, stateDir: sharedStateDir,
+    run(file, args) {
+      const [name, arg] = file === process.execPath ? [path.basename(args[0], '.cjs'), args[1]] : [file, args[0]];
+      const key = `${name} ${arg}`;
+      calls.push({ key, args });
+      if (key in refusing) throw Object.assign(new Error('failed'), { stderr: refusing[key] });
+      if (key === 'role-artifact read') fs.writeFileSync(args[args.indexOf('--pr-body-out') + 1], refusing.body || 'Ticket: T-01-01\nbody\n');
+      return { 'git symbolic-ref': refusing.head ?? `${ticketRow().branch}\n`, 'git log': refusing.empty ? '' : 'c0ffee\n', 'pr-hygiene format': 'feat: Demo ticket\n', 'gh pr': refusing.url ?? 'https://github.com/o/r/pull/77\n' }[key] || '';
+    },
+  });
+  const keys = () => calls.map((c) => c.key);
+  const args = (key) => calls.find((c) => c.key === key).args;
+  const arg = (key, flag) => args(key)[args(key).indexOf(flag) + 1];
+  return { f, publish, keys, args, arg, ledger: () => require('../../plugins/delivery-pipeline/scripts/pr-ledger.cjs').readLedger(f.graphDir).entries };
+}
+
+const PUBLISH_HEAD = ['git symbolic-ref', 'git log', 'scope-gate T-01-01', 'comment-policy check', 'role-artifact validate', 'role-artifact read'];
+const PUBLISH_TAIL = ['publish-gate --worktree', 'git push', 'gh pr', 'reviewers reinit'];
+
+test('publish runs gates, validation, push, PR, ledger and reinit in order and records the match', () => {
+  const p = publishFixture();
+  try {
+    assert.equal(p.publish().pr, 77);
+    assert.deepEqual(p.keys(), [...PUBLISH_HEAD, ...PUBLISH_TAIL]);
+    assert.equal(p.arg('gh pr', '--title'), 'T-01-01: Demo ticket');
+    assert.equal(p.arg('gh pr', '--base'), 'main');
+    assert.equal(p.args('gh pr').includes('--draft'), true);
+    assert.equal(p.arg('publish-gate --worktree', '--base'), 'main');
+    assert.equal(p.args('publish-gate --worktree').includes('--working-tree'), true);
+    assert.equal(p.args('reviewers reinit')[2], '77');
+    assert.equal(p.ledger()[p.f.id].number, 77);
+  } finally { cleanup(p.f.root); }
+});
+
+test('publish stops at the first refusal, names it, and runs nothing after it', () => {
+  const cases = [
+    [{ head: 'other\n' }, /branch check refused: the worktree is on other/, 1], [{ empty: true }, /did-work gate refused/, 2],
+    [{ 'scope-gate T-01-01': 'out of scope' }, /scope-gate refused: out of scope/, 3], [{ 'comment-policy check': 'bad' }, /comment-policy refused/, 4],
+    [{ 'role-artifact validate': 'stale head' }, /role-artifact refused: stale head/, 5], [{ body: 'no marker\n' }, /marker "Ticket: T-01-01"/, 6],
+    [{ 'publish-gate --worktree': 'blocked' }, /publish-gate refused/, 7], [{ 'git push': 'rejected' }, /push refused/, 8], [{ url: 'no url\n' }, /no pull request number/, 9],
+  ];
+  for (const [refusing, message, ran] of cases) {
+    const p = publishFixture();
+    try {
+      assert.throws(() => p.publish(refusing), (error) => error.code === 'PUBLISH_REFUSED' && message.test(error.message));
+      assert.deepEqual(p.keys(), [...PUBLISH_HEAD, ...PUBLISH_TAIL].slice(0, ran));
+      assert.deepEqual(p.ledger(), {});
+    } finally { cleanup(p.f.root); }
+  }
+  const unresolved = publishFixture({ board: { base: '' } });
+  try {
+    assert.throws(() => unresolved.publish({}, ['--dispatch-id', 'd']), (error) => error.code === 'USAGE');
+    assert.throws(() => unresolved.publish(), (error) => error.code === 'BASE_UNRESOLVED');
+    assert.deepEqual(unresolved.keys(), []);
+  } finally { cleanup(unresolved.f.root); }
+});
+
+test('publish merges the base in only for a primary parent on the epic, and renders and checks a target-project title with the repo', () => {
+  for (const [row, board, merges] of [[{ primary_parent: 'T-00-00' }, { base: 'epic/demo' }, true], [{ primary_parent: 'T-00-00' }, {}, false], [{}, { base: 'epic/demo' }, false]]) {
+    const p = publishFixture({ row, board, manifestName: 'target' });
+    try {
+      p.publish();
+      assert.equal(p.keys().includes('base-merge T-01-01'), merges);
+      if (!merges) continue;
+      const at = (key) => p.keys().indexOf(key);
+      assert.ok(at('role-artifact read') < at('base-merge T-01-01') && at('base-merge T-01-01') < at('publish-gate --worktree') && at('publish-gate --worktree') < at('git push'));
+      assert.equal(p.ledger()[p.f.id].head, p.args('git push')[3]);
+      assert.equal(p.ledger()[p.f.id].head, p.arg('gh pr', '--head'));
+    } finally { cleanup(p.f.root); }
+  }
+  const p = publishFixture({ row: { jira: 'PRJ-7', type: 'fix' }, board: { repo: 'o/r' }, manifestName: 'target' });
+  try {
+    p.publish();
+    assert.deepEqual(p.keys(), [...PUBLISH_HEAD, 'pr-hygiene format', 'pr-hygiene check', ...PUBLISH_TAIL]);
+    for (const key of ['pr-hygiene format', 'pr-hygiene check', 'gh pr', 'reviewers reinit']) assert.equal(p.arg(key, '--repo'), 'o/r');
+    assert.equal([p.arg('pr-hygiene format', '--type'), p.arg('pr-hygiene format', '--jira')].join(), 'fix,PRJ-7');
+    assert.equal([p.arg('pr-hygiene check', '--title'), p.arg('gh pr', '--title')].join(), 'feat: Demo ticket,feat: Demo ticket');
+    assert.equal(p.ledger()[p.f.id].repo, 'o/r');
+    assert.equal([p.arg('pr-hygiene check', '--project-root'), p.arg('publish-gate --worktree', '--project-root')].join(), `${p.f.root}-checkout,${p.f.root}-checkout`);
+  } finally { cleanup(p.f.root); }
+  const refused = publishFixture({ manifestName: 'target' });
+  try {
+    assert.throws(() => refused.publish({ 'pr-hygiene check': 'leaked id' }), /pr-hygiene refused: leaked id/);
+    assert.equal(refused.keys().includes('git push'), false);
+  } finally { cleanup(refused.f.root); }
+});
+
+test('publish refuses a repository ticket without a resolved checkout, and reports an open PR whose ledger write failed', () => {
+  const unresolved = publishFixture({ board: { repo: 'o/r', repo_resolution: null }, manifestName: 'target' });
+  try {
+    assert.throws(() => unresolved.publish(), (error) => error.code === 'PUBLISH_REFUSED' && /no checkout of it is resolved/.test(error.message));
+    assert.deepEqual(unresolved.keys(), []);
+  } finally { cleanup(unresolved.f.root); }
+  const p = publishFixture();
+  try {
+    require('../../plugins/delivery-pipeline/scripts/pr-ledger.cjs').recordPr({ graphDir: p.f.graphDir, ticket: p.f.id, number: 5, head: ticketRow().branch });
+    assert.throws(() => p.publish(), (error) => error.code === 'PUBLISH_REFUSED' && /^deliver-dispatch: PR #77 is already open; ledger not recorded: .*PR #5/.test(error.message) && !/--replace/.test(error.message));
+    assert.equal(p.keys().includes('reviewers reinit'), false);
+  } finally { cleanup(p.f.root); }
+});
+
 assert.equal(d37Selected, 2, 'exact dispatch D37 registration');
 done();

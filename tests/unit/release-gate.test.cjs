@@ -253,7 +253,7 @@ function liveBoundary(options = {}) {
         require('child_process').execFileSync('git', ['-C', process.env.CONTROL_WORKTREE, 'checkout', '-qb', 'changed-after-admission']);
       }
     `);
-    fs.writeFileSync(path.join(scripts, 'pr-ledger.cjs'), '');
+    fs.writeFileSync(path.join(scripts, 'pr-ledger.cjs'), 'exports.recordPr = () => {};');
     const bin = path.join(root, 'bin');
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\ncase "$*" in *" push "*) echo push >> "$CONTROL_CALLS"; exit 0;; esac\nexec ${JSON.stringify(execFileSync('which', ['git'], { encoding: 'utf8' }).trim())} "$@"\n`, { mode: 0o755 });

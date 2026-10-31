@@ -16,6 +16,7 @@ const codexHost = require('./codex-delivery-host.cjs');
 const claudeRoleHost = require('./claude-role-host.cjs');
 const sentinelPreflight = require('./sentinel-preflight.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
+const { recordPr } = require('./pr-ledger.cjs');
 const { buildContextPacket } = require('./context-packet.cjs');
 const modelPolicy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
@@ -297,6 +298,14 @@ function launchPrSentinel({ args, row, projectRoot, graphDir, dispatchId, dir, o
   });
 }
 
+function loadTicket(graphDir, ticket) {
+  const graph = readJsonBounded(path.join(graphDir, 'tickets.json'));
+  const row = graph && object(graph.tickets) ? graph.tickets[ticket] : undefined;
+  if (!object(row)) fail('UNKNOWN_TICKET', `ticket ${ticket} has no canonical graph entry in ${graphDir}`);
+  const rawState = readJsonBounded(path.join(graphDir, 'delivery-state.json')) || {};
+  return { graph, row, state: object(rawState) && object(rawState.tickets) ? rawState.tickets : rawState };
+}
+
 async function launch(argv, options = {}) {
   const args = parseLaunchArgs(argv);
   const cwd = options.cwd || process.cwd();
@@ -305,11 +314,7 @@ async function launch(argv, options = {}) {
   catch { return fail('USAGE', `worktree ${cwd} does not exist`); }
 
   const graphDir = resolveLaunchGraphDir({ worktree: worktreePath, explicitGraphDir: args.graphDir });
-  const graph = readJsonBounded(path.join(graphDir, 'tickets.json'));
-  const row = graph && object(graph.tickets) ? graph.tickets[args.ticket] : undefined;
-  if (!object(row)) fail('UNKNOWN_TICKET', `ticket ${args.ticket} has no canonical graph entry in ${graphDir}`);
-  const rawState = readJsonBounded(path.join(graphDir, 'delivery-state.json')) || {};
-  const state = object(rawState) && object(rawState.tickets) ? rawState.tickets : rawState;
+  const { graph, row, state } = loadTicket(graphDir, args.ticket);
 
   const computeFrontFn = options.computeFront || computeFront;
   const front = computeFrontFn(graph.tickets, state, options.frontOptions || {});
@@ -451,6 +456,69 @@ async function waitOnce(dispatchId, options = {}) {
     if (remaining <= 0) return Object.freeze({ ...current, exit_code: 3 });
     await sleep(Math.min(intervalMs, remaining));
   }
+}
+
+function execStep(file, args, cwd) {
+  return execFileSync(file, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 });
+}
+
+function publish(argv, options = {}) {
+  const ticket = argv[0];
+  const boundary = ['--boundary-store', '--dispatch-id', '--artifact', '--artifact-digest'];
+  if (!ticket || ticket.startsWith('--') || boundary.some((name) => !flagValue(argv, name))) {
+    fail('USAGE', `usage: deliver-dispatch.cjs publish <ticket> ${boundary.map((name) => `${name} <v>`).join(' ')} [--graph-dir <d>]`);
+  }
+  const worktree = fs.realpathSync(options.cwd || process.cwd());
+  const graphDir = resolveLaunchGraphDir({ worktree, explicitGraphDir: flagValue(argv, '--graph-dir') });
+  const { row, state } = loadTicket(graphDir, ticket);
+  const board = object(state[ticket]) ? state[ticket] : {};
+  const base = board.base;
+  if (typeof base !== 'string' || !base) fail('BASE_UNRESOLVED', `ticket ${ticket} has no live base on the delivery board`);
+  const branch = row.branch;
+  const repoArgs = board.repo ? ['--repo', board.repo] : [];
+  const checkout = object(board.repo_resolution) && board.repo_resolution.repository_root;
+  if (board.repo && !checkout) fail('PUBLISH_REFUSED', `ticket ${ticket} belongs to ${board.repo} but no checkout of it is resolved`);
+  const root = checkout || path.resolve(graphDir, '..', '..');
+  const step = (name, file, args) => {
+    try { return (options.run || execStep)(file, args, worktree); } catch (error) {
+      return fail('PUBLISH_REFUSED', `${name} refused: ${`${error.stderr || ''}${error.stdout || ''}`.trim() || error.message}`);
+    }
+  };
+  const script = (name, args) => step(name, process.execPath, [path.join(__dirname, `${name}.cjs`), ...args]);
+  const gate = ['--worktree', worktree, '--base', base];
+  const artifact = ['--role', 'executor', '--ticket', ticket, ...gate, ...boundary.flatMap((name) => [name, flagValue(argv, name)])];
+
+  const head = step('branch check', 'git', ['symbolic-ref', '--short', 'HEAD']).trim();
+  if (head !== branch) fail('PUBLISH_REFUSED', `branch check refused: the worktree is on ${head || 'a detached HEAD'}, the ticket branch is ${branch}`);
+  if (!step('did-work gate', 'git', ['log', '--oneline', `${base}..HEAD`]).trim()) fail('PUBLISH_REFUSED', `did-work gate refused: ${branch} has no commits beyond ${base}`);
+  script('scope-gate', [ticket, ...gate]);
+  script('comment-policy', ['check', ticket, ...gate, '--json']);
+  script('role-artifact', ['validate', ...artifact]);
+  fs.mkdirSync(dispatchStateDir(options), { recursive: true });
+  const outDir = fs.mkdtempSync(path.join(dispatchStateDir(options), `publish-${ticket}-`));
+  const bodyFile = path.join(outDir, 'pr-body.md');
+  const evidenceFile = path.join(outDir, 'evidence.md');
+  script('role-artifact', ['read', ...artifact, '--pr-body-out', bodyFile, '--evidence-out', evidenceFile]);
+  if (row.primary_parent && base === row.epic) script('base-merge', [ticket, ...gate]);
+
+  let title = `${ticket}: ${row.title}`;
+  if (prHygiene.applies({ root })) {
+    title = script('pr-hygiene', ['format', '--project-root', root, ...repoArgs, '--type', prHygiene.conventionalType(row.type),
+      ...(row.jira ? ['--jira', row.jira] : []), '--subject', row.title]).trim();
+    script('pr-hygiene', ['check', '--project-root', root, ...repoArgs, '--base', base, '--head', branch, '--title', title, '--body-file', bodyFile, '--json']);
+  } else if (fs.readFileSync(bodyFile, 'utf8').split('\n', 1)[0] !== `Ticket: ${ticket}`) {
+    fail('PUBLISH_REFUSED', `the validated PR body does not start with the marker "Ticket: ${ticket}"`);
+  }
+  script('publish-gate', ['--worktree', worktree, '--working-tree', '--ticket', ticket, '--base', base, '--project-root', root]);
+  step('push', 'git', ['push', '-u', 'origin', branch]);
+  const url = step('gh pr create', 'gh', ['pr', 'create', '--base', base, '--head', branch, '--draft', '--title', title, '--body-file', bodyFile, ...repoArgs]).trim();
+  const number = Number((/\/pull\/(\d+)\s*$/.exec(url) || [])[1]);
+  if (!number) fail('PUBLISH_REFUSED', `gh pr create returned no pull request number: ${url}`);
+  try { recordPr({ graphDir, ticket, number, head: branch, repo: board.repo }); } catch (error) {
+    fail('PUBLISH_REFUSED', `PR #${number} is already open; ledger not recorded: ${error.message}`);
+  }
+  step(`reviewers reinit (PR #${number} is already open and recorded)`, process.execPath, [path.join(__dirname, 'reviewers.cjs'), 'reinit', String(number), ...repoArgs]);
+  return { ticket, pr: number, head: branch, base, url, evidence: evidenceFile };
 }
 
 function flagValue(argv, name) {
@@ -1268,7 +1336,11 @@ async function main(argv = process.argv.slice(2), output = process.stdout, optio
     output.write(`${JSON.stringify(result)}\n`);
     return result.exit_code;
   }
-  return fail('USAGE', 'usage: deliver-dispatch.cjs build|launch|status|wait ...');
+  if (command === 'publish') {
+    output.write(`${JSON.stringify(publish(rest, options))}\n`);
+    return 0;
+  }
+  return fail('USAGE', 'usage: deliver-dispatch.cjs build|launch|status|wait|publish ...');
 }
 
 module.exports = Object.freeze({
@@ -1286,6 +1358,7 @@ module.exports = Object.freeze({
   launch,
   statusOnce,
   waitOnce,
+  publish,
   pidLive,
   dispatchStateDir,
   main,

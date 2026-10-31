@@ -448,7 +448,8 @@ node "$SCRIPTS/pr-hygiene.cjs" check --project-root "$project" --repo "$repo" --
 pr_url="$(cd "$project" && gh pr create --repo "$repo" --base "$base_branch" --head "$head_branch" --title "$title" --body-file "$body_file")" \
   || fail_stage publish "gh pr create failed" "$executor_dispatch" "executor" null null
 pr_number="${pr_url##*/}"
-node "$SCRIPTS/pr-ledger.cjs" record --ticket "$ticket" --number "$pr_number" --head "$head_branch" --repo "$repo" --graph-dir "$graph_dir" >/dev/null \
+node -e 'require(process.argv[1]).recordPr({ graphDir: process.argv[2], ticket: process.argv[3], number: process.argv[4], head: process.argv[5], repo: process.argv[6] })' \
+  "$SCRIPTS/pr-ledger.cjs" "$graph_dir" "$ticket" "$pr_number" "$head_branch" "$repo" >/dev/null \
   || fail_stage publish "pr-ledger record failed for PR #$pr_number" "$executor_dispatch" "executor" null null
 publish_rung="$(printf '%s' "$(cat "$work/executor.wait.json")" | receipt_rungs)"
 stage_json publish true "PR #$pr_number recorded" "$executor_dispatch" executor "${publish_rung%%	*}" "${publish_rung#*	}"
