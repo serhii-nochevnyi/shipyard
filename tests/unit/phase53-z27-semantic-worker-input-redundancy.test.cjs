@@ -55,13 +55,17 @@ function launchAssertions(a, snapshot, launch, record, predecessor = false) {
   const prior = oldBody(snapshot, launch.stage, assignment, view, inputs, record.input_transport);
   const expected = h.clone(prior);
   if (snapshot.role === 'code-review' && launch.stage === 'worker' && !predecessor) delete expected.obligation_ids;
-  if (snapshot.role === 'code-review' && launch.stage === 'final') delete expected.independent_final_seam_ids;
+  if (snapshot.role === 'code-review' && launch.stage === 'final') {
+    delete expected.independent_final_seam_ids;
+    if (record.input_transport === 'host-files') delete expected.obligations;
+  }
   assert.deepEqual(body, expected);
   assert.deepEqual(view.obligation_ids, view.obligations.map(item => item.id));
   assert.deepEqual(view, unchanged); assert.equal(h.stable(snapshot), before);
   assert.equal(binding_sha256, h.hash(h.stable(body))); assert.equal(launch.input_sha256, h.hash(launch.input));
   assert.deepEqual(body.reviewed_identity, snapshot.identity);
-  assert.deepEqual(body.obligations, view.obligations); assert.deepEqual(body.seams, view.seams);
+  assert.deepEqual(snapshot.role === 'code-review' && launch.stage === 'final' && record.input_transport === 'host-files'
+    ? JSON.parse(fs.readFileSync(body.catalog.read_path)).obligations : body.obligations, view.obligations); assert.deepEqual(body.seams, view.seams);
   assert.deepEqual(body.required_context, view.required_context);
   const allMaterial = snapshot.material.map(({ content, ...item }) => ({ ...item,
     read_path: path.join(path.dirname(body.catalog.read_path), item.source_id + '.txt'),
@@ -94,6 +98,7 @@ function launchAssertions(a, snapshot, launch, record, predecessor = false) {
     assert.deepEqual(restored, prior); assert.ok(delta > 0);
   } else {
     const { independent_final_seam_ids, ...expected } = prior;
+    if (snapshot.role === 'code-review' && record.input_transport === 'host-files') delete expected.obligations;
     assert.deepEqual(projected, snapshot.role === 'code-review' ? expected : prior);
   }
 }

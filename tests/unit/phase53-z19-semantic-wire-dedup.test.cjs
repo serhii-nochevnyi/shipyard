@@ -285,7 +285,8 @@ function assertPackets(h, prepared, canonical = true) {
       assert.ok(all.length > unique(all).length, 'both complete responsibility contexts overlap');
       assert.deepEqual(packet.required_context, canonical ? unique(all) : all);
       assert.deepEqual(packet.seams, snapshot.seams);
-      assert.deepEqual(packet.obligations, snapshot.obligations);
+      assert.deepEqual(packet.role === 'code-review' && packet.stage === 'final' && packet.input_transport === 'host-files'
+        ? JSON.parse(fs.readFileSync(packet.catalog.read_path)).obligations : packet.obligations, snapshot.obligations);
       assert.deepEqual(packet.role === 'code-review' && packet.stage === 'final'
         ? packet.seams.map(item => item.id) : packet.independent_final_seam_ids, snapshot.independent_final_seam_ids);
       assert.deepEqual(packet.cross_responsibility_seam_ids, snapshot.cross_responsibility_seam_ids);
