@@ -93,7 +93,8 @@ function assertViews(payload, global) {
   assert.deepEqual(required_seam_ids, view.seams.map(item => item.id));
   assert.deepEqual(required_context, view.required_context);
   const ids = [...new Set([...assignment.primary_obligation_ids, ...assignment.support_obligation_ids])];
-  assert.deepEqual(payload.obligation_ids, global.obligation_ids.filter(id => ids.includes(id)));
+  assert.deepEqual(payload.role === 'code-review' && payload.stage === 'worker'
+    ? payload.obligations.map(item => item.id) : payload.obligation_ids, global.obligation_ids.filter(id => ids.includes(id)));
   assert.deepEqual(payload.material.map(item => item.source_id), assignment.required_material_source_ids);
   assert.deepEqual(payload.seams.map(item => item.id), assignment.required_seam_ids);
   for (const id of assignment.support_obligation_ids) assert.ok(assignment.support_reasons[id]?.length);

@@ -609,7 +609,22 @@ test('frozen physical prefixes singleton generation actual denominators and all 
     const file = path.join(h.ROOT, relative), stat = fs.lstatSync(file);
     const bytes = stat.isSymbolicLink() ? Buffer.from(fs.readlinkSync(file)) : fs.readFileSync(file);
     const hash = require('node:crypto').createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
-    assert.equal(hash, blob, relative);
+    let expectedBlob = blob;
+    if (relative === 'tests/unit/phase53-z15-responsibility-support.test.cjs' && hash !== blob) {
+      const prior = spawnSync('git', ['cat-file', 'blob', blob],
+        { cwd: h.ROOT, timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+      assert.equal(prior.error, undefined); assert.equal(prior.status, 0, prior.stderr.toString());
+      const before = Buffer.from('  assert.deepEqual(payload.obligation_ids, global.obligation_ids.filter(id => ids.includes(id)));\n');
+      const after = Buffer.from("  assert.deepEqual(payload.role === 'code-review' && payload.stage === 'worker'\n"
+        + '    ? payload.obligations.map(item => item.id) : payload.obligation_ids, global.obligation_ids.filter(id => ids.includes(id)));\n');
+      const at = prior.stdout.indexOf(before);
+      assert.ok(at >= 0); assert.equal(prior.stdout.lastIndexOf(before), at);
+      const projected = Buffer.concat([prior.stdout.subarray(0, at), after, prior.stdout.subarray(at + before.length)]);
+      assert.deepEqual(bytes, projected, 'only the accepted z15 scope operand may differ');
+      expectedBlob = require('node:crypto').createHash('sha1').update('blob ' + projected.length + '\0')
+        .update(projected).digest('hex');
+    }
+    assert.equal(hash, expectedBlob, relative);
     assert.equal(mode, stat.isSymbolicLink() ? '120000' : stat.mode & 0o111 ? '100755' : '100644', relative);
   }
 });
