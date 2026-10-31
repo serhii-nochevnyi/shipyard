@@ -630,28 +630,6 @@ for (const mode of ['hold', 'report']) test('D35 completed normalization control
   } finally { f.cleanup(); }
 });
 
-test('D35 immutable input-only history retains rounds and cannot authorize public hold or delta coverage', () => {
-  const f = fixture(null);
-  const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
-  try {
-    const binding = f.advance(1), input = f.inputArtifact(binding, 1, null, raw());
-    const old = fixtures.sealInputOnlyHistory(input), bytes = fs.readFileSync(old.artifact_ref);
-    const prior = artifact.priorCodeReviewVerdicts({ worktreePath: f.root,
-      repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
-    assert.equal(prior.length, 1); assert.equal(prior[0].answer_authenticated, false);
-    assert.equal(flow.status(f.input()).state, 'owed'); assert.equal(flow.status(f.input()).rounds_used, 1);
-    assert.equal(flow.verifyCodeReview(f.input()).ok, false); assert.equal(flow.evaluateGate(f.input()).ok, false);
-    const delta = artifactInput(f, binding, raw(), 2, input.result.head);
-    assert.throws(() => artifact.sealJudgment(delta), { code: 'JUDGMENT_OUTCOME_MISMATCH' });
-    const fresh = f.inputArtifact(binding, 2, input.result.head, raw());
-    fresh.result.review_scope = 'full'; retainPlanningInput(f, fresh);
-    artifact.sealJudgment(fresh);
-    assert.equal(flow.status(f.input()).state, 'current'); assert.equal(flow.status(f.input()).rounds_used, 2);
-    assert.equal(flow.verifyCodeReview(f.input()).ok, true);
-    assert.deepEqual(fs.readFileSync(old.artifact_ref), bytes);
-  } finally { f.cleanup(); }
-});
-
 test('D35 cold public CLI refuses changed native evidence and accepts restored original bytes', () => {
   const f = fixture(null), directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'd35-gate-')));
   try {
@@ -802,7 +780,7 @@ test('D37 historical authenticity grants no changed current authority: ' + JSON.
 });
 
 for (const mode of d37Modes) for (const change of ['session', 'selection', 'association', 'repository', 'packet', 'answer', 'evidence'])
-test('D37 pinned old archives cannot authenticate inconsistent originals: ' + JSON.stringify({ ...mode, change }), () => {
+test('D37 inconsistent originals cannot be sealed and leave no history: ' + JSON.stringify({ ...mode, change }), () => {
   const f = fixture(null);
   try {
     const input = d37Input(f, f.advance(1), mode, raw(), 1, null, [], {
@@ -834,26 +812,9 @@ test('D37 pinned old archives cannot authenticate inconsistent originals: ' + JS
     }
     if (change === 'evidence') fs.writeFileSync(path.join(f.root, '.shipyard-code-review-evidence.md'), 'Substituted evidence\n');
     assert.throws(() => artifact.sealJudgment(input));
-    const old = d37Fixtures.sealInputOnlyHistory(input);
-    const prior = d37Prior(f);
-    assert.equal(prior.length, 1); assert.equal(prior[0].artifact_digest, old.artifact_digest);
-    assert.equal(prior[0].answer_authenticated, false); assert.equal(prior[0].coverage_range, null);
+    assert.deepEqual(d37Prior(f), []);
     assert.equal(f.lookup(), null); assert.equal(flow.evaluateGate(f.input()).ok, false);
-    assert.equal(flow.status(f.input()).rounds_used, change === 'answer' ? 0 : 1);
-  } finally { f.cleanup(); }
-});
-
-for (const mode of d37Modes) test('D37 input-only history cannot authorize successor coverage: ' + JSON.stringify(mode), () => {
-  const f = fixture(null);
-  try {
-    const binding = f.advance(1), input = f.inputArtifact(binding, 1, null, raw());
-    const old = d37Fixtures.sealInputOnlyHistory(input);
-    const prior = d37Prior(f);
-    assert.equal(prior[0].artifact_digest, old.artifact_digest);
-    assert.equal(prior[0].answer_authenticated, false); assert.equal(prior[0].coverage_range, null);
-    assert.equal(flow.status(f.input()).rounds_used, 1); assert.equal(flow.evaluateGate(f.input()).ok, false);
-    const delta = d37Input(f, binding, mode, raw(), 2, input.result.head);
-    assert.throws(() => artifact.sealJudgment(delta), { code: 'JUDGMENT_OUTCOME_MISMATCH' });
+    assert.equal(flow.status(f.input()).rounds_used, 0);
   } finally { f.cleanup(); }
 });
 

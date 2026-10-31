@@ -1164,20 +1164,3 @@ test('D35 publication requires the completed original normalized answer', () => 
     assert.equal(flow.publish(f.input(), f.options).status.ok, true);
   } finally { f.cleanup(); }
 });
-
-test('D35 input-only historical pass cannot publish success or open hold', () => {
-  const f = fixture(null, 'hold');
-  const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
-  try {
-    fs.writeFileSync(path.join(f.root, 'round.txt'), '1');
-    f.git(['add', 'round.txt']); f.git(['commit', '--quiet', '-m', 'reviewed history head']);
-    const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
-      repository: target.repositoryIdentity(f.root), branch: f.branch, pr: 52, head: f.live().headRefOid, base: f.base });
-    const unretained = f.rawInput(binding, 1, null, raw());
-    const sealed = fixtures.sealInputOnlyHistory(unretained), bytes = fs.readFileSync(sealed.artifact_ref);
-    assert.equal(f.lookup(), null); assert.equal(flow.status({ ...f.input(), live: f.live() }).rounds_used, 1);
-    assert.equal(flow.verifyCodeReview({ ...f.input(), live: f.live() }).ok, false);
-    assert.throws(() => flow.publish(f.input(), f.options), /owed/); assert.equal(f.writes.length, 0);
-    assert.deepEqual(fs.readFileSync(sealed.artifact_ref), bytes);
-  } finally { f.cleanup(); }
-});

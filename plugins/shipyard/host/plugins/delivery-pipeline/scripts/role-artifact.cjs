@@ -336,11 +336,6 @@ function trustedRecord(input) {
       || record.receipt.compliance_proof.boundary !== 'adr-014.dispatch-boundary') {
     fail('NONCOMPLIANT_RECEIPT', 'dispatch receipt is not a finalized ADR-014 boundary receipt', { dispatch_id: dispatchId });
   }
-  const unsupported = ['completed_source', 'review_continuation', 'reader_capacity_probe',
-    ...(record.receipt.role === 'code-review' ? [] : ['input_transport'])]
-    .find(key => record.receipt.runtime_evidence?.[key] !== undefined);
-  if (unsupported)
-    fail('NONCOMPLIANT_RECEIPT', 'receipt carries ' + unsupported + ', which the Codex reader and continuation transport no longer supports', { dispatch_id: dispatchId });
   nonEmpty(record.receipt.runtime, 'receipt runtime');
   nonEmpty(record.receipt.role, 'receipt role');
   nonEmpty(record.receipt.launch_id, 'receipt launch id');
@@ -956,11 +951,11 @@ function producerEvidenceName(role) {
 // Clear the fixed role-owned scratch file before a new dispatch. Without this
 // rotation, a producer that dies before writing could seal an earlier attempt's
 // evidence under the new authenticated receipt.
-const HISTORICAL_ARCHIVE_MAX_BYTES = 4 * 1024 * 1024;
+const ARCHIVE_MAX_BYTES = 4 * 1024 * 1024;
 
 function readPinnedArchiveFile(worktree, pin, label) {
   if (!object(pin) || !Number.isSafeInteger(pin.bytes) || pin.bytes < 0
-      || pin.bytes > HISTORICAL_ARCHIVE_MAX_BYTES || !/^[a-f0-9]{64}$/.test(pin.sha256 || ''))
+      || pin.bytes > ARCHIVE_MAX_BYTES || !/^[a-f0-9]{64}$/.test(pin.sha256 || ''))
     fail('ARCHIVE_AUTHORITY_INVALID', 'historical archive pin exceeds its complete-byte bound');
   const absolute = fixedPath(worktree, pin.path, label), stat = fs.lstatSync(absolute);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== pin.bytes || fs.realpathSync(absolute) !== absolute)
@@ -1261,11 +1256,11 @@ function architectureSourcePins(pins) {
         || !/^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(pin.path)
         || path.posix.normalize(pin.path) !== pin.path || pin.path.includes('\\')
         || seen.has(pin.path) || !Number.isSafeInteger(pin.bytes) || pin.bytes < 0
-        || pin.bytes > HISTORICAL_ARCHIVE_MAX_BYTES || !/^[a-f0-9]{64}$/.test(pin.sha256 || ''))
+        || pin.bytes > ARCHIVE_MAX_BYTES || !/^[a-f0-9]{64}$/.test(pin.sha256 || ''))
       fail('SOURCE_AUTHORITY_INVALID', 'invalid complete source pin');
     seen.add(pin.path); bytes += pin.bytes;
   }
-  if (bytes > HISTORICAL_ARCHIVE_MAX_BYTES) fail('SOURCE_AUTHORITY_INVALID', 'complete source corpus exceeds its byte bound');
+  if (bytes > ARCHIVE_MAX_BYTES) fail('SOURCE_AUTHORITY_INVALID', 'complete source corpus exceeds its byte bound');
   return pins.map(pin => ({ path: pin.path, bytes: pin.bytes, sha256: pin.sha256 })).sort((a, b) => a.path.localeCompare(b.path));
 }
 
@@ -1296,7 +1291,7 @@ function registerArchitectureAuthority(input) {
   const payload = { schema: approved.schema, approval_id: approved.approval_id, source, pins, exceptional_paths: exceptional, approval_digest: input.expectedApprovalDigest };
   const file = architectureAuthorityPath(source.root, source, pins);
   const serialized = JSON.stringify({ payload, mac: crypto.createHmac('sha256', state.key).update(stable(payload)).digest('hex') }) + '\n';
-  if (Buffer.byteLength(serialized) > HISTORICAL_ARCHIVE_MAX_BYTES)
+  if (Buffer.byteLength(serialized) > ARCHIVE_MAX_BYTES)
     fail('SOURCE_AUTHORITY_INVALID', 'complete serialized source approval exceeds its authority byte bound');
   const temporary = file + '.' + crypto.randomUUID() + '.tmp';
   try {
@@ -1366,7 +1361,7 @@ function assertCommittedArchitectureSources(source, pins, exceptional) {
     if (exceptional.includes(pin.path)) continue;
     let committed;
     try { committed = execFileSync('git', ['-C', source.root, 'show', source.head + ':' + pin.path],
-      { maxBuffer: HISTORICAL_ARCHIVE_MAX_BYTES, stdio: ['ignore', 'pipe', 'ignore'] }); }
+      { maxBuffer: ARCHIVE_MAX_BYTES, stdio: ['ignore', 'pipe', 'ignore'] }); }
     catch { fail('SOURCE_AUTHORITY_REQUIRED', 'uncommitted architecture source requires independent protected approval: ' + pin.path); }
     if (committed.length !== pin.bytes || digest(committed) !== pin.sha256)
       fail('SOURCE_AUTHORITY_REQUIRED', 'dirty architecture source requires independent protected approval: ' + pin.path);
@@ -1438,7 +1433,7 @@ function phaseRecordPins(dispatchId, pins) {
   if (!Array.isArray(pins) || pins.length !== 3 || new Set(pins.map(pin => pin.path)).size !== 3
       || pins.some(pin => !object(pin) || typeof pin.path !== 'string'
         || path.posix.dirname(pin.path) !== archiveRelative(dispatchId, '').replace(/\/$/, '')
-        || !Number.isSafeInteger(pin.bytes) || pin.bytes < 0 || pin.bytes > HISTORICAL_ARCHIVE_MAX_BYTES
+        || !Number.isSafeInteger(pin.bytes) || pin.bytes < 0 || pin.bytes > ARCHIVE_MAX_BYTES
         || !/^[a-f0-9]{64}$/.test(pin.sha256 || ''))
       || !pins.some(pin => pin.path === archiveRelative(dispatchId, MANIFEST_NAME)))
     fail('ARCHIVE_AUTHORITY_INVALID', 'current family requires exactly three original pins');
@@ -1970,9 +1965,9 @@ function originalArchitectureTicketSet(trusted, manifest, findings, evidence, id
 
 function authenticatedCurrentArchive(worktree, record, manifest, findings, identity, currentBinding) {
   const retention = record.review_current;
-  const trusted = retention?.receipt_store
-    ? trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: retention.receipt_store })
-    : { dispatchId: record.dispatch_id, receipt: record.receipt, record: { ...record, ticket: manifest.boundary_subject } };
+  if (typeof retention?.receipt_store !== 'string')
+    fail('REVIEW_COVERAGE_INVALID', 'original current retention is required');
+  const trusted = trustedRecord({ dispatchId: record.dispatch_id, boundaryStore: retention.receipt_store });
   if (stable(trusted.receipt) !== stable(record.receipt) || record.receipt.role !== manifest.role
       || record.receipt.policy_hash !== require('./model-policy.cjs').POLICY_HASH)
     fail('REVIEW_COVERAGE_INVALID', 'original current catalogue role or policy differs');
@@ -1980,7 +1975,7 @@ function authenticatedCurrentArchive(worktree, record, manifest, findings, ident
   selectedArchiveRecord({ identity: { repository: identity.repository.identity }, verification }, {
     worktree, dispatch_id: record.dispatch_id, ticket: manifest.boundary_subject,
     receipt: record.receipt, pins: record.pins,
-  }, retention?.receipt_store ? trusted : undefined);
+  }, trusted);
   verification.finish();
   const evidence = readPinnedArchiveFile(worktree, manifest.files.evidence, 'complete original current evidence');
   if (manifest.role === 'arch-review') authenticateSelectedReferences(trusted, findings, identity.worktree, evidence);
@@ -2241,9 +2236,9 @@ function classifyLegacyProvenance(worktreePath) {
       const file = path.join(directory, name), stat = fs.lstatSync(file);
       if (stat.isSymbolicLink()) { unsafe(relative, 'member is a symlink'); continue; }
       if (!stat.isFile()) { unsafe(relative, 'member is not a regular file'); continue; }
-      if (stat.size > HISTORICAL_ARCHIVE_MAX_BYTES) { unsafe(relative, 'member exceeds the archive byte bound'); continue; }
+      if (stat.size > ARCHIVE_MAX_BYTES) { unsafe(relative, 'member exceeds the archive byte bound'); continue; }
       try {
-        const content = readImmutableFile(fs, file, 'legacy provenance member', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size);
+        const content = readImmutableFile(fs, file, 'legacy provenance member', ARCHIVE_MAX_BYTES, stat.size);
         members.push({ path: relative, bytes: content.length, sha256: digest(content) });
       } catch (error) { unsafe(relative, 'member could not be read stably'); }
     }
@@ -2251,7 +2246,7 @@ function classifyLegacyProvenance(worktreePath) {
   const projected = JSON.stringify({ payload: { schema: 'shipyard.role-archive-catalogue.v1', worktree, records: {},
     [LEGACY_BOOKKEEPING_FIELD]: { schema: LEGACY_BOOKKEEPING_SCHEMA, version: LEGACY_BOOKKEEPING_VERSION,
       status: LEGACY_STATUS, members } }, mac: '0'.repeat(64) }) + '\n';
-  if (Buffer.byteLength(projected) > HISTORICAL_ARCHIVE_MAX_BYTES)
+  if (Buffer.byteLength(projected) > ARCHIVE_MAX_BYTES)
     unsafe('.planning/graph/provenance', 'inventory would exceed the catalogue byte bound');
   const side = legacyAuthoritySide(worktree);
   const result = (state, extra = {}) => ({ state, members, findings, warnings, unreadable: null, ...extra });
@@ -2283,7 +2278,7 @@ function writeArchiveCatalogue(state) {
   const envelope = { payload: state.payload,
     mac: crypto.createHmac('sha256', state.key).update(stable(state.payload)).digest('hex') };
   const serialized = JSON.stringify(envelope) + '\n';
-  if (Buffer.byteLength(serialized) > HISTORICAL_ARCHIVE_MAX_BYTES)
+  if (Buffer.byteLength(serialized) > ARCHIVE_MAX_BYTES)
     fail('ARCHIVE_AUTHORITY_INVALID', 'complete archive catalogue exceeds its bound');
   const temporary = state.file + '.' + crypto.randomUUID() + '.tmp';
   try {
@@ -2316,8 +2311,8 @@ function assertLegacyMembersUnchanged(worktree, members) {
     try { stat = fs.lstatSync(file); }
     catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     let content = null;
-    if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= HISTORICAL_ARCHIVE_MAX_BYTES) {
-      try { content = readImmutableFile(fs, file, 'legacy provenance member', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size); }
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= ARCHIVE_MAX_BYTES) {
+      try { content = readImmutableFile(fs, file, 'legacy provenance member', ARCHIVE_MAX_BYTES, stat.size); }
       catch { content = null; }
     }
     if (!content || content.length !== entry.bytes || digest(content) !== entry.sha256)
@@ -2366,7 +2361,7 @@ function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning
       if (legacy) {
         const file = fixedPath(worktree, pin.path, 'authenticated bookkeeping');
         const stat = fs.lstatSync(file);
-        const content = readImmutableFile(fs, file, 'authenticated bookkeeping', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size);
+        const content = readImmutableFile(fs, file, 'authenticated bookkeeping', ARCHIVE_MAX_BYTES, stat.size);
         const current = digest(content);
         if (current !== legacy.sha256 && current !== legacy.cleared_sha256)
           fail('ARCHIVE_AUTHORITY_INVALID', 'authenticated legacy bookkeeping changed before trusted mutation');
@@ -2394,7 +2389,7 @@ function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning
         if (retained && !writtenPaths.includes(relative)) return { ...retained };
         const file = fixedPath(worktree, relative, 'host bookkeeping');
         const stat = fs.lstatSync(file);
-        const content = readImmutableFile(fs, file, 'host bookkeeping', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size);
+        const content = readImmutableFile(fs, file, 'host bookkeeping', ARCHIVE_MAX_BYTES, stat.size);
         return { path: relative, bytes: content.length, sha256: digest(content) };
       });
     if (adopting) state.payload[LEGACY_BOOKKEEPING_FIELD] = { schema: LEGACY_BOOKKEEPING_SCHEMA,
@@ -2488,11 +2483,11 @@ function withArchivePublication(worktree, fn) {
 }
 
 function preflightArchiveCatalogue(worktree, trusted, manifestPath, manifest, manifestBytes, findingsBytes) {
-  if (manifestBytes.length > HISTORICAL_ARCHIVE_MAX_BYTES)
+  if (manifestBytes.length > ARCHIVE_MAX_BYTES)
     fail('ARTIFACT_WRITE', 'complete archive manifest exceeds its complete-byte bound');
   const pins = [{ path: path.relative(worktree, manifestPath), sha256: digest(manifestBytes), bytes: manifestBytes.length },
     ...[manifest.files.evidence, manifest.files.findings].map(pin => ({ path: pin.path, sha256: pin.sha256, bytes: pin.bytes }))];
-  if (pins.some(pin => pin.bytes > HISTORICAL_ARCHIVE_MAX_BYTES))
+  if (pins.some(pin => pin.bytes > ARCHIVE_MAX_BYTES))
     fail('ARTIFACT_WRITE', 'complete archive member exceeds its complete-byte bound');
   const state = authorityState(worktree, true);
   const record = { dispatch_id: trusted.dispatchId, receipt: trusted.receipt, pins,
@@ -2500,7 +2495,7 @@ function preflightArchiveCatalogue(worktree, trusted, manifestPath, manifest, ma
   const candidate = { ...state.payload, records: { ...state.payload.records, [trusted.dispatchId]: record },
     ...(record.bookkeeping.length ? { latest_bookkeeping: record.bookkeeping } : {}) };
   const envelope = { payload: candidate, mac: crypto.createHmac('sha256', state.key).update(stable(candidate)).digest('hex') };
-  if (Buffer.byteLength(JSON.stringify(envelope) + '\n') > HISTORICAL_ARCHIVE_MAX_BYTES)
+  if (Buffer.byteLength(JSON.stringify(envelope) + '\n') > ARCHIVE_MAX_BYTES)
     fail('ARCHIVE_AUTHORITY_INVALID', 'complete archive catalogue exceeds its bound before publication');
 }
 
@@ -2635,7 +2630,7 @@ function ensureArchiveDirectory(fsApi, worktree, dispatchId) {
 
 function writeImmutableArtifactFile(fsApi, file, content, label, maximum) {
   const value = Buffer.isBuffer(content) ? Buffer.from(content) : Buffer.from(String(content), 'utf8');
-  maximum ??= HISTORICAL_ARCHIVE_MAX_BYTES;
+  maximum ??= ARCHIVE_MAX_BYTES;
   if (value.length > maximum) fail('ARTIFACT_WRITE', label + ' exceeds its complete-byte bound');
   try {
     fsApi.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -3212,7 +3207,7 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
   if (parts.length) core.assertPathPartition(context.change_metadata.changes, parts);
   const normalized = core.normalizeFinal(original, parts, options);
   const { evidence_markdown: markdown, host_context: _host, ...expected } = normalized;
-  if (typeof markdown !== 'string' || !markdown.trim() || Buffer.byteLength(markdown) > HISTORICAL_ARCHIVE_MAX_BYTES
+  if (typeof markdown !== 'string' || !markdown.trim() || Buffer.byteLength(markdown) > ARCHIVE_MAX_BYTES
       || !Buffer.from(markdown).equals(evidence)) fail('REVIEW_NATIVE_INVALID', 'original code-review evidence differs');
   Object.assign(expected, { ticket_set: context.ticket_set, prior_head: context.prior_head,
     contract_digest: context.contract_digest, dispositions_digest: context.dispositions_digest,
@@ -3376,7 +3371,8 @@ function replayCodeReviewRecord(worktree, record, repository, lineage) {
   verification.finish();
   const manifestFile = selected.files.find(file => file.path.endsWith('/' + MANIFEST_NAME));
   const manifest = JSON.parse(manifestFile.content);
-  if (manifest.contract_digest !== currentCodeReviewContract()) return null;
+  // @contract: a verdict of another contract or without current review authority is skipped, so the review is owed.
+  if (manifest.contract_digest !== currentCodeReviewContract() || !manifest.current_review || !record.review_current) return null;
   const findingFile = selected.files.find(file => file.path === manifest.files.findings.path);
   const evidence = selected.files.find(file => file.path === manifest.files.evidence.path);
   const findings = JSON.parse(findingFile.content);
@@ -3407,8 +3403,7 @@ function replayCodeReviewRecord(worktree, record, repository, lineage) {
   try {
     const replay = authenticateCodeReviewAnswer({ trusted, result: findings, evidence: Buffer.from(evidence.content),
       identity, retained: record.review_current }, HISTORICAL_CODE_REVIEW_REPLAY, lineage);
-    answerAuthenticated = !!record.review_current && !!manifest.current_review
-      && stable(replay) === stable(manifest.current_review);
+    answerAuthenticated = stable(replay) === stable(manifest.current_review);
   } catch {}
   return { ...data, answer_authenticated: answerAuthenticated,
     coverage_range: answerAuthenticated ? codeReviewCoverageRange(trusted, findings, identity) : null, head: manifest.head, base_commit: manifest.base_commit, prior_head: manifest.prior_head,
@@ -3560,7 +3555,7 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
   for (const verdict of prior) {
     if (verdict.head !== head || verdict.base_commit !== baseCommit) continue;
     if (!verdict.answer_authenticated) { current = null; currentPlanning = null; continue; }
-    const manifestBytes = readImmutableFile(fs, verdict.artifact_ref, 'code-review manifest', HISTORICAL_ARCHIVE_MAX_BYTES);
+    const manifestBytes = readImmutableFile(fs, verdict.artifact_ref, 'code-review manifest', ARCHIVE_MAX_BYTES);
     if (digest(manifestBytes) !== verdict.artifact_digest) fail('ARCHIVE_AUTHORITY_INVALID', 'code-review manifest changed during lookup');
     const manifest = JSON.parse(manifestBytes);
     if (manifest.subject !== binding.subject || manifest.ticket_set_digest !== binding.membership
@@ -4224,7 +4219,7 @@ function judgmentManifest(data, metadata, files, envelope, dispatchId) {
 
 function judgmentEvidenceMaximum(role, runtime) {
   return role === 'integrator' || (role === 'arch-review' && runtime === 'codex')
-    ? 96 * 1024 : HISTORICAL_ARCHIVE_MAX_BYTES;
+    ? 96 * 1024 : ARCHIVE_MAX_BYTES;
 }
 
 function sealJudgment(value, options) {
@@ -4233,7 +4228,7 @@ function sealJudgment(value, options) {
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const trusted = trustedRecord(input);
   const role = artifactRole(input, trusted);
-  const maximum = HISTORICAL_ARCHIVE_MAX_BYTES;
+  const maximum = ARCHIVE_MAX_BYTES;
   if (!JUDGMENT_ROLES.has(role)) fail('INVALID_ARTIFACT', `judgment artifacts do not support ${role}`);
   const identity = gitIdentity({ ...input, role }, worktree);
   const metadata = trustedMetadata({ ...input, role }, trusted, identity);
@@ -4269,7 +4264,7 @@ function sealJudgment(value, options) {
   } catch (error) {
     fail('INVALID_RESULT', `complete ${role} judgment is not JSON-serializable: ${error.message}`);
   }
-  if (findingsBytes.length > HISTORICAL_ARCHIVE_MAX_BYTES)
+  if (findingsBytes.length > ARCHIVE_MAX_BYTES)
     fail('ARTIFACT_WRITE', 'complete findings exceeds its complete-byte bound');
   const dispatchId = trusted.dispatchId;
   return withArchivePublication(worktree, () => {
@@ -4325,7 +4320,7 @@ function validateJudgmentManifest(value, options) {
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const trusted = trustedRecord(input);
   const role = artifactRole(input, trusted);
-  const maximum = HISTORICAL_ARCHIVE_MAX_BYTES;
+  const maximum = ARCHIVE_MAX_BYTES;
   if (!JUDGMENT_ROLES.has(role)) fail('INVALID_ARTIFACT', `judgment artifacts do not support ${role}`);
   const identity = gitIdentity({ ...input, role }, worktree);
   const metadata = trustedMetadata({ ...input, role }, trusted, identity);
@@ -4439,10 +4434,7 @@ function validateJudgmentManifest(value, options) {
   }
   const retainedRecord = role === 'code-review' && fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))
     ? authorityState(worktree).payload.records[dispatchId] : null;
-  const historicalCodeReview = role === 'code-review' && manifest.current_review === undefined
-    && !retainedRecord?.review_current && retainedRecord?.pins.some(pin => pin.path === path.relative(worktree, manifestResolved)
-      && pin.sha256 === actualDigest && pin.bytes === manifestBytes.length);
-  const currentReview = role === 'code-review' && !historicalCodeReview
+  const currentReview = role === 'code-review'
     ? authenticateCodeReviewAnswer({ trusted, result, evidence: evidence.content, identity,
       retained: retainedRecord?.review_current })
     : ['arch-review', 'integrator'].includes(role)
@@ -4507,7 +4499,6 @@ function validateJudgmentManifest(value, options) {
       commit: manifest.base_commit,
       tree: manifest.base_tree,
     },
-    historical: historicalCodeReview === true,
   });
 }
 
@@ -4584,10 +4575,10 @@ function sealRole(value, options) {
     fsApi,
     fixedPath(worktree, producerEvidenceName(role), 'producer evidence'),
     'producer evidence',
-    HISTORICAL_ARCHIVE_MAX_BYTES,
+    ARCHIVE_MAX_BYTES,
   );
   if (!sourceEvidence.length) fail('MISSING_ARTIFACT', `${role} producer evidence is empty`);
-  if (findingsBytes.length > HISTORICAL_ARCHIVE_MAX_BYTES)
+  if (findingsBytes.length > ARCHIVE_MAX_BYTES)
     fail('ARTIFACT_WRITE', 'complete findings exceeds its complete-byte bound');
   const dispatchId = trusted.dispatchId;
   return withArchivePublication(worktree, () => {
@@ -4764,7 +4755,7 @@ function validateRoleManifest(value, options) {
   const trusted = trustedRecord(input);
   const role = artifactRole(input, trusted);
   const identity = gitIdentity(input, worktree);
-  const historical = input.historical === true || input.allowHistorical === true;
+  const historical = input.historical === true;
   const dispatchId = trusted.dispatchId;
   const expectedManifestPath = archivePath(worktree, dispatchId, MANIFEST_NAME, 'artifact manifest');
   const requestedPath = input.artifactPath || input.artifact_path || input.artifact_ref || expectedManifestPath;
@@ -4886,7 +4877,7 @@ function validateRoleManifest(value, options) {
     producerEvidenceName(role),
     manifest.files.evidence,
     'producer evidence',
-    HISTORICAL_ARCHIVE_MAX_BYTES,
+    ARCHIVE_MAX_BYTES,
   );
   const findings = expectedRoleReference(
     fsApi,
@@ -5074,8 +5065,8 @@ function parseArgs(argv) {
     if (!token.startsWith('--')) fail('INVALID_INPUT', `unknown argument ${token}`);
     const key = token.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
     if (key === 'help') { values.help = true; continue; }
-    if (key === 'historical' || key === 'allowHistorical') {
-      values[key] = true;
+    if (key === 'historical') {
+      values.historical = true;
       continue;
     }
     const value = argv[index + 1];
