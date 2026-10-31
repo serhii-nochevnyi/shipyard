@@ -49,6 +49,41 @@ function pidAlive(pid) {
   catch (error) { return !error || error.code !== 'ESRCH'; }
 }
 
+function phaseDirectory(worktree, phase, refuse) {
+  const phasesRoot = path.join(worktree, '.planning', 'phases');
+  let names;
+  try {
+    names = fs.readdirSync(phasesRoot);
+  } catch (error) {
+    refuse('PHASE_DIRECTORY_MISSING', `phase directory root is unavailable: ${error.message}`);
+  }
+  if (fs.realpathSync(phasesRoot) !== phasesRoot) {
+    refuse('PHASE_DIRECTORY_MISSING', 'phase directory root is not canonical');
+  }
+  const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === Number(phase)
+    && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
+  if (matches.length !== 1) {
+    refuse('PHASE_DIRECTORY_MISSING', `expected exactly one phase directory for phase ${phase}, found ${matches.length}`);
+  }
+  const directory = path.join(phasesRoot, matches[0]);
+  if (fs.realpathSync(directory) !== directory) {
+    refuse('PHASE_DIRECTORY_MISSING', 'phase directory is not canonical');
+  }
+  return directory;
+}
+
+function writeDurableFile(file, raw) {
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(temporary, raw, { mode: 0o600 });
+    const handle = fs.openSync(temporary, 'r');
+    try { fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
+    fs.renameSync(temporary, file);
+    const directory = fs.openSync(path.dirname(file), 'r');
+    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+  } finally { try { fs.unlinkSync(temporary); } catch {} }
+}
+
 function realpathClosest(target) {
   let root = path.resolve(target);
   const missing = [];
@@ -387,6 +422,7 @@ function createPlanningWriterLease(options = {}) {
   });
 }
 
-module.exports = Object.freeze({ SCHEMA, DEFAULT_TTL_MS, createPlanningWriterLease,
+module.exports = Object.freeze({ SCHEMA, DEFAULT_TTL_MS, createPlanningWriterLease, pidAlive, phaseDirectory,
+  writeDurableFile,
   sharedPlanningWriterRoot, legacyPlanningWriterRoots, assertNoLegacyPlanningWriter,
   sealOutputPaths, captureSealManifest, assertSealManifest });

@@ -9,7 +9,8 @@ const { createClaudeRuntimeHost, probeClaudeRuntime } = require('./claude-runtim
 const { registerClaudeWorkflowHost } = require('./claude-workflow-host.cjs');
 const { loadClaudeReferenceContent } = require('./claude-reference-content.cjs');
 const { finalizeDeliveryCommit } = require('./delivery-commit-finalizer.cjs');
-const { verifyPlan } = require('./host-verification.cjs');
+const { verifyPlan, retryableFailure, failureContext, scheduleRetry: scheduleVerificationRetry,
+  failureReason: verificationFailureReason } = require('./host-verification.cjs');
 const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 const { isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createRunController } = require('./run-controller.cjs');
@@ -49,51 +50,10 @@ function commitVerificationMatches(finalized, digest) {
 
 function retryableVerificationFailure(result) {
   const failure = Array.isArray(result) ? result.find((entry) => entry?.status === 'verification_failed') : null;
-  return failure && failure.retryable === true
-    && Array.isArray(failure.command) && failure.command.length > 0
-    && /^[0-9a-f]{64}$/.test(failure.evidence_digest || '') ? failure : null;
+  return retryableFailure(failure) ? failure : null;
 }
 
-function verificationFailureContext(failure) {
-  const diagnostic = {
-    attempt: 1,
-    limit: 1,
-    command: failure.command.slice(0, 64).map((part) => String(part)
-      .replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 256)),
-    evidence_digest: failure.evidence_digest,
-    summary: String(failure.summary || 'host verification failed').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 500),
-  };
-  while (Buffer.byteLength(JSON.stringify(diagnostic), 'utf8') > 2048) {
-    if (diagnostic.command.length && diagnostic.command[diagnostic.command.length - 1].length > 16) {
-      const index = diagnostic.command.length - 1;
-      diagnostic.command[index] = diagnostic.command[index].slice(0, Math.max(16, Math.floor(diagnostic.command[index].length / 2)));
-    } else if (diagnostic.command.length > 1) diagnostic.command.pop();
-    else if (diagnostic.summary.length > 32) diagnostic.summary = diagnostic.summary.slice(0, Math.floor(diagnostic.summary.length / 2));
-    else if (diagnostic.command.length) diagnostic.command.pop();
-    else reject('verification failure diagnostic cannot fit its 2 KiB bound');
-  }
-  return Object.freeze({ ...diagnostic, command: Object.freeze(diagnostic.command) });
-}
-
-function scheduleVerificationRetry(controller, runId, failure) {
-  if (!controller || typeof controller.retry !== 'function' || typeof controller.wake !== 'function') return false;
-  const current = typeof controller.status === 'function' ? controller.status(runId) : null;
-  if (current?.retry && (current.retry.exhausted === true
-      || (Number.isSafeInteger(current.retry.max_attempts)
-        && current.retry.attempts >= current.retry.max_attempts - 1))) return false;
-  const reason = `host verification failed; one bounded executor repair: ${JSON.stringify(failure)}`.slice(0, 400);
-  const scheduled = controller.retry(runId, { target_state: 'retryable', reason, delay_ms: 0, capability_recheck_ms: 0 });
-  if (!scheduled?.result?.scheduled || scheduled.result.exhausted === true) return false;
-  const woken = controller.wake(runId, { force: true, reason: 'bounded host-verification repair' });
-  return Boolean(woken?.result?.woken === true);
-}
-
-function verificationFailureReason(failure) {
-  const command = Array.isArray(failure?.command) && failure.command.length
-    ? failure.command.map((part) => String(part)).join(' ') : 'no allow-listed verification command matched';
-  const summary = String(failure?.summary || 'host verification failed').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 300);
-  return `host verification failed (${command}): ${summary}`.slice(0, 400);
-}
+const verificationFailureContext = (failure) => failureContext(failure, reject);
 
 function parallel(jobs) {
   if (!Array.isArray(jobs) || jobs.length > 32 || jobs.some((job) => typeof job !== 'function')) {

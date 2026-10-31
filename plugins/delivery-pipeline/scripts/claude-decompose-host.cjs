@@ -19,7 +19,8 @@ const { resolveClaudeHome, preflight, emitPreflight, stateRefusalOf } = require(
 const { repositoryIdentity } = require('./architecture-target.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
-  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
+  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest, pidAlive,
+  phaseDirectory: sharedPhaseDirectory, writeDurableFile } = require('./planning-writer-lease.cjs');
 
 const { decompositionAdr } = require('./planning-result-sealer.cjs');
 
@@ -140,28 +141,7 @@ function canonicalRequest(input) {
     ticket: `T-${phase}-DECOMPOSE`, repository: common, adr });
 }
 
-function phaseDirectory(worktree, phase) {
-  const phasesRoot = path.join(worktree, '.planning', 'phases');
-  let names;
-  try {
-    names = fs.readdirSync(phasesRoot);
-  } catch (error) {
-    refuse('PHASE_DIRECTORY_MISSING', `phase directory root is unavailable: ${error.message}`);
-  }
-  if (fs.realpathSync(phasesRoot) !== phasesRoot) {
-    refuse('PHASE_DIRECTORY_MISSING', 'phase directory root is not canonical');
-  }
-  const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === Number(phase)
-    && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
-  if (matches.length !== 1) {
-    refuse('PHASE_DIRECTORY_MISSING', `expected exactly one phase directory for phase ${phase}, found ${matches.length}`);
-  }
-  const directory = path.join(phasesRoot, matches[0]);
-  if (fs.realpathSync(directory) !== directory) {
-    refuse('PHASE_DIRECTORY_MISSING', 'phase directory is not canonical');
-  }
-  return directory;
-}
+const phaseDirectory = (worktree, phase) => sharedPhaseDirectory(worktree, phase, refuse);
 
 function decompositionPlans(directory) {
   const contextPath = path.join(directory, 'CONTEXT.md');
@@ -216,17 +196,9 @@ function writeLaunch(store, record) {
   const file = launchFile(store, record.dispatch_id);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.chmodSync(path.dirname(file), 0o700);
-  const temporary = `${file}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
   const raw = `${JSON.stringify(record)}\n`;
   if (Buffer.byteLength(raw, 'utf8') > MAX_LAUNCH) refuse('INVALID_INPUT', 'private launch snapshot exceeds 4 MiB');
-  try {
-    fs.writeFileSync(temporary, raw, { mode: 0o600 });
-    const handle = fs.openSync(temporary, 'r');
-    try { fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
-    fs.renameSync(temporary, file);
-    const directory = fs.openSync(path.dirname(file), 'r');
-    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-  } finally { try { fs.unlinkSync(temporary); } catch {} }
+  writeDurableFile(file, raw);
 }
 
 function digestValue(value) {
@@ -268,12 +240,6 @@ function readLaunch(store, dispatchId) {
     refuse('RECOVERY_EVIDENCE_MISSING', 'launch record has invalid identity or snapshot');
   }
   return record;
-}
-
-function pidAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return !error || error.code !== 'ESRCH'; }
 }
 
 function fileDigest(file) {

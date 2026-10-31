@@ -7,7 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { spawn, spawnSync } = require('node:child_process');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, assertNoLegacyPlanningWriter,
-  captureSealManifest, assertSealManifest } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
+  captureSealManifest, assertSealManifest, pidAlive, phaseDirectory } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 
 const MODULE_PATH = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'planning-writer-lease.cjs');
 
@@ -435,3 +435,23 @@ test('control: a plain check-then-write with no shared lock lets two racers both
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
+
+test('pidAlive treats only a vanished process as stopped', () => {
+  assert.equal(pidAlive(process.pid), true);
+  for (const unknown of [0, -1, 1.5, NaN, '1']) assert.equal(pidAlive(unknown), true);
+  const child = spawnSync(process.execPath, ['-e', '']);
+  assert.equal(pidAlive(child.pid), false);
+});
+
+test('phaseDirectory resolves one canonical phase directory and refuses anything else', () => fixture(({ worktree }) => {
+  const refuse = (code, message) => { throw Object.assign(new Error(message), { code }); };
+  const phases = path.join(fs.realpathSync(worktree), '.planning', 'phases');
+  fs.mkdirSync(path.join(phases, '01-one'), { recursive: true });
+  fs.mkdirSync(path.join(phases, '10-ten'));
+  fs.mkdirSync(path.join(phases, '10-again'));
+  assert.equal(phaseDirectory(path.dirname(path.dirname(phases)), '01', refuse), path.join(phases, '01-one'));
+  for (const phase of [2, 10]) assert.throws(() => phaseDirectory(path.dirname(path.dirname(phases)), phase, refuse), { code: 'PHASE_DIRECTORY_MISSING' });
+  fs.renameSync(phases, `${phases}-real`);
+  fs.symlinkSync(`${phases}-real`, phases);
+  assert.throws(() => phaseDirectory(path.dirname(path.dirname(phases)), 1, refuse), /root is not canonical/);
+}));
