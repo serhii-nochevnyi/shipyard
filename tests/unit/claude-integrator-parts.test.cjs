@@ -225,6 +225,14 @@ test('the integrator request carries no review_contract selector', () => {
     assert.throws(() => parseRequest({ ...base, review_contract: value }), /request field review_contract is not permitted/);
 });
 
+test('an integrator that creates INTEGRATION.md itself is refused as a mutated worktree', async () => {
+  const fixture = integratorFixture();
+  try {
+    await assert.rejects(runIntegrator(fixture, { onLaunch() { write(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`, 'child wrote this\n'); } }),
+      { code: 'WORKTREE_MUTATED' });
+  } finally { cleanupFixture(fixture); }
+});
+
 test('an integrator part that writes an untracked file is refused and no further session launches', async () => {
   const fixture = integratorFixture({ files: FILES });
   let launches = 0;
