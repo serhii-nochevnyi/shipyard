@@ -37,7 +37,7 @@ function command(program, args, cwd, env) {
   const child = spawnSync(program, args, { cwd, env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
   assert.equal(child.error, undefined, child.error?.message);
   assert.equal(child.status, 0, program + ' ' + args.join(' ') + '\n' + child.stderr);
-  return child.stdout.trim();
+  return program === 'git' && args.some(arg => arg === '-z' || arg === '-rz') ? child.stdout : child.stdout.trim();
 }
 function absentHistory(root, env) {
   const git = (...args) => command('git', args, root, env);
@@ -79,34 +79,134 @@ function fixtureIdentity(root) {
 }
 function squashCandidate(directory, env) {
   const checkout = path.join(directory, 'squash'), archive = path.join(directory, 'candidate.tar');
+  if (fs.realpathSync(ROOT) !== ROOT || fs.realpathSync(directory) !== directory)
+    throw Error('candidate roots must be physical');
   fs.mkdirSync(checkout);
-  const changed = command('git', ['diff', '--name-only', 'HEAD'], ROOT, env).split('\n').filter(Boolean);
-  assert.ok(changed.every(file => OWNED.includes(file)), 'unrelated dirty candidate files must not be silently archived away');
+  const listing = args => {
+    const output = command('git', args, ROOT, env);
+    if (!output) return [];
+    const records = output.split('\0');
+    if (records.pop() !== '') throw Error('incomplete NUL listing');
+    return records;
+  };
+  const changed = [...new Set([...listing(['diff', '--name-only', '-z', '--no-renames', 'HEAD', '--']),
+    ...listing(['ls-files', '--others', '--exclude-standard', '-z'])])];
+  const lstat = file => {
+    try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  const entry = (root, relative, create = false) => {
+    const parts = relative.split('/');
+    if (path.isAbsolute(relative) || parts.some(part => !part || part === '.' || part === '..' || /^\.git$/i.test(part)))
+      throw Error('unsafe candidate path: ' + relative);
+    const file = path.join(root, relative);
+    if (!file.startsWith(root + path.sep)) throw Error('candidate path escaped root');
+    let parent = root;
+    for (const part of parts.slice(0, -1)) {
+      parent = path.join(parent, part);
+      let stat = lstat(parent);
+      if (!stat && create) { fs.mkdirSync(parent); stat = lstat(parent); }
+      if (!stat || stat.isFile()) {
+        if (create) throw Error('blocked candidate parent: ' + relative);
+        return { file, stat: null };
+      }
+      if (stat.isSymbolicLink() || !stat.isDirectory() || fs.realpathSync(parent) !== parent
+          || lstat(path.join(parent, '.git')))
+        throw Error('unsafe candidate parent: ' + relative);
+    }
+    return { file, stat: lstat(file) };
+  };
+  const tree = listing(['ls-tree', '-rz', '--full-tree', 'HEAD']).map(record => {
+    const tab = record.indexOf('\t');
+    if (tab < 0) throw Error('invalid tree entry');
+    const [mode, type, identity] = record.slice(0, tab).split(' '), relative = record.slice(tab + 1);
+    assert.equal(type, 'blob', 'no shared Git metadata or submodules');
+    entry(ROOT, relative);
+    return { mode, identity, relative };
+  });
+  const tracked = new Map(tree.map(row => [row.relative, row]));
   command('git', ['archive', '--format=tar', '--output=' + archive, 'HEAD'], ROOT, env);
   command('tar', ['-xf', archive, '-C', checkout], directory, env);
   fs.unlinkSync(archive);
-  const tree = command('git', ['ls-tree', '-rz', '--full-tree', 'HEAD'], ROOT, env).split('\0').filter(Boolean);
-  for (const entry of tree) {
-    const [metadata, relative] = entry.split('\t'), [mode, type] = metadata.split(' ');
-    assert.equal(type, 'blob', 'no shared Git metadata or submodules');
-    if (OWNED.includes(relative)) continue;
-    const source = path.join(ROOT, relative), target = path.join(checkout, relative);
-    assert.equal(fs.lstatSync(source).isSymbolicLink(), mode === '120000');
+  for (const { mode, identity, relative } of tree) {
+    const { file, stat } = entry(checkout, relative);
+    if (!stat || (mode === '120000' ? !stat.isSymbolicLink() : !stat.isFile() || stat.isSymbolicLink()))
+      throw Error('archive omitted or substituted candidate type: ' + relative);
+    const bytes = mode === '120000' ? Buffer.from(fs.readlinkSync(file)) : fs.readFileSync(file);
+    if (blob(bytes) !== identity || mode !== '120000' && (stat.mode & 0o777) !== (mode === '100755' ? 0o755 : 0o644))
+      throw Error('archive substituted candidate bytes or mode: ' + relative);
+  }
+  const removed = new Set(), additions = [], completed = new Set();
+  for (const relative of changed) {
+    const { stat } = entry(ROOT, relative);
+    if (!stat || stat.isDirectory() && tracked.has(relative)) {
+      if (!tracked.has(relative)) throw Error('untracked candidate disappeared: ' + relative);
+      removed.add(relative);
+    } else additions.push(relative);
+  }
+  for (const relative of removed) {
+    const { file, stat } = entry(checkout, relative);
+    if (!stat || !stat.isFile() && !stat.isSymbolicLink()) throw Error('invalid archived removal: ' + relative);
+    fs.unlinkSync(file);
+    if (lstat(file)) throw Error('candidate removal incomplete: ' + relative);
+    for (let parent = path.dirname(file); parent !== checkout; parent = path.dirname(parent)) {
+      try { fs.rmdirSync(parent); } catch (error) {
+        if (error.code !== 'ENOTEMPTY' && error.code !== 'EEXIST') throw error;
+        break;
+      }
+    }
+    completed.add(relative);
+  }
+  for (const relative of additions) {
+    const { file: source, stat } = entry(ROOT, relative), { file: target, stat: previous } = entry(checkout, relative, true);
+    assert.equal(stat?.isFile(), true); assert.equal(stat?.isSymbolicLink(), false);
+    if (previous) {
+      if (previous.isDirectory()) fs.rmdirSync(target);
+      else if (previous.isFile() || previous.isSymbolicLink()) fs.unlinkSync(target);
+      else throw Error('unsupported archived replacement: ' + relative);
+    }
+    fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(target, stat.mode & 0o777);
+    const observed = fs.lstatSync(target);
+    if (!observed.isFile() || observed.isSymbolicLink()) throw Error('candidate copy type changed: ' + relative);
+    assert.deepEqual(fs.readFileSync(target), fs.readFileSync(source), relative);
+    assert.equal(observed.mode & 0o777, fs.lstatSync(source).mode & 0o777);
+    completed.add(relative);
+  }
+  const present = new Set([...tracked.keys(), ...additions].filter(relative => !removed.has(relative)));
+  for (const relative of new Set([...tracked.keys(), ...changed])) {
+    const { file: source, stat } = entry(ROOT, relative), { file: target, stat: observed } = entry(checkout, relative);
+    if (removed.has(relative)) {
+      if (observed && (!stat?.isDirectory() || !observed.isDirectory()))
+        throw Error('candidate deletion was not preserved: ' + relative);
+      continue;
+    }
+    const mode = changed.includes(relative) ? '100644' : tracked.get(relative).mode;
+    assert.equal(stat?.isSymbolicLink(), mode === '120000');
+    if (!observed || observed.isSymbolicLink() !== stat.isSymbolicLink()
+        || !stat.isSymbolicLink() && (!stat.isFile() || !observed.isFile()))
+      throw Error('final candidate type mismatch: ' + relative);
     if (mode === '120000') assert.equal(fs.readlinkSync(target), fs.readlinkSync(source));
     else {
       assert.deepEqual(fs.readFileSync(target), fs.readFileSync(source), 'archive must equal actual current candidate: ' + relative);
-      assert.equal(fs.statSync(target).mode & 0o777, fs.statSync(source).mode & 0o777, relative);
+      assert.equal(observed.mode & 0o777, stat.mode & 0o777, relative);
     }
   }
-  for (const relative of OWNED) {
-    const source = path.join(ROOT, relative), target = path.join(checkout, relative);
-    if (!fs.existsSync(source)) { fs.rmSync(target, { force: true }); continue; }
-    assert.equal(fs.lstatSync(source).isFile(), true); assert.equal(fs.lstatSync(source).isSymbolicLink(), false);
-    fs.mkdirSync(path.dirname(target), { recursive: true }); fs.copyFileSync(source, target);
-    fs.chmodSync(target, fs.statSync(source).mode & 0o777);
-    assert.deepEqual(fs.readFileSync(target), fs.readFileSync(source), relative);
-    assert.equal(fs.statSync(target).mode & 0o777, fs.statSync(source).mode & 0o777);
-  }
+  const expected = new Set(present), actual = new Set();
+  for (const relative of present)
+    for (let parent = path.dirname(relative); parent !== '.'; parent = path.dirname(parent)) expected.add(parent);
+  const inventory = (directory, prefix = '') => {
+    for (const name of fs.readdirSync(directory)) {
+      const relative = prefix + name, { file, stat } = entry(checkout, relative);
+      actual.add(relative);
+      if (stat.isDirectory()) inventory(file, relative + '/');
+      else if (!stat.isFile() && !stat.isSymbolicLink()) throw Error('unsupported destination node: ' + relative);
+    }
+  };
+  inventory(checkout);
+  assert.ok(changed.every(file => completed.has(file) && (removed.has(file)
+    ? !present.has(file) && (!actual.has(file) || fs.lstatSync(path.join(checkout, file)).isDirectory()) : actual.has(file)))
+    && actual.size === expected.size && [...actual].every(file => expected.has(file)),
+  'unrelated dirty candidate files must not be silently archived away');
   command('git', ['init', '--initial-branch=main', '--template='], checkout, env);
   command('git', ['add', '--all'], checkout, env);
   command('git', ['-c', 'user.name=Portable fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false',
@@ -114,6 +214,7 @@ function squashCandidate(directory, env) {
   absentHistory(checkout, env); fixtureIdentity(checkout);
   return checkout;
 }
+
 async function flow(root, runtime, shared) {
   const h = require(path.join(root, HELPER));
   await h.publicRole('integrator', runtime, { historical: true, historicalShared: shared, full: true,
