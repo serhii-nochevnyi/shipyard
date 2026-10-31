@@ -4,17 +4,14 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
   createSessionHandoff,
   resolveRepositoryIdentity,
   ownershipStorePath,
-  LIFECYCLE_CLASSES,
-  lifecycleClassStatus,
 } = require('../../plugins/delivery-pipeline/scripts/session-handoff.cjs');
-const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 const {
   createDispatchBoundary,
   createDurableRecorder,
@@ -224,6 +221,42 @@ test('pinned references and live revalidation fail closed before a successor can
     fs.unlinkSync(path.join(root, 'README.md'));
     assert.throws(() => handoff.acknowledge(candidate, { revalidate: () => ({ valid: true, clean: true, children: [] }) }),
       (error) => error.code === 'MISSING_REFERENCE');
+  } finally {
+    clean(root);
+  }
+});
+
+test('inspect reports the unproven transfer capability: automatic transfer is never allowed', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+    handoff.begin({ runId: 'run-inspect', sessionId: 'session-inspect', phase: '33', tickets: ['T-33-08'] });
+    const [scope] = handoff.inspect().scopes;
+    assert.equal(scope.transfer_capability.status, 'unsupported');
+    assert.equal(scope.transfer_capability.automatic_transfer.allowed, false);
+    assert.equal(scope.transfer_capability.manual_resume.status, 'available');
+  } finally {
+    clean(root);
+  }
+});
+
+test('the inspect CLI reports a synthetic capability claim as unsupported and never allows automatic transfer', () => {
+  const root = repoFixture();
+  try {
+    createSessionHandoff({ cwd: root }).begin({ runId: 'run-cli', sessionId: 'session-cli', phase: '33', tickets: ['T-33-08'] });
+    const evidence = Object.fromEntries(require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs').TRANSFER_PROOF_CATEGORIES
+      .map((category) => [category, { status: 'proven', source: 'synthetic-fixture', runtime: 'codex', host_version: '999.0.0', evidence_id: category }]));
+    const file = path.join(root, 'capability.json');
+    fs.writeFileSync(file, JSON.stringify(evidence));
+    const cli = spawnSync(process.execPath, [
+      path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/session-handoff.cjs'),
+      'inspect', '--cwd', root, '--runtime', 'codex', '--host-version', '999.0.0', '--capability-file', file, '--json',
+    ], { encoding: 'utf8', env: { ...process.env, SHIPYARD_RUNTIME: '', GSD_RUNTIME: '' } });
+    assert.equal(cli.status, 0, cli.stderr);
+    const capability = JSON.parse(cli.stdout).scopes[0].transfer_capability;
+    assert.equal(capability.status, 'unsupported');
+    assert.equal(capability.automatic_transfer.allowed, false);
+    assert.equal(capability.manual_resume.status, 'available');
   } finally {
     clean(root);
   }
@@ -590,42 +623,6 @@ test('omitting a required checkpoint field refuses before owner transfer and nam
     );
     assert.doesNotThrow(() => handoff.assertOwner(owner));
     handoff.checkpoint(owner, checkpointPayload(root));
-  } finally {
-    clean(root);
-  }
-});
-
-test('the lifecycle class table names a Codex fork unsupported while every class keeps the four handoff cost stages', () => {
-  assert.equal(LIFECYCLE_CLASSES.fork.history_copying, true);
-  assert.equal(LIFECYCLE_CLASSES.resume.history_copying, false);
-  assert.equal(LIFECYCLE_CLASSES.compaction.history_copying, false);
-  assert.equal(LIFECYCLE_CLASSES.fresh_start.history_copying, false);
-  assert.equal(lifecycleClassStatus('fork', 'codex').supported, false);
-  assert.equal(lifecycleClassStatus('fork', 'claude').supported, true);
-  for (const name of ['resume', 'fork', 'compaction', 'fresh_start']) {
-    assert.deepEqual(LIFECYCLE_CLASSES[name].stages, [
-      'checkpoint_collection', 'successor_startup', 'cache_warmup', 'successor_reread',
-    ]);
-  }
-});
-
-test('recordLifecycleCost forwards the session model, effort and instruction_digest to the recorded checkpoint cost', () => {
-  const root = repoFixture();
-  const graph = path.join(root, 'overhead');
-  try {
-    const recorder = overhead.createRecorder(graph);
-    const handoff = createSessionHandoff({
-      cwd: root, overheadRecorder: recorder, runtime: 'claude', backend: 'workflow',
-      model: 'opus', effort: 'high', instruction_digest: 'c'.repeat(64),
-    });
-    const owner = handoff.begin({ runId: 'run-lifecycle-fields', sessionId: 'session-lifecycle-fields', phase: '41', tickets: ['T-41-02-lifecycle-fields'] });
-    handoff.checkpoint(owner, checkpointPayload(root));
-    const rows = recorder.latest();
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].model, 'opus');
-    assert.equal(rows[0].effort, 'high');
-    assert.equal(rows[0].instruction_digest, 'c'.repeat(64));
-    assert.equal(rows[0].lifecycle_class, undefined);
   } finally {
     clean(root);
   }

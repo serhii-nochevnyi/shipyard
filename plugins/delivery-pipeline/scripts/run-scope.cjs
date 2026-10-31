@@ -117,7 +117,6 @@ module.exports = Object.freeze({
   createWakeIdentity,
   createReceiptIdentity,
   createRunScope,
-  validateRunScope: contract.normalizeRunContract,
   createHostAuthority: contract.createHostAuthority,
   assertHostAuthority: contract.assertHostAuthority,
   applyEvent: contract.applyEvent,

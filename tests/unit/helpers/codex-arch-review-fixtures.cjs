@@ -84,7 +84,6 @@ async function unitJudgment(f, afterLaunch) {
   const crypto = require('node:crypto');
   const policy = require('../../../plugins/delivery-pipeline/scripts/model-policy.cjs');
   const { createDurableRecorder } = require('../../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-  const { createCodexDeliveryHost } = require('../../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
   const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-arch-unit-')));
   f.storage = storage;
   const builder = require('../../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');

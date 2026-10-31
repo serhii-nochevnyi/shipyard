@@ -8,7 +8,6 @@ const { execFileSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { createDurableRecorder, createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const roleArtifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 
 function retainPlanningInput(f, input, planningRoot = f.root, repo = null) {
   return require('../fixtures/code-review/artifact-fixture.cjs').retainPlanningInput(f, input, planningRoot, repo);

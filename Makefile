@@ -83,6 +83,7 @@ test-graph:
 
 test-worktree:
 	./tests/smoke/worktree-smoke.sh
+	./tests/smoke/repo-resolve-smoke.sh
 
 test-worktree-gates:
 	./tests/smoke/worktree-gates-smoke.sh

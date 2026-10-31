@@ -72,7 +72,7 @@ How the commits were identified: `git log --first-parent -i -E --grep=<patterns>
 
 Phases with no landing commit identified: 37, 38 and 48. Search: `git log --first-parent --format='%H %ad %s' --date=short -i -E --grep='epic/(2[0-6]|3[78]|48)|epic: (2[0-6]|3[78]|48)-|phase ?(2[0-6]|37|38|48)([^0-9]|$)'` returned no commit for them (and the earlier search for 29, 31, 34, 37, 38, 47, 48 and 49 found none for 37, 38 and 48). Their work may have landed inside another phase's merge or under a subject these patterns miss; that is unknown, and the next check is `git log --first-parent --format='%h %s' --since=<phase date>` read by a person.
 
-Summary statistics (30 rows). A `node -e` one-liner to compute them was refused by the executor's permission layer, so these figures were computed by hand from the 30 rows above and **must be confirmed** with the operator check below. Median is the mean of the 15th and 16th ordered values; 90th percentile is the nearest rank, the 27th ordered value.
+Summary statistics (30 rows). A `node -e` one-liner to compute them was refused by the executor's permission layer, so these figures were computed by hand from the 30 rows above and **must be confirmed** with item 1 of the operator checklist in `README.md`. Median is the mean of the 15th and 16th ordered values; 90th percentile is the nearest rank, the 27th ordered value.
 
 | Quantity | Count | Min | Median | 90th percentile | Max |
 |---|---|---|---|---|---|

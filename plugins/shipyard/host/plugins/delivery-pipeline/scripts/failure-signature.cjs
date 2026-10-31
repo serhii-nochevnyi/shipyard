@@ -140,7 +140,6 @@ const EXHAUSTED_PRIOR_REPEATS = 2;
 // spawn could actually carry, and only the Workflow path can carry one — so the
 // honest Agent-path row says `unsupported`, `unknown` or says nothing, and none
 // of those is proof.
-const UNMEASURED_EFFORT = 'unknown';
 const UNMEASURED_EFFORTS = new Set(['unknown', 'unsupported']);
 const isAppliedEffort = (level) => typeof level === 'string'
   && !UNMEASURED_EFFORTS.has(level) && EFFORTS.includes(level);
@@ -687,6 +686,6 @@ if (require.main === module) {
 module.exports = {
   computeSignature, computeVerdict, normalize, relativize,
   isUnknownSignature, UNKNOWN_PREFIX, VERDICTS, DEFAULT_K,
-  EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORT, UNMEASURED_EFFORTS,
+  EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORTS,
   resourceState,
 };

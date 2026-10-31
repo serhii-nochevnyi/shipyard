@@ -1562,33 +1562,20 @@ function resolveAndPersistRepository(input) {
   return persistExecutableResult(input, result);
 }
 
-// Short aliases for callers that use command-style names.
-const resolveConfigured = resolveConfiguredRepo;
-const discoverRepo = discoverRepository;
-const resolveRepo = resolveRepository;
-const resolveSupplied = suppliedPathResult;
-const chooseRepo = chooseRepository;
-
 module.exports = {
-  CHOICES: OPERATOR_CHOICES,
   REPO_SLUG,
   choicePrompt,
   cloneCommand,
   cloneRepository,
-  chooseRepo,
   chooseRepository,
-  discoverRepo,
   discoverRepository,
   originProtocol,
   normalizeOrigin,
   readGhRepositoryMetadata,
-  resolveConfigured,
   resolveConfiguredRepo,
   resolveCloneUrl,
   resolveAndPersistRepository,
-  resolveRepo,
   resolveRepository,
-  resolveSupplied,
   safeCloneUrl,
   selectCloneUrl,
   persistResolvedRepository,

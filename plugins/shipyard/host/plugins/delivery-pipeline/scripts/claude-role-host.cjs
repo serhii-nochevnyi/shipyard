@@ -1712,7 +1712,7 @@ async function dispatchRole(options, prepared) {
       ...(prepared.binding ? { phase_repo: prepared.binding.repo } : {}),
       selected_refs: prepared.packet.required_refs.map(ref => ({ path: ref.path, sha256: ref.sha256, bytes: ref.bytes })),
     } } : validatedResult;
-    const { artifact, validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id);
+    const { validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id);
     const round = prepared.role === 'pr-sentinel'
       ? require('./dispatch-record.cjs').recordRound(
         path.resolve(prepared.graph.directory, '..', '..'),

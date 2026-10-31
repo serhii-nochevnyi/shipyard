@@ -525,7 +525,6 @@ const DEFAULTS = {
   // conservative preserves the role floor; adaptive classifies each dispatch
   // and opens the routine lane for bounded low-risk work.
   model_ladder: 'conservative',       // conservative | adaptive
-  use_workflow: 'auto',               // auto | false
   // The PR sentinel: who drives open PRs to green and lands them in the stack
   // while the main loop cascades onward.
   //   sentinel:   auto (background guard when the runtime has one, otherwise a
@@ -1206,7 +1205,6 @@ function loadConfig(root, options = {}) {
       cfg[numeric] = n;
     }
   }
-  cfg.use_workflow = cfg.use_workflow === false || cfg.use_workflow === 'false' ? false : 'auto';
   cfg.graph_gate = cfg.graph_gate !== false;
 
   // These values are the normalized pipeline controls the routed bridge passes

@@ -1569,7 +1569,7 @@ if (epicNotice) console.log(`note: ${epicNotice}`);
 for (const n of notices) console.log(`⚠ ${n}`);
 console.log(`PR listing: listed_open=${listingStats.listedOpen}, looked_up=${listingStats.lookedUp}, skipped_landed=${listingStats.skippedLanded}`);
 console.log(`integration mode: ${mode}${mode === 'epic-stacked' ? ` (→ ${DEFAULT_BRANCH} via epic)` : ` (→ ${DEFAULT_BRANCH})`} [base from ${DEFAULT_BRANCH_SOURCE}]`);
-console.log(`model policy: ${cfg.model_policy} | workflow: ${cfg.use_workflow === false ? 'forced-off' : 'auto'} | max attempts: ${cfg.max_attempts}`);
+console.log(`model policy: ${cfg.model_policy} | max attempts: ${cfg.max_attempts}`);
 // The `⚠ config: … INVALID …` line comes from the warnings loop above (loadConfig
 // composes it, so the board and every other reader quote one sentence). This line
 // carries the CONSEQUENCE, and the epic-stacked note below it must not fire on an

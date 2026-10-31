@@ -1654,7 +1654,6 @@ test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main workt
   }
 });
 
-const { classifyLegacyProvenance } = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
 const { spawnSync } = require('node:child_process');
 
 const DELIVERY_SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');

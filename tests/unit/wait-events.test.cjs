@@ -419,6 +419,27 @@ test('a selected treatment is persisted, an unknown one is refused, and a switch
   assert.deepEqual(Object.values(store(cliGraph).records)[0].treatments, { wait_events: 'opt-06', bounded_context: 'opt-07' });
 });
 
+test('treatment input is canonicalised through aliases and on/off, and malformed input is refused with its reason', () => {
+  const waitEvents = loadWaitEvents();
+  const graphDir = graph();
+  const ctx = context(graphDir);
+  const observation = { checks: [{ name: 'build', state: 'IN_PROGRESS', bucket: 'pending' }] };
+  waitEvents.observe({ ...ctx, observation, treatments: { wait: 'on', context: 'off' } }, { now: 1000 });
+  assert.deepEqual(Object.values(store(graphDir).records)[0].treatments, { wait_events: 'opt-06', bounded_context: 'baseline' });
+  waitEvents.observe({ ...ctx, observation, treatments: { 'opt-07': 'on', 'opt-06': 'off' } }, { now: 1200 });
+  assert.deepEqual(Object.values(store(graphDir).records)[0].treatments, { wait_events: 'baseline', bounded_context: 'opt-07' });
+  for (const [treatments, reason] of [
+    [{ nope: 'baseline' }, /unknown treatment dimension nope/],
+    [{ wait_events: 'a\u0001b' }, /must be non-empty text/],
+    [{ wait_events: 'x'.repeat(513) }, /must be non-empty text/],
+    [['baseline'], /treatment must be an object/],
+  ]) {
+    const refused = waitEvents.observe({ ...ctx, observation, treatments }, { now: 1500 });
+    assert.equal(refused.code, 'INVALID_TREATMENT');
+    assert.match(refused.message || refused.reason || JSON.stringify(refused), reason);
+  }
+});
+
 test('duplicate acknowledgment is idempotent and leaves no pending action', () => {
   const waitEvents = loadWaitEvents();
   const graphDir = graph();
