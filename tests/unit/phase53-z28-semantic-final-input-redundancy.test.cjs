@@ -555,8 +555,9 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' exact recorded previ
   }
 });
 
-for (const runtime of ['codex', 'claude']) test(runtime + ' unchanged integration architecture and recorded resource refusals', async () => {
-  for (const role of ['integrator', 'arch-review']) await publicRole(role, runtime, {
+for (const runtime of ['codex', 'claude']) for (const role of ['integrator', 'arch-review'])
+  test(runtime + ' unchanged ' + role + ' wire and original custody', async () => {
+  await publicRole(role, runtime, {
     inspect({ f, api, prepared, snapshots, originals, current }) {
       const a = internals(), snapshot = [...snapshots.values()][0], before = h.stable(snapshot);
       const record = a.semanticRecord(f.worktree, snapshot.snapshot_sha256);
@@ -576,6 +577,9 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' unchanged integratio
       assert.equal(h.stable(snapshot), before);
     },
   });
+});
+
+for (const runtime of ['codex', 'claude']) test(runtime + ' recorded resource and required-read failures remain incomplete', async () => {
   await publicRole('code-review', runtime, {
     refusal: /SEMANTIC_REVIEW_INCOMPLETE/,
     native(rows, payload) {
@@ -610,6 +614,9 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' unchanged integratio
       }
     },
   });
+});
+
+for (const runtime of ['codex', 'claude']) test(runtime + ' unresolved independent final seam refuses a pass', async () => {
   await publicRole('code-review', runtime, {
     refusal: /SEMANTIC_REVIEW_INCOMPATIBLE/,
     result(result) { if (result.stage === 'final') result.seams[0].disposition = 'unresolved'; },
