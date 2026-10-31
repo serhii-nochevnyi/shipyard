@@ -226,6 +226,20 @@ test('pinned references and live revalidation fail closed before a successor can
   }
 });
 
+test('inspect reports the unproven transfer capability: automatic transfer is never allowed', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+    handoff.begin({ runId: 'run-inspect', sessionId: 'session-inspect', phase: '33', tickets: ['T-33-08'] });
+    const [scope] = handoff.inspect().scopes;
+    assert.equal(scope.transfer_capability.status, 'unsupported');
+    assert.equal(scope.transfer_capability.automatic_transfer.allowed, false);
+    assert.equal(scope.transfer_capability.manual_resume.status, 'available');
+  } finally {
+    clean(root);
+  }
+});
+
 test('cancel-before-ack removes only the preparing successor and keeps the fence monotonic', () => {
   const root = repoFixture();
   try {
