@@ -4956,10 +4956,13 @@ function validateSemanticResult(result, launch, record, facts) {
 function semanticLaunchPayload(snapshot, stage, assignment, view, inputs, transport) {
   const { obligation_ids, ...workerView } = view;
   const emittedView = snapshot.role === 'code-review' && stage === 'worker' ? workerView : view;
+  const { independent_final_seam_ids, ...finalView } = emittedView;
+  const selectedView = snapshot.role === 'code-review' && stage === 'final'
+    ? { ...finalView, ...inputs } : { ...emittedView, ...inputs };
   return { schema: SEMANTIC_REVIEW_V1, review_contract: SEMANTIC_REVIEW_V1, role: snapshot.role, stage,
     runtime: snapshot.runtime, subject: snapshot.subject, snapshot_sha256: snapshot.snapshot_sha256,
     reviewed_identity: snapshot.identity, result_formats: ['full', 'snapshot-indexed.v1'], assignment: semanticInlineAssignment(assignment),
-    ...emittedView, ...inputs, ...(transport === 'host-files' ? { input_transport: 'host-files' } : {}),
+    ...selectedView, ...(transport === 'host-files' ? { input_transport: 'host-files' } : {}),
     ...(snapshot.role === 'code-review' ? { code_review_context: Object.fromEntries(
       ['review_round', 'review_scope', 'prior_head', 'prior_findings', 'dispositions_digest'].map(key =>
         [key, snapshot.code_review_packet.role_context[key]])) } : {}),
@@ -4992,7 +4995,9 @@ function assertSemanticLaunchView(launch, record, inputs) {
     semanticError('semantic launch required responsibility view differs');
   if (stable(body) === stable(expected)) return;
   const predecessor = snapshot.role === 'code-review' && launch.stage === 'worker'
-    ? { ...expected, obligation_ids: view.obligations.map(item => item.id) } : expected;
+    ? { ...expected, obligation_ids: view.obligations.map(item => item.id) }
+    : snapshot.role === 'code-review' && launch.stage === 'final'
+      ? { ...expected, independent_final_seam_ids: view.seams.map(item => item.id) } : expected;
   const { result_formats, ...previous } = predecessor;
   const legacy = { ...previous, assignment: assignment || null,
     required_context: assignment ? assignment.required_context : snapshot.assignments.flatMap(item => item.required_context) };

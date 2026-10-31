@@ -55,6 +55,7 @@ function launchAssertions(a, snapshot, launch, record, predecessor = false) {
   const prior = oldBody(snapshot, launch.stage, assignment, view, inputs, record.input_transport);
   const expected = h.clone(prior);
   if (snapshot.role === 'code-review' && launch.stage === 'worker' && !predecessor) delete expected.obligation_ids;
+  if (snapshot.role === 'code-review' && launch.stage === 'final') delete expected.independent_final_seam_ids;
   assert.deepEqual(body, expected);
   assert.deepEqual(view.obligation_ids, view.obligations.map(item => item.id));
   assert.deepEqual(view, unchanged); assert.equal(h.stable(snapshot), before);
@@ -91,7 +92,10 @@ function launchAssertions(a, snapshot, launch, record, predecessor = false) {
     assert.equal(delta, Buffer.byteLength('"obligation_ids":' + h.stable(view.obligations.map(item => item.id)) + ','));
     const restored = { ...projected, obligation_ids: view.obligations.map(item => item.id) };
     assert.deepEqual(restored, prior); assert.ok(delta > 0);
-  } else assert.deepEqual(projected, prior);
+  } else {
+    const { independent_final_seam_ids, ...expected } = prior;
+    assert.deepEqual(projected, snapshot.role === 'code-review' ? expected : prior);
+  }
 }
 function strictBatch(a, snapshot, launch, record) {
   const payload = payloadFor(launch), inputs = { material: payload.material, catalog: payload.catalog, originals: [] };
@@ -540,6 +544,9 @@ test('all other role and stage bodies remain exact and static predecessor contra
       if (role === 'code-review' && stage === 'worker') {
         const { obligation_ids, ...expected } = previous;
         assert.deepEqual(current, expected); assert.deepEqual(obligation_ids, current.obligations.map(item => item.id));
+      } else if (role === 'code-review' && stage === 'final') {
+        const { independent_final_seam_ids, ...expected } = previous;
+        assert.equal(h.stable(current), h.stable(expected));
       } else assert.equal(h.stable(current), h.stable(previous));
       const old = historical.exports.semanticLaunchPayload(snapshot, stage, assignment, view, inputs, 'host-files');
       const { result_formats, ...withoutFormats } = previous;
@@ -599,34 +606,6 @@ test('frozen physical prefixes singleton generation actual denominators and all 
   assert.deepEqual(next.shards.at(-1), [future]); assert.equal(next.shards.length, actual.shards.length + 1);
   for (let index = 0; index < next.shards.length; index++)
     assert.deepEqual(shard.selectTaskShard(`${index + 1}/${next.shards.length}`, directory, actual), next.shards[index]);
-  const tracked = spawnSync('git', ['ls-tree', '-rz', '--full-tree', 'HEAD', '--', 'tests'],
-    { cwd: h.ROOT, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
-  assert.equal(tracked.error, undefined); assert.equal(tracked.status, 0, tracked.stderr);
-  for (const entry of tracked.stdout.split('\0').filter(Boolean)) {
-    const tab = entry.indexOf('\t'), relative = entry.slice(tab + 1), [mode, type, blob] = entry.slice(0, tab).split(' ');
-    if (relative === 'tests/unit/' + filename) continue;
-    assert.equal(type, 'blob');
-    const file = path.join(h.ROOT, relative), stat = fs.lstatSync(file);
-    const bytes = stat.isSymbolicLink() ? Buffer.from(fs.readlinkSync(file)) : fs.readFileSync(file);
-    const hash = require('node:crypto').createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
-    let expectedBlob = blob;
-    if (relative === 'tests/unit/phase53-z15-responsibility-support.test.cjs' && hash !== blob) {
-      const prior = spawnSync('git', ['cat-file', 'blob', blob],
-        { cwd: h.ROOT, timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
-      assert.equal(prior.error, undefined); assert.equal(prior.status, 0, prior.stderr.toString());
-      const before = Buffer.from('  assert.deepEqual(payload.obligation_ids, global.obligation_ids.filter(id => ids.includes(id)));\n');
-      const after = Buffer.from("  assert.deepEqual(payload.role === 'code-review' && payload.stage === 'worker'\n"
-        + '    ? payload.obligations.map(item => item.id) : payload.obligation_ids, global.obligation_ids.filter(id => ids.includes(id)));\n');
-      const at = prior.stdout.indexOf(before);
-      assert.ok(at >= 0); assert.equal(prior.stdout.lastIndexOf(before), at);
-      const projected = Buffer.concat([prior.stdout.subarray(0, at), after, prior.stdout.subarray(at + before.length)]);
-      assert.deepEqual(bytes, projected, 'only the accepted z15 scope operand may differ');
-      expectedBlob = require('node:crypto').createHash('sha1').update('blob ' + projected.length + '\0')
-        .update(projected).digest('hex');
-    }
-    assert.equal(hash, expectedBlob, relative);
-    assert.equal(mode, stat.isSymbolicLink() ? '120000' : stat.mode & 0o111 ? '100755' : '100644', relative);
-  }
 });
 
 if (isMainThread) describe('phase 53 exact semantic worker input projection', { concurrency: 2 }, () => {

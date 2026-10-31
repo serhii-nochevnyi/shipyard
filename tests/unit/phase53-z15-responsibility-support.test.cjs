@@ -82,7 +82,8 @@ function assertViews(payload, global) {
   if (!assignment) {
     assert.equal(payload.assignment, null);
     assert.deepEqual(payload.obligation_ids, global.obligation_ids);
-    assert.deepEqual(payload.independent_final_seam_ids, s.independent_final_seam_ids);
+    assert.deepEqual(payload.role === 'code-review' && payload.stage === 'final'
+      ? payload.seams.map(item => item.id) : payload.independent_final_seam_ids, s.independent_final_seam_ids);
     assert.deepEqual(payload.cross_responsibility_seam_ids, s.cross_responsibility_seam_ids);
     return;
   }
