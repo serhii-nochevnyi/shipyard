@@ -100,16 +100,9 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
   const sandboxEvidence = evidence.sandbox_evidence;
   const expectedProfileParent = expectedSandbox === 'read-only' ? ':read-only' : ':workspace';
   const protectedPaths = sandboxEvidence && sandboxEvidence.protected_paths;
-  const evidenceNames = {
-    'shipyard-drift-check.toml': '.shipyard-drift-evidence.md',
-    'shipyard-arch-review.toml': '.shipyard-arch-review-evidence.md',
-    'shipyard-arch-review-critical.toml': '.shipyard-arch-review-evidence.md',
-    'shipyard-code-review.toml': '.shipyard-code-review-evidence.md',
-    'shipyard-code-review-critical.toml': '.shipyard-code-review-evidence.md',
-  };
-  const expectedEvidencePath = expectedSandbox === 'read-only' && evidenceNames[resolution.agent_file]
+  const expectedEvidencePath = expectedSandbox === 'read-only' && resolution.agent_file === 'shipyard-drift-check.toml'
     && typeof evidence.worktree === 'string' && path.isAbsolute(evidence.worktree)
-    ? path.join(evidence.worktree, evidenceNames[resolution.agent_file]) : null;
+    ? path.join(evidence.worktree, '.shipyard-drift-evidence.md') : null;
   const evidenceWritePath = sandboxEvidence && sandboxEvidence.evidence_write_path;
   const readOnlyPaths = object(sandboxEvidence) && Object.hasOwn(sandboxEvidence, 'read_only_protected_paths')
     ? sandboxEvidence.read_only_protected_paths : [];

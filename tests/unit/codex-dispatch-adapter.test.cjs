@@ -330,31 +330,31 @@ test('default sandbox per role: researchers write, the plan-checker stays read-o
   }
 });
 
-test('static judgment receipts accept only their named evidence file write grant', () => {
-  for (const [role, evidenceName] of [
-    ['drift-check', '.shipyard-drift-evidence.md'],
-    ['arch-review', '.shipyard-arch-review-evidence.md'],
-    ['code-review', '.shipyard-code-review-evidence.md'],
+test('only drift-check keeps an evidence write grant; the review roles accept none', () => {
+  for (const [role, grant, accepted] of [
+    ['drift-check', '.shipyard-drift-evidence.md', true], ['drift-check', 'unrelated.md', false],
+    ['arch-review', null, true], ['arch-review', '.shipyard-arch-review-evidence.md', false], ['arch-review', 'unrelated.md', false],
+    ['code-review', null, true], ['code-review', '.shipyard-code-review-evidence.md', false], ['code-review', 'unrelated.md', false],
   ]) {
-    for (const [grant, accepted] of [[evidenceName, true], ['unrelated.md', false]]) {
-      const f = setup({ host: {
-        requireRuntimeEvidence: true,
-        launchStatic: (selection, context) => {
-          const evidence = runtimeEvidence(selection, context);
+    const f = setup({ host: {
+      requireRuntimeEvidence: true,
+      launchStatic: (selection, context) => {
+        const evidence = runtimeEvidence(selection, context);
+        if (grant) {
           const file = path.join(evidence.worktree, grant);
           evidence.sandbox_evidence.evidence_write_path = file;
           const index = evidence.command.args.findIndex((arg) => arg.startsWith('permissions.shipyard-runtime.filesystem='));
           evidence.command.args[index] = evidence.command.args[index].replace(/}$/, ',' + JSON.stringify(file) + '=\"write\"}');
-          return { ...applied(selection), observed_model: selection.model,
-            observed_effort: selection.reasoning_effort, runtime_evidence: evidence };
-        },
-      } });
-      try {
-        const run = () => f.boundary.dispatch({ runtime: 'codex', role }, subjectContext(role));
-        if (accepted) assert.equal(run().receipt.compliance, 'verified');
-        else assert.throws(run, (error) => error.code === 'MISSING_RECEIPT');
-      } finally { clean(f); }
-    }
+        }
+        return { ...applied(selection), observed_model: selection.model,
+          observed_effort: selection.reasoning_effort, runtime_evidence: evidence };
+      },
+    } });
+    try {
+      const run = () => f.boundary.dispatch({ runtime: 'codex', role }, subjectContext(role));
+      if (accepted) assert.equal(run().receipt.compliance, 'verified');
+      else assert.throws(run, (error) => error.code === 'MISSING_RECEIPT');
+    } finally { clean(f); }
   }
 });
 

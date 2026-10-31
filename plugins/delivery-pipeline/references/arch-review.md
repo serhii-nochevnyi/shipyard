@@ -123,7 +123,8 @@ remains unresolved, return `review_completeness: incomplete` and preserve all us
 findings and limitations. An incomplete judgment cannot grant current conformance.
 Use the existing `conform`, `violation`, or `adr-outdated` verdict and consistent
 `blocking_count`; completeness is a separate declaration. Write the complete
-`evidence_markdown` verbatim to `.shipyard-arch-review-evidence.md` before finishing.
+`evidence_markdown` in the final message and write no file; the host writes it verbatim
+to `.shipyard-arch-review-evidence.md` when it seals.
 Neither the declarations nor an empty finding list prove source consumption.
 
 ## Procedure
@@ -212,17 +213,17 @@ keeps every violating ADR, section, hunk, and remediation. An `adr-outdated`
 finding keeps the decision, the contradictory reality, and the precise human
 decision. Do not collapse these into the summary or add an agent-owned receipt.
 
-Before the authenticated dispatch, the host clears the role-owned evidence
-scratch file for this worktree:
+Before the authenticated dispatch, the host clears the evidence scratch file for
+this worktree:
 
 ```bash
 node $SHIPYARD_ROOT/scripts/role-artifact.cjs prepare \
   --worktree <worktree> --role arch-review
 ```
 
-Write the fresh complete evidence to
-`.shipyard-arch-review-evidence.md` in that worktree. A prior archive or another
-path is not a valid evidence source.
+After the dispatch the host writes the fresh complete `evidence_markdown` to
+`.shipyard-arch-review-evidence.md` in that worktree. The reviewer writes nothing;
+a prior archive or another path is not a valid evidence source.
 
 The host seals the result at the consuming boundary, after the authenticated
 dispatch receipt returns:

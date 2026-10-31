@@ -3702,7 +3702,6 @@ async function codeReviewEntryFixture(action, config = {}) {
         : { ...binding, ticket_set: value.prepared.binding.ticketSet, findings: [], dispositions: [],
         summary: 'Reviewed complete phase input', review_completeness: config.incomplete ? 'incomplete' : 'complete',
         limitations: config.incomplete ? ['unresolved source'] : [], unresolved_sources: [], evidence_markdown: 'Code review evidence.\n' };
-      if (!part) helper.write(f.root, '.shipyard-code-review-evidence.md', raw.evidence_markdown);
       const session = crypto.randomUUID();
       const records = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
         .trim().split('\n').map(JSON.parse);

@@ -90,7 +90,6 @@ function dispatchFixture(f, value, mutate = () => {}, evidence = true, mutateEvi
     summary: 'Reviewed the complete phase change.', review_completeness: 'complete', limitations: [], unresolved_sources: [],
     evidence_markdown: 'Exact role-owned evidence.\n' };
   mutate(raw);
-  if (evidence && !part) write(f.root, '.shipyard-code-review-evidence.md', raw.evidence_markdown);
   const session = crypto.randomUUID();
   const captured = fs.readFileSync(path.resolve(__dirname,
     '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
@@ -396,17 +395,41 @@ for (const field of ['ticket', 'phase', 'worktree', 'dispatch_id', 'prompt']) te
   } finally { f.cleanup(); }
 });
 
-for (const label of ['missing', 'divergent', 'symlink', 'oversized']) test('finish refuses ' + label + ' evidence', () => {
+const CODE_EVIDENCE = '.shipyard-code-review-evidence.md';
+
+test('finish takes the verdict from the final message and writes the evidence file itself', () => {
   const f = fixture();
   try {
     const id = crypto.randomUUID(), v = f.prepare({ inflightDispatchId: id }, { dispatch_id: id }); admit(f, v);
     const d = dispatchFixture(f, v);
-    const p = path.join(f.root, '.shipyard-code-review-evidence.md');
-    if (label === 'missing') fs.unlinkSync(p);
-    if (label === 'divergent') fs.appendFileSync(p, ' ');
-    if (label === 'symlink') { fs.unlinkSync(p); const other = path.join(f.storage, 'evidence'); fs.writeFileSync(other, d.raw.evidence_markdown); fs.symlinkSync(other, p); }
-    if (label === 'oversized') fs.writeFileSync(p, 'x'.repeat(partitions.EVIDENCE_MAX_BYTES + 1));
-    assert.throws(() => context.finish(v, d.dispatch, d.recorder));
+    const p = path.join(f.root, CODE_EVIDENCE);
+    assert.equal(fs.existsSync(p), false);
+    const done = context.finish(v, d.dispatch, d.recorder);
+    assert.equal(fs.readFileSync(p, 'utf8'), d.raw.evidence_markdown);
+    assert.ok(done.artifact.ref);
+  } finally { f.cleanup(); }
+});
+
+for (const label of ['regular file', 'symlink']) test('finish refuses a reviewer-created ' + label + ' at the evidence path', () => {
+  const f = fixture();
+  try {
+    const id = crypto.randomUUID(), v = f.prepare({ inflightDispatchId: id }, { dispatch_id: id }); admit(f, v);
+    const d = dispatchFixture(f, v);
+    const p = path.join(f.root, CODE_EVIDENCE);
+    if (label === 'symlink') fs.symlinkSync(path.join(f.root, 'missing-target'), p);
+    else write(f.root, CODE_EVIDENCE, d.raw.evidence_markdown);
+    assert.throws(() => context.finish(v, d.dispatch, d.recorder), { code: 'WORKTREE_MUTATED' });
+    assert.deepEqual(artifact.authenticatedArchivePins(f.root), []);
+  } finally { f.cleanup(); }
+});
+
+for (const label of ['empty', 'oversized']) test('finish refuses ' + label + ' evidence_markdown in the final message', () => {
+  const f = fixture();
+  try {
+    const id = crypto.randomUUID(), v = f.prepare({ inflightDispatchId: id }, { dispatch_id: id }); admit(f, v);
+    const d = dispatchFixture(f, v, raw => { raw.evidence_markdown = label === 'empty' ? '' : 'x'.repeat(partitions.EVIDENCE_MAX_BYTES + 1); });
+    assert.throws(() => context.finish(v, d.dispatch, d.recorder), { code: 'INVALID_RESULT' });
+    assert.equal(fs.existsSync(path.join(f.root, CODE_EVIDENCE)), false);
   } finally { f.cleanup(); }
 });
 
@@ -1189,7 +1212,9 @@ for (const kind of ['needs-fix', 'incomplete']) test('D35 Codex public sealer re
         contractDigest: value.prepared.contractDigest }), host_context: {
         original_packet: require(path.join(scripts, 'context-packet.cjs')).encodeUniqueContent(packet),
         planning_reference: packet.role_context.planning_reference, selected_refs: value.evidence.selected_refs } };
+    write(f.root, CODE_EVIDENCE, d.raw.evidence_markdown);
     assert.throws(() => artifact.sealJudgment(d35SealInput(f, value, d, forged)), { code: 'REVIEW_NATIVE_INVALID' });
+    fs.unlinkSync(path.join(f.root, CODE_EVIDENCE));
     assert.equal(context.finish(value, d.dispatch, d.recorder).result.verdict, kind);
   } finally { f.cleanup(); }
 });

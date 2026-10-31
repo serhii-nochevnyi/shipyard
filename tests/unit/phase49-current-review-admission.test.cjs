@@ -240,7 +240,6 @@ async function runFocusedArchitecture(f, edit = () => {}) {
   const dispatched = boundary.createDispatchBoundary({ adapters: { codex: adapter }, recorder }).dispatch(
     { runtime: 'codex', role: 'arch-review', dispatch_id: dispatchId, signals: prepared.launch.signals },
     { ticket: scope.ticket, ...(prepared.prepared.binding ? { subject_kind: 'phase' } : {}) });
-  write(f.worktree, '.shipyard-arch-review-evidence.md', result.evidence_markdown);
   return collector.finish(prepared, dispatched, recorder);
 }
 
@@ -520,7 +519,6 @@ async function runClaudeCurrentReview(f, role, edit = {}) {
                   base_tree: git(f.worktree, 'rev-parse', f.base + '^{tree}'),
                   ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest,
                   verdict: 'conform', blocking_count: 0, summary: 'Complete original architecture fixture', findings: [] };
-                write(f.worktree, '.shipyard-arch-review-evidence.md', 'Complete original architecture fixture evidence.\n');
               }
               edit.originalResult?.(result);
               const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];

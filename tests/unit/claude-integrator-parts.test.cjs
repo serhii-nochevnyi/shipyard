@@ -213,6 +213,7 @@ test('the integrator launch is sandboxed to read git: no write into the worktree
       assert.deepEqual(settings.sandbox.filesystem.allowWrite, []);
       assert.deepEqual(settings.permissions.allow, []);
       assert.deepEqual(settings.sandbox.filesystem.denyWrite, ['/authority', fixture.root, require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').repositoryIdentity(fixture.root)]);
+      assert.equal(value('--tools'), 'Bash,Read,Glob,Grep');
       assert.equal(value('--allowedTools'), 'Bash,Read,Glob,Grep');
     }
   } finally { cleanupFixture(fixture); }
@@ -222,6 +223,14 @@ test('the integrator request carries no review_contract selector', () => {
   const base = { schema: REQUEST_SCHEMA, role: 'integrator', worktree: process.cwd(), phase: PHASE };
   for (const value of ['shipyard.integration-review.v1', 'shipyard.integration-review.v3'])
     assert.throws(() => parseRequest({ ...base, review_contract: value }), /request field review_contract is not permitted/);
+});
+
+test('an integrator that creates INTEGRATION.md itself is refused as a mutated worktree', async () => {
+  const fixture = integratorFixture();
+  try {
+    await assert.rejects(runIntegrator(fixture, { onLaunch() { write(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`, 'child wrote this\n'); } }),
+      { code: 'WORKTREE_MUTATED' });
+  } finally { cleanupFixture(fixture); }
 });
 
 test('an integrator part that writes an untracked file is refused and no further session launches', async () => {

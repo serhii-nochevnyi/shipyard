@@ -976,11 +976,11 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
   const range = exact || (role === 'integrator' && combined?.content === undefined
     ? { base: combined.merge_base, head: combined.head } : null);
   const instruction = role === 'arch-review'
-    ? 'Return one JSON object matching the arch-review reference schema. Review only the authenticated PR and use the exact reviewed head and merge-base tree.'
+    ? 'Return one JSON object matching the arch-review reference schema. Review only the authenticated PR and use the exact reviewed head and merge-base tree. Write no file: return the complete review in evidence_markdown.'
     : part
       ? core.partDirections({ part })[0]
     : codeReview
-      ? 'Return one JSON object matching the code-review reference schema. Review the complete authenticated product diff and its callers. Write only .shipyard-code-review-evidence.md. Do not write to GitHub.'
+      ? 'Return one JSON object matching the code-review reference schema. Review the complete authenticated product diff and its callers. Write no file: return the complete review in evidence_markdown. Do not write to GitHub.'
     : role === 'integrator'
       ? 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and its combined diff. Write no file: return the complete integration evidence in evidence_markdown.'
     : readOnlySmoke
@@ -1009,7 +1009,7 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
     ...(role === 'arch-review' ? ['Each $semantic_content alias in the packet resolves to the dictionary entry with that sha256; read the architecture records and plans it holds.']
       : sharedReview ? ['Read the complete inline dictionary and every logical obligation. Resolve shared content references without discarding distinct purposes or provenance. Trusted mechanical integrity supplies no semantic reading credit.'] : []),
     `Authenticated subject: ${subject}`,
-    ...(part || role === 'integrator' ? [] : ['Write the complete evidence to the role-owned evidence path from the reference before returning JSON.']),
+    ...(role === 'pr-sentinel' ? ['Write the complete evidence to the role-owned evidence path from the reference before returning JSON.'] : []),
     '<AUTHENTICATED_CONTEXT_PACKET>',
     JSON.stringify(encoded),
     '</AUTHENTICATED_CONTEXT_PACKET>',
@@ -1277,18 +1277,15 @@ function storageDirectory(options, runId, worktree) {
 function runtimeFor(options, scope, controller, storage, prepared) {
   const runtimeOptions = { scope, controller, readOnlySmoke: options.readOnlySmoke === true,
     recorderDir: path.join(storage, 'receipts'), transcriptDir: path.join(storage, 'transcripts'),
-    ...(prepared.role === 'code-review' || prepared.role === 'integrator' ? { spawn(executable, args, spawnOptions) {
+    ...(['arch-review', 'code-review', 'integrator'].includes(prepared.role) ? { spawn(executable, args, spawnOptions) {
       const at = flag => { const index = args.indexOf(flag) + 1; if (!index) reject(`review runtime lacks ${flag}`, 'RUNTIME_CAPABILITY_MISSING'); return index; };
-      const worktree = prepared.canonical.worktree;
-      const evidence = prepared.part || prepared.role === 'integrator' ? [] : [path.join(worktree, prepared.evidencePath)];
       const settings = JSON.parse(args[at('--settings')]);
-      settings.sandbox.filesystem.allowWrite = evidence;
-      settings.sandbox.filesystem.denyWrite.push(worktree, prepared.canonical.commonPath);
-      settings.permissions.allow = evidence.map(file => `Edit(/${file})`);
+      settings.sandbox.filesystem.allowWrite = [];
+      settings.sandbox.filesystem.denyWrite.push(prepared.canonical.worktree, prepared.canonical.commonPath);
+      settings.permissions.allow = [];
       const restricted = [...args];
       restricted[at('--settings')] = JSON.stringify(settings);
-      restricted[at('--tools')] = 'Bash,Read,Write,Glob,Grep';
-      restricted[at('--allowedTools')] = 'Bash,Read,Glob,Grep';
+      restricted[at('--tools')] = restricted[at('--allowedTools')] = 'Bash,Read,Glob,Grep';
       return require('node:child_process').spawn(executable, restricted, spawnOptions);
     } } : {}),
   };
@@ -1427,7 +1424,7 @@ function assertEvidenceOnlyChanges(options, prepared, graphBaseline) {
   const untracked = git(options, prepared.canonical.worktree, ['ls-files', '--others', '--exclude-standard', '-z'], 256 * 1024, true)
     .split('\0').filter(Boolean);
   const unexpected = [...new Set([...changed, ...untracked])].filter((file) => {
-    if (file === prepared.evidencePath) return false;
+    if (file === prepared.evidencePath) return ['arch-review', 'code-review'].includes(prepared.role);
     if (prepared.role !== 'code-review' && prepared.binding && untracked.includes(file) && !changed.includes(file)
         && file.startsWith(roleArtifact.ARTIFACT_ARCHIVE_DIR + '/')) return false;
     if ((prepared.role === 'code-review' || prepared.role === 'integrator') && untracked.includes(file) && !changed.includes(file)) {
@@ -1635,38 +1632,10 @@ function firstResponseUsage(evidence) {
   return { status: 'observed', dispatch_identity: { session_id: evidence.session_id, launch_id: evidence.launch_id || null }, counters };
 }
 
-function codeReviewEvidenceFs(evidencePath, markdown) {
-  if (typeof markdown !== 'string') reject('code-review evidence_markdown must be a string', 'INVALID_RESULT');
-  const expected = Buffer.from(markdown, 'utf8');
-  const sourceDescriptors = new Set();
-  return Object.freeze({ ...fs,
-    openSync(file, ...args) {
-      const fd = fs.openSync(file, ...args);
-      if (file === evidencePath) sourceDescriptors.add(fd);
-      return fd;
-    },
-    readSync(fd, buffer, offset, length, position) {
-      const count = fs.readSync(fd, buffer, offset, length, position);
-      // @security: Compare the exact source bytes consumed by sealJudgment before any archive publication.
-      if (sourceDescriptors.has(fd) && (!Number.isSafeInteger(position) || position < 0
-          || position + count > expected.length || (count === 0 && position !== expected.length)
-          || !buffer.subarray(offset, offset + count).equals(expected.subarray(position, position + count))))
-        reject('focused original evidence differs from the role-owned file', 'INVALID_RESULT');
-      return count;
-    },
-    closeSync(fd) {
-      sourceDescriptors.delete(fd);
-      return fs.closeSync(fd);
-    },
-  });
-}
-
-function sealResult(prepared, result, recorder, dispatchId, evidenceMarkdown) {
+function sealResult(prepared, result, recorder, dispatchId) {
   const common = { worktreePath: prepared.canonical.worktree, role: prepared.role,
     ticket: prepared.ticket, base: prepared.base, recorder, dispatchId, result,
     ...(prepared.binding ? { phase: prepared.binding.phase, ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest } : {}),
-    ...(prepared.role === 'code-review' ? { io: { fs: codeReviewEvidenceFs(
-      path.join(prepared.canonical.worktree, prepared.evidencePath), evidenceMarkdown) } } : {}),
     evidencePath: prepared.evidencePath };
   const input = ['arch-review', 'code-review'].includes(prepared.role)
     ? { ...common, pr: prepared.pr }
@@ -1677,12 +1646,13 @@ function sealResult(prepared, result, recorder, dispatchId, evidenceMarkdown) {
   return { artifact, validated };
 }
 
-function writeIntegratorEvidence(prepared, markdown) {
+function writeEvidence(prepared, markdown) {
   if (typeof markdown !== 'string' || !markdown.trim())
-    reject('integrator result requires its complete evidence_markdown', 'INVALID_RESULT');
+    reject(`${prepared.role} result requires its complete evidence_markdown`, 'INVALID_RESULT');
   const file = path.join(prepared.canonical.worktree, prepared.evidencePath);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, markdown);
+  try { fs.writeFileSync(file, markdown, { flag: 'wx' }); }
+  catch (error) { if (error.code === 'EEXIST') reject(`${prepared.role} left a file at its evidence path`, 'WORKTREE_MUTATED'); throw error; }
 }
 
 async function dispatchRole(options, prepared) {
@@ -1735,17 +1705,14 @@ async function dispatchRole(options, prepared) {
     const evidence_markdown = originalResult.evidence_markdown;
     const validatedResult = { ...originalResult };
     if (['arch-review', 'code-review', 'integrator'].includes(prepared.role)) delete validatedResult.evidence_markdown;
-    if (prepared.role === 'integrator') writeIntegratorEvidence(prepared, evidence_markdown);
-    if (prepared.role === 'arch-review' && (typeof evidence_markdown !== 'string'
-        || evidence_markdown.trim() !== fs.readFileSync(path.join(prepared.canonical.worktree, prepared.evidencePath), 'utf8').trim()))
-      reject('focused original evidence differs from the role-owned file', 'INVALID_RESULT');
+    if (['arch-review', 'code-review', 'integrator'].includes(prepared.role)) writeEvidence(prepared, evidence_markdown);
     const result = prepared.role === 'arch-review' ? { ...validatedResult, host_context: {
       focused: { ...prepared.packet.role_context.focused, context_digest: sha(canonicalJson(prepared.packet)) },
       graph_dir: prepared.graph.directory, source_root: prepared.canonical.projectRoot,
       ...(prepared.binding ? { phase_repo: prepared.binding.repo } : {}),
       selected_refs: prepared.packet.required_refs.map(ref => ({ path: ref.path, sha256: ref.sha256, bytes: ref.bytes })),
     } } : validatedResult;
-    const { artifact, validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id, evidence_markdown);
+    const { artifact, validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id);
     const round = prepared.role === 'pr-sentinel'
       ? require('./dispatch-record.cjs').recordRound(
         path.resolve(prepared.graph.directory, '..', '..'),
@@ -1907,7 +1874,7 @@ module.exports = Object.freeze({
   prepareIntegratorContext,
   revalidateIntegrator,
   validateResult,
-  writeIntegratorEvidence,
+  writeEvidence,
   sealResult,
   assertEvidenceOnlyChanges,
   graphStateSnapshot,

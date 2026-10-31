@@ -103,7 +103,7 @@ sealing; do not invent host citation identities, classifications or suppression.
 | `summary` | Synopsis; the sealed envelope caps it at 500 characters |
 | `findings` | At most 128 entries described below |
 | `dispositions` | At most 128 entries `{ref, disposition, justification?, source?}`; `source`, if returned, is `reviewer` |
-| `evidence_markdown` | Full evidence identical to the role-owned evidence file |
+| `evidence_markdown` | Full evidence; the host writes it to the evidence file and seals it |
 
 A returned finding requires `id`, `severity` and `summary`. `id` is a non-empty
 string of at most 128 UTF-8 bytes. When a returned label collides with a carried
@@ -212,11 +212,11 @@ Example reviewer output before host normalization:
 
 ## Evidence
 
-Write the complete evidence to `.shipyard-code-review-evidence.md`. It is the
-reviewer's only writable path. Include commands, output tails, findings and
+Return the complete evidence in `evidence_markdown` and write no file: the
+reviewer has no writable path. Include commands, output tails, findings and
 rating evidence, prior BLOCKER dispositions, limitations and unread sources.
-Return the identical text in `evidence_markdown`; the host compares and seals
-it with the exact head, base commit and ticket-set digest.
+The host writes it to `.shipyard-code-review-evidence.md` and seals it with the
+exact head, base commit and ticket-set digest.
 
 The recorded-disagreement carrier lives at
 `<project-root>/.planning/phases/<phase-directory>/code-review-disagreements.json`,

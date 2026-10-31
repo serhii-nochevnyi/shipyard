@@ -444,27 +444,14 @@ function verifyLivePullRequest(prepared, options) {
   return current.livePullRequests[0];
 }
 
-function writeEvidence(prepared, value, dispatchId) {
+function writeEvidence(prepared, value) {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value, 'utf8') > EVIDENCE_MAX_BYTES) {
     fail('Codex architecture response must include bounded complete evidence_markdown', 'INVALID_RESULT');
   }
-  const worktree = prepared.canonical.worktree;
-  const evidencePath = path.resolve(worktree, prepared.evidencePath);
-  const relative = path.relative(worktree, evidencePath);
-  if (relative !== '.shipyard-arch-review-evidence.md' || path.isAbsolute(relative) || relative.startsWith('..')) {
-    fail('architecture evidence path differs from the role-owned scratch path', 'ARTIFACT_PATH_ESCAPE');
-  }
-  if (fs.existsSync(evidencePath)) {
-    const stat = fs.lstatSync(evidencePath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > EVIDENCE_MAX_BYTES)
-      fail('existing reviewer evidence differs from its complete response', 'INVALID_RESULT');
-    const bytes = boundedBytes(fs, evidencePath, EVIDENCE_MAX_BYTES, undefined, stat);
-    if (bytes.toString('utf8').trim() !== value.trim())
-      fail('existing reviewer evidence differs from its complete response', 'INVALID_RESULT');
-    return { path: evidencePath, sha256: digest(bytes) };
-  }
-  fail('complete role-owned architecture evidence file is missing', 'MISSING_ARTIFACT');
-
+  const file = path.join(prepared.canonical.worktree, prepared.evidencePath);
+  try { fs.writeFileSync(file, value, { flag: 'wx' }); }
+  catch (error) { if (error.code === 'EEXIST') fail('a reviewer wrote the evidence file', 'WORKTREE_MUTATED'); throw error; }
+  return { path: file, sha256: digest(Buffer.from(value, 'utf8')) };
 }
 
 function finish(value, dispatch, recorder) {
@@ -509,7 +496,7 @@ function finish(value, dispatch, recorder) {
   if (result.context_digest !== prepared.packet.digest || result.launch_digest !== launchDigest(value, installation))
     fail('native judgment differs from authenticated launch context', 'STALE_CONTEXT');
   const live = verifyLivePullRequest(prepared, preparedOptions.get(value));
-  const evidence = writeEvidence(prepared, evidenceMarkdown, dispatch.dispatch_id);
+  const evidence = writeEvidence(prepared, evidenceMarkdown);
   const checkedFs = new Proxy(fs, { get(target, property) {
     if (property !== 'readFileSync') return target[property];
     return (filePath, ...args) => {
@@ -764,8 +751,7 @@ function prepare(scope, launch, options = {}) {
     'Use packet body ticket, pr.number, pr.head and diff.merge_base_tree for the exact identity fields.',
     ...(prepared.binding ? ['Repeat the complete packet ticket_set and ticket_set_digest in the result. This is the phase integration review, bound to the aggregate PR, not a ticket verdict.'] : []),
     'Keep development artifacts as context; judge product behavior. Retain uncertainty in the evidence.',
-    'Write the complete review to .shipyard-arch-review-evidence.md in the supplied worktree.',
-    'That required role-owned file must contain exactly the complete evidence_markdown text.',
+    'Write no file: the host writes the evidence from evidence_markdown.',
     '<AUTHENTICATED_CONTEXT_PACKET>', packet, '</AUTHENTICATED_CONTEXT_PACKET>',
   ].join('\n\n');
   if (Buffer.byteLength(prompt, 'utf8') > INPUT_MAX_BYTES)
