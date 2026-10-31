@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Every published tag must carry a release entry.
+# Every published v* tag must carry a release entry.
 #
 # This repo has kept release notes since v0.4.0 — and then twelve tags in a row
 # shipped without one, because the release step lived in whoever was cutting the
@@ -20,12 +20,13 @@ command -v gh >/dev/null 2>&1 || { echo "gh not found on PATH — this check rea
 git remote get-url origin >/dev/null 2>&1 || { echo "no 'origin' remote to compare against"; exit 1; }
 
 # Tags as GitHub knows them, not as this checkout does: a tag that was never
-# pushed cannot have a release, and demanding one would be noise.
-if ! remote_tags="$(git ls-remote --tags origin 2>/dev/null | grep -v '\^{}' | awk '{print $2}' | sed 's|refs/tags/||' | sort)"; then
+# pushed cannot have a release, and demanding one would be noise. Only v* tags
+# are releases; fixture and other tags are not.
+if ! remote_tags="$(git ls-remote --tags origin 2>/dev/null | grep -v '\^{}' | awk '{print $2}' | sed -n 's|^refs/tags/\(v.*\)|\1|p' | sort)"; then
   echo "could not list remote tags (network? auth?)"; exit 1
 fi
 if [[ -z "$remote_tags" ]]; then
-  echo "release notes smoke: no tags on origin — nothing to check"
+  echo "release notes smoke: no v* tags on origin — nothing to check"
   exit 0
 fi
 
