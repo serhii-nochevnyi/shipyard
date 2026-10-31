@@ -50,10 +50,14 @@ test('a lone latest cancel is pending and cancelled — never passing or green',
   assert.strictEqual(isGreen({ failing: 0, pending: 0, cancelled: 1 }), false);
 });
 
-test('a cancel superseded by a newer run of the same name is ignored — newer pass is green', () => {
+test('a cancel superseded by a proven same logical check is ignored — newer pass is green', () => {
+  const identity = { source: 'check-run', repository: 'o/r', head_sha: 'a'.repeat(40),
+    app_id: 15368, app_slug: 'github-actions', workflow_id: 50, event: 'push', run_attempt: 1 };
   const c = classify([
-    { name: 'publish', bucket: 'cancel', startedAt: '2026-09-01T10:00:00Z', link: 'https://x/actions/runs/1/job/1' },
-    { name: 'publish', bucket: 'pass', startedAt: '2026-09-01T10:05:00Z', link: 'https://x/actions/runs/2/job/2' },
+    { ...identity, id: 1, name: 'publish', bucket: 'cancel', startedAt: '2026-09-01T10:00:00Z',
+      link: 'https://github.com/o/r/actions/runs/1/job/1', run_id: '1', job_id: '1', run_number: 1, check_suite_id: 101 },
+    { ...identity, id: 2, name: 'publish', bucket: 'pass', startedAt: '2026-09-01T10:05:00Z',
+      link: 'https://github.com/o/r/actions/runs/2/job/2', run_id: '2', job_id: '2', run_number: 2, check_suite_id: 102 },
   ]);
   assert.strictEqual(c.superseded, 1);
   assert.strictEqual(c.cancelled, 0);

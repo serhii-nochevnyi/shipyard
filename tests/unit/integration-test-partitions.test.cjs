@@ -18,7 +18,7 @@ const shards = require('./shard-files.cjs');
 const counts = [1, 1, 24, 25, 28, 28];
 const taskKeys = [1, 2, 3, 4, 5, 6].map(number => ownerName + '#integration-partition=' + number);
 const suffixAnchor = "const assert = require('node:assert/strict');";
-const suffixDigest = '3bce8840cf158fd44aa4301b6e91569435312eebd44d279ab3970c258a463384';
+const suffixDigest = 'c4e32e7c562db3ac1786b3d8ed732894858ed3cb53c518d778b4d824c637a8d1';
 assert.equal(crypto.createHash('sha256').update(source.slice(source.indexOf(suffixAnchor))).digest('hex'), suffixDigest);
 function discover(args = []) {
   const result = spawnSync(process.execPath, [owner, '--list-integration-tests', ...args], {
@@ -211,7 +211,8 @@ function runnerFixture() {
     assert.equal(result.status, 0, result.stderr);
     fs.symlinkSync(result.stdout.trim(), path.join(root, 'tools/git'));
   }
-  const files = ['a.test.cjs', 'b.test.cjs', ownerName, 'z.test.cjs', checkName].sort();
+  const files = ['a.test.cjs', 'b.test.cjs', ownerName, 'z.test.cjs', checkName,
+    ...Array.from({ length: 6 }, (_, i) => `extra-${i}.test.cjs`)].sort();
   const body = `
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const root = process.cwd(), id = path.basename(__filename), args = process.argv.slice(2);
@@ -243,7 +244,9 @@ if (process.env.QUEUE_BLOCK === '1') {
   for (const [index, seconds] of [1597.8, 1318.2, 1369.2, 1368, 1368, 1368.6].entries())
     weights[taskKeys[index]] = seconds;
   fs.writeFileSync(path.join(root, 'tests/unit/shard-weights.json'), JSON.stringify(weights));
-  return { root, files, weights };
+  const manifest = { version: 1, shards: shards.assign(shards.unitTasks(files), weights, 16).map(shard => shard.files) };
+  fs.writeFileSync(path.join(root, 'tests/unit/shard-manifest.json'), JSON.stringify(manifest));
+  return { root, files, weights, manifest };
 }
 function runnerEnv(f, extra = {}) {
   return { ...process.env, PATH: path.join(f.root, 'tools') + path.delimiter + process.env.PATH,
@@ -269,15 +272,14 @@ function fixtureTasks(f) {
   return [...f.files.filter(file => file !== ownerName), ...taskKeys].sort();
 }
 
-test('real queue assigns expanded tasks across six jobs exactly once and preserves default completeness and worker isolation', () => {
+test('real queue assigns frozen tasks across sixteen jobs exactly once and preserves default completeness and worker isolation', () => {
   const union = [];
-  const thirds = [];
   let complete;
-  for (const spec of ['', '1/6', '2/6', '3/6', '4/6', '5/6', '6/6', '1/3', '2/3', '3/3']) {
+  for (const spec of ['', ...Array.from({ length: 16 }, (_, i) => `${i + 1}/16`)]) {
     const f = runnerFixture();
     try {
       const inventory = fixtureTasks(f);
-      assert.equal(inventory.length, 10);
+      assert.equal(inventory.length, 16);
       const result = spawnSync('/bin/bash', [path.join(f.root, 'tests/unit/run.sh')], {
         cwd: '/', env: runnerEnv(f, { UNIT_SHARD: spec }), encoding: 'utf8', timeout: 20000,
       });
@@ -286,10 +288,9 @@ test('real queue assigns expanded tasks across six jobs exactly once and preserv
       const selected = events(f);
       const actual = selected.map(eventTask).sort();
       const [index, count] = spec.split('/').map(Number);
-      const expected = spec ? shards.assign(inventory, f.weights, count)[index - 1].files : inventory;
+      const expected = spec ? f.manifest.shards[index - 1] : inventory;
       assert.deepEqual(actual, expected);
-      if (count === 6) union.push(...actual);
-      else if (count === 3) thirds.push(...actual);
+      if (count === 16) union.push(...actual);
       else { complete = inventory; assert.deepEqual(actual, complete); }
       assert.equal(new Set(selected.map(item => item.pid)).size, selected.length);
       assert.equal(new Set(selected.map(item => item.ppid)).size, 1);
@@ -313,12 +314,29 @@ test('real queue assigns expanded tasks across six jobs exactly once and preserv
       assert.deepEqual(fs.readdirSync(path.join(f.root, 'scratch')), []);
     } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
   }
-  for (const selected of [union, thirds]) {
+  for (const selected of [union]) {
     assert.deepEqual(selected.sort(), complete);
     assert.equal(new Set(selected).size, complete.length);
     assert.equal(selected.filter(task => task === checkName).length, 1);
     assert.ok(!selected.includes(ownerName));
   }
+});
+
+test('the real runner executes a new test alone in an additional shard without editing the manifest', () => {
+  const f = runnerFixture();
+  try {
+    const directory = path.join(f.root, 'tests/unit');
+    const original = fs.readFileSync(path.join(directory, 'shard-manifest.json'), 'utf8');
+    fs.copyFileSync(path.join(directory, 'a.test.cjs'), path.join(directory, 'new.test.cjs'));
+    const result = spawnSync('/bin/bash', [path.join(directory, 'run.sh')], {
+      cwd: '/', env: runnerEnv(f, { UNIT_SHARD: '17/17' }), encoding: 'utf8', timeout: 20000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.deepEqual(events(f).map(eventTask), ['new.test.cjs']);
+    assert.equal(fs.readFileSync(path.join(directory, 'shard-manifest.json'), 'utf8'), original);
+    assert.deepEqual(fs.readdirSync(path.join(f.root, 'scratch')), []);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
 test('ordinary-only copied runners preserve their physical snapshot without a shard helper', () => {
@@ -360,7 +378,7 @@ test('a failed partition propagates status after all queued workers and preserve
     });
     assert.equal(result.error, undefined);
     assert.equal(result.status, 1, result.stderr + result.stdout);
-    assert.equal(events(f).length, 10);
+    assert.equal(events(f).length, fixtureTasks(f).length);
     assert.deepEqual(events(f).map(eventTask).sort(), fixtureTasks(f));
     assert.match(result.stdout, /phase49-incremental-integration\.test\.cjs --integration-partition=2 status=7/);
     assert.match(result.stdout, /unit tests FAILED/);

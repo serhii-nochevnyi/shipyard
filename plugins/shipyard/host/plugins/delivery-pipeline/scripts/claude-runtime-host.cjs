@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { claudeGsdAgentDirectory } = require('./gsd-agent-root.cjs');
-const { resolveClaudeHome } = require('./runtime-context.cjs');
+const { resolveClaudeHome, acquireRuntimeProbe } = require('./runtime-context.cjs');
 const { spawn, spawnSync } = require('node:child_process');
 const { CLAUDE_MODEL_ALIASES } = require('./runtime-adapters.cjs');
 const { createDurableRecorder } = require('./dispatch-boundary.cjs');
@@ -434,22 +434,26 @@ function transcriptPathForEvidence(root, transcriptPath, sessionId) {
     fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript path cannot be inspected: ${error.message}`);
   }
   if (projectStat.isSymbolicLink() || !projectStat.isDirectory()) fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript project directory is not a regular directory');
+  let realProject;
+  try { realProject = fs.realpathSync(project); }
+  catch (error) { fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript path cannot be resolved: ${error.message}`); }
+  if (path.dirname(realProject) !== rootReal) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript resolves outside the exact Claude project/session location');
+  }
   let fileStat;
   try { fileStat = fs.lstatSync(file); }
   catch (error) {
-    if (error && error.code === 'ENOENT') return file;
+    if (error && error.code === 'ENOENT') return path.join(realProject, path.basename(file));
     fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript file cannot be inspected: ${error.message}`);
   }
   if (fileStat.isSymbolicLink() || !fileStat.isFile()) fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript file is not a regular file');
-  let realProject;
   let realFile;
   try {
-    realProject = fs.realpathSync(project);
     realFile = fs.realpathSync(file);
   } catch (error) {
     fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript path cannot be resolved: ${error.message}`);
   }
-  if (path.dirname(realProject) !== rootReal || path.dirname(realFile) !== realProject
+  if (path.dirname(realFile) !== realProject
       || path.basename(realFile) !== `${sessionId}.jsonl`) {
     fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript resolves outside the exact Claude project/session location');
   }
@@ -495,31 +499,46 @@ async function readSessionEvidence(startEvidence, sessionId, expectedModel, expe
   const poll = Number.isSafeInteger(options.transcriptPollMs)
     ? Math.max(1, options.transcriptPollMs) : TRANSCRIPT_POLL_MS;
   let priorStamp = '';
-  let stablePolls = 0;
-  while (now() <= deadline) {
+  let stableSince;
+  // @invariant: Inspect the terminal wake once; stability never authorizes a sleep at or beyond the deadline.
+  while (true) {
+    const sampledAt = now();
     {
       const file = transcriptPath;
       let before;
-      try { before = fs.statSync(file); }
+      try {
+        const physical = transcriptPathForEvidence(root, startEvidence.transcript_path, sessionId);
+        if (physical && physical !== file) {
+          fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript physical path changed during observation');
+        }
+        if (physical) before = fs.statSync(file);
+      }
       catch (error) {
+        if (error && error.name === 'ClaudeRuntimeHostError') throw error;
         if (!error || error.code !== 'ENOENT') fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript metadata cannot be read: ${error.message}`);
       }
+      let stamp = '';
       if (before) {
         if (before.size > TRANSCRIPT_MAX_BYTES) fail('RUNTIME_EVIDENCE_INVALID', 'Claude session transcript exceeds the evidence size limit');
-        const stamp = `${before.size}:${before.mtimeMs}`;
-        stablePolls = stamp === priorStamp ? stablePolls + 1 : 0;
-        priorStamp = stamp;
-        if (stablePolls >= 2) {
-          let bytes;
-          let after;
-          try {
-            bytes = fs.readFileSync(file);
-            after = fs.statSync(file);
-          } catch (error) {
-            if (!error || error.code !== 'ENOENT') fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript cannot be read: ${error.message}`);
+        let bytes;
+        let after;
+        try {
+          bytes = fs.readFileSync(file);
+          const physical = transcriptPathForEvidence(root, startEvidence.transcript_path, sessionId);
+          if (physical && physical !== file) {
+            fail('RUNTIME_EVIDENCE_INVALID', 'Claude transcript physical path changed during reading');
           }
-          if (bytes && after && before.size === after.size && before.mtimeMs === after.mtimeMs
-              && bytes.length === after.size) {
+          if (physical) after = fs.statSync(file);
+        } catch (error) {
+          if (error && error.name === 'ClaudeRuntimeHostError') throw error;
+          if (!error || error.code !== 'ENOENT') fail('RUNTIME_EVIDENCE_INVALID', `Claude transcript cannot be read: ${error.message}`);
+        }
+        if (bytes && after && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(key => before[key] === after[key])
+            && bytes.length === after.size) {
+          const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+          stamp = `${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}:${after.ctimeMs}:${sha256}`;
+          if (stamp !== priorStamp) stableSince = sampledAt;
+          if (sampledAt - stableSince >= 2 * poll) {
             const selection = parseAssistantTranscript(bytes.toString('utf8'), sessionId, expectedModel, expectedEffort, expectedGsdRole);
             if (selection) {
               return Object.freeze({
@@ -527,19 +546,19 @@ async function readSessionEvidence(startEvidence, sessionId, expectedModel, expe
                 transcript: Object.freeze({
                   path: path.relative(transcriptRoot, file).split(path.sep).join('/'),
                   bytes: bytes.length,
-                  sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+                  sha256,
                 }),
               });
             }
-          } else {
-            priorStamp = '';
-            stablePolls = 0;
           }
         }
       }
+      priorStamp = stamp;
+      if (!stamp) stableSince = undefined;
     }
-    if (now() >= deadline) break;
-    await sleep(Math.min(poll, Math.max(1, deadline - now())));
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(poll, remaining));
   }
   fail('RUNTIME_EVIDENCE_MISSING', 'Claude assistant transcript was not flushed for the launched session');
 }
@@ -734,6 +753,9 @@ function createClaudeCliLauncher(options = {}) {
       try { schemaJson = JSON.stringify(schema); } catch { schemaJson = undefined; }
       if (typeof schemaJson !== 'string') fail('INVALID_INPUT', 'schema must be serializable JSON');
     }
+    const semanticReview = schema?.properties?.review_contract?.const === 'shipyard.semantic-review.v1';
+    if (semanticReview && launchOptions.readOnly !== true)
+      fail('INVALID_INPUT', 'semantic review requires the native read-only profile');
     const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot, schema) : null;
     const persistentEvidence = typeof options.startEvidenceFile === 'string';
     const evidenceDirectory = persistentEvidence ? path.dirname(path.resolve(options.startEvidenceFile))
@@ -753,7 +775,8 @@ function createClaudeCliLauncher(options = {}) {
           failIfUnavailable: true,
           allowUnsandboxedCommands: false,
           autoAllowBashIfSandboxed: true,
-          filesystem: { allowWrite: [path.resolve(scope.worktree)], denyRead: [archiveAuthority], denyWrite: [archiveAuthority] },
+          filesystem: { allowWrite: semanticReview ? [] : [path.resolve(scope.worktree)], denyRead: [archiveAuthority],
+            denyWrite: [archiveAuthority, ...(semanticReview ? [path.resolve(scope.worktree)] : [])] },
           credentials: { envVars: SENSITIVE_SUBPROCESS_ENV.map((name) => ({ name, mode: 'deny' })) },
         },
         permissions: {
@@ -778,7 +801,7 @@ function createClaudeCliLauncher(options = {}) {
           }],
         },
       });
-      const tools = launchOptions.readOnly === true ? READ_ONLY_TOOLS
+      const tools = semanticReview ? 'Read,Glob,Grep' : launchOptions.readOnly === true ? READ_ONLY_TOOLS
         : agentDefinition ? agentDefinition.tools : ALLOWED_TOOLS;
       const args = [
       '--print', '--input-format', STREAM_FORMAT, '--output-format', STREAM_FORMAT,
@@ -922,13 +945,13 @@ function createClaudeRuntimeHost(options = {}) {
   const scope = normalizeScope(options.scope || options.runScope || {});
   const controller = options.controller;
   const runId = options.run_id || options.runId || scope.run_id;
-  const probe = options.probe || probeClaudeRuntime({
-    executable: options.executable, checkAuth: options.checkAuth, env: options.env,
-  });
+  const probe = acquireRuntimeProbe(options, 'claude', () => probeClaudeRuntime({
+    executable: options.executable, checkAuth: options.checkAuth, env: { ...process.env, ...options.env },
+  }));
   if (!object(probe) || !['available', 'unavailable'].includes(probe.status)) fail('INVALID_INPUT', 'runtime probe has an invalid status');
   if (probe.status !== 'available') {
     if (controller && typeof controller.markUnavailable === 'function') {
-      controller.markUnavailable(runId, { reason: probe.reason || 'Claude runtime unavailable' });
+      controller.markUnavailable(runId, { reason: bounded(probe.reason, 2048) || 'Claude runtime unavailable' });
     }
     fail('RUNTIME_UNAVAILABLE', probe.detail || `Claude runtime unavailable: ${probe.reason || 'unknown'}`, { probe });
   }
@@ -975,7 +998,7 @@ function createClaudeRuntimeHost(options = {}) {
       return result;
     } catch (error) {
       if (controller && UNAVAILABLE_CODES.has(error && error.code) && typeof controller.markUnavailable === 'function') {
-        controller.markUnavailable(runId, { reason: error.message });
+        controller.markUnavailable(runId, { reason: bounded(error.message, 2048) || 'Claude runtime unavailable' });
       }
       throw error;
     }
@@ -1002,6 +1025,87 @@ function createClaudeRuntimeHost(options = {}) {
     },
   };
   return Object.freeze(host);
+}
+
+// @contract: Semantic review authenticates Claude carriers and tool identities under their native schema.
+function semanticResult(parsed) {
+  const terminal = parsed.result;
+  if (!terminal || parsed.records.at(-1) !== terminal || terminal.subtype !== 'success'
+      || terminal.is_error !== false || parsed.records.filter(row => row.type === 'result').length !== 1
+      || terminal.session_id !== parsed.session_id)
+    fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude output requires one original successful terminal result');
+  let textual;
+  const text = typeof terminal.result === 'string' ? terminal.result : null;
+  if (text !== null) {
+    try { textual = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
+    catch { fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude terminal text is not complete JSON'); }
+  }
+  const result = terminal.structured_output ?? textual;
+  if (!object(result) || result.review_contract !== 'shipyard.semantic-review.v1'
+      || text !== null && Buffer.byteLength(text) > 128 * 1024
+      || Buffer.byteLength(JSON.stringify(result)) > 128 * 1024
+      || textual !== undefined && !require('node:util').isDeepStrictEqual(textual, result))
+    fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude terminal carriers differ or exceed their contract');
+  return { result, text: text ?? JSON.stringify(result) };
+}
+
+function verifySemanticReads(raw, sessionId) {
+  const rows = raw.split('\n').filter(Boolean).map(JSON.parse);
+  const calls = new Map(), completed = [], incomplete = [], outputCalls = new Set();
+  let outputBytes = 0, input = false, final = false;
+  for (const row of rows) {
+    if (!object(row) || row.type === 'response_item' || row.type === 'event_msg')
+      fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude transcript contains foreign native records');
+    if (!['user', 'assistant'].includes(row.type)) continue;
+    if (row.sessionId !== sessionId || row.session_id !== undefined && row.session_id !== sessionId)
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic Claude read belongs to a foreign session');
+    const content = row.message?.content;
+    if (row.type === 'user' && (typeof content === 'string'
+        || Array.isArray(content) && content.some(block => block.type === 'text' && block.text?.includes('<AUTHENTICATED_SEMANTIC_REVIEW>')))) {
+      if (input || final) fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude input must be unique and precede all reads');
+      input = true;
+    }
+    for (const block of Array.isArray(content) ? content : []) {
+      let answer;
+      if (row.type === 'assistant' && block.type === 'text') {
+        try { answer = JSON.parse(block.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
+      }
+      if (row.type === 'assistant' && (block.name === 'StructuredOutput' && block.type === 'tool_use'
+          || answer?.review_contract === 'shipyard.semantic-review.v1')) {
+        if (!input || final) fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude final must follow its unique input and tools');
+        final = true;
+        if (block.type === 'tool_use') {
+          if (typeof block.id !== 'string' || !block.id || calls.has(block.id))
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic Claude final tool identity differs from original read calls');
+          outputCalls.add(block.id);
+        }
+      } else if (row.type === 'assistant' && block.type === 'tool_use') {
+        if (!input || final || typeof block.id !== 'string' || !block.id || calls.has(block.id)
+            || !['Read', 'Glob', 'Grep'].includes(block.name))
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic Claude tool call has a duplicate or foreign identity');
+        calls.set(block.id, { name: block.name, input: block.input, completed: false });
+      } else if (row.type === 'user' && block.type === 'tool_result') {
+        if (outputCalls.delete(block.tool_use_id)) continue;
+        const call = calls.get(block.tool_use_id);
+        if (!call || call.completed || final)
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'semantic Claude tool output has a duplicate or foreign identity');
+        call.completed = true;
+        const encoded = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
+        if (typeof encoded !== 'string') fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude tool output is missing');
+        outputBytes += Buffer.byteLength(encoded);
+        if (outputBytes > TRANSCRIPT_MAX_BYTES) fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude tool outputs exceed their bound');
+        const reason = block.truncated === true || row.toolUseResult?.truncated === true
+          || /(?:^|\n)(?:Warning: truncated output|\[(?:output|file) truncated\]|Output (?:was )?truncated|<persisted-output>)/i.test(encoded)
+          ? 'truncated' : block.is_error === true || row.toolUseResult?.is_error === true ? 'failed' : null;
+        (reason ? incomplete : completed).push({ call_id: block.tool_use_id, tool: call.name,
+          ...(reason ? { reason } : {}) });
+      }
+    }
+  }
+  if (!input || !final) fail('RUNTIME_EVIDENCE_INVALID', 'semantic Claude input or final is missing');
+  for (const [call_id, call] of calls) if (!call.completed) incomplete.push({ call_id, tool: call.name, reason: 'missing-output' });
+  return freeze({ schema: 'shipyard.semantic-native-reads.v1', completed, incomplete,
+    output_bytes: outputBytes, semantic_credit: false });
 }
 
 function parseCliArguments(argv) {
@@ -1045,6 +1149,8 @@ module.exports = Object.freeze({
   probeClaudeRuntime,
   parseClaudeStream,
   observedSelection,
+  semanticResult,
+  verifySemanticReads,
   writeTranscript,
   verifyCompletedClaudeLaunch,
   createClaudeCliLauncher,

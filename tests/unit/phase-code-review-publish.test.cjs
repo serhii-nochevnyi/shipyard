@@ -38,7 +38,7 @@ function fixture(jira = null, mode = 'report', pr = 52) {
   f.writeGraph();
   const live = () => ({ number: pr, state: 'OPEN', headRefName: branch, headRefOid: f.git(['rev-parse', 'HEAD']),
     baseRefName: 'main', baseRefOid: f.base });
-  const writes = [], comments = [], hooks = {};
+  const writes = [], comments = [], statuses = [], hooks = {};
   let nextCommentId = 77;
   let ticketHead = f.base, failStatus = false, failComment = false, failLookup = false;
   const getPullRequest = ({ pr: requested }) => {
@@ -56,7 +56,8 @@ function fixture(jira = null, mode = 'report', pr = 52) {
       if (endpoint.includes('/statuses/')) {
         hooks.status?.();
         if (failStatus) throw new Error('status unavailable');
-        return {};
+        const status = { id: statuses.length + 1, ...fields, creator: { id: 1 } };
+        statuses.push(status); return { ...status };
       }
       if (failComment) throw new Error('comment unavailable');
       if (method === 'PATCH') {
@@ -64,10 +65,14 @@ function fixture(jira = null, mode = 'report', pr = 52) {
         comment.body = fields.body; hooks.comment?.(); return { ...comment };
       }
       nextCommentId = Math.max(nextCommentId, ...comments.map(comment => comment.id + 1));
-      const comment = { id: nextCommentId++, body: fields.body };
+      const comment = { id: nextCommentId++, body: fields.body, user: { id: 1 } };
       comments.push(comment); hooks.comment?.(); return { ...comment };
     }
+    if (endpoint === 'user') return { id: 1 };
+    if (endpoint === 'repos/{owner}/{repo}' || /^repos\/[^/]+\/[^/]+$/.test(endpoint))
+      return { id: 7, full_name: endpoint === 'repos/{owner}/{repo}' ? 'fixture/repository' : endpoint.slice(6) };
     if (failLookup) throw new Error('comment lookup unavailable');
+    if (endpoint.includes('/commits/')) return [statuses];
     hooks.lookup?.();
     return [comments];
   } };
@@ -92,7 +97,7 @@ function fixture(jira = null, mode = 'report', pr = 52) {
     require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(request, result, priorFindings);
     return artifact.sealJudgment(retainPlanningInput(f, request, planningRoot));
   };
-  return { ...f, rawInput: f.input, branch, live, input, options, seal, writes, comments, hooks,
+  return { ...f, rawInput: f.input, branch, live, input, options, seal, writes, comments, statuses, hooks,
     sealLinked: linked => {
       const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
         repository: target.repositoryIdentity(linked), branch, pr, head: live().headRefOid, base: f.base });
@@ -127,15 +132,17 @@ for (const jira of [null, 'PRJ-42']) {
         const result = flow.publish(f.input(), f.options);
         assert.equal(result.schema, 'shipyard.phase-code-review-publish.v1');
         assert.equal(result.status.ok, true); assert.equal(result.comment.ok, true);
-        assert.equal(result.comment.action, i ? 'edited' : 'created');
+        assert.equal(result.comment.action, i ? 'reconciled' : 'created');
       }
       assert.equal(f.comments.length, 1);
       assert.match(f.comments[0].body, /<!-- code-review -->/);
       const statuses = f.writes.filter(write => write.endpoint.includes('/statuses/'));
-      assert.equal(statuses.length, 2);
+      assert.equal(statuses.length, 1);
       for (const posted of statuses) {
         assert(posted.endpoint.endsWith('/' + f.live().headRefOid));
-        assert.deepEqual(posted.fields, { state: 'success', context: 'code-review', description: 'code review: no blocking issues, 0 notes' });
+        assert.deepEqual({ ...posted.fields, target_url: undefined }, { state: 'success', context: 'code-review',
+          description: 'code review: no blocking issues, 0 notes', target_url: undefined });
+        assert.match(posted.fields.target_url, /^https:\/\/github.com\/fixture\/repository\/pull\/52#code-review-/);
       }
     } finally { f.cleanup(); }
   });
@@ -219,7 +226,8 @@ for (const jira of [null, 'PRJ-42']) {
       const defaults = flow.publish(f.input(), f.options);
       assert.equal(defaults.status.ok, true); assert.equal(defaults.status.state, 'pending');
       assert.equal(defaults.comment.action, 'skipped'); assert.equal(f.writes.length, 2);
-      assert.deepEqual(publicationSnapshot(f), before);
+      assert.equal(fs.existsSync(publicationState(f).file), false);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(publicationState(f).directory, '.52.status.json'))).stage, 'published');
     } finally { f.cleanup(); }
   });
 }
@@ -274,7 +282,7 @@ for (const leak of [false, true]) test('publish CLI reports independent results 
       const again = spawnSync(process.execPath, argv, options);
       assert.equal(again.status, 0, again.stdout + again.stderr);
       const second = JSON.parse(again.stdout);
-      assert.equal(second.comment.action, 'edited'); assert.equal(second.comment.id, result.comment.id);
+      assert.equal(second.comment.action, 'reconciled'); assert.equal(second.comment.id, result.comment.id);
       const saved = JSON.parse(fs.readFileSync(data + '.comments', 'utf8'));
       assert.equal(saved.length, 1); assert.equal(saved[0].id, result.comment.id);
     }
@@ -434,7 +442,7 @@ const readerSources = () => fs.readdirSync(scripts, { recursive: true }).filter(
 function assertReaderRegistry(sources) {
   const message = 're-audit the check-rollup readers (plan 52-11)';
   assert.deepEqual(sources.filter(([, source]) => importsCheckState(source))
-    .map(([file]) => file).sort(), ['ci-wait.cjs', 'front.cjs', 'sentinel.cjs', 'state-sync.cjs'], message);
+    .map(([file]) => file).sort(), ['ci-wait.cjs', 'front.cjs', 'sentinel.cjs', 'state-sync.cjs', 'wait-events.cjs'], message);
   assert.deepEqual(sources.filter(([, source]) => /['"]pr['"]\s*,\s*['"]checks['"]\s*,\s*String\(/.test(source))
     .map(([file]) => file).sort(), ['ci-wait.cjs', 'sentinel.cjs', 'state-sync.cjs'], message);
 }
@@ -742,7 +750,8 @@ for (const statusFails of [false, true]) test('invalidation after status stops n
     if (statusFails) f.failStatus();
     assertConfigRefusal(() => flow.publish(f.input(), f.options), file);
     assert.equal(f.writes.length, 1); assert(f.writes[0].endpoint.includes('/statuses/'));
-    assert.equal(f.comments.length, 0); assert.deepEqual(publicationSnapshot(f), before);
+    assert.equal(f.comments.length, 0); assert.equal(fs.existsSync(publicationState(f).file), false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(publicationState(f).directory, '.52.status.json'))).stage, 'pending');
   } finally { f.cleanup(); }
 });
 
@@ -768,7 +777,7 @@ test('invalidation after namespace validation prevents lock initialization', () 
     };
     assertConfigRefusal(() => flow.publish(f.input(), f.options), file);
     assert.equal(invalidated, true); assert.equal(laterMkdirs, 0);
-    assert.equal(f.writes.length, 1); assert.equal(f.comments.length, 0);
+    assert.equal(f.writes.length, 0); assert.equal(f.comments.length, 0);
     assert.deepEqual(publicationSnapshot(f), before);
   } finally { fs.lstatSync = originalLstat; fs.mkdirSync = originalMkdir; f.cleanup(); }
 });
@@ -788,7 +797,7 @@ for (const bound of [false, true]) {
         } else fs.mkdirSync(state.directory, { recursive: true, mode: 0o700 });
         const human = { id: 91, body: '<!-- code-review --> Human discussion.\r\n' };
         f.comments.push(human);
-        const before = publicationSnapshot(f), comments = structuredClone(f.comments);
+        const before = fs.existsSync(state.file) ? fs.readFileSync(state.file) : null, comments = structuredClone(f.comments);
         f.writes.length = 0;
         let invalidated = false, temporaryFd, temporaryOpens = 0;
         const invalidate = () => { invalidated = true; fs.writeFileSync(config, '{'); };
@@ -797,23 +806,18 @@ for (const bound of [false, true]) {
           if (name === path.join(state.directory, `.52.json.tmp-${process.pid}`) && args[0] === 'wx') {
             temporaryOpens++;
             if (boundary === 'atomic-write') temporaryFd = fd;
+            if (boundary === 'temporary-file') invalidate();
           }
           return fd;
         };
         if (boundary === 'lookup') f.hooks.lookup = invalidate;
-        else if (boundary === 'live-head') {
-          let reads = 0;
-          f.hooks.readPR = pr => { if (pr === 52 && ++reads === 3) invalidate(); };
-        } else if (boundary === 'comment') f.hooks.comment = invalidate;
-        else if (boundary === 'comment-write' || boundary === 'temporary-file') {
-          let reads = 0;
-          const watched = boundary === 'comment-write' ? state.directory : state.file;
-          const finalRead = boundary === 'comment-write' ? 3 : bound ? 4 : 2;
-          fs.lstatSync = function (name, ...args) {
-            try { return originalLstat.call(this, name, ...args); }
-            finally { if (name === watched && ++reads === finalRead) invalidate(); }
+        else if (boundary === 'live-head' || boundary === 'comment-write') {
+          f.hooks.lookup = () => {
+            let reads = 0;
+            f.hooks.readPR = pr => { if (pr === 52 && ++reads === (boundary === 'live-head' ? 1 : 2)) invalidate(); };
           };
-        } else {
+        } else if (boundary === 'comment') f.hooks.comment = invalidate;
+        else if (boundary === 'atomic-write') {
           fs.closeSync = function (fd) {
             const result = originalClose.call(this, fd);
             if (fd === temporaryFd) { temporaryFd = undefined; invalidate(); }
@@ -830,9 +834,9 @@ for (const bound of [false, true]) {
           assert.match(f.comments.find(comment => comment.id !== 91).body, /Code review/);
           if (bound) assert.notEqual(f.comments[0].body, comments[0].body);
         } else assert.deepEqual(f.comments, comments);
-        assert.equal(temporaryOpens, boundary === 'atomic-write' ? 1 : 0);
+        assert.equal(temporaryOpens, ['temporary-file', 'atomic-write'].includes(boundary) ? 1 : 0);
         assert.equal(human.body, '<!-- code-review --> Human discussion.\r\n');
-        assert.deepEqual(publicationSnapshot(f), before);
+        assert.deepEqual(fs.existsSync(state.file) ? fs.readFileSync(state.file) : null, before);
       } finally { fs.openSync = originalOpen; fs.closeSync = originalClose; fs.lstatSync = originalLstat; f.cleanup(); }
     });
   }
@@ -857,10 +861,10 @@ test('unbound human marker quotations, legacy summaries and copied genuine repor
     assert.equal(first.status.ok, true); assert.equal(first.comment.action, 'created');
     assert(first.comment.id > 94);
     const second = coldPublisher().publish(f.input(), f.options);
-    assert.equal(second.comment.action, 'edited'); assert.equal(second.comment.id, first.comment.id);
+    assert.equal(second.comment.action, 'reconciled'); assert.equal(second.comment.id, first.comment.id);
     assert.deepEqual(f.comments.slice(0, 4).map(comment => comment.body), bodies);
     assert.deepEqual(f.writes.filter(write => write.method === 'PATCH').map(write => write.endpoint),
-      [`repos/{owner}/{repo}/issues/comments/${first.comment.id}`]);
+      []);
   } finally { f.cleanup(); donor.cleanup(); }
 });
 
@@ -920,8 +924,9 @@ for (const mutation of ['json', 'oversize', 'directory', 'symlink', 'mode', 'nam
       }
       const before = f.writes.length;
       const result = flow.publish(f.input(), f.options);
-      assert.equal(result.status.ok, true); assert.equal(result.comment.ok, false);
-      assert.equal(f.writes.length, before + 1); assert.equal(f.comments[0].body, original);
+      assert.equal(result.status.ok, !['namespace-mode', 'ancestor-symlink'].includes(mutation));
+      assert.equal(result.comment.ok, false);
+      assert.equal(f.writes.length, before); assert.equal(f.comments[0].body, original);
     } finally { restore(); f.cleanup(); }
   });
 }
@@ -941,7 +946,7 @@ for (const invalid of [null, {}, { id: '77' }, { id: 0 }, { id: -1 }, { id: 1.5 
       assert.equal(fs.existsSync(publicationState(f).file), false);
       const old = f.comments[0].body;
       const retry = coldPublisher().publish(f.input(), f.options);
-      assert.equal(retry.comment.action, 'created'); assert.equal(f.comments[0].body, old);
+      assert.equal(retry.comment.action, 'reconciled'); assert.equal(f.comments[0].body, old);
       assert(!f.writes.some(write => write.method === 'PATCH'));
     } finally { f.cleanup(); }
   });
@@ -952,6 +957,7 @@ for (const failure of ['wrong-id', 'body', 'lookup', 'write', 'temporary-symlink
     const f = fixture(); let restore = () => {};
     try {
       f.seal(); const first = flow.publish(f.input(), f.options);
+      f.seal(raw(), 2, f.live().headRefOid);
       const state = publicationState(f), bytes = fs.readFileSync(state.file, 'utf8');
       const human = { id: 91, body: '<!-- code-review --> human bytes\r\n' }; f.comments.push(human);
       if (failure === 'write') {
@@ -961,14 +967,15 @@ for (const failure of ['wrong-id', 'body', 'lookup', 'write', 'temporary-symlink
       }
       if (failure === 'temporary-symlink') fs.symlinkSync(state.file,
         path.join(state.directory, `.52.json.tmp-${process.pid}`));
-      let reads = 0;
+      let commentLookup = false;
       const options = { ...f.options,
         getPullRequest(args) {
           const live = f.options.getPullRequest(args);
-          if (args.pr === 52 && ++reads === 3 && failure === 'head-race') return { ...live, headRefOid: f.base };
+          if (args.pr === 52 && commentLookup && failure === 'head-race') return { ...live, headRefOid: f.base };
           return live;
         },
         gh(args) {
+          if (args.includes('--slurp') && args[1].includes('/comments')) commentLookup = true;
           if (failure === 'lookup' && args.includes('--slurp')) return [{}];
           const response = f.options.gh(args);
           if (args.includes('PATCH') && failure === 'wrong-id') return { ...response, id: 91 };
@@ -1011,18 +1018,32 @@ const data = JSON.parse(fs.readFileSync(file, 'utf8'));
 const args = process.argv.slice(2);
 if (args[0] === 'pr') {
   console.log(JSON.stringify(Number(args[2]) === 52 ? data.epic : data.ticket));
+} else if (args[1] === 'user') {
+  console.log('{"id":1}');
+} else if (args[1] === 'repos/{owner}/{repo}') {
+  console.log('{"id":7,"full_name":"fixture/repository"}');
+} else if (args[1].includes('/commits/')) {
+  console.log(JSON.stringify([fs.existsSync(file + '.statuses') ? JSON.parse(fs.readFileSync(file + '.statuses', 'utf8')) : []]));
 } else if (!args.includes('-f')) {
   const comments = fs.existsSync(file + '.comments') ? JSON.parse(fs.readFileSync(file + '.comments', 'utf8')) : [];
   console.log(JSON.stringify([comments]));
 } else {
   fs.appendFileSync(data.log, JSON.stringify(args) + '\\n');
-  if (args[1].includes('/statuses/')) console.log('{}');
+  if (args[1].includes('/statuses/')) {
+    const statuses = fs.existsSync(file + '.statuses') ? JSON.parse(fs.readFileSync(file + '.statuses', 'utf8')) : [];
+    const fields = Object.fromEntries(args.filter((_, i) => args[i - 1] === '-f').map(value => {
+      const index = value.indexOf('='); return [value.slice(0, index), value.slice(index + 1)];
+    }));
+    const status = { id: statuses.length + 1, ...fields, creator: { id: 1 } };
+    statuses.push(status); fs.writeFileSync(file + '.statuses', JSON.stringify(statuses));
+    console.log(JSON.stringify(status));
+  }
   else {
     const comments = fs.existsSync(file + '.comments') ? JSON.parse(fs.readFileSync(file + '.comments', 'utf8')) : [];
     const body = args.find((v, i) => args[i - 1] === '-f' && v.startsWith('body=')).slice(5);
     let comment;
     if (args.includes('PATCH')) comment = comments.find(c => args[1].endsWith('/' + c.id));
-    else { comment = { id: Math.max(76, ...comments.map(c => c.id)) + 1 }; comments.push(comment); }
+    else { comment = { id: Math.max(76, ...comments.map(c => c.id)) + 1, user: { id: 1 } }; comments.push(comment); }
     comment.body = body;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
     fs.writeFileSync(file + '.comments', JSON.stringify(comments));
@@ -1050,6 +1071,7 @@ test('concurrent cold processes and both runtimes reuse one canonical repository
   const f = fixture(), directory = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-producers-'));
   try {
     f.seal();
+    const packaged = require('../../scripts/package-shipyard-codex.cjs').build(path.join(directory, 'current-package'));
     const preload = path.join(directory, 'preload.cjs');
     fs.writeFileSync(preload, `require('node:os').homedir = () => ${JSON.stringify(home)};\n`);
     const data = path.join(directory, 'data.json');
@@ -1061,10 +1083,10 @@ test('concurrent cold processes and both runtimes reuse one canonical repository
     const env = { ...process.env, PATH: directory + path.delimiter + process.env.PATH, PUBLISH_TEST_DATA: data };
     const results = await Promise.all([
       childPublication(argv(path.join(scripts, 'phase-code-review.cjs')), env),
-      childPublication(argv(path.resolve(__dirname,
-        '../../plugins/shipyard/host/plugins/delivery-pipeline/scripts/phase-code-review.cjs')), env),
+      childPublication(argv(path.join(packaged,
+        'host/plugins/delivery-pipeline/scripts/phase-code-review.cjs')), env),
     ]);
-    assert.deepEqual(results.map(result => result.comment.action).sort(), ['created', 'edited']);
+    assert.deepEqual(results.map(result => result.comment.action).sort(), ['created', 'reconciled']);
     assert.equal(results[0].comment.id, results[1].comment.id);
     const comments = JSON.parse(fs.readFileSync(data + '.comments', 'utf8'));
     assert.equal(comments.length, 1);
@@ -1141,7 +1163,7 @@ test('a contended publication lock fails the comment independently without a wri
     const result = flow.publish(f.input(), f.options);
     assert.equal(result.status.ok, true); assert.equal(result.comment.ok, false);
     assert.match(result.comment.reason, /lock/);
-    assert.equal(f.writes.length, count + 1); assert.equal(f.comments[0].body, before);
+    assert.equal(f.writes.length, count); assert.equal(f.comments[0].body, before);
   } finally { if (handle) handle.release(); f.cleanup(); }
 });
 
