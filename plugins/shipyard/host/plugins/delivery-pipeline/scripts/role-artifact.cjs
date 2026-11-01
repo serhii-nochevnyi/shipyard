@@ -4176,15 +4176,16 @@ function semanticInputFiles(record, originals = [], publish = false, sizing = fa
     }
     if (fs.realpathSync(directory) !== directory || !fs.lstatSync(directory).isDirectory())
       semanticError('semantic input storage changed');
-    const retain = (name, content) => {
+    const retain = (name, content, maximum) => {
       const file = path.join(directory, name), value = Buffer.from(content, 'utf8');
-      if (publish) writeImmutableArtifactFile(fs, file, value, 'complete semantic input');
+      if (publish) writeImmutableArtifactFile(fs, file, value, 'complete semantic input', maximum);
       else if (!sizing && !readImmutableFile(fs, file, 'complete semantic input', value.length, value.length).equals(value))
         semanticError('complete semantic input bytes changed', 'ARTIFACT_MUTATED');
       return { read_path: file, bytes: value.length, sha256: digest(value) };
     };
     const material = snapshot.material.map(({ content, ...source }) => ({ ...source,
-      ...retain(source.source_id + '.txt', content) }));
+      ...retain(source.source_id + '.txt', content, snapshot.role === 'code-review'
+        ? require('./claude-role-host.cjs').CODE_REVIEW_MATERIAL_MAX_BYTES : undefined) }));
     return { material,
       ...(snapshot.responsibility_view_version ? { catalog: retain('catalog.json', stable({
         responsibility_view_version: snapshot.responsibility_view_version,
