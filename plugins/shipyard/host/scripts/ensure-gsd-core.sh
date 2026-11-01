@@ -215,16 +215,19 @@ try {
       if (cur === root) break;
     }
   }
-  const base = path.join(process.env.CODEX_HOME, 'tmp/arg0');
-  parents(base);
+  // Codex keeps helper links under tmp/arg0 (Linux) or tmp/arg0-macos (macOS).
+  const tmp = path.join(process.env.CODEX_HOME, 'tmp');
+  const arg0Bases = () => fs.existsSync(tmp) ? fs.readdirSync(tmp).filter(n => /^arg0[A-Za-z0-9-]*$/.test(n)).map(n => path.join(tmp, n)) : [];
+  parents(tmp);
+  arg0Bases().forEach(parents);
   const before = new Map();
   function snapshot(p) {
     let s; try { s = fs.lstatSync(p); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
     before.set(p, identity(s));
     if (s.isDirectory()) for (const n of fs.readdirSync(p)) snapshot(path.join(p, n));
   }
-  snapshot(base);
-  for (let cur = path.dirname(base); inside(cur); cur = path.dirname(cur)) {
+  arg0Bases().forEach(snapshot);
+  for (let cur = tmp; inside(cur); cur = path.dirname(cur)) {
     if (fs.existsSync(cur)) before.set(cur, identity(fs.lstatSync(cur)));
     if (cur === root) break;
   }
@@ -269,10 +272,11 @@ try {
       || !['7f454c46', 'cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca'].includes(magic.toString('hex'))) cli = null;
   }
   const result = spawnSync(process.execPath, process.argv.slice(2), { stdio: 'inherit', timeout: 30000 });
-  parents(base);
+  parents(tmp);
+  arg0Bases().forEach(parents);
   verifyCli();
   const removals = [];
-  if (fs.existsSync(base)) for (const name of fs.readdirSync(base)) {
+  for (const base of arg0Bases()) for (const name of fs.readdirSync(base)) {
     const dir = path.join(base, name);
     if (!/^codex-arg0[A-Za-z0-9]+$/.test(name)) continue;
     parents(dir);

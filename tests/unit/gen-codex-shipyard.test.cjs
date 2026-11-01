@@ -314,7 +314,7 @@ test('the manifest records the Codex CLI version, or null when unreadable', () =
 
 test('the Codex CLI version probe leaves no helper links in the configured Codex home', () => {
   withFixture({}, (f) => {
-    write(f.codexFile, '#!/bin/sh\nmkdir -p "$CODEX_HOME/tmp/arg0/codex-arg0probe"\nln -s /bin/sh "$CODEX_HOME/tmp/arg0/codex-arg0probe/apply_patch"\necho "codex-cli 0.147.0"\n');
+    write(f.codexFile, '#!/bin/sh\nfor d in arg0 arg0-macos; do mkdir -p "$CODEX_HOME/tmp/$d/codex-arg0probe"\nln -s /bin/sh "$CODEX_HOME/tmp/$d/codex-arg0probe/apply_patch"; done\necho "codex-cli 0.147.0"\n');
     fs.chmodSync(f.codexFile, 0o755);
     const r = f.run();
     assert.strictEqual(r.status, 0, r.stderr);

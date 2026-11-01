@@ -1015,7 +1015,8 @@ test('owned tuner cleans native fixture helpers before parent continuation and r
   const executable = process.execPath;
   const target = fs.realpathSync(executable);
   const bytes = fs.readFileSync(target), stat = fs.statSync(target);
-  for (const hazard of ['none', 'unknown', 'repointed', 'preexisting', 'parent', 'shim', 'alias-hop', 'cli-repointed', 'parent-replaced']) {
+  for (const hazard of ['none', 'unknown', 'repointed', 'preexisting', 'parent', 'shim', 'alias-hop', 'cli-repointed', 'parent-replaced', 'macos']) {
+    const arg0 = hazard === 'macos' ? 'arg0-macos' : 'arg0';
     const f = processFixture(t), outside = fullSnapshot(f.ambient);
     const cliDir = path.join(f.candidate, 'native-bin'); fs.mkdirSync(cliDir, { recursive: true });
     const cli = path.join(cliDir, 'codex');
@@ -1027,11 +1028,12 @@ test('owned tuner cleans native fixture helpers before parent continuation and r
       : hazard === 'cli-repointed' ? "const alias=process.env.PATH.split(path.delimiter)[0]+'/codex';fs.unlinkSync(alias);fs.symlinkSync(process.env.HOME,alias);"
       : hazard === 'parent-replaced' ? "fs.renameSync(base,base+'-old');fs.mkdirSync(base);"
       : '';
-    fs.writeFileSync(probe, `const fs=require('node:fs'),path=require('node:path');const cli=${JSON.stringify(cli)};const r=require('node:child_process').spawnSync(cli,['--version'],{stdio:'inherit',timeout:10000});if(r.status!==0)process.exit(1);const base=path.join(process.env.CODEX_HOME,'tmp/arg0'),dir=path.join(base,'codex-arg0Fixture');fs.mkdirSync(dir,{recursive:true});for(const leaf of ['apply_patch','applypatch','codex-execve-wrapper'])fs.symlinkSync(cli,path.join(dir,leaf));${mutation}`);
+    fs.writeFileSync(probe, `const fs=require('node:fs'),path=require('node:path');const cli=${JSON.stringify(cli)};const r=require('node:child_process').spawnSync(cli,['--version'],{stdio:'inherit',timeout:10000});if(r.status!==0)process.exit(1);const base=path.join(process.env.CODEX_HOME,'tmp/${arg0}'),dir=path.join(base,'codex-arg0Fixture');fs.mkdirSync(dir,{recursive:true});for(const leaf of ['apply_patch','applypatch','codex-execve-wrapper'])fs.symlinkSync(cli,path.join(dir,leaf));${mutation}`);
     if (hazard === 'shim') {
       fs.unlinkSync(cli);
       fs.writeFileSync(cli, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
+    if (hazard === 'parent-replaced') fs.mkdirSync(path.join(f.env.CODEX_HOME, 'tmp/arg0'), { recursive: true });
     if (hazard === 'preexisting' || hazard === 'parent') {
       const dir = path.join(f.env.CODEX_HOME, 'tmp/arg0/codex-arg0Before');
       fs.mkdirSync(dir, { recursive: true });
@@ -1041,11 +1043,12 @@ test('owned tuner cleans native fixture helpers before parent continuation and r
     fs.mkdirSync(f.env.CODEX_HOME, { recursive: true, mode: 0o700 });
     const before = fullSnapshot(f.candidate);
     const result = f.run('/bin/bash', ['-c', 'source scripts/ensure-gsd-core.sh --library; prepare_isolation codex "$CODEX_HOME" "$SHIPYARD_ISOLATION_ROOT"; run_isolated_tuner "$1" || exit $?; isolation_env codex "$SHIPYARD_ISOLATION_ROOT" >/dev/null || exit $?; touch "$CODEX_HOME/parent-continued"', 'probe', probe], { PATH: `${cliDir}:${f.env.PATH}` });
-    if (hazard === 'none') {
+    if (hazard === 'none' || hazard === 'macos') {
       assert.equal(result.status, 0, result.stdout + result.stderr);
       assert.match(result.stdout, /v\d+\.\d+\.\d+/, 'native fixture version input remains available');
       assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'parent-continued')));
-      const base = path.join(f.env.CODEX_HOME, 'tmp/arg0');
+      const base = path.join(f.env.CODEX_HOME, 'tmp', arg0);
+      assert.ok(fs.readdirSync(base).length > 0, 'helper directory was created');
       for (const dir of fs.readdirSync(base)) for (const leaf of ['apply_patch', 'applypatch', 'codex-execve-wrapper'])
         assert.equal(fs.existsSync(path.join(base, dir, leaf)), false);
     } else {
