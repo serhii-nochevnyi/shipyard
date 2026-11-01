@@ -156,10 +156,9 @@ Read `.planning/investigations/` (may not exist):
    subprocess or cross-provider fallback.
 
    Accept a research result only after its durable boundary receipt is verified.
-   Pass the workflow `artifactContract: planning.v1`, the absolute worktree and
-   investigation paths, the authenticated `sourceRevision`, repository identity,
-   policy hash, and one contained `artifactPaths.<line-id>` for each of the four
-   lines. The prompt tells each worker to write its complete finding to that
+   Pass the workflow the absolute worktree and investigation paths, the
+   authenticated `sourceRevision`, repository identity, policy hash, and one
+   contained `artifactPaths.<line-id>` for each of the four lines. The prompt tells each worker to write its complete finding to that
    exact path. The host-owned trusted consumer validates the file bytes and
    seals a `shipyard.role-artifact.v1` envelope with
    `shipyard.research-result.v1`, subject `<INV-ID>:<line-id>`, the exact source

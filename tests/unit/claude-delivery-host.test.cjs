@@ -913,7 +913,6 @@ test('investigation inlines its approved contract without exposing the plugin pa
       invId: 'INV-TEST',
       invPath,
       worktreePath: root,
-      artifactContract: 'planning.v1',
       artifactRoot,
       artifactPaths: Object.fromEntries(Object.keys(labels).map((id) => [id, path.join(artifactRoot, `${id}.md`)])),
       sourceRevision,
@@ -1008,7 +1007,6 @@ test('investigation runs in a repository that has no graph yet', async () => {
       invId: 'INV-TEST',
       invPath,
       worktreePath: root,
-      artifactContract: 'planning.v1',
       artifactRoot,
       artifactPaths: Object.fromEntries(Object.keys(labels).map((id) => [id, path.join(artifactRoot, `${id}.md`)])),
       sourceRevision,
@@ -1092,7 +1090,7 @@ test('the host accepts a single-line re-dispatch only once its three siblings ve
     });
     const baseArgs = {
       invId: 'INV-REDISPATCH', invPath, worktreePath: root,
-      artifactContract: 'planning.v1', artifactRoot,
+      artifactRoot,
       artifactPaths: Object.fromEntries(Object.keys(labels).map((id) => [id, path.join(artifactRoot, `${id}.md`)])),
       sourceRevision, repository: 'shipyard/test', policyHash,
       problemStatement: 'Inspect the single-line re-dispatch boundary',
@@ -1174,7 +1172,7 @@ test('production investigation CLI owns a T-scoped run while sealing INV researc
     fs.writeFileSync(requestFile, JSON.stringify({ schema: REQUEST_SCHEMA,
       scope: { run_id: 'cli-inv-38', ticket: 'INV-TEST', phase: 38, worktree },
       args: { invId: 'INV-TEST', invPath, worktreePath: worktree,
-        artifactContract: 'planning.v1', artifactRoot,
+        artifactRoot,
         artifactPaths: Object.fromEntries(Object.keys(labels).map((id) => [id, path.join(artifactRoot, `${id}.md`)])),
         sourceRevision: git(worktree, 'rev-parse', 'HEAD'), repository: 'shipyard/test',
         policyHash: policy.resolveDispatch({ runtime: 'claude', role: 'research', signals: { type: 'facts' } }).policy_hash,

@@ -988,7 +988,6 @@ function buildPlanningRequest(args, options) {
           referencePath: 'inv-research',
           problemStatement: `Read ${refs[0].path} (sha256: ${refs[0].sha256}).`,
           sourceRefs,
-          artifactContract: 'planning.v1',
           artifactRoot: path.join(invPath, 'research'),
           artifactPaths: Object.fromEntries(RESEARCH_LINE_IDS.map((id) => [id, path.join(invPath, 'research', `${id}.md`)])),
           sourceRevision,
