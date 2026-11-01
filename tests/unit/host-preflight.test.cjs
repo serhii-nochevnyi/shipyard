@@ -154,25 +154,25 @@ describe('host preflight', () => {
     assert.ok(!/hint\[/.test(streams.stderr.text));
   });
 
-  it('classifies legacy history read from the host graph directory, not the worktree', () => {
+  it('reads provenance from the host graph directory, not the worktree', () => {
     const layout = installedLayout();
     const a = project();
     const b = project({ 'one.json': '{}', 'two.json': '{}' });
     const onB = preflight(base(layout, { worktree: a.root, graphDir: b.graphDir }));
-    assert.equal(onB.ok, true);
-    assert.ok(onB.notes.some((n) => n.kind === 'adoptable' && n.detail.includes('2')));
+    assert.deepEqual(codes(onB), ['LEGACY_HISTORY_UNKNOWN_MEMBER', 'LEGACY_HISTORY_UNKNOWN_MEMBER']);
+    assert.deepEqual(onB.findings.map((f) => f.vars.path),
+      ['.planning/graph/provenance/one.json', '.planning/graph/provenance/two.json']);
     const onlyA = project({ 'one.json': '{}' });
     const empty = project();
-    const result = preflight(base(layout, { worktree: onlyA.root, graphDir: empty.graphDir }));
-    assert.deepEqual(result.notes.filter((n) => n.kind === 'adoptable'), []);
+    assert.equal(preflight(base(layout, { worktree: onlyA.root, graphDir: empty.graphDir })).ok, true);
   });
 
   it('resolves an omitted graphDir through SHIPYARD_GRAPH_DIR and records a missing one', () => {
     const layout = installedLayout();
     const b = project({ 'one.json': '{}' });
     const viaEnv = preflight(base(layout, { graphDir: undefined, env: { SHIPYARD_GRAPH_DIR: b.graphDir } }));
-    assert.ok(viaEnv.notes.some((n) => n.kind === 'adoptable'));
-    const noGraph = 'legacy history: not evaluated, no graph directory';
+    assert.deepEqual(codes(viaEnv), ['LEGACY_HISTORY_UNKNOWN_MEMBER']);
+    const noGraph = 'provenance: not evaluated, no graph directory';
     for (const graphDir of [null, path.join(tmp('x'), 'elsewhere'), path.join(tmp('y'), '.planning', 'graph')]) {
       const result = preflight(base(layout, { graphDir }));
       assert.ok(result.notes.some((n) => n.detail === noGraph), String(graphDir));
@@ -180,25 +180,29 @@ describe('host preflight', () => {
     }
   });
 
-  it('flags unsafe, changed and unknown legacy members', () => {
+  it('flags a symlinked member and a member no pin names', () => {
     const layout = installedLayout();
-    const unsafe = project({ 'one.json': '{}' });
-    fs.symlinkSync('one.json', path.join(unsafe.provenance, 'link.json'));
-    assert.ok(codes(preflight(base(layout, { graphDir: unsafe.graphDir }))).includes('LEGACY_HISTORY_UNSAFE'));
+    const unsafe = project();
+    fs.symlinkSync('/etc/hosts', path.join(unsafe.provenance, 'link.json'));
+    assert.deepEqual(codes(preflight(base(layout, { graphDir: unsafe.graphDir }))), ['LEGACY_HISTORY_UNKNOWN_MEMBER']);
 
-    const adopted = project({ 'one.json': '{}' });
-    roleArtifact.trustedBookkeepingMutation(adopted.root, () => {}, []);
-    assert.equal(preflight(base(layout, { graphDir: adopted.graphDir })).ok, true);
-    fs.writeFileSync(path.join(adopted.provenance, 'forged.json'), '{}');
-    assert.ok(codes(preflight(base(layout, { graphDir: adopted.graphDir }))).includes('LEGACY_HISTORY_UNKNOWN_MEMBER'));
-    fs.rmSync(path.join(adopted.provenance, 'forged.json'));
-    fs.writeFileSync(path.join(adopted.provenance, 'one.json'), '{"changed":1}');
-    assert.ok(codes(preflight(base(layout, { graphDir: adopted.graphDir }))).includes('LEGACY_HISTORY_CHANGED'));
+    const recorded = project();
+    roleArtifact.trustedBookkeepingMutation(recorded.root, () => {}, []);
+    assert.equal(preflight(base(layout, { graphDir: recorded.graphDir })).ok, true);
+    fs.writeFileSync(path.join(recorded.provenance, 'forged.json'), '{}');
+    const result = preflight(base(layout, { graphDir: recorded.graphDir }));
+    assert.deepEqual(codes(result), ['LEGACY_HISTORY_UNKNOWN_MEMBER']);
+    assert.equal(result.findings[0].vars.path, '.planning/graph/provenance/forged.json');
+    const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
+    assert.equal(emitPreflight(result, streams), 1);
+    assert.match(streams.stderr.text, /hint\[LEGACY_HISTORY_UNKNOWN_MEMBER\].*forged\.json/);
+    fs.rmSync(path.join(recorded.provenance, 'forged.json'));
+    assert.equal(preflight(base(layout, { graphDir: recorded.graphDir })).ok, true);
   });
 
   it('reports an unreadable authority namespace as a note and still reports other defects', () => {
     const layout = installedLayout();
-    const legacy = project({ 'one.json': '{}' });
+    const legacy = project();
     const real = fs.lstatSync;
     const mocked = mock.method(fs, 'lstatSync', (target, ...rest) => {
       if (String(target).includes('role-artifact-authority')) {
@@ -209,7 +213,7 @@ describe('host preflight', () => {
     try {
       const result = preflight(base(layout, { graphDir: legacy.graphDir, env: { CODEX_HOME: tmp('other') } }));
       assert.deepEqual(codes(result), ['ENV_CONFLICT']);
-      assert.ok(result.notes.some((n) => n.detail === 'legacy history: not evaluated, authority namespace unreadable (EPERM)'));
+      assert.ok(result.notes.some((n) => n.detail === 'provenance: not evaluated, authority namespace unreadable (EPERM)'));
       const clean = preflight(base(layout, { graphDir: legacy.graphDir }));
       assert.equal(clean.ok, true);
     } finally { mocked.mock.restore(); }
@@ -217,7 +221,7 @@ describe('host preflight', () => {
 
   it('keeps a forged catalogue a finding', () => {
     const layout = installedLayout();
-    const forged = project({ 'one.json': '{}' });
+    const forged = project();
     roleArtifact.trustedBookkeepingMutation(forged.root, () => {}, []);
     const directory = roleArtifact.archiveAuthorityDirectory(forged.root);
     fs.writeFileSync(path.join(directory, 'catalogue.json'), '{"payload":{},"mac":"x"}', { mode: 0o600 });
@@ -228,14 +232,14 @@ describe('host preflight', () => {
   it('reports a malformed catalogue as a finding, exits 1 and refuses a launch with the coded hint', () => {
     for (const body of ['garbage text', '{}', '[]', 'null']) {
       const layout = installedLayout();
-      const broken = project({ 'one.json': '{}' });
+      const broken = project();
       roleArtifact.trustedBookkeepingMutation(broken.root, () => {}, []);
       const directory = roleArtifact.archiveAuthorityDirectory(broken.root);
       fs.writeFileSync(path.join(directory, 'catalogue.json'), body, { mode: 0o600 });
       const result = preflight(base(layout, { graphDir: broken.graphDir }));
       assert.deepEqual(codes(result), ['ARCHIVE_AUTHORITY_INVALID'], body);
       assert.equal(result.ok, false, body);
-      assert.ok(!result.notes.some((n) => /not evaluated/.test(n.detail) && /legacy history/.test(n.detail)), body);
+      assert.ok(!result.notes.some((n) => /not evaluated/.test(n.detail) && /provenance/.test(n.detail)), body);
       assert.match(result.findings[0].detail, /archive catalogue is not (valid JSON|an authenticated envelope)/, body);
       const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
       assert.equal(emitPreflight(result, streams), 1);
@@ -283,7 +287,7 @@ describe('host preflight', () => {
 
   it('reports a catalogue without its authority key as the finding a trusted mutation refuses with', () => {
     const layout = installedLayout();
-    const keyless = project({ 'one.json': '{}' });
+    const keyless = project();
     roleArtifact.trustedBookkeepingMutation(keyless.root, () => {}, []);
     const directory = roleArtifact.archiveAuthorityDirectory(keyless.root);
     assert.equal(preflight(base(layout, { graphDir: keyless.graphDir })).ok, true);
@@ -291,7 +295,7 @@ describe('host preflight', () => {
     const result = preflight(base(layout, { graphDir: keyless.graphDir }));
     assert.deepEqual(codes(result), ['ARCHIVE_AUTHORITY_INVALID']);
     assert.match(result.findings[0].detail, /original authority key/);
-    assert.ok(!result.notes.some((n) => /legacy history: not evaluated/.test(n.detail)));
+    assert.ok(!result.notes.some((n) => /provenance: not evaluated/.test(n.detail)));
     const streams = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
     assert.equal(emitPreflight(result, streams), 1);
     assert.match(streams.stderr.text, /hint\[ARCHIVE_AUTHORITY_INVALID\]/);
@@ -302,7 +306,7 @@ describe('host preflight', () => {
 
   it('reports other protected records without their key, and stays quiet for a fresh namespace', () => {
     const layout = installedLayout();
-    const fresh = project({ 'one.json': '{}' });
+    const fresh = project();
     assert.equal(preflight(base(layout, { graphDir: fresh.graphDir })).ok, true);
     const orphan = project();
     const directory = roleArtifact.archiveAuthorityDirectory(orphan.root);
@@ -370,10 +374,10 @@ describe('host preflight', () => {
     assert.match(streams.stderr.text, /^preflight: 1 incompatibilities/);
     assert.match(streams.stderr.text, /hint\[STALE_GENERATED_AGENT\]/);
     assert.equal(JSON.parse(streams.stdout.text.trim()).ok, false);
-    const ok = { schema: 'x', ok: true, findings: [], warnings: [{ code: 'LEGACY_HISTORY_MISSING', detail: 'p', vars: {} }], notes: [] };
+    const ok = { schema: 'x', ok: true, findings: [], warnings: [{ code: 'CAPABILITY_SNAPSHOT_AGED', detail: 'p', vars: {} }], notes: [] };
     const quiet = { stdout: { write() {} }, stderr: { text: '', write(t) { this.text += t; } } };
     assert.equal(emitPreflight(ok, quiet), 0);
-    assert.match(quiet.stderr.text, /preflight: warning\[LEGACY_HISTORY_MISSING\]/);
+    assert.match(quiet.stderr.text, /preflight: warning\[CAPABILITY_SNAPSHOT_AGED\]/);
   });
 
   it('warns once when the installed Codex CLI differs from the recorded version', () => {
@@ -455,8 +459,7 @@ describe('host preflight', () => {
   });
 
   it('words a Claude-reachable remedy for both hosts', () => {
-    for (const code of ['RUNTIME_CAPABILITY_MISSING', 'LEGACY_WRITER_STATE', 'LEGACY_HISTORY_UNKNOWN_MEMBER',
-      'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE', 'ENV_CONFLICT']) {
+    for (const code of ['RUNTIME_CAPABILITY_MISSING', 'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE', 'ENV_CONFLICT']) {
       assert.match(formatHint(code), /Claude: claude plugin marketplace update shipyard, then claude plugin update shipyard and restart Claude Code; Codex: codex plugin marketplace upgrade shipyard/, code);
       assert.doesNotMatch(formatHint(code), /claude plugin install/, code);
     }

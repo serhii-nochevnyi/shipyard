@@ -3561,12 +3561,12 @@ test('a symlinked provenance member in the host graph directory refuses the laun
   const env = { ...f.env, SHIPYARD_GRAPH_DIR: path.join(foreign, '.planning', 'graph') };
   const result = runScript(f, ['--args-file', requestFor(f)], env);
   assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+  assert.match(result.stderr, /hint\[LEGACY_HISTORY_UNKNOWN_MEMBER\]/);
   assert.deepEqual(treeOf(f.isolated), before);
   fs.symlinkSync('one.json', path.join(f.project, '.planning', 'graph', 'provenance', 'link.json'));
   fs.writeFileSync(path.join(f.project, '.planning', 'graph', 'provenance', 'one.json'), '{}');
   const own = runScript(f, ['--preflight', '--args-file', requestFor(f)]);
-  assert.match(own.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+  assert.match(own.stderr, /hint\[LEGACY_HISTORY_UNKNOWN_MEMBER\]/);
 });
 
 test('resume modes refuse a broken environment before their controller begins', () => {

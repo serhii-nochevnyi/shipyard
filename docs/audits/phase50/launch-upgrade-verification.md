@@ -2,6 +2,9 @@
 
 Opened by T-50-06 against `be7ab4f3` (v0.72.2) and closed by T-50-27. Each obligation section ends in `closed` or `limitation`; the contract test forbids `pending`.
 
+The adoption of old provenance history was removed in HS-43; the evidence below describes release 0.73.0.
+The current rule is in the README (Launch and upgrade).
+
 ## Pin-reader audit
 
 Status: closed

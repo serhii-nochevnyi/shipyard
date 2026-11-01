@@ -188,9 +188,9 @@ for (const host of CATCH_HOSTS) {
     const busy = trip(host, { code: 'ARCHIVE_AUTHORITY_BUSY', details: { pid: 424242 } });
     assert.notEqual(busy.status, 0, busy.stderr);
     assert.match(busy.stderr, /hint\[ARCHIVE_AUTHORITY_BUSY\]: Another session holds the archive authority \(owner pid 424242\)/, busy.stderr);
-    const legacy = trip(host, { code: 'LEGACY_HISTORY_UNSAFE',
-      message: 'legacy provenance history is not safe before trusted mutation .planning/graph/provenance/member.json: member is a symlink' });
-    assert.match(legacy.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]: The legacy history at \.planning\/graph\/provenance\/member\.json /, legacy.stderr);
+    const legacy = trip(host, { code: 'LEGACY_HISTORY_UNKNOWN_MEMBER',
+      message: 'unknown host provenance member before trusted mutation .planning/graph/provenance/member.json' });
+    assert.match(legacy.stderr, /hint\[LEGACY_HISTORY_UNKNOWN_MEMBER\]: The provenance file at \.planning\/graph\/provenance\/member\.json /, legacy.stderr);
     const unavailable = trip(host, { code: 'RUNTIME_UNAVAILABLE' });
     assert.ok(unavailable.stderr.includes(`/scripts/${host.file} --preflight`), unavailable.stderr);
     for (const outcome of [busy, legacy, unavailable]) {

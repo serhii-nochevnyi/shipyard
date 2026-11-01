@@ -504,11 +504,10 @@ function reportTransferCapability(options = {}) {
 const PREFLIGHT_CODES = Object.freeze([
   'ENV_CONFLICT', 'BUNDLE_MANIFEST_INVALID', 'CAPABILITY_EVIDENCE_STALE', 'RUNTIME_CAPABILITY_MISSING',
   'UNKNOWN_RUNTIME', 'AMBIGUOUS_RUNTIME', 'STALE_GENERATED_AGENT', 'RUNTIME_UNAVAILABLE',
-  'LEGACY_HISTORY_UNSAFE', 'LEGACY_HISTORY_CHANGED', 'LEGACY_HISTORY_UNKNOWN_MEMBER', 'LEGACY_HISTORY_MISSING',
-  'ARCHIVE_AUTHORITY_INVALID', 'LEGACY_WRITER_STATE', 'INVALID_STORE', 'REPOSITORY_IDENTITY_INVALID',
+  'ARCHIVE_AUTHORITY_INVALID', 'INVALID_STORE', 'REPOSITORY_IDENTITY_INVALID',
 ]);
 
-const STATE_REFUSAL_CODES = Object.freeze(['LEGACY_WRITER_STATE', 'INVALID_STATE_DIR']);
+const STATE_REFUSAL_CODES = Object.freeze(['INVALID_STATE_DIR']);
 
 // @contract: a state refusal raised while a host gathers preflight inputs reaches preflight() as a finding.
 function stateRefusalOf(error) {
@@ -649,20 +648,16 @@ function preflight(options = {}) {
         throw error;
       }
     });
-    run('legacy history', () => {
+    run('provenance', () => {
       const directory = preflightGraphDir(opts.graphDir, opts.worktree, env);
-      if (!directory) { note('not-evaluated', 'legacy history: not evaluated, no graph directory'); return; }
+      if (!directory) { note('not-evaluated', 'provenance: not evaluated, no graph directory'); return; }
       const root = fs.realpathSync(path.resolve(directory, '..', '..'));
-      const result = require('./role-artifact.cjs').classifyLegacyProvenance(root);
-      if (result.state === 'unreadable') {
-        note('not-evaluated', `legacy history: not evaluated, authority namespace unreadable (${result.unreadable && result.unreadable.code})`);
+      const result = require('./role-artifact.cjs').provenanceFindings(root);
+      if (result.unreadable) {
+        note('not-evaluated', `provenance: not evaluated, authority namespace unreadable (${result.unreadable.code})`);
         return;
       }
       for (const item of result.findings) find(item.code, item.detail || item.code, withBundle({ path: item.path || '' }));
-      for (const item of result.warnings) {
-        warnings.push({ code: item.code, detail: item.path || item.code, vars: withBundle({ host, path: item.path || '' }) });
-      }
-      if (result.state === 'adoptable') note('adoptable', `legacy history: adoption will record ${result.members.length} member(s)`);
     });
     if (opts.writerStateError) run('host state', () => { throw opts.writerStateError; });
     if (typeof opts.runStoreFile === 'string' && opts.runStoreFile) {
