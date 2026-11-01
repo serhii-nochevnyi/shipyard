@@ -358,7 +358,8 @@ function runCheckCli(argv) {
   }
   const commits = collectCommits(root, base, head);
   const format = titleFormat({ root, repo });
-  const result = check({ title, body, head, base, paths, commits, jiraKeys: [], titleFormat: format });
+  const jira = flagValue(argv, 'jira');
+  const result = check({ title, body, head, base, paths, commits, jiraKeys: jira ? [jira] : [], titleFormat: format });
 
   if (json) {
     console.log(JSON.stringify(result, null, 2));
@@ -404,7 +405,7 @@ if (require.main === module) {
   try {
     if (command === 'check') process.exitCode = runCheckCli(rest);
     else if (command === 'format') process.exitCode = runFormatCli(rest);
-    else fail('USAGE', 'usage: pr-hygiene.cjs check --project-root <r> [--repo <owner/name>] --base <b> --head <h> --title <t> --body-file <f> [--json]\n   or: pr-hygiene.cjs format --project-root <r> [--repo <owner/name>] --type <t> [--scope <s>] [--jira <KEY>] --subject <text>');
+    else fail('USAGE', 'usage: pr-hygiene.cjs check --project-root <r> [--repo <owner/name>] --base <b> --head <h> --title <t> --body-file <f> [--jira <KEY>] [--json]\n   or: pr-hygiene.cjs format --project-root <r> [--repo <owner/name>] --type <t> [--scope <s>] [--jira <KEY>] --subject <text>');
   } catch (error) {
     process.stderr.write(`pr-hygiene: ${error.code ? `${error.code}: ` : ''}${error.message}\n`);
     process.exitCode = 2;

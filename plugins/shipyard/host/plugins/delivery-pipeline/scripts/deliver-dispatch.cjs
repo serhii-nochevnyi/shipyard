@@ -505,7 +505,8 @@ function publish(argv, options = {}) {
   if (prHygiene.applies({ root })) {
     title = script('pr-hygiene', ['format', '--project-root', root, ...repoArgs, '--type', prHygiene.conventionalType(row.type),
       ...(row.jira ? ['--jira', row.jira] : []), '--subject', row.title]).trim();
-    script('pr-hygiene', ['check', '--project-root', root, ...repoArgs, '--base', base, '--head', branch, '--title', title, '--body-file', bodyFile, '--json']);
+    script('pr-hygiene', ['check', '--project-root', root, ...repoArgs, '--base', base, '--head', branch, '--title', title, '--body-file', bodyFile,
+      ...(row.jira ? ['--jira', row.jira] : []), '--json']);
   } else if (fs.readFileSync(bodyFile, 'utf8').split('\n', 1)[0] !== `Ticket: ${ticket}`) {
     fail('PUBLISH_REFUSED', `the validated PR body does not start with the marker "Ticket: ${ticket}"`);
   }
