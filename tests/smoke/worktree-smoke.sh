@@ -779,11 +779,18 @@ git init -q "$W/prseed"
   git add p.txt
   git commit -qm 'legacy phase work'
   git push -q -u origin epic/03-legacy-phase
+  git checkout -q main
+  git checkout -q -b feat/MYD-12-keyed-phase
+  echo keyed >> p.txt
+  git add p.txt
+  git commit -qm 'keyed phase work'
+  git push -q -u origin feat/MYD-12-keyed-phase
   git checkout -q main )
 git clone -q "$W/prorigin" "$W/prclone"
 git -C "$W/prclone" branch --track feat/sample-phase origin/feat/sample-phase >/dev/null 2>&1
 git -C "$W/prclone" branch --track feat/second-phase origin/feat/second-phase >/dev/null 2>&1
 git -C "$W/prclone" branch --track epic/03-legacy-phase origin/epic/03-legacy-phase >/dev/null 2>&1
+git -C "$W/prclone" branch --track feat/MYD-12-keyed-phase origin/feat/MYD-12-keyed-phase >/dev/null 2>&1
 mkdir -p "$W/prclone/plugins/delivery-pipeline/.claude-plugin"
 printf '{"name":"shipyard"}\n' > "$W/prclone/plugins/delivery-pipeline/.claude-plugin/plugin.json"
 mkdir -p "$W/prclone/.planning/graph"
@@ -791,7 +798,8 @@ cat > "$W/prclone/.planning/graph/tickets.json" <<'JSON'
 {
   "epics": {
     "1": { "branch": "feat/sample-phase", "base": null, "repos": [null], "phaseDir": "01-sample-phase", "jira": null },
-    "2": { "branch": "feat/second-phase", "base": null, "repos": [null], "phaseDir": "02-second-phase", "jira": "MYD-9" }
+    "2": { "branch": "feat/second-phase", "base": null, "repos": [null], "phaseDir": "02-second-phase", "jira": "MYD-9" },
+    "4": { "branch": "feat/MYD-12-keyed-phase", "base": null, "repos": [null], "phaseDir": "04-keyed-phase", "jira": "MYD-12" }
   },
   "tickets": {
     "T-01-01": { "title": "Add search filters", "epic": "feat/sample-phase" },
@@ -863,6 +871,20 @@ fi
   && ok "…and renders the phase's jira key into the configured format" \
   || bad "the configured pr_title_format is rendered" "$(cat "$CAPTURED_TITLE" 2>/dev/null || echo MISSING)"
 rm -f "$W/prclone/.planning/config.json"
+
+rm -f "$PR_CREATED_FLAG" "$CAPTURED_TITLE" "$CAPTURED_BODY"
+MANIFEST="$W/prclone/plugins/delivery-pipeline/.claude-plugin/plugin.json"
+mv "$MANIFEST" "$MANIFEST.off"
+out="$(run_pr_epic pr feat/MYD-12-keyed-phase main 2>&1)" && keyed_rc=0 || keyed_rc=$?
+mv "$MANIFEST.off" "$MANIFEST"
+if [[ "$keyed_rc" -eq 0 ]]; then
+  ok "epic-branch.sh pr accepts the phase's own Jira key in the epic branch name of a target project"
+else
+  bad "epic-branch.sh pr accepts the phase's own Jira key in the epic branch name of a target project" "$out"
+fi
+[[ "$(cat "$CAPTURED_TITLE" 2>/dev/null)" == "feat: keyed phase" ]] \
+  && ok "…and opens the keyed epic PR with the conventional title" \
+  || bad "the keyed epic PR is opened with the conventional title" "$(cat "$CAPTURED_TITLE" 2>/dev/null || echo MISSING)"
 
 rm -f "$PR_CREATED_FLAG" "$CAPTURED_TITLE" "$CAPTURED_BODY"
 if out="$(run_pr_epic pr epic/03-legacy-phase main 2>&1)"; then

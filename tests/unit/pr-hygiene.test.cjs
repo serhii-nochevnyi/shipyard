@@ -456,6 +456,55 @@ test('the check CLI allows only the ticket Jira key given by --jira in the branc
   }
 });
 
+function keyedCheckRepo(branches) {
+  const { dir, env } = hermeticRepo();
+  git(dir, ['remote', 'add', 'origin', 'git@github.com:acme/widgets.git'], env);
+  fs.writeFileSync(path.join(dir, 'README.md'), 'hi\n');
+  git(dir, ['add', '-A'], env);
+  git(dir, ['commit', '-q', '-m', 'feat: init'], env);
+  for (const branch of branches) git(dir, ['branch', branch], env);
+  git(dir, ['checkout', '-q', branches[0]], env);
+  fs.writeFileSync(path.join(dir, 'thing.js'), 'module.exports = 1;\n');
+  git(dir, ['add', '-A'], env);
+  git(dir, ['commit', '-q', '-m', 'feat: thing'], env);
+  for (const branch of branches.slice(1)) git(dir, ['branch', '-f', branch, branches[0]], env);
+  const bodyFile = path.join(dir, 'body.md');
+  const run = ({ head, title = 'feat: thing', body = NEUTRAL_PR_BODY_GUIDE }, ...extra) => {
+    fs.writeFileSync(bodyFile, body);
+    const cli = spawnSync('node', [MOD, 'check', '--project-root', dir, '--base', 'main', '--head', head,
+      '--title', title, '--body-file', bodyFile, ...extra, '--json'], { encoding: 'utf8', env });
+    return { status: cli.status, violations: JSON.parse(cli.stdout).violations || [] };
+  };
+  return { dir, run };
+}
+
+test('a foreign Jira key in the branch name or body is refused even with the right --jira', () => {
+  const foreign = ['PDF-99', 'PDF-1'];
+  const { run } = keyedCheckRepo(['feat/PDF-13561-thing', ...foreign.map((key) => `feat/${key}-thing`)]);
+  const own = run({ head: 'feat/PDF-13561-thing', body: 'Refs PDF-13561' }, '--jira', 'PDF-13561');
+  assert.deepStrictEqual([own.status, own.violations], [0, []]);
+  for (const key of foreign) {
+    const refused = run({ head: `feat/${key}-thing`, body: `Refs PDF-13561 and ${key}` }, '--jira', 'PDF-13561');
+    assert.strictEqual(refused.status, 2);
+    assert.deepStrictEqual(refused.violations.map((v) => [v.field, v.rule, v.excerpt]),
+      [['body', 'jira-key-not-listed', key], ['head', 'jira-key-not-listed', key]]);
+  }
+});
+
+test('a title carrying the ticket Jira key in the {jira} slot passes with --jira and is refused without it', () => {
+  const { dir, run } = keyedCheckRepo(['feat/thing']);
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'),
+    JSON.stringify({ pipeline: { pr_title_format: '[{jira}] {type}: {subject}' } }));
+  const input = { head: 'feat/thing', title: '[PDF-13561] feat: thing' };
+  const allowed = run(input, '--jira', 'PDF-13561');
+  assert.deepStrictEqual([allowed.status, allowed.violations], [0, []]);
+  const refused = run(input);
+  assert.strictEqual(refused.status, 2);
+  assert.deepStrictEqual(refused.violations.map((v) => [v.field, v.rule, v.excerpt]),
+    [['title', 'jira-key-not-listed', 'PDF-13561']]);
+});
+
 test('the check CLI exits 0 and prints exempt for the Shipyard repository', () => {
   const { dir, env } = hermeticRepo();
   fs.mkdirSync(path.join(dir, 'plugins', 'delivery-pipeline', '.claude-plugin'), { recursive: true });

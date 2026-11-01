@@ -384,7 +384,7 @@ case "$cmd" in
     pr_body_tmp="$(mktemp)"
     printf '%s' "$pr_body" > "$pr_body_tmp"
     if ! node "$pr_hygiene_cjs" check --project-root "$repo_root" --base "$base" --head "$epic" \
-        --title "$pr_title" --body-file "$pr_body_tmp" 1>&2; then
+        --title "$pr_title" --body-file "$pr_body_tmp" "${jira_args[@]+"${jira_args[@]}"}" 1>&2; then
       echo "epic-branch.sh pr: refusing — pr-hygiene.cjs check reported violations for epic $epic (see above)" >&2
       exit 1
     fi
