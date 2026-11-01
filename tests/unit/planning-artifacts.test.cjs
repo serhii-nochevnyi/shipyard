@@ -95,7 +95,6 @@ function researchHarness({ resultForLine, consumer } = {}) {
   const artifactRoot = path.join(root, 'research');
   fs.mkdirSync(artifactRoot, { recursive: true });
   const args = {
-    artifactContract: 'planning.v1',
     invId: 'INV-TEST',
     invPath: root,
     worktreePath: root,
@@ -234,7 +233,6 @@ function runSealedResearch(fixture, summaryForLine) {
     invId: 'INV-SEAL',
     invPath: fixture.invPath,
     worktreePath: fixture.worktree,
-    artifactContract: 'planning.v1',
     artifactRoot: fixture.artifactRoot,
     artifactPaths: Object.fromEntries(lineDefinitions.map(({ id }) => [id, path.join(fixture.artifactRoot, `${id}.md`)])),
     sourceRevision: fixture.sourceRevision,

@@ -8,9 +8,9 @@ orchestrator transcript.
 
 ## Bounded handback contract
 
-The investigation command passes `artifactContract: planning.v1` together with
-the authenticated source revision, repository identity, policy hash, and one
-contained path per canonical line under `artifactPaths`:
+The investigation command passes the authenticated source revision,
+repository identity, policy hash, and one contained path per canonical line
+under `artifactPaths`:
 
 ```json
 {

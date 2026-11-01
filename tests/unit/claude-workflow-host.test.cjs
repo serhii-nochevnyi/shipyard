@@ -288,8 +288,15 @@ test('production investigation entry point pins the research workflow and runs a
         problemStatement: 'Test the production research entry point',
         referencePath: '/plugin/references/inv-research.md',
         artifactLanguage: 'English',
+        worktreePath: root,
+        artifactRoot: path.join(root, 'research'),
+        artifactPaths: Object.fromEntries(lines.map(({ id }) => [id, path.join(root, 'research', `${id}.md`)])),
+        sourceRevision: 'a'.repeat(40),
+        repository: 'acme/shipyard',
+        policyHash: 'b'.repeat(64),
         lines,
       };
+    const sha256 = 'd'.repeat(64);
     const value = await registerInvestigationWorkflowHost({
       agent: async (_prompt, options) => {
         calls.push(options);
@@ -297,7 +304,7 @@ test('production investigation entry point pins the research workflow and runs a
           id: options.label.split(':').pop(),
           status: 'completed',
           summary: `completed ${options.label}`,
-          draft: `draft ${options.label}`,
+          artifact: { path: `${root}/research/${options.label.split(':').pop()}.md`, bytes: 1, content_bytes: 1, sha256, digest: sha256 },
         };
         evidence.set(result, transcriptEvidence({
           launch_id: `investigation-host-${calls.length}`,
@@ -313,6 +320,20 @@ test('production investigation entry point pins the research workflow and runs a
       capabilities: PLANNING_CAPABILITIES,
       recorder,
       applicationEvidence: ({ result }) => evidence.get(result),
+      artifactConsumer: ({ artifact, result, record }) => ({
+        schema: 'shipyard.role-artifact.v1',
+        artifact_ref: path.join(root, `${record.receipt.dispatch_id}.json`),
+        artifact_digest: 'c'.repeat(64),
+        envelope: {
+          schema: 'shipyard.research-result.v1', version: 1, role: 'research',
+          subject: artifact.subject, source_revision: artifact.sourceRevision,
+          repository: artifact.repository, policy_hash: artifact.policyHash,
+          status: result.status, summary: result.summary,
+          artifact_index: result.artifact, evidence_index: result.artifact, evidence_index_ref: result.artifact,
+        },
+        artifact_index: result.artifact,
+        evidence_index: result.artifact,
+      }),
     }).run(args);
     assert.match(INVESTIGATION_RESEARCH_SCRIPT, /workflows[\\/]investigation-research\.mjs$/);
     assert.equal(value.length, 4);

@@ -212,7 +212,7 @@ host_request() {
         scope: { run_id: "live-" + crypto.randomUUID(), ticket: invId, phase: 1, worktree: project },
         args: {
           invId, invPath, problemStatement: problem, referencePath: "inv-research",
-          artifactContract: "planning.v1", worktreePath: project, artifactRoot, sourceRevision, repository,
+          worktreePath: project, artifactRoot, sourceRevision, repository,
           policyHash: policy.POLICY_HASH,
           artifactPaths: Object.fromEntries(lines.map((id) => [id, path.join(artifactRoot, id + ".md")])),
           lines: lines.map((id) => {

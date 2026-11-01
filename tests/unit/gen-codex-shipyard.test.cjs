@@ -417,7 +417,7 @@ test('the generated bundle covers all ten canonical roles and planning reference
       assert.ok(agent.includes('# code-review agent'), `${file} must be generated from references/code-review.md`);
       assert.ok(agent.includes('sandbox_mode = "read-only"'), `${file} must be read-only`);
     }
-    assert.ok(read(path.join(f.out, 'skills/shipyard-investigate/SKILL.md')).includes('planning.v1'));
+    assert.ok(read(path.join(f.out, 'skills/shipyard-investigate/SKILL.md')).includes('shipyard.research-result.v1'));
     assert.ok(read(path.join(f.out, 'skills/shipyard-decompose/SKILL.md')).includes('artifact_index'));
   });
 });
