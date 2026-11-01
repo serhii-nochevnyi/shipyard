@@ -47,7 +47,6 @@ if (process.env.SHIPYARD_RESEARCH_HANDBACK_FIXTURE) {
     const writer = require(writerFile);
     require.cache[writerFile].exports = { ...writer,
       sharedPlanningWriterRoot: () => config.writerRoot,
-      legacyPlanningWriterRoots: () => [],
       createPlanningWriterLease(options) {
         const lease = writer.createPlanningWriterLease(options);
         return { ...lease, release(input) {

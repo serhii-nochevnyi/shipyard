@@ -3509,7 +3509,7 @@ test('a refused launch keeps stdout free of preflight JSON, throws the first fin
   assert.equal(JSON.parse(check.stdout.trim()).ok, false);
 });
 
-test('--preflight reports a state directory inside the worktree and an unreadable private writer root', async () => {
+test('--preflight reports a state directory inside the worktree', async () => {
   const f = preflightFixture();
   fs.mkdirSync(path.join(f.project, '.planning', 'phases', '50-launch'), { recursive: true });
   const file = path.join(f.root, 'typed-request.json');
@@ -3517,29 +3517,12 @@ test('--preflight reports a state directory inside the worktree and an unreadabl
     scope: { run_id: 'pf-run', ticket: 'T-50-14', phase: 50, worktree: f.project, runtime: 'codex', provider: 'openai' },
     role: 'decomposition', gsd_role: 'gsd-planner', context: { prompt: 'x' },
   }));
-  const stderr = [];
-  const check = (extra) => runCli(['--preflight', '--args-file', file], { write() {} }, {
+  const inside = await runCli(['--preflight', '--args-file', file], { write() {} }, {
     env: f.env, probe: { status: 'available' }, preflightStdout: { write() {} },
-    preflightStderr: { write: (text) => stderr.push(text) }, ...extra,
+    preflightStderr: { write() {} }, storageRoot: path.join(f.project, 'state-inside'),
   });
-  const inside = await check({ storageRoot: path.join(f.project, 'state-inside') });
   assert.deepEqual(inside.findings.map((finding) => finding.code), ['INVALID_STATE_DIR']);
   assert.equal(inside.ok, false);
-  const home = process.env.HOME;
-  try {
-    const claudeBase = path.join(f.root, 'private-home', '.local', 'state', 'shipyard', 'claude-decompose');
-    fs.mkdirSync(claudeBase, { recursive: true });
-    fs.symlinkSync(f.root, path.join(claudeBase, 'linked'));
-    process.env.HOME = path.join(f.root, 'private-home');
-    const legacy = await check({ storageRoot: path.join(f.root, 'host-state') });
-    assert.deepEqual(legacy.findings.map((finding) => finding.code), ['LEGACY_WRITER_STATE']);
-    assert.equal(legacy.ok, false);
-    assert.match(stderr.join(''), /hint\[LEGACY_WRITER_STATE\]/);
-  } finally {
-    if (home === undefined) delete process.env.HOME;
-    else process.env.HOME = home;
-  }
-  assert.strictEqual(process.env.HOME, home);
 });
 
 test('a launch that passes preflight prints warnings on stderr without a bare ok line and no preflight JSON', () => {

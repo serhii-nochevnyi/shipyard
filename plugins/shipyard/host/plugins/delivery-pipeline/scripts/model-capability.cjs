@@ -26,13 +26,7 @@ function pairSupported(snapshot, model, effort) {
 }
 
 function normalizeSnapshot(raw) {
-  if (!object(raw)) return null;
-  const snapshot = clone(raw);
-  if (snapshot.schema_version === undefined && snapshot.schema === SCHEMA_VERSION) snapshot.schema_version = snapshot.schema;
-  if (snapshot.supported_models === undefined && snapshot.supportedModels !== undefined) snapshot.supported_models = snapshot.supportedModels;
-  if (snapshot.supported_efforts === undefined && snapshot.supportedEfforts !== undefined) snapshot.supported_efforts = snapshot.supportedEfforts;
-  if (snapshot.supported_selections === undefined && snapshot.supportedSelections !== undefined) snapshot.supported_selections = snapshot.supportedSelections;
-  return snapshot;
+  return object(raw) ? clone(raw) : null;
 }
 
 function isModelAxisEscalation(resolution) {

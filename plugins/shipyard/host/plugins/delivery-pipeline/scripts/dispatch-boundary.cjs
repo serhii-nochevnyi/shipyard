@@ -1239,12 +1239,7 @@ function trustedGeneratedAgentDigest(resolution, adapter, root, actualDigest) {
   if (manifest.policy_hash !== undefined && manifest.policy_hash !== resolution.policy_hash) {
     refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} has stale policy hash`, { manifest: manifestPath, expected: resolution.policy_hash, actual: manifest.policy_hash });
   }
-  // The installer currently publishes agent_files before the per-file digest
-  // map is available. Consume that real legacy contract here and let the
-  // adapter-owned validator bind the file to the active policy. New manifests
-  // take the stronger authenticated digest path below.
-  if (!isObject(manifest.agent_digests)) return { manifest: manifestPath, digest: null, legacy: true };
-  const expectedDigest = manifest.agent_digests[resolution.agent_file];
+  const expectedDigest = isObject(manifest.agent_digests) ? manifest.agent_digests[resolution.agent_file] : undefined;
   if (typeof expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(expectedDigest)) {
     refuse('STALE_GENERATED_AGENT', `generated-agent manifest ${manifestPath} has no trusted digest for ${resolution.agent_file}`, { manifest: manifestPath, agent_file: resolution.agent_file });
   }

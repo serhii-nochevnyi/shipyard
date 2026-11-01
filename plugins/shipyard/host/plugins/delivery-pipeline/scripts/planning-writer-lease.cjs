@@ -4,7 +4,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
 const { withLock, writeAtomic } = require('./lock.cjs');
 
 const SCHEMA = 'shipyard.planning-writer-lease.v1';
@@ -120,65 +119,6 @@ function digestFile(file) {
 function sharedPlanningWriterRoot(testWriterStateRoot) {
   return realpathClosest(testWriterStateRoot || path.join(os.userInfo().homedir,
     '.local', 'state', 'shipyard', 'planning-writers', 'shared'));
-}
-
-function legacyPlanningWriterRoots({ worktree, phase, repository, privateRoots = [] }) {
-  const real = fs.realpathSync(worktree);
-  const homes = [...new Set([os.userInfo().homedir, os.homedir(), process.env.HOME]
-    .filter((item) => typeof item === 'string' && path.isAbsolute(item)))];
-  const codex = homes.map((home) => path.join(home, '.local', 'state', 'shipyard', 'codex-decompose',
-    crypto.createHash('sha256').update(real).digest('hex'), 'writer'));
-  const gitCommon = fs.realpathSync(path.resolve(real, execFileSync('git',
-    ['-C', real, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', timeout: 10000 }).trim()));
-  const claude = [];
-  for (const home of homes) {
-    const claudeBase = path.join(home, '.local', 'state', 'shipyard', 'claude-decompose');
-    claude.push(...[repository, gitCommon].map((identity) => path.join(claudeBase,
-      crypto.createHash('sha256').update(`${identity}\n${real}\n${phase}`).digest('hex'), 'writer')));
-    try {
-      const entries = fs.readdirSync(claudeBase, { withFileTypes: true });
-      if (entries.length > 4096) fail('LEGACY_WRITER_STATE', 'private Claude writer root exceeds inspection bound');
-      for (const entry of entries) {
-        if (entry.isSymbolicLink()) fail('LEGACY_WRITER_STATE', 'private Claude writer root has a symbolic link');
-        if (entry.isDirectory()) claude.push(path.join(claudeBase, entry.name, 'writer'));
-      }
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        if (error.code === 'LEGACY_WRITER_STATE') throw error;
-        fail('LEGACY_WRITER_STATE', 'private Claude writer root cannot be inspected');
-      }
-    }
-  }
-  return [...new Set([...codex, ...claude, ...privateRoots])];
-}
-
-function assertNoLegacyPlanningWriter({ worktree, phaseDir, roots = [] }) {
-  const key = crypto.createHash('sha256').update(`${fs.realpathSync(worktree)}\n${fs.realpathSync(phaseDir)}`).digest('hex');
-  for (const root of roots) {
-    const file = path.join(root, key, 'lease.json');
-    let raw;
-    try {
-      const stat = fs.lstatSync(file);
-      if (!stat.isFile() || stat.isSymbolicLink()) {
-        fail('LEGACY_WRITER_STATE', `private writer state is not a regular file at ${file}`);
-      }
-      raw = fs.readFileSync(file, 'utf8');
-    }
-    catch (error) {
-      if (error.code === 'ENOENT') continue;
-      fail('LEGACY_WRITER_STATE', `cannot inspect private writer state at ${file}`);
-    }
-    let record;
-    try { record = JSON.parse(raw); }
-    catch { fail('LEGACY_WRITER_STATE', `private writer state is corrupt at ${file}`); }
-    if (!object(record) || record.schema !== SCHEMA || record.status !== 'released'
-        || !Number.isSafeInteger(record.epoch) || record.epoch < 0
-        || typeof record.token !== 'string' || !/^[a-f0-9]{64}$/.test(record.token)
-        || typeof record.owner !== 'string' || !record.owner
-        || !Number.isSafeInteger(record.pid) || record.pid <= 0) {
-      fail('LEGACY_WRITER_STATE', `private writer ownership requires original recovery at ${file}`);
-    }
-  }
 }
 
 function sealOutputPaths(role, phaseDir) {
@@ -424,5 +364,5 @@ function createPlanningWriterLease(options = {}) {
 
 module.exports = Object.freeze({ SCHEMA, DEFAULT_TTL_MS, createPlanningWriterLease, pidAlive, phaseDirectory,
   writeDurableFile,
-  sharedPlanningWriterRoot, legacyPlanningWriterRoots, assertNoLegacyPlanningWriter,
+  sharedPlanningWriterRoot,
   sealOutputPaths, captureSealManifest, assertSealManifest });

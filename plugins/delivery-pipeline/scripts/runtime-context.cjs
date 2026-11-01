@@ -665,13 +665,6 @@ function preflight(options = {}) {
       if (result.state === 'adoptable') note('adoptable', `legacy history: adoption will record ${result.members.length} member(s)`);
     });
     if (opts.writerStateError) run('host state', () => { throw opts.writerStateError; });
-    if (typeof opts.gsdRole === 'string' && opts.gsdRole && opts.worktree && opts.phaseDir) {
-      run('planning writer state', () => {
-        require('./planning-writer-lease.cjs').assertNoLegacyPlanningWriter({
-          worktree: opts.worktree, phaseDir: opts.phaseDir, roots: opts.writerRoots || [],
-        });
-      });
-    }
     if (typeof opts.runStoreFile === 'string' && opts.runStoreFile) {
       run('run store', () => {
         let raw;

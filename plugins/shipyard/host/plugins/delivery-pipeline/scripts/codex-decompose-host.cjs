@@ -22,8 +22,7 @@ const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.
 const { hintForError } = require('./refusal-hints.cjs');
 const { sealDecomposition, assertContained, captureContainmentBaseline,
   persistContainmentBaseline, restoreContainmentBaseline } = require('./planning-result-sealer.cjs');
-const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
-  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest, pidAlive,
+const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest, pidAlive,
   phaseDirectory: sharedPhaseDirectory, writeDurableFile } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
@@ -821,13 +820,11 @@ function requestGraphDir(env, worktree) {
   return path.resolve(env.SHIPYARD_GRAPH_DIR || path.join(worktree, '.planning', 'graph'));
 }
 
-function writerPreflight(options, scope, launch) {
+function writerPreflight(options, scope) {
   try {
-    const phaseDir = phaseDirectory(scope.worktree, scope.phase);
-    const hostStateDir = path.dirname(options.testRunStoreDir || defaultRunStoreDir(scope, options.testStateRoot));
-    return { gsdRole: launch.gsd_role, phaseDir,
-      writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-        repository: scope.repository, privateRoots: [path.join(hostStateDir, 'writer')] }) };
+    phaseDirectory(scope.worktree, scope.phase);
+    if (!options.testRunStoreDir) defaultRunStoreDir(scope, options.testStateRoot);
+    return {};
   } catch (error) {
     const writerStateError = stateRefusalOf(error);
     return writerStateError ? { writerStateError } : {};
@@ -864,7 +861,7 @@ function preflightCli(parsed, stdout, options, host = 'codex-decompose-host.cjs'
   const scope = normalizeScope(request.scope);
   return runHostPreflight(options, {
     host, worktree: scope.worktree, graphDir: requestGraphDir(hostEnvironment(options), scope.worktree), stdout,
-    ...writerPreflight(options, scope, request.launch),
+    ...writerPreflight(options, scope),
   });
 }
 
@@ -940,7 +937,7 @@ function detachCli(argv, stdout, options) {
 
   runHostPreflight(options, { host: 'codex-decompose-host.cjs', worktree: scope.worktree,
     graphDir: requestGraphDir(hostEnvironment(options), scope.worktree),
-    ...writerPreflight(options, scope, parsed.launch) });
+    ...writerPreflight(options, scope) });
 
   const dispatchId = detachedDispatchId(parsed.launch);
   if (dispatchId === '.' || dispatchId === '..' || /[\\/]/.test(dispatchId) || path.isAbsolute(dispatchId)) {
@@ -1032,9 +1029,6 @@ async function recoverCli(argv, stdout, options) {
     ...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
-  assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
-    roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-      repository: scope.repository, privateRoots: [path.join(hostStateDir, 'writer')] }) });
   const writerLease = options.writerLease || createPlanningWriterLease({
     worktree: scope.worktree, phaseDir, stateRoot: sharedPlanningWriterRoot(options.testWriterStateRoot),
     ...(options.now === undefined ? {} : { now: options.now }),
@@ -1235,7 +1229,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
   runHostPreflight(options, { host: 'codex-decompose-host.cjs', worktree: scope.worktree,
     graphDir: requestGraphDir(hostEnvironment(options), scope.worktree),
-    ...writerPreflight(options, scope, parsed.launch) });
+    ...writerPreflight(options, scope) });
   const runStoreDir = options.testRunStoreDir || defaultRunStoreDir(scope, options.testStateRoot);
   const hostStateDir = path.dirname(runStoreDir);
   const controller = createRunController({
@@ -1244,9 +1238,6 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   const phaseDir = phaseDirectory(scope.worktree, scope.phase);
-  assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
-    roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-      repository: scope.repository, privateRoots: [path.join(hostStateDir, 'writer')] }) });
   const writerLease = options.writerLease || createPlanningWriterLease({
     worktree: scope.worktree, phaseDir, stateRoot: sharedPlanningWriterRoot(options.testWriterStateRoot),
     ...(options.now === undefined ? {} : { now: options.now }),
