@@ -203,7 +203,7 @@ function formatTitle(fields, format) {
 }
 
 const NEUTRAL_PR_BODY_GUIDE =
-  'PR body: Summary (what changed and why), Changes (bullet list), Tests (how it was verified) — no internal identifiers or tool names.';
+  'PR body: Summary (what changed and why), Changes (bullet list), Tests (how it was verified) — the Jira key of this ticket is allowed; no other internal identifiers or tool names.';
 const NEUTRAL_DELIVERY_RULES_HINT =
   'Work only within files_modified; commit with a Conventional Commits subject and no internal identifiers.';
 

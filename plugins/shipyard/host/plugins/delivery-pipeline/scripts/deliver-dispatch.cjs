@@ -486,7 +486,8 @@ function publish(argv, options = {}) {
   };
   const script = (name, args) => step(name, process.execPath, [path.join(__dirname, `${name}.cjs`), ...args]);
   const gate = ['--worktree', worktree, '--base', base];
-  const artifact = ['--role', 'executor', '--ticket', ticket, ...gate, ...boundary.flatMap((name) => [name, flagValue(argv, name)])];
+  const artifact = ['--role', 'executor', '--ticket', ticket, ...gate, ...boundary.flatMap((name) => [name, flagValue(argv, name)]),
+    ...(row.jira ? ['--jira', row.jira] : [])];
 
   const head = step('branch check', 'git', ['symbolic-ref', '--short', 'HEAD']).trim();
   if (head !== branch) fail('PUBLISH_REFUSED', `branch check refused: the worktree is on ${head || 'a detached HEAD'}, the ticket branch is ${branch}`);

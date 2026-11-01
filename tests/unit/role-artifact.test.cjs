@@ -648,6 +648,34 @@ test('a target project accepts a neutral PR body and validates it', async () => 
   }
 });
 
+test('a target project accepts the ticket Jira key in the PR body only with --jira, and never records the key', async () => {
+  const value = await runFixture({ ticket: 'T-44-jira-key', exempt: false, prBody: NEUTRAL_PR_BODY_GUIDE });
+  const artifact = value.result[0];
+  const resultFile = path.join(value.root, 'trusted-result.json');
+  const run = (command, ...extra) => spawnSync(process.execPath, [...testAuthorityArgs,
+    ROLE_ARTIFACT, command, '--worktree', value.root, '--base', 'main', '--role', 'executor', '--ticket', value.ticket,
+    '--boundary-store', value.receipts, '--dispatch-id', artifact.receipt.dispatch_id, ...extra], { encoding: 'utf8' });
+  const code = (result) => result.status === 0 ? 'ok' : JSON.parse(result.stderr).error.code;
+  try {
+    fs.unlinkSync(artifact.artifact_ref);
+    fs.writeFileSync(path.join(value.root, '.shipyard-pr-body.md'), 'Summary\n\nFixes PRJ-7.\n');
+    fs.writeFileSync(resultFile, JSON.stringify(value.agentResult));
+    assert.equal(code(run('seal', '--result-file', resultFile)), 'PR_BODY_LEAK');
+    const sealed = run('seal', '--result-file', resultFile, '--jira', 'PRJ-7');
+    assert.equal(sealed.status, 0, sealed.stderr);
+    assert.ok(!fs.readFileSync(artifact.artifact_ref, 'utf8').includes('PRJ-7'), 'the key must not enter the sealed manifest');
+    const sealedArtifact = ['--artifact', artifact.artifact_ref, '--artifact-digest', JSON.parse(sealed.stdout).artifact_digest];
+    for (const command of ['validate', 'read']) {
+      assert.equal(code(run(command, ...sealedArtifact, '--jira', 'PRJ-7')), 'ok', command);
+      assert.equal(code(run(command, ...sealedArtifact)), 'PR_BODY_LEAK', command);
+      assert.equal(code(run(command, ...sealedArtifact, '--jira', 'OTHER-9')), 'PR_BODY_LEAK', command);
+      assert.equal(code(run(command, ...sealedArtifact, '--jira', '')), 'INVALID_INPUT', command);
+    }
+  } finally {
+    clean(value);
+  }
+});
+
 test('an uncommitted worktree shipyard manifest does not grant the exemption', async () => {
   const value = fixture({ ticket: 'T-33-target-uncommitted', exempt: false, uncommittedManifest: true });
   try {

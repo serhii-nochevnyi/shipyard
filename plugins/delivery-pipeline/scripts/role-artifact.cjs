@@ -464,7 +464,7 @@ function assertTicketMarker(content, ticket) {
 }
 
 // @security: hygiene comes from the committed base (prHygiene.applies), never worktree files.
-function assertPrBody(content, ticket, hygiene) {
+function assertPrBody(content, ticket, hygiene, jira) {
   if (!hygiene) {
     assertTicketMarker(content, ticket);
     return;
@@ -473,7 +473,8 @@ function assertPrBody(content, ticket, hygiene) {
   if (body.trim() === '') {
     fail('PR_BODY_LEAK', 'PR body must be a non-empty neutral body in a target project', { ticket });
   }
-  const violations = prHygiene.check({ body }).violations.filter((violation) => violation.field === 'body');
+  const jiraKeys = typeof jira === 'string' && jira !== '' ? [jira] : [];
+  const violations = prHygiene.check({ body, jiraKeys }).violations.filter((violation) => violation.field === 'body');
   if (violations.length) {
     fail('PR_BODY_LEAK', 'PR body must not contain internal identifiers in a target project', { violations });
   }
@@ -616,7 +617,7 @@ function sealExecutor(value, options) {
       content: readImmutableFile(fsApi, fixedPath(worktree, EVIDENCE_NAME, 'evidence'), 'evidence'),
     },
   };
-  assertPrBody(files.pr_body.content, metadata.ticket, hygiene);
+  assertPrBody(files.pr_body.content, metadata.ticket, hygiene, input.jira);
   const envelope = envelopeFor(metadata, resultData, files);
   const manifest = manifestFor(metadata, trusted, envelope, files);
   const manifestPath = fixedPath(worktree, MANIFEST_NAME, 'artifact manifest');
@@ -765,7 +766,7 @@ function validateExecutor(value, options) {
   }
   const prBody = verifyFileReference(fsApi, worktree, manifest.files.pr_body, PR_BODY_NAME);
   const evidence = verifyFileReference(fsApi, worktree, manifest.files.evidence, EVIDENCE_NAME);
-  assertPrBody(prBody.content, metadata.ticket, hygiene);
+  assertPrBody(prBody.content, metadata.ticket, hygiene, input.jira);
   if (manifest.envelope.evidence_index.sha256 !== evidence.sha256
       || manifest.envelope.evidence_index.bytes !== evidence.bytes) {
     fail('ARTIFACT_DIGEST_MISMATCH', 'evidence index reference does not match the complete evidence bytes');
@@ -5005,6 +5006,13 @@ function parseArgs(argv) {
   return { command, values };
 }
 
+// @contract: the Jira key is a validation input like --base, never part of a sealed record.
+function jiraInput(values) {
+  if (values.jira === undefined) return {};
+  if (values.jira.trim() === '') fail('INVALID_INPUT', 'missing value for --jira');
+  return { jira: values.jira };
+}
+
 function required(values, name) {
   if (typeof values[name] !== 'string' || values[name].trim() === '') fail('INVALID_INPUT', `--${name} is required`);
   return values[name];
@@ -5032,7 +5040,7 @@ function cliValue(value) {
 function cli(argv) {
   const { command, values } = parseArgs(argv);
   if (command === 'help' || values.help) {
-    process.stdout.write('usage: role-artifact.cjs <prepare|seal|validate|read> --worktree PATH [--role ROLE] [--base REF --boundary-store PATH --dispatch-id ID] [--phase PHASE --ticket-set-file PATH --evidence-path PATH] [options]\n');
+    process.stdout.write('usage: role-artifact.cjs <prepare|seal|validate|read> --worktree PATH [--role ROLE] [--jira KEY] [--base REF --boundary-store PATH --dispatch-id ID] [--phase PHASE --ticket-set-file PATH --evidence-path PATH] [options]\n');
     return 0;
   }
   if (command === 'prepare') {
@@ -5059,6 +5067,7 @@ function cli(argv) {
     ...(values.evidencePath ? { evidencePath: values.evidencePath } : {}),
     ...(values.attempt ? { attempt: Number(values.attempt) } : {}),
     ...(values.historical ? { historical: true } : {}),
+    ...jiraInput(values),
   };
   if (values.ticketSetFile) {
     try {
