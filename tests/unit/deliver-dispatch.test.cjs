@@ -1284,10 +1284,16 @@ test('publish merges the base in only for a primary parent on the epic, and rend
     assert.deepEqual(p.keys(), [...PUBLISH_HEAD, 'pr-hygiene format', 'pr-hygiene check', ...PUBLISH_TAIL]);
     for (const key of ['pr-hygiene format', 'pr-hygiene check', 'gh pr', 'reviewers reinit']) assert.equal(p.arg(key, '--repo'), 'o/r');
     assert.equal([p.arg('pr-hygiene format', '--type'), p.arg('pr-hygiene format', '--jira')].join(), 'fix,PRJ-7');
+    assert.equal(p.arg('pr-hygiene check', '--jira'), 'PRJ-7');
     assert.equal([p.arg('pr-hygiene check', '--title'), p.arg('gh pr', '--title')].join(), 'feat: Demo ticket,feat: Demo ticket');
     assert.equal(p.ledger()[p.f.id].repo, 'o/r');
     assert.equal([p.arg('pr-hygiene check', '--project-root'), p.arg('publish-gate --worktree', '--project-root')].join(), `${p.f.root}-checkout,${p.f.root}-checkout`);
   } finally { cleanup(p.f.root); }
+  const keyless = publishFixture({ manifestName: 'target' });
+  try {
+    keyless.publish();
+    assert.equal(keyless.args('pr-hygiene check').includes('--jira'), false);
+  } finally { cleanup(keyless.f.root); }
   const refused = publishFixture({ manifestName: 'target' });
   try {
     assert.throws(() => refused.publish({ 'pr-hygiene check': 'leaked id' }), /pr-hygiene refused: leaked id/);

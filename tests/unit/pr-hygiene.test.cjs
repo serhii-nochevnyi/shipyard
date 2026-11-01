@@ -427,6 +427,35 @@ test('process-only PR bypasses review of development metadata', () => {
   assert.strictEqual(result.exempt, true);
 });
 
+test('the check CLI allows only the ticket Jira key given by --jira in the branch name', () => {
+  const { dir, env } = hermeticRepo();
+  git(dir, ['remote', 'add', 'origin', 'git@github.com:acme/widgets.git'], env);
+  fs.writeFileSync(path.join(dir, 'README.md'), 'hi\n');
+  git(dir, ['add', '-A'], env);
+  git(dir, ['commit', '-q', '-m', 'feat: init'], env);
+  git(dir, ['checkout', '-q', '-b', 'feat/PDF-13561-thing'], env);
+  fs.writeFileSync(path.join(dir, 'thing.js'), 'module.exports = 1;\n');
+  git(dir, ['add', '-A'], env);
+  git(dir, ['commit', '-q', '-m', 'feat: thing'], env);
+  const bodyFile = path.join(dir, 'body.md');
+  fs.writeFileSync(bodyFile, NEUTRAL_PR_BODY_GUIDE);
+  const run = (head, ...extra) => {
+    const cli = spawnSync('node', [MOD, 'check', '--project-root', dir, '--base', 'main', '--head', head,
+      '--title', 'feat: thing', '--body-file', bodyFile, ...extra, '--json'], { encoding: 'utf8', env });
+    return { status: cli.status, result: JSON.parse(cli.stdout) };
+  };
+  const head = 'feat/PDF-13561-thing';
+  const allowed = run(head, '--jira', 'PDF-13561');
+  assert.strictEqual(allowed.status, 0, JSON.stringify(allowed.result));
+  assert.strictEqual(allowed.result.ok, true);
+  for (const extra of [[], ['--jira', 'PDF-1']]) {
+    const refused = run(head, ...extra);
+    assert.strictEqual(refused.status, 2);
+    assert.deepStrictEqual(refused.result.violations.map((v) => [v.field, v.rule, v.excerpt]),
+      [['head', 'jira-key-not-listed', 'PDF-13561']]);
+  }
+});
+
 test('the check CLI exits 0 and prints exempt for the Shipyard repository', () => {
   const { dir, env } = hermeticRepo();
   fs.mkdirSync(path.join(dir, 'plugins', 'delivery-pipeline', '.claude-plugin'), { recursive: true });
