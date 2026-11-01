@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const Module = require('node:module');
 const crypto = require('node:crypto');
 const ROOT = path.resolve(__dirname, '../..');
 const SCRIPTS = path.join(ROOT, 'plugins/delivery-pipeline/scripts');
@@ -37,26 +36,10 @@ const signer = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-k
 function setup(t, scripts = SCRIPTS) {
   const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'z23-owner-')));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
-  const filename = path.join(__dirname, 'codex-delivery-host.test.cjs');
-  const source = fs.readFileSync(filename, 'utf8');
-  const loaded = new Module(filename, module);
-  loaded.filename = filename; loaded.paths = Module._nodeModulePaths(__dirname);
-  loaded.require = request => request === 'node:os' ? { ...os, tmpdir: () => temporary }
-    : request.startsWith('../../plugins/delivery-pipeline/scripts/')
-      ? require(path.join(scripts, path.basename(request))) : require(request);
-  loaded._compile(`'use strict';
-    const crypto = require('node:crypto'), fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-    const { execFileSync } = require('node:child_process');
-    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
-    const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-    const { createCodexDeliveryHost } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
-    const temporary = ${JSON.stringify(temporary)}, signer = ${JSON.stringify(signer)};
-    const finalizeCommit = () => { throw Object.assign(new Error('fixture candidate retained'), { code: 'Z23_CANDIDATE' }); };
-    ${source.slice(source.indexOf('const capabilities ='), source.indexOf('const finalizerFile ='))}
-    ${source.slice(source.indexOf('function git('), source.indexOf("suite('codex-delivery-host"))}
-    module.exports = { fixture, delivery, clean, git };
-  `, filename);
-  const helpers = loaded.exports;
+  const helpers = require('./helpers/phase53-delivery-fixture.cjs').createDeliveryFixture({
+    temporary, signer, scripts, tmpdir: temporary,
+    finalizeCommit: () => { throw Object.assign(new Error('fixture candidate retained'), { code: 'Z23_CANDIDATE' }); },
+  });
   const f = helpers.fixture({ physicalPaths: true });
   t.after(() => helpers.clean(f));
   fs.mkdirSync(path.join(f.root, '.planning/phases/38-z23'), { recursive: true });
