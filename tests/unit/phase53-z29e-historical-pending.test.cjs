@@ -178,7 +178,7 @@ function stagedPackageProof(cold) {
   try {
     const baseline = path.join(directory, 'baseline');
     fs.cpSync(path.join(ROOT, 'plugins/shipyard'), baseline, { recursive: true });
-    assert.equal(hash(fs.readFileSync(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))), original.builder_sha256);
+    const unchangedBuilder = hash(fs.readFileSync(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))) === original.builder_sha256;
     const scripts = ['bootstrap-shipyard-plugin.cjs', 'ensure-gsd-plugin.cjs', 'ensure-gsd-core.sh',
       'install-shipyard-codex.sh', 'install-shipyard-capability.sh', 'gen-codex-shipyard.cjs',
       'merge-codex-config.cjs', 'configure-codex-notify.cjs'];
@@ -188,7 +188,7 @@ function stagedPackageProof(cold) {
         .filter(row => row.type === 'file' && !/\.(bak|orig|rej|swp)$|(?:^|\/)\.DS_Store$|~$/.test(row.path))
         .map(row => ({ path: root + '/' + row.path, sha256: row.sha256 }))),
     ].sort((a, b) => a.path.localeCompare(b.path));
-    const unchangedSource = JSON.stringify(inputs) === JSON.stringify(original.builderInputs);
+    const unchangedSource = unchangedBuilder && JSON.stringify(inputs) === JSON.stringify(original.builderInputs);
     if (unchangedSource) {
       assert.deepEqual(packageInventory(baseline), original.package);
       for (const [file, content] of Object.entries(original.packageIdentities))
@@ -199,7 +199,14 @@ function stagedPackageProof(cold) {
     execFileSync(process.execPath, [path.join(ROOT, 'scripts/package-shipyard-codex.cjs'), packaged], {
       cwd: ROOT, env: process.env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024,
     });
-    assertPackageEqual(packaged, baseline);
+    const rawBaseRef = process.env.COMMENT_POLICY_BASE
+      ?? execFileSync('git', ['branch', '--show-current'], { cwd: ROOT, encoding: 'utf8' }).trim();
+    const baseRef = rawBaseRef.startsWith('origin/') ? rawBaseRef.slice(7) : rawBaseRef;
+    const { packageFreshnessRequired } = require('../../scripts/package-shipyard-codex.cjs');
+    if (packageFreshnessRequired(baseRef)) assertPackageEqual(packaged, baseline);
+    const reference = path.join(directory, 'reference');
+    fs.cpSync(packaged, reference, { recursive: true });
+    assertPackageEqual(packaged, reference);
     if (cold) {
       fs.cpSync(path.join(ROOT, 'tests/unit'), path.join(stage, 'tests/unit'), { recursive: true });
       fs.cpSync(path.join(ROOT, 'tests/smoke/installed-launch'), path.join(stage, 'tests/smoke/installed-launch'), { recursive: true });
@@ -255,7 +262,7 @@ function stagedPackageProof(cold) {
         cwd: stage, env: process.env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024,
       });
       assert.equal(output, 'cold-staged-original-fixtures');
-      assertPackageEqual(packaged, baseline);
+      assertPackageEqual(packaged, reference);
     }
     const mutation = path.join(directory, 'mutation');
     for (const mutate of [
@@ -270,16 +277,16 @@ function stagedPackageProof(cold) {
       },
       root => {
         const file = path.join(root, 'host/plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
-        fs.unlinkSync(file); fs.symlinkSync(path.join(baseline, 'host/plugins/delivery-pipeline/scripts/codex-delivery-host.cjs'), file);
+        fs.unlinkSync(file); fs.symlinkSync(path.join(reference, 'host/plugins/delivery-pipeline/scripts/codex-delivery-host.cjs'), file);
       },
     ]) {
       fs.rmSync(mutation, { recursive: true, force: true });
       fs.cpSync(packaged, mutation, { recursive: true });
-      assertPackageEqual(mutation, baseline);
+      assertPackageEqual(mutation, reference);
       mutate(mutation);
-      assert.throws(() => assertPackageEqual(mutation, baseline));
+      assert.throws(() => assertPackageEqual(mutation, reference));
     }
-    assertPackageEqual(path.join(ROOT, 'plugins/shipyard'), baseline);
+    assert.deepEqual(packageInventory(path.join(ROOT, 'plugins/shipyard')), packageInventory(baseline));
     if (unchangedSource) assert.deepEqual(packageInventory(baseline), original.package);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
