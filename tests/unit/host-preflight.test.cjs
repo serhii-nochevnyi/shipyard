@@ -341,20 +341,12 @@ describe('host preflight', () => {
     assert.match(formatHint('RUNTIME_CAPABILITY_MISSING'), /upgrade that CLI instead/);
   });
 
-  it('flags an invalid run store and a legacy planning writer', () => {
+  it('flags an invalid run store', () => {
     const layout = installedLayout();
     const file = path.join(tmp('store'), 'store.json');
     fs.writeFileSync(file, '{"schema":"nope"}');
     assert.deepEqual(codes(preflight(base(layout, { runStoreFile: file }))), ['INVALID_STORE']);
     assert.deepEqual(codes(preflight(base(layout, { runStoreFile: file, scope: 'environment' }))), []);
-    const phaseDir = tmp('phase');
-    const worktree = tmp('wt');
-    const writers = tmp('writers');
-    const key = digest(`${fs.realpathSync(worktree)}\n${fs.realpathSync(phaseDir)}`);
-    fs.mkdirSync(path.join(writers, key));
-    fs.writeFileSync(path.join(writers, key, 'lease.json'), '{bad');
-    const result = preflight(base(layout, { worktree, phaseDir, gsdRole: 'gsd-planner', writerRoots: [writers], graphDir: null }));
-    assert.deepEqual(codes(result), ['LEGACY_WRITER_STATE']);
   });
 
   it('is read-only', () => {

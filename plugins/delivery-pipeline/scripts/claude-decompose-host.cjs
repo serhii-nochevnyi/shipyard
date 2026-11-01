@@ -15,11 +15,10 @@ const { createRunScope } = require('./run-scope.cjs');
 const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
-const { resolveClaudeHome, preflight, emitPreflight, stateRefusalOf } = require('./runtime-context.cjs');
+const { resolveClaudeHome, preflight, emitPreflight } = require('./runtime-context.cjs');
 const { repositoryIdentity } = require('./architecture-target.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
-const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
-  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest, pidAlive,
+const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest, pidAlive,
   phaseDirectory: sharedPhaseDirectory, writeDurableFile } = require('./planning-writer-lease.cjs');
 
 const { decompositionAdr } = require('./planning-result-sealer.cjs');
@@ -300,9 +299,6 @@ async function runDecomposition(request, dependencies = {}) {
   const scope = canonicalRequest(request);
   const store = dependencies.store || privateStore(scope);
   const phaseDir = phaseDirectory(scope.worktree, scope.phase);
-  assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
-    roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-      repository: scope.repository, privateRoots: [path.join(store, 'writer')] }) });
   ensurePrivateStore(store);
   const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'runs') });
   const runId = `decompose-${crypto.randomUUID()}`;
@@ -497,9 +493,6 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
   if (dependencies.environmentGate) dependencies.environmentGate(scope);
   const phaseDir = phaseDirectory(scope.worktree, scope.phase);
   const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'recovery-runs') });
-  assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
-    roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-      repository: scope.repository, privateRoots: [path.join(store, 'writer')] }) });
   const writerLease = dependencies.writerLease || createPlanningWriterLease({
     worktree: scope.worktree, phaseDir, stateRoot: sharedPlanningWriterRoot(dependencies.testWriterStateRoot),
   });
@@ -626,20 +619,6 @@ function parseArguments(argv) {
   return { requestFile: argv[1] };
 }
 
-function writerPreflight(scope) {
-  let phaseDir;
-  try { phaseDir = phaseDirectory(scope.worktree, scope.phase); } catch { return {}; }
-  try {
-    return { gsdRole: scope.role, phaseDir,
-      writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-        repository: scope.repository, privateRoots: [path.join(privateStore(scope), 'writer')] }) };
-  } catch (error) {
-    const writerStateError = stateRefusalOf(error);
-    if (!writerStateError) throw error;
-    return { writerStateError };
-  }
-}
-
 function launchPreflight(worktree, { stdout = { write() {} }, scope = 'launch', ...extra } = {}) {
   const result = preflight({
     runtime: 'claude', scriptDir: __dirname, worktree, graphDir: undefined, scope,
@@ -710,12 +689,11 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   process.chdir(scope.worktree);
-  const gateOptions = writerPreflight(scope);
   if (args.preflightOnly) {
-    if (!launchPreflight(scope.worktree, { stdout: process.stdout, ...gateOptions }).ok) process.exitCode = 1;
+    if (!launchPreflight(scope.worktree, { stdout: process.stdout }).ok) process.exitCode = 1;
     return;
   }
-  requirePreflight(scope.worktree, gateOptions);
+  requirePreflight(scope.worktree);
   const output = await runDecomposition(request);
   process.stdout.write(`${JSON.stringify(output)}\n`);
 }

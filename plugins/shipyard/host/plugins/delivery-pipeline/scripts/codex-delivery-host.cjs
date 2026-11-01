@@ -32,8 +32,7 @@ const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 const { isScratch } = require('./conveyor-scratch.cjs');
-const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
-  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
+const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
@@ -3029,20 +3028,12 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       fail('INVALID_INPUT', 'conflicting canonical graph selectors');
     options = { ...options, graphDir: parsed.graphDir };
   }
-  const gsdRole = parsed ? parsed.launch.gsd_role : undefined;
-  let phaseDir;
-  if (gsdRole !== undefined) {
-    try { phaseDir = typedPhaseDirectory(scope.worktree, scope.phase); } catch { phaseDir = undefined; }
-  }
   // @contract: a state refusal met while gathering preflight inputs is reported as a finding, not thrown.
   const stateInputs = () => {
     try {
       return {
         ...(parsed ? { runStoreFile: path.join(storageRootOf(options, scope),
           crypto.createHash('sha256').update(`${scope.run_id}\0${scope.worktree}`).digest('hex'), 'runs', 'runs.json') } : {}),
-        ...(gsdRole !== undefined && phaseDir ? { gsdRole, phaseDir,
-          writerRoots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-            repository: scope.repository }) } : {}),
       };
     } catch (error) {
       const writerStateError = stateRefusalOf(error);
@@ -3121,9 +3112,6 @@ async function launchRole(parsed, scope, options, stdout, codeReview = {}) {
   try {
   if (request.gsd_role !== undefined) {
     const phaseDir = typedPhaseDirectory(scope.worktree, scope.phase);
-    assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
-      roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
-        repository: scope.repository }) });
     writerLease = createPlanningWriterLease({ worktree: scope.worktree, phaseDir,
       stateRoot: sharedPlanningWriterRoot(options.testWriterStateRoot) });
     const baseRevision = git(scope.worktree, ['rev-parse', 'HEAD']);

@@ -1086,7 +1086,7 @@ test('static Codex dispatch requires generated-agent evidence and a digest', () 
   );
 });
 
-test('legacy Codex manifests delegate policy binding to the adapter contract', () => {
+test('Codex agents without ADR policy comments delegate policy binding to the adapter contract', () => {
   const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-legacy-agent-'));
   const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'legacy-agent-file' });
   const text = [
@@ -1097,12 +1097,14 @@ test('legacy Codex manifests delegate policy binding to the adapter contract', (
     '',
   ].join('\n');
   fs.writeFileSync(path.join(agentsDir, base.agent_file), text);
-  fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
+  const digest = crypto.createHash('sha256').update(text).digest('hex');
+  const writeManifest = (extra) => fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
     agent_files: [base.agent_file],
     registrations: [`agents.${base.agent_file.replace(/\.toml$/, '')}`],
+    ...extra,
   }) + '\n');
+  writeManifest({ agent_digests: { [base.agent_file]: digest } });
   let validatorCalled = false;
-  const digest = crypto.createHash('sha256').update(text).digest('hex');
   const boundary = boundaryModule.createDispatchBoundary({
     adapters: {
       codex: fakeAdapter({
@@ -1130,6 +1132,11 @@ test('legacy Codex manifests delegate policy binding to the adapter contract', (
   });
   assert.equal(validatorCalled, true);
   assert.equal(result.receipt.agent_file_digest, digest);
+  writeManifest({});
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'no-digests' }),
+    (error) => error.code === 'STALE_GENERATED_AGENT' && /no trusted digest/.test(error.message),
+  );
 });
 
 test('an adapter telemetry record hook cannot become repair authority', () => {

@@ -219,7 +219,7 @@ function completedResult(waited, scope, request, options) {
 
 function writerPreflight(options, parsed) {
   try {
-    return codexDecomposeHost.writerPreflight(options, normalizeScope(parsed.scope), parsed.launch);
+    return codexDecomposeHost.writerPreflight(options, normalizeScope(parsed.scope));
   } catch { return {}; }
 }
 

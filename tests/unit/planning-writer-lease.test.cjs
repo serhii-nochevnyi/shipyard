@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawn, spawnSync } = require('node:child_process');
-const { createPlanningWriterLease, sharedPlanningWriterRoot, assertNoLegacyPlanningWriter,
+const { createPlanningWriterLease, sharedPlanningWriterRoot,
   captureSealManifest, assertSealManifest, pidAlive, phaseDirectory } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 
 const MODULE_PATH = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'planning-writer-lease.cjs');
@@ -118,23 +118,6 @@ test('the seal manifest takes the changed set from the host delta and refuses wr
   fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Edited\n');
   assert.throws(() => assertSealManifest({ role: 'gsd-plan-checker', phaseDir, snapshot,
     changed: lease.changedSince(snapshot).changed, outputs: {}, lease }), { code: 'RECOVERY_ARTIFACT_ALTERED' });
-}));
-
-test('legacy private active and corrupt leases refuse without changing their bytes', () => fixture(({ stateRoot, worktree }) => {
-  const phaseDir = path.join(worktree, '38-phase');
-  fs.mkdirSync(phaseDir);
-  const privateRoot = path.join(stateRoot, 'private');
-  const lease = createPlanningWriterLease({ stateRoot: privateRoot, worktree, phaseDir });
-  lease.acquire({ owner: 'legacy', base_revision: 'rev' });
-  const before = fs.readFileSync(lease.file);
-  assert.throws(() => assertNoLegacyPlanningWriter({ worktree, phaseDir, roots: [privateRoot] }),
-    { code: 'LEGACY_WRITER_STATE' });
-  assert.deepEqual(fs.readFileSync(lease.file), before);
-  fs.writeFileSync(lease.file, '{invalid');
-  const corrupt = fs.readFileSync(lease.file);
-  assert.throws(() => assertNoLegacyPlanningWriter({ worktree, phaseDir, roots: [privateRoot] }),
-    { code: 'LEGACY_WRITER_STATE' });
-  assert.deepEqual(fs.readFileSync(lease.file), corrupt);
 }));
 
 test('a stateRoot inside the worktree is refused', () => fixture(({ worktree }) => {
