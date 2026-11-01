@@ -37,6 +37,23 @@ function lineIdentity({ path: file, lineText, ordinal }) {
     fail('INVALID_RESULT', 'a source identity requires a path, non-empty source line and positive ordinal');
   return hash([normalized, normalizeSourceLine(lineText), String(ordinal)].join('\n'));
 }
+const sourceIndexes = new WeakMap();
+function indexSource(readSource, file, source) {
+  const byFile = sourceIndexes.get(readSource) || sourceIndexes.set(readSource, new Map()).get(readSource);
+  let index = byFile.get(file);
+  if (index?.source !== source) {
+    if (Buffer.byteLength(source) > SOURCE_MAX_BYTES || source.includes('\0')) return null;
+    const lines = source.split('\n'), counts = new Map();
+    if (source.endsWith('\n')) lines.pop();
+    const rows = lines.map(raw => {
+      const text = normalizeSourceLine(raw), rank = (counts.get(text) || 0) + 1;
+      counts.set(text, rank);
+      return { text, rank };
+    });
+    byFile.set(file, index = { source, rows, counts });
+  }
+  return index;
+}
 function resolveCitation({ path: file, line, quotedText, readSource }) {
   const missing = { citation: 'missing', identity: null, line_text: null, occurrence: null, occurrences: null };
   const normalized = normalizeCitedPath(file);
@@ -44,22 +61,14 @@ function resolveCitation({ path: file, line, quotedText, readSource }) {
   let source;
   try { source = readSource(normalized); } catch { return missing; }
   if (Buffer.isBuffer(source)) source = source.toString('utf8');
-  if (typeof source !== 'string' || Buffer.byteLength(source) > SOURCE_MAX_BYTES || source.includes('\0')) return missing;
-  const lines = source.split('\n');
-  if (source.endsWith('\n')) lines.pop();
-  if (line > lines.length) return missing;
-  const text = normalizeSourceLine(lines[line - 1]);
+  const index = typeof source === 'string' && indexSource(readSource, normalized, source);
+  if (!index || line > index.rows.length) return missing;
+  const { text, rank } = index.rows[line - 1];
   if (!text || Buffer.byteLength(text) > 1024) return missing;
   if (typeof quotedText === 'string' && quotedText.length > 0 && normalizeSourceLine(quotedText) !== text)
     return { ...missing, citation: 'unmatched' };
-  let ordinal = 0, count = 0;
-  for (let index = 0; index < lines.length; index++) {
-    if (normalizeSourceLine(lines[index]) !== text) continue;
-    count++;
-    if (index < line) ordinal++;
-  }
-  return { citation: 'resolved', line_text: text, occurrence: ordinal, occurrences: count,
-    identity: lineIdentity({ path: normalized, lineText: text, ordinal }) };
+  return { citation: 'resolved', line_text: text, occurrence: rank, occurrences: index.counts.get(text),
+    identity: lineIdentity({ path: normalized, lineText: text, ordinal: rank }) };
 }
 function createSourceReader({ git, head }) {
   const cache = new Map();
