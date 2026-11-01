@@ -778,7 +778,7 @@ test('direct ADR decomposition retains its subject through controller, in-flight
     fs.mkdirSync(graphDir, { recursive: true });
     fs.writeFileSync(path.join(graphDir, 'tickets.json'), '{"tickets":{}}\n');
     fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), '{}\n');
-    const input = { graphDir, ticket, role: 'decomposition', dispatch_id: dispatchId,
+    const input = { graphDir, worktree: f.root, ticket, role: 'decomposition', dispatch_id: dispatchId,
       pid: process.pid, host: 'codex', refreshBoard: false };
     recordInflight(input);
     const provenanceFile = path.join(graphDir, 'provenance', dispatchId + '.json');

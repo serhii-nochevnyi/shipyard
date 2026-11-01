@@ -103,8 +103,8 @@ const HINTS = Object.freeze({
     remedy: `Update Shipyard (${CLAUDE_UPGRADE}) so the plugin and the installed host agree, then re-run.`,
   }),
   LEGACY_WRITER_STATE: Object.freeze({
-    hint: 'A planning writer state file was written by an older layout.',
-    remedy: `Upgrade the installed bundle (${UPGRADE}) and re-run.`,
+    hint: 'The original dispatch used a different planning writer lease file than this recovery would.',
+    remedy: 'That dispatch cannot be recovered; start a new run of the same step.',
   }),
   UNKNOWN_RUNTIME: Object.freeze({
     hint: 'The runtime could not be recognised from the environment.',
@@ -158,25 +158,9 @@ const HINTS = Object.freeze({
     hint: 'Warning: the capability snapshot is aged but still usable.',
     remedy: 'Run node {bundle}/scripts/{host} --preflight to refresh it when convenient.',
   }),
-  LEGACY_HISTORY_UNSAFE: Object.freeze({
-    hint: 'The legacy history at {path} cannot be adopted safely.',
-    remedy: 'Leave the history in place and report it; adoption stays blocked until the host that wrote it is updated.',
-  }),
-  LEGACY_HISTORY_CHANGED: Object.freeze({
-    hint: 'The legacy history at {path} changed during adoption.',
-    remedy: 'Wait for the other writer to finish, then re-run; the history is left as it is.',
-  }),
   LEGACY_HISTORY_UNKNOWN_MEMBER: Object.freeze({
-    hint: 'The legacy history at {path} contains a member this host does not know.',
-    remedy: `Update the host that wrote the file (${UPGRADE}), then re-run.`,
-  }),
-  LEGACY_HISTORY_COLLISION: Object.freeze({
-    hint: 'Adopting the legacy history at {path} would collide with existing content.',
-    remedy: 'Leave both in place and report the collision; adoption stays blocked.',
-  }),
-  LEGACY_HISTORY_MISSING: Object.freeze({
-    hint: 'Warning: the expected legacy history at {path} was not found.',
-    remedy: 'Continue if this project has no earlier history; otherwise re-run from the original checkout location.',
+    hint: 'The provenance file at {path} is not recorded by this host.',
+    remedy: 'An earlier release or another writer left it. Move it out of .planning/graph/provenance (untracked runtime state), then re-run.',
   }),
   REPOSITORY_IDENTITY_INVALID: Object.freeze({
     hint: 'The repository identity could not be established.',
@@ -184,7 +168,7 @@ const HINTS = Object.freeze({
   }),
 });
 
-const LAUNCH_CODES = Object.freeze(["ARCHIVE_AUTHORITY_INVALID", "ARCHIVE_AUTHORITY_REQUIRED", "ARCHIVE_AUTHORITY_BUSY", "RUNTIME_CAPABILITY_MISSING", "LEGACY_WRITER_STATE", "UNKNOWN_RUNTIME", "AMBIGUOUS_RUNTIME", "INVALID_STORE", "ADR_REQUIRED", "ADR_PATH_INVALID", "ADR_UNAVAILABLE", "ADR_CHANGED", "ADR_DIGEST_MISMATCH", "DECOMPOSITION_SUBJECT_INVALID", "ENV_CONFLICT", "BUNDLE_MANIFEST_INVALID", "CAPABILITY_EVIDENCE_STALE", "CAPABILITY_SNAPSHOT_AGED", "LEGACY_HISTORY_UNSAFE", "LEGACY_HISTORY_CHANGED", "LEGACY_HISTORY_UNKNOWN_MEMBER", "LEGACY_HISTORY_COLLISION", "LEGACY_HISTORY_MISSING", "REPOSITORY_IDENTITY_INVALID", "REFERENCE_UNAVAILABLE", "RUNTIME_UNAVAILABLE", "STALE_GENERATED_AGENT", "CODEX_CONFIG_FIX", "CODEX_GENERATED_AGENT_FIX"]);
+const LAUNCH_CODES = Object.freeze(["ARCHIVE_AUTHORITY_INVALID", "ARCHIVE_AUTHORITY_REQUIRED", "ARCHIVE_AUTHORITY_BUSY", "RUNTIME_CAPABILITY_MISSING", "LEGACY_WRITER_STATE", "UNKNOWN_RUNTIME", "AMBIGUOUS_RUNTIME", "INVALID_STORE", "ADR_REQUIRED", "ADR_PATH_INVALID", "ADR_UNAVAILABLE", "ADR_CHANGED", "ADR_DIGEST_MISMATCH", "DECOMPOSITION_SUBJECT_INVALID", "ENV_CONFLICT", "BUNDLE_MANIFEST_INVALID", "CAPABILITY_EVIDENCE_STALE", "CAPABILITY_SNAPSHOT_AGED", "LEGACY_HISTORY_UNKNOWN_MEMBER", "REPOSITORY_IDENTITY_INVALID", "REFERENCE_UNAVAILABLE", "RUNTIME_UNAVAILABLE", "STALE_GENERATED_AGENT", "CODEX_CONFIG_FIX", "CODEX_GENERATED_AGENT_FIX"]);
 
 function hintFor(code) {
   if (typeof code === 'string' && Object.hasOwn(HINTS, code)) return HINTS[code];
@@ -283,7 +267,7 @@ function errorVars(error) {
     const bundle = scalar(bag.bundle);
     if (bundle) vars.bundle = bundle;
   }
-  if (vars.path === undefined && typeof source.code === 'string' && source.code.startsWith('LEGACY_HISTORY_')) {
+  if (vars.path === undefined && source.code === 'LEGACY_HISTORY_UNKNOWN_MEMBER') {
     const found = PLANNING_PATH_IN_MESSAGE.exec(String(source.message || ''));
     if (found) vars.path = found[1];
   }

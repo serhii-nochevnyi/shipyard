@@ -481,15 +481,6 @@
         },
         {
           "argv": [
-            "bash",
-            "tests/smoke/installed-launch-smoke.sh",
-            "scenario-upgrade-history"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
             "make",
             "-n",
             "test-installed-launch"
@@ -552,8 +543,7 @@
           "argv": [
             "node",
             "--test",
-            "tests/unit/codex-arch-review-context.test.cjs",
-            "tests/unit/legacy-bookkeeping-adoption.test.cjs"
+            "tests/unit/codex-arch-review-context.test.cjs"
           ],
           "profile": "sandbox",
           "timeout_s": 600
@@ -611,8 +601,7 @@
           "argv": [
             "node",
             "--test",
-            "tests/unit/dispatch-record.test.cjs",
-            "tests/unit/adoption-ordering.test.cjs"
+            "tests/unit/dispatch-record.test.cjs"
           ],
           "profile": "sandbox",
           "timeout_s": 600
@@ -710,19 +699,8 @@
           "argv": [
             "node",
             "--test",
-            "tests/unit/legacy-bookkeeping-adoption.test.cjs"
-          ],
-          "profile": "sandbox",
-          "timeout_s": 600
-        },
-        {
-          "argv": [
-            "node",
-            "--test",
-            "tests/unit/legacy-bookkeeping-adoption.test.cjs",
             "tests/unit/archive-lock-liveness.test.cjs",
             "tests/unit/archive-authority-race.test.cjs",
-            "tests/unit/adoption-ordering.test.cjs",
             "tests/unit/subject-contract.test.cjs"
           ],
           "profile": "sandbox",
@@ -732,7 +710,6 @@
           "argv": [
             "node",
             "--test",
-            "tests/unit/legacy-pin-readers.test.cjs",
             "tests/unit/launch-upgrade-verification-record.test.cjs"
           ],
           "profile": "sandbox",

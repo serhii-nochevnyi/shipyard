@@ -1800,7 +1800,7 @@ test('fresh linked-worker provenance remains authenticated when the next host ru
   }
 });
 
-test('external canonical graph history is not admitted as ticket-local archive bookkeeping', () => {
+test('an unrecorded canonical graph file is refused for an external ticket worktree and is never pinned', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const ticketWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-external-ticket-'));
   const authorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-authority-home-')));
@@ -1814,15 +1814,11 @@ test('external canonical graph history is not admitted as ticket-local archive b
     fs.writeFileSync(legacy, 'historical canonical graph record');
     const input = { graphDir: graph, worktree: ticketWorktree, ticket: 'T-01-01', role: 'arch-review',
       dispatch_id: 'external-review', pid: process.pid, host: 'codex', refreshBoard: false };
-    recordInflight(input);
-    assert.equal(clearInflight(input), true);
+    assert.throws(() => recordInflight(input), error => error.code === 'LEGACY_HISTORY_UNKNOWN_MEMBER');
     assert.equal(fs.readFileSync(legacy, 'utf8'), 'historical canonical graph record');
     const pins = authority.historicalBookkeepingPins(project).map(pin => pin.path);
     assert.ok(!pins.includes('.planning/graph/provenance/historical.json'), 'historical.json is never pinned');
-    assert.ok(pins.includes('.planning/graph/provenance/external-review.json'), 'the external review sidecar is a pin');
-    const members = authority.legacyBookkeepingMembers(project);
-    assert.deepStrictEqual(members.map(member => member.path), ['.planning/graph/provenance/historical.json']);
-    assert.equal(members[0].sha256, crypto.createHash('sha256').update('historical canonical graph record').digest('hex'));
+    assert.ok(!pins.includes('.planning/graph/provenance/external-review.json'), 'the refused admission recorded no sidecar');
   } finally {
     os.homedir = originalHomedir;
     fs.rmSync(authorityHome, { recursive: true, force: true });
@@ -1874,48 +1870,6 @@ const admission = (graph, worktree, id, overrides = {}) => ({ graphDir: graph, w
 
 const authorityPresent = (authority, project) => fs.existsSync(authority.archiveAuthorityDirectory(project));
 
-test('a linked-worktree host admission over legacy history is trusted, pinned, and does not block the next root host', () => withAuthorityHome((home) => {
-  const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
-  try {
-    const linked = linkedWorktree(project);
-    const authority = authorityModule();
-    const legacyDir = legacySidecars(graph, ['legacy-a', 'legacy-b', 'legacy-c']);
-    const legacyBefore = treeDigest(legacyDir);
-    const worker = admission(graph, linked, 'linked-executor');
-    recordInflight(worker);
-    const pins = authority.historicalBookkeepingPins(project).map((pin) => pin.path);
-    assert.ok(pins.includes('.planning/graph/provenance/linked-executor.json'), 'the linked sidecar is an authenticated pin');
-    assert.ok(pins.includes('.planning/graph/dispatches.json'));
-    assert.deepStrictEqual(authority.legacyBookkeepingMembers(project).map((member) => member.path),
-      ['legacy-a', 'legacy-b', 'legacy-c'].map((name) => `.planning/graph/provenance/${name}.json`));
-    assert.equal(authority.classifyLegacyProvenance(project).state, 'adopted');
-    assert.equal(clearInflight(worker), true);
-    const guard = admission(graph, project, 'root-guard', { role: 'pr-sentinel' });
-    assert.doesNotThrow(() => recordInflight(guard));
-    assert.equal(clearInflight(guard), true);
-    assert.equal(authority.classifyLegacyProvenance(project).state, 'adopted');
-    const names = fs.readdirSync(legacyDir).sort();
-    assert.deepStrictEqual(names, ['legacy-a.json', 'legacy-b.json', 'legacy-c.json', 'linked-executor.json', 'root-guard.json']);
-    assert.deepStrictEqual(treeDigest(legacyDir).filter((line) => line.startsWith('legacy-')), legacyBefore);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-}));
-
-test('adopted history with no pin yet still routes a linked-worktree admission through the trusted writer', () => withAuthorityHome(() => {
-  const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
-  try {
-    const linked = linkedWorktree(project);
-    const authority = authorityModule();
-    legacySidecars(graph, ['legacy-a', 'legacy-b']);
-    authority.trustedBookkeepingMutation(project, () => {});
-    assert.equal(authority.classifyLegacyProvenance(project).state, 'adopted');
-    assert.deepStrictEqual(authority.historicalBookkeepingPins(project), [], 'precondition: no authenticated pin exists yet');
-    recordInflight(admission(graph, linked, 'adopted-linked'));
-    assert.ok(authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/adopted-linked.json')),
-      'the linked sidecar is an authenticated pin');
-    assert.doesNotThrow(() => recordInflight(admission(graph, project, 'adopted-root', { role: 'pr-sentinel' })));
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-}));
-
 test('clearInflight takes the trusted path from the project root and from a linked worktree', () => {
   for (const from of ['project', 'linked']) withAuthorityHome(() => {
     const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
@@ -1924,9 +1878,9 @@ test('clearInflight takes the trusted path from the project root and from a link
       const authority = authorityModule();
       legacySidecars(graph, ['legacy-a', 'legacy-b']);
       assert.equal(authorityPresent(authority, project), false);
-      assert.equal(clearInflight(admission(graph, from === 'project' ? project : linked, 'nothing-to-clear')), false);
-      assert.equal(authority.classifyLegacyProvenance(project).state, 'adopted', `${from} clear adopts through the trusted writer`);
-      assert.equal(authority.legacyBookkeepingMembers(project).length, 2);
+      assert.throws(() => clearInflight(admission(graph, from === 'project' ? project : linked, 'nothing-to-clear')),
+        error => error.code === 'LEGACY_HISTORY_UNKNOWN_MEMBER', `${from} clear refuses through the trusted writer`);
+      assert.equal(authorityPresent(authority, project), false);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });
@@ -1951,7 +1905,7 @@ test('with no history, the root creates the authority and a linked worker with a
       fs.mkdirSync(PROVENANCE_DIR(graph), { recursive: true });
       recordInflight(admission(graph, linked, 'first-linked'));
       assert.ok(authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/first-linked.json')));
-      assert.equal(authority.classifyLegacyProvenance(project).state, 'authenticated');
+      assert.deepStrictEqual(authority.provenanceFindings(project).findings, []);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });
@@ -1965,7 +1919,7 @@ test('a provenance directory holding only noise admits a linked worker as an emp
     fs.writeFileSync(path.join(PROVENANCE_DIR(graph), '.DS_Store'), 'x');
     recordInflight(admission(graph, linked, 'noisy-linked'));
     assert.ok(authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/noisy-linked.json')));
-    assert.equal(authority.classifyLegacyProvenance(project).state, 'authenticated');
+    assert.deepStrictEqual(authority.provenanceFindings(project).findings, []);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }));
 
@@ -1998,7 +1952,7 @@ test('an unreadable authority namespace sends a linked worktree down the trusted
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }));
 
-test('a linked-worktree host admission over unsafe legacy history is refused without any write', () => withAuthorityHome(() => {
+test('a linked-worktree host admission over an unrecorded file is refused without any write', () => withAuthorityHome(() => {
   const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
   try {
     const linked = linkedWorktree(project);
@@ -2008,8 +1962,8 @@ test('a linked-worktree host admission over unsafe legacy history is refused wit
     const before = treeDigest(legacyDir);
     let failure;
     try { recordInflight(admission(graph, linked, 'unsafe-linked')); } catch (error) { failure = error; }
-    assert.ok(failure, 'the unsafe member refuses host admission');
-    assert.equal(failure.code, 'LEGACY_HISTORY_UNSAFE');
+    assert.ok(failure, 'the unknown member refuses host admission');
+    assert.equal(failure.code, 'LEGACY_HISTORY_UNKNOWN_MEMBER');
     assert.equal(fs.existsSync(path.join(graph, 'dispatches.json')), false);
     assert.deepStrictEqual(treeDigest(legacyDir), before);
     assert.equal(authorityPresent(authority, project), false);
@@ -2082,11 +2036,11 @@ const NON_ADMISSION = {
 
 test('every mutate() call site is either host admission or a named non-admission row', () => {
   assert.deepStrictEqual(mutateCallSites(), [...Object.keys(NON_ADMISSION), 'recordInflight', 'clearInflight'].sort(),
-    'a mutate() call site without a row (or a row without a call site) changes what adoption can be triggered by');
+    'a mutate() call site without a row (or a row without a call site) changes which writers take the trusted path');
 });
 
 for (const caller of Object.keys(NON_ADMISSION)) {
-  test(`${caller} on a legacy-bearing project adopts nothing, creates no authority and matches a project with no history`, () => withAuthorityHome((home) => {
+  test(`${caller} on a project with unrecorded provenance creates no authority and matches a project with no history`, () => withAuthorityHome((home) => {
     const outcomes = {};
     for (const variant of ['legacy', 'control']) {
       const fixture = roundProject();
@@ -2099,7 +2053,7 @@ for (const caller of Object.keys(NON_ADMISSION)) {
         assert.equal(fs.existsSync(path.join(home, '.local')), false, `${variant}: no authority namespace`);
         if (legacyDir) {
           assert.deepStrictEqual(treeDigest(legacyDir), before, 'legacy members are untouched');
-          assert.equal(authority.classifyLegacyProvenance(fixture.project).state, 'adoptable', 'nothing was adopted');
+          assert.equal(authority.provenanceFindings(fixture.project).findings.length, 3, 'nothing was recorded');
         }
         outcomes[variant] = normalizedStore(fixture.graph, fixture.dir);
       } finally { fs.rmSync(fixture.dir, { recursive: true, force: true }); }
@@ -2108,83 +2062,24 @@ for (const caller of Object.keys(NON_ADMISSION)) {
   }));
 }
 
-test('a legacy member named like a new dispatch id is refused and never stands in for the new sidecar', () => withAuthorityHome(() => {
-  for (const adopted of [false, true]) {
-    const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
-    try {
-      const authority = authorityModule();
-      const secret = 'legacy-secret-contents';
-      const legacyDir = legacySidecars(graph, ['legacy-a']);
-      fs.writeFileSync(path.join(legacyDir, 'colliding-id.json'), secret);
-      if (adopted) authority.trustedBookkeepingMutation(project, () => {});
-      const before = treeDigest(legacyDir);
-      let failure;
-      try { recordInflight(admission(graph, project, 'colliding-id')); } catch (error) { failure = error; }
-      assert.ok(failure, `adopted=${adopted}: the collision is refused`);
-      assert.equal(failure.code, 'LEGACY_HISTORY_COLLISION');
-      assert.match(failure.message, /colliding-id\.json/);
-      assert.equal(failure.details.path, '.planning/graph/provenance/colliding-id.json');
-      assert.ok(!failure.message.includes(secret), 'the message names the path, never the contents');
-      assert.deepStrictEqual(treeDigest(legacyDir), before, 'the legacy file is not replaced or rewritten');
-      assert.ok(!authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/colliding-id.json')),
-        'the legacy file never becomes a pin');
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  }
-}));
-
-test('a refused legacy collision leaves no in-flight row, adoption or catalogue behind', () => withAuthorityHome(() => {
-  for (const adopted of [false, true]) {
-    const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
-    try {
-      const authority = authorityModule();
-      legacySidecars(graph, ['legacy-a']);
-      if (adopted) authority.trustedBookkeepingMutation(project, () => {});
-      const storeFile = path.join(graph, 'dispatches.json');
-      const storeBefore = fs.existsSync(storeFile) ? fs.readFileSync(storeFile, 'utf8') : null;
-      const catalogue = path.join(authority.archiveAuthorityDirectory(project), 'catalogue.json');
-      const catalogueBefore = fs.existsSync(catalogue) ? fs.readFileSync(catalogue, 'utf8') : null;
-      let failure;
-      try { recordInflight(admission(graph, project, 'legacy-a')); } catch (error) { failure = error; }
-      assert.equal(failure && failure.code, 'LEGACY_HISTORY_COLLISION', `adopted=${adopted}`);
-      const storeAfter = fs.existsSync(storeFile) ? fs.readFileSync(storeFile, 'utf8') : null;
-      assert.equal(storeAfter, storeBefore, `adopted=${adopted}: dispatches.json is untouched`);
-      assert.ok(!storeAfter || !JSON.parse(storeAfter).inflight?.['legacy-a'], 'no in-flight row survives the refusal');
-      assert.equal(fs.existsSync(catalogue) ? fs.readFileSync(catalogue, 'utf8') : null, catalogueBefore,
-        `adopted=${adopted}: the refusal adopts nothing`);
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  }
-}));
-
-function stableJson(value) {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-test('the collision guard defers when the same path is also an authenticated pin', () => withAuthorityHome(() => {
+test('an unrecorded file named like a new dispatch id is refused, never stands in for the new sidecar and leaves no row', () => withAuthorityHome(() => {
   const { project, graph, dir } = scratch({ 'T-01-01': { ...READY } });
   try {
     const authority = authorityModule();
-    const legacyDir = legacySidecars(graph, ['both-id']);
-    authority.trustedBookkeepingMutation(project, () => {});
-    const authorityDir = authority.archiveAuthorityDirectory(project);
-    const catalogue = path.join(authorityDir, 'catalogue.json');
-    const key = fs.readFileSync(path.join(authorityDir, 'hmac.key'));
-    const envelope = JSON.parse(fs.readFileSync(catalogue, 'utf8'));
-    const bytes = fs.readFileSync(path.join(legacyDir, 'both-id.json'));
-    envelope.payload.bookkeeping_state = [{ path: '.planning/graph/provenance/both-id.json', bytes: bytes.length,
-      sha256: crypto.createHash('sha256').update(bytes).digest('hex') }];
-    envelope.mac = crypto.createHmac('sha256', key).update(stableJson(envelope.payload)).digest('hex');
-    fs.writeFileSync(catalogue, JSON.stringify(envelope) + '\n');
-    assert.ok(authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/both-id.json')));
-    assert.ok(authority.legacyBookkeepingMembers(project).some((member) => member.path.endsWith('/both-id.json')));
+    const secret = 'legacy-secret-contents';
+    const legacyDir = legacySidecars(graph, ['legacy-a']);
+    fs.writeFileSync(path.join(legacyDir, 'colliding-id.json'), secret);
+    const before = treeDigest(legacyDir);
     let failure;
-    try { recordInflight(admission(graph, project, 'both-id')); } catch (error) { failure = error; }
-    assert.ok(failure, 'a recorded legacy member is never overwritten');
-    assert.notEqual(failure.code, 'LEGACY_HISTORY_COLLISION', 'the pin exemption defers to the trusted writer');
-    assert.equal(failure.code, 'LEGACY_HISTORY_CHANGED');
+    try { recordInflight(admission(graph, project, 'colliding-id')); } catch (error) { failure = error; }
+    assert.ok(failure, 'the collision is refused');
+    assert.equal(failure.code, 'LEGACY_HISTORY_UNKNOWN_MEMBER');
+    assert.equal(failure.details.path, '.planning/graph/provenance/colliding-id.json');
+    assert.ok(!failure.message.includes(secret), 'the message names the path, never the contents');
+    assert.deepStrictEqual(treeDigest(legacyDir), before, 'the file is not replaced or rewritten');
+    assert.ok(!authority.historicalBookkeepingPins(project).some((pin) => pin.path.endsWith('/colliding-id.json')), 'the file never becomes a pin');
+    assert.equal(fs.existsSync(path.join(graph, 'dispatches.json')), false, 'no in-flight row survives the refusal');
+    assert.equal(authorityPresent(authority, project), false, 'no authority state was created');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }));
 

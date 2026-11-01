@@ -146,7 +146,7 @@ for (const entry of ENTRIES) {
     const broken = runPreflight(entry, w);
     assert.equal(broken.status, 1, `${entry.file} broken: ${broken.stdout}${broken.stderr}`);
     assert.equal(broken.json.ok, false);
-    assert.ok(broken.json.findings.some((finding) => finding.code === 'LEGACY_HISTORY_UNSAFE'), `${entry.file} must report the symlinked provenance member`);
+    assert.ok(broken.json.findings.some((finding) => finding.code === 'LEGACY_HISTORY_UNKNOWN_MEMBER'), `${entry.file} must report the symlinked provenance member`);
     assertHintPerFinding(entry, broken);
     assert.equal(snapshot(w.project, w.home, w.xdg), brokenBefore, `${entry.file} wrote state while refusing`);
     assert.equal(fs.readdirSync(w.home).length + fs.readdirSync(w.xdg).length, 0, `${entry.file} created an authority or run-store directory`);
@@ -202,8 +202,7 @@ test('claude-role-host --capability-only exits 0 with the Claude probe JSON when
 test('every emitted launch, preflight, legacy and identity code has a hint and a remedy', () => {
   const { RESOLVER_CODES, PREFLIGHT_CODES } = require('../../plugins/delivery-pipeline/scripts/runtime-context.cjs');
   const { LAUNCH_CODES, HINTS } = require('../../plugins/delivery-pipeline/scripts/refusal-hints.cjs');
-  const legacy = ['LEGACY_HISTORY_UNSAFE', 'LEGACY_HISTORY_CHANGED', 'LEGACY_HISTORY_UNKNOWN_MEMBER', 'LEGACY_HISTORY_COLLISION',
-    'LEGACY_HISTORY_MISSING', 'LEGACY_WRITER_STATE', 'ARCHIVE_AUTHORITY_INVALID', 'ARCHIVE_AUTHORITY_REQUIRED', 'ARCHIVE_AUTHORITY_BUSY'];
+  const legacy = ['LEGACY_HISTORY_UNKNOWN_MEMBER', 'LEGACY_WRITER_STATE', 'ARCHIVE_AUTHORITY_INVALID', 'ARCHIVE_AUTHORITY_REQUIRED', 'ARCHIVE_AUTHORITY_BUSY'];
   const identity = ['REPOSITORY_IDENTITY_INVALID', 'DECOMPOSITION_SUBJECT_INVALID'];
   for (const code of new Set([...RESOLVER_CODES, ...PREFLIGHT_CODES, ...legacy, ...identity])) {
     assert.ok(LAUNCH_CODES.includes(code), `${code} is missing from LAUNCH_CODES`);

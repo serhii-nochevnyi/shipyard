@@ -96,7 +96,7 @@ esac
     assert.equal(viaInvestigation.status, 1, viaInvestigation.stderr);
     assert.equal(viaInvestigation.status, viaDelivery.status);
     assert.equal(viaInvestigation.stdout, viaDelivery.stdout);
-    assert.match(viaInvestigation.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+    assert.match(viaInvestigation.stderr, /hint\[LEGACY_HISTORY_UNKNOWN_MEMBER\]/);
     assert.equal(fs.existsSync(path.join(home, '.local')), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

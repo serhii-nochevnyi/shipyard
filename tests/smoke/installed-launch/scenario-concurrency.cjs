@@ -8,7 +8,6 @@ const { spawn } = require('node:child_process');
 const lib = require('./lib.cjs');
 
 const ITERATIONS = 5;
-const LEGACY_MEMBERS = 64;
 const LOCK_BOUND_MS = 5000;
 const MARGIN_MS = 6000;
 
@@ -18,24 +17,10 @@ function loadRoleArtifact() {
   return require(path.join(fixture.scriptsDir, 'role-artifact.cjs'));
 }
 
-function seedLegacy(projectRoot) {
-  const directory = path.join(projectRoot, '.planning/graph/provenance');
-  fs.mkdirSync(directory, { recursive: true });
-  const bytes = new Map();
-  for (let index = 0; index < LEGACY_MEMBERS; index++) {
-    const name = `legacy-${String(index).padStart(2, '0')}.json`;
-    const content = JSON.stringify({ legacy: index, nonce: crypto.randomBytes(8).toString('hex') }) + '\n';
-    fs.writeFileSync(path.join(directory, name), content);
-    bytes.set(name, content);
-  }
-  return { directory, bytes };
-}
-
-function assertSidecars(seed) {
-  assert.deepEqual(fs.readdirSync(seed.directory).filter((name) => name.startsWith('legacy-')).sort(), [...seed.bytes.keys()].sort());
-  for (const [name, content] of seed.bytes) {
-    assert.equal(fs.readFileSync(path.join(seed.directory, name), 'utf8'), content, `sidecar ${name} changed`);
-  }
+function pinPaths(project) {
+  const pins = loadRoleArtifact().historicalBookkeepingPins(project.root);
+  assert.ok(Array.isArray(pins), 'the catalogue must authenticate');
+  return pins.map((pin) => pin.path).sort();
 }
 
 function barrierWrapper() {
@@ -161,7 +146,6 @@ async function waitForFile(file) {
 
 async function heldLockShape(index, heldMs, expected) {
   const project = lib.stageClaudeProject(fixture, `held-${index}`);
-  seedLegacy(project.root);
   const signal = path.join(fixture.workRoot, `held-${index}.signal`);
   const holder = lockHolder(project, heldMs, signal);
   await waitForFile(signal);
@@ -191,17 +175,6 @@ function assertNoOrphanLock(project) {
   assert.equal(fs.existsSync(path.join(directory, 'catalogue.lock')), false, 'an orphaned catalogue lock remains');
 }
 
-function adoptionSnapshot(project, seed) {
-  const roleArtifact = loadRoleArtifact();
-  const members = roleArtifact.legacyBookkeepingMembers(project.root);
-  assert.equal(members.length, LEGACY_MEMBERS, 'adoption must record every legacy member exactly once');
-  assert.ok(Array.isArray(roleArtifact.historicalBookkeepingPins(project.root)), 'the catalogue must authenticate');
-  const state = JSON.parse(fs.readFileSync(path.join(roleArtifact.archiveAuthorityDirectory(project.root), 'catalogue.json'), 'utf8'));
-  assert.equal(Object.keys(state.payload).filter((key) => key === 'legacy_bookkeeping').length, 1);
-  assertSidecars(seed);
-  return JSON.stringify(members);
-}
-
 async function main() {
   const previousHome = process.env.HOME;
   process.env.HOME = fixture.home;
@@ -212,7 +185,6 @@ async function main() {
     const summary = [];
     for (let index = 0; index < ITERATIONS; index++) {
       const project = lib.stageClaudeProject(fixture, `concurrency-${index}`);
-      const seed = seedLegacy(project.root);
       const ready = path.join(fixture.workRoot, `ready-${index}`);
       const pair = await concurrentPair(project, `pair-${index}`, ready);
       assertAllowed(`iteration ${index} codex`, pair.codex.outcome, pair.codex.run);
@@ -223,7 +195,7 @@ async function main() {
       assert.ok(pair.claude.lines.length <= 1 && pair.codex.lines.length <= 1);
       summary.push(`${pair.codex.outcome.kind}/${pair.claude.outcome.kind}`);
       assertNoOrphanLock(project);
-      const members = adoptionSnapshot(project, seed);
+      const pins = pinPaths(project);
 
       const third = index % 2 === 0 ? await sequentialClaude(project) : null;
       let thirdLaunch = third;
@@ -235,7 +207,7 @@ async function main() {
       }
       assert.equal(thirdLaunch.outcome.kind, 'reached', explain(`iteration ${index} third`, thirdLaunch.outcome, thirdLaunch.run));
       assert.equal(thirdLaunch.lines.length, 1);
-      assert.equal(adoptionSnapshot(project, seed), members, 'a further admission changed the adopted legacy members');
+      assert.ok(pins.every((pin) => pinPaths(project).includes(pin)), 'a further admission dropped an authenticated pin');
       assertNoOrphanLock(project);
     }
 

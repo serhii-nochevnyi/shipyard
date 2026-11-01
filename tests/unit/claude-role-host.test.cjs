@@ -2053,7 +2053,7 @@ test('role host --args-file refuses with hints before any private file, run stor
     const before = [roleTree(fixture.root), roleTree(fixture.home), roleTree(fixture.storageRoot)];
     const result = spawnRoleHost(fixture, ['--args-file', fixture.argsFile]);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /hint\[LEGACY_HISTORY_UNSAFE\]/);
+    assert.match(result.stderr, /hint\[LEGACY_HISTORY_UNKNOWN_MEMBER\]/);
     assert.deepEqual([roleTree(fixture.root), roleTree(fixture.home), roleTree(fixture.storageRoot)], before);
   } finally { cleanupRoleCli(fixture); }
 });
@@ -2141,7 +2141,7 @@ test('role host preflight calls an injected probe function and keeps a probe val
   } finally { cleanupRoleCli(project); }
 });
 
-test('role host preflight judges the legacy history of the host graph directory project', () => {
+test('role host preflight judges the provenance of the host graph directory project', () => {
   const worktreeProject = roleCliFixture();
   const graphProject = setupRepository('arch-review');
   try {
@@ -2154,7 +2154,7 @@ test('role host preflight judges the legacy history of the host graph directory 
     const result = runClaudeRoleCli(['--preflight', '--args-file', worktreeProject.argsFile], { write: (value) => out.push(value) },
       { graphDir: path.join(graphProject.root, '.planning/graph'), probe: { status: 'available' }, stderr: { write() {} } });
     assert.equal(result.ok, false);
-    assert.ok(result.findings.some((finding) => finding.code === 'LEGACY_HISTORY_UNSAFE'));
+    assert.ok(result.findings.some((finding) => finding.code === 'LEGACY_HISTORY_UNKNOWN_MEMBER'));
   } finally {
     cleanupRoleCli(worktreeProject);
     cleanupFixture(graphProject);

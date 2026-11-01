@@ -108,7 +108,7 @@ test('the Codex config-fix and generated-agent-fix causes are registered and for
 });
 
 test('every launch code has a frozen entry, including the warning-only codes', () => {
-  for (const code of [...LAUNCH_CODES, 'CAPABILITY_SNAPSHOT_AGED', 'LEGACY_HISTORY_MISSING']) {
+  for (const code of [...LAUNCH_CODES, 'CAPABILITY_SNAPSHOT_AGED']) {
     assert.ok(LAUNCH_CODES.includes(code), `LAUNCH_CODES missing ${code}`);
     assert.ok(Object.hasOwn(HINTS, code), `HINTS missing ${code}`);
     assert.ok(Object.isFrozen(HINTS[code]));
@@ -134,9 +134,12 @@ test('no remedy in the whole map is checkout-relative or a bypass', () => {
   }
 });
 
-test('remedies touching history or authority never suggest deleting or moving it', () => {
-  for (const entry of Object.values(HINTS)) {
-    if (/provenance|history|sidecar|catalogue|authority/i.test(entry.remedy)) {
+test('remedies touching history or authority never suggest deleting or moving it, except moving an unrecorded provenance file', () => {
+  for (const [code, entry] of Object.entries(HINTS)) {
+    if (code === 'LEGACY_HISTORY_UNKNOWN_MEMBER') {
+      assert.match(entry.remedy, /^An earlier release or another writer left it\. Move it out of \.planning\/graph\/provenance /);
+      assert.doesNotMatch(entry.remedy, /catalogue|authority|archive/i);
+    } else if (/provenance|history|sidecar|catalogue|authority/i.test(entry.remedy)) {
       assert.doesNotMatch(entry.remedy, /\b(delete|remove|archive|move|rename|purge|clean)/i);
     }
   }
@@ -170,7 +173,7 @@ test('a path substituted into a command remedy is shell-quoted only when it is n
 });
 
 test('prose placeholders are not shell-quoted', () => {
-  assert.ok(formatHint('LEGACY_HISTORY_UNSAFE', { path: '.planning/graph/a b;c.json' }).includes('history at .planning/graph/a b;c.json cannot'));
+  assert.ok(formatHint('LEGACY_HISTORY_UNKNOWN_MEMBER', { path: '.planning/graph/a b;c.json' }).includes('file at .planning/graph/a b;c.json is not'));
   assert.ok(formatHint('ENV_CONFLICT', { explicit: 'CODEX_HOME=/a b', bundle_value: '/c d' }).includes('names CODEX_HOME=/a b but the installed bundle is /c d'));
 });
 
@@ -195,13 +198,13 @@ test('capability, runtime-ambiguity and repository-identity remedies name the re
 test('hintForError carries the pid, the path and the supplied host and never prose placeholders', () => {
   const busy = hintForError(Object.assign(new Error('held'), { code: 'ARCHIVE_AUTHORITY_BUSY', details: { pid: 4242 } }));
   assert.match(busy, /\(owner pid 4242\)/);
-  const viaVars = hintForError(Object.assign(new Error('x'), { code: 'LEGACY_HISTORY_CHANGED', vars: { path: '.planning/a b.json' } }));
-  assert.match(viaVars, /history at \.planning\/a b\.json changed/);
-  const fromMessage = hintForError(Object.assign(new Error('legacy provenance history is not safe before trusted mutation '
-    + '.planning/graph/provenance/m n.json: member is a symlink'), { code: 'LEGACY_HISTORY_UNSAFE' }));
-  assert.match(fromMessage, /history at \.planning\/graph\/provenance\/m n\.json cannot/);
-  assert.equal(hintForError(Object.assign(new Error('x'), { code: 'LEGACY_HISTORY_UNSAFE', details: { path: 'p' } }))
-    .includes('history at p cannot'), true);
+  const viaVars = hintForError(Object.assign(new Error('x'), { code: 'LEGACY_HISTORY_UNKNOWN_MEMBER', vars: { path: '.planning/a b.json' } }));
+  assert.match(viaVars, /file at \.planning\/a b\.json is not recorded/);
+  const fromMessage = hintForError(Object.assign(new Error('unknown host provenance member before trusted mutation '
+    + '.planning/graph/provenance/m n.json'), { code: 'LEGACY_HISTORY_UNKNOWN_MEMBER' }));
+  assert.match(fromMessage, /file at \.planning\/graph\/provenance\/m n\.json is not recorded/);
+  assert.equal(hintForError(Object.assign(new Error('x'), { code: 'LEGACY_HISTORY_UNKNOWN_MEMBER', details: { path: 'p' } }))
+    .includes('file at p is not recorded'), true);
   const hosted = hintForError({ code: 'RUNTIME_UNAVAILABLE' }, 'codex-delivery-host.cjs');
   assert.ok(hosted.includes('/scripts/codex-delivery-host.cjs --preflight'), hosted);
   assert.equal(hintForError({ code: 'RUNTIME_UNAVAILABLE' }, '/x/y/claude-role-host.cjs').includes('/scripts/claude-role-host.cjs --preflight'), true);
@@ -275,7 +278,7 @@ test('an ENV_CONFLICT remedy tells a flag to be dropped and a variable to be uns
 });
 
 test('a supplied value that contains a template token is emitted as given and a missing value never leaves one', () => {
-  const given = formatHint('LEGACY_HISTORY_UNSAFE', { path: '.planning/{weird}/x.json' });
-  assert.ok(given.includes('history at .planning/{weird}/x.json cannot'), given);
+  const given = formatHint('LEGACY_HISTORY_UNKNOWN_MEMBER', { path: '.planning/{weird}/x.json' });
+  assert.ok(given.includes('file at .planning/{weird}/x.json is not'), given);
   for (const code of Object.keys(HINTS)) assert.doesNotMatch(formatHint(code, {}), /\{\w+\}/, code);
 });
