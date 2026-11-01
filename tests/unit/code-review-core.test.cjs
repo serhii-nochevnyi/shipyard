@@ -379,3 +379,89 @@ test('the part budget is one weight bound per runtime', () => {
   assert.deepEqual({ ...core.PART_BUDGET }, { claude: 40000, codex: 10000 });
   assert.ok(Object.isFrozen(core.PART_BUDGET));
 });
+
+function referenceCitation({ path: file, line, quotedText, readSource }) {
+  const missing = { citation: 'missing', identity: null, line_text: null, occurrence: null, occurrences: null };
+  const normalized = core.normalizeCitedPath(file);
+  if (!normalized || !Number.isSafeInteger(line) || line <= 0 || typeof readSource !== 'function') return missing;
+  let source;
+  try { source = readSource(normalized); } catch { return missing; }
+  if (Buffer.isBuffer(source)) source = source.toString('utf8');
+  if (typeof source !== 'string' || Buffer.byteLength(source) > core.SOURCE_MAX_BYTES || source.includes('\0')) return missing;
+  const lines = source.split('\n');
+  if (source.endsWith('\n')) lines.pop();
+  if (line > lines.length) return missing;
+  const text = core.normalizeSourceLine(lines[line - 1]);
+  if (!text || Buffer.byteLength(text) > 1024) return missing;
+  if (typeof quotedText === 'string' && quotedText.length > 0 && core.normalizeSourceLine(quotedText) !== text)
+    return { ...missing, citation: 'unmatched' };
+  let ordinal = 0, count = 0;
+  for (let index = 0; index < lines.length; index++) {
+    if (core.normalizeSourceLine(lines[index]) !== text) continue;
+    count++;
+    if (index < line) ordinal++;
+  }
+  return { citation: 'resolved', line_text: text, occurrence: ordinal, occurrences: count,
+    identity: core.lineIdentity({ path: normalized, lineText: text, ordinal }) };
+}
+
+test('resolveCitation matches the line-by-line reference on random and adversarial sources', () => {
+  let seed = 20260501;
+  const random = limit => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+  const pick = list => list[random(list.length)];
+  const pool = ['', ' ', '\t\t', 'a', ' a ', 'a\u00a0b', 'a  b', 'e\u0301', '\u00e9', 'x\r', '\r', '\u{1F600} x', 'lone\ud800',
+    '\u2028', '\ufeff', '\u200b', '}', 'x'.repeat(1100), '\u00e9'.repeat(600), ' '.repeat(2000) + 'z', 'a\0b', 'a\u0001'];
+  const paths = [...Array(12).fill('a.js'), './a.js', 'dir//a.js', 'a\\b', '../a.js', '/a.js', 'C:x', '', 'a\0'];
+  const sources = () => {
+    const lines = Array.from({ length: random(40) }, () => pick(pool));
+    const joined = lines.map(text => text + pick(['\n', '\n', '\r\n'])).join('');
+    const body = random(2) ? joined.slice(0, joined.length - 1) : joined;
+    return pick([...Array(12).fill(body), Buffer.from(body), Buffer.from(body), null, 7, undefined]);
+  };
+  let resolved = 0, other = 0;
+  for (let round = 0; round < 1500; round++) {
+    const source = sources();
+    const readSource = random(20) === 0 ? () => { throw Error('unreadable'); } : () => source;
+    const length = typeof source === 'string' ? source.split('\n').length : 3;
+    for (let line = -1; line <= length + 1; line++) {
+      const cited = typeof source === 'string' ? source.split('\n')[line - 1] : '';
+      const quotedText = pick([undefined, undefined, undefined, '', null, 7, cited, cited, ' ' + cited + ' \t', ' ' + cited + ' \t', cited + 'x', ' ']);
+      const args = { path: pick(paths), line: pick([...Array(20).fill(line), 1.5, NaN, '1', Number.MAX_SAFE_INTEGER + 1]), quotedText, readSource };
+      const expected = referenceCitation(args);
+      assert.deepEqual(core.resolveCitation(args), expected);
+      if (expected.citation === 'resolved') resolved++; else other++;
+    }
+  }
+  assert.ok(resolved > 1000 && other > 1000, `resolved=${resolved} other=${other}`);
+  const lineCount = Math.ceil(core.SOURCE_MAX_BYTES / 3);
+  for (const text of ['x'.repeat(core.SOURCE_MAX_BYTES), 'x'.repeat(core.SOURCE_MAX_BYTES + 1), 'ab\n'.repeat(lineCount - 1), 'ab\n'.repeat(lineCount)]) {
+    const args = { path: 'a.js', line: 1, readSource: () => text };
+    assert.deepEqual(core.resolveCitation(args), referenceCitation(args));
+  }
+});
+
+test('resolveCitation follows a reader whose answer changes between calls', () => {
+  const answers = ['x\ny\nx\n', 'y\nx\nx\n', 'x\ny\nx\n', 'a\0\n', 'x\nx\nx\n', new Error('unreadable'), 'x\ny\nx\n'];
+  let calls = 0;
+  const readSource = () => { const answer = answers[calls++ % answers.length]; if (answer instanceof Error) throw answer; return answer; };
+  const replay = Array.from({ length: answers.length }, () => ({ path: 'a.js', line: 3, readSource }));
+  const seen = replay.map(args => core.resolveCitation(args));
+  calls = 0;
+  assert.deepEqual(seen, replay.map(args => referenceCitation(args)));
+  assert.deepEqual(seen.map(result => [result.citation, result.occurrence, result.occurrences]),
+    [['resolved', 2, 2], ['resolved', 2, 2], ['resolved', 2, 2], ['missing', null, null], ['resolved', 3, 3], ['missing', null, null], ['resolved', 2, 2]]);
+});
+
+test('resolveCitation normalizes each source line once per source, not once per citation', () => {
+  const lines = Array.from({ length: 3000 }, (_, index) => `const value${index % 700} = ${index};  `);
+  const source = lines.join('\n') + '\n', citations = 300;
+  const readSource = () => source;
+  const original = String.prototype.normalize;
+  let normalizations = 0;
+  String.prototype.normalize = function (...args) { normalizations++; return original.apply(this, args); };
+  try {
+    for (let index = 1; index <= citations; index++)
+      assert.equal(core.resolveCitation({ path: 'big.js', line: index * 10, readSource }).citation, 'resolved');
+  } finally { String.prototype.normalize = original; }
+  assert.ok(normalizations <= lines.length + citations * 3, `normalizations=${normalizations}`);
+});
