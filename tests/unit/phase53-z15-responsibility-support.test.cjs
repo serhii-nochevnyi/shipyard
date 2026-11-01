@@ -76,7 +76,8 @@ function assertViews(payload, global) {
   assert.equal(payload.assignment?.id || null, assignment?.id || null);
   const view = a.semanticRequiredView(s, assignment);
   assert.deepEqual(payload.material.map(({ read_path, ...source }) => source), view.material);
-  assert.deepEqual(payload.obligations, view.obligations);
+  assert.deepEqual(payload.role === 'code-review' && payload.stage === 'final' && payload.input_transport === 'host-files'
+    ? JSON.parse(fs.readFileSync(payload.catalog.read_path)).obligations : payload.obligations, view.obligations);
   assert.deepEqual(payload.seams, view.seams);
   assert.deepEqual(payload.required_context, view.required_context);
   if (!assignment) {
@@ -104,7 +105,8 @@ function assertViews(payload, global) {
   assert.equal(catalog.length, payload.catalog.bytes);
   assert.equal(hash(catalog), payload.catalog.sha256);
   const complete = JSON.parse(catalog);
-  assert.deepEqual(complete.obligations, global.obligations);
+  assert.deepEqual(complete.obligations, global.role === 'code-review' && global.stage === 'final'
+    && global.input_transport === 'host-files' ? s.obligations : global.obligations);
   assert.deepEqual(complete.material.map(item => item.source_id), global.material.map(item => item.source_id));
   for (const source of complete.material) assert.equal(hash(fs.readFileSync(source.read_path)), source.sha256);
 }

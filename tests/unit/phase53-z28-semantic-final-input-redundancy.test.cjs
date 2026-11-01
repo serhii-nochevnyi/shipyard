@@ -383,11 +383,12 @@ for (const runtime of ['codex', 'claude']) test(runtime + ' current public final
           assert.deepEqual(body, previous);
         } else {
           const { independent_final_seam_ids, ...projected } = previous;
-          assert.deepEqual(body, projected);
-          assert.deepEqual({ ...body, independent_final_seam_ids: body.seams.map(item => item.id) }, previous);
+          const comparison = { ...body, obligations: JSON.parse(fs.readFileSync(body.catalog.read_path)).obligations };
+          assert.deepEqual(comparison, projected);
+          assert.deepEqual({ ...comparison, independent_final_seam_ids: body.seams.map(item => item.id) }, previous);
           assert.deepEqual(independent_final_seam_ids, snapshot.independent_final_seam_ids);
           assert.deepEqual(view.independent_final_seam_ids, view.seams.map(item => item.id));
-          assert.equal(Buffer.byteLength(h.stable(previous)) - Buffer.byteLength(h.stable(body)),
+          assert.equal(Buffer.byteLength(h.stable(previous)) - Buffer.byteLength(h.stable(comparison)),
             Buffer.byteLength('"independent_final_seam_ids":' + h.stable(independent_final_seam_ids) + ','));
           assert.deepEqual(body.cross_responsibility_seam_ids, snapshot.cross_responsibility_seam_ids);
         }
