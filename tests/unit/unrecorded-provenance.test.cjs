@@ -145,6 +145,22 @@ test('a trusted mutation that publishes a sidecar it did not declare is refused 
   assert.deepEqual(fs.readFileSync(catalogueFile(root)), bytes);
 });
 
+test('a host admission after a writer without a worktree still passes and pins that writer sidecar', () => {
+  const root = project();
+  const graph = path.join(root, '.planning', 'graph');
+  fs.mkdirSync(graph, { recursive: true });
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': { phase: '01' } } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({ 'T-01-01': { status: 'pending', ready: true } }));
+  const admit = (id, extra = {}) => dispatchRecord.recordInflight({ graphDir: graph, worktree: root, ticket: 'T-01-01', role: 'executor',
+    dispatch_id: id, pid: process.pid, host: 'claude', refreshBoard: false, ...extra });
+  admit('a1');
+  admit('b1', { worktree: undefined });
+  assert.doesNotThrow(() => admit('a2'));
+  const pins = roleArtifact.historicalBookkeepingPins(root).map(pin => pin.path);
+  assert.ok(pins.includes(PROVENANCE + 'b1.json'));
+  assert.deepEqual(roleArtifact.provenanceFindings(root).findings, []);
+});
+
 test('a role-artifact directory sends a writer without a worktree through the trusted path', () => {
   const outcomes = {};
   for (const archive of [false, true]) {

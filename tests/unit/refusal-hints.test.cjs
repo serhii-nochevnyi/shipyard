@@ -139,6 +139,7 @@ test('remedies touching history or authority never suggest deleting or moving it
     if (code === 'LEGACY_HISTORY_UNKNOWN_MEMBER') {
       assert.match(entry.remedy, /^An earlier release or another writer left it\. Move it out of \.planning\/graph\/provenance /);
       assert.doesNotMatch(entry.remedy, /catalogue|authority|archive/i);
+      assert.doesNotMatch(entry.remedy, /\b(delete|remove|purge|clean)/i);
     } else if (/provenance|history|sidecar|catalogue|authority/i.test(entry.remedy)) {
       assert.doesNotMatch(entry.remedy, /\b(delete|remove|archive|move|rename|purge|clean)/i);
     }
