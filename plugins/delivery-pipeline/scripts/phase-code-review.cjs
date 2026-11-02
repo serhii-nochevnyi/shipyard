@@ -303,8 +303,11 @@ const publicationHash = value => crypto.createHash('sha256').update(value).diges
 const positiveId = value => Number.isSafeInteger(value) && value > 0;
 const PUBLICATION_BOUND = 8192;
 
-function publicationLocation({ repository, repo, pr, roots = [] }) {
+function publicationLocation(input) {
+  const { repository, repo = null, pr, roots } = input ?? {};
   if (!positiveId(pr)) throw new Error('a pull request number is required');
+  if (typeof repository !== 'string' || !repository) throw new Error('a repository identity is required');
+  if (!Array.isArray(roots) || !roots.some(Boolean)) throw new Error('the checkout roots are required');
   const home = fs.realpathSync(require('node:os').homedir());
   const selector = repo === null ? null : repo.trim().toLowerCase();
   const directory = path.join(home, '.local/state/shipyard/code-review-publications',
@@ -353,11 +356,11 @@ function readPrivateRecord(file, bound, label, validate) {
   try { stat = fs.lstatSync(file); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()
-      || (stat.mode & 0o777) !== 0o600 || stat.size > bound)
+      || (stat.mode & 0o777) !== 0o600 || stat.nlink !== 1 || stat.size > bound)
     throw new Error(`unsafe ${label} record`);
   const same = value => ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode']
     .every(key => value[key] === stat[key]);
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   let record;
   try {
     if (!same(fs.fstatSync(fd))) throw new Error(`${label} record changed`);
@@ -439,15 +442,17 @@ function readExtensionFile(store) {
 }
 
 // @security: this read grants rounds, so it checks the namespace with lstat only and creates nothing.
+// @contract: a corrupt store throws and never reads as empty; only an absent store is empty.
 function readExtensions(input) {
-  const store = extensionStore(publicationLocation(input), input);
-  try { walkNamespace(store); }
+  let store;
+  try { store = extensionStore(publicationLocation(input), input); walkNamespace(store); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   return readExtensionFile(store)?.records ?? [];
 }
 
 function appendExtension(ctx, record) {
   if (!extensionRecord(record)) throw new Error('extension record is invalid');
+  if (!object(ctx?.mode)) throw new Error('the code review mode is required');
   const state = publicationNamespace(ctx);
   const store = extensionStore({ directory: state.directory, selector: state.identity.selector }, ctx);
   return withLock(state.directory, `extend-${ctx.pr}`, () => {
@@ -460,8 +465,10 @@ function appendExtension(ctx, record) {
     const bytes = JSON.stringify(next) + '\n';
     if (Buffer.byteLength(bytes) > PUBLICATION_BOUND) throw new Error('extension record exceeds bound');
     const temporary = path.join(state.directory, `.${path.basename(store.file)}.tmp-${process.pid}`);
+    assertPublicationConfig(ctx.mode);
     fs.closeSync(fs.openSync(temporary, 'wx', 0o600));
     try {
+      assertPublicationConfig(ctx.mode);
       writeAtomic(store.file, bytes);
       for (const target of [store.file, state.directory]) {
         const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);

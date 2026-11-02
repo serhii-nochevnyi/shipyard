@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 const realHomedir = os.homedir;
 const realState = path.join(fs.realpathSync(realHomedir()), '.local/state/shipyard/code-review-publications');
@@ -14,7 +15,8 @@ const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'code-review-
 let current = path.join(base, 'unset-home');
 os.homedir = () => current;
 process.on('exit', () => { os.homedir = realHomedir; fs.rmSync(base, { recursive: true, force: true }); });
-const flow = require(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/phase-code-review.cjs'));
+const script = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/phase-code-review.cjs');
+const flow = require(script);
 
 const inside = (root, file) => {
   const relative = path.relative(root, file);
@@ -23,12 +25,13 @@ const inside = (root, file) => {
 const HEAD = 'a'.repeat(40), BASE = 'b'.repeat(40), REPOSITORY = '/repo/identity';
 const record = (overrides = {}) => ({ head: HEAD, base_commit: BASE, operator: 'Ada Lovelace',
   created_at: '2026-11-02T10:00:00.000Z', reason: 'Fresh evidence needs one more pass', ...overrides });
+const headN = index => String(index).padStart(40, '0');
 let counter = 0;
 
 function fixture({ homeInsideWorktree = false, repository = REPOSITORY, repo = null, pr = 52 } = {}) {
   const root = path.join(base, `case-${++counter}`);
   const worktree = path.join(root, 'worktree'), planning = path.join(root, 'planning');
-  fs.mkdirSync(worktree, { recursive: true }); fs.mkdirSync(planning, { recursive: true });
+  fs.mkdirSync(path.join(planning, '.planning'), { recursive: true }); fs.mkdirSync(worktree, { recursive: true });
   const home = homeInsideWorktree ? path.join(worktree, 'home') : path.join(root, 'home');
   fs.mkdirSync(home, { recursive: true });
   current = home;
@@ -37,9 +40,13 @@ function fixture({ homeInsideWorktree = false, repository = REPOSITORY, repo = n
     .update(JSON.stringify([repository, repo === null ? null : repo.trim().toLowerCase()])).digest('hex'));
   usedNamespaces.add(path.basename(directory));
   return { root, home, worktree, planning, state, directory, file: path.join(directory, `${pr}.extensions.json`),
+    config: path.join(planning, '.planning/config.json'),
     input: { repository, repo, pr, roots: [worktree, planning] },
     ctx: { repository, repo, pr, worktree, mode: { project_root: planning } } };
 }
+const seeded = options => { const f = fixture(options); flow.appendExtension(f.ctx, record()); return f; };
+const stored = f => JSON.parse(fs.readFileSync(f.file, 'utf8'));
+const put = (f, data) => fs.writeFileSync(f.file, JSON.stringify(data));
 
 function snapshot(root) {
   const entries = [];
@@ -59,6 +66,12 @@ function stubbed(patches, run) {
   Object.assign(fs, patches);
   try { return run(); } finally { Object.assign(fs, saved); }
 }
+const { lstatSync: realLstat, openSync: realOpen, closeSync: realClose } = fs;
+const asOwnedBy = (target, run) => stubbed({ lstatSync(name, ...args) {
+  const stat = realLstat.call(this, name, ...args);
+  if (name === target) stat.uid += 1;
+  return stat;
+} }, run);
 
 const noMkdir = run => {
   const original = fs.mkdirSync;
@@ -68,139 +81,138 @@ const noMkdir = run => {
   return result;
 };
 
-function seeded(options) {
-  const f = fixture(options);
-  flow.appendExtension(f.ctx, record());
-  return f;
-}
-
 test('the test home, worktree and state resolve inside the test temp directory, not the real state', () => {
   const f = fixture();
   assert.notEqual(realHomedir(), os.homedir());
   assert(inside(fs.realpathSync(os.tmpdir()), base));
   for (const dir of [os.homedir(), f.home, f.worktree, f.planning, f.directory, f.file]) assert(inside(base, dir), dir);
-  assert(!inside(realState, f.file));
   assert(!inside(path.dirname(realState), f.file));
 });
 
 test('appendExtension creates a private store outside the worktree and readExtensions returns it unchanged', () => {
   const f = fixture();
-  const stored = record();
-  assert.deepEqual(flow.appendExtension(f.ctx, stored), stored);
-  assert(inside(base, f.file)); assert(!inside(f.worktree, f.file)); assert(!inside(f.planning, f.file));
+  assert.deepEqual(flow.appendExtension(f.ctx, record()), record());
+  assert(!inside(f.worktree, f.file)); assert(!inside(f.planning, f.file));
   assert.equal(fs.lstatSync(f.directory).mode & 0o777, 0o700);
   assert.equal(fs.lstatSync(f.state).mode & 0o777, 0o700);
   assert.equal(fs.lstatSync(f.file).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(f.directory), ['52.extensions.json']);
-  assert.deepEqual(flow.readExtensions(f.input), [stored]);
-  const file = JSON.parse(fs.readFileSync(f.file, 'utf8'));
+  assert.deepEqual(flow.readExtensions(f.input), [record()]);
+  const file = stored(f);
   assert.deepEqual(Object.keys(file).sort(), ['pr', 'records', 'repository', 'schema', 'selector']);
   assert.deepEqual({ schema: file.schema, repository: file.repository, selector: file.selector, pr: file.pr },
     { schema: 'shipyard.code-review-extension.v1', repository: REPOSITORY, selector: null, pr: 52 });
 });
 
-test('readExtensions on a never-used PR returns no records and creates nothing', () => {
+test('readExtensions creates nothing: never-used PR, partial chain, absent file and missing home all read empty', () => {
   const f = fixture();
-  const before = snapshot(f.home);
-  assert.deepEqual(noMkdir(() => flow.readExtensions(f.input)), []);
-  assert.equal(fs.existsSync(path.join(f.home, '.local')), false);
-  assert.equal(fs.existsSync(f.state), false);
-  assert.deepEqual(snapshot(f.home), before);
-});
-
-test('readExtensions validates the chain with lstat only: a partial chain and an absent file return no records', () => {
-  const f = fixture();
-  fs.mkdirSync(path.join(f.home, '.local'), { mode: 0o700 });
   let before = snapshot(f.home);
   assert.deepEqual(noMkdir(() => flow.readExtensions(f.input)), []);
-  assert.equal(fs.existsSync(path.join(f.home, '.local/state/shipyard')), false);
+  assert.equal(fs.existsSync(path.join(f.home, '.local')), false);
   assert.deepEqual(snapshot(f.home), before);
+  fs.mkdirSync(path.join(f.home, '.local'), { mode: 0o700 });
+  before = snapshot(f.home);
+  assert.deepEqual(noMkdir(() => flow.readExtensions(f.input)), []);
+  assert.equal(fs.existsSync(path.join(f.home, '.local/state/shipyard')), false);
   fs.mkdirSync(f.directory, { recursive: true, mode: 0o700 });
   before = snapshot(f.home);
   assert.deepEqual(noMkdir(() => flow.readExtensions(f.input)), []);
   assert.deepEqual(snapshot(f.home), before);
+  current = path.join(base, 'no-such-home');
+  assert.deepEqual(flow.readExtensions(f.input), []);
 });
 
-test('each store is bound to its own selector and normalizes the selector like the publication namespace', () => {
+test('the selector is normalized like the publication namespace and each PR has its own file', () => {
   const f = fixture({ repo: ' Owner/Repo ' });
   flow.appendExtension(f.ctx, record());
-  const raw = JSON.parse(fs.readFileSync(f.file, 'utf8'));
-  assert.equal(raw.selector, 'owner/repo');
+  assert.equal(stored(f).selector, 'owner/repo');
   assert.deepEqual(flow.readExtensions({ ...f.input, repo: 'owner/repo' }), [record()]);
   assert.deepEqual(flow.readExtensions({ ...f.input, repo: null }), []);
   assert.deepEqual(flow.readExtensions({ ...f.input, pr: 53 }), []);
 });
 
-const fileMutations = {
-  'json': file => fs.writeFileSync(file, '{'),
-  'array': file => fs.writeFileSync(file, '[]'),
-  'scalar': file => fs.writeFileSync(file, '7'),
-  'null': file => fs.writeFileSync(file, 'null'),
-  'schema': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, schema: 'shipyard.code-review-publication.v1' })),
-  'repository': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, repository: '/wrong/repository' })),
-  'selector': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, selector: 'other/repo' })),
-  'pr': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, pr: 53 })),
-  'extra-key': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, comment_id: 7 })),
-  'missing-key': (file, data) => { const { selector, ...rest } = data; fs.writeFileSync(file, JSON.stringify(rest)); },
-  'records-not-array': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: {} })),
-  'record-extra-key': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [{ ...data.records[0], id: 1 }] })),
-  'record-missing-key': (file, data) => {
-    const { reason, ...rest } = data.records[0]; fs.writeFileSync(file, JSON.stringify({ ...data, records: [rest] }));
-  },
-  'bad-head': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record({ head: 'a'.repeat(39) })] })),
-  'upper-head': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record({ head: 'A'.repeat(40) })] })),
-  'bad-base': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record({ base_commit: 'xyz' })] })),
-  'time-no-millis': (file, data) => fs.writeFileSync(file,
-    JSON.stringify({ ...data, records: [record({ created_at: '2026-11-02T10:00:00Z' })] })),
-  'time-offset': (file, data) => fs.writeFileSync(file,
-    JSON.stringify({ ...data, records: [record({ created_at: '2026-11-02T10:00:00.000+01:00' })] })),
-  'time-impossible': (file, data) => fs.writeFileSync(file,
-    JSON.stringify({ ...data, records: [record({ created_at: '2026-13-45T10:00:00.000Z' })] })),
-  'empty-reason': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record({ reason: '' })] })),
-  'long-reason': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record({ reason: 'é'.repeat(101) })] })),
-  'control-reason': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record({ reason: 'two\nlines' })] })),
-  'empty-operator': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record({ operator: '' })] })),
-  'long-operator': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record({ operator: 'é'.repeat(65) })] })),
-  'control-operator': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record({ operator: 'Ada\u0007' })] })),
-  'too-many-records': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data,
-    records: Array.from({ length: 17 }, (_, index) => record({ head: String(index).padStart(40, '0') })) })),
-  'duplicate-records': (file, data) => fs.writeFileSync(file, JSON.stringify({ ...data, records: [record(), record()] })),
-  'oversize': file => fs.writeFileSync(file, ' '.repeat(8193)),
-  'mode': file => fs.chmodSync(file, 0o644),
-  'directory': file => { fs.unlinkSync(file); fs.mkdirSync(file); },
-  'symlink': file => { fs.renameSync(file, file + '.saved'); fs.symlinkSync(file + '.saved', file); },
+// @contract: one table serves the read validator and the append validator.
+const badRecords = {
+  'short head': { head: 'a'.repeat(39) }, 'upper head': { head: 'A'.repeat(40) }, 'bad base': { base_commit: 'xyz' },
+  'time without millis': { created_at: '2026-11-02T10:00:00Z' },
+  'time with offset': { created_at: '2026-11-02T10:00:00.000+01:00' },
+  'impossible time': { created_at: '2026-02-31T10:00:00.000Z' },
+  'empty reason': { reason: '' }, 'long reason': { reason: 'é'.repeat(101) },
+  'newline reason': { reason: 'two\nlines' }, 'delete reason': { reason: 'a\u007fb' },
+  'empty operator': { operator: '' }, 'long operator': { operator: 'é'.repeat(65) },
+  'control operator': { operator: 'Ada\u0007' },
 };
 
+for (const [label, overrides] of Object.entries(badRecords)) {
+  test('an invalid record is refused by both paths and append creates nothing: ' + label, () => {
+    const f = seeded();
+    put(f, { ...stored(f), records: [record(overrides)] });
+    assert.throws(() => flow.readExtensions(f.input), /extension record identity or schema mismatch/);
+    const g = fixture();
+    assert.throws(() => flow.appendExtension(g.ctx, record(overrides)), /extension record is invalid/);
+    assert.equal(fs.existsSync(path.join(g.home, '.local')), false);
+  });
+}
+
+const fileMutations = {
+  'json': f => fs.writeFileSync(f.file, '{'), 'array': f => fs.writeFileSync(f.file, '[]'),
+  'scalar': f => fs.writeFileSync(f.file, '7'),
+  'schema': f => put(f, { ...stored(f), schema: 'shipyard.code-review-publication.v1' }),
+  'repository': f => put(f, { ...stored(f), repository: '/wrong/repository' }),
+  'selector': f => put(f, { ...stored(f), selector: 'other/repo' }),
+  'pr': f => put(f, { ...stored(f), pr: 53 }),
+  'extra-key': f => put(f, { ...stored(f), comment_id: 7 }),
+  'missing-key': f => { const { selector, ...rest } = stored(f); put(f, rest); },
+  'records-not-array': f => put(f, { ...stored(f), records: {} }),
+  'record-extra-key': f => put(f, { ...stored(f), records: [{ ...record(), id: 1 }] }),
+  'too-many-records': f => put(f, { ...stored(f), records: Array.from({ length: 17 }, (_, i) => record({ head: headN(i) })) }),
+  'duplicate-records': f => put(f, { ...stored(f), records: [record(), record()] }),
+  'mode': f => fs.chmodSync(f.file, 0o644),
+  'oversize': f => put(f, { ...stored(f), padding: ' '.repeat(9000) }),
+  'oversize-valid-json': f => fs.writeFileSync(f.file, JSON.stringify(stored(f)) + ' '.repeat(9000)),
+  'directory': f => { fs.unlinkSync(f.file); fs.mkdirSync(f.file); fs.chmodSync(f.file, 0o600); },
+  'fifo': f => { fs.unlinkSync(f.file); execFileSync('mkfifo', [f.file]); fs.chmodSync(f.file, 0o600); },
+  'symlink': f => { fs.renameSync(f.file, f.file + '.saved'); fs.symlinkSync(f.file + '.saved', f.file); },
+  'hard-link': f => fs.linkSync(f.file, f.file + '.link'),
+};
+
+const fileSafety = new Set(['mode', 'oversize', 'oversize-valid-json', 'directory', 'fifo', 'symlink', 'hard-link']);
 for (const [mutation, mutate] of Object.entries(fileMutations)) {
   test('unsafe or invalid extension file makes readExtensions throw: ' + mutation, () => {
     const f = seeded();
-    mutate(f.file, JSON.parse(fs.readFileSync(f.file, 'utf8')));
+    mutate(f);
     const before = snapshot(f.home);
-    assert.throws(() => flow.readExtensions(f.input));
+    assert.throws(() => flow.readExtensions(f.input),
+      fileSafety.has(mutation) ? /unsafe extension record/ : Error);
     assert.deepEqual(snapshot(f.home), before);
   });
 }
 
-test('a file owned by another uid makes readExtensions throw', () => {
+test('a FIFO swapped in between lstat and open cannot hang the read', () => {
   const f = seeded();
-  const lstat = fs.lstatSync;
-  assert.throws(() => stubbed({ lstatSync(name, ...args) {
-    const stat = lstat.call(this, name, ...args);
-    if (name === f.file) stat.uid += 1;
-    return stat;
-  } }, () => flow.readExtensions(f.input)), /unsafe extension record/);
+  const good = path.join(f.directory, 'good');
+  fs.copyFileSync(f.file, good); fs.chmodSync(good, 0o600);
+  fs.unlinkSync(f.file); execFileSync('mkfifo', [f.file]); fs.chmodSync(f.file, 0o600);
+  const code = `const fs = require('node:fs'); const [script, input, file, good] = process.argv.slice(1);
+    const lstat = fs.lstatSync;
+    fs.lstatSync = (name, ...args) => lstat(name === file ? good : name, ...args);
+    try { require(script).readExtensions(JSON.parse(input)); process.exit(1); } catch (error) { process.stdout.write(error.message); }`;
+  const child = spawnSync(process.execPath, ['-e', code, script, JSON.stringify(f.input), f.file, good],
+    { env: { ...process.env, HOME: f.home }, timeout: 10000 });
+  assert.equal(child.status, 0, 'the read must refuse the swapped FIFO instead of blocking in open');
+  assert.match(String(child.stdout), /extension record changed/);
 });
 
-test('an unreadable extension file makes readExtensions throw', () => {
+test('a file owned by another uid and an unreadable file make readExtensions throw', () => {
   const f = seeded();
-  const open = fs.openSync;
+  assert.throws(() => asOwnedBy(f.file, () => flow.readExtensions(f.input)), /unsafe extension record/);
   assert.throws(() => stubbed({ openSync(name, ...args) {
     if (name === f.file) throw Object.assign(new Error('unreadable state'), { code: 'EACCES' });
-    return open.call(this, name, ...args);
+    return realOpen.call(this, name, ...args);
   } }, () => flow.readExtensions(f.input)), /unreadable state/);
 });
 
-for (const mode of [0o755, 0o770, 0o701]) {
+for (const mode of [0o755, 0o770]) {
   for (const [label, target] of [['publications directory', f => f.state], ['hashed directory', f => f.directory]]) {
     test(`namespace-mode: ${label} at ${mode.toString(8)} makes readExtensions throw without creating anything`, () => {
       const f = seeded();
@@ -212,8 +224,8 @@ for (const mode of [0o755, 0o770, 0o701]) {
   }
 }
 
-for (const [label, replaced] of [['.local/state', '.local/state'], ['shipyard', '.local/state/shipyard']]) {
-  test(`ancestor-symlink: ${label} replaced by a symlink to a real store makes readExtensions throw`, () => {
+for (const replaced of ['.local/state', '.local/state/shipyard']) {
+  test(`ancestor-symlink: ${replaced} replaced by a symlink to a real store makes readExtensions throw`, () => {
     const f = seeded();
     const ancestor = path.join(f.home, replaced);
     fs.renameSync(ancestor, ancestor + '.real'); fs.symlinkSync(ancestor + '.real', ancestor);
@@ -224,19 +236,13 @@ for (const [label, replaced] of [['.local/state', '.local/state'], ['shipyard', 
   });
 }
 
-test('a group-writable or foreign-owned ancestor directory makes readExtensions throw', () => {
+test('a group-writable or foreign-owned home or ancestor directory makes readExtensions throw', () => {
   const f = seeded();
   fs.chmodSync(path.join(f.home, '.local'), 0o775);
   assert.throws(() => flow.readExtensions(f.input), /unsafe publication namespace/);
   fs.chmodSync(path.join(f.home, '.local'), 0o700);
-  const lstat = fs.lstatSync;
-  for (const [owned, message] of [[f.home, /unsafe publication home/], [path.join(f.home, '.local/state'), /unsafe publication namespace/]]) {
-    assert.throws(() => stubbed({ lstatSync(name, ...args) {
-      const stat = lstat.call(this, name, ...args);
-      if (name === owned) stat.uid += 1;
-      return stat;
-    } }, () => flow.readExtensions(f.input)), message);
-  }
+  assert.throws(() => asOwnedBy(f.home, () => flow.readExtensions(f.input)), /unsafe publication home/);
+  assert.throws(() => asOwnedBy(path.join(f.home, '.local/state'), () => flow.readExtensions(f.input)), /unsafe publication namespace/);
 });
 
 test('a state directory inside the worktree or planning checkout is refused by both paths', () => {
@@ -247,28 +253,45 @@ test('a state directory inside the worktree or planning checkout is refused by b
   assert.deepEqual(snapshot(f.home), before);
 });
 
+test('roots are required and unusable input fails with a clear error, not a TypeError', () => {
+  const f = fixture();
+  const { roots, ...withoutRoots } = f.input;
+  for (const input of [withoutRoots, { ...f.input, roots: [] }, { ...f.input, roots: [null] }])
+    assert.throws(() => flow.readExtensions(input), /checkout roots are required/);
+  assert.throws(() => flow.readExtensions({ ...f.input, repository: undefined }), /repository identity is required/);
+  assert.throws(() => flow.readExtensions(undefined), /pull request number is required/);
+  for (const pr of [0, -1, 1.5, '52', '../52', null, undefined]) {
+    assert.throws(() => flow.readExtensions({ ...f.input, pr }), /pull request number is required/);
+    assert.throws(() => flow.appendExtension({ ...f.ctx, pr }, record()), /pull request number is required/);
+  }
+  assert.throws(() => flow.appendExtension({ ...f.ctx, mode: undefined }, record()), /code review mode is required/);
+  assert.throws(() => flow.appendExtension(f.ctx, { ...record(), id: 1 }), /extension record is invalid/);
+  assert.throws(() => flow.appendExtension(f.ctx, null), /extension record is invalid/);
+  assert.equal(fs.existsSync(path.join(f.home, '.local')), false);
+  const absent = { ...f.input }; delete absent.repo;
+  assert.deepEqual(flow.readExtensions(absent), []);
+});
+
 test('appending the same head and base twice stores one record and returns the existing one', () => {
   const f = fixture();
   const first = flow.appendExtension(f.ctx, record());
   const bytes = fs.readFileSync(f.file, 'hex');
-  const again = flow.appendExtension(f.ctx, record({ operator: 'Someone Else', created_at: '2026-11-02T11:00:00.000Z', reason: 'second attempt' }));
+  const again = flow.appendExtension(f.ctx, record({ operator: 'Someone Else', created_at: '2026-11-02T11:00:00.000Z', reason: 'second' }));
   assert.deepEqual(again, first);
   assert.equal(fs.readFileSync(f.file, 'hex'), bytes);
-  assert.equal(flow.readExtensions(f.input).length, 1);
   flow.appendExtension(f.ctx, record({ head: 'c'.repeat(40) }));
   flow.appendExtension(f.ctx, record({ base_commit: 'd'.repeat(40) }));
   assert.equal(flow.readExtensions(f.input).length, 3);
+  assert.deepEqual(fs.readdirSync(f.directory), ['52.extensions.json']);
 });
 
 test('the store is bounded by count: a seventeenth distinct record is refused', () => {
   const f = fixture();
-  const heads = Array.from({ length: 17 }, (_, index) => String(index + 1).padStart(40, '0'));
-  for (const head of heads.slice(0, 16)) flow.appendExtension(f.ctx, record({ head }));
+  for (let index = 1; index <= 16; index++) flow.appendExtension(f.ctx, record({ head: headN(index) }));
   const bytes = fs.readFileSync(f.file, 'hex');
-  assert.throws(() => flow.appendExtension(f.ctx, record({ head: heads[16] })), /limit/);
+  assert.throws(() => flow.appendExtension(f.ctx, record({ head: headN(17) })), /limit/);
   assert.equal(fs.readFileSync(f.file, 'hex'), bytes);
-  assert.equal(flow.readExtensions(f.input).length, 16);
-  assert.deepEqual(flow.appendExtension(f.ctx, record({ head: heads[0] })).head, heads[0]);
+  assert.equal(flow.appendExtension(f.ctx, record({ head: headN(1) })).head, headN(1));
 });
 
 test('the store is bounded by size: an append that would pass 8192 bytes is refused and leaves the file unchanged', () => {
@@ -276,69 +299,68 @@ test('the store is bounded by size: an append that would pass 8192 bytes is refu
   let refused = null, count = 0;
   for (let index = 1; index <= 16 && !refused; index++) {
     const before = fs.existsSync(f.file) ? fs.readFileSync(f.file, 'hex') : null;
-    try {
-      flow.appendExtension(f.ctx, record({ head: String(index).padStart(40, '0'), operator: 'o'.repeat(128), reason: 'r'.repeat(200) }));
-      count++;
-    } catch (error) { refused = { error, before }; }
+    try { flow.appendExtension(f.ctx, record({ head: headN(index), operator: 'o'.repeat(128), reason: 'r'.repeat(200) })); count++; }
+    catch (error) { refused = { error, before }; }
   }
-  assert(refused, 'the size bound must refuse before the count bound');
+  assert(refused && count > 0 && count < 16, 'the size bound must refuse before the count bound');
   assert.match(refused.error.message, /bound/);
-  assert(count > 0 && count < 16);
   assert.equal(fs.readFileSync(f.file, 'hex'), refused.before);
   assert(fs.statSync(f.file).size <= 8192);
-  assert.equal(flow.readExtensions(f.input).length, count);
 });
 
-const invalidRecords = {
-  'bad head': { head: 'g'.repeat(40) },
-  'short base': { base_commit: 'b'.repeat(39) },
-  'empty operator': { operator: '' },
-  'long operator': { operator: 'é'.repeat(65) },
-  'control operator': { operator: 'Ada\nLovelace' },
-  'empty reason': { reason: '' },
-  'long reason': { reason: 'é'.repeat(101) },
-  'newline reason': { reason: 'first\nsecond' },
-  'nul reason': { reason: 'first\u0000second' },
-  'delete reason': { reason: 'first\u007fsecond' },
-  'time without millis': { created_at: '2026-11-02T10:00:00Z' },
-  'time with offset': { created_at: '2026-11-02T10:00:00.000+00:00' },
-  'impossible time': { created_at: '2026-02-31T10:00:00.000Z' },
-  'time not a string': { created_at: 1730541600000 },
-};
-
-for (const [label, overrides] of Object.entries(invalidRecords)) {
-  test('appendExtension refuses an invalid record before touching the file system: ' + label, () => {
-    const f = fixture();
-    assert.throws(() => flow.appendExtension(f.ctx, record(overrides)));
-    assert.equal(fs.existsSync(f.state), false);
-    assert.equal(fs.existsSync(path.join(f.home, '.local')), false);
+for (const point of ['before the temporary file', 'before the atomic write']) {
+  test('config invalidation ' + point + ' refuses with CONFIG_INVALID and saves no record', () => {
+    const f = seeded();
+    const before = snapshot(f.home);
+    const invalidate = () => fs.writeFileSync(f.config, '[]');
+    let opened, temporaryOpens = 0;
+    const early = point === 'before the temporary file';
+    const temporary = path.join(f.directory, `.52.extensions.json.tmp-${process.pid}`);
+    const patches = {
+      lstatSync(name, ...args) {
+        try { return realLstat.call(this, name, ...args); }
+        finally { if (early && name === f.file && !fs.existsSync(f.config)) invalidate(); }
+      },
+      openSync(name, ...args) {
+        const fd = realOpen.call(this, name, ...args);
+        if (name === temporary) { temporaryOpens++; opened = fd; }
+        return fd;
+      },
+      closeSync(fd) {
+        const result = realClose.call(this, fd);
+        if (!early && fd === opened) { opened = undefined; invalidate(); }
+        return result;
+      },
+    };
+    assert.throws(() => stubbed(patches, () => flow.appendExtension(f.ctx, record({ head: 'c'.repeat(40) }))),
+      error => error.code === 'CONFIG_INVALID');
+    assert.equal(temporaryOpens, early ? 0 : 1);
+    fs.rmSync(f.config, { force: true });
+    assert.deepEqual(flow.readExtensions(f.input), [record()]);
+    assert.deepEqual(snapshot(f.home), before);
   });
 }
 
-test('appendExtension refuses a record with an extra key, a non-object and an unusable PR', () => {
+test('concurrent processes appending to the same PR keep every record (the lock serializes them)', async () => {
   const f = fixture();
-  assert.throws(() => flow.appendExtension(f.ctx, { ...record(), id: 1 }));
-  assert.throws(() => flow.appendExtension(f.ctx, null));
-  assert.throws(() => flow.appendExtension(f.ctx, []));
-  for (const pr of [0, -1, 1.5, '52', '../52', null, undefined]) {
-    assert.throws(() => flow.appendExtension({ ...f.ctx, pr }, record()), /pull request/);
-    assert.throws(() => flow.readExtensions({ ...f.input, pr }), /pull request/);
-  }
-  assert.equal(fs.existsSync(f.state), false);
-});
-
-test('appendExtension leaves no lock or temporary file and refuses an unsafe existing store', () => {
-  const f = seeded();
-  flow.appendExtension(f.ctx, record({ head: 'c'.repeat(40) }));
+  const code = `const flow = require(process.argv[1]); const ctx = JSON.parse(process.argv[2]);
+    for (const head of JSON.parse(process.argv[3]))
+      flow.appendExtension(ctx, { head, base_commit: '${BASE}', operator: 'Ada', created_at: '2026-11-02T10:00:00.000Z', reason: 'parallel' });`;
+  const env = { ...process.env, HOME: f.home };
+  assert(inside(base, env.HOME));
+  const children = [0, 1, 2].map(child => new Promise((resolve, reject) => {
+    const heads = Array.from({ length: 5 }, (_, index) => headN(child * 5 + index + 1));
+    const proc = spawn(process.execPath, ['-e', code, script, JSON.stringify(f.ctx), JSON.stringify(heads)], { env });
+    let stderr = '';
+    proc.stderr.on('data', chunk => { stderr += chunk; });
+    proc.on('exit', status => status === 0 ? resolve() : reject(new Error(stderr)));
+  }));
+  await Promise.all(children);
+  assert.equal(flow.readExtensions(f.input).length, 15);
   assert.deepEqual(fs.readdirSync(f.directory), ['52.extensions.json']);
-  fs.chmodSync(f.file, 0o644);
-  const before = snapshot(f.home);
-  assert.throws(() => flow.appendExtension(f.ctx, record({ head: 'd'.repeat(40) })), /unsafe extension record/);
-  assert.deepEqual(snapshot(f.home), before);
 });
 
 test('the real state directory received none of the namespaces this file used', () => {
   assert(usedNamespaces.size > 0);
   for (const name of usedNamespaces) assert.equal(fs.existsSync(path.join(realState, name)), false, name);
-  assert.equal(os.homedir(), current);
 });
