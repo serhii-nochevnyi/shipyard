@@ -552,6 +552,9 @@ test('real isolated builder reproduces complete inventory and independently load
   assert.deepEqual(actual, before);
   const owned = new Set(['host/plugins/delivery-pipeline/scripts/check-state.cjs', '.codex-plugin/plugin.json', 'package-build.json']);
   const priorMirrors = {
+    'base-merge.cjs': { mode: 493, digest: '8b71ae08e904afa70d9d4c55c66aae3dd2a2ff3e57f93d2ec2d96c8c75fe9864' },
+    'deliver-dispatch.cjs': { mode: 420, digest: '80cad081b106f476e71c9c556bb5f8ad0a58d708a823b12c1204a7627159d1bf' },
+    'dispatch-boundary.cjs': { mode: 420, digest: '72d3d0c2d4f4a62d995ca3821719254512c6dd36053fae561f5d8a01e12caf5b' },
     'phase-code-review.cjs': { mode: 420, digest: '2d3a15adce1f1204481d769a7e2cae01ef3ba0bb31e8b5d7e42afe48acc148f4' },
     'ci-wait.cjs': { mode: 493, digest: 'a22edb2ce48790bae6bc8526405fdd86cd8818c76126d6e72decece58af962b4' },
     'codex-runtime-host.cjs': { mode: 420, digest: 'f684acac76b9ae49ffcb7c890ff47cf7964d90558556dddb377381f49c1a9968' },
@@ -572,7 +575,7 @@ test('real isolated builder reproduces complete inventory and independently load
     assert.equal(row.mode, priorMirrors[name].mode);
     return { ...row, ...priorMirrors[name], directory: false };
   });
-  assert.equal(previous.filter(r => Object.values(priorMirrors).some(prior => prior.digest === r.digest)).length, 9);
+  assert.equal(previous.filter(r => Object.values(priorMirrors).some(prior => prior.digest === r.digest)).length, 12);
   assert.equal(hash(JSON.stringify(previous)), capture.parent.other_package_inventory_sha256);
   const mirror = path.join(candidate, 'host/plugins/delivery-pipeline/scripts/check-state.cjs');
   assert.deepEqual(fs.readFileSync(mirror), fs.readFileSync(path.join(SCRIPTS, 'check-state.cjs')));
