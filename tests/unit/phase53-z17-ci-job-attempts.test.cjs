@@ -552,6 +552,7 @@ test('real isolated builder reproduces complete inventory and independently load
   assert.deepEqual(actual, before);
   const owned = new Set(['host/plugins/delivery-pipeline/scripts/check-state.cjs', '.codex-plugin/plugin.json', 'package-build.json']);
   const priorMirrors = {
+    'phase-code-review.cjs': { mode: 420, digest: '2d3a15adce1f1204481d769a7e2cae01ef3ba0bb31e8b5d7e42afe48acc148f4' },
     'ci-wait.cjs': { mode: 493, digest: 'a22edb2ce48790bae6bc8526405fdd86cd8818c76126d6e72decece58af962b4' },
     'codex-runtime-host.cjs': { mode: 420, digest: 'f684acac76b9ae49ffcb7c890ff47cf7964d90558556dddb377381f49c1a9968' },
     'role-artifact.cjs': { mode: 420, digest: '52e676c0d76e5e81a68a1040f03eac03b773211bde36204b271a934160e8a4cd' },
@@ -571,7 +572,7 @@ test('real isolated builder reproduces complete inventory and independently load
     assert.equal(row.mode, priorMirrors[name].mode);
     return { ...row, ...priorMirrors[name], directory: false };
   });
-  assert.equal(previous.filter(r => Object.values(priorMirrors).some(prior => prior.digest === r.digest)).length, 8);
+  assert.equal(previous.filter(r => Object.values(priorMirrors).some(prior => prior.digest === r.digest)).length, 9);
   assert.equal(hash(JSON.stringify(previous)), capture.parent.other_package_inventory_sha256);
   const mirror = path.join(candidate, 'host/plugins/delivery-pipeline/scripts/check-state.cjs');
   assert.deepEqual(fs.readFileSync(mirror), fs.readFileSync(path.join(SCRIPTS, 'check-state.cjs')));
