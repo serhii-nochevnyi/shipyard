@@ -70,8 +70,7 @@ is only a transport synopsis and cannot replace the document. The host clears an
 writes `.planning/phases/<phase>/INTEGRATION.md` itself; a prior archive or another
 path is not a valid evidence source.
 
-Return a structured result containing the exact combined revision and the
-complete merged ticket set:
+Return a structured result containing the exact combined revision:
 
 ```json
 {
@@ -81,8 +80,6 @@ complete merged ticket set:
   "head_tree": "<40-char combined head tree sha>",
   "base": "<default-branch ref or commit>",
   "base_tree": "<40-char default-branch tree sha>",
-  "ticket_set": [{"id": "T-33-01", "pr": 123, "head": "<40-char PR head sha>", "base": "<PR base branch>", "branch": "<ticket branch>"}],
-  "ticket_set_digest": "<sha256 of the complete ticket set>",
   "blocking_count": 0,
   "summary": "bounded synopsis",
   "findings": [],
@@ -90,9 +87,8 @@ complete merged ticket set:
 }
 ```
 
-`ticket_set` is `role_context.ticket_set` copied verbatim, the exact array of
-`{id, pr, head, base, branch}` objects in host order; a string, a list of ids,
-a reordered or re-keyed array is refused.
+The host binds `role_context.ticket_set` and its digest to the result itself;
+judge the complete set but do not return it.
 
 A `needs-fix` result attaches its fix tickets as findings:
 

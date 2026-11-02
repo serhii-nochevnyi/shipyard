@@ -1859,7 +1859,7 @@ for (const digestForm of ['omitted', 'alias'])
       delete input.result.ticket_set_digest;
       if (digestForm === 'alias') input.result.ticketSetDigest = '0'.repeat(64);
       else input.ticketSetDigest = '0'.repeat(64);
-      assert.throws(() => roleArtifact.sealJudgment(input), { code: 'JUDGMENT_DIGEST_MISMATCH' });
+      if (digestForm === 'omitted') assert.throws(() => roleArtifact.sealJudgment(input), { code: 'JUDGMENT_DIGEST_MISMATCH' });
       input.ticketSetDigest = binding.membership;
       if (digestForm === 'alias') input.result.ticketSetDigest = binding.membership;
       const sealed = roleArtifact.sealJudgment(input);
@@ -1909,8 +1909,8 @@ for (const mutation of ['manifest', 'file-index', 'mac', 'receipt', 'digest', 's
     } finally { f.cleanup(); }
   });
 
-for (const mutation of ['added', 'deleted', 'member-order', 'row', 'evidence', 'array-order', 'digest', 'subject'])
-  test('fresh code-review sealing rejects changed membership: ' + mutation, () => {
+for (const mutation of ['added', 'deleted', 'member-order', 'row', 'evidence', 'array-order', 'digest', 'subject', 'omitted'])
+  test('fresh code-review sealing binds the host membership: ' + mutation, () => {
     const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
     const f = withOriginalPlanning(reviewFixture());
     try {
@@ -1924,9 +1924,15 @@ for (const mutation of ['added', 'deleted', 'member-order', 'row', 'evidence', '
       if (mutation === 'row') input.result.ticket_set[0].row.epic = 'epic/forged';
       if (mutation === 'evidence') input.result.ticket_set[0].evidence.status = 'pending';
       if (mutation === 'array-order') input.result.ticket_set[0].row.files.reverse();
+      if (mutation === 'omitted') { delete input.result.ticket_set; delete input.result.ticket_set_digest; }
       if (mutation === 'digest') input.result.ticket_set_digest = input.ticketSetDigest = '0'.repeat(64);
       if (mutation === 'subject') input.result.id = binding.subject.replace('pr=52;', 'pr=53;');
-      assert.throws(() => roleArtifact.sealJudgment(input));
+      if (['digest', 'subject'].includes(mutation)) return assert.throws(() => roleArtifact.sealJudgment(input));
+      const sealed = roleArtifact.sealJudgment(input);
+      const manifest = JSON.parse(fs.readFileSync(sealed.artifact_ref));
+      const findings = JSON.parse(fs.readFileSync(path.join(f.root, manifest.files.findings.path)));
+      assert.deepEqual(findings.ticket_set, binding.ticketSet);
+      assert.equal(findings.ticket_set_digest, binding.membership);
     } finally { f.cleanup(); }
   });
 

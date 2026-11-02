@@ -242,8 +242,6 @@ function fakeRuntimeFactory(fixture, options = {}) {
           const readOnlySmoke = selection.readOnly === true;
           result = {
             outcome: readOnlySmoke ? 'awaiting-human' : 'clear',
-            ticket_set: ticketSet,
-            ticket_set_digest: context.ticket_set_digest,
             head: fixture.head,
             head_tree: fixture.headTree,
             performed: readOnlySmoke ? [] : ticketSet.map((entry) => ({ ticket: entry.id, duty: 'check-current-front', status: 'complete' })),
@@ -260,7 +258,6 @@ function fakeRuntimeFactory(fixture, options = {}) {
         } else {
           result = { outcome: 'passed', phase: context.phase, head: context.combined_diff.head,
             head_tree: context.combined_diff.head_tree, base: context.integration_base.ref, base_tree: context.integration_base.tree,
-            ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest,
             blocking_count: 0, summary: 'Phase is coherent.', findings: [],
             evidence_markdown: `Integration check at ${context.combined_diff.head}.\n` };
         }

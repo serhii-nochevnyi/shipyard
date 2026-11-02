@@ -248,8 +248,8 @@ function prepare(scope, launch, options = {}) {
     'context_digest=' + prepared.packet.digest, 'launch_digest=' + '0'.repeat(64),
     core.readGit(prepared.packet.role_context.exact_diff.base, prepared.canonical.head),
     ...(part ? core.partDirections({ part }) : [
-      'Use review_contract=' + CODE_REVIEW_CONTRACT + '. Repeat these exact host identities: ' + JSON.stringify(launchBinding(prepared)),
-      'Repeat the complete packet ticket_set and ticket_set_digest in the result.',
+      'Use review_contract=' + CODE_REVIEW_CONTRACT + '. Repeat these exact host identities: '
+        + JSON.stringify((({ ticket_set_digest: _host, ...echo }) => echo)(launchBinding(prepared))),
       'Review round=' + prepared.round.round + ', scope=' + prepared.round.scope + ', prior_head=' + (prepared.round.priorHead || 'null') + '.',
       'Return one JSON object with the identities, summary, findings, dispositions, review_completeness (complete|incomplete), limitations, unresolved_sources, and evidence_markdown.',
       'Classify severity as BLOCKER, WARNING or INFO; cite path, line and line_text. BLOCKER requires failure_scenario and a complete fix_ticket.',
@@ -421,9 +421,7 @@ function finish(value, dispatch, recorder) {
     return { ...core.normalizePart(result, prepared.part), dispatch_id: dispatch.dispatch_id };
   }
   for (const [key, expected] of Object.entries(binding))
-    if (result[key] !== expected) fail('result differs from pinned ' + key, 'ARTIFACT_IDENTITY_MISMATCH');
-  if (stable(result.ticket_set) !== stable(prepared.binding.ticketSet))
-    fail('result differs from complete ticket set', 'ARTIFACT_IDENTITY_MISMATCH');
+    if (key !== 'ticket_set_digest' && result[key] !== expected) fail('result differs from pinned ' + key, 'ARTIFACT_IDENTITY_MISMATCH');
   const normalized = core.normalizeFinal(result, prepared.parts ?? [], { round: prepared.round.round, scope: prepared.round.scope,
     priorFindings: prepared.priorFindings, readSource: options.readSource });
   normalized.ticket_set = structuredClone(prepared.binding.ticketSet);

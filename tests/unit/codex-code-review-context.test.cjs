@@ -260,19 +260,23 @@ function reverseReviewKeys(value) {
   return value;
 }
 
-for (const mutation of ['row', 'evidence', 'array-order', 'added', 'deleted'])
-  test('finish rejects changed nested membership before sealing: ' + mutation, () => {
+for (const mutation of ['row', 'evidence', 'array-order', 'added', 'deleted', 'omitted', 'forged-digest'])
+  test('finish ignores a model-changed membership and seals the host membership: ' + mutation, () => {
     const f = fixture();
     try {
-      assert.throws(() => review(f, raw => {
+      const r = review(f, raw => {
+        if (mutation === 'omitted') { delete raw.ticket_set; delete raw.ticket_set_digest; return; }
         raw.ticket_set = reverseReviewKeys(raw.ticket_set);
         if (mutation === 'row') raw.ticket_set[0].row.epic = 'epic/forged';
         if (mutation === 'evidence') raw.ticket_set[0].evidence.status = 'pending';
         if (mutation === 'array-order') raw.ticket_set[0].row.files.push('forged.js');
         if (mutation === 'added') raw.ticket_set.push({ id: 'T-38-99', row: {}, evidence: {} });
         if (mutation === 'deleted') raw.ticket_set.pop();
-      }), { code: 'ARTIFACT_IDENTITY_MISMATCH' });
-      assert.deepEqual(artifact.authenticatedArchivePins(f.root), []);
+        if (mutation === 'forged-digest') raw.ticket_set_digest = '0'.repeat(64);
+      });
+      assert.deepEqual(r.result.result.ticket_set, r.value.prepared.binding.ticketSet);
+      assert.equal(r.result.result.ticket_set_digest, r.value.prepared.binding.membership);
+      assert.equal(artifact.authenticatedArchivePins(f.root).length, 3);
     } finally { f.cleanup(); }
   });
 
@@ -379,9 +383,9 @@ for (const content of ['{', JSON.stringify({ schema: 'shipyard.code-review-disag
 }
 
 for (const field of ['review_contract', 'repository', 'id', 'pr', 'head', 'base_commit', 'merge_base', 'base_tree',
-  'ticket_set_digest', 'context_digest', 'launch_digest', 'ticket_set']) test('finish refuses changed identity: ' + field, () => {
+  'context_digest', 'launch_digest']) test('finish refuses changed identity: ' + field, () => {
   const f = fixture();
-  try { assert.throws(() => review(f, r => { r[field] = field === 'ticket_set' ? [] : 'forged'; })); }
+  try { assert.throws(() => review(f, r => { r[field] = 'forged'; })); }
   finally { f.cleanup(); }
 });
 

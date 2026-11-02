@@ -815,23 +815,30 @@ test('pr-sentinel launch schema declares its identity fields', async () => {
     assert.ok(schema.required.includes('outcome'));
     assert.ok(schema.required.includes('head'));
     assert.ok(schema.required.includes('head_tree'));
-    assert.deepEqual(schema.properties.ticket_set.items.required, ['id', 'pr', 'head', 'base', 'branch']);
-    assert.equal(schema.properties.ticket_set.items.additionalProperties, false);
   } finally {
     cleanupFixture(fixture);
   }
 });
 
-test('a sentinel result echoing ticket_set as a string is refused with the named remedy', async () => {
-  const fixture = setupSentinelRepository();
+for (const [role, setup, outcome, tail] of [['pr-sentinel', setupSentinelRepository, 'clear', 'round'],
+  ['integrator', () => setupRepository('integrator'), 'passed', 'phase']])
+for (const [name, mutate] of [['omitted', () => {}],
+  ['condensed', result => { result.ticket_set = ['T-01-01']; result.ticket_set_digest = 'forged'; }],
+  ['a different head', result => { result.head = 'f'.repeat(40); }]])
+test(`${role} result with ${name} ticket_set: the host owns the membership and other identity checks stay`, async () => {
+  const fixture = setup();
+  let launched;
   try {
-    const options = hostOptions(fixture, {
-      mutateResult(result) { result.ticket_set = fixture.ids.join(' '); },
-    });
-    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), (error) =>
-      error.code === 'INVALID_RESULT' && error.message.includes('ticket_set')
-      && error.message.includes('remedy: copy role_context.ticket_set verbatim')
-      && !error.message.includes('identity differs'));
+    const run = createClaudeRoleHost(hostOptions(fixture, { mutateResult: mutate,
+      onLaunch(prompt, selection) { launched = { prompt, schema: selection.schema }; } })).run(request(fixture));
+    if (name === 'a different head') return await assert.rejects(run, error => error.code === 'ARTIFACT_IDENTITY_MISMATCH'
+      && error.message.endsWith(`authenticated ${tail} snapshot: head`));
+    const result = await run, packet = packetFromPrompt(launched.prompt);
+    assert.deepEqual(result.result.ticket_set, packet.role_context.ticket_set);
+    assert.equal(result.result.ticket_set_digest, packet.role_context.ticket_set_digest);
+    assert.equal(result.artifact.outcome, outcome);
+    assert.equal(launched.schema.properties.ticket_set, undefined);
+    assert.ok(!launched.schema.required.includes('ticket_set') && !launched.schema.required.includes('ticket_set_digest'));
   } finally {
     cleanupFixture(fixture);
   }
@@ -900,67 +907,6 @@ test('integrator authenticates the merged ticket set and seals phase evidence', 
     assert.equal(result.artifact.outcome, 'passed');
     assert.equal(result.ticket_set_digest, packet.role_context.ticket_set_digest);
     assert.equal(fs.existsSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`)), true);
-  } finally {
-    cleanupFixture(fixture);
-  }
-});
-
-test('integrator launch schema declares the authenticated ticket_set objects', async () => {
-  const fixture = setupRepository('integrator');
-  let launched;
-  try {
-    await createClaudeRoleHost(hostOptions(fixture, {
-      onLaunch(prompt, selection) { launched = { prompt, selection }; },
-    })).run(request(fixture));
-    const schema = launched.selection.schema;
-    assert.ok(schema.required.includes('ticket_set'));
-    assert.ok(schema.required.includes('ticket_set_digest'));
-    assert.deepEqual(schema.properties.ticket_set.items.required, ['id', 'pr', 'head', 'base', 'branch']);
-    assert.equal(schema.properties.ticket_set.items.additionalProperties, false);
-  } finally {
-    cleanupFixture(fixture);
-  }
-});
-
-test('an integrator result echoing ticket_set as a string is refused with the named remedy', async () => {
-  const fixture = setupRepository('integrator');
-  try {
-    const options = hostOptions(fixture, {
-      mutateResult(result) { result.ticket_set = 'T-39-01 … T-39-12'; },
-    });
-    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), (error) =>
-      error.code === 'INVALID_RESULT' && error.message.includes('ticket_set')
-      && error.message.includes('remedy: copy role_context.ticket_set verbatim')
-      && !error.message.includes('identity differs'));
-  } finally {
-    cleanupFixture(fixture);
-  }
-});
-
-test('an integrator result listing ticket ids is refused with the named remedy', async () => {
-  const fixture = setupRepository('integrator');
-  try {
-    const options = hostOptions(fixture, {
-      mutateResult(result) { result.ticket_set = ['T-01-01']; },
-    });
-    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), (error) =>
-      error.code === 'INVALID_RESULT'
-      && error.message.includes('remedy: copy role_context.ticket_set verbatim'));
-  } finally {
-    cleanupFixture(fixture);
-  }
-});
-
-test('a well-shaped ticket_set with a changed head is still an identity mismatch', async () => {
-  const fixture = setupRepository('integrator');
-  try {
-    const options = hostOptions(fixture, {
-      mutateResult(result) {
-        result.ticket_set = result.ticket_set.map((entry) => ({ ...entry, head: 'f'.repeat(40) }));
-      },
-    });
-    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), (error) =>
-      error.code === 'ARTIFACT_IDENTITY_MISMATCH' && error.message.includes('identity differs'));
   } finally {
     cleanupFixture(fixture);
   }
@@ -1049,18 +995,6 @@ test('integrator and arch-review launch schemas declare the finding ticket contr
       properties: {
         blocking_count: { type: 'integer', minimum: 0 },
         outcome: { type: 'string', enum: ['clear', 'blocked', 'awaiting-human'] },
-        ticket_set: {
-          type: 'array',
-          items: {
-            type: 'object', additionalProperties: false,
-            required: ['id', 'pr', 'head', 'base', 'branch'],
-            properties: {
-              id: { type: 'string' }, pr: { type: 'integer', minimum: 1 }, head: { type: 'string' },
-              base: { type: 'string' }, branch: { type: 'string' },
-            },
-          },
-        },
-        ticket_set_digest: { type: 'string' },
         head: { type: 'string' }, head_tree: { type: 'string' },
         performed: { type: 'array', items: {
           type: 'object', required: ['ticket', 'duty', 'status'],
@@ -1085,7 +1019,7 @@ test('integrator and arch-review launch schemas declare the finding ticket contr
         } },
         summary: { type: 'string' },
       },
-      required: ['outcome', 'ticket_set', 'ticket_set_digest', 'head', 'head_tree', 'blocking_count'],
+      required: ['outcome', 'head', 'head_tree', 'blocking_count'],
     });
   } finally {
     cleanupFixture(integratorFixture);
@@ -2405,14 +2339,46 @@ test('code-review seals exact Unicode and whitespace evidence from the final mes
 });
 
 for (const field of ['review_contract', 'repository', 'id', 'pr', 'head', 'base_commit', 'merge_base', 'base_tree',
-  'ticket_set_digest', 'context_digest', 'launch_digest', 'ticket_set', 'head_tree', 'merge_base_tree'])
+  'context_digest', 'launch_digest', 'head_tree', 'merge_base_tree'])
 test(`code-review refuses a returned ${field} identity mismatch`, async () => {
   const fixture = setupCodeReview();
   try {
     await assert.rejects(runCodeReview(fixture, { mutateResult(result) {
-      result[field] = field === 'ticket_set' ? [] : field === 'pr' ? 999 : 'forged';
-    } }));
+      result[field] = field === 'pr' ? 999 : 'forged';
+    } }), error => error.code === 'ARTIFACT_IDENTITY_MISMATCH' && error.message.endsWith(`snapshot: ${field}`));
     assert.equal(reviewHistory(fixture).length, 0);
+  } finally { cleanupFixture(fixture); }
+});
+
+for (const [name, edit] of [['echoed', () => {}], ['omitted', raw => { delete raw.ticket_set; delete raw.ticket_set_digest; }],
+  ['condensed', raw => { raw.ticket_set = raw.ticket_set.map(({ id }) => ({ id, status: 'ok' })); raw.ticket_set_digest = 'forged'; }]])
+test(`code-review with ${name} ticket_set seals the host membership and authenticates as current`, async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  try {
+    let packet, prompt;
+    const schemas = [];
+    const result = await runCodeReview(fixture, { mutateResult: edit,
+      onLaunch(text, selection) { prompt = text; packet = packetFromPrompt(text); schemas.push(selection.schema); } });
+    for (const schema of schemas.filter(item => item.properties?.review_contract)) {
+      assert.equal(schema.properties.ticket_set, undefined);
+      assert.equal(schema.properties.ticket_set_digest, undefined);
+      assert.ok(!schema.required.includes('ticket_set') && !schema.required.includes('ticket_set_digest'));
+    }
+    assert.doesNotMatch(prompt, /[Rr]epeat the complete/);
+    assert.deepEqual(result.result.ticket_set, packet.role_context.ticket_set);
+    assert.equal(result.result.ticket_set_digest, packet.role_context.ticket_set_digest);
+    const input = d35ClaudeInput(fixture, result);
+    const validate = change => reviewArtifacts.validateJudgmentManifest({ ...input, ...change,
+      artifactPath: result.artifact.ref, artifactDigest: result.artifact.digest });
+    assert.equal(validate({}).envelope.outcome, 'pass');
+    const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
+    const sealed = JSON.parse(fs.readFileSync(path.join(fixture.root, manifest.files.findings.path)));
+    assert.deepEqual(sealed.ticket_set, packet.role_context.ticket_set);
+    assert.equal(sealed.ticket_set_digest, packet.role_context.ticket_set_digest);
+    for (const change of [{ ticketSetDigest: 'f'.repeat(64) }, { ticketSet: [] }, { ticketSet: sealed.ticket_set.map(({ id }) => ({ id })) }])
+      assert.throws(() => validate(change));
+    assert.equal(reviewArtifacts.currentCodeReviewVerdict({ worktreePath: fixture.root, pr: 101,
+      head: fixture.head, baseName: 'main', baseCommit: fixture.base, graphDir: fixture.graphDir }).verdict, 'pass');
   } finally { cleanupFixture(fixture); }
 });
 

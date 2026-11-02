@@ -484,7 +484,8 @@ function finish(value, dispatch, recorder) {
   if (JSON.stringify(canonical(dispatch.receipt.runtime_evidence.focused_review)) !== JSON.stringify(canonical({ ...focused, launch_digest: launchDigest(value) })))
     fail('original receipt lacks focused launch custody', 'MISSING_RECEIPT');
   const evidenceMarkdown = result.evidence_markdown;
-  const { evidence_markdown: _evidenceMarkdown, ...judgment } = result;
+  const { evidence_markdown: _evidenceMarkdown, ticket_set: _set, ticket_set_digest: _digest, ...judgment } = result;
+  if (prepared.binding) Object.assign(judgment, { ticket_set: prepared.binding.ticketSet, ticket_set_digest: prepared.binding.membership });
   if (judgment.id !== prepared.ticket || judgment.pr !== prepared.pr
       || judgment.head !== prepared.canonical.head || judgment.base_tree !== prepared.mergeBaseTree
       || !['conform', 'violation', 'adr-outdated'].includes(judgment.verdict)
@@ -572,7 +573,7 @@ function validateFocusedResult(result, binding) {
   }
   if (result.review_completeness === 'complete' && (result.limitations.length || result.unresolved_sources.length))
     fail('complete focused review has unresolved material or coverage limitations', 'INVALID_RESULT');
-  for (const key of ['repository', 'id', 'pr', 'head', 'base_commit', 'merge_base', 'base_tree', 'ticket_set_digest', 'context_digest'])
+  for (const key of ['repository', 'id', 'pr', 'head', 'base_commit', 'merge_base', 'base_tree', 'context_digest'])
     if (result[key] !== binding[key]) fail('focused result differs from its pinned ' + key, 'ARTIFACT_IDENTITY_MISMATCH');
   if (!/^[a-f0-9]{64}$/.test(result.launch_digest || '')) fail('focused launch digest is missing', 'INVALID_RESULT');
   return true;
@@ -739,7 +740,7 @@ function prepare(scope, launch, options = {}) {
       + ' -- <path> for every changed path in change_metadata.changes, and git show ' + prepared.packet.pr.head + ':<path> for current content. Read a large diff in slices (| sed -n \'START,ENDp\'). Run only read-only git commands; never change the worktree, index, refs or remotes.',
     'Each $semantic_content alias in the packet resolves to the dictionary entry with that sha256. Report incomplete if necessary material remains unresolved.',
     'Use review_contract=' + FOCUSED_CONTRACT + '. Include review_completeness (complete|incomplete), limitations (bounded string list), unresolved_sources (bounded path/partition list). Complete requires both lists empty. No consumption or range echoes are required.',
-    'Repeat these focused subject fields: ' + JSON.stringify(focusedBinding(prepared)),
+    'Repeat these focused subject fields: ' + JSON.stringify((({ ticket_set_digest: _host, ...echo }) => echo)(focusedBinding(prepared))),
     'Do not call GitHub, dispatch other roles, change source or merge. Trusted host owns live I/O and finalization.',
     'Return one JSON object with id, pr, head, base_tree, verdict (conform|violation|adr-outdated),',
     'summary, findings (the complete index), blocking_count, context_digest, launch_digest and evidence_markdown (the complete review).',
@@ -747,7 +748,7 @@ function prepare(scope, launch, options = {}) {
     'context_digest=' + prepared.packet.digest,
     'launch_digest=' + '0'.repeat(64),
     'Use packet body ticket, pr.number, pr.head and diff.merge_base_tree for the exact identity fields.',
-    ...(prepared.binding ? ['Repeat the complete packet ticket_set and ticket_set_digest in the result. This is the phase integration review, bound to the aggregate PR, not a ticket verdict.'] : []),
+    ...(prepared.binding ? ['This is the phase integration review, bound to the aggregate PR, not a ticket verdict.'] : []),
     'Keep development artifacts as context; judge product behavior. Retain uncertainty in the evidence.',
     'Write no file: the host writes the evidence from evidence_markdown.',
     '<AUTHENTICATED_CONTEXT_PACKET>', packet, '</AUTHENTICATED_CONTEXT_PACKET>',
@@ -895,8 +896,8 @@ function validateHistoricalContext(input) {
   if (context.planning_reference !== undefined) attestation.planning_reference = context.planning_reference;
   if (context.phase_repo !== undefined) attestation.phase_repo = context.phase_repo;
   refuseFileTransport(context);
-  const { evidence_markdown: markdown, host_context: _nativeContext, ...native } = original;
-  const { host_context: _sealedContext, ...sealed } = input.result;
+  const { evidence_markdown: markdown, host_context: _nativeContext, ticket_set: _nativeSet, ticket_set_digest: _nativeDigest, ...native } = original;
+  const { host_context: _sealedContext, ticket_set: _sealedSet, ticket_set_digest: _sealedDigest, ...sealed } = input.result;
   if (original.context_digest !== context.packet_digest
       || original.launch_digest !== digest(JSON.stringify(canonical(attestation)))
       || JSON.stringify(canonical(native)) !== JSON.stringify(canonical(sealed))

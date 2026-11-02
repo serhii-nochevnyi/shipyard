@@ -27,8 +27,8 @@ Both hosts derive the aggregate subject from actual phase graph membership,
 repository, PR, exact live head and base. The context includes the complete
 change-path inventory (the aggregate PR diff is read with git), explicitly affected
 architecture records and relevant linked decisions. Plans supply a compact acceptance header; whole phase
-plans, research, transcripts and retained archives remain available history. Repeat the complete ticket set
-and digest. Do not invent a graph ticket, substitute a ticket/integrator verdict,
+plans, research, transcripts and retained archives remain available history. Judge the complete ticket set; the host
+binds it and its digest. Do not invent a graph ticket, substitute a ticket/integrator verdict,
 or dispatch a provider/model replacement. The native boundary and durable receipt
 validation remain mandatory. Missing retained/native evidence stays unknown or HOLD.
 
@@ -102,7 +102,6 @@ Return the exact host-supplied subject fields plus the original independent resu
   "base_commit": "<separately observed live base commit>",
   "merge_base": "<diff merge-base commit>",
   "base_tree": "<merge-base tree>",
-  "ticket_set_digest": "<complete current membership digest>",
   "context_digest": "<host packet digest>",
   "launch_digest": "<host installed launch digest>",
   "review_completeness": "complete",
@@ -116,7 +115,7 @@ Return the exact host-supplied subject fields plus the original independent resu
 }
 ```
 
-Repeat the complete `ticket_set` for an aggregate review. `limitations` and
+`ticket_set` and its digest are host-owned and are not returned. `limitations` and
 `unresolved_sources` contain at most 128 nonempty strings of at most 1024 UTF-8
 bytes each. A complete judgment requires both lists empty. If relevant material
 remains unresolved, return `review_completeness: incomplete` and preserve all useful

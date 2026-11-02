@@ -178,7 +178,6 @@ for (const producer of ['codex', 'claude']) test(producer + ' large diff reaches
 for (const [name, edit] of [
   ['forged contract', result => { result.review_contract = 'forged'; }],
   ['wrong repository', result => { result.repository += '-foreign'; }],
-  ['wrong membership', result => { result.ticket_set_digest = '0'.repeat(64); }],
   ['wrong base', result => { result.base_commit = '0'.repeat(40); }],
   ['wrong launch', result => { result.launch_digest = '0'.repeat(64); }],
   ['malformed completeness', result => { result.review_completeness = 'maybe'; }],
@@ -187,6 +186,30 @@ for (const [name, edit] of [
   await fixture(async f => {
     await assert.rejects(runFocusedArchitecture(f, edit));
     for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, false);
+  });
+});
+
+test('focused original completion ignores a model-supplied membership digest', async () => {
+  await claudeFixture(async f => {
+    const reviewed = await runFocusedArchitecture(f, result => { result.ticket_set_digest = '0'.repeat(64); delete result.ticket_set; });
+    assert.equal(reviewed.artifact.outcome, 'conform');
+    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true, admissionDiagnostic(f, consumer));
+  });
+});
+
+for (const [name, edit] of [['echoed', () => {}], ['omitted', result => { delete result.ticket_set; delete result.ticket_set_digest; }],
+  ['condensed', result => { result.ticket_set = result.ticket_set.map(({ id }) => ({ id, status: 'ok' })); result.ticket_set_digest = 'forged'; }]])
+test('Claude phase architecture with ' + name + ' ticket_set seals the host membership and admits at every consumer', async () => {
+  await claudeFixture(async f => {
+    const reviewed = await runClaudeCurrentReview(f, 'arch-review', { originalResult: edit });
+    const hostSet = f.lastClaudePacket.role_context.ticket_set;
+    assert.deepEqual(reviewed.result.ticket_set, hostSet);
+    assert.equal(reviewed.result.ticket_set_digest, f.lastClaudePacket.role_context.ticket_set_digest);
+    const manifest = JSON.parse(fs.readFileSync(reviewed.artifact.ref));
+    const findings = JSON.parse(fs.readFileSync(path.join(f.worktree, manifest.files.findings.path)));
+    assert.deepEqual(findings.ticket_set, hostSet);
+    assert.equal(findings.ticket_set_digest, manifest.ticket_set_digest);
+    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true, admissionDiagnostic(f, consumer));
   });
 });
 
@@ -333,7 +356,7 @@ test('genuine finalized Claude receipts admit full architecture at all current c
     if (role === 'arch-review') {
       const manifest = JSON.parse(fs.readFileSync(fresh.artifact.ref));
       const findings = JSON.parse(fs.readFileSync(path.join(f.worktree, manifest.files.findings.path)));
-      assert.notEqual(hash(JSON.stringify(findings.ticket_set)), manifest.ticket_set_digest);
+      assert.equal(hash(JSON.stringify(findings.ticket_set)), manifest.ticket_set_digest);
       assert.equal(hash(JSON.stringify(phaseBinding(f).ticketSet)), manifest.ticket_set_digest);
       assert.deepEqual(findings.ticket_set, f.lastClaudePacket.role_context.ticket_set);
       assert.equal(f.lastClaudePacket.required_refs.some(ref => ref.path === '.planning/graph/tickets.json'), false);

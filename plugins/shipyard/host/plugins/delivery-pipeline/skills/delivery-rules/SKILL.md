@@ -31,8 +31,8 @@ phase, omit `--repo` and invoke from its epic worktree as above.
 Both hosts derive the aggregate subject from actual phase graph membership,
 repository, PR, exact live head and base. The context includes the entire aggregate
 PR diff, all phase plans/evidence, architecture records, linked decisions and
-available authenticated retained ticket artifacts. Repeat the complete ticket set
-and digest. Do not invent a graph ticket, substitute a ticket/integrator verdict,
+available authenticated retained ticket artifacts. Judge the complete ticket set; the host
+binds it and its digest. Do not invent a graph ticket, substitute a ticket/integrator verdict,
 or dispatch a provider/model replacement. The native boundary and durable receipt
 validation remain mandatory. Missing retained/native evidence stays unknown or HOLD.
 

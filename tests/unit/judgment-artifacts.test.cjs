@@ -395,6 +395,25 @@ test('a sentinel round is bound to its complete guarded ticket set, not one fabr
   }
 });
 
+test('a sentinel result that omits or forges its ticket set seals the host-supplied membership', () => {
+  const tickets = [{ id: 'T-33-A', pr: 503, head: 'c'.repeat(40), base: 'epic/33' }];
+  const value = fixture('pr-sentinel', roundSubject(tickets));
+  try {
+    const result = { outcome: 'clear', blocking_count: 0, summary: 'guard completed the deterministic live duties',
+      performed: [{ ticket: 'T-33-A', duty: 'wait-ci', status: 'complete' }], refused: [] };
+    const seal = changed => roleArtifact.seal(sealInput(value, { ...result, ...changed }, { role: 'pr-sentinel', ticketSet: tickets,
+      evidencePath: evidence(value.root, '.shipyard-sentinel-evidence.md', 'every live duty was checked') }));
+    const omitted = seal({});
+    const forged = seal({ ticket_set: [{ id: 'T-99-X', pr: 1 }], ticket_set_digest: 'f'.repeat(64) });
+    const echoed = seal({ ticket_set: tickets });
+    assert.equal(forged.artifact_digest, omitted.artifact_digest);
+    assert.equal(echoed.artifact_digest, omitted.artifact_digest);
+    assert.equal(omitted.envelope.ticket_set_digest, crypto.createHash('sha256').update(JSON.stringify(tickets)).digest('hex'));
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
 test('sentinel surplus duties and refused gates cannot be presented as a clear round', () => {
   const tickets = [{ id: 'T-33-A', pr: 503, head: 'c'.repeat(40), base: 'epic/33' }];
   const value = fixture('pr-sentinel', roundSubject(tickets));
@@ -537,18 +556,6 @@ test('integrator preserves human-review-required findings and rejects duplicate 
     assert.throws(
       () => roleArtifact.seal(sealInput(value, {
         ...result,
-        ticket_set_digest: '0'.repeat(64),
-      }, {
-        role: 'integrator',
-        phase: INTEGRATION_PHASE,
-        ticketSet: tickets,
-        evidencePath: integrationPath,
-      })),
-      (error) => error && error.code === 'JUDGMENT_DIGEST_MISMATCH',
-    );
-    assert.throws(
-      () => roleArtifact.seal(sealInput(value, {
-        ...result,
         outcome: 'passed',
         blocking_count: 0,
         finding_count: 0,
@@ -589,7 +596,7 @@ test('integrator preserves human-review-required findings and rejects duplicate 
       (error) => error && error.code === 'JUDGMENT_IDENTITY_MISMATCH',
     );
 
-    const duplicate = roleArtifact.seal(sealInput(value, result, {
+    const duplicate = roleArtifact.seal(sealInput(value, { ...result, ticket_set_digest: '0'.repeat(64) }, {
       role: 'integrator',
       phase: INTEGRATION_PHASE,
       ticketSet: tickets,
@@ -836,7 +843,7 @@ test('code-review artifact rejects false passes, invalid citations and missing r
       r=>{delete r.findings[0].fix_ticket;},r=>{delete r.findings[0].identity;},
       r=>{r.findings[0].line_text=null;},r=>{r.findings[0].occurrence=null;},
       r=>{r.findings[0].citation='unmatched';},r=>{r.findings[0].citation='missing';},
-      r=>{r.id='T-52-01';},r=>{r.head='a'.repeat(40);},r=>{r.ticket_set_digest='a'.repeat(64);},
+      r=>{r.id='T-52-01';},r=>{r.head='a'.repeat(40);},
       r=>{r.base_commit='a'.repeat(40);},
     ]) {const input=f.input(binding);mutate(input.result);assert.throws(()=>roleArtifact.sealJudgment(input));}
     const raw=JSON.parse(fs.readFileSync(path.join(__dirname,'../fixtures/code-review/review.json'),'utf8'));
