@@ -1182,6 +1182,14 @@ for (const [name, mutate] of [
 
 test('a genuine prior Codex repair archive cannot supply host bookkeeping and remains admitted by the following review', async () => {
   const f = fixture(), stores = [];
+  const TICKET = 'T-38-01';
+  f.ticket = TICKET;
+  for (const relative of ['.planning/graph/tickets.json', '.planning/graph/delivery-state.json']) {
+    const file = path.join(f.root, relative);
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replaceAll('T-38-01-role-host', TICKET));
+  }
+  f.pr.title = f.pr.title.replace('T-38-01-role-host', TICKET);
+  f.pr.body = f.pr.body.replace('T-38-01-role-host', TICKET);
   const signing = require('./phase53-z29x-native-ci-fix-contract.test.cjs').signingFixture();
   try {
     git(f.root, ['config', 'user.signingkey', signing.signer]);

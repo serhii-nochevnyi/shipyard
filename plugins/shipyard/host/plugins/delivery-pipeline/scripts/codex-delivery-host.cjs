@@ -28,7 +28,7 @@ const { hintForError, stripControl } = require('./refusal-hints.cjs');
 const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, emitPreflight,
   roleNeedsRepositoryIdentity, stateRefusalOf, handoffLaunchPreparation } = require('./runtime-context.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
-const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
+const { acquireGeneratedMergeLock, acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 const { isScratch, ARCH_REVIEW_EVIDENCE_NAME, CODE_REVIEW_EVIDENCE_NAME } = require('./conveyor-scratch.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
@@ -3019,9 +3019,10 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
   const environment = () => {
     const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' }; for (const key of GIT_SCOPE_KEYS) delete env[key]; return env;
   };
-  const run = (program, args, extra = {}) => execFileSync(program, args,
+  let lock;
+  const run = (program, args, extra = {}) => { lock?.assertOwned(); const result = execFileSync(program, args,
     { cwd: root, env: environment(), encoding: 'utf8', timeout: 180000, maxBuffer: MAX_GRAPH_BYTES,
-      stdio: ['ignore', 'pipe', 'pipe'], ...extra });
+      stdio: ['ignore', 'pipe', 'pipe'], ...extra }); lock?.assertOwned(); return result; };
   const g = args => run('git', ['-C', root, ...args]).trim();
   const rawGit = args => run('git', ['-C', root, ...args], { encoding: null });
   const stageRows = () => rawGit(['ls-files', '--stage', '-z']).toString('utf8').split('\0').filter(Boolean).map(row => {
@@ -3063,10 +3064,11 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
       fail('GENERATED_MERGE_INVALID', 'generated merge proof directory is not private and physical');
     return { path: file, dev: stat.dev, ino: stat.ino, mode: stat.mode };
   };
-  const lock = acquireLock(privateDirectory(stateRoot, 'generated-base-merge-locks'), sha256(root), { waitMs: 0 });
+  lock = acquireGeneratedMergeLock(privateDirectory(stateRoot, 'generated-base-merge-locks'), sha256(root));
   if (!lock) fail('GENERATED_MERGE_BUSY', 'another host owns this generated merge');
   let operation, proofFile;
   const save = () => {
+    lock.assertOwned();
     if (Buffer.byteLength(canonical(operation)) > MAX_STATE_BYTES - 1024) fail('GENERATED_MERGE_INVALID', 'generated merge proof exceeds bound');
     atomicWrite(proofFile, JSON.stringify(seal(operation, key)) + '\n', { exclusive: false });
   };
@@ -3315,13 +3317,17 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
     }
     const intent = applyState(), retained = path.join(parent, operation.generation.directory, 'package');
     for (const entry of intent.paths) {
+      lock.assertOwned();
       applyState();
       const target = path.join(root, entry.path), bytes = ciPhysical(path.join(retained, entry.path.slice(packagePrefix.length)), MAX_GRAPH_BYTES, false, true).bytes;
       if (!ciPhysical(target, MAX_GRAPH_BYTES, false, true).bytes.equals(bytes)) fs.writeFileSync(target, bytes);
+      lock.assertOwned();
       applyState();
       if ((fs.lstatSync(target).mode & 0o777) !== entry.intended.mode) fs.chmodSync(target, entry.intended.mode);
+      lock.assertOwned();
       applyState();
       if (canonical(stageRows().filter(row => row.path === entry.path)) !== canonical(entry.intended_stages)) g(['add', '--', entry.path]);
+      lock.assertOwned();
       applyState();
     }
     if (canonical(stageRows()) !== canonical(intent.intended_stages)
@@ -3361,6 +3367,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
     if (g(['status', '--porcelain=v1', '--untracked-files=no']))
       fail('GENERATED_MERGE_CHANGED', 'signed generated merge is not clean');
     check(); verifyCommit();
+    lock.assertOwned();
     const record = coverage.createCoverageWriter().record({ commit: operation.commit,
       parents: [operation.head, operation.pins.base], tree: operation.tree, ticket,
       repo: operation.pins.repo, worktree: root, kind: 'base-merge', base_merge: {

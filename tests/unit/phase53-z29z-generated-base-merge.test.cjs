@@ -268,3 +268,37 @@ if (require.main === module) {
   });
 }
 module.exports = { divergentFixture, inspectSuccess };
+
+if (require.main === module) test('generated merge process ownership survives age and fences replaced owners', bounded, () => {
+  const os = require('node:os');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'generated-process-lock-'));
+  const modulePath = path.join(scripts, 'lock.cjs');
+  const locks = require(modulePath);
+  try {
+    const handle = locks.acquireGeneratedMergeLock(directory, 'merge');
+    const ownerFile = path.join(handle.path, 'owner.json');
+    const owner = JSON.parse(fs.readFileSync(ownerFile));
+    fs.writeFileSync(ownerFile, JSON.stringify({ ...owner, at: '2000-01-01T00:00:00Z' }));
+    const contend = () => spawnSync(process.execPath, ['-e',
+      'const l=require(process.argv[1]).acquireGeneratedMergeLock(process.argv[2],"merge");if(l){l.release();process.exit(1)}',
+      modulePath, directory], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(contend().status, 0);
+    const blocked = spawnSync(process.execPath, ['-e',
+      'const l=require(process.argv[1]).acquireGeneratedMergeLock(process.argv[2],"merge");process.exit(l?1:0)',
+      modulePath, directory], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(blocked.status, 0);
+    handle.assertOwned();
+    fs.writeFileSync(ownerFile, JSON.stringify({ ...owner, token: 'replacement' }));
+    assert.throws(() => handle.assertOwned(), { code: 'LOCK_OWNERSHIP_LOST' });
+    fs.writeFileSync(ownerFile, JSON.stringify({ ...owner, generated_process: 'reused PID lifetime' }));
+    const replacement = locks.acquireGeneratedMergeLock(directory, 'merge');
+    assert.ok(replacement);
+    assert.throws(() => handle.assertOwned(), { code: 'LOCK_OWNERSHIP_LOST' });
+    replacement.release();
+    fs.mkdirSync(path.join(directory, 'merge.lock'));
+    fs.writeFileSync(path.join(directory, 'merge.lock/owner.json'), JSON.stringify({
+      ...owner, pid: 2147483647, generated_process: 'dead owner' }));
+    const recovered = locks.acquireGeneratedMergeLock(directory, 'merge');
+    assert.ok(recovered); recovered.release();
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

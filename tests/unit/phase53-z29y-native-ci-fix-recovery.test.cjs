@@ -61,7 +61,10 @@ function originalOperation(f) {
   assert.equal(operations.length, 1); return operations[0];
 }
 function coldOriginal(f, installed, expectedError, expectedPushes = 1) {
-  f.options.controller.release(f.scope.run_id, 'fixture cold original host handoff');
+  if (f.options.controller) {
+    f.options.controller.release(f.scope.run_id, 'fixture cold original host handoff');
+    delete f.options.controller;
+  }
   const child = spawnSync(process.execPath, ['-e', 'require(process.argv[1]).coldRecovery(JSON.parse(process.argv[2]),process.argv[3]).then(r=>process.stdout.write(JSON.stringify(r))).catch(e=>{process.stdout.write(JSON.stringify({error:e.code,launches:e.physical_launches,pushes:e.publication_calls}));console.error(e);process.exitCode=1;});',
     path.join(__dirname, 'phase53-z29x-native-ci-fix-contract.test.cjs'), JSON.stringify(f.coldSpec()), path.join(installed, 'host/plugins/delivery-pipeline/scripts')],
     { encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
@@ -81,7 +84,7 @@ if (require.main === module) {
       const installed = packageSource(path.join(signing.directory, 'candidate-crash-package'));
       verifyPackage(installed);
       for (const point of ['admitted', 'finalized', 'signed-result', 'cli', 'candidate-only', 'tampered-candidate', 'tampered-association', 'tampered-coverage']) await t.test(point, bounded, async () => {
-        const f = ciFixture(signing), rename = fs.renameSync;
+        const f = ciFixture(signing), rename = fs.renameSync, link = fs.linkSync;
         let interrupted = false;
         fs.renameSync = (source, destination, ...args) => {
           if (!interrupted && point === 'signed-result' && destination.includes('ci-originals')
@@ -96,8 +99,16 @@ if (require.main === module) {
           }
           return value;
         };
+        fs.linkSync = (source, destination, ...args) => {
+          const value = link(source, destination, ...args);
+          if (!interrupted && point !== 'signed-result' && point !== 'admitted'
+              && destination.includes(path.sep + 'finalized' + path.sep)) {
+            interrupted = true; throw new Error('fixture candidate crash');
+          }
+          return value;
+        };
         try { await assert.rejects(f.run, /fixture candidate crash/); }
-        finally { fs.renameSync = rename; }
+        finally { fs.renameSync = rename; fs.linkSync = link; }
         assert.equal(interrupted, true);
         const original = originalOperation(f).envelope.payload;
         assert.ok(original.candidate_result.candidate_id);
