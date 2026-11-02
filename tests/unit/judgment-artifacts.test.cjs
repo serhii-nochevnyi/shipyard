@@ -406,7 +406,9 @@ test('a sentinel result that omits or forges its ticket set seals the host-suppl
     const omitted = seal({});
     const forged = seal({ ticket_set: [{ id: 'T-99-X', pr: 1 }], ticket_set_digest: 'f'.repeat(64) });
     const echoed = seal({ ticket_set: tickets });
+    const aliased = seal({ ticketSet: [{ id: 'T-99-X', pr: 1 }], ticketSetDigest: 'f'.repeat(64) });
     assert.equal(forged.artifact_digest, omitted.artifact_digest);
+    assert.equal(aliased.artifact_digest, omitted.artifact_digest);
     assert.equal(echoed.artifact_digest, omitted.artifact_digest);
     assert.equal(omitted.envelope.ticket_set_digest, crypto.createHash('sha256').update(JSON.stringify(tickets)).digest('hex'));
   } finally {

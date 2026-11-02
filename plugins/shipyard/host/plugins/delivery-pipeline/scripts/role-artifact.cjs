@@ -4016,13 +4016,13 @@ function judgmentEvidenceMaximum(role, runtime) {
     ? 96 * 1024 : ARCHIVE_MAX_BYTES;
 }
 
-// @invariant: the host ticket_set and its digest replace any model-returned values.
 function withoutHostTicketSet(value) {
   const rest = { ...value };
   for (const key of ['ticket_set', 'ticket_set_digest', 'ticketSet', 'ticketSetDigest']) delete rest[key];
   return rest;
 }
 
+// @invariant: the host ticket_set and its digest replace any model-returned values.
 function withHostTicketSet(input) {
   const ticketSet = aliasValue(input, ['ticketSet', 'ticket_set'], 'host ticket set');
   if (ticketSet === undefined || !object(input.result)) return input.result;
