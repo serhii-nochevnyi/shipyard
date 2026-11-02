@@ -239,7 +239,7 @@ function effectiveBaseRef(worktree, file, ticket, snapshot) {
     fail('BOARD_UNAVAILABLE', 'cannot read canonical delivery board: ' + error.message);
   }
   const row = snapshot.row;
-  const live = board && board[ticket];
+  const live = board && (board.tickets || board)[ticket];
   if (!object(live) || live.branch !== row.branch || typeof live.base !== 'string' || !live.base.trim()) {
     fail('BASE_MISMATCH', `ticket ${ticket} has no matching live delivery base`);
   }
@@ -2705,6 +2705,28 @@ function writeCiOperation(state) {
   state.operation = operation;
 }
 
+function reconcileCiCandidate(state) {
+  const { operation: op, prepared } = state;
+  if (!op.candidate_result || op.signed_result) return;
+  const candidateId = op.candidate_result.candidate_id;
+  if (!/^[a-f0-9]{64}$/.test(candidateId || ''))
+    fail('CI_ORIGINAL_INVALID', 'original CI candidate association is malformed');
+  const finalized = readSealed(finalizationFile(prepared.stateRoot, candidateId), prepared.key);
+  if (!finalized) return;
+  const candidate = readSealed(candidateFile(prepared.stateRoot, candidateId), prepared.key);
+  if (!candidate) fail('CI_ORIGINAL_INVALID', 'original CI candidate is unavailable');
+  const artifact = { schema: 'shipyard.codex-delivery-artifact.v1', status: 'committed',
+    ticket: candidate.ticket, commit: finalized.commit, signer: finalized.signer, changed: finalized.changed,
+    candidate_id: candidateId, tree: candidate.scoped_tree,
+    gates: { pre_commit: 'passed', downstream: pendingGates() } };
+  const { candidate_id: _candidateId, ...retained } = op.candidate_result;
+  const signed = { ...retained, artifact };
+  const authenticated = { ...state, operation: { ...op, state: 'finished', signed_result: signed, result: signed } };
+  authenticateFinishedCi(authenticated, { finalizationOnly: true });
+  op.signed_result = signed;
+  writeCiOperation(state);
+}
+
 function prepareCiRepair(options, scope, context) {
   const file = graphFile(options, scope.worktree), graph = graphSnapshot(file, scope.ticket);
   const plan = planSnapshot(file, graph.row);
@@ -2784,7 +2806,8 @@ function prepareCiRepair(options, scope, context) {
   const state = { prepared: result, options, file: operationFile, operation };
   originalCiOperations.set(handle, state); preparedCiOperations.set(result, handle);
   if (!saved) writeCiOperation(state);
-  recheckCiRepair(result, options, { signedHead: saved?.signed_result?.artifact?.commit });
+  reconcileCiCandidate(state);
+  recheckCiRepair(result, options, { signedHead: state.operation.signed_result?.artifact?.commit });
   if (saved?.state === 'finished') {
     authenticateFinishedCi(state);
     if (!saved.signed_result) {
@@ -2805,7 +2828,7 @@ function prepareCiRepair(options, scope, context) {
   return result;
 }
 
-function authenticateFinishedCi(state) {
+function authenticateFinishedCi(state, { finalizationOnly = false } = {}) {
   const { operation: op, prepared, options } = state;
   const recorder = createDurableRecorder(op.receipt_store);
   const original = authenticatedReceipt(recorder, op.dispatch_id, 'ci-fix');
@@ -2833,7 +2856,7 @@ function authenticateFinishedCi(state) {
       || candidate.expected_role !== 'ci-fix' || candidate.dispatch_id !== op.dispatch_id
       || candidate.receipt_store !== op.receipt_store || candidate.repository !== prepared.repository
       || candidate.worktree !== prepared.commit.worktree || candidate.ticket !== prepared.commit.ticket
-      || candidate.phase !== op.scope.phase || candidate.branch !== prepared.commit.expectedBranch
+      || candidate.phase !== op.scope.phase || candidate.run_id !== op.scope.run_id || candidate.branch !== prepared.commit.expectedBranch
       || candidate.expected_head !== prepared.commit.expectedHead || candidate.expected_base !== prepared.commit.expectedBase
       || candidate.base_ref !== prepared.baseRef || candidate.graph_sha256 !== prepared.graphDigest
       || candidate.plan_sha256 !== prepared.plan.sha256 || candidate.plan_path !== prepared.plan.path
@@ -2849,11 +2872,11 @@ function authenticateFinishedCi(state) {
   verifySignedCommit(prepared.commit.worktree, candidate, artifact.commit);
   const transition = { candidate_id: id, from: prepared.commit.expectedHead, to: artifact.commit,
     tree: artifact.tree, signer: artifact.signer };
-  if (publication?.status !== 'confirmed' || publication.candidate_id !== id || publication.commit !== artifact.commit
+  if (!finalizationOnly && (publication?.status !== 'confirmed' || publication.candidate_id !== id || publication.commit !== artifact.commit
       || canonical(publication.subject) !== canonical({ ...prepared.repair, live: publication.subject?.live, signed_transition: transition })
-      || canonical(op.result.publication) !== canonical({ status: 'confirmed', transition }))
+      || canonical(op.result.publication) !== canonical({ status: 'confirmed', transition })))
     fail('REPAIR_PUBLICATION_PENDING', 'finished CI lacks its exact confirmed signed publication');
-  repairLive(options, { ...prepared, commit: { ...prepared.commit, expectedHead: artifact.commit } }, prepared.repair.pr);
+  if (!finalizationOnly) repairLive(options, { ...prepared, commit: { ...prepared.commit, expectedHead: artifact.commit } }, prepared.repair.pr);
   const covered = require('./conveyor-coverage.cjs').verify({ commit: artifact.commit, repo: prepared.repo, worktree: prepared.commit.worktree });
   if (!covered.covered || covered.record.kind !== 'fixer' || covered.record.dispatch_id !== op.dispatch_id
       || covered.record.receipt_digest !== original.digest || covered.record.tree !== candidate.scoped_tree
@@ -3671,9 +3694,37 @@ function finishRepairRecovery(candidate, artifact, options, stateRoot, key, reco
   const output = repairCompletion({ launch_id: original.launch_id, session_id: original.runtime_evidence.session_id,
     runtime_evidence: original.runtime_evidence, last_agent_message: text }, { receipt: original }, prepared, recorder);
   if (canonical(output) !== canonical(attempt.result)) fail('REPAIR_PREDECESSOR_INVALID', 'recovery result differs from the original completed turn');
+  let ciSelectors, ciOperation, ciOriginalPrepared;
+  if (candidate.expected_role === 'ci-fix') {
+    ciSelectors = { pr: candidate.repair_subject.pr, plan_sha256: candidate.plan_sha256,
+      evidence_path: candidate.repair_subject.evidence.original.path, evidence_sha256: candidate.repair_subject.evidence.sha256 };
+    ciOperation = readSealed(ciOperationFile(prepared, ciSelectors), key);
+    if (!ciOperation || ciOperation.dispatch_id !== candidate.dispatch_id
+        || (ciOperation.candidate_result?.candidate_id || ciOperation.signed_result?.artifact?.candidate_id) !== candidate.candidate_id)
+      fail('CI_ORIGINAL_INVALID', 'candidate recovery lacks its authenticated original CI association');
+    if (ciOperation.candidate_result) {
+      ciOriginalPrepared = prepareCiRepair(options, ciOperation.scope, ciSelectors);
+      const state = originalCiOperations.get(preparedCiOperations.get(ciOriginalPrepared));
+      authenticateFinishedCi({ ...state, operation: { ...state.operation, state: 'finished', result: state.operation.signed_result } },
+        { finalizationOnly: true });
+    }
+  }
   const transitioned = publishSignedRepair(prepared, { artifact }, options);
-  return { repair_result: output, publication: { status: 'confirmed', transition: transitioned.repair.signed_transition },
+  const recovered = { repair_result: output, publication: { status: 'confirmed', transition: transitioned.repair.signed_transition },
     actions: applyRepairActions(transitioned, output, options, candidate.dispatch_id) };
+  if (candidate.expected_role === 'ci-fix') {
+    const operation = ciOperation;
+    if (operation.candidate_result) {
+      if (operation.candidate_result.candidate_id !== candidate.candidate_id || operation.dispatch_id !== candidate.dispatch_id)
+        fail('CI_ORIGINAL_INVALID', 'recovered candidate differs from its original CI association');
+      const state = originalCiOperations.get(preparedCiOperations.get(ciOriginalPrepared));
+      const completed = { ...state.operation.signed_result, ...recovered };
+      const finished = { ...state.operation, state: 'finished', result: completed };
+      authenticateFinishedCi({ ...state, operation: finished });
+      state.operation = finished; writeCiOperation(state);
+    }
+  }
+  return recovered;
 }
 
 function applyRepairActions(prepared, output, options, dispatchId) {
@@ -3877,6 +3928,14 @@ function finalizedArtifact(result, prepared, options, renewOwner) {
   if (prepared.repair) recheckRepair(prepared, options);
   const candidate = admitCandidate(staged, prepared.verification, records, tree);
   options.controller?.assertOwner(options.scope.run_id);
+  if (prepared.expectedRole === 'ci-fix') {
+    const state = originalCiOperations.get(preparedCiOperations.get(prepared));
+    if (!state || state.operation.dispatch_id !== candidate.dispatch_id)
+      fail('CI_ORIGINAL_INVALID', 'CI candidate has no matching original operation');
+    state.operation.candidate_result = { ...result, candidate_id: candidate.candidate_id,
+      repair: options.ciRepairSeal, repair_result: options.ciRepairResult };
+    writeCiOperation(state);
+  }
   let artifact;
   try {
     artifact = finalizeCandidate(candidate, prepared.stateRoot, prepared.key, options);
@@ -4358,6 +4417,16 @@ function createCodexDeliveryHost(options = {}) {
       }
       if (request.role === 'ci-fix') {
         const state = originalCiOperations.get(preparedCiOperations.get(repairPrepared));
+        if (state.operation.candidate_result && !state.operation.signed_result) {
+          const resumed = await resumeFinalization(options, state.operation.candidate_result.candidate_id, scope);
+          const saved = readSealed(state.file, repairPrepared.key);
+          if (saved?.state !== 'finished' || saved.dispatch_id !== state.operation.dispatch_id
+              || saved.result?.artifact?.commit !== resumed.artifact.commit)
+            fail('CI_ORIGINAL_INVALID', 'candidate recovery did not finish its original CI operation');
+          state.operation = saved;
+          authenticateFinishedCi(state);
+          return Object.freeze(saved.result);
+        }
         if (state.operation.signed_result && state.operation.state !== 'finished') {
           const retained = state.operation.signed_result;
           const recorder = createDurableRecorder(state.operation.receipt_store);
@@ -4753,7 +4822,7 @@ function createCodexDeliveryHost(options = {}) {
         recheckRepair(repairPrepared, options);
         retainRepairAttempt(repairPrepared, sealed, output, repairRecorder, result.receipt.dispatch_id);
         const signed = delta.length ? finalizedArtifact(result, repairPrepared,
-          { ...options, scope, recorder: repairRecorder }, renewVerificationOwner) : result;
+          { ...options, scope, recorder: repairRecorder, ciRepairSeal: sealed, ciRepairResult: output }, renewVerificationOwner) : result;
         if (signed.status === 'verification_failed') return signed;
         if (request.role === 'ci-fix' && delta.length) {
           const state = originalCiOperations.get(preparedCiOperations.get(repairPrepared));
@@ -5090,6 +5159,30 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       authenticateFinishedCi(state);
       stdout.write(JSON.stringify(state.operation.result) + '\n');
       return state.operation.result;
+    }
+    if (state.operation.candidate_result) {
+      const candidateId = state.operation.candidate_result.candidate_id;
+      const candidate = readSealed(candidateFile(preparedRepair.stateRoot, candidateId), preparedRepair.key);
+      if (!candidate || candidate.dispatch_id !== state.operation.dispatch_id || candidate.expected_role !== 'ci-fix')
+        fail('CI_ORIGINAL_INVALID', 'CLI recovery requires its original admitted CI candidate');
+      const original = authenticatedReceipt(createDurableRecorder(state.operation.receipt_store), candidate.dispatch_id, 'ci-fix');
+      const policyVersion = candidatePolicy(candidate, original);
+      const recoveryScope = { ...scope, run_id: 'ci-candidate-recovery-' + crypto.randomUUID() };
+      const controller = createRunController({ storeDir: path.join(storageDirectory(options, scope), 'runs') });
+      controller.begin(createRunScope({ ...recoveryScope, repository_id: scope.repository, owner_id: controller.owner_id,
+        dispatch: { dispatch_id: 'recovery-' + candidateId.slice(0, 32), role: 'ci-fix', model: candidate.model,
+          effort: candidate.effort, policy_version: policyVersion, policy_hash: candidate.policy_hash } }));
+      try {
+        await resumeFinalization({ ...options, controller }, candidateId, recoveryScope);
+        state.operation = readSealed(state.file, preparedRepair.key);
+        authenticateFinishedCi(state);
+        controller.complete(recoveryScope.run_id, { reason: 'recovered original CI candidate ' + candidateId });
+        stdout.write(JSON.stringify(state.operation.result) + '\n');
+        return state.operation.result;
+      } catch (error) {
+        try { controller.fail(recoveryScope.run_id, { reason: historyReason(error.message) }); } catch {}
+        throw error;
+      }
     }
   }
   const fileInputContext = preparedReview ? null : prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });

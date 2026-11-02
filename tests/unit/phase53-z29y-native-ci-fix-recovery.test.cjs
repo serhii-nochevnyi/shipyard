@@ -75,6 +75,70 @@ function coldOriginal(f, installed, expectedError, expectedPushes = 1) {
   return recovered.result;
 }
 if (require.main === module) {
+  test('CI candidate association recovers admission and finalization crashes through the original cold operation', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      const installed = packageSource(path.join(signing.directory, 'candidate-crash-package'));
+      verifyPackage(installed);
+      for (const point of ['admitted', 'finalized', 'signed-result', 'cli', 'candidate-only', 'tampered-candidate', 'tampered-association', 'tampered-coverage']) await t.test(point, bounded, async () => {
+        const f = ciFixture(signing), rename = fs.renameSync;
+        let interrupted = false;
+        fs.renameSync = (source, destination, ...args) => {
+          if (!interrupted && point === 'signed-result' && destination.includes('ci-originals')
+              && JSON.parse(fs.readFileSync(source)).payload.signed_result) {
+            interrupted = true; throw new Error('fixture candidate crash');
+          }
+          const value = rename(source, destination, ...args);
+          if (!interrupted && (((['finalized', 'cli', 'candidate-only'].includes(point) || point.startsWith('tampered-')) && destination.includes(path.sep + 'finalized' + path.sep))
+              || (point === 'admitted' && destination.includes('ci-originals')
+                && JSON.parse(fs.readFileSync(destination)).payload.candidate_result))) {
+            interrupted = true; throw new Error('fixture candidate crash');
+          }
+          return value;
+        };
+        try { await assert.rejects(f.run, /fixture candidate crash/); }
+        finally { fs.renameSync = rename; }
+        assert.equal(interrupted, true);
+        const original = originalOperation(f).envelope.payload;
+        assert.ok(original.candidate_result.candidate_id);
+        assert.equal(original.signed_result, undefined);
+        assert.equal(f.launches, 1); assert.equal(f.pushes, 0);
+        if (point.startsWith('tampered-')) {
+          const files = {
+            'tampered-candidate': path.join(f.stateRoot, 'candidates', original.candidate_result.candidate_id + '.json'),
+            'tampered-association': originalOperation(f).file,
+            'tampered-coverage': path.join(process.env.SHIPYARD_COVERAGE_ROOT, 'coverage', encodeURIComponent('fixture/repository'),
+              git(f.worktree, 'rev-parse', 'HEAD') + '.json'),
+          };
+          fs.appendFileSync(files[point], '\nforeign state');
+          f.options.controller.release(f.scope.run_id, 'candidate tamper cold handoff');
+          const child = spawnSync(process.execPath, ['-e',
+            'require(process.argv[1]).coldRecovery(JSON.parse(process.argv[2]),process.argv[3]).then(()=>process.exitCode=2).catch(e=>process.stdout.write(JSON.stringify({launches:e.physical_launches,pushes:e.publication_calls})));',
+            path.join(__dirname, 'phase53-z29x-native-ci-fix-contract.test.cjs'), JSON.stringify(f.coldSpec()),
+            path.join(installed, 'host/plugins/delivery-pipeline/scripts')],
+            { encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+          assert.equal(child.status, 0, child.stderr + child.stdout);
+          assert.deepEqual(JSON.parse(child.stdout), { launches: 0, pushes: 0 });
+          assert.equal(git(f.worktree, 'rev-list', '--count', `${f.originalHead}..HEAD`), '1');
+          return;
+        }
+        let recovered;
+        if (point === 'cli') recovered = await f.cliRun();
+        else if (point === 'candidate-only') {
+          await host.createFinalizationRecoveryHost(f.options).resumeFinalization(original.candidate_result.candidate_id, f.scope);
+          recovered = originalOperation(f).envelope.payload.result;
+        } else recovered = coldOriginal(f, installed);
+        const finished = originalOperation(f).envelope.payload;
+        assert.equal(finished.state, 'finished');
+        assert.equal(finished.dispatch_id, original.dispatch_id);
+        assert.equal(finished.completed.session_id, original.completed.session_id);
+        assert.equal(finished.signed_result.artifact.candidate_id, original.candidate_result.candidate_id);
+        assert.equal(git(f.worktree, 'rev-list', '--count', `${f.originalHead}..HEAD`), '1');
+        assertCurrent(f, recovered);
+        assert.deepEqual(coldOriginal(f, installed, undefined, 0), recovered);
+      });
+    } finally { signing.close(); }
+  });
   test('finished signed CI originals return under green, pending and lost successful return with no fresh work', bounded, async t => {
     const signing = signingFixture();
     try {
