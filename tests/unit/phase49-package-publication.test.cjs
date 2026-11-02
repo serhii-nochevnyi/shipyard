@@ -1559,17 +1559,39 @@ test('same-generation packaged fixer authenticates source publication and comple
           finally { fs.readFileSync = originalRead; Module._load = load; }
         });
     } else {
-    const source = fs.readFileSync(file, 'utf8');
-    const prefix = '../../plugins/delivery-pipeline/';
-    if (!source.includes(prefix)) throw new Error('original fixer package import seam changed');
-    entry._compile(source.split(prefix).join('../../plugins/shipyard/host/plugins/delivery-pipeline/'), file);
+    let lifecycle;
+    if (!process.argv[3]) {
+      lifecycle = require(path.join(process.argv[1], 'tests/unit/helpers/phase53-delivery-fixture.cjs'))
+        .createDeliveryLifecycle({ scripts: path.join(packaged, 'scripts') });
+      const context = lifecycle.start();
+      for (const owner of [
+        'codex-delivery-host.test.cjs',
+        'phase53-z29a-fixer-original-custody.test.cjs',
+        'phase53-z29b-fixer-source-history.test.cjs',
+        'phase53-z29c-historical-direct.test.cjs',
+        'phase53-z29d-historical-admitted.test.cjs',
+        'phase53-z29e-historical-pending.test.cjs',
+        'phase53-z29f-historical-action-repeat.test.cjs',
+        'phase53-z29g-historical-action-covered.test.cjs',
+      ]) {
+        const definitions = require(path.join(process.argv[1], 'tests/unit', owner));
+        (definitions.registerDeliveryTests || definitions.registerTests)((name, callback) => registered.set(name, callback), context);
+      }
+    } else {
+      const source = fs.readFileSync(file, 'utf8');
+      const prefix = '../../plugins/delivery-pipeline/';
+      if (!source.includes(prefix)) throw new Error('original fixer package import seam changed');
+      entry._compile(source.split(prefix).join('../../plugins/shipyard/host/plugins/delivery-pipeline/'), file);
+    }
     (async () => {
+      try {
       for (const name of JSON.parse(process.argv[2])) {
         const callback = registered.get(name);
         if (typeof callback !== 'function') throw new Error('missing original fixer fixture: ' + name);
         await callback();
       }
       process.stdout.write('packaged-original-fixer-contracts-pass\\n');
+      } finally { lifecycle?.cleanup(); }
     })().catch(error => { process.stderr.write(error.stack + '\\n'); process.exitCode = 1; });
     }
   `;
