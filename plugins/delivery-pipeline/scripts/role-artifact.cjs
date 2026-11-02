@@ -1204,7 +1204,13 @@ function assertArchitectureSourceStable(source, pins) {
   const names = []; let count = 0;
   function visit(relative) {
     if (++count > 2000) fail('SOURCE_AUTHORITY_INVALID', 'canonical source inventory exceeds its bound');
-    const absolute = path.join(source.root, relative), stat = fs.lstatSync(absolute);
+    const absolute = path.join(source.root, relative);
+    let stat;
+    try { stat = fs.lstatSync(absolute); }
+    catch (error) {
+      if (error.code === 'ENOENT') fail('ARCHIVE_AUTHORITY_INVALID', 'canonical source inventory is missing: ' + relative);
+      throw error;
+    }
     if (stat.isSymbolicLink() || fs.realpathSync(absolute) !== absolute)
       fail('SOURCE_AUTHORITY_INVALID', 'canonical source inventory contains a symlink');
     if (stat.isDirectory()) {
@@ -1223,7 +1229,13 @@ function assertArchitectureSourceStable(source, pins) {
 function authenticateArchitectureSources(worktree, project, refs) {
   const source = architectureSourceIdentity(project), pins = architectureSourcePins(refs);
   if (planningIsTracked(source)) assertCommittedArchitectureSources(source, pins);
-  else for (const pin of pins) readPinnedArchiveFile(source.root, pin, 'local source');
+  else for (const pin of pins) {
+    try { readPinnedArchiveFile(source.root, pin, 'local source'); }
+    catch (error) {
+      if (error.code === 'ENOENT') fail('ARCHIVE_AUTHORITY_INVALID', 'local source is missing: ' + pin.path);
+      throw error;
+    }
+  }
   assertArchitectureSourceStable(source, pins);
   return { source, pins };
 }

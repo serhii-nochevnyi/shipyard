@@ -1094,7 +1094,7 @@ test('untracked planning sources refuse a changed, added, removed or symlinked A
   const link = ADR_PATH + '.real';
   for (const [name, change, code] of [
     ['changed', f => write(f.root, ADR_PATH, ADR + 'edited\n'), 'ARCHIVE_AUTHORITY_INVALID'],
-    ['removed', f => fs.unlinkSync(path.join(f.root, ADR_PATH)), 'ENOENT'],
+    ['removed', f => fs.unlinkSync(path.join(f.root, ADR_PATH)), 'ARCHIVE_AUTHORITY_INVALID'],
     ['added', f => write(f.root, '.planning/architecture/ADR-026-late.md', '# late\n'), 'SOURCE_AUTHORITY_INVALID'],
     ['symlinked pinned member', f => { const file = path.join(f.root, ADR_PATH); fs.copyFileSync(file, file + '.real'); fs.unlinkSync(file); fs.symlinkSync(path.basename(link), file); }, 'ARCHIVE_AUTHORITY_INVALID'],
     ['unpinned symlink member', f => fs.symlinkSync(path.basename(ADR_PATH), path.join(f.root, '.planning/architecture/ADR-099-link.md')), 'SOURCE_AUTHORITY_INVALID'],
@@ -1109,6 +1109,18 @@ test('untracked planning sources refuse a changed, added, removed or symlinked A
       assert.throws(() => role.authenticateArchitectureSources(f.root, f.root, pins), error => error.code === code, name);
     } finally { cleanupJudgment(f); }
   }
+});
+
+test('untracked planning refuses a missing architecture directory with a Shipyard code', () => {
+  const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const f = fixture(), decision = '.planning/investigations/INV-closure/DECISIONS.md';
+  try {
+    write(f.root, decision, 'Complete linked decision.');
+    untrackPlanning(f);
+    const pins = sourcePins(f, [decision]);
+    fs.rmSync(path.join(f.root, '.planning/architecture'), { recursive: true });
+    assert.throws(() => role.authenticateArchitectureSources(f.root, f.root, pins), error => error.code === 'ARCHIVE_AUTHORITY_INVALID');
+  } finally { cleanupJudgment(f); }
 });
 
 test('untracked planning member swapped for a symlink between the physical-path check and the open is refused by O_NOFOLLOW', () => {
