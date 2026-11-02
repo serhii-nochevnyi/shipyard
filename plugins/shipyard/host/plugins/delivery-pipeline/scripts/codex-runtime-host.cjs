@@ -814,7 +814,8 @@ function installedGsdAgent(role, env = {}) {
 function parseNativeParentSpawn(raw, parentId, role, model, effort, live = false) {
   parseNativeCodexTranscript(raw, parentId);
   const calls = [];
-  const waits = [];
+  let waits = [];
+  let lastCall = null;
   const outputs = new Map();
   let metadataCount = 0;
   for (const line of raw.split(/\r?\n/)) {
@@ -826,6 +827,7 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort, live = false
     if (record.type !== 'response_item' || !object(record.payload)) continue;
     const item = record.payload;
     if (item.type === 'function_call' && item.name === 'spawn_agent') calls.push(item);
+    if (item.type === 'function_call') lastCall = item;
     if (item.type === 'function_call' && item.name === 'wait_agent') waits.push(item);
     if (item.type === 'function_call_output' && typeof item.call_id === 'string') {
       if (outputs.has(item.call_id)) fail('RUNTIME_EVIDENCE_INVALID', 'duplicate parent tool output');
@@ -857,6 +859,12 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort, live = false
       || path.basename(output.task_name) !== args.task_name) {
     fail('RUNTIME_EVIDENCE_MISMATCH', 'native spawn output does not identify the requested task');
   }
+  // @invariant: a wait cancelled before dispatch is no evidence and is accepted only as the parent's last tool call.
+  waits = waits.filter((wait) => {
+    if (outputs.get(wait.call_id) !== 'aborted before dispatch') return true;
+    if (wait !== lastCall) fail('RUNTIME_EVIDENCE_INVALID', 'native parent continued after a cancelled child wait');
+    return false;
+  });
   if (!live && !waits.length) fail('RUNTIME_EVIDENCE_MISSING', 'native parent did not wait for its child');
   const waitResults = waits.map((wait) => {
     if (live && !outputs.has(wait.call_id)) return { timed_out: true };

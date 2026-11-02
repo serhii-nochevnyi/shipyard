@@ -763,10 +763,22 @@ test('recorded CLI 0.157.1 parent proves an explicit native typed spawn', () => 
   });
   assert.equal(parseNativeParentSpawn(withWaitOutput('{"message":"Wait timed out.","timed_out":true}'),
     parent, 'gsd-plan-checker', 'gpt-6-luna', 'low').task_name, 'gsd_task');
-  for (const bad of ['{"message":"Wait completed."}', '{"timed_out":"false"}', 'not json', '[]']) {
+  for (const bad of ['{"message":"Wait completed."}', '{"timed_out":"false"}', 'not json', '[]', '', 'aborted before dispatch.']) {
     assert.throws(() => parseNativeParentSpawn(withWaitOutput(bad), parent, 'gsd-plan-checker', 'gpt-6-luna', 'low'),
       (error) => error.code === 'RUNTIME_EVIDENCE_INVALID');
   }
+  const ABORTED = 'aborted before dispatch';
+  const spawnParent = (text) => parseNativeParentSpawn(text, parent, 'gsd-plan-checker', 'gpt-6-luna', 'low');
+  const addWait = (text, id, output) => text + [
+    { ...structuredClone(waitCall), payload: { ...waitCall.payload, call_id: id } },
+    { ...structuredClone(waitOutput), payload: { ...waitOutput.payload, call_id: id, output } },
+  ].map((record) => JSON.stringify(record)).join('\n') + '\n';
+  const timedOut = withWaitOutput('{"message":"Wait timed out.","timed_out":true}');
+  assert.equal(spawnParent(addWait(timedOut, 'wait-aborted', ABORTED)).timed_out, true);
+  assert.equal(spawnParent(addWait(raw + '\n', 'wait-aborted', ABORTED)).timed_out, false);
+  assert.throws(() => spawnParent(withWaitOutput(ABORTED)), (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
+  assert.throws(() => spawnParent(addWait(addWait(timedOut, 'wait-aborted', ABORTED), 'wait-after', '{"timed_out":true}')),
+    (error) => error.code === 'RUNTIME_EVIDENCE_INVALID');
   assert.throws(() => parseNativeParentSpawn(raw.split('\n').filter((line) => !line.includes(waitCall.payload.call_id)
     || line.includes('"wait_agent"')).join('\n'), parent, 'gsd-plan-checker', 'gpt-6-luna', 'low'),
   (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
