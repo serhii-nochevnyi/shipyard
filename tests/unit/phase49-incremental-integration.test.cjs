@@ -776,6 +776,8 @@ async function publicIntegrationFixture(action) {
 }
 
 async function supportedPartitionCaller(f, nativeRuntime, options) {
+  if (nativeRuntime === 'codex')
+    options = await require('./phase53-z29i-recorded-integration-compatibility.test.cjs').recordHistoricalCodexV3(f, options);
   if (nativeRuntime === 'claude' && !options.integrationCapacity?.plan_sha256)
     options = await require('../fixtures/phase49/claude-v3-native-driver.cjs').recordHistoricalClaudeV3(f, options);
   const command = fs.readFileSync(path.resolve(__dirname, '../fixtures/phase49/integration-v3-caller.md'), 'utf8');
@@ -1569,14 +1571,14 @@ async function withCodexIngressHost(intercept, action) {
   const originalAuthority = require.cache[authorityPath], originalReader = authority;
   const originalEvidenceHost = require.cache[evidenceHostPath];
   try {
-    require.cache[runtimePath].exports = { ...originalRuntime,
-      createCodexRuntimeHost: options => intercept(options, originalRuntime.createCodexRuntimeHost) };
+    const createCodexRuntimeHost = options => intercept(options, originalRuntime.createCodexRuntimeHost);
+    require.cache[runtimePath].exports = { ...originalRuntime, createCodexRuntimeHost };
     delete require.cache[evidenceHostPath];
     require(evidenceHostPath);
     delete require.cache[deliveryPath];
     require(deliveryPath);
     require.cache[runtimePath].exports = originalRuntime;
-    await action();
+    await require('./phase53-z29i-recorded-integration-compatibility.test.cjs').withHistoricalCodexRuntime(createCodexRuntimeHost, action);
   } finally {
     require.cache[runtimePath].exports = originalRuntime;
     require.cache[deliveryPath] = originalDelivery;

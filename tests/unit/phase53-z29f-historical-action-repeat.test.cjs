@@ -201,84 +201,9 @@ test('public integration-review.v2 completes shared preparation with coordinator
   }
 }));
 
-test('public Codex v3 preserves historical pins through independent units, exact-plan restart and one actual final', () => withGraphDirEnv(undefined, async () => {
-  const helper = codexPartitionHelpers();
-  await helper.fixture(async f => {
-    const roleArtifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-    const prior = await helper.successfulReview(f, 'integrator', { legacy: true });
-    const historical = roleArtifacts.authenticatedArchivePins(f.worktree);
-    const receipt = structuredClone(prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt);
-    const evidencePath = path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md');
-    helper.write(f.worktree, 'src/consumer.cjs', 'exact Codex primary line Ω\n'.repeat(3000)); helper.commit(f, 'complete partitioned source');
-    const { options, controls } = codexPartitionFixture(f, helper);
-    options.integrationCapacity.capacity.unit_input_bytes = 128 * 1024;
-    let interrupted = false;
-    controls.render = launch => {
-      if (controls.launches?.length === 2 && launch.kind !== 'reserved-template' && !interrupted) {
-        interrupted = true; throw new Error('fixture interruption before next native reservation');
-      }
-    };
-    controls.onLaunch = (input, payload) => {
-      assert.equal(input.includes('<AUTHENTICATED_CONTEXT_PACKET>'), false);
-      assert.equal(controls.measured.filter(item => item.reserved_template).length, 1);
-      assert.ok(controls.measured.filter(item => item.kind === 'unit').length > 1);
-      assert.equal(fs.existsSync(evidencePath), false);
-      if (payload.kind === 'phase') assert.ok(payload.unit_artifacts.length > 1);
-    };
-    const host = createCodexDeliveryHost(options), selected = { role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } };
-    await assert.rejects(host.run(selected), error => error.code === 'INTEGRATION_CAPACITY_UNPROVEN');
-    assert.equal(controls.launches.length, 2);
-    for (const pin of historical) roleArtifacts.assertArchivePin(f.worktree, pin);
-    const old = fs.readFileSync(path.join(f.worktree, historical[0].path));
-    fs.appendFileSync(path.join(f.worktree, historical[0].path), 'tamper');
-    await assert.rejects(host.run(selected), /archive|pin|changed|digest/i);
-    fs.writeFileSync(path.join(f.worktree, historical[0].path), old);
-    helper.write(f.worktree, roleArtifacts.ARTIFACT_ARCHIVE_DIR + '/unlisted/unrelated.json', '{}');
-    await assert.rejects(host.run(selected), /archive|membership/i);
-    fs.rmSync(path.join(f.worktree, roleArtifacts.ARTIFACT_ARCHIVE_DIR, 'unlisted'), { recursive: true });
-    options.integrationCapacity.plan_sha256 = controls.measured[0].plan_sha256;
-    const restarted = createCodexDeliveryHost(options);
-    const result = await restarted.run(selected);
-    assert.equal(result.result.kind, 'phase');
-    assert.equal(result.result.outcome, 'passed');
-    assert.equal(result.receipt.runtime, 'codex');
-    assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
-    const units = controls.launches.filter(item => item.payload.kind === 'unit');
-    assert.equal(new Set(units.map(item => item.payload.assignment.unit_id)).size, units.length);
-    assert.equal(controls.measured.length, controls.launches.length + 1);
-    const final = controls.measured.at(-1);
-    assert.equal(final.kind, 'phase'); assert.equal(final.reserved_template, undefined);
-    assert.notEqual(final.verified_index_sha256, '0'.repeat(64));
-    assert.equal(final.unit_artifacts.length, units.length);
-    assert.deepEqual(prior.recorder.getVerifiedRecord(prior.dispatched.dispatch_id).receipt, receipt);
-    for (const pin of historical) roleArtifacts.assertArchivePin(f.worktree, pin);
-    const manifests = roleArtifacts.authenticatedArchivePins(f.worktree).filter(pin => pin.path.endsWith('/.shipyard-role-artifact.json'))
-      .map(pin => JSON.parse(fs.readFileSync(path.join(f.worktree, pin.path))));
-    assert.equal(new Set(manifests.map(item => item.producer_launch)).size, manifests.length);
-    assert.equal(manifests.filter(item => item.artifact_kind === 'integration-unit').length, units.length);
-    await assert.rejects(restarted.run(selected), /reserved|archive|membership|baseline/i);
-    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
-  });
-}));
+test('public Codex v3 preserves historical pins through independent units, exact-plan restart and one actual final', () => require('./phase53-z29i-recorded-integration-compatibility.test.cjs').assertFreshHistoricalRefusal('pins', context));
 
-test('public Codex v3 accepts omitted capacity through original observed evidence', () => withGraphDirEnv(undefined, async () => {
-  const helper = codexPartitionHelpers();
-  await helper.publicIntegrationFixture(async f => {
-    const { options, controls } = helper.publicPartitionFixture(f, 'codex', { observed: true });
-    delete options.integrationCapacity;
-    const result = await createCodexDeliveryHost(options).run({ role: 'integrator',
-      context: { review_contract: 'shipyard.integration-review.v3' } });
-    assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(result.result.outcome, 'passed');
-    assert.equal(controls.measured, undefined);
-    assert.ok(controls.launches.filter(item => item.payload.kind === 'unit').length > 0);
-    assert.equal(controls.launches.filter(item => item.payload.kind === 'phase').length, 1);
-    assert.equal(result.operational_diagnostic.authoritative, false);
-    assert.ok(result.operational_diagnostic.actual_final_input_bytes <= 4194304);
-    assert.equal(helper.currentPartitionConsumer(f)?.authenticated, true);
-  });
-}));
+test('public Codex v3 accepts omitted capacity through original observed evidence', () => require('./phase53-z29i-recorded-integration-compatibility.test.cjs').assertFreshHistoricalRefusal('observed', context));
 }
 
 function registerRuntimeTests(register, context = createDeliveryFixture()) {
