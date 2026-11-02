@@ -8,21 +8,23 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-spikes-')));
-const homedir = os.homedir;
-os.homedir = () => path.join(work, 'parent-home');
-process.on('exit', () => { os.homedir = homedir; fs.rmSync(work, { recursive: true, force: true }); });
+process.on('exit', () => fs.rmSync(work, { recursive: true, force: true }));
 const repository = path.resolve(__dirname, '../..');
 
 const SITES = {
   normalize: ['scripts/code-review-core.cjs', 'round > ROUND_CAP ||', 'round > 5 ||'],
   seal: ['scripts/role-artifact.cjs', 'result.review_round > core.ROUND_CAP', 'result.review_round > 5'],
-  replay: ['scripts/role-artifact.cjs', "lineage.active.size >= require('./code-review-core.cjs').ROUND_CAP",
-    'lineage.active.size >= 5'],
 };
-const TRACE = ['scripts/role-artifact.cjs', "lineage.active.size >= require('./code-review-core.cjs').ROUND_CAP",
+const GUARD = "lineage.active.size >= require('./code-review-core.cjs').ROUND_CAP";
+const replay = bound => ['scripts/role-artifact.cjs', GUARD, 'lineage.active.size >= ' + bound];
+const COLD = ['scripts/role-artifact.cjs',
+  "payload.records)) {\n      if (record.receipt?.role !== 'code-review') continue;\n      const fields",
+  "payload.records).reverse()) {\n      if (record.receipt?.role !== 'code-review') continue;\n      const fields"];
+const TRACE = ['scripts/role-artifact.cjs', GUARD,
   '((globalThis.guardSizes ??= []).push(lineage.active.size), lineage.active.size >= 5)'];
-const VARIANTS = { A: [], B: [SITES.normalize, SITES.seal], C: [SITES.normalize, SITES.seal, SITES.replay],
-  T: [SITES.normalize, SITES.seal, TRACE] };
+const ceiling = (...rest) => [SITES.normalize, SITES.seal, ...rest];
+const VARIANTS = { A: [], B: [SITES.normalize, SITES.seal], C: ceiling(replay(5)), T: ceiling(TRACE),
+  R5: ceiling(replay(5), COLD), R4: ceiling(replay(4), COLD), R3: ceiling(replay(3), COLD) };
 
 const PROBE = `
 const fs = require('node:fs');
@@ -149,13 +151,18 @@ function environment(name) {
     GIT_CONFIG_GLOBAL: at('gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
 }
 
+function run(file, args, options) {
+  for (const key of ['HOME', 'TMPDIR', 'GIT_CONFIG_GLOBAL']) {
+    const relative = path.relative(work, options.env[key] || '');
+    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), key + ' must resolve inside the test directory');
+  }
+  return spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', timeout: 540000, ...options });
+}
+
 function probe(variant, env, args) {
   const copy = copyOf(variant);
-  const result = spawnSync(process.execPath, [path.join(copy, 'probe.cjs'), ...args], {
-    cwd: copy, encoding: 'utf8', env, timeout: 540000 });
+  const result = run(path.join(copy, 'probe.cjs'), args, { cwd: copy, env });
   assert.equal(result.status, 0, result.stderr);
-  if (args[0] !== 'read')
-    assert.ok(fs.readdirSync(path.join(env.HOME, '.local/state/shipyard/role-artifact-authority')).length > 0);
   return result.stdout.trim().split('\n').map(line => JSON.parse(line));
 }
 
@@ -177,6 +184,15 @@ function expectLineage(rows, sealed, refusal) {
   assert.equal(refused.error.code, refusal.code);
   assert.match(refused.error.message, refusal.message);
   assert.equal(refused.current, null);
+  assert.deepEqual(refused.history, sealed.map(round => ({ round, auth: true })));
+}
+
+function expectGuardSizes(rows) {
+  for (const row of rows.filter(entry => !entry.end)) {
+    const walk = Array.from({ length: Math.max(row.round - 1, 0) }, (_, size) => size);
+    assert.deepEqual(row.guard_seal, [...walk, ...walk]);
+    assert.ok(row.guard_history.every(size => size === 0 || size === 1));
+  }
 }
 
 const EXPECTED = {
@@ -199,6 +215,21 @@ for (const runtime of ['claude', 'codex']) {
     const rows = probe('T', environment('trace-' + runtime), ['seal', runtime, '5']);
     t.diagnostic(`variant T ${runtime}\n${table(rows)}`);
     expectLineage(rows, [1, 2, 3, 4, 5]);
+    expectGuardSizes(rows);
+  });
+
+  test('S1 ' + runtime + ': a cold history read needs the replay bound at the ceiling', t => {
+    const env = environment('cold-' + runtime);
+    const info = probe('C', env, ['keep', runtime, '5']).at(-1);
+    const flags = { R5: [true, true, true, true, true], R4: [true, false, false, false, false],
+      R3: [true, true, false, false, false] };
+    for (const [variant, expected] of Object.entries(flags)) {
+      const read = probe(variant, env, ['read', runtime, JSON.stringify(info)])[0];
+      t.diagnostic(`cold read ${variant} ${runtime}: ${JSON.stringify(read.history)} error=${JSON.stringify(read.error)}`);
+      assert.equal(read.error, null);
+      assert.deepEqual(read.history.map(entry => entry.round), [1, 2, 3, 4, 5]);
+      assert.deepEqual(read.history.map(entry => entry.auth), expected);
+    }
   });
 
   test('S4 ' + runtime + ': code of the current release reads a sealed round-4 verdict', t => {
@@ -223,9 +254,9 @@ for (const runtime of ['claude', 'codex']) {
     const live = { number: 52, state: 'OPEN', headRefName: info.branch, headRefOid: info.head, baseRefName: 'main', baseRefOid: info.base };
     fs.writeFileSync(path.join(bin, 'pr.json'), JSON.stringify(live));
     fs.writeFileSync(path.join(bin, 'gh'), '#!/usr/bin/env node\nprocess.stdout.write(require("node:fs").readFileSync(' + JSON.stringify(path.join(bin, 'pr.json')) + '));\n', { mode: 0o755 });
-    const cli = spawnSync(process.execPath, [path.join(copyOf('A'), 'plugins/delivery-pipeline/scripts/phase-code-review.cjs'), 'status',
+    const cli = run(path.join(copyOf('A'), 'plugins/delivery-pipeline/scripts/phase-code-review.cjs'), ['status',
       info.phase, '--phase', '52', '--pr', '52', '--worktree', info.root, '--graph', info.graphDir], {
-      cwd: bin, encoding: 'utf8', env: { ...env, PATH: bin + path.delimiter + env.PATH } });
+      cwd: bin, env: { ...env, PATH: bin + path.delimiter + env.PATH } });
     t.diagnostic(`unpatched status CLI ${runtime}: exit=${cli.status} stdout=${JSON.stringify(cli.stdout)} stderr=${JSON.stringify(cli.stderr)}`);
     assert.equal(cli.status, 1);
     assert.equal(cli.stdout, '');
