@@ -196,7 +196,10 @@ function assertCurrent(f, result, consumerScripts = scripts) {
 }
 function fixtureController(options, consumerScripts = scripts) {
   const directory = path.join(options.storageRoot, 'finalization', hash(options.scope.worktree), 'ci-originals');
-  const operation = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]))).payload;
+  const operations = fs.readdirSync(directory).map(name => JSON.parse(fs.readFileSync(path.join(directory, name))).payload)
+    .filter(operation => operation.scope.run_id === options.scope.run_id);
+  assert.equal(operations.length, 1);
+  const operation = operations[0];
   const controller = require(path.join(consumerScripts, 'run-controller.cjs')).createRunController({
     storeDir: path.join(options.storageRoot, 'fixture-controller', hash(options.scope.run_id)) });
   const selected = operation.resolution || policy.resolveDispatch({ runtime: 'codex', role: 'ci-fix', dispatch_id: operation.dispatch_id });

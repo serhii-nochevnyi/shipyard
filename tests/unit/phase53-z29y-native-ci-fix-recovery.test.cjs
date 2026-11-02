@@ -54,8 +54,11 @@ function packageSource(directory) {
 }
 function originalOperation(f) {
   const directory = path.join(f.stateRoot, 'ci-originals');
-  const names = fs.readdirSync(directory); assert.equal(names.length, 1);
-  const file = path.join(directory, names[0]); return { file, envelope: JSON.parse(fs.readFileSync(file)) };
+  const operations = fs.readdirSync(directory).map(name => {
+    const file = path.join(directory, name); return { file, envelope: JSON.parse(fs.readFileSync(file)) };
+  }).filter(({ envelope }) => ['plan_sha256', 'pr', 'evidence_path', 'evidence_sha256']
+    .every(key => envelope.payload.selectors[key] === f.request.context[key]));
+  assert.equal(operations.length, 1); return operations[0];
 }
 function coldOriginal(f, installed, expectedError, expectedPushes = 1) {
   f.options.controller.release(f.scope.run_id, 'fixture cold original host handoff');
@@ -148,7 +151,14 @@ if (require.main === module) {
         if (f.options.controller) {
           f.options.controller.release(f.scope.run_id, 'fixture signed predecessor handoff'); delete f.options.controller;
         }
-        f.scope.run_id = 'signed-chain-' + require('node:crypto').randomUUID();
+        if (attempt > 1) {
+          const failureFile = path.join(signing.directory, 'successor-' + require('node:crypto').randomUUID() + '.log');
+          fs.writeFileSync(failureFile, f.failureBytes, { mode: 0o600 });
+          const request = require(path.join(scripts, 'deliver-dispatch.cjs')).build(['ci-fix', f.scope.ticket,
+            '--runtime', 'codex', '--pr', '501', '--failure-file', failureFile], { cwd: f.worktree, graphDir: f.graphDir });
+          Object.assign(f.scope, request.scope); Object.assign(f.request, request);
+          fs.writeFileSync(f.requestFile, JSON.stringify(request));
+        }
         f.control.runAttempt = attempt;
         f.control.mutateNative = () => fs.chmodSync(path.join(f.worktree, 'src/owned.txt'), attempt === 2 ? 0o755 : 0o644);
         const result = await f.run();
