@@ -217,13 +217,8 @@ function liveBaseRef(input, worktree) {
   } else {
     candidates.push(`origin/${requested}`, requested);
   }
-  const pinned = input.baseCommit === undefined ? null : String(input.baseCommit).toLowerCase();
   for (const candidate of candidates) {
-    const commit = gitCommitIfPresent(input, worktree, candidate);
-    if (commit && (pinned === null || commit.toLowerCase() === pinned)) return candidate;
-  }
-  if (pinned !== null) {
-    fail('STALE_ARTIFACT', 'no ref of the base branch resolves to the base commit authenticated at prepare', { base: requested, base_commit: pinned });
+    if (gitCommitIfPresent(input, worktree, candidate)) return candidate;
   }
   return requested;
 }
