@@ -217,8 +217,16 @@ function liveBaseRef(input, worktree) {
   } else {
     candidates.push(`origin/${requested}`, requested);
   }
+  // A host that already authenticated the base commit at prepare time pins it:
+  // the first candidate resolving to that commit wins, so seal cannot pick a
+  // different edition of the same branch name than prepare did.
+  const pinned = input.baseCommit === undefined ? null : String(input.baseCommit).toLowerCase();
   for (const candidate of candidates) {
-    if (gitCommitIfPresent(input, worktree, candidate)) return candidate;
+    const commit = gitCommitIfPresent(input, worktree, candidate);
+    if (commit && (pinned === null || commit.toLowerCase() === pinned)) return candidate;
+  }
+  if (pinned !== null) {
+    fail('STALE_ARTIFACT', 'no ref of the base branch resolves to the base commit authenticated at prepare', { base: requested, base_commit: pinned });
   }
   return requested;
 }

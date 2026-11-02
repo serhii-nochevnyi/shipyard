@@ -699,6 +699,30 @@ test('keeps an unknown arch-review type as an informational note beside a blocke
   }
 });
 
+test('seal resolves the base to the commit authenticated at prepare, not to a newer origin edition', () => {
+  const value = judgmentFixture('T-48-01-pinned-base');
+  try {
+    const localMain = git(value.root, ['rev-parse', 'main']);
+    const tree = git(value.root, ['rev-parse', 'main^{tree}']);
+    const advanced = git(value.root, ['commit-tree', tree, '-p', localMain, '-m', 'origin advanced']);
+    git(value.root, ['update-ref', 'refs/remotes/origin/main', advanced]);
+    const seal = (extra) => {
+      const evidencePath = path.join(value.root, '.shipyard-arch-review-evidence.md');
+      fs.writeFileSync(evidencePath, 'complete architecture review evidence\n');
+      return roleArtifact.seal({ worktreePath: value.root, base: 'main', role: 'arch-review', ticket: value.ticket,
+        pr: 404, recorder: value.recorder, dispatchId: value.dispatch.receipt.dispatch_id,
+        result: archReviewResult(value, { verdict: 'conform', blocking_count: 0 }), evidencePath, ...extra });
+    };
+    const sealed = seal({ baseCommit: localMain });
+    assert.notEqual(advanced, localMain);
+    assert.equal(sealed.envelope.reviewed_base_commit, localMain);
+    assert.equal(sealed.envelope.reviewed_base, 'main');
+    assert.throws(() => seal({ baseCommit: 'f'.repeat(40) }), { code: 'STALE_ARTIFACT' });
+  } finally {
+    clean(value);
+  }
+});
+
 test('keeps an unknown arch-review note under a conform verdict', () => {
   const value = judgmentFixture('T-43-05-conform-unknown-note');
   try {

@@ -1593,7 +1593,7 @@ function firstResponseUsage(evidence) {
 
 function sealResult(prepared, result, recorder, dispatchId) {
   const common = { worktreePath: prepared.canonical.worktree, role: prepared.role,
-    ticket: prepared.ticket, base: prepared.base, recorder, dispatchId, result,
+    ticket: prepared.ticket, base: prepared.base, baseCommit: prepared.baseCommit, recorder, dispatchId, result,
     ...(prepared.binding ? { phase: prepared.binding.phase, ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest } : {}),
     evidencePath: prepared.evidencePath };
   const input = ['arch-review', 'code-review'].includes(prepared.role)
