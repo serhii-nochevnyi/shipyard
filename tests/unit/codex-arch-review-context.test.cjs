@@ -1186,13 +1186,18 @@ test('a genuine prior Codex repair archive cannot supply host bookkeeping and re
   f.ticket = TICKET;
   for (const relative of ['.planning/graph/tickets.json', '.planning/graph/delivery-state.json']) {
     const file = path.join(f.root, relative);
-    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replaceAll('T-38-01-role-host', TICKET));
+    const document = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const tickets = relative.endsWith('/tickets.json') ? document.tickets : document;
+    tickets[TICKET] = tickets['T-38-01-role-host'];
+    delete tickets['T-38-01-role-host'];
+    fs.writeFileSync(file, JSON.stringify(document));
   }
   f.pr.title = f.pr.title.replace('T-38-01-role-host', TICKET);
   f.pr.body = f.pr.body.replace('T-38-01-role-host', TICKET);
   const signing = require('./phase53-z29x-native-ci-fix-contract.test.cjs').signingFixture();
   try {
     git(f.root, ['config', 'user.signingkey', signing.signer]);
+    fs.mkdirSync(path.join(f.root, '.git/info'), { recursive: true });
     fs.appendFileSync(path.join(f.root, '.git/info/exclude'), '\n/.planning/graph/dispatches.json\n/.planning/graph/delivery-front.json\n/.planning/graph/provenance/\n');
     const boardFile = path.join(f.root, '.planning/graph/delivery-state.json');
     const board = JSON.parse(fs.readFileSync(boardFile));
