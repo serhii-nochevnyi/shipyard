@@ -2,7 +2,13 @@
 
 const { createRuntimeFixture, createRuntimeLifecycle } = require('./helpers/phase53-runtime-fixture.cjs');
 
-function registerTests(harnessTest, context = createRuntimeFixture(), options = {}) {
+const fixtureOptions = { capturedPaths: {
+  exec: 'tests/fixtures/captured/codex-agent-stream-exec.jsonl',
+  parent: 'tests/fixtures/captured/codex-agent-stream-parent.jsonl',
+  child: 'tests/fixtures/captured/codex-agent-stream-child.jsonl',
+} };
+
+function registerTests(harnessTest, context = createRuntimeFixture(fixtureOptions), options = {}) {
 const suite = options.suite || (() => {});
 const { fs, os, path, crypto, EventEmitter, originalRuntimeCases, policy, EFFORTS, createCodexCliLauncher, createCodexRuntimeHost, observedSelection, parseNativeCodexTranscript, parseNativeParentSpawn, parseNativeChildTranscript, installedGsdAgent, signerProtectionPaths, signerPermissionProfileArgs, parseCodexStream, probeCodexRuntime, launchAgent, createCodexDispatchAdapter, SCOPE, capabilities, EXEC_FIXTURE, PARENT_FIXTURE, CHILD_FIXTURE, PARENT_ID, CHILD_ID, CAPTURED_TASK, CAPTURED_SHA256, captured, stream, sessionTranscript, writeSession, childFor, probe, staticContent, recordedTypedSession, transformJsonl, relayChild, HOST_SCRIPT, runCapabilityOnly, fakeCodex, installedBundle, ROLE_TOML, TYPED, codeReviewRuntimeFixture, assert, require, __dirname } = context;
 function test(name, callback) {
@@ -1785,7 +1791,7 @@ test('code review runtime records private custody and evidence-only permissions:
 module.exports = { registerTests };
 
 if (require.main === module) {
-  const lifecycle = createRuntimeLifecycle();
+  const lifecycle = createRuntimeLifecycle(fixtureOptions);
   const context = lifecycle.start();
   const { suite, test, done } = require('./assert-harness.cjs');
   registerTests((name, callback, registration) => test(name, () => context.run(callback, registration.family)), context, { suite });

@@ -64,11 +64,11 @@ const capabilities = {
   observedEffort: true,
 };
 
-const EXEC_FIXTURE = 'tests/fixtures/captured/codex-agent-stream-exec.jsonl';
+const EXEC_FIXTURE = options.capturedPaths?.exec || 'tests/fixtures/captured/codex-agent-stream-exec.jsonl';
 
-const PARENT_FIXTURE = 'tests/fixtures/captured/codex-agent-stream-parent.jsonl';
+const PARENT_FIXTURE = options.capturedPaths?.parent || 'tests/fixtures/captured/codex-agent-stream-parent.jsonl';
 
-const CHILD_FIXTURE = 'tests/fixtures/captured/codex-agent-stream-child.jsonl';
+const CHILD_FIXTURE = options.capturedPaths?.child || 'tests/fixtures/captured/codex-agent-stream-child.jsonl';
 
 const PARENT_ID = '01a0e224-6642-7f20-b2a3-68b283d429b9';
 
