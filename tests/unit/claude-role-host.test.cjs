@@ -2965,6 +2965,18 @@ test('pure Claude preparation refreshes expanded coverage at round two without l
   } finally { cleanupFixture(f); }
 });
 
+test('Claude preparation refuses a base whose origin edition differs from GitHub baseRefOid instead of using the stale local branch', () => {
+  const f = setupCodeReview({ coordinatorGraph: true });
+  try {
+    git(f.root, ['update-ref', 'refs/heads/main', f.base]);
+    const tree = git(f.root, ['rev-parse', `${f.base}^{tree}`]);
+    git(f.root, ['update-ref', 'refs/remotes/origin/main', git(f.root, ['commit-tree', tree, '-p', f.base, '-m', 'origin advanced'])]);
+    const options = hostOptions(f, { createRuntimeHost() { assert.fail('refused before launch'); } });
+    assert.throws(() => preparationOnlyHost().prepareInvocation(options, parseRequest(codeReviewRequest(f))),
+      { code: 'BASE_REVISION_UNAVAILABLE' });
+  } finally { cleanupFixture(f); }
+});
+
 function d35ClaudeInput(fixture, result) {
   return { worktreePath: fixture.root, role: 'code-review', ticket: result.subject, pr: 101, base: 'main',
     phase: PHASE, ticketSet: result.result.ticket_set, ticketSetDigest: result.result.ticket_set_digest,

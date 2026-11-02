@@ -243,10 +243,10 @@ function branchOid(options, worktree, branch, expectedOid) {
   }
   const candidates = safe.startsWith('origin/') ? [safe, safe.slice('origin/'.length)] : [`origin/${safe}`, safe];
   for (const candidate of candidates) {
-    try {
-      const oid = git(options, worktree, ['rev-parse', '--verify', `${candidate}^{commit}`]);
-      if (expectedOid === undefined || oid === expectedOid) return { ref: candidate, oid };
-    } catch {}
+    let oid;
+    try { oid = git(options, worktree, ['rev-parse', '--verify', `${candidate}^{commit}`]); } catch { continue; }
+    if (expectedOid === undefined || oid === expectedOid) return { ref: candidate, oid };
+    break;
   }
   reject(`base branch ${safe} is missing or differs from its live GitHub revision`, 'BASE_REVISION_UNAVAILABLE');
 }
