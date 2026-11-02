@@ -814,7 +814,7 @@ function installedGsdAgent(role, env = {}) {
 function parseNativeParentSpawn(raw, parentId, role, model, effort, live = false) {
   parseNativeCodexTranscript(raw, parentId);
   const calls = [];
-  const waits = [];
+  let waits = [];
   const outputs = new Map();
   let metadataCount = 0;
   for (const line of raw.split(/\r?\n/)) {
@@ -857,6 +857,8 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort, live = false
       || path.basename(output.task_name) !== args.task_name) {
     fail('RUNTIME_EVIDENCE_MISMATCH', 'native spawn output does not identify the requested task');
   }
+  // @invariant: a wait cancelled before dispatch never reached the child and is no evidence, wherever it sits.
+  waits = waits.filter((wait) => outputs.get(wait.call_id) !== 'aborted before dispatch');
   if (!live && !waits.length) fail('RUNTIME_EVIDENCE_MISSING', 'native parent did not wait for its child');
   const waitResults = waits.map((wait) => {
     if (live && !outputs.has(wait.call_id)) return { timed_out: true };
