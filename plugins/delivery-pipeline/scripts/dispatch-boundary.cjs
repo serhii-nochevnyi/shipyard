@@ -619,7 +619,8 @@ function createDurableRecorder(storeDir) {
     if (!validRepairCommit(commit, predecessorDispatchId)) {
       throw boundaryError('RECORD_FAILED', 'durable repair commit is malformed', { dispatch_id: predecessorDispatchId });
     }
-    if (commit.record_input.receipt?.role === 'ci-fix') return commit;
+    const original = readAuthenticated(reservationFile(commit.successor_dispatch_id));
+    if (commit.original_kind === 'ci-fix' || original?.original_kind === 'ci-fix') return commit;
     const successorRecord = recordFile(commit.successor_dispatch_id);
     const existingStored = readStored(successorRecord);
     const existing = existingStored && existingStored.payload;
@@ -715,7 +716,7 @@ function createDurableRecorder(storeDir) {
             try {
               const claim = readJsonFile(claimFile(prior));
               if (!sameClaimFence(claim, claimAuthority) || claimIsStale(claim)) return { retained: false };
-              const marker = { predecessor_dispatch_id: prior, successor_dispatch_id: dispatchId,
+              const marker = { original_kind: 'ci-fix', predecessor_dispatch_id: prior, successor_dispatch_id: dispatchId,
                 consumer_id: dispatchId, claim_generation: claim.generation, claim_token: claim.claim_token, record_input: recordInput };
               if (!atomicCreateJson(repairCommitFile(prior), seal(marker))
                   && !sameRecord(readAuthenticated(repairCommitFile(prior)), marker)) return { retained: false };
@@ -766,7 +767,7 @@ function createDurableRecorder(storeDir) {
           const fence = reservation.original_subject.claim;
           const claim = readJsonFile(claimFile(prior));
           if (!sameClaimFence(claim, fence) || claim.consumer_id !== dispatchId) return { recovered: false };
-          marker = { predecessor_dispatch_id: prior, successor_dispatch_id: dispatchId, consumer_id: dispatchId,
+          marker = { original_kind: 'ci-fix', predecessor_dispatch_id: prior, successor_dispatch_id: dispatchId, consumer_id: dispatchId,
             claim_generation: fence.generation, claim_token: fence.claim_token, record_input: original };
         }
         const finalized = deepFreeze(snapshot({ ...original, trace: [...original.trace,
@@ -872,6 +873,7 @@ function createDurableRecorder(storeDir) {
               const claim = readJsonFile(claimFile(predecessorDispatchId));
               if (!sameClaimFence(claim, claimAuthority) || claimIsStale(claim)) return { recorded: false };
               const repairCommit = {
+                ...(originalCi?.original_kind === 'ci-fix' ? { original_kind: 'ci-fix' } : {}),
                 predecessor_dispatch_id: predecessorDispatchId,
                 successor_dispatch_id: dispatchId,
                 consumer_id: predecessorConsumerId,
