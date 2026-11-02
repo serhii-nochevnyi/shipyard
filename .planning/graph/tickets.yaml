@@ -130,6 +130,11 @@ epics:
     repos: [null]
     phaseDir: '50-make-launch-and-upgrade-reliable'
     jira: null
+  '54':
+    branch: epic/54-let-an-operator-grant-one-more-code-review-round
+    repos: [null]
+    phaseDir: '54-let-an-operator-grant-one-more-code-review-round'
+    jira: null
   '33-reduce-orchestration-context-and-transfer-sessions-safely':
     branch: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
     repos: [null]
@@ -4934,4 +4939,259 @@ tickets:
     epic: epic/50-make-launch-and-upgrade-reliable
     primary_parent: T-50-23
     pr_base: ticket/T-50-23-installed-package-scenario-a-claude-host
+    jira: null
+  T-54-01:
+    title: 'Record the S1 and S4 spikes: replay of a four-deep needs-fix lineage under a raised bound, and older code reading a sealed round-4 verdict'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-01-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [docs/audits/phase54/review-round-spikes.md, tests/unit/code-review-round-spikes.test.cjs]
+    risk: low
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-01-record-the-s1-and-s4-spikes-replay-of-a
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: null
+    pr_base: epic/54-let-an-operator-grant-one-more-code-review-round
+    jira: null
+  T-54-02:
+    title: 'One round lookup at the three call sites and one refusal sentence, with no behaviour change'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-02-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/code-review-core.cjs, plugins/delivery-pipeline/scripts/phase-code-review.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, plugins/delivery-pipeline/scripts/codex-code-review-context.cjs, plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, tests/unit/code-review-core.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-02-one-round-lookup-at-the-three-call-sites
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: null
+    pr_base: epic/54-let-an-operator-grant-one-more-code-review-round
+    jira: null
+  T-54-03:
+    title: 'Private extension record store beside the publication record, with a read path that never creates state'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-03-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 2
+    depends_on: [T-54-02]
+    files: [plugins/delivery-pipeline/scripts/phase-code-review.cjs, tests/unit/code-review-extension-record.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-03-private-extension-record-store-beside-th
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-02
+    pr_base: ticket/T-54-02-one-round-lookup-at-the-three-call-sites
+    jira: null
+  T-54-04:
+    title: 'Effective review limit from valid records, with consumption derived from the sealed verdict history'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-04-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 3
+    depends_on: [T-54-03, T-54-01]
+    files: [plugins/delivery-pipeline/scripts/code-review-core.cjs, plugins/delivery-pipeline/scripts/phase-code-review.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, plugins/delivery-pipeline/scripts/codex-code-review-context.cjs, tests/unit/code-review-core.test.cjs, tests/unit/phase-code-review.test.cjs, tests/unit/claude-role-host.test.cjs, tests/unit/codex-code-review-context.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-04-effective-review-limit-from-valid-record
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-03
+    pr_base: ticket/T-54-03-private-extension-record-store-beside-th
+    jira: null
+  T-54-05:
+    title: 'Absolute ceiling of 5 in result normalization, seal validation and the replay-depth bound'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-05-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 4
+    depends_on: [T-54-04, T-54-01]
+    files: [plugins/delivery-pipeline/scripts/code-review-core.cjs, plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/unit/code-review-core.test.cjs, tests/unit/role-artifact.test.cjs, tests/unit/code-review-round-spikes.test.cjs, docs/audits/phase54/review-round-spikes.md]
+    risk: high
+    human_checkpoint: true
+    checkpoint: review
+    preauthorized: false
+    branch: ticket/T-54-05-absolute-ceiling-of-5-in-result-normaliz
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-04
+    pr_base: ticket/T-54-04-effective-review-limit-from-valid-record
+    jira: null
+  T-54-06:
+    title: 'Extended round is delta-only and needs a record bound to the current head; repair stays at rounds 1 and 2'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-06-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 5
+    depends_on: [T-54-05]
+    files: [plugins/delivery-pipeline/scripts/code-review-core.cjs, tests/unit/code-review-core.test.cjs, tests/unit/phase-code-review.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-06-extended-round-is-delta-only-and-needs-a
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-05
+    pr_base: ticket/T-54-05-absolute-ceiling-of-5-in-result-normaliz
+    jira: null
+  T-54-07:
+    title: 'The extend command, and the refusal of a grant from a role-hosted child'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-07-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 6
+    depends_on: [T-54-06]
+    files: [plugins/delivery-pipeline/scripts/phase-code-review.cjs, plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, tests/unit/phase-code-review.test.cjs, tests/unit/claude-runtime-host.test.cjs, tests/unit/codex-runtime-host.test.cjs]
+    risk: high
+    human_checkpoint: true
+    checkpoint: review
+    preauthorized: false
+    branch: ticket/T-54-07-the-extend-command-and-the-refusal-of-a
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-06
+    pr_base: ticket/T-54-06-extended-round-is-delta-only-and-needs-a
+    jira: null
+  T-54-08:
+    title: 'A sealed review_extension field: packet, normalization, seal validation, replay and the current verdict'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-08-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 6
+    depends_on: [T-54-06]
+    files: [plugins/delivery-pipeline/scripts/code-review-core.cjs, plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/fixtures/code-review/artifact-fixture.cjs, tests/unit/code-review-core.test.cjs, tests/unit/role-artifact.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-08-a-sealed-review-extension-field-packet-n
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-06
+    pr_base: ticket/T-54-06-extended-round-is-delta-only-and-needs-a
+    jira: null
+  T-54-09:
+    title: Both hosts pass the host-authored extension into normalization so an extended round seals
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-09-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 7
+    depends_on: [T-54-04, T-54-08]
+    files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, plugins/delivery-pipeline/scripts/codex-code-review-context.cjs, tests/unit/claude-role-host.test.cjs, tests/unit/codex-code-review-context.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-09-both-hosts-pass-the-host-authored-extens
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-08
+    pr_base: ticket/T-54-08-a-sealed-review-extension-field-packet-n
+    jira: null
+  T-54-10:
+    title: The extended-round line in the code-review commit status and the PR comment
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-10-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 7
+    depends_on: [T-54-07, T-54-08]
+    files: [plugins/delivery-pipeline/scripts/phase-code-review.cjs, tests/unit/phase-code-review-publish.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-10-the-extended-round-line-in-the-code-revi
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-07
+    pr_base: ticket/T-54-07-the-extend-command-and-the-refusal-of-a
+    jira: null
+  T-54-11:
+    title: 'Named refusal hints for the round limit, a refused extension and a usage error'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-11-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 8
+    depends_on: [T-54-10]
+    files: [plugins/delivery-pipeline/scripts/refusal-hints.cjs, plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, plugins/delivery-pipeline/scripts/phase-code-review.cjs, tests/unit/refusal-hints.test.cjs, tests/unit/deliver-dispatch.test.cjs, tests/unit/phase-code-review.test.cjs]
+    risk: low
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-11-named-refusal-hints-for-the-round-limit
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-10
+    pr_base: ticket/T-54-10-the-extended-round-line-in-the-code-revi
+    jira: null
+  T-54-12:
+    title: 'Every text that offers report says it is project-wide, and the refusal names the extend command'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-12-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 9
+    depends_on: [T-54-11]
+    files: [plugins/delivery-pipeline/scripts/phase-code-review.cjs, plugins/delivery-pipeline/commands/deliver.md, docs/gsd_multilevel_delivery_pipeline.md, capabilities/delivery-pipeline/capability.json, tests/unit/phase-code-review.test.cjs, tests/unit/phase-code-review-publish.test.cjs, tests/unit/deliver-dispatch.test.cjs, tests/unit/deliver-builders-contract.test.cjs]
+    risk: low
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-12-every-text-that-offers-report-says-it-is
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-11
+    pr_base: ticket/T-54-11-named-refusal-hints-for-the-round-limit
+    jira: null
+  T-54-13:
+    title: 'Reviewer reference states rounds 1 to 5, a fourth round only on an operator record, and the one-time reset'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-13-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 8
+    depends_on: [T-54-09]
+    files: [plugins/delivery-pipeline/references/code-review.md, tests/unit/judgment-contract.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-13-reviewer-reference-states-rounds-1-to-5
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-09
+    pr_base: ticket/T-54-09-both-hosts-pass-the-host-authored-extens
+    jira: null
+  T-54-14:
+    title: 'R-11 end to end: refusal without a record, voided and foreign records, child refusal, the ceiling, and the round 4 then push then new record sequence'
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-14-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 10
+    depends_on: [T-54-12]
+    files: [tests/unit/phase-code-review.test.cjs]
+    risk: low
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-14-r-11-end-to-end-refusal-without-a-record
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-12
+    pr_base: ticket/T-54-12-every-text-that-offers-report-says-it-is
+    jira: null
+  T-54-15:
+    title: Bump the version to 1.0.0-rc.4 in the six version files
+    plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-15-PLAN.md'
+    phase: '54'
+    repo: null
+    wave: 11
+    depends_on: [T-54-01, T-54-02, T-54-03, T-54-04, T-54-05, T-54-06, T-54-07, T-54-08, T-54-09, T-54-10, T-54-11, T-54-12, T-54-13, T-54-14]
+    files: [capabilities/delivery-pipeline/capability.json, plugins/delivery-pipeline/.claude-plugin/plugin.json, plugins/shipyard/.codex-plugin/plugin.json, plugins/shipyard/package-build.json, plugins/shipyard/host/capabilities/delivery-pipeline/capability.json, plugins/shipyard/host/plugins/delivery-pipeline/.claude-plugin/plugin.json]
+    risk: low
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-54-15-bump-the-version-to-1-0-0-rc-4-in-the-si
+    epic: epic/54-let-an-operator-grant-one-more-code-review-round
+    primary_parent: T-54-14
+    pr_base: ticket/T-54-14-r-11-end-to-end-refusal-without-a-record
     jira: null

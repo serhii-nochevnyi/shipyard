@@ -202,6 +202,15 @@
 - [ ] **REQ-194**: An advisory, shadow-only run/phase admission ledger on `capacity-lease.cjs` reserves launches atomically against a constructor budget, always admits verification and checkpoint capacity, reports unknown quota instead of a percentage, and adds no config key or launch wiring.
 - [ ] **REQ-195**: A Claude drift-check verdict rejected as fresh with moved findings gets exactly one repair dispatch in the same round with the validation error as data; a second invalid result refuses with both errors and both dispatch ids.
 - [ ] **REQ-196**: The capture scrubber replaces Codex account identifiers with stable placeholders before session-id replacement, live captures run in a git-initialised scratch directory, and the fixture scan rejects any leaked account id without rewriting committed fixtures.
+- [ ] **REQ-204**: An operator command `phase-code-review.cjs extend --phase N --pr P --reason "…" --confirm extend-review-round` writes one private record outside the worktree, bound to repository, PR, live head and base commit, with operator identity, time and a bounded reason; one record grants exactly one extra round (ADR-035 R-1, R-3).
+- [ ] **REQ-205**: The extension claim is exactly that a role-hosted child cannot grant itself an extension (existing sandbox plus a refusal under host-child markers) while the same-user orchestrating session acting on the operator's word is trusted; no signature and no cryptographic human-only claim is made (ADR-035 R-2).
+- [ ] **REQ-206**: The effective review limit is `ROUND_CAP` plus the valid records, clamped to a total of 5, with consumption derived from the authenticated verdict history and never from a stored flag; a record for another PR, base or unrelated head is void and does not count (ADR-035 R-4).
+- [ ] **REQ-207**: Seal validation, result normalization and the replay-depth bound use the absolute ceiling of 5 instead of the per-PR limit, and the S1 and S4 spikes establish the replay and rollback behaviour of a round-4 verdict before the limit changes (ADR-035 R-5, R-10).
+- [ ] **REQ-208**: An extended round is always a delta from the last counted verdict and refuses rather than falling back to a full review when no delta is possible; `repairAllowed` stays true only for rounds 1 and 2 (ADR-035 R-6).
+- [ ] **REQ-209**: An extended round is visible in the sealed verdict, the `<!-- code-review -->` comment and the `code-review` commit status as `round N of 3, extended by <operator> at <time>: <reason>`; the gate trailer is unchanged; the `limit` refusal carries named hints for the extend command and `report`, and every text offering `report` says it applies to the whole project until switched back (ADR-035 R-7, R-13, R-14).
+- [ ] **REQ-210**: `references/code-review.md` states rounds 1-5 with a fourth round only on a human record, and the one-time reset of verdicts sealed before the edit is accepted and stated in the release notes (ADR-035 R-8).
+- [ ] **REQ-211**: Fixes pushed between two reviews cost one round, a record voided by a head move costs nothing, the ceiling of 5 is final, and each delivery PR reports net lines including tests and names an offsetting deletion (ADR-035 R-11, R-12, R-15).
+- [ ] **REQ-212**: The change ships as `1.0.0-rc.4` on `epic/harness-simplification` with the version bumped by the six-file pattern of commit `749604b9` as the last PR of the epic after the Codex package is regenerated, and no tag or release without the operator (ADR-035 R-9).
 
 ## Out of Scope
 
@@ -408,10 +417,19 @@
 | REQ-194 | Phase 45 | Blocked |
 | REQ-195 | Phase 45 | Blocked |
 | REQ-196 | Phase 45 | Blocked |
+| REQ-204 | Phase 54 | Pending |
+| REQ-205 | Phase 54 | Pending |
+| REQ-206 | Phase 54 | Pending |
+| REQ-207 | Phase 54 | Pending |
+| REQ-208 | Phase 54 | Pending |
+| REQ-209 | Phase 54 | Pending |
+| REQ-210 | Phase 54 | Pending |
+| REQ-211 | Phase 54 | Pending |
+| REQ-212 | Phase 54 | Pending |
 
 **Coverage:**
-- v1 requirements: 194 total
-- Mapped to phases: 192
+- v1 requirements: 203 total
+- Mapped to phases: 201
 - Unmapped: 2 ⚠️
 
 ---

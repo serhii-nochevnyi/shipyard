@@ -994,3 +994,15 @@ The original REQ-193 definition is unchanged and remains open until this phase v
 Plans:
 
 - [ ] TBD — decomposed from ADR-030 decisions L-1…L-11 under the `fine` granularity and `--tdd`.
+
+### Phase 54: Let an operator grant one more code-review round
+
+**Status**: operator-approved scope from accepted ADR-035 (INV-021 Gate 1, 2026-11-02); decomposition in progress; no executable plans or accepted ticket graph yet
+**Goal**: the phase code review can run a round beyond the third only on a head-bound record written by the operator, with one round per record and a total ceiling of 5, a delta-only extended round that never auto-repairs, derived consumption, absolute ceilings in seal and replay, visibility in the PR comment and the code-review status, named refusal hints, project-wide `report` wording, a one-time accepted reset through the reviewer reference edit, and the release `1.0.0-rc.3`, all on `epic/harness-simplification`.
+**Requirements**: REQ-204, REQ-205, REQ-206, REQ-207, REQ-208, REQ-209, REQ-210, REQ-211, REQ-212
+**Depends on**: none declared; establish exact ticket dependencies during decomposition against `epic/harness-simplification` at `749604b9` (1.0.0-rc.2)
+**Plans**: 0; plan against the then-current source before execution
+
+Plans:
+
+- [ ] TBD — decomposed from ADR-035 decisions R-1…R-15 under the `fine` granularity and `--tdd`; first ticket is the S1/S4 spikes, last ticket is the `1.0.0-rc.4` version bump (rc.3 was released without this phase).
