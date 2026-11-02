@@ -311,7 +311,7 @@ const GENERATED_OWNER = Symbol('generated-merge-owner');
 function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid < 1) return null;
   const result = require('child_process').spawnSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='],
-    { encoding: 'utf8', timeout: 5000 });
+    { encoding: 'utf8', timeout: 5000, env: { ...process.env, TZ: 'UTC', LC_ALL: 'C', LANG: 'C' } });
   if (result.error || (result.status !== 0 && result.status !== 1))
     throw Object.assign(new Error('cannot establish lock process identity'), { code: 'LOCK_PROCESS_UNKNOWN' });
   return result.status === 0 ? result.stdout.trim() || null : null;

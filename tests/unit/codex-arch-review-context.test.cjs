@@ -1206,7 +1206,7 @@ test('a genuine prior Codex repair archive cannot supply host bookkeeping and re
     const approvedPlan = path.join(f.root, planPath());
     fs.writeFileSync(approvedPlan, fs.readFileSync(approvedPlan, 'utf8').replace(
       '- node --test tests/unit/codex-arch-review-context.test.cjs', '- `node --test tests/unit/codex-arch-review-context.test.cjs`'));
-    git(f.root, ['add', '.planning/graph/delivery-state.json', planPath()]);
+    git(f.root, ['add', '.planning/graph/tickets.json', '.planning/graph/delivery-state.json', planPath()]);
     git(f.root, ['commit', '-m', 'test: bind the existing repair archive fixture to its live base']);
     f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
     const first = await unitJudgment(f); stores.push(f.storage);
@@ -1233,7 +1233,6 @@ test('a genuine prior Codex repair archive cannot supply host bookkeeping and re
     const result = { schema: 'shipyard.repair-result.v1', id: TICKET, pr: f.pr.number, status: 'no-op', pushed: false,
       notes: 'Captured unit repair found no further change.', hypothesis: 'The earlier patch resolved the issue.',
       host_context: { bookkeeping: [{ path: '.planning/graph/dispatches.json', sha256: 'a'.repeat(64), cleared_sha256: 'b'.repeat(64) }] } };
-    write(f.root, '.shipyard-repair-evidence.md', 'Complete retained Codex repair evidence.');
     const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
     const failureFile = path.join(f.storage, 'ci-failure.log'), failureBytes = Buffer.from('Original failing archive fixture check\n');
     fs.writeFileSync(failureFile, failureBytes, { mode: 0o600 });
@@ -1263,13 +1262,14 @@ test('a genuine prior Codex repair archive cannot supply host bookkeeping and re
     const nativeHost = { scope: repairScope, recorder: first.recorder,
       capabilities: { supportedModels: [selected.model], supportedEfforts: [selected.effort] },
       launchStatic(selection, launchContext) {
+        write(f.root, '.shipyard-repair-evidence.md', 'Complete retained Codex repair evidence.');
         const session = crypto.randomUUID(), { host_context: _ignored, ...nativeResult } = result;
         const text = JSON.stringify(nativeResult);
         const capture = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
           .trim().split('\n').map(line => JSON.parse(line));
-        const records = ['thread.started', 'item.completed', 'turn.completed']
+        const records = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
           .map(type => structuredClone(capture.find(record => record.type === type)));
-        records[0].thread_id = session; records[1].item.text = text;
+        records[0].thread_id = session; records.find(record => record.type === 'item.completed').item.text = text;
         const stream = records.map(record => JSON.stringify(record)).join('\n') + '\n';
         const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
         const native = require('./helpers/codex-arch-review-fixtures.cjs').focusedNativeSession({
@@ -1313,7 +1313,8 @@ test('a genuine prior Codex repair archive cannot supply host bookkeeping and re
     const archived = fs.readFileSync(repair.artifact_path);
     assert.throws(() => artifacts.sealRole({ worktreePath: f.root, base: 'refs/remotes/origin/main', role,
       ticket: TICKET, pr: f.pr.number, branch: BRANCH, planPath: planPath(), recorder: first.recorder,
-      dispatchId: dispatch.dispatch_id, result }), error => error.code === 'ARTIFACT_WRITE');
+      dispatchId: dispatch.dispatch_id, result }), error => error.code === 'ARTIFACT_MUTATED'
+        && error.message === 'archived role findings changed from its authenticated complete-byte count');
     assert(artifacts.historicalBookkeepingPins(f.root).every(pin => pin.sha256 !== 'a'.repeat(64) && pin.sha256 !== 'b'.repeat(64)));
     const second = await unitJudgment(f); stores.push(f.storage);
     assert.equal(second.result.artifact.outcome, 'conform');

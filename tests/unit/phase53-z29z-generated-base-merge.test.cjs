@@ -279,10 +279,14 @@ if (require.main === module) test('generated merge process ownership survives ag
     const ownerFile = path.join(handle.path, 'owner.json');
     const owner = JSON.parse(fs.readFileSync(ownerFile));
     fs.writeFileSync(ownerFile, JSON.stringify({ ...owner, at: '2000-01-01T00:00:00Z' }));
-    const contend = () => spawnSync(process.execPath, ['-e',
+    const contend = timezone => spawnSync(process.execPath, ['-e',
       'const l=require(process.argv[1]).acquireGeneratedMergeLock(process.argv[2],"merge");if(l){l.release();process.exit(1)}',
-      modulePath, directory], { encoding: 'utf8', timeout: 10000 });
-    assert.equal(contend().status, 0);
+      modulePath, directory], { encoding: 'utf8', timeout: 10000, env: { ...process.env, TZ: timezone, LC_ALL: 'C' } });
+    for (const timezone of ['Pacific/Honolulu', 'Asia/Tokyo', 'UTC']) {
+      const contender = contend(timezone);
+      assert.equal(contender.status, 0, contender.stderr);
+      assert.deepEqual(JSON.parse(fs.readFileSync(ownerFile)), { ...owner, at: '2000-01-01T00:00:00Z' });
+    }
     const blocked = spawnSync(process.execPath, ['-e',
       'const l=require(process.argv[1]).acquireGeneratedMergeLock(process.argv[2],"merge");process.exit(l?1:0)',
       modulePath, directory], { encoding: 'utf8', timeout: 10000 });
