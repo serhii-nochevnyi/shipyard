@@ -210,7 +210,7 @@
 - [ ] **REQ-209**: An extended round is visible in the sealed verdict, the `<!-- code-review -->` comment and the `code-review` commit status as `round N of 3, extended by <operator> at <time>: <reason>`; the gate trailer is unchanged; the `limit` refusal carries named hints for the extend command and `report`, and every text offering `report` says it applies to the whole project until switched back (ADR-035 R-7, R-13, R-14).
 - [ ] **REQ-210**: `references/code-review.md` states rounds 1-5 with a fourth round only on a human record, and the one-time reset of verdicts sealed before the edit is accepted and stated in the release notes (ADR-035 R-8).
 - [ ] **REQ-211**: Fixes pushed between two reviews cost one round, a record voided by a head move costs nothing, the ceiling of 5 is final, and each delivery PR reports net lines including tests and names an offsetting deletion (ADR-035 R-11, R-12, R-15).
-- [ ] **REQ-212**: The change ships as `1.0.0-rc.4` on `epic/harness-simplification` with the version bumped by the six-file pattern of commit `749604b9` as the last PR of the epic after the Codex package is regenerated, and no tag or release without the operator (ADR-035 R-9).
+- [ ] **REQ-212**: The change ships as `1.0.0-rc.5` on `epic/harness-simplification` with the version bumped by the six-file pattern of commit `749604b9` as the last PR of the epic after the Codex package is regenerated, and no tag or release without the operator (ADR-035 R-9).
 
 ## Out of Scope
 
