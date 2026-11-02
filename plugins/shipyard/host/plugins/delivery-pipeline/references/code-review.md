@@ -15,11 +15,11 @@ The orchestrator supplies a `role_context` object:
 | --- | --- |
 | `review_contract` | `shipyard.phase-code-review.v1` |
 | `subject` | Authenticated phase subject; repeat as output `id` |
-| `focused` | Identity echo: `review_contract`, `repository`, `id`, `pr`, `head`, `base_commit`, `merge_base`, `base_tree`, `ticket_set_digest` |
+| `focused` | Identity echo: `review_contract`, `repository`, `id`, `pr`, `head`, `base_commit`, `merge_base`, `base_tree` |
 | `exact_diff` | Range `{base, head}` of the full diff for the first countable round, or of the fix delta for a later round; read the diff itself with git |
 | `part`, `parts` | A part reviewer receives `part`; the final reviewer receives `parts` |
 | `integration_base` | Integration base supplied by the host |
-| `ticket_set` | Complete phase membership and delivery evidence; repeat unchanged |
+| `ticket_set` | Complete phase membership and delivery evidence; review it, the host binds it and you do not return it |
 | `plan_acceptance` | Acceptance criteria of the phase plans |
 | `prior_findings` | Carried findings from `prior_sealed_findings`, with `recorded_disagreements` applied |
 | `review_round` | Integer 1 through 3 |
@@ -96,7 +96,6 @@ sealing; do not invent host citation identities, classifications or suppression.
 | `base_tree` | Exact reviewed merge-base tree from `focused` |
 | `base_commit` | If reported, must equal the authenticated integration commit |
 | `head_tree`, `merge_base_tree` | Optional identity aliases; must equal the authenticated trees |
-| `ticket_set`, `ticket_set_digest` | Complete membership and its host digest |
 | `verdict` | `pass`, `needs-fix` or `incomplete`; may be omitted before normalization |
 | `review_completeness` | `complete` or `incomplete` |
 | `limitations`, `unresolved_sources` | Arrays, at most 128 non-empty strings each, at most 1,024 UTF-8 bytes per string; empty for complete |
@@ -184,8 +183,6 @@ Example reviewer output before host normalization:
   "pr": 52,
   "head": "0123456789abcdef0123456789abcdef01234567",
   "base_tree": "89abcdef0123456789abcdef0123456789abcdef",
-  "ticket_set": [],
-  "ticket_set_digest": "<focused.ticket_set_digest>",
   "review_completeness": "complete",
   "limitations": [],
   "unresolved_sources": [],

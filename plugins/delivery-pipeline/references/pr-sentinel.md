@@ -26,8 +26,8 @@ phase, omit `--repo` and invoke from its epic worktree as above.
 Both hosts derive the aggregate subject from actual phase graph membership,
 repository, PR, exact live head and base. The context includes the entire aggregate
 PR diff, all phase plans/evidence, architecture records, linked decisions and
-available authenticated retained ticket artifacts. Repeat the complete ticket set
-and digest. Do not invent a graph ticket, substitute a ticket/integrator verdict,
+available authenticated retained ticket artifacts. Judge the complete ticket set; the host
+binds it and its digest. Do not invent a graph ticket, substitute a ticket/integrator verdict,
 or dispatch a provider/model replacement. The native boundary and durable receipt
 validation remain mandatory. Missing retained/native evidence stays unknown or HOLD.
 
@@ -351,9 +351,9 @@ session, or in-process fallback may perform or record this `review-fix`.
 
 ## Complete sentinel judgment artifact
 
-The sentinel report is round-scoped. It must repeat the complete guarded ticket
-set and every duty outcome; a single ticket receipt or a short summary cannot
-stand in for the round. Keep complete evidence in a regular file inside the
+The sentinel report is round-scoped. The host binds the complete guarded ticket
+set; the report states every duty outcome, and a single ticket receipt or a
+short summary cannot stand in for the round. Keep complete evidence in a regular file inside the
 sentinel worktree, including the live commands, the tickets checked, performed
 duties, refused duties with reasons, and the resulting outcome.
 
@@ -373,10 +373,8 @@ The result passed to the host has this shape:
 ```json
 {
   "outcome": "clear | blocked | awaiting-human",
-  "ticket_set": [{"id": "T-…", "pr": 123, "head": "<40-char sha>", "base": "<base-ref>#<40-char base sha>", "branch": "<ticket branch>"}],
   "head": "<40-char worktree sha>",
   "head_tree": "<40-char worktree tree sha>",
-  "ticket_set_digest": "<sha256 of the complete ticket set>",
   "performed": [{"ticket": "T-…", "duty": "wait-ci", "status": "complete"}],
   "refused": [{"ticket": "T-…", "duty": "merge", "status": "refused", "reason": "…"}],
   "blocking_count": 0,

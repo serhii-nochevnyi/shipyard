@@ -1612,8 +1612,8 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
     }
   } else fail('REVIEW_NATIVE_INVALID', 'unsupported current native runtime');
   if (receipt.role === 'code-review') return original;
-  const { host_context: _nativeContext, evidence_markdown: markdown, ...nativeResult } = original;
-  const { host_context: _sealedContext, ...sealedResult } = result;
+  const { host_context: _nativeContext, evidence_markdown: markdown, ...nativeResult } = withoutHostTicketSet(original);
+  const { host_context: _sealedContext, ...sealedResult } = withoutHostTicketSet(result);
   if (stable(nativeResult) !== stable(sealedResult)
       || (markdown !== undefined && (typeof markdown !== 'string' || markdown.trim() !== evidence.toString('utf8').trim())))
     fail('REVIEW_NATIVE_INVALID', 'sealed current result differs from original completed native bytes');
@@ -2974,12 +2974,11 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
     if (original.host_context !== undefined) fail('REVIEW_NATIVE_INVALID', 'native code-review host context is reserved');
   }
   for (const [key, value] of Object.entries(binding))
-    if (original[key] !== value) fail('REVIEW_NATIVE_INVALID', 'original code-review answer differs from ' + key);
+    if (key !== 'ticket_set_digest' && original[key] !== value) fail('REVIEW_NATIVE_INVALID', 'original code-review answer differs from ' + key);
   if (original.head_tree !== undefined && original.head_tree !== identity.head_tree
       || original.merge_base_tree !== undefined && original.merge_base_tree !== identity.merge_base_tree)
     fail('REVIEW_NATIVE_INVALID', 'original code-review source trees differ');
-  if (stable(original.ticket_set) !== stable(context.ticket_set)
-      || context.contract_digest !== core.contractDigest(referenceDigest)
+  if (context.contract_digest !== core.contractDigest(referenceDigest)
       || !Object.hasOwn(context, 'dispositions_digest')
       || (context.dispositions_digest !== null && !/^[a-f0-9]{64}$/.test(context.dispositions_digest || '')))
     fail('REVIEW_NATIVE_INVALID', 'original code-review contract or dispositions association differs');
@@ -3000,11 +2999,11 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
   const options = { round: context.review_round, scope: context.review_scope, priorFindings: prior, readSource };
   const parts = context.parts ?? [];
   if (parts.length) core.assertPathPartition(context.change_metadata.changes, parts);
-  const normalized = core.normalizeFinal(original, parts, options);
+  const normalized = core.normalizeFinal(withoutHostTicketSet(original), parts, options);
   const { evidence_markdown: markdown, host_context: _host, ...expected } = normalized;
   if (typeof markdown !== 'string' || !markdown.trim() || Buffer.byteLength(markdown) > ARCHIVE_MAX_BYTES
       || !Buffer.from(markdown).equals(evidence)) fail('REVIEW_NATIVE_INVALID', 'original code-review evidence differs');
-  Object.assign(expected, { ticket_set: context.ticket_set, prior_head: context.prior_head,
+  Object.assign(expected, { ticket_set: context.ticket_set, ticket_set_digest: focused.ticket_set_digest, prior_head: context.prior_head,
     contract_digest: context.contract_digest, dispositions_digest: context.dispositions_digest,
     reuse_key: core.reuseKey({ head: identity.head, baseCommit: identity.base_commit, contractDigest: context.contract_digest }) });
   if (trusted.receipt.runtime === 'codex') expected.host_context = { original_packet: packets.encodeUniqueContent(packet), ...planningContext };
@@ -3592,11 +3591,11 @@ function ticketSetFor(input, result, role, metadata) {
   const supplied = aliasValue(input, ['ticketSet', 'ticket_set'], `${role} input ticket set`);
   const resultValue = aliasValue(result, ['ticket_set', 'ticketSet'], `${role} result ticket set`);
   if (supplied === undefined) fail('MISSING_JUDGMENT_CONTEXT', `${role} requires the guarded/merged ticket set before dispatch`);
-  if (resultValue === undefined) fail('MISSING_ARTIFACT', `${role} result must repeat the complete ticket set`);
+  if (resultValue === undefined) fail('MISSING_ARTIFACT', `${role} sealed result is missing its ticket set`);
   const expected = canonicalTicketSet(supplied, `${role} ticket set`);
   const actual = canonicalTicketSet(resultValue, `${role} result ticket set`);
   if (['arch-review', 'code-review'].includes(role) && stable(supplied) !== stable(resultValue))
-    fail('JUDGMENT_IDENTITY_MISMATCH', 'aggregate result must repeat complete membership and evidence');
+    fail('JUDGMENT_IDENTITY_MISMATCH', 'sealed membership differs from the authenticated membership and evidence');
   if (stable(expected) !== stable(actual)) {
     fail('JUDGMENT_IDENTITY_MISMATCH', `${role} result ticket set does not match the authenticated input ticket set`);
   }
@@ -4017,6 +4016,20 @@ function judgmentEvidenceMaximum(role, runtime) {
     ? 96 * 1024 : ARCHIVE_MAX_BYTES;
 }
 
+function withoutHostTicketSet(value) {
+  const rest = { ...value };
+  for (const key of ['ticket_set', 'ticket_set_digest', 'ticketSet', 'ticketSetDigest']) delete rest[key];
+  return rest;
+}
+
+// @invariant: the host ticket_set and its digest replace any model-returned values.
+function withHostTicketSet(input) {
+  const ticketSet = aliasValue(input, ['ticketSet', 'ticket_set'], 'host ticket set');
+  if (ticketSet === undefined || !object(input.result)) return input.result;
+  return { ...withoutHostTicketSet(input.result), ticket_set: ticketSet, ticket_set_digest: aliasValue(input, ['ticketSetDigest', 'ticket_set_digest'],
+    'host ticket-set digest') ?? digest(JSON.stringify(ticketSet)) };
+}
+
 function sealJudgment(value, options) {
   const input = normalizeCall(value, options);
   const fsApi = ioFor(input).fs;
@@ -4028,7 +4041,7 @@ function sealJudgment(value, options) {
   const identity = gitIdentity({ ...input, role }, worktree);
   const metadata = trustedMetadata({ ...input, role }, trusted, identity);
   metadata.trusted = trusted;
-  const result = input.result;
+  const result = withHostTicketSet(input);
   const data = judgmentResultData(result, metadata, input, identity);
   assertCodeReviewLineage(data, identity, trusted, result);
   const sourceEvidenceName = judgmentEvidenceName(role, input.phase);
@@ -4978,6 +4991,7 @@ function cli(argv) {
 }
 
 module.exports = Object.freeze(Object.assign(Object.create(null), {
+  withoutHostTicketSet,
   ROLE_ARTIFACT_SCHEMA,
   ENVELOPE_SCHEMA,
   ENVELOPE_MAX_BYTES,

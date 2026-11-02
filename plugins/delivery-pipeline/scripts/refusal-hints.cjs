@@ -54,6 +54,10 @@ const HINTS = Object.freeze({
     hint: 'The produced artifact does not match the schema the trusted consumer requires.',
     remedy: 'Fix the artifact fields to match the documented schema and re-run.',
   }),
+  ARTIFACT_IDENTITY_MISMATCH: Object.freeze({
+    hint: 'The role result names a repository, PR, commit or tree that differs from the authenticated snapshot; the refusal names the field.',
+    remedy: 'Re-run the role against the current PR head and base; if the same field differs again, the PR changed while the role ran, so wait for it to settle first.',
+  }),
   INVALID_RESULT: Object.freeze({
     hint: 'The dispatch result does not match the shape the boundary requires.',
     remedy: 'Fix the result fields to match the documented schema and re-run.',

@@ -283,3 +283,10 @@ test('a supplied value that contains a template token is emitted as given and a 
   assert.ok(given.includes('file at .planning/{weird}/x.json is not'), given);
   for (const code of Object.keys(HINTS)) assert.doesNotMatch(formatHint(code, {}), /\{\w+\}/, code);
 });
+
+test('an ARTIFACT_IDENTITY_MISMATCH refusal has its own hint and a re-run remedy', () => {
+  assert.ok(Object.hasOwn(HINTS, 'ARTIFACT_IDENTITY_MISMATCH'));
+  assert.ok(Object.isFrozen(HINTS.ARTIFACT_IDENTITY_MISMATCH));
+  assert.notEqual(hintFor('ARTIFACT_IDENTITY_MISMATCH'), hintFor(undefined));
+  assert.match(formatHint('ARTIFACT_IDENTITY_MISMATCH'), /^hint\[ARTIFACT_IDENTITY_MISMATCH\]: .+ — remedy: Re-run the role .+$/);
+});
