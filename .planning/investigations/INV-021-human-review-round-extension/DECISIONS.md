@@ -69,3 +69,8 @@
 **Why:** the operator released `1.0.0-rc.3` first (2026-11-02, tag `v1.0.0-rc.3` at `9ba94e7c`) with HS-45, HS-46 and HS-47 and without this phase. The version bump ticket T-54-15 therefore takes `1.0.0-rc.3` to `1.0.0-rc.4`.
 **What was rejected:** re-tagging or re-releasing rc.3.
 **Scope fence:** ADR-035 R-9, ROADMAP, REQ-212, CONTEXT, 54-VALIDATION and 54-15 are amended; the historical research and earlier decisions keep their original wording.
+
+## Release version of the phase is `1.0.0-rc.5` (amends the `1.0.0-rc.4` decision above)
+**Why:** an arch-review defect found in the pdffiller-mcp delivery (the seal re-resolves the base ref while prepare accepted a stale local `main`, so a finished review is refused with `JUDGMENT_IDENTITY_MISMATCH`) is fixed by a separate ticket (HS-48) and released first as `1.0.0-rc.4`, without this phase. The operator therefore moved the phase to `1.0.0-rc.5` (2026-11-02). T-54-15 takes `1.0.0-rc.4` to `1.0.0-rc.5`.
+**What was rejected:** shipping phase 54 tickets inside rc.4; holding the arch-review fix until the phase is done.
+**Scope fence:** ADR-035 R-9, ROADMAP, REQ-212, CONTEXT, 54-VALIDATION and 54-15 amended; earlier entries keep their wording. Phase 54 tickets merge into the epic only after the `v1.0.0-rc.4` tag exists.

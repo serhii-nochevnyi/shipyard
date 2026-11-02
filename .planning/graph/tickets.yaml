@@ -5179,7 +5179,7 @@ tickets:
     pr_base: ticket/T-54-12-every-text-that-offers-report-says-it-is
     jira: null
   T-54-15:
-    title: Bump the version to 1.0.0-rc.4 in the six version files
+    title: Bump the version to 1.0.0-rc.5 in the six version files
     plan: '.planning/phases/54-let-an-operator-grant-one-more-code-review-round/54-15-PLAN.md'
     phase: '54'
     repo: null
@@ -5190,7 +5190,7 @@ tickets:
     human_checkpoint: false
     checkpoint: null
     preauthorized: false
-    branch: ticket/T-54-15-bump-the-version-to-1-0-0-rc-4-in-the-si
+    branch: ticket/T-54-15-bump-the-version-to-1-0-0-rc-5-in-the-si
     epic: epic/54-let-an-operator-grant-one-more-code-review-round
     primary_parent: T-54-14
     pr_base: ticket/T-54-14-r-11-end-to-end-refusal-without-a-record

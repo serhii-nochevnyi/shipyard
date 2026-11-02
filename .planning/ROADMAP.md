@@ -1005,4 +1005,4 @@ Plans:
 
 Plans:
 
-- [ ] TBD — decomposed from ADR-035 decisions R-1…R-15 under the `fine` granularity and `--tdd`; first ticket is the S1/S4 spikes, last ticket is the `1.0.0-rc.4` version bump (rc.3 was released without this phase).
+- [ ] TBD — decomposed from ADR-035 decisions R-1…R-15 under the `fine` granularity and `--tdd`; first ticket is the S1/S4 spikes, last ticket is the `1.0.0-rc.5` version bump (rc.3 was released without this phase; rc.4 carries the arch-review base fix HS-48).
