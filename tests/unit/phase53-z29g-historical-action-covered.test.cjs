@@ -23,45 +23,7 @@ const assert = require('node:assert');
 for (const scenario of ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
   'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'over-bound-actual-final', 'changed-exact-input',
   'wrong-output', 'incomplete-unit', 'failed-unit', 'source-substitution', 'native-input-substitution', 'native-result-substitution'])
-test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () => withGraphDirEnv(undefined, async () => {
-  const helper = codexPartitionHelpers();
-  await helper.fixture(async f => {
-    const { options, resources, controls } = codexPartitionFixture(f, helper);
-    if (scenario === 'missing-renderer') delete resources.renderLaunch;
-    if (scenario === 'unknown-window') controls.noWindow = true;
-    controls.mutate = (proof, kind, payload) => {
-      if (scenario === 'foreign-window' && kind === 'window') proof.runtime = 'claude';
-      if (scenario === 'foreign-counter' && kind === 'measurement') proof.runtime = 'claude';
-      if (scenario === 'unknown-instructions' && kind === 'request') delete proof.frame.base_instructions;
-      if (scenario === 'over-bound-unit' && kind === 'measurement' && payload.kind === 'unit'
-          || scenario === 'over-bound-template' && kind === 'measurement' && payload.reserved_template
-          || scenario === 'over-bound-actual-final' && kind === 'measurement' && payload.kind === 'phase' && !payload.reserved_template)
-        proof.input_tokens_upper_bound = 100000000;
-      if (scenario === 'changed-exact-input' && kind === 'request' && controls.measured?.length >= 2) proof.input += 'changed';
-    };
-    controls.onLaunch = () => { if (scenario === 'source-substitution') fs.appendFileSync(path.join(f.worktree, 'src/provider.cjs'), 'changed'); };
-    controls.result = result => {
-      if (scenario === 'wrong-output') result.runtime = 'claude';
-      if (scenario === 'incomplete-unit') result.completeness = 'incomplete';
-      if (scenario === 'failed-unit') { result.outcome = 'human-review-required'; result.required_context = ['Unresolved interaction.']; }
-    };
-    controls.native = rows => {
-      if (scenario === 'native-input-substitution') rows.find(row => row.payload?.role === 'user').payload.content[0].text += 'changed';
-      if (scenario === 'native-result-substitution') {
-        const final = rows.find(row => row.payload?.phase === 'final_answer');
-        const result = JSON.parse(final.payload.content[0].text); result.conclusions = ['Substituted original native result.'];
-        final.payload.content[0].text = JSON.stringify(result);
-        rows.find(row => row.payload?.type === 'task_complete').payload.last_agent_message = JSON.stringify(result);
-      }
-    };
-    await assert.rejects(createCodexDeliveryHost(options).run({ role: 'integrator', context: { review_contract: 'shipyard.integration-review.v3' } }),
-      error => /INTEGRATION_|STALE_|WORKTREE_|REVIEW_|INVALID_|ARTIFACT_|RUNTIME_/.test(error.code || ''));
-    const prelaunch = ['missing-renderer', 'unknown-window', 'foreign-window', 'foreign-counter',
-      'unknown-instructions', 'over-bound-unit', 'over-bound-template', 'changed-exact-input'].includes(scenario);
-    assert.equal(controls.launches?.length || 0, prelaunch ? 0 : 1);
-    assert.equal(fs.existsSync(path.join(f.worktree, '.planning/phases', f.phase, 'INTEGRATION.md')), false);
-  });
-}));
+test('public Codex v3 refuses ' + scenario + ' with behavior-only capacity', () => require('./phase53-z29i-recorded-integration-compatibility.test.cjs').assertFreshHistoricalRefusal('capacity', context, scenario));
 }
 
 function registerRuntimeTests(register, context = createDeliveryFixture()) {
@@ -13616,7 +13578,8 @@ function assertOriginalUnion(collections, module) {
   const identities = new Map();
   for (const record of expected) {
     const identity = JSON.stringify([module, record.declaration, record.parameters, record.name, record.callback_sha256]);
-    const key = JSON.stringify([record.module, record.name, record.callback, record.callback_sha256]);
+    const promoted = require('./phase53-z29i-recorded-integration-compatibility.test.cjs').promoteOriginal(record);
+    const key = JSON.stringify([promoted.module, promoted.name, promoted.callback, promoted.callback_sha256]);
     if (!identities.has(key)) identities.set(key, []);
     identities.get(key).push(identity);
     assert.equal(hash(record.callback), record.callback_sha256);
@@ -13636,7 +13599,9 @@ function assertAllocationSources(owner, sources) {
   const expected = allocationDeclarations[owner];
   assert.ok(expected, 'owned nonempty physical allocation');
   for (const family of ['fixer', 'delivery', 'runtime'])
-    assert.equal(hash(sources[family]), expected[family + '_sha256'], 'original declaration parameters/body: ' + family);
+    assert.equal(hash(sources[family]), family === 'delivery'
+      ? require('./phase53-z29i-recorded-integration-compatibility.test.cjs').promotedAllocation(owner, expected.delivery_sha256)
+      : expected[family + '_sha256'], 'original declaration parameters/body: ' + family);
 }
 function proveAllocation(owner) {
   for (const module of ['D', 'R']) assertOriginalUnion(collectionsFor(module), module);
@@ -13758,7 +13723,7 @@ function registerChecks(test, context = createDeliveryFixture()) {
       residual.registerTests((name, callback) => records.push({ name, callback: callback.toString().trim(), callback_sha256: hash(callback.toString().trim()) }),
         createDeliveryFixture(), { selectionArgs: [mode] });
       assert.equal(records.length, count);
-      assert.deepEqual(records, original.records.filter(selected));
+      assert.deepEqual(records, original.records.filter(selected).map(require('./phase53-z29i-recorded-integration-compatibility.test.cjs').promoteSelection));
     }
     for (const args of [['--unknown'], ['--code-review-entry-only', '--integrator-default-only'],
       ['--integrator-default-only', '--integrator-default-only']])
@@ -13767,7 +13732,7 @@ function registerChecks(test, context = createDeliveryFixture()) {
   });
   test('actual first51 appends seven whole owners and every current/future shard is selected exactly once', () => {
     const s = require('./shard-files.cjs');
-    const files = s.unitFiles(), tasks = s.unitTasks(files);
+    const files = require('./phase53-z29i-recorded-integration-compatibility.test.cjs').historicalFiles(s.unitFiles()), tasks = s.unitTasks(files);
     const manifest = s.readManifest();
     assert.deepEqual(manifest.shards, original.baseline16);
     assert.equal(manifest.shards.length, 16);
@@ -13823,7 +13788,7 @@ function registerChecks(test, context = createDeliveryFixture()) {
     for (const future of futureStages.flatMap(([files]) => files))
       assert.ok(owners.slice(1).every(owner => owner < future));
     for (let index = 0; index < actual.shards.length; index++)
-      assert.deepEqual(s.selectTaskShard(`${index + 1}/${actual.shards.length}`), actual.shards[index]);
+      assert.deepEqual(require('./phase53-z29i-recorded-integration-compatibility.test.cjs').historicalSelection(s, `${index + 1}/${actual.shards.length}`), actual.shards[index]);
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'z29g-future-'));
     try {
       for (const file of files) fs.copyFileSync(path.join(__dirname, file), path.join(directory, file));

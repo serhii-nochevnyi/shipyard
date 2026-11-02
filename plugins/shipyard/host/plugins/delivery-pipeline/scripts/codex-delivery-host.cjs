@@ -1180,147 +1180,119 @@ function prepareCodexSemanticArchitecture(scope, request, options) {
   return { architecture, prepared: architecture.prepared };
 }
 
+function recordedCodexIntegrationFinal(scope, runtimeHost, options) {
+  const previous = options.integrationCapacity?.plan_sha256;
+  if (!/^[a-f0-9]{64}$/.test(previous || '')) return null;
+  const recorder = runtimeHost.recorder, dispatchId = 'integration-final-' + previous;
+  const manifestPath = path.join(scope.worktree, roleArtifact.ARTIFACT_ARCHIVE_DIR, sha256(dispatchId), '.shipyard-role-artifact.json');
+  if (!fs.existsSync(manifestPath)) return null;
+  const originalRecorder = options.integrationCapacity?.recorder || options.recorder || recorder;
+  if (!require('./dispatch-boundary.cjs').isDurableRecorder(recorder)
+      || !require('./dispatch-boundary.cjs').isDurableRecorder(originalRecorder)
+      || originalRecorder.storeDir !== recorder.storeDir)
+    fail('MISSING_RECEIPT', 'historical final requires its original durable recorder');
+  const dispatch = recorder.getVerifiedRecord(dispatchId), result = partitionedCodexResult(dispatch, recorder);
+  if (result.kind !== 'phase' || result.runtime !== 'codex' || result.review_contract !== roleArtifact.INTEGRATION_REVIEW_V3
+      || result.plan_sha256 !== previous || result.subject !== scope.ticket
+      || Number(String(result.phase).split('-')[0]) !== Number(scope.phase))
+    fail('INVALID_RESULT', 'recorded final differs from the exact historical subject and plan');
+  const pins = roleArtifact.authenticatedArchivePins(scope.worktree), pin = pins.find(item => path.resolve(scope.worktree, item.path) === manifestPath);
+  if (!pin) fail('MISSING_RECEIPT', 'historical final has no original protected archive pin');
+  roleArtifact.assertArchivePin(scope.worktree, pin);
+  roleArtifact.assertArchiveInventory(scope.worktree, pins);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const directory = options.graphDir || path.join(scope.worktree, '.planning/graph');
+  const baseName = require('./architecture-target.cjs').resolveIntegrationBranch({ projectRoot: path.resolve(directory, '../..'),
+    defaultBranch: options.defaultBranch, exec: options.execFileSync || execFileSync });
+  const current = roleArtifact.currentIntegrationVerdict({ worktreePath: scope.worktree, graphDir: directory,
+    head: git(scope.worktree, ['rev-parse', 'HEAD']), headBranch: git(scope.worktree, ['symbolic-ref', '--short', 'HEAD']),
+    baseName, baseCommit: git(scope.worktree, ['rev-parse', 'refs/remotes/origin/' + baseName]) });
+  if (!current?.authenticated || current.contract !== roleArtifact.INTEGRATION_REVIEW_V3 || current.dispatch_id !== dispatchId
+      || current.subject !== scope.ticket)
+    fail('STALE_CONTEXT', 'recorded final is not the exact authenticated current original');
+  const status = require('./conveyor-scratch.cjs').statusIgnoringScratch(scope.worktree, { untracked: 'all', forJudge: false });
+  if (!status.ok || status.entries.some(entry => entry.status !== '??'
+      || entry.path !== manifest.source_evidence_path && !pins.some(item => item.path === entry.path)))
+    fail('WORKTREE_MUTATED', 'historical consumption refuses changes outside authenticated original evidence');
+  const { evidence_markdown, ...judgment } = result;
+  if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
+    fail('INVALID_RESULT', 'historical final requires its complete original report');
+  const evidencePath = path.join(scope.worktree, manifest.source_evidence_path);
+  if (!fs.existsSync(evidencePath)) {
+    roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'integrator', phase: result.phase, evidencePath });
+    fs.writeFileSync(evidencePath, evidence_markdown);
+  }
+  const validated = roleArtifact.validateJudgmentManifest({ worktreePath: scope.worktree, role: 'integrator', phase: result.phase,
+    ticket: scope.ticket, base: result.base,
+    ticketSet: result.ticket_set.map(({ id, pr, head, base, branch }) => ({ id, pr, head, base, branch })),
+    ticketSetDigest: result.ticket_set_digest,
+    recorder, dispatchId, result: judgment, evidencePath, artifactPath: manifestPath, artifactDigest: pin.sha256 });
+  return Object.freeze({ ...dispatch, result, artifact: { artifact_path: manifestPath, artifact_digest: pin.sha256,
+    artifact_ref: validated.artifact_ref } });
+}
+
 async function runCodexIntegrationPartitions(review, runtimeHost, scope, options) {
   const execution = integrationExecutions.get(review);
   if (!execution) fail('INVALID_INPUT', 'original private partition execution is required');
-  const { partitions } = execution, resources = options.integrationCapacity || {};
-  const lazyUnits = ['shipyard.integration-partition-plan.v2', 'shipyard.integration-partition-plan.v3'].includes(partitions.plan.schema);
+  const { partitions } = execution, recorder = runtimeHost.recorder;
   recheckIntegrationReview(review, partitions);
-  if (!execution.capacityHost) execution.capacityHost = roleArtifact.createIntegrationCapacityHost({
-    ...resources, partitions, runtime: 'codex', recorder: runtimeHost.recorder });
-  if (!lazyUnits && !execution.stages.length) for (const unit of partitions.plan.units) {
-    try { roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); continue; }
-    catch (error) {
-      if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
-    }
-    execution.stages.push(roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
-      dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id }));
-  }
-  if (!lazyUnits && !execution.admitted) {
-    execution.admissions ||= new Set();
-    for (const stage of [partitions.reserved_template, ...execution.stages].filter(Boolean)) {
-      if (execution.admissions.has(stage.launch_sha256)) continue;
-      await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: execution.capacityHost });
-      execution.admissions.add(stage.launch_sha256);
-    }
-    execution.admitted = true;
-  }
-  const launch = async stage => {
-    recheckIntegrationReview(review, partitions);
-    require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
-      ...review.prepared, integrationReview: review, integrationPartitions: partitions });
-    const runId = 'integration-' + crypto.randomUUID(), ownerId = 'integration-owner-' + crypto.randomUUID();
-    const runScope = createRunScope({ run_id: runId, repository_id: review.prepared.canonical.commonPath,
-      phase: scope.phase, ticket: scope.ticket, worktree: scope.worktree, runtime: 'codex', owner_id: ownerId,
-      dispatch: { runtime: 'codex', role: 'integrator', dispatch_id: stage.dispatch_id } });
-    const storage = storageDirectory(options, { ...scope, run_id: runId });
-    const controller = options.controller === false ? null : createRunController({ storeDir: path.join(storage, 'controller'), ownerId });
-    if (controller) controller.begin(runScope);
-    const nativeScope = { ...scope, run_id: runId };
-    const native = createCodexRuntimeHost({ scope: nativeScope, controller,
-      ...(stage.mode === 'native-observed' ? { integrationIngress: request =>
-        roleArtifact.createCodexIntegrationIngress({ prepared: stage, host: execution.capacityHost, scope: nativeScope })(request) } : {}),
-      recorder: runtimeHost.recorder, capabilities: runtimeHost.capabilities,
-      agentDir: options.agentDir, agentManifest: options.agentManifest, executable: options.executable, probe: options.probe,
-      env: options.env, spawn: options.spawn, ephemeral: options.ephemeral, approveForMe: options.approveForMe,
-      transcriptDir: path.join(storage, 'transcripts'),
-      additionalProtectedPaths: [hostStateRoot(options, scope), roleArtifact.archiveAuthorityDirectory(scope.worktree)] });
-    let heartbeatError;
-    const heartbeat = controller ? setInterval(() => {
-      try { controller.heartbeat(runId); } catch (error) { heartbeatError = error; }
-    }, 60000) : null;
-    heartbeat?.unref();
-    try {
-      const installed = installedAgentOptions(options, {}, native.capabilities);
-      const pin = partitions.plan.instruction_pins.find(item => item.sha256 === stage.agent_sha256);
-      if (!pin) fail('STALE_GENERATED_AGENT', 'partition requires its original installed instruction pin');
-      const prefix = require('./codex-runtime-host.cjs').generatedInstructions(
-        fs.readFileSync(path.resolve(pin.root, pin.path), 'utf8')) + '\n\n';
-      if (!stage.input.startsWith(prefix))
-        fail('INVALID_INPUT', 'partition full native input differs from its installed static instruction prefix');
-      roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: stage, host: execution.capacityHost });
-      const fileInput = stage.mode === 'native-observed' && Buffer.byteLength(stage.input) > 1048576
-        ? roleArtifact.prepareCodexIntegrationFileInput({ prepared: stage, host: execution.capacityHost,
-          scope: native.scope, storageRoot: storage, graphDir: review.prepared.graph.directory }) : null;
-      const dispatch = await launchAgent('integrator', { cwd: scope.worktree, flags: new Map(),
-        signals: review.prepared.signals, dispatch_id: stage.dispatch_id, scope: native.scope,
-        host: native, recorder: native.recorder, controller, capabilities: native.capabilities,
-        agentDir: installed.agentDir, agentManifest: installed.agentManifest, env: options.env || process.env,
-        context: { ticket: scope.ticket, phase: scope.phase, worktreePath: scope.worktree,
-          runtime: 'codex', provider: 'openai', prompt: fileInput ? fileInput.prompt : stage.input.slice(prefix.length),
-          ...(fileInput ? { input_transport: 'host-files', input_prepared: fileInput, input_bundle: fileInput.input_bundle } : {}) } });
-      if (heartbeatError) throw heartbeatError;
-      recheckIntegrationReview(review, partitions);
-      require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
-        ...review.prepared, integrationReview: review, integrationPartitions: partitions });
-      const result = partitionedCodexResult(dispatch, native.recorder);
-      let artifact;
-      if (stage.kind === 'unit') artifact = roleArtifact.sealIntegrationUnit({ prepared: stage,
-        recorder: native.recorder, dispatchId: stage.dispatch_id, result });
-      else {
-        const { evidence_markdown, ...judgment } = result;
-        if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
-          fail('INVALID_RESULT', 'final requires the complete original evidence handoff');
-        const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
-        roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase, evidencePath });
-        fs.writeFileSync(evidencePath, evidence_markdown);
-        const input = { worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase,
-          ticket: scope.ticket, base: review.prepared.base, ticketSet: review.prepared.ticketSet,
-          ticketSetDigest: review.prepared.ticketSetDigest, recorder: native.recorder, dispatchId: stage.dispatch_id,
-          result: judgment, evidencePath, integrationReview: review };
-        artifact = roleArtifact.sealJudgment(input);
-        roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
-      }
-      if (controller) controller.complete(runId);
-      return Object.freeze({ ...dispatch, result, artifact,
-        ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
-          actual_final_input_bytes: stage.kind === 'phase' ? Buffer.byteLength(stage.input) : null } } : {}) });
-    } catch (error) {
-      if (controller) controller.fail(runId, { reason: String(error.message).slice(0, 500) });
-      throw error;
-    } finally { if (heartbeat) clearInterval(heartbeat); }
+  const recorded = stage => {
+    const dispatch = recorder.getVerifiedRecord(stage.dispatch_id);
+    if (!dispatch) fail('MISSING_RECEIPT', 'historical integration requires every already recorded original native result');
+    return { dispatch, result: partitionedCodexResult(dispatch, recorder) };
   };
   for (const unit of partitions.plan.units) {
     let completed;
     try { completed = roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); }
     catch (error) {
       if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
+      const stage = roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
+        dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id });
+      const { result } = recorded(stage);
+      roleArtifact.sealIntegrationUnit({ prepared: stage, recorder, dispatchId: stage.dispatch_id, result });
+      completed = roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id });
     }
-    if (!completed) {
-      let stage = execution.stages.find(stage => stage.unit_id === unit.unit_id);
-      if (lazyUnits) {
-        if (!stage) {
-          stage = roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
-            dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id });
-          execution.stages.push(stage);
-        }
-        execution.admissions ||= new Set();
-        if (!execution.admissions.has(stage.launch_sha256)) {
-          await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: execution.capacityHost });
-          execution.admissions.add(stage.launch_sha256);
-        }
-      }
-      completed = await launch(stage);
-    }
+    const original = recorder.getVerifiedRecord(completed.reference.dispatch_id);
+    if (!original || original.runtime !== 'codex' || original.role !== 'integrator')
+      fail('MISSING_RECEIPT', 'indexed unit requires its original same-recorder native receipt');
+    if (stableStringify(partitionedCodexResult(original, recorder)) !== stableStringify(completed.result))
+      fail('INVALID_RESULT', 'indexed unit differs from its original same-recorder native result');
     if (completed.result.completeness !== 'complete' || completed.result.outcome !== 'passed' || completed.result.required_context.length)
       fail('INTEGRATION_PARTITION_INVALID', 'incomplete, failing or context-blocked unit requires repair');
   }
   recheckIntegrationReview(review, partitions);
-  if (!execution.final) execution.final = roleArtifact.prepareIntegrationAggregate({ partitions,
+  const stage = roleArtifact.prepareIntegrationAggregate({ partitions,
     dispatch_id: 'integration-final-' + partitions.plan.plan_sha256 });
-  if (execution.recovered && !execution.finalAdmitted) {
-    try {
-      roleArtifact.assertIntegrationAdmission({ prepared: execution.final, launch: execution.final, host: execution.capacityHost });
-      execution.finalAdmitted = true;
-    } catch (error) {
-      if (error.code !== 'INTEGRATION_CAPACITY_UNPROVEN' || !error.message.endsWith('exact launch has no protected capacity admission')) throw error;
+  const { dispatch, result } = recorded(stage), { evidence_markdown, ...judgment } = result;
+  if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
+    fail('INVALID_RESULT', 'final requires the complete original evidence handoff');
+  require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
+    ...review.prepared, integrationReview: review, integrationPartitions: partitions });
+  const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
+  const absent = !fs.existsSync(evidencePath);
+  try {
+    roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase, evidencePath });
+    fs.writeFileSync(evidencePath, evidence_markdown);
+    const input = { worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase,
+      ticket: scope.ticket, base: review.prepared.base, ticketSet: review.prepared.ticketSet,
+      ticketSetDigest: review.prepared.ticketSetDigest, recorder, dispatchId: stage.dispatch_id,
+      result: judgment, evidencePath, integrationReview: review };
+    const artifact = roleArtifact.sealJudgment(input);
+    roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
+    return Object.freeze({ ...dispatch, result, artifact,
+      ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
+        actual_final_input_bytes: Buffer.byteLength(stage.input) } } : {}) });
+  } catch (error) {
+    const manifest = path.join(scope.worktree, roleArtifact.ARTIFACT_ARCHIVE_DIR, sha256(stage.dispatch_id), '.shipyard-role-artifact.json');
+    if (absent && !fs.existsSync(manifest)) {
+      try {
+        const stat = fs.lstatSync(evidencePath);
+        if (stat.isFile() && !stat.isSymbolicLink() && stat.uid === process.getuid()
+            && fs.readFileSync(evidencePath, 'utf8') === evidence_markdown) fs.unlinkSync(evidencePath);
+      } catch {}
     }
+    throw error;
   }
-  if (!execution.finalAdmitted) {
-    await roleArtifact.admitIntegrationCapacity({ prepared: execution.final, host: execution.capacityHost });
-    execution.finalAdmitted = true;
-  }
-  return launch(execution.final);
 }
 
 function recheckInlineIntegrator(scope, request) {
@@ -1348,6 +1320,13 @@ function prepareIntegratorInput(scope, request, options) {
   if (request.context.review_contract === roleArtifact.INTEGRATION_REVIEW_V3) {
     if (Object.keys(request.context).some(key => key !== 'review_contract') || Object.keys(request.signals || {}).length)
       fail('INVALID_INPUT', 'partition inputs and authority are private to the host');
+    const resources = options.integrationCapacity;
+    const recorder = resources?.recorder || options.recorder || options.host?.recorder;
+    if (!/^[a-f0-9]{64}$/.test(resources?.plan_sha256 || '')
+        || !require('./dispatch-boundary.cjs').isDurableRecorder(recorder)
+        || !require('./dispatch-boundary.cjs').isDurableRecorder(options.host?.recorder || recorder)
+        || (options.host?.recorder && options.host.recorder.storeDir !== recorder.storeDir))
+      fail('INVALID_INPUT', 'historical v3 requires its original frozen plan and durable recorded native results');
     if (options.fileInputContext) {
       const review = integrationInputs.get(options.fileInputContext);
       const execution = integrationExecutions.get(review);
@@ -1367,12 +1346,8 @@ function prepareIntegratorInput(scope, request, options) {
       generatedInstructionBytes: instructions.generated_instruction_bytes,
       instructionBinding: { agent_file: selected.agent_file, agent_path: path.resolve(installed.agentDir, installed.agentFile),
         agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
-    if (options.integrationCapacity !== undefined && (!object(options.integrationCapacity) || !options.integrationCapacity.capacity))
-      fail('INTEGRATION_CAPACITY_UNPROVEN', 'supplied strict capacity resources are malformed');
-    const previous = options.integrationCapacity?.plan_sha256;
-    const partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity: options.integrationCapacity?.capacity,
-      ...(previous ? { plan_sha256: previous } : {}) });
-    integrationExecutions.set(review, { partitions, stages: [], admitted: !!previous, recovered: !!previous, final: null });
+    const partitions = roleArtifact.prepareIntegrationPartitions({ review, plan_sha256: resources.plan_sha256 });
+    integrationExecutions.set(review, { partitions });
     return review.input;
   }
   if (request.context.review_contract !== undefined
@@ -3331,7 +3306,7 @@ function createCodexDeliveryHost(options = {}) {
     capabilitiesFile: options.capabilitiesFile,
     executable: options.executable,
     probe: options.probe,
-    recorder: options.recorder,
+    recorder: options.recorder || options.integrationCapacity?.recorder,
     recorderDir: options.recorderDir || path.join(storage, 'receipts'),
     transcriptDir: options.transcriptDir || path.join(storage, 'transcripts'),
     env: options.env,
@@ -3489,6 +3464,10 @@ function createCodexDeliveryHost(options = {}) {
         if (partitionRunning) fail('INVALID_INPUT', 'partition execution is already active');
         partitionRunning = true;
         try {
+          if (Object.keys(request.context).some(key => key !== 'review_contract') || Object.keys(request.signals || {}).length)
+            fail('INVALID_INPUT', 'partition inputs and authority are private to the host');
+          const completed = recordedCodexIntegrationFinal(scope, runtimeHost, options);
+          if (completed) return completed;
           partitionInput = prepareIntegratorInput(scope, { ...request, dispatch_id: newDispatchId() }, {
             ...options, host: runtimeHost, fileInputContext: partitionInput || options.fileInputContext });
           return await runCodexIntegrationPartitions(integrationInputs.get(partitionInput), runtimeHost, scope, options);

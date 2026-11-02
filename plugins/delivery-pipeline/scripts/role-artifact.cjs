@@ -2852,6 +2852,75 @@ function reviewGit(root, args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024 }).trimEnd();
 }
 
+function createReviewGitReader(root, entries, maximumBytes) {
+  const limit = 16 * 1024 * 1024;
+  const objects = [...new Set(entries.filter(entry => entry.type === 'blob'
+    && ['100644', '100755'].includes(entry.mode)).map(entry => entry.object))];
+  const invalid = () => fail('REVIEW_IMPACT_UNCERTAIN', 'invalid complete Git object batch');
+  if (objects.some(object => !/^[a-f0-9]{40}$/.test(object))) invalid();
+  const request = selected => {
+    const input = Buffer.from(selected.join('\n') + '\n', 'ascii');
+    if (input.length > limit) fail('CONTEXT_OVER_BOUND', 'complete Git object request exceeds its bound');
+    return input;
+  };
+  const parse = (raw, selected, sizes) => {
+    if (!Buffer.isBuffer(raw) || raw.length > limit) invalid();
+    let offset = 0;
+    const result = [];
+    for (let index = 0; index < selected.length; index++) {
+      const end = raw.indexOf(10, offset);
+      if (end < offset || end - offset > 128) invalid();
+      const header = raw.subarray(offset, end).toString('latin1');
+      const match = /^([a-f0-9]{40}) blob (0|[1-9][0-9]*)$/.exec(header);
+      const size = match && Number(match[2]);
+      if (!match || match[1] !== selected[index] || !Number.isSafeInteger(size) || size < 0) invalid();
+      offset = end + 1;
+      if (sizes) {
+        if (size !== sizes[index] || size > raw.length - offset - 1 || raw[offset + size] !== 10) invalid();
+        result.push(raw.subarray(offset, offset + size));
+        offset += size + 1;
+      } else result.push(size);
+    }
+    if (offset !== raw.length) invalid();
+    return result;
+  };
+  let sizes, cursor = 0, pending = [], pendingStart = 0;
+  return (object, total) => {
+    if (object !== objects[cursor]) invalid();
+    if (!sizes) sizes = parse(execFileSync('git', ['-C', root, 'cat-file', '--batch-check'], {
+      input: request(objects), timeout: 30000, maxBuffer: limit,
+    }), objects);
+    const size = sizes[cursor];
+    if (size > limit || total + size > maximumBytes)
+      fail('CONTEXT_OVER_BOUND', 'complete impact sources exceed their bound');
+    let raw;
+    if (cursor < pendingStart + pending.length) {
+      raw = pending[cursor - pendingStart];
+      pending[cursor - pendingStart] = null;
+    } else if (Buffer.byteLength(object + ' blob ' + size + '\n') + size + 1 > limit) {
+      raw = execFileSync('git', ['-C', root, 'cat-file', 'blob', object], { maxBuffer: limit });
+      if (!Buffer.isBuffer(raw) || raw.length !== size) invalid();
+    } else {
+      let framedBytes = 0, bodyBytes = 0, end = cursor;
+      while (end < objects.length) {
+        const next = sizes[end];
+        if (next > limit) break;
+        const framed = Buffer.byteLength(objects[end] + ' blob ' + next + '\n') + next + 1;
+        if (framed > limit - framedBytes || next > maximumBytes - total - bodyBytes) break;
+        framedBytes += framed; bodyBytes += next; end++;
+      }
+      const selected = objects.slice(cursor, end);
+      pending = parse(execFileSync('git', ['-C', root, 'cat-file', '--batch'], {
+        input: request(selected), maxBuffer: limit,
+      }), selected, sizes.slice(cursor, end));
+      pendingStart = cursor;
+      raw = pending[0]; pending[0] = null;
+    }
+    cursor++;
+    return raw;
+  };
+}
+
 function matchesGitSource(entry, ref) {
   return entry?.type === 'blob' && ['100644', '100755'].includes(entry.mode)
     && typeof ref.content === 'string' && Buffer.byteLength(ref.content) === ref.bytes
@@ -2917,6 +2986,8 @@ function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId, v
   const previous = new Map(previousInventory.map(entry => [entry.path, entry])), now = new Map(inventory.map(entry => [entry.path, entry]));
   const graph = new Map(), boundaries = [], uncertainty = [], bodies = new Map();
   let total = 0;
+  let readGit = createReviewGitReader(root, [...previousInventory, ...inventory]
+    .filter(entry => /\.(?:cjs|mjs|js|ts|tsx|jsx)$/.test(entry.path)), maximumBytes);
   const read = entry => {
     if (entry.type !== 'blob' || !['100644', '100755'].includes(entry.mode)) {
       uncertainty.push({ path: entry.path, reason: 'non-regular-source-boundary' }); return null;
@@ -2926,10 +2997,7 @@ function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId, v
       if (content === null) uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' });
       return content;
     }
-    const size = Number(reviewGit(root, ['cat-file', '-s', entry.object]));
-    if (!Number.isSafeInteger(size) || size < 0 || size > 16 * 1024 * 1024 || total + size > maximumBytes)
-      fail('CONTEXT_OVER_BOUND', 'complete impact sources exceed their bound');
-    const raw = execFileSync('git', ['-C', root, 'cat-file', 'blob', entry.object], { maxBuffer: 16 * 1024 * 1024 });
+    const raw = readGit(entry.object, total);
     total += raw.length;
     let content;
     try { content = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch {
@@ -3020,6 +3088,7 @@ function rebuildReviewImpactPacket(currentInput, selection, excludeDispatchId, v
       inherited.push({ ...priorObligations[index], conclusion: baseline.conclusion, assumptions: baseline.assumptions });
     } else newly.push({ ...ref, obligation: 'current-required-source' });
   }
+  readGit = createReviewGitReader(root, [...affected].sort().map(name => now.get(name) || previous.get(name)).filter(Boolean), maximumBytes);
   for (const name of [...affected].sort()) {
     const entry = now.get(name);
     if (!entry) {
