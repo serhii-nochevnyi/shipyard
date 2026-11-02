@@ -1046,7 +1046,7 @@ function registerTests(test) {
         try { await refuse(label); } finally { fs.writeFileSync(file, bytes); }
       }
       const baseRef = fixtureGit(f.worktree, 'rev-parse', '--symbolic-full-name', plan.identity.base_ref);
-      assert.match(baseRef, /^refs\//);
+      assert.ok(baseRef.startsWith('refs/'));
       const baseOid = fixtureGit(f.worktree, 'rev-parse', '--verify', baseRef + '^{commit}');
       assert.equal(baseOid, plan.identity.base);
       assert.equal(baseOid, f.base);
