@@ -303,68 +303,87 @@ const publicationHash = value => crypto.createHash('sha256').update(value).diges
 const positiveId = value => Number.isSafeInteger(value) && value > 0;
 const PUBLICATION_BOUND = 8192;
 
-function publicationNamespace(ctx) {
+function publicationLocation({ repository, repo, pr, roots = [] }) {
+  if (!positiveId(pr)) throw new Error('a pull request number is required');
   const home = fs.realpathSync(require('node:os').homedir());
-  const selector = ctx.repo === null ? null : ctx.repo.trim().toLowerCase();
-  const identity = { schema: 'shipyard.code-review-publication.v1', repository: ctx.repository,
-    selector, pr: ctx.pr };
+  const selector = repo === null ? null : repo.trim().toLowerCase();
   const directory = path.join(home, '.local/state/shipyard/code-review-publications',
-    publicationHash(JSON.stringify([identity.repository, selector])));
-  for (const root of [ctx.worktree, ctx.mode.project_root].filter(Boolean)) {
+    publicationHash(JSON.stringify([repository, selector])));
+  for (const root of roots.filter(Boolean)) {
     const relative = path.relative(fs.realpathSync(root), directory);
     if (!relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)))
       throw new Error('publication state cannot be inside a source or planning checkout');
   }
-  const validate = () => {
-    let current = home;
-    const homeStat = fs.lstatSync(home);
-    if (!homeStat.isDirectory() || homeStat.uid !== process.getuid()) throw new Error('unsafe publication home');
-    for (const part of path.relative(home, directory).split(path.sep)) {
-      current = path.join(current, part);
-      assertPublicationConfig(ctx.mode);
-      try { fs.mkdirSync(current, { mode: 0o700 }); }
-      catch (error) { if (error.code !== 'EEXIST') throw error; }
-      const stat = fs.lstatSync(current);
-      const privateDirectory = current === directory || part === 'code-review-publications';
-      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()
-          || (stat.mode & (privateDirectory ? 0o777 : 0o022)) !== (privateDirectory ? 0o700 : 0))
-        throw new Error('unsafe publication namespace');
-    }
-  };
-  validate();
-  return { directory, file: path.join(directory, `${ctx.pr}.json`), identity, validate };
+  return { home, selector, directory };
 }
 
-function readPublication(state) {
+// @invariant: the writer and the reader judge every namespace segment by this one predicate.
+function walkNamespace({ home, directory }, beforeSegment = () => {}) {
+  let current = home;
+  const homeStat = fs.lstatSync(home);
+  if (!homeStat.isDirectory() || homeStat.uid !== process.getuid()) throw new Error('unsafe publication home');
+  for (const part of path.relative(home, directory).split(path.sep)) {
+    current = path.join(current, part);
+    beforeSegment(current);
+    const stat = fs.lstatSync(current);
+    const privateDirectory = current === directory || part === 'code-review-publications';
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()
+        || (stat.mode & (privateDirectory ? 0o777 : 0o022)) !== (privateDirectory ? 0o700 : 0))
+      throw new Error('unsafe publication namespace');
+  }
+}
+
+function publicationNamespace(ctx) {
+  const location = publicationLocation({ repository: ctx.repository, repo: ctx.repo, pr: ctx.pr,
+    roots: [ctx.worktree, ctx.mode.project_root] });
+  const identity = { schema: 'shipyard.code-review-publication.v1', repository: ctx.repository,
+    selector: location.selector, pr: ctx.pr };
+  const validate = () => walkNamespace(location, current => {
+    assertPublicationConfig(ctx.mode);
+    try { fs.mkdirSync(current, { mode: 0o700 }); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  });
+  validate();
+  return { directory: location.directory, file: path.join(location.directory, `${ctx.pr}.json`), identity, validate };
+}
+
+// @security: private state files are read only here: own uid, mode 0600, bounded, no symlink.
+function readPrivateRecord(file, bound, label, validate) {
   let stat;
-  try { stat = fs.lstatSync(state.file); }
+  try { stat = fs.lstatSync(file); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()
-      || (stat.mode & 0o777) !== 0o600 || stat.size > PUBLICATION_BOUND)
-    throw new Error('unsafe publication record');
+      || (stat.mode & 0o777) !== 0o600 || stat.size > bound)
+    throw new Error(`unsafe ${label} record`);
   const same = value => ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode']
     .every(key => value[key] === stat[key]);
-  const fd = fs.openSync(state.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   let record;
   try {
-    if (!same(fs.fstatSync(fd))) throw new Error('publication record changed');
+    if (!same(fs.fstatSync(fd))) throw new Error(`${label} record changed`);
     const bytes = Buffer.alloc(stat.size);
     let offset = 0;
     while (offset < bytes.length) {
       const count = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
-      if (!count) throw new Error('publication record is unreadable');
+      if (!count) throw new Error(`${label} record is unreadable`);
       offset += count;
     }
     if (fs.readSync(fd, Buffer.alloc(1), 0, 1, offset) || !same(fs.fstatSync(fd))
-        || !same(fs.lstatSync(state.file))) throw new Error('publication record changed');
+        || !same(fs.lstatSync(file))) throw new Error(`${label} record changed`);
     record = JSON.parse(bytes.toString('utf8'));
   } finally { fs.closeSync(fd); }
-  if (!object(record) || Object.keys(record).sort().join(',') !== 'body_hash,comment_id,pr,repository,schema,selector'
-      || Object.entries(state.identity).some(([key, value]) => record[key] !== value)
-      || !positiveId(record.comment_id) || typeof record.body_hash !== 'string'
-      || !/^[a-f0-9]{64}$/.test(record.body_hash))
-    throw new Error('publication record identity or schema mismatch');
-  return record;
+  return validate(record);
+}
+
+function readPublication(state) {
+  return readPrivateRecord(state.file, PUBLICATION_BOUND, 'publication', record => {
+    if (!object(record) || Object.keys(record).sort().join(',') !== 'body_hash,comment_id,pr,repository,schema,selector'
+        || Object.entries(state.identity).some(([key, value]) => record[key] !== value)
+        || !positiveId(record.comment_id) || typeof record.body_hash !== 'string'
+        || !/^[a-f0-9]{64}$/.test(record.body_hash))
+      throw new Error('publication record identity or schema mismatch');
+    return record;
+  });
 }
 
 function persistPublication(ctx, state, record) {
@@ -388,6 +407,72 @@ function persistPublication(ctx, state, record) {
     if (JSON.stringify(readPublication(state)) !== JSON.stringify(record))
       throw new Error('publication record persistence failed');
   } finally { try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+}
+
+const EXTENSION_SCHEMA = 'shipyard.code-review-extension.v1';
+const EXTENSION_LIMIT = 16;
+const hex40 = /^[a-f0-9]{40}$/;
+const plainText = (value, max) => typeof value === 'string' && value.length > 0
+  && Buffer.byteLength(value) <= max && !/[\u0000-\u001f\u007f]/.test(value);
+const exactKeys = (value, keys) => object(value) && Object.keys(value).sort().join(',') === keys;
+const extensionRecord = value => exactKeys(value, 'base_commit,created_at,head,operator,reason')
+  && hex40.test(value.head) && hex40.test(value.base_commit)
+  && plainText(value.operator, 128) && plainText(value.reason, 200)
+  && typeof value.created_at === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value.created_at)
+  && !Number.isNaN(Date.parse(value.created_at)) && new Date(value.created_at).toISOString() === value.created_at;
+
+function extensionStore(location, input) {
+  return { ...location, file: path.join(location.directory, `${input.pr}.extensions.json`),
+    identity: { schema: EXTENSION_SCHEMA, repository: input.repository, selector: location.selector, pr: input.pr } };
+}
+
+function readExtensionFile(store) {
+  return readPrivateRecord(store.file, PUBLICATION_BOUND, 'extension', file => {
+    if (!exactKeys(file, 'pr,records,repository,schema,selector')
+        || Object.entries(store.identity).some(([key, value]) => file[key] !== value)
+        || !Array.isArray(file.records) || file.records.length > EXTENSION_LIMIT
+        || !file.records.every(extensionRecord)
+        || new Set(file.records.map(row => row.head + row.base_commit)).size !== file.records.length)
+      throw new Error('extension record identity or schema mismatch');
+    return file;
+  });
+}
+
+// @security: this read grants rounds, so it checks the namespace with lstat only and creates nothing.
+function readExtensions(input) {
+  const store = extensionStore(publicationLocation(input), input);
+  try { walkNamespace(store); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  return readExtensionFile(store)?.records ?? [];
+}
+
+function appendExtension(ctx, record) {
+  if (!extensionRecord(record)) throw new Error('extension record is invalid');
+  const state = publicationNamespace(ctx);
+  const store = extensionStore({ directory: state.directory, selector: state.identity.selector }, ctx);
+  return withLock(state.directory, `extend-${ctx.pr}`, () => {
+    state.validate();
+    const records = readExtensionFile(store)?.records ?? [];
+    const existing = records.find(row => row.head === record.head && row.base_commit === record.base_commit);
+    if (existing) return existing;
+    if (records.length >= EXTENSION_LIMIT) throw new Error('extension record limit reached');
+    const next = { ...store.identity, records: [...records, record] };
+    const bytes = JSON.stringify(next) + '\n';
+    if (Buffer.byteLength(bytes) > PUBLICATION_BOUND) throw new Error('extension record exceeds bound');
+    const temporary = path.join(state.directory, `.${path.basename(store.file)}.tmp-${process.pid}`);
+    fs.closeSync(fs.openSync(temporary, 'wx', 0o600));
+    try {
+      writeAtomic(store.file, bytes);
+      for (const target of [store.file, state.directory]) {
+        const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      }
+      state.validate();
+      if (JSON.stringify(readExtensionFile(store)) !== JSON.stringify(next))
+        throw new Error('extension record persistence failed');
+    } finally { try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+    return record;
+  }, { label: 'code review extension', waitMs: 10000 });
 }
 
 function publish(input, options = {}) {
@@ -503,7 +588,7 @@ function verifyCodeReview(input, options = {}) {
   return { ...current, ok: gate.ok, reason: gate.ok ? current.reason : gate.message };
 }
 
-module.exports = { publish, statusDescription, status, evaluateGate, fixTickets, matchEpicPullRequest, refusalText: refusal, resolveCodeReviewMode, verifyCodeReview };
+module.exports = { publish, readExtensions, appendExtension, statusDescription, status, evaluateGate, fixTickets, matchEpicPullRequest, refusalText: refusal, resolveCodeReviewMode, verifyCodeReview };
 
 if (require.main === module) {
   try {
