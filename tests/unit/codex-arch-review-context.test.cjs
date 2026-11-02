@@ -1085,26 +1085,74 @@ test('untracked planning sources survive sealing and fresh consumption, and a ch
     const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
     role.validateJudgmentManifest(sealed.validationInput);
     write(f.root, ADR_PATH, ADR + 'edited after sealing\n');
-    assert.throws(() => role.validateJudgmentManifest(sealed.validationInput), /source|changed|differs|digest|authority/);
+    assert.throws(() => role.validateJudgmentManifest(sealed.validationInput), error => error.code === 'ARCHIVE_AUTHORITY_INVALID');
   } finally { cleanupJudgment(f); }
 });
 
-test('untracked planning sources refuse a changed, added or symlinked ADR between pin and use', () => {
+test('untracked planning sources refuse a changed, added, removed or symlinked ADR between pin and use', () => {
   const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-  for (const [name, change, expected] of [
-    ['changed', f => write(f.root, ADR_PATH, ADR + 'edited\n'), /./],
-    ['added', f => write(f.root, '.planning/architecture/ADR-026-late.md', '# late\n'), /membership changed/],
-    ['symlinked', f => { const file = path.join(f.root, ADR_PATH); fs.renameSync(file, file + '.real'); fs.symlinkSync(file + '.real', file); }, /./],
+  const link = ADR_PATH + '.real';
+  for (const [name, change, code] of [
+    ['changed', f => write(f.root, ADR_PATH, ADR + 'edited\n'), 'ARCHIVE_AUTHORITY_INVALID'],
+    ['removed', f => fs.unlinkSync(path.join(f.root, ADR_PATH)), 'ENOENT'],
+    ['added', f => write(f.root, '.planning/architecture/ADR-026-late.md', '# late\n'), 'SOURCE_AUTHORITY_INVALID'],
+    ['symlinked pinned member', f => { const file = path.join(f.root, ADR_PATH); fs.copyFileSync(file, file + '.real'); fs.unlinkSync(file); fs.symlinkSync(path.basename(link), file); }, 'ARCHIVE_AUTHORITY_INVALID'],
+    ['unpinned symlink member', f => fs.symlinkSync(path.basename(ADR_PATH), path.join(f.root, '.planning/architecture/ADR-099-link.md')), 'SOURCE_AUTHORITY_INVALID'],
   ]) {
     const f = fixture();
     try {
+      write(f.root, ADR_PATH, 'x'.repeat(path.basename(link).length));
       untrackPlanning(f);
       const pins = sourcePins(f, [ADR_PATH]);
       assert.deepEqual(role.authenticateArchitectureSources(f.root, f.root, pins).pins, pins);
       change(f);
-      assert.throws(() => role.authenticateArchitectureSources(f.root, f.root, pins), expected, name);
+      assert.throws(() => role.authenticateArchitectureSources(f.root, f.root, pins), error => error.code === code, name);
     } finally { cleanupJudgment(f); }
   }
+});
+
+test('untracked planning member swapped for a symlink between the physical-path check and the open is refused by O_NOFOLLOW', () => {
+  const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const f = fixture(), open = fs.openSync, file = path.join(f.root, ADR_PATH);
+  try {
+    untrackPlanning(f);
+    const pins = sourcePins(f, [ADR_PATH]);
+    fs.openSync = function(target, ...args) {
+      if (String(target) === file) { fs.copyFileSync(file, file + '.real'); fs.unlinkSync(file); fs.symlinkSync(file + '.real', file); }
+      return open.call(fs, target, ...args);
+    };
+    assert.throws(() => role.authenticateArchitectureSources(f.root, f.root, pins), error => error.code === 'ELOOP');
+  } finally { fs.openSync = open; cleanupJudgment(f); }
+});
+
+test('untracked linked DECISIONS.md is pinned, sealed and re-read by the fresh consumer', async () => {
+  const f = fixture(), decision = '.planning/investigations/INV-closure/DECISIONS.md';
+  try {
+    write(f.root, decision, '# Linked local decision\n');
+    write(f.root, planPath(), fs.readFileSync(path.join(f.root, planPath()), 'utf8') + '\nSee [' + decision + '](' + decision + ')\n');
+    untrackPlanning(f);
+    const sealed = await unitJudgment(f);
+    assert.ok(sealed.value.prepared.packet.source_authority.pins.some(pin => pin.path === decision));
+    const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    role.validateJudgmentManifest(sealed.validationInput);
+    write(f.root, decision, '# Linked local decision, edited\n');
+    assert.throws(() => role.validateJudgmentManifest(sealed.validationInput), error => error.code === 'ARCHIVE_AUTHORITY_INVALID');
+  } finally { cleanupJudgment(f); }
+});
+
+test('untracked planning in the canonical root is pinned for a ticket worktree that has no planning', () => {
+  const f = fixture(); const review = f.root + '-ticket';
+  try {
+    untrackPlanning(f);
+    git(f.root, ['checkout', '--detach']);
+    git(f.root, ['worktree', 'add', review, BRANCH]);
+    assert.equal(fs.existsSync(path.join(review, '.planning')), false);
+    const scope = { ticket: TICKET, phase: 38, worktree: review };
+    const options = { refreshGit: false, graphDir: path.join(f.root, '.planning/graph'), listPullRequests: () => [f.pr], getPullRequest: () => f.pr };
+    const authority = contextBuilder.prepare(scope, { role: 'arch-review', context: {}, signals: {} }, options).prepared.packet.source_authority;
+    assert.equal(authority.source.root, f.root);
+    assert.deepEqual(authority.pins, sourcePins(f, [ADR_PATH]));
+  } finally { try { git(f.root, ['worktree', 'remove', '--force', review]); } catch {} cleanupJudgment(f); }
 });
 
 test('a repository whose head tracks planning refuses an uncommitted or dirty ADR', () => {
