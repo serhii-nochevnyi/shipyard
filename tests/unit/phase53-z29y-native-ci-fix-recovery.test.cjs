@@ -109,6 +109,60 @@ if (require.main === module) {
       });
     } finally { signing.close(); }
   });
+  test('finished unsigned CI results acknowledge green and pending checks through the terminal CLI', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      for (const status of ['no-op', 'escalate']) for (const observation of ['green', 'pending', 'invalid'])
+        await t.test(`${status}:${observation}`, bounded, async () => {
+          const f = ciFixture(signing);
+          f.control.source = false; f.output.status = status;
+          const result = await f.cliRun();
+          const retained = originalOperation(f).envelope.payload;
+          assert.equal(retained.state, 'finished'); assert.equal(retained.signed_result, undefined);
+          f.control.mutateResponse = (endpoint, rows) => {
+            if (endpoint.includes('/check-runs?')) {
+              Object.assign(rows[0].check_runs[0], { status: observation === 'pending' ? 'in_progress' : 'completed',
+                conclusion: observation === 'pending' ? null : 'success' });
+              if (observation === 'invalid') rows[0].check_runs[0].head_sha = '0'.repeat(40);
+            }
+          };
+          if (observation === 'invalid') await assert.rejects(f.cliRun);
+          else {
+            assert.deepEqual(await f.cliRun(), JSON.parse(JSON.stringify(result)));
+            const request = JSON.parse(fs.readFileSync(f.requestFile));
+            request.scope.run_id = 'fresh-ack-' + require('node:crypto').randomUUID();
+            fs.writeFileSync(f.requestFile, JSON.stringify(request));
+            assert.deepEqual(await f.cliRun(), JSON.parse(JSON.stringify(result)));
+          }
+          assert.equal(f.launches, 1); assert.equal(f.pushes, 0);
+          assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), f.originalHead);
+          assert.equal(originalOperation(f).envelope.payload.dispatch_id, retained.dispatch_id);
+        });
+    } finally { signing.close(); }
+  });
+  test('signed low and high source transitions admit the authenticated xhigh successor', bounded, async () => {
+    const signing = signingFixture();
+    try {
+      const f = ciFixture(signing), dispatches = [], heads = [f.originalHead];
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        if (f.options.controller) {
+          f.options.controller.release(f.scope.run_id, 'fixture signed predecessor handoff'); delete f.options.controller;
+        }
+        f.scope.run_id = 'signed-chain-' + require('node:crypto').randomUUID();
+        f.control.runAttempt = attempt;
+        f.control.mutateNative = () => fs.chmodSync(path.join(f.worktree, 'src/owned.txt'), attempt === 2 ? 0o755 : 0o644);
+        const result = await f.run();
+        assert.equal(result.receipt.applied_effort, ['low', 'high', 'xhigh'][attempt - 1]);
+        const original = originalOperation(f).envelope.payload;
+        assert.equal(original.predecessor_dispatch_id, dispatches.at(-1) || null);
+        assert.equal(git(f.worktree, 'show', '-s', '--format=%P', result.artifact.commit), heads.at(-1));
+        dispatches.push(result.receipt.dispatch_id); heads.push(result.artifact.commit);
+        assertCurrent(f, result);
+      }
+      assert.equal(new Set(dispatches).size, 3); assert.equal(new Set(heads).size, 4);
+      assert.equal(f.launches, 3); assert.equal(f.pushes, 3);
+    } finally { signing.close(); }
+  });
   test('finished CI originals refuse changed signed head, receipt, coverage, graph, signer, publication and source without replay', bounded, async t => {
     const signing = signingFixture();
     try {

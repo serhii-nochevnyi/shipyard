@@ -11,7 +11,7 @@ const coverage = require(path.join(scripts, 'conveyor-coverage.cjs'));
 const canonical = 'plugins/delivery-pipeline/scripts/role-artifact.cjs';
 const mirror = 'plugins/shipyard/host/' + canonical;
 const identityPaths = ['plugins/shipyard/.codex-plugin/plugin.json', 'plugins/shipyard/package-build.json'];
-function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false } = {}) {
+function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false, wrappedBoard = false } = {}) {
   const worktree = path.join(signing.directory, 'source-' + crypto.randomUUID());
   fs.mkdirSync(worktree); packageSource(worktree);
   git(worktree, 'init', '-q', '-b', 'main');
@@ -42,7 +42,8 @@ function divergentFixture(signing, { conflict = false, generatedEntry = false, m
     phase: 53, branch: 'ticket/T-53-31', pr_base: 'main', plan: '.planning/PLAN.md',
     files: [canonical, mirror, ...identityPaths], repo: 'fixture/repository',
   } } }));
-  fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify({ 'T-53-31': { pr: 501, branch: 'ticket/T-53-31', base: 'main' } }));
+  const board = { 'T-53-31': { pr: 501, branch: 'ticket/T-53-31', base: 'main' } };
+  fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify(wrappedBoard ? { tickets: board } : board));
   const entryPackage = path.join(signing.directory, 'entry-' + crypto.randomUUID());
   if (generatedEntry) fs.cpSync(path.join(worktree, 'plugins/shipyard'), entryPackage, { recursive: true });
   const script = generatedEntry ? path.join(entryPackage, 'host/plugins/delivery-pipeline/scripts/base-merge.cjs') : path.join(scripts, 'base-merge.cjs');
@@ -118,10 +119,10 @@ function partialApplyInjection(f, phase) {
     const exec=cp.execFileSync;cp.execFileSync=function(command,args,...rest){const result=exec.call(this,command,args,...rest);if(command==='git'&&args[1]===root&&args[2]==='add'&&intended()?.apply){adds++;if((phase==='first-add'&&adds===1)||(phase==='multiple-adds'&&adds===2))process.exit(97);}return result;};`;
 }
 if (require.main === module) {
-  for (const generatedEntry of [false, true]) test(`actual divergent whole generations produce a signed covered combined merge through ${generatedEntry ? 'generated' : 'canonical'} entrypoint`, bounded, () => {
+  for (const wrappedBoard of [false, true]) for (const generatedEntry of [false, true]) test(`${wrappedBoard ? 'wrapped' : 'flat'} delivery state: actual divergent whole generations produce a signed covered combined merge through ${generatedEntry ? 'generated' : 'canonical'} entrypoint`, bounded, () => {
     const signing = signingFixture();
     try {
-      const f = divergentFixture(signing, { generatedEntry }); inspectSuccess(f, f.run());
+      const f = divergentFixture(signing, { generatedEntry, wrappedBoard }); inspectSuccess(f, f.run());
       const before = git(f.worktree, 'rev-parse', 'HEAD'); inspectSuccess(f, f.run()); assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), before);
     } finally { signing.close(); }
   });

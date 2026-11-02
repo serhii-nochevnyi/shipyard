@@ -2744,10 +2744,12 @@ function prepareCiRepair(options, scope, context) {
     history = ciRepairHistory(prepared, pr);
     const signature = sha256(canonical({ repository: feedback.repository, ticket: scope.ticket, pr,
       failure: evidence.sha256, name: feedback.failure.name, workflow_id: feedback.failure.workflow_id }));
-    for (const item of history.history) if (item.attempt.signature === signature
+    for (const [index, item] of history.history.entries()) if (item.attempt.signature === signature
         && (canonical(item.attempt.preparation.commit.files_modified) !== canonical(prepared.commit.files_modified)
           || item.attempt.preparation.plan.sha256 !== plan.sha256
-          || item.attempt.preparation.graphDigest !== prepared.graphDigest || !ciPredecessorHead(prepared, item)))
+          || item.attempt.preparation.graphDigest !== prepared.graphDigest
+          || !ciPredecessorHead(index === 0 ? prepared : { ...prepared,
+            commit: { ...prepared.commit, expectedHead: history.history[index - 1].attempt.preparation.commit.expectedHead } }, item)))
       fail('REPAIR_PREDECESSOR_INVALID', 'matching original CI history lacks a compatible graph, scope or covered source transition');
     const compatible = history.history.filter(item => item.attempt.signature === signature
       && canonical(item.attempt.preparation.commit.files_modified) === canonical(prepared.commit.files_modified)
@@ -2786,7 +2788,12 @@ function prepareCiRepair(options, scope, context) {
   if (saved?.state === 'finished') {
     authenticateFinishedCi(state);
     if (!saved.signed_result) {
-      const current = collectRepairCi(options, result, context.pr, evidence);
+      let current;
+      try { current = collectRepairCi(options, result, context.pr, evidence); }
+      catch (error) {
+        if (!['CI_NOT_FAILED', 'CI_OBSERVATION_PENDING'].includes(error.code)) throw error;
+        return result;
+      }
       if (current.digest !== result.repair.feedback.digest) {
         const archive = path.join(privateDirectory(root, 'ci-original-history'), sha256(canonical(saved)) + '.json');
         atomicWrite(archive, JSON.stringify(seal(saved, key)) + '\n', { exclusive: true });
@@ -3064,7 +3071,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
       trusted = sha256(rawGit(['show', `${baseRef}:${builder}`]));
     }
     const board = JSON.parse(ciPhysical(path.join(path.dirname(graphPath), 'delivery-state.json')).bytes);
-    const pr = board[ticket]?.pr;
+    const pr = (board.tickets || board)[ticket]?.pr;
     if (!Number.isSafeInteger(pr) || pr < 1) fail('GENERATED_MERGE_INVALID', 'generated merge requires its recorded PR');
     return { ticket, pr, no_fetch: noFetch, worktree: root, repository: coverage.repositoryIdentity(root), repo: coverage.repoSlug(root, snapshot.row.repo),
       graph: graphPath, graph_sha256: snapshot.sha256, plan_sha256: plan.sha256, files_modified: snapshot.row.files,
@@ -5077,6 +5084,14 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   const preparedRepair = request.role === 'ci-fix' ? prepareCiRepair(options, scope, request.context)
     : request.role === 'review-fix' ? prepareRepair(options, scope, request.context) : null;
   if (request.role === 'ci-fix') request.dispatch_id = originalCiOperations.get(preparedCiOperations.get(preparedRepair)).operation.dispatch_id;
+  if (request.role === 'ci-fix') {
+    const state = originalCiOperations.get(preparedCiOperations.get(preparedRepair));
+    if (state.operation.state === 'finished') {
+      authenticateFinishedCi(state);
+      stdout.write(JSON.stringify(state.operation.result) + '\n');
+      return state.operation.result;
+    }
+  }
   const fileInputContext = preparedReview ? null : prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
   const archReviewSignals = preparedArchReview && !archReviewContext.isSemanticArchitecture(preparedArchReview) ? admitArchitectureInput(preparedArchReview, request, { ...options, automaticReader: !options.readerCapacity },
     options.host?.capabilities || options.capabilities || {}) : null;
