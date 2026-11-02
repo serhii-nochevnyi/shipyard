@@ -5182,7 +5182,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       const policyVersion = candidatePolicy(candidate, original);
       const recoveryScope = { ...scope, run_id: 'ci-candidate-recovery-' + crypto.randomUUID() };
       const controller = createRunController({ storeDir: path.join(storageDirectory(options, scope), 'runs') });
-      controller.begin(createRunScope({ ...recoveryScope, repository_id: scope.repository, owner_id: controller.owner_id,
+      controller.begin(createRunScope({ ...recoveryScope, repository: { repository_id: preparedRepair.repository, worktree: scope.worktree }, owner_id: controller.owner_id,
         dispatch: { dispatch_id: 'recovery-' + candidateId.slice(0, 32), role: 'ci-fix', model: candidate.model,
           effort: candidate.effort, policy_version: policyVersion, policy_hash: candidate.policy_hash } }));
       try {

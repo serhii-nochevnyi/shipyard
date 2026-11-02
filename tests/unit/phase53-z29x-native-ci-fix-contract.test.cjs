@@ -236,12 +236,13 @@ async function coldRecovery(spec, consumerScripts = scripts) {
     } },
   };
   delete options.host; delete options.controller;
-  fixtureController(options, consumerScripts);
   let result;
   try {
+    fixtureController(options, consumerScripts);
     result = await require(path.join(consumerScripts, 'codex-delivery-host.cjs')).createCodexDeliveryHost(options)
       .run({ role: spec.request.role, context: spec.request.context });
   } catch (error) { error.physical_launches = launches; error.publication_calls = pushes; throw error; }
+  finally { options.controller?.release(options.scope.run_id); }
   assertCurrent({ scope: options.scope, worktree: options.scope.worktree, output: spec.output,
     stateRoot: path.join(options.storageRoot, 'finalization', hash(options.scope.worktree)) }, result, consumerScripts);
   assert.equal(launches, 0); return { result, launches, pushes };
