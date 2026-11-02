@@ -509,7 +509,7 @@ function publish(input, options = {}) {
   const identity = content => publicationHash(JSON.stringify({ ...bindingIdentity, content }));
   const prepareOperation = (state, kind, expected, contentHash) => {
     const { stage, ...operation } = newPublicationOperation(request, api, expected, contentHash, ctx);
-    const prepared = { ...operation, stage: 'prepared', preparation: { ...state.identity, ...bindingIdentity, kind } };
+    const prepared = { ...operation, stage: 'prepared', preparation: { ...bindingIdentity, ...state.identity, kind } };
     prepared.preparation.operation_sha256 = publicationOperationDigest(prepared);
     return prepared;
   };

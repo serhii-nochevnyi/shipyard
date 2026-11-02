@@ -12,24 +12,24 @@ const target = require(path.join(scripts, 'architecture-target.cjs'));
 const { fixture: artifactFixture, setOriginalReview, retainPlanningInput } = require('../fixtures/code-review/artifact-fixture.cjs');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
-function publicationFixture(action) {
+function publicationFixture(action, repo = null) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'z29h-'))), homedir = os.homedir;
   os.homedir = () => home;
   const f = artifactFixture('unsent');
   try {
     const pr = 52, branch = f.branch;
-    f.graph.epics = { '052': { branch, phaseDir: f.phase, repos: [null], jira: null } };
-    Object.assign(f.graph.tickets['T-52-01'], { epic: branch, branch: 'feat/review-ticket', repo: null, phaseDir: f.phase });
+    f.graph.epics = { '052': { branch, phaseDir: f.phase, repos: [repo], jira: null } };
+    Object.assign(f.graph.tickets['T-52-01'], { epic: branch, branch: 'feat/review-ticket', repo, phaseDir: f.phase });
     const config = path.join(f.root, '.planning/config.json');
     fs.writeFileSync(config, JSON.stringify({ git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'report' } }));
     f.writeGraph();
     const live = () => ({ number: pr, state: 'OPEN', headRefName: branch, headRefOid: f.git(['rev-parse', 'HEAD']),
       baseRefName: 'main', baseRefOid: f.base });
-    const input = () => ({ phase: 52, phaseDirectory: f.phase, pr, worktree: f.root, graphDir: f.graphDir });
+    const input = () => ({ phase: 52, phaseDirectory: f.phase, pr, repo, worktree: f.root, graphDir: f.graphDir });
     let round = 0, mutate, lookup, drift;
     const writes = [], comments = [], statuses = [];
     const operationPath = kind => path.join(home, '.local/state/shipyard/code-review-publications',
-      hash(JSON.stringify([target.repositoryIdentity(f.root), null])), '.52.' + kind + '.json');
+      hash(JSON.stringify([target.repositoryIdentity(f.root), repo === null ? null : repo.toLowerCase()])), '.52.' + kind + '.json');
     const operation = kind => fs.existsSync(operationPath(kind)) ? JSON.parse(fs.readFileSync(operationPath(kind))) : null;
     const seal = () => {
       round++;
@@ -37,13 +37,13 @@ function publicationFixture(action) {
       f.git(['add', 'round.txt']); f.git(['commit', '--quiet', '-m', 'round ' + round]);
       f.writeGraph();
       const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
-        repository: target.repositoryIdentity(f.root), branch, pr, head: live().headRefOid, base: f.base });
+        repository: target.repositoryIdentity(f.root), repo, branch, pr, head: live().headRefOid, base: f.base });
       const raw = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [], coverage: [] };
       const request = f.input(binding, 1, null, raw);
       Object.assign(request.result, require(path.join(scripts, 'code-review-core.cjs')).normalizeResult(raw, {
         round: 1, scope: 'full', priorFindings: [], readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') }));
       setOriginalReview(request, raw, []);
-      artifact.sealJudgment(retainPlanningInput(f, request));
+      artifact.sealJudgment(retainPlanningInput(f, request, f.root, repo));
     };
     const options = { defaultBranch: 'main', getPullRequest({ pr: requested }) {
       const result = requested === pr ? live() : { number: requested, headRefOid: f.base };
@@ -64,7 +64,7 @@ function publicationFixture(action) {
         return mutate ? mutate(kind, result) : { ...result };
       }
       if (endpoint === 'user') return { id: 1 };
-      if (endpoint === 'repos/{owner}/{repo}') return { id: 7, full_name: 'fixture/repository' };
+      if (endpoint === (repo ? `repos/${repo}` : 'repos/{owner}/{repo}')) return { id: 7, full_name: repo || 'fixture/repository' };
       const kind = endpoint.includes('/commits/') ? 'status' : 'comment';
       const rows = kind === 'status' ? statuses : comments;
       return lookup ? lookup(kind, rows) : [rows];
@@ -75,6 +75,21 @@ function publicationFixture(action) {
 }
 
 function registerTests(test) {
+  for (const kind of ['status', 'comment']) test('mixed-case repository preserves canonical ' + kind + ' preparation across retry', () => publicationFixture(f => {
+    f.seal();
+    f.setDrift(live => f.operation(kind)?.stage === 'prepared' ? { ...live, headRefOid: f.base } : live);
+    assert.equal(flow.publish(f.input(), f.options)[kind].ok, false);
+    assert.equal(f.operation(kind).stage, 'prepared');
+    assert.equal(f.operation(kind).preparation.selector, 'owner/repo');
+    assert.equal(f.writes.filter(row => row.kind === kind).length, 0);
+    f.setDrift(null);
+    for (let attempt = 0; attempt < 2; attempt++) assert.equal(flow.publish(f.input(), f.options)[kind].ok, true);
+    assert.equal(f.writes.filter(row => row.kind === kind).length, 1);
+    f.seal();
+    for (let attempt = 0; attempt < 2; attempt++) assert.equal(flow.publish(f.input(), f.options)[kind].ok, true);
+    assert.equal(f.writes.filter(row => row.kind === kind).length, 2);
+    if (kind === 'comment') assert.equal(f.writes.filter(row => row.kind === kind).at(-1).method, 'PATCH');
+  }, 'Owner/Repo'));
   for (const kind of ['status', 'comment']) for (const edit of kind === 'comment' ? [false, true] : [false])
     for (const change of ['head', 'base', 'config', 'local-head'])
       test('prepared ' + kind + (edit ? ' PATCH' : ' POST') + ' refuses ' + change + ' before send and accepts next binding', () => publicationFixture(f => {
