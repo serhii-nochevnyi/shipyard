@@ -700,6 +700,17 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
   }
 });
 
+for (const [field, value] of [['id', 'T-99-99'], ['pr', 999], ['head', 'f'.repeat(40)], ['base_tree', 'f'.repeat(40)]])
+test(`an architecture result with a different ${field} is refused naming the field`, async () => {
+  const fixture = setupRepository('arch-review');
+  try {
+    await assert.rejects(createClaudeRoleHost(hostOptions(fixture, { mutateResult(result) { result[field] = value; } })).run(request(fixture)),
+      error => error.code === 'ARTIFACT_IDENTITY_MISMATCH' && error.message.endsWith(`pinned ${field}`));
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
 test('aggregate architecture seals a phase verdict without a registered roster and re-owes changed context', async () => {
   const fixture = setupRepository('arch-review');
   fixture.storageRoot = fs.realpathSync(fixture.storageRoot);
@@ -2351,6 +2362,8 @@ test(`code-review refuses a returned ${field} identity mismatch`, async () => {
 });
 
 for (const [name, edit] of [['echoed', () => {}], ['omitted', raw => { delete raw.ticket_set; delete raw.ticket_set_digest; }],
+  ['camelCase', raw => { raw.ticketSet = [{ id: 'x' }]; raw.ticketSetDigest = 'forged'; delete raw.ticket_set; delete raw.ticket_set_digest; }],
+  ['both-form', raw => { raw.ticketSet = [{ id: 'x' }]; raw.ticketSetDigest = 'forged'; }],
   ['condensed', raw => { raw.ticket_set = raw.ticket_set.map(({ id }) => ({ id, status: 'ok' })); raw.ticket_set_digest = 'forged'; }]])
 test(`code-review with ${name} ticket_set seals the host membership and authenticates as current`, async () => {
   const fixture = setupCodeReview({ coordinatorGraph: true });

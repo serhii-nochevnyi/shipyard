@@ -189,15 +189,25 @@ for (const [name, edit] of [
   });
 });
 
-test('focused original completion ignores a model-supplied membership digest', async () => {
+for (const [name, edit] of [['digest', result => { result.ticket_set_digest = '0'.repeat(64); delete result.ticket_set; }],
+  ['camelCase', result => { result.ticketSet = [{ id: 'x' }]; result.ticketSetDigest = 'forged'; delete result.ticket_set; delete result.ticket_set_digest; }],
+  ['both-form', result => { result.ticketSet = [{ id: 'x' }]; result.ticketSetDigest = 'forged'; }]])
+test('focused original completion ignores a model-supplied ' + name + ' membership and returns the host membership', async () => {
   await claudeFixture(async f => {
-    const reviewed = await runFocusedArchitecture(f, result => { result.ticket_set_digest = '0'.repeat(64); delete result.ticket_set; });
+    const reviewed = await runFocusedArchitecture(f, edit);
     assert.equal(reviewed.artifact.outcome, 'conform');
+    const binding = f.lastArchitecture.prepared.binding;
+    assert.ok(binding);
+    assert.deepEqual(reviewed.result.ticket_set, binding.ticketSet);
+    assert.equal(reviewed.result.ticket_set_digest, binding.membership);
+    assert.equal(reviewed.result.ticketSet, undefined);
     for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true, admissionDiagnostic(f, consumer));
   });
 });
 
 for (const [name, edit] of [['echoed', () => {}], ['omitted', result => { delete result.ticket_set; delete result.ticket_set_digest; }],
+  ['camelCase', result => { result.ticketSet = [{ id: 'x' }]; result.ticketSetDigest = 'forged'; delete result.ticket_set; delete result.ticket_set_digest; }],
+  ['both-form', result => { result.ticketSet = [{ id: 'x' }]; result.ticketSetDigest = 'forged'; }],
   ['condensed', result => { result.ticket_set = result.ticket_set.map(({ id }) => ({ id, status: 'ok' })); result.ticket_set_digest = 'forged'; }]])
 test('Claude phase architecture with ' + name + ' ticket_set seals the host membership and admits at every consumer', async () => {
   await claudeFixture(async f => {

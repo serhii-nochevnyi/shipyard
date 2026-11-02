@@ -1612,9 +1612,8 @@ function originalCurrentResponse(trusted, result, evidence, retained) {
     }
   } else fail('REVIEW_NATIVE_INVALID', 'unsupported current native runtime');
   if (receipt.role === 'code-review') return original;
-  const { host_context: _nativeContext, evidence_markdown: markdown, ticket_set: _nativeSet, ticket_set_digest: _nativeDigest,
-    ...nativeResult } = original;
-  const { host_context: _sealedContext, ticket_set: _sealedSet, ticket_set_digest: _sealedDigest, ...sealedResult } = result;
+  const { host_context: _nativeContext, evidence_markdown: markdown, ...nativeResult } = withoutHostTicketSet(original);
+  const { host_context: _sealedContext, ...sealedResult } = withoutHostTicketSet(result);
   if (stable(nativeResult) !== stable(sealedResult)
       || (markdown !== undefined && (typeof markdown !== 'string' || markdown.trim() !== evidence.toString('utf8').trim())))
     fail('REVIEW_NATIVE_INVALID', 'sealed current result differs from original completed native bytes');
@@ -3000,7 +2999,7 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
   const options = { round: context.review_round, scope: context.review_scope, priorFindings: prior, readSource };
   const parts = context.parts ?? [];
   if (parts.length) core.assertPathPartition(context.change_metadata.changes, parts);
-  const normalized = core.normalizeFinal(original, parts, options);
+  const normalized = core.normalizeFinal(withoutHostTicketSet(original), parts, options);
   const { evidence_markdown: markdown, host_context: _host, ...expected } = normalized;
   if (typeof markdown !== 'string' || !markdown.trim() || Buffer.byteLength(markdown) > ARCHIVE_MAX_BYTES
       || !Buffer.from(markdown).equals(evidence)) fail('REVIEW_NATIVE_INVALID', 'original code-review evidence differs');
@@ -3592,11 +3591,11 @@ function ticketSetFor(input, result, role, metadata) {
   const supplied = aliasValue(input, ['ticketSet', 'ticket_set'], `${role} input ticket set`);
   const resultValue = aliasValue(result, ['ticket_set', 'ticketSet'], `${role} result ticket set`);
   if (supplied === undefined) fail('MISSING_JUDGMENT_CONTEXT', `${role} requires the guarded/merged ticket set before dispatch`);
-  if (resultValue === undefined) fail('MISSING_ARTIFACT', `${role} result must repeat the complete ticket set`);
+  if (resultValue === undefined) fail('MISSING_ARTIFACT', `${role} sealed result is missing its ticket set`);
   const expected = canonicalTicketSet(supplied, `${role} ticket set`);
   const actual = canonicalTicketSet(resultValue, `${role} result ticket set`);
   if (['arch-review', 'code-review'].includes(role) && stable(supplied) !== stable(resultValue))
-    fail('JUDGMENT_IDENTITY_MISMATCH', 'aggregate result must repeat complete membership and evidence');
+    fail('JUDGMENT_IDENTITY_MISMATCH', 'sealed membership differs from the authenticated membership and evidence');
   if (stable(expected) !== stable(actual)) {
     fail('JUDGMENT_IDENTITY_MISMATCH', `${role} result ticket set does not match the authenticated input ticket set`);
   }
@@ -4018,11 +4017,16 @@ function judgmentEvidenceMaximum(role, runtime) {
 }
 
 // @invariant: the host ticket_set and its digest replace any model-returned values.
+function withoutHostTicketSet(value) {
+  const rest = { ...value };
+  for (const key of ['ticket_set', 'ticket_set_digest', 'ticketSet', 'ticketSetDigest']) delete rest[key];
+  return rest;
+}
+
 function withHostTicketSet(input) {
-  const { ticketSet: _set, ticketSetDigest: _digest, ...result } = input.result;
   const ticketSet = aliasValue(input, ['ticketSet', 'ticket_set'], 'host ticket set');
-  if (ticketSet === undefined) return input.result;
-  return { ...result, ticket_set: ticketSet, ticket_set_digest: aliasValue(input, ['ticketSetDigest', 'ticket_set_digest'],
+  if (ticketSet === undefined || !object(input.result)) return input.result;
+  return { ...withoutHostTicketSet(input.result), ticket_set: ticketSet, ticket_set_digest: aliasValue(input, ['ticketSetDigest', 'ticket_set_digest'],
     'host ticket-set digest') ?? digest(JSON.stringify(ticketSet)) };
 }
 
@@ -4987,6 +4991,7 @@ function cli(argv) {
 }
 
 module.exports = Object.freeze(Object.assign(Object.create(null), {
+  withoutHostTicketSet,
   ROLE_ARTIFACT_SCHEMA,
   ENVELOPE_SCHEMA,
   ENVELOPE_MAX_BYTES,

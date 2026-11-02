@@ -260,12 +260,14 @@ function reverseReviewKeys(value) {
   return value;
 }
 
-for (const mutation of ['row', 'evidence', 'array-order', 'added', 'deleted', 'omitted', 'forged-digest'])
+for (const mutation of ['row', 'evidence', 'array-order', 'added', 'deleted', 'omitted', 'forged-digest', 'camelCase', 'both-form'])
   test('finish ignores a model-changed membership and seals the host membership: ' + mutation, () => {
     const f = fixture();
     try {
       const r = review(f, raw => {
         if (mutation === 'omitted') { delete raw.ticket_set; delete raw.ticket_set_digest; return; }
+        if (mutation === 'camelCase') { raw.ticketSet = [{ id: 'x' }]; raw.ticketSetDigest = 'forged'; delete raw.ticket_set; delete raw.ticket_set_digest; return; }
+        if (mutation === 'both-form') { raw.ticketSet = [{ id: 'x' }]; raw.ticketSetDigest = 'forged'; return; }
         raw.ticket_set = reverseReviewKeys(raw.ticket_set);
         if (mutation === 'row') raw.ticket_set[0].row.epic = 'epic/forged';
         if (mutation === 'evidence') raw.ticket_set[0].evidence.status = 'pending';
@@ -276,6 +278,7 @@ for (const mutation of ['row', 'evidence', 'array-order', 'added', 'deleted', 'o
       });
       assert.deepEqual(r.result.result.ticket_set, r.value.prepared.binding.ticketSet);
       assert.equal(r.result.result.ticket_set_digest, r.value.prepared.binding.membership);
+      assert.equal(r.result.result.ticketSet, undefined);
       assert.equal(artifact.authenticatedArchivePins(f.root).length, 3);
     } finally { f.cleanup(); }
   });

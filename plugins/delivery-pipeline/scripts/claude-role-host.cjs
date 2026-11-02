@@ -1154,7 +1154,7 @@ function roleOutputSchema(role) {
 
 // @invariant: the host owns ticket_set and its digest; a model-returned value is replaced.
 function withHostTicketSet(prepared, result) {
-  const { ticket_set: _set, ticket_set_digest: _digest, ...rest } = result;
+  const rest = roleArtifact.withoutHostTicketSet(result);
   return prepared.ticketSet ? { ...rest, ticket_set: prepared.ticketSet, ticket_set_digest: prepared.ticketSetDigest } : rest;
 }
 
@@ -1189,8 +1189,6 @@ function validateResult(prepared, result) {
         reject('focused original launch digest differs', 'INVALID_RESULT');
     }
     if (result.host_context !== undefined) reject('architecture host context is reserved to the host', 'INVALID_RESULT');
-    assertIdentity(result, { id: prepared.ticket, pr: prepared.pr, head: prepared.canonical.head, base_tree: prepared.mergeBaseTree },
-      'architecture', 'PR');
   } else if (prepared.role === 'integrator') {
     assertIdentity(result, { phase: prepared.phase, head: prepared.canonical.head, head_tree: prepared.canonical.headTree,
       base: prepared.base, base_tree: prepared.defaultBaseTree }, 'integrator', 'phase');

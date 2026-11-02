@@ -422,7 +422,7 @@ function finish(value, dispatch, recorder) {
   }
   for (const [key, expected] of Object.entries(binding))
     if (key !== 'ticket_set_digest' && result[key] !== expected) fail('result differs from pinned ' + key, 'ARTIFACT_IDENTITY_MISMATCH');
-  const normalized = core.normalizeFinal(result, prepared.parts ?? [], { round: prepared.round.round, scope: prepared.round.scope,
+  const normalized = core.normalizeFinal(roleArtifact.withoutHostTicketSet(result), prepared.parts ?? [], { round: prepared.round.round, scope: prepared.round.scope,
     priorFindings: prepared.priorFindings, readSource: options.readSource });
   normalized.ticket_set = structuredClone(prepared.binding.ticketSet);
   normalized.ticket_set_digest = prepared.binding.membership;

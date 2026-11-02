@@ -351,9 +351,9 @@ session, or in-process fallback may perform or record this `review-fix`.
 
 ## Complete sentinel judgment artifact
 
-The sentinel report is round-scoped. It must repeat the complete guarded ticket
-set and every duty outcome; a single ticket receipt or a short summary cannot
-stand in for the round. Keep complete evidence in a regular file inside the
+The sentinel report is round-scoped. The host binds the complete guarded ticket
+set; the report states every duty outcome, and a single ticket receipt or a
+short summary cannot stand in for the round. Keep complete evidence in a regular file inside the
 sentinel worktree, including the live commands, the tickets checked, performed
 duties, refused duties with reasons, and the resulting outcome.
 

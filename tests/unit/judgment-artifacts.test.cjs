@@ -414,6 +414,18 @@ test('a sentinel result that omits or forges its ticket set seals the host-suppl
   }
 });
 
+for (const bad of [null, undefined])
+test('a sealed judgment without a result object is refused with its coded error: ' + bad, () => {
+  const tickets = [{ id: 'T-33-A', pr: 503, head: 'c'.repeat(40), base: 'epic/33' }];
+  const value = fixture('pr-sentinel', roundSubject(tickets));
+  try {
+    assert.throws(() => roleArtifact.seal(sealInput(value, bad, { role: 'pr-sentinel', ticketSet: tickets,
+      evidencePath: evidence(value.root, '.shipyard-sentinel-evidence.md', 'complete') })), { code: 'INVALID_RESULT' });
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
 test('sentinel surplus duties and refused gates cannot be presented as a clear round', () => {
   const tickets = [{ id: 'T-33-A', pr: 503, head: 'c'.repeat(40), base: 'epic/33' }];
   const value = fixture('pr-sentinel', roundSubject(tickets));

@@ -484,7 +484,7 @@ function finish(value, dispatch, recorder) {
   if (JSON.stringify(canonical(dispatch.receipt.runtime_evidence.focused_review)) !== JSON.stringify(canonical({ ...focused, launch_digest: launchDigest(value) })))
     fail('original receipt lacks focused launch custody', 'MISSING_RECEIPT');
   const evidenceMarkdown = result.evidence_markdown;
-  const { evidence_markdown: _evidenceMarkdown, ticket_set: _set, ticket_set_digest: _digest, ...judgment } = result;
+  const { evidence_markdown: _evidenceMarkdown, ...judgment } = roleArtifact.withoutHostTicketSet(result);
   if (prepared.binding) Object.assign(judgment, { ticket_set: prepared.binding.ticketSet, ticket_set_digest: prepared.binding.membership });
   if (judgment.id !== prepared.ticket || judgment.pr !== prepared.pr
       || judgment.head !== prepared.canonical.head || judgment.base_tree !== prepared.mergeBaseTree
@@ -896,8 +896,8 @@ function validateHistoricalContext(input) {
   if (context.planning_reference !== undefined) attestation.planning_reference = context.planning_reference;
   if (context.phase_repo !== undefined) attestation.phase_repo = context.phase_repo;
   refuseFileTransport(context);
-  const { evidence_markdown: markdown, host_context: _nativeContext, ticket_set: _nativeSet, ticket_set_digest: _nativeDigest, ...native } = original;
-  const { host_context: _sealedContext, ticket_set: _sealedSet, ticket_set_digest: _sealedDigest, ...sealed } = input.result;
+  const { evidence_markdown: markdown, host_context: _nativeContext, ...native } = roleArtifact.withoutHostTicketSet(original);
+  const { host_context: _sealedContext, ...sealed } = roleArtifact.withoutHostTicketSet(input.result);
   if (original.context_digest !== context.packet_digest
       || original.launch_digest !== digest(JSON.stringify(canonical(attestation)))
       || JSON.stringify(canonical(native)) !== JSON.stringify(canonical(sealed))
