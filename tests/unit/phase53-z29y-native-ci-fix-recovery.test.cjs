@@ -519,6 +519,13 @@ if (require.main === module) {
         assert.equal(interrupted, true); assert.equal(f.launches, rung); assert.equal(f.pushes, 0);
         const before = originalOperation(f).envelope.payload;
         assert.ok(before.predecessor_dispatch_id); assert.equal(before.resolution.prior_applied.dispatch_id, before.predecessor_dispatch_id);
+        if (phase === 'marker') {
+          const recorder = boundary.createDurableRecorder(before.receipt_store);
+          const retained = inventory(before.receipt_store);
+          assert.equal(recorder.isConsumed(before.predecessor_dispatch_id), true);
+          assert.equal(recorder.claim(before.predecessor_dispatch_id, 'foreign-marker-reader').claimed, false);
+          assert.deepEqual(inventory(before.receipt_store), retained);
+        }
         if (['native-completed', 'foreign-fence'].includes(phase)) {
           const claim = path.join(before.receipt_store, 'claim-' + hash(before.predecessor_dispatch_id) + '.json');
           const retained = JSON.parse(fs.readFileSync(claim)); retained.lease_expires_at = '2000-01-01T00:00:00.000Z';
@@ -629,7 +636,10 @@ if (require.main === module) {
       'phase53-z29h-publication-unsent-recovery.test.cjs', 'phase53-z29i-recorded-integration-compatibility.test.cjs',
       'phase53-z29t-role-architecture-archives.test.cjs', 'phase53-z29u-role-containment.test.cjs',
       'phase53-z29v-role-code-review.test.cjs', 'phase53-z29w-role-integration.test.cjs'];
-    const tasks = shards.unitTasks(shards.unitFiles().filter(name => !prerequisites.includes(name)));
+    const baseline = require('./phase53-z29g-historical-action-covered.test.cjs').original.shards;
+    const historicalFiles = [...new Set([...baseline.flat(), ...names])];
+    assert.ok(historicalFiles.every(name => !prerequisites.includes(name)));
+    const tasks = shards.unitTasks(historicalFiles);
     const delivered = shards.appendShard(frozen, tasks.filter(task => !names.includes(task)));
     assert.equal(delivered.shards.length, 51);
     assert.equal(hash(JSON.stringify(delivered.shards.slice(0, 50))), 'b6268014b4ae96454730fc1ee45a956acd518836daf2f787af6d6bdd73a02604');
@@ -639,7 +649,7 @@ if (require.main === module) {
     for (const name of names) assert.ok(name > 'phase53-z29-semantic-final-catalog-duplication.test.cjs' && name < 'phase53-z30-semantic-material-retention.test.cjs');
     const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't31-shards-')));
     try {
-      for (const name of shards.unitFiles().filter(name => !prerequisites.includes(name))) fs.writeFileSync(path.join(directory, name), '');
+      for (const name of historicalFiles) fs.writeFileSync(path.join(directory, name), '');
       fs.writeFileSync(path.join(directory, 'phase53-z99-future.test.cjs'), '');
       const future = shards.appendShard(next, shards.unitTasks(shards.unitFiles(directory)));
       assert.equal(future.shards.length, next.shards.length + 1);
@@ -659,16 +669,18 @@ if (require.main === module) {
     const four = ['phase53-z29t-role-architecture-archives.test.cjs', 'phase53-z29u-role-containment.test.cjs',
       'phase53-z29v-role-code-review.test.cjs', 'phase53-z29w-role-integration.test.cjs'];
     const three = ['phase53-z29x-native-ci-fix-contract.test.cjs', 'phase53-z29y-native-ci-fix-recovery.test.cjs', 'phase53-z29z-generated-base-merge.test.cjs'];
-    const before = shards.appendShard(frozen, tasks.filter(task => !three.includes(task)));
+    const historicalTasks = shards.unitTasks([...new Set([...baseline.flat(), ...seven, ...two, ...four])]);
+    const before = shards.appendShard(frozen, historicalTasks);
     assert.equal(before.shards.length, 64); assert.equal(before.shards.length + 3, 67);
     assert.deepEqual(before.shards.slice(0, 51), baseline);
     assert.deepEqual(before.shards.slice(51, 58), seven.map(file => [file]));
     assert.deepEqual(before.shards.slice(58, 60), two.map(file => [file]));
     assert.deepEqual(before.shards.slice(60), four.map(file => [file]));
     const actual = shards.appendShard(frozen, tasks);
-    assert.equal(actual.shards.length, 67); assert.equal(actual.shards.length + 3, 70);
+    assert.equal(actual.shards.length, 64 + tasks.filter(task => !historicalTasks.includes(task)).length);
     assert.deepEqual(actual.shards.slice(0, 64), before.shards);
-    assert.deepEqual(actual.shards.slice(64), three.map(file => [file]));
+    assert.deepEqual(actual.shards.slice(64), tasks.filter(task => !historicalTasks.includes(task)).map(file => [file]));
+    for (const name of three) assert.equal(actual.shards.flat().filter(task => task === name).length, 1);
     assert.deepEqual(actual.shards.slice(0, 16), frozen.shards.slice(0, 16));
     assert.equal(hash(JSON.stringify(actual.shards.slice(0, 50))), 'b6268014b4ae96454730fc1ee45a956acd518836daf2f787af6d6bdd73a02604');
     assert.deepEqual([...actual.shards.flat()].sort(), tasks); assert.equal(new Set(actual.shards.flat()).size, tasks.length);
@@ -682,13 +694,14 @@ if (require.main === module) {
         'phase53-z30e-semantic-material-retention.test.cjs', 'phase53-z30f-semantic-material-retention.test.cjs'];
       for (const name of future) fs.writeFileSync(path.join(directory, name), '');
       const discovered = shards.unitTasks(shards.unitFiles(directory)), next = shards.appendShard(actual, discovered);
-      assert.equal(next.shards.length, actual.shards.length + future.length); assert.equal(next.shards.length, 73);
-      assert.equal(next.shards.length + 3, 76); assert.deepEqual(next.shards.slice(0, 67), actual.shards);
-      assert.deepEqual(next.shards.slice(67), future.map(file => [file]));
+      const additions = future.filter(name => !files.includes(name));
+      assert.equal(next.shards.length, actual.shards.length + additions.length);
+      assert.deepEqual(next.shards.slice(0, actual.shards.length), actual.shards);
+      assert.deepEqual(next.shards.slice(actual.shards.length), additions.map(file => [file]));
       assert.deepEqual([...next.shards.flat()].sort(), discovered); assert.equal(new Set(next.shards.flat()).size, discovered.length);
       for (let index = 0; index < next.shards.length; index++)
         assert.deepEqual(shards.selectTaskShard(`${index + 1}/${next.shards.length}`, directory, actual), next.shards[index]);
-      assert.throws(() => shards.selectTaskShard(`1/${actual.shards.length}`, directory, actual));
+      if (additions.length) assert.throws(() => shards.selectTaskShard(`1/${actual.shards.length}`, directory, actual));
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   });
 

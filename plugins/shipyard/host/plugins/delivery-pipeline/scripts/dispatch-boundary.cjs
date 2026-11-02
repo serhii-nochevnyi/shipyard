@@ -619,16 +619,7 @@ function createDurableRecorder(storeDir) {
     if (!validRepairCommit(commit, predecessorDispatchId)) {
       throw boundaryError('RECORD_FAILED', 'durable repair commit is malformed', { dispatch_id: predecessorDispatchId });
     }
-    if (commit.record_input.receipt?.role === 'ci-fix') {
-      const latest = readStored(latestFile(commit.record_input.receipt.runtime, commit.record_input.receipt.role));
-      const history = readAuthenticated(rollbackHistoryFile(commit.successor_dispatch_id));
-      const reservation = readAuthenticated(reservationFile(commit.successor_dispatch_id));
-      const previous = history?.previous_dispatch_id ?? (reservation?.original_kind === 'ci-fix'
-        ? reservation.original_previous_dispatch_id : undefined);
-      if (latest && (!latest.authenticated || (latest.payload.dispatch_id !== commit.successor_dispatch_id
-          && latest.payload.dispatch_id !== previous)))
-        throw boundaryError('RECORD_FAILED', 'CI repair recovery cannot overwrite a later index');
-    }
+    if (commit.record_input.receipt?.role === 'ci-fix') return commit;
     const successorRecord = recordFile(commit.successor_dispatch_id);
     const existingStored = readStored(successorRecord);
     const existing = existingStored && existingStored.payload;

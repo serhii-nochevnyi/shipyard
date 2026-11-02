@@ -420,6 +420,14 @@ function authenticatedReceipt(recorder, dispatchId, expectedRole = 'executor') {
   return Object.freeze({ receipt, digest: sha256(canonical(receipt)), policy_version: version });
 }
 
+function authenticatedCoveredReceipt(record) {
+  const recorder = createDurableRecorder(record.receipt_store);
+  const role = recorder.getVerifiedRecord(record.dispatch_id)?.receipt?.role;
+  if (record.kind === 'fixer' && !['ci-fix', 'review-fix'].includes(role))
+    fail('MISSING_RECEIPT', 'covered fixer has no authenticated repair role');
+  return authenticatedReceipt(recorder, record.dispatch_id, record.kind === 'executor' ? 'executor' : role);
+}
+
 function planSnapshot(graph, row) {
   if (typeof row.plan !== 'string' || !row.plan || path.isAbsolute(row.plan) || row.plan.split('/').includes('..')) {
     fail('VERIFICATION_SPEC_MISSING', 'canonical graph names no approved source PLAN; re-run decomposition');
@@ -2259,8 +2267,7 @@ function recheckHistoricalRepair(prepared, prior, originalHead, endpoint = prepa
             || canonical(checked.record.parents) !== canonical([sourceParent])
             || sha256(canonical(checked.record)) !== pin.coverage_sha256)
           throw new Error('historical action source coverage changed');
-        const original = authenticatedReceipt(createDurableRecorder(checked.record.receipt_store), checked.record.dispatch_id,
-          checked.record.kind === 'executor' ? 'executor' : 'review-fix');
+        const original = authenticatedCoveredReceipt(checked.record);
         if (original.digest !== checked.record.receipt_digest) throw new Error('historical source receipt changed');
         sourceParent = pin.commit;
       }
@@ -2384,8 +2391,7 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
           const record = checked.record;
           if (canonical(record.parents) !== canonical([sourceParent]))
             throw new Error('source transition changed its exact native producer parent');
-          const original = authenticatedReceipt(createDurableRecorder(record.receipt_store), record.dispatch_id,
-            record.kind === 'executor' ? 'executor' : 'review-fix');
+          const original = authenticatedCoveredReceipt(record);
           if (original.digest !== record.receipt_digest) throw new Error('source transition receipt changed');
           sourceParent = commit;
           return { commit, coverage_sha256: sha256(canonical(record)) };
