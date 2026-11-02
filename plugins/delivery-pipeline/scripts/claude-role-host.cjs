@@ -608,8 +608,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
     }
     return ancestry.get(key);
   } };
-  const countable = core.countableVerdicts(history);
-  const round = core.nextRound(history);
+  const { countable, ...round } = core.roundLookup(history);
   if (round.state === 'limit') reject('three rounds are spent; no code-review launch is allowed', 'CODE_REVIEW_ROUND_LIMIT');
   const deltaBase = round.deltaBase || mergeBase;
   const range = [deltaBase, canonical.head];

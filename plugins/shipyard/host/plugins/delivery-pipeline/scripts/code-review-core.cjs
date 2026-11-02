@@ -344,6 +344,7 @@ function nextRound(options) {
   return { round: used + 1, state: 'ready', scope: inherit ? 'delta' : 'full', rounds_used: used,
     priorHead: used ? verdicts.at(-1).head : null, deltaBase: inherit ? verdicts.at(-1).head : null };
 }
+function roundLookup(options) { return { countable: countableVerdicts(options), ...nextRound(options) }; }
 function repairAllowed(round) { return round === 1 || round === 2; }
 
 function diffPath(value) {
@@ -529,5 +530,5 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
 module.exports = { CONTRACT_ID, ROUND_CAP, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
-  lineageComplete, coverageComplete, nextRound, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
+  lineageComplete, coverageComplete, nextRound, roundLookup, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };

@@ -151,7 +151,7 @@ function status(input, options = {}) {
       throw error;
     }
   } };
-  const countable = core.countableVerdicts(history), next = core.nextRound(history);
+  const { countable, ...next } = core.roundLookup(history);
   let current = null;
   try {
     current = authority.currentCodeReviewVerdict({ worktreePath: worktree, graphDir: mode.graph_dir,
@@ -503,7 +503,7 @@ function verifyCodeReview(input, options = {}) {
   return { ...current, ok: gate.ok, reason: gate.ok ? current.reason : gate.message };
 }
 
-module.exports = { publish, statusDescription, status, evaluateGate, fixTickets, matchEpicPullRequest, resolveCodeReviewMode, verifyCodeReview };
+module.exports = { publish, statusDescription, status, evaluateGate, fixTickets, matchEpicPullRequest, refusalText: refusal, resolveCodeReviewMode, verifyCodeReview };
 
 if (require.main === module) {
   try {

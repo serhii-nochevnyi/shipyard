@@ -375,6 +375,24 @@ test('coverage and permanent round costs stay independent across expanding and n
     isAncestor() { throw Error('Git unavailable'); } }), /Git unavailable/);
 });
 
+test('roundLookup equals the countable verdicts joined with the next round for every history', () => {
+  const verdict = n => ({ head: 'h' + n, sealed_at: '2026-01-0' + n, review_completeness: 'complete',
+    review_scope: n === 1 ? 'full' : 'delta', prior_head: n === 1 ? null : 'h' + (n - 1), answer_authenticated: true });
+  const all = [1, 2, 3].map(verdict), isAncestor = () => true;
+  const histories = [];
+  for (const mergeBase of [undefined, 'm'])
+    for (let used = 0; used <= 3; used++) histories.push({ priorVerdicts: all.slice(0, used), head: 'current', isAncestor, mergeBase });
+  histories.push({ priorVerdicts: [{ ...all[0], review_completeness: 'incomplete' }, all[1]], head: 'current', isAncestor });
+  histories.push({ priorVerdicts: all.slice(0, 2), head: 'current', isAncestor: head => head !== 'h2' });
+  histories.push({ priorVerdicts: [all[0], { ...all[1], answer_authenticated: false }], head: 'current', isAncestor });
+  histories.push({ priorVerdicts: [all[0], { ...all[1], answer_authenticated: false }], head: 'current', isAncestor, mergeBase: 'm' });
+  for (const history of histories)
+    assert.deepEqual(core.roundLookup(history), { countable: core.countableVerdicts(history), ...core.nextRound(history) });
+  assert.equal(core.roundLookup(histories[3]).state, 'limit');
+  assert.equal(core.roundLookup(histories[1]).countable.length, 1);
+  assert.equal(core.roundLookup(histories.at(-3)).countable.length, 1);
+});
+
 test('the part budget is one weight bound per runtime', () => {
   assert.deepEqual({ ...core.PART_BUDGET }, { claude: 40000, codex: 10000 });
   assert.ok(Object.isFrozen(core.PART_BUDGET));

@@ -145,7 +145,7 @@ function collect(scope, options) {
     catch (error) { if (error.status === 1) return false; throw error; }
   };
   const roundOptions = { priorVerdicts, head, isAncestor, mergeBase };
-  const verdicts = core.countableVerdicts(roundOptions), round = core.nextRound(roundOptions);
+  const { countable: verdicts, ...round } = core.roundLookup(roundOptions);
   if (round.state === 'limit') fail('three countable reviews have already run', 'CODE_REVIEW_ROUND_LIMIT');
   const deltaBase = round.deltaBase || mergeBase;
   const changeMetadata = {};
