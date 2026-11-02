@@ -1035,23 +1035,22 @@ test('historical bounded descriptor reads refuse atomic pathname replacement wit
 });
 
 
-function sourceApproval(f, additionalPaths = []) {
-  const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
-  const source = role.architectureSourceIdentity(f.root);
-  const paths = fs.readdirSync(path.join(f.root, '.planning/architecture')).filter(name => name.endsWith('.md'))
-    .map(name => '.planning/architecture/' + name).concat(additionalPaths).sort();
-  const pins = paths.map(relative => {
+function untrackPlanning(f) {
+  git(f.root, ['rm', '-r', '--cached', '-q', '.planning']);
+  fs.mkdirSync(path.join(f.root, '.git/info'), { recursive: true });
+  fs.appendFileSync(path.join(f.root, '.git/info/exclude'), '.planning/\n');
+  git(f.root, ['commit', '-m', 'fixture: planning stays untracked']);
+  f.pr.headRefOid = git(f.root, ['rev-parse', 'HEAD']);
+}
+
+function sourcePins(f, relatives) {
+  return relatives.map(relative => {
     const bytes = fs.readFileSync(path.join(f.root, relative));
     return { path: relative, bytes: bytes.length, sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex') };
-  });
-  const approval = { schema: 'shipyard.architecture-source-approval.v1', approval_id: 'independent-fixture-approval', source, pins, exceptional_paths: paths.filter(relative => relative.includes('ADR-025')) };
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-source-approval-'));
-  const approvalTablePath = path.join(directory, 'approval.json');
-  const bytes = Buffer.from(JSON.stringify(approval));
-  fs.writeFileSync(approvalTablePath, bytes, { mode: 0o600 });
-  return { role, approval, directory, input: { worktreePath: f.root, projectPath: f.root, approvalTablePath,
-    expectedApprovalDigest: require('node:crypto').createHash('sha256').update(bytes).digest('hex') } };
+  }).sort((a, b) => a.path.localeCompare(b.path));
 }
+
+const ADR_PATH = '.planning/architecture/ADR-014-host-bound-review.md';
 
 test('linked canonical dirty ADR refuses while an uncommitted protected PLAN remains accepted', () => {
   const f = fixture(); let review;
@@ -1063,78 +1062,136 @@ test('linked canonical dirty ADR refuses while an uncommitted protected PLAN rem
     const launch = { role: 'arch-review', context: {}, signals: {} };
     assert.ok(contextBuilder.prepare(scope, launch, options));
     write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', ADR + 'unapproved bytes\n');
-    assert.throws(() => contextBuilder.prepare(scope, launch, options), /dirty architecture source.*protected approval/);
+    assert.throws(() => contextBuilder.prepare(scope, launch, options), error => error.code === 'SOURCE_AUTHORITY_REQUIRED' && /differs from the canonical head/.test(error.message));
   } finally { if (review) git(f.root, ['worktree', 'remove', '--force', review]); cleanupJudgment(f); }
 });
 
-test('independently approved untracked ADR joins committed corpus and survives fresh collection', async () => {
-  const f = fixture(); let approval;
+test('untracked planning ADRs are pinned from local files without any approval record', () => {
+  const f = fixture();
   try {
-    git(f.root, ['switch', 'main']);
-    write(f.root, '.planning/architecture/ADR-025-bootstrap.md', '# Independently approved bootstrap\n');
-    approval = sourceApproval(f);
-    approval.role.registerArchitectureAuthority(approval.input);
-    git(f.root, ['update-index', '--skip-worktree', '.planning/architecture/ADR-014-host-bound-review.md']);
-    const review = f.root + '-approved'; git(f.root, ['worktree', 'add', review, BRANCH]);
-    try {
-      const scope = { ticket: TICKET, phase: 38, worktree: review };
-      const prepared = contextBuilder.prepare(scope, { role: 'arch-review', context: {}, signals: {} }, { refreshGit: false, graphDir: path.join(f.root, '.planning/graph'), listPullRequests: () => [f.pr], getPullRequest: () => f.pr });
-      assert.equal(prepared.prepared.packet.source_authority.approval_id, 'independent-fixture-approval');
-      const fresh = contextBuilder.prepare(scope, { role: 'arch-review', context: {}, signals: {} }, { refreshGit: false, graphDir: path.join(f.root, '.planning/graph'), listPullRequests: () => [f.pr], getPullRequest: () => f.pr });
-      assert.equal(fresh.prepared.packet.source_authority.approval_digest, approval.input.expectedApprovalDigest);
-    } finally { git(f.root, ['worktree', 'remove', '--force', review]); }
-  } finally { if (approval) fs.rmSync(approval.directory, { recursive: true, force: true }); cleanupJudgment(f); }
+    untrackPlanning(f);
+    write(f.root, '.planning/architecture/ADR-025-local.md', '# Local untracked decision\n');
+    const authority = prepared(f).prepared.packet.source_authority;
+    assert.deepEqual(authority.pins.map(pin => pin.path), [ADR_PATH, '.planning/architecture/ADR-025-local.md']);
+    assert.deepEqual(Object.keys(authority).sort(), ['pins', 'source']);
+  } finally { cleanupJudgment(f); }
 });
 
-for (const [name, change] of [
-  ['wrong independently retained digest', (f, a) => { a.input.expectedApprovalDigest = 'a'.repeat(64); }],
-  ['wrong approved head', (f, a) => { a.approval.source.head = 'a'.repeat(40); }],
-  ['unknown added ADR', (f) => write(f.root, '.planning/architecture/ADR-026-unknown.md', '# unknown\n')],
-  ['deleted member', (f) => fs.unlinkSync(path.join(f.root, '.planning/architecture/ADR-014-host-bound-review.md'))],
-  ['changed member', (f) => write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', ADR + 'changed\n')],
-  ['moved symlink member', (f) => { const original = path.join(f.root, '.planning/architecture/ADR-014-host-bound-review.md'); fs.renameSync(original, original + '.original'); fs.symlinkSync(original + '.original', original); }],
-]) test('independent source admission refuses ' + name, () => {
-  const f = fixture(); const a = sourceApproval(f);
+test('untracked planning sources survive sealing and fresh consumption, and a changed ADR is refused afterwards', async () => {
+  const f = fixture();
   try {
-    change(f, a);
-    if (name === 'wrong approved head') {
-      const bytes = Buffer.from(JSON.stringify(a.approval)); fs.writeFileSync(a.input.approvalTablePath, bytes);
-      a.input.expectedApprovalDigest = require('node:crypto').createHash('sha256').update(bytes).digest('hex');
-    }
-    assert.throws(() => a.role.registerArchitectureAuthority(a.input), /source|corpus|approval|symlink|missing|membership|ENOENT/);
-  } finally { fs.rmSync(a.directory, { recursive: true, force: true }); cleanupJudgment(f); }
-});
-
-
-for (const [name, mutate] of [
-  ['removed protected registry', (f, a) => fs.unlinkSync(a.role.architectureAuthorityPath(f.root, a.approval.source, a.approval.pins))],
-  ['forged protected registry', (f, a) => { const file = a.role.architectureAuthorityPath(f.root, a.approval.source, a.approval.pins); const value = JSON.parse(fs.readFileSync(file)); value.payload.approval_id = 'forged'; fs.writeFileSync(file, JSON.stringify(value)); }],
-  ['canonical head advanced', (f) => { git(f.root, ['commit', '--allow-empty', '-m', 'fixture: advance approved canonical head']); f.pr.headRefOid = git(f.root, ['rev-parse', 'HEAD']); }],
-]) test('fresh consumer refuses ' + name + ' after sealed source approval', async () => {
-  const f = fixture(), a = sourceApproval(f);
-  try {
-    a.role.registerArchitectureAuthority(a.input);
+    untrackPlanning(f);
     const sealed = await unitJudgment(f);
-    a.role.validateJudgmentManifest(sealed.validationInput);
-    mutate(f, a);
-    assert.throws(() => a.role.validateJudgmentManifest(sealed.validationInput), /source|approval|authentication|changed|stale|head/);
-  } finally { fs.rmSync(a.directory, { recursive: true, force: true }); cleanupJudgment(f); }
+    const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    role.validateJudgmentManifest(sealed.validationInput);
+    write(f.root, ADR_PATH, ADR + 'edited after sealing\n');
+    assert.throws(() => role.validateJudgmentManifest(sealed.validationInput), error => error.code === 'ARCHIVE_AUTHORITY_INVALID');
+  } finally { cleanupJudgment(f); }
 });
 
+test('untracked planning sources refuse a changed, added, removed or symlinked ADR between pin and use', () => {
+  const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const link = ADR_PATH + '.real';
+  for (const [name, change, code] of [
+    ['changed', f => write(f.root, ADR_PATH, ADR + 'edited\n'), 'ARCHIVE_AUTHORITY_INVALID'],
+    ['removed', f => fs.unlinkSync(path.join(f.root, ADR_PATH)), 'ARCHIVE_AUTHORITY_INVALID'],
+    ['added', f => write(f.root, '.planning/architecture/ADR-026-late.md', '# late\n'), 'SOURCE_AUTHORITY_INVALID'],
+    ['symlinked pinned member', f => { const file = path.join(f.root, ADR_PATH); fs.copyFileSync(file, file + '.real'); fs.unlinkSync(file); fs.symlinkSync(path.basename(link), file); }, 'ARCHIVE_AUTHORITY_INVALID'],
+    ['unpinned symlink member', f => fs.symlinkSync(path.basename(ADR_PATH), path.join(f.root, '.planning/architecture/ADR-099-link.md')), 'SOURCE_AUTHORITY_INVALID'],
+  ]) {
+    const f = fixture();
+    try {
+      write(f.root, ADR_PATH, 'x'.repeat(path.basename(link).length));
+      untrackPlanning(f);
+      const pins = sourcePins(f, [ADR_PATH]);
+      assert.deepEqual(role.authenticateArchitectureSources(f.root, f.root, pins).pins, pins);
+      change(f);
+      assert.throws(() => role.authenticateArchitectureSources(f.root, f.root, pins), error => error.code === code, name);
+    } finally { cleanupJudgment(f); }
+  }
+});
 
-test('registry-only authority reads without a catalogue and a missing key never recreates authority', () => {
-  const f = fixture(), a = sourceApproval(f);
+test('untracked planning refuses a missing architecture directory with a Shipyard code', () => {
+  const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const f = fixture(), decision = '.planning/investigations/INV-closure/DECISIONS.md';
   try {
-    a.role.registerArchitectureAuthority(a.input);
-    const directory = a.role.archiveAuthorityDirectory(f.root);
-    assert.equal(fs.existsSync(path.join(directory, 'catalogue.json')), false);
-    assert.equal(prepared(f).prepared.packet.source_authority.approval_id, a.approval.approval_id);
-    fs.unlinkSync(path.join(directory, 'hmac.key'));
-    const before = fs.readdirSync(directory).sort();
-    assert.throws(() => prepared(f), /ENOENT|missing|authority/);
-    assert.equal(fs.existsSync(path.join(directory, 'hmac.key')), false);
-    assert.deepEqual(fs.readdirSync(directory).sort(), before);
-  } finally { fs.rmSync(a.directory, { recursive: true, force: true }); cleanupJudgment(f); }
+    write(f.root, decision, 'Complete linked decision.');
+    untrackPlanning(f);
+    const pins = sourcePins(f, [decision]);
+    fs.rmSync(path.join(f.root, '.planning/architecture'), { recursive: true });
+    assert.throws(() => role.authenticateArchitectureSources(f.root, f.root, pins), error => error.code === 'ARCHIVE_AUTHORITY_INVALID');
+  } finally { cleanupJudgment(f); }
+});
+
+test('untracked planning member swapped for a symlink between the physical-path check and the open is refused by O_NOFOLLOW', () => {
+  const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const f = fixture(), open = fs.openSync, file = path.join(f.root, ADR_PATH);
+  try {
+    untrackPlanning(f);
+    const pins = sourcePins(f, [ADR_PATH]);
+    fs.openSync = function(target, ...args) {
+      if (String(target) === file) { fs.copyFileSync(file, file + '.real'); fs.unlinkSync(file); fs.symlinkSync(file + '.real', file); }
+      return open.call(fs, target, ...args);
+    };
+    assert.throws(() => role.authenticateArchitectureSources(f.root, f.root, pins), error => error.code === 'ELOOP');
+  } finally { fs.openSync = open; cleanupJudgment(f); }
+});
+
+test('untracked linked DECISIONS.md is pinned, sealed and re-read by the fresh consumer', async () => {
+  const f = fixture(), decision = '.planning/investigations/INV-closure/DECISIONS.md';
+  try {
+    write(f.root, decision, '# Linked local decision\n');
+    write(f.root, planPath(), fs.readFileSync(path.join(f.root, planPath()), 'utf8') + '\nSee [' + decision + '](' + decision + ')\n');
+    untrackPlanning(f);
+    const sealed = await unitJudgment(f);
+    assert.ok(sealed.value.prepared.packet.source_authority.pins.some(pin => pin.path === decision));
+    const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    role.validateJudgmentManifest(sealed.validationInput);
+    write(f.root, decision, '# Linked local decision, edited\n');
+    assert.throws(() => role.validateJudgmentManifest(sealed.validationInput), error => error.code === 'ARCHIVE_AUTHORITY_INVALID');
+  } finally { cleanupJudgment(f); }
+});
+
+test('untracked planning in the canonical root is pinned for a ticket worktree that has no planning', () => {
+  const f = fixture(); const review = f.root + '-ticket';
+  try {
+    untrackPlanning(f);
+    git(f.root, ['checkout', '--detach']);
+    git(f.root, ['worktree', 'add', review, BRANCH]);
+    assert.equal(fs.existsSync(path.join(review, '.planning')), false);
+    const scope = { ticket: TICKET, phase: 38, worktree: review };
+    const options = { refreshGit: false, graphDir: path.join(f.root, '.planning/graph'), listPullRequests: () => [f.pr], getPullRequest: () => f.pr };
+    const authority = contextBuilder.prepare(scope, { role: 'arch-review', context: {}, signals: {} }, options).prepared.packet.source_authority;
+    assert.equal(authority.source.root, f.root);
+    assert.deepEqual(authority.pins, sourcePins(f, [ADR_PATH]));
+  } finally { try { git(f.root, ['worktree', 'remove', '--force', review]); } catch {} cleanupJudgment(f); }
+});
+
+test('a repository whose head tracks planning refuses an uncommitted or dirty ADR', () => {
+  const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  for (const [name, change, relatives] of [
+    ['uncommitted', f => write(f.root, '.planning/architecture/ADR-027-new.md', '# new\n'), [ADR_PATH, '.planning/architecture/ADR-027-new.md']],
+    ['dirty', f => write(f.root, ADR_PATH, ADR + 'edited\n'), [ADR_PATH]],
+  ]) {
+    const f = fixture();
+    try {
+      change(f);
+      const pins = sourcePins(f, relatives);
+      assert.throws(() => role.authenticateArchitectureSources(f.root, f.root, pins), error => error.code === 'SOURCE_AUTHORITY_REQUIRED', name);
+    } finally { cleanupJudgment(f); }
+  }
+});
+
+test('fresh consumer refuses a canonical head that advanced after sealing', async () => {
+  const f = fixture();
+  try {
+    const sealed = await unitJudgment(f);
+    const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    role.validateJudgmentManifest(sealed.validationInput);
+    git(f.root, ['commit', '--allow-empty', '-m', 'fixture: advance canonical head']);
+    f.pr.headRefOid = git(f.root, ['rev-parse', 'HEAD']);
+    assert.throws(() => role.validateJudgmentManifest(sealed.validationInput), /source|authentication|changed|stale|head/);
+  } finally { cleanupJudgment(f); }
 });
 
 
@@ -1169,21 +1226,6 @@ test('context fixed-size descriptor read refuses growth without allocating expan
   } finally { fs.openSync = originalOpen; fs.readSync = originalRead; cleanupJudgment(f); }
 });
 
-
-test('original approval table growth refuses before allocation and leaves no registered authority', () => {
-  const f = fixture(), a = sourceApproval(f), original = fs.openSync;
-  let changed = false;
-  try {
-    fs.openSync = function(file, ...args) {
-      const fd = original.call(fs, file, ...args);
-      if (String(file) === a.input.approvalTablePath && !changed) { changed = true; fs.appendFileSync(file, 'unapproved growth'); }
-      return fd;
-    };
-    assert.throws(() => a.role.registerArchitectureAuthority(a.input), /changed before bounded reading/);
-    assert.equal(changed, true);
-    assert.equal(fs.existsSync(a.role.architectureAuthorityPath(f.root, a.approval.source, a.approval.pins)), false);
-  } finally { fs.openSync = original; fs.rmSync(a.directory, { recursive: true, force: true }); cleanupJudgment(f); }
-});
 
 test('original native transcript growth refuses before allocating expanded content', async () => {
   const f = fixture(), open = fs.openSync; let changed = false;
@@ -1283,87 +1325,6 @@ for (const kind of ['evidence', 'findings', 'manifest'])
         if (mode === 'EEXIST race') assert.equal(hidden, true);
       } finally { fs.lstatSync = lstat; fs.openSync = open; fs.existsSync = exists; cleanupJudgment(f); }
     });
-
-
-test('two independently approved linked decision closures coexist across sealed fresh consumers', async () => {
-  const f = fixture(), other = { ...f, ticket: 'T-38-02-role-host' }; let a, b;
-  const reviews = [f.root + '-first-review', f.root + '-second-review'];
-  const decision = '.planning/investigations/INV-closure/DECISIONS.md';
-  try {
-    git(f.root, ['switch', 'main']);
-    const graphPath = '.planning/graph/tickets.json', statePath = '.planning/graph/delivery-state.json';
-    const graph = JSON.parse(fs.readFileSync(path.join(f.root, graphPath))), state = JSON.parse(fs.readFileSync(path.join(f.root, statePath)));
-    const plan = '.planning/phases/38-codex-arch-review/38-02-PLAN.md', branch = 'ticket/' + other.ticket;
-    graph.tickets[other.ticket] = { ...graph.tickets[TICKET], plan, branch };
-    state[other.ticket] = { status: 'pr-open', pr: 302 };
-    write(f.root, graphPath, JSON.stringify(graph)); write(f.root, statePath, JSON.stringify(state));
-    write(f.root, decision, '# Independent linked decision\n');
-    write(f.root, plan, fs.readFileSync(path.join(f.root, planPath()), 'utf8') + '\nSee [' + decision + '](' + decision + ')\n');
-    git(f.root, ['add', '.']); git(f.root, ['commit', '-m', 'fixture: two independent protected planning closures']);
-    write(f.root, '.planning/architecture/ADR-025-bootstrap.md', '# Independently approved bootstrap\n');
-    git(f.root, ['worktree', 'add', reviews[0], BRANCH]);
-    git(f.root, ['worktree', 'add', '-b', branch, reviews[1], f.head]);
-    f.reviewRoot = reviews[0]; other.reviewRoot = reviews[1];
-    other.pr = { ...f.pr, number: 302, headRefName: branch };
-    a = sourceApproval(f); b = sourceApproval(f, [decision]);
-    a.role.registerArchitectureAuthority(a.input);
-    const first = await unitJudgment(f), originalDigest = first.value.prepared.packet.digest;
-    const secondRegistration = b.role.registerArchitectureAuthority(b.input);
-    const second = await unitJudgment(other);
-    assert.notEqual(a.role.architectureAuthorityPath(f.root, a.approval.source, a.approval.pins), secondRegistration.recordPath);
-    assert.deepEqual(a.role.authenticateArchitectureSources(reviews[0], f.root, first.value.prepared.packet.source_authority.pins), first.value.prepared.packet.source_authority);
-    assert.equal(first.value.prepared.packet.digest, originalDigest);
-    for (const [fixture, sealed] of [[f, first], [other, second]]) {
-      const input = { ...sealed.validationInput, recorder: undefined, io: undefined, boundaryStore: path.join(fixture.storage, 'receipts') };
-      const script = `const fs = require('node:fs'), { execFileSync } = require('node:child_process'); const x = JSON.parse(fs.readFileSync(0, 'utf8'));
-        x.input.io = { execFileSync(exe,args,options) { if(exe==='gh')return JSON.stringify(x.pr);if(exe==='git'&&args.includes('fetch'))return '';return execFileSync(exe,args,options); } };
-        require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))}).validateJudgmentManifest(x.input);`;
-      execFileSync(process.execPath, [...testAuthorityArgs, '-e', script], { input: JSON.stringify({ input, pr: fixture.pr }), encoding: 'utf8', stdio: ['pipe','pipe','pipe'] });
-    }
-    fs.unlinkSync(secondRegistration.recordPath);
-    assert.throws(() => a.role.validateJudgmentManifest(second.validationInput), /uncommitted architecture source.*protected approval/);
-    a.role.validateJudgmentManifest(first.validationInput);
-  } finally {
-    for (const fixture of [f, other]) {
-      if (fixture.reviewRoot && fs.existsSync(fixture.reviewRoot)) fs.rmSync(require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').archiveAuthorityDirectory(fixture.reviewRoot), { recursive: true, force: true });
-      if (fixture.storage) fs.rmSync(fixture.storage, { recursive: true, force: true });
-    }
-    for (const review of reviews) { try { git(f.root, ['worktree', 'remove', '--force', review]); } catch {} }
-    for (const approval of [a,b]) if (approval) fs.rmSync(approval.directory, { recursive: true, force: true });
-    cleanupJudgment(f);
-  }
-});
-
-test('same inventory authority publication is idempotent and refuses a changed independently approved payload', () => {
-  const f = fixture(), a = sourceApproval(f);
-  try {
-    const first = a.role.registerArchitectureAuthority(a.input), bytes = fs.readFileSync(first.recordPath);
-    assert.deepEqual(a.role.registerArchitectureAuthority(a.input), first);
-    a.approval.approval_id = 'different-independent-approval';
-    const updated = Buffer.from(JSON.stringify(a.approval)); fs.writeFileSync(a.input.approvalTablePath, updated);
-    a.input.expectedApprovalDigest = require('node:crypto').createHash('sha256').update(updated).digest('hex');
-    assert.throws(() => a.role.registerArchitectureAuthority(a.input), /cannot replace.*original/);
-    assert.deepEqual(fs.readFileSync(first.recordPath), bytes);
-  } finally { fs.rmSync(a.directory, { recursive: true, force: true }); cleanupJudgment(f); }
-});
-
-
-test('source approval envelope bound refuses before publishing any temporary or final record', () => {
-  const f = fixture(), a = sourceApproval(f), original = fs.writeFileSync; let recordWrites = 0;
-  try {
-    const baseBytes = Buffer.byteLength(JSON.stringify({ ...a.approval, approval_id: '' }));
-    a.approval.approval_id = 'x'.repeat(4 * 1024 * 1024 - baseBytes - 5);
-    const approvedBytes = Buffer.from(JSON.stringify(a.approval));
-    assert(approvedBytes.length < 4 * 1024 * 1024);
-    fs.writeFileSync(a.input.approvalTablePath, approvedBytes);
-    a.input.expectedApprovalDigest = require('node:crypto').createHash('sha256').update(approvedBytes).digest('hex');
-    const recordPath = a.role.architectureAuthorityPath(f.root, a.approval.source, a.approval.pins);
-    fs.writeFileSync = function(file, ...args) { if (String(file) === recordPath || String(file).startsWith(recordPath + '.')) recordWrites++; return original.call(fs, file, ...args); };
-    assert.throws(() => a.role.registerArchitectureAuthority(a.input), /serialized source approval exceeds.*bound/);
-    assert.equal(recordWrites, 0);
-    assert.equal(fs.readdirSync(a.role.archiveAuthorityDirectory(f.root)).some(name => name.startsWith('architecture-sources-')), false);
-  } finally { fs.writeFileSync = original; fs.rmSync(a.directory, { recursive: true, force: true }); cleanupJudgment(f); }
-});
 
 
 test('actual serial registration returns a rejected case and executes the following awaited case', async () => {

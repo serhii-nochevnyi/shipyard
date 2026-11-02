@@ -406,6 +406,19 @@ test(`coordinator planning refuses ${scenario}`, (t) => {
   finally { if (foreign) cleanupFixture(foreign); cleanupFixture(fixture); }
 });
 
+test('coordinator with untracked planning accepts local architecture sources without approval', () => {
+  const fixture = coordinatorOnlyPlanning('arch-review');
+  try {
+    git(fixture.project, ['rm', '-r', '--cached', '-q', '.planning']);
+    git(fixture.project, ['commit', '-m', 'chore: planning stays untracked']);
+    fs.appendFileSync(path.join(fixture.project, '.planning/architecture/ADR-014-test.md'), 'Local untracked architecture bytes.\n');
+    const options = hostOptions(fixture);
+    options.getPullRequest = () => ({ ...livePr(fixture), baseRefName: 'integration' });
+    const prepared = preparationOnlyHost().prepareInvocation(options, parseRequest(phasePreparationRequest(fixture)));
+    assert.ok(prepared);
+  } finally { cleanupFixture(fixture); }
+});
+
 test('coordinator relocation does not authorize dirty architecture sources', () => {
   const fixture = coordinatorOnlyPlanning('arch-review');
   try {
