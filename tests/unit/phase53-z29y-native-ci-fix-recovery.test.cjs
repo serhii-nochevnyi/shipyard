@@ -97,7 +97,7 @@ if (require.main === module) {
     const loaded = new Module(filename, module);
     loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
     loaded._compile(fs.readFileSync(filename, 'utf8')
-      + '\nmodule.exports.ownerTest = { repairOwnerRenewal, repairCommand, REPAIR_OWNER };\n', filename);
+      + '\nmodule.exports = { ...module.exports, ownerTest: { repairOwnerRenewal, repairCommand, REPAIR_OWNER } };\n', filename);
     const { repairOwnerRenewal, repairCommand, REPAIR_OWNER } = loaded.exports.ownerTest;
     const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't31-owner-')));
     try {
@@ -138,7 +138,7 @@ if (require.main === module) {
     const loaded = new Module(filename, module); loaded.filename = filename;
     loaded.paths = Module._nodeModulePaths(path.dirname(filename));
     loaded._compile(fs.readFileSync(filename, 'utf8')
-      + '\nmodule.exports.ownerTest = { repairOwnerRenewal, repairCommand, REPAIR_OWNER };\n', filename);
+      + '\nmodule.exports = { ...module.exports, ownerTest: { repairOwnerRenewal, repairCommand, REPAIR_OWNER } };\n', filename);
     const { repairOwnerRenewal, repairCommand, REPAIR_OWNER } = loaded.exports.ownerTest;
     const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't31-expiry-')));
     try {
