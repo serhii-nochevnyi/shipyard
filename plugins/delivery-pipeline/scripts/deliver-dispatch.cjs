@@ -1204,9 +1204,9 @@ function buildPhaseArchitectureRequest(args, options) {
   const live = requireArchitectureTarget({ ...input, row, branch, stateRow: {} }, args, options);
   const flow = require('./phase-code-review.cjs');
   const match = flow.matchEpicPullRequest({ graph: input.graph, state, live, repo, phase: args.phase });
-  if (args.role === 'code-review' && match.kind !== 'epic') buildFail('--pr',
-    `phase code review is ${match.kind}: ${match.reason || 'this PR is a ticket PR; the phase code review applies only to the phase epic PR'}. ` +
-    `The operator can set delivery_pipeline.code_review to "report" in ${path.join(input.projectRoot, '.planning/config.json')} for this PR (nothing is held in report mode); there is no override flag and no waiver record.`);
+  if (args.role === 'code-review' && match.kind !== 'epic') buildFail('--pr', flow.refusalText(match.kind,
+    match.reason || 'this PR is a ticket PR; the phase code review applies only to the phase epic PR',
+    { config_path: path.join(input.projectRoot, '.planning/config.json') }));
   if (args.role === 'arch-review') {
     const gate = flow.evaluateGate({ phase: args.phase, pr: args.pr, worktree: input.worktree,
       graphDir: input.graphDir, repo, live }, options);
