@@ -298,11 +298,13 @@ test('R-13 the round-limit, refused-extension and usage refusals each have their
     assert.match(formatHint(code), new RegExp(`^hint\\[${code}\\]: .+ — remedy: .+$`));
   }
   const limit = hintForError({ code: 'CODE_REVIEW_ROUND_LIMIT' });
-  assert.match(limit, /phase-code-review\.cjs extend --phase N --pr P --reason "why" --confirm extend-review-round/);
-  assert.match(limit, /five rounds in total at most/);
-  assert.match(limit, /code_review to report, which applies to the whole project until it is set back to hold/);
-  assert.match(hintForError({ code: 'EXTENSION_REFUSED' }), /operator shell.*below five rounds.*fixes being pushed first.*delta/);
-  assert.match(hintForError({ code: 'USAGE' }), /does not match the usage printed above/);
+  assert.match(limit, /^hint\[CODE_REVIEW_ROUND_LIMIT\]: The phase code review has used every round .*phase-code-review\.cjs extend --phase N --pr P --reason "why" --confirm extend-review-round .*five rounds in total at most.*code_review to report, which applies to the whole project until it is set back to hold/);
+  assert.match(limit, /N and P are the phase and PR numbers.*role-hosted child is refused.*already granted/);
+  assert.match(limit, /fewer than five rounds are spent.*delta from the last counted review/);
+  assert.match(hintForError({ code: 'EXTENSION_REFUSED' }),
+    /not from a role-hosted child.*fewer than five rounds.*push the fixes first.*no extension is needed if it passed.*match the phase.*delta.*at most 200 bytes.*internal identifiers.*git user\.name.*at most 128 bytes/);
+  assert.match(hintForError({ code: 'USAGE' }), /refused before any work started.* remedy: Fix the argument or input named in the message/);
+  assert.doesNotMatch(formatHint('USAGE'), /printed above/);
 });
 
 test('R-13 a build refusal that names the limit hint prints it under the BUILD_REFUSED label', () => {

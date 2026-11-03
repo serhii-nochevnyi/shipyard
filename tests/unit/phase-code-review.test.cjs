@@ -383,7 +383,7 @@ test('R-13 usage hint: status without --phase prints hint[USAGE]', () => {
       const result = cli.run(list, {}, verb);
       assert.equal(result.status, 2, result.stderr);
       const lines = result.stderr.trim().split('\n');
-      assert.match(lines[0], /^USAGE: /); assert.match(lines[1], /^hint\[USAGE\]: .*usage printed above.* remedy: /);
+      assert.match(lines[0], /^USAGE: (?!usage: )\S/); assert.match(lines[1], /^hint\[USAGE\]: .*refused before any work started.* remedy: /);
       assert.equal(lines.length, 2); assert.doesNotMatch(result.stderr, /does not name/);
     }
   } finally { f.cleanup(); cli.cleanup(); }
@@ -396,7 +396,7 @@ test('R-13 a refused extension prints hint[EXTENSION_REFUSED] on stderr', () => 
     assert.equal(result.status, 1, result.stderr);
     const lines = result.stderr.trim().split('\n');
     assert.match(lines[0], /^EXTENSION_REFUSED: a role-hosted child cannot grant/);
-    assert.match(lines[1], /^hint\[EXTENSION_REFUSED\]: The extension was not recorded.* remedy: .*operator shell/);
+    assert.match(lines[1], /^hint\[EXTENSION_REFUSED\]: The extension was not recorded.* remedy: .*role-hosted child/);
     assert.equal(lines.length, 2);
   } finally { f.cleanup(); cli.cleanup(); }
 });

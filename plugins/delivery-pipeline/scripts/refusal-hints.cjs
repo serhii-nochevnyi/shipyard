@@ -172,15 +172,15 @@ const HINTS = Object.freeze({
   }),
   CODE_REVIEW_ROUND_LIMIT: Object.freeze({
     hint: 'The phase code review has used every round it may run for this PR.',
-    remedy: 'Read the findings on the PR, then either push the fixes and run node {bundle}/scripts/phase-code-review.cjs extend --phase N --pr P --reason "why" --confirm extend-review-round from the operator shell to allow one more round bound to the new head (five rounds in total at most), or set delivery_pipeline.code_review to report, which applies to the whole project until it is set back to hold.',
+    remedy: `Read the findings on the PR. When the fixes are pushed, fewer than five rounds are spent and a delta from the last counted review is possible, run node {bundle}/scripts/phase-code-review.cjs extend --phase N --pr P --reason "why" --confirm extend-review-round with the operator's word (N and P are the phase and PR numbers; a role-hosted child is refused) to allow one more round bound to the new head, five rounds in total at most; a record that already exists for this head means the round is already granted, and extend only prints it. At five rounds, or when no delta is possible, the human decides from the findings, or sets delivery_pipeline.code_review to report, which applies to the whole project until it is set back to hold.`,
   }),
   EXTENSION_REFUSED: Object.freeze({
     hint: 'The extension was not recorded.',
-    remedy: 'Read the printed reason, which names the failed condition: the operator shell (a role-hosted child cannot grant a round), the limit being reached and below five rounds, the fixes being pushed first (a head that already has a counted review is not at the limit), a delta being possible, or a plain reason of at most 200 bytes with a git user.name of at most 128 bytes. Fix it and re-run.',
+    remedy: `Read the printed reason and fix what it names: run extend with the operator's word, not from a role-hosted child; the review must be at its limit with fewer than five rounds spent (a head that already has a counted review is not at the limit: push the fixes first, or no extension is needed if it passed); the PR must match the phase; a delta from the last counted review must be possible; the reason must be plain text of at most 200 bytes with no internal identifiers, and the git user.name (or the OS user name when it is empty) at most 128 bytes. Then re-run.`,
   }),
   USAGE: Object.freeze({
-    hint: 'The command line does not match the usage printed above.',
-    remedy: 'Fix the arguments to match it and re-run.',
+    hint: 'The command line or its inputs were refused before any work started.',
+    remedy: 'Fix the argument or input named in the message (or the usage line when one is printed) and re-run.',
   }),
 });
 

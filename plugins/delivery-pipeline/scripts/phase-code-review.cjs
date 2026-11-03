@@ -510,7 +510,7 @@ function extend(input, options = {}) {
   // @security: only the operator grants a round; a role-hosted child is refused before any other step.
   if (process.env.SHIPYARD_ROLE_CHILD === '1') refuseExtension('a role-hosted child cannot grant a review round; only the operator runs extend');
   if (input.confirm !== EXTEND_CONFIRM || typeof input.reason !== 'string')
-    throw Object.assign(new Error(`usage: ${EXTEND_USAGE}`), { code: 'USAGE', exitCode: 2 });
+    throw Object.assign(new Error(EXTEND_USAGE), { code: 'USAGE', exitCode: 2 });
   const worktree = input.worktree || input.worktreePath || process.cwd();
   let named = '';
   try { named = git(worktree, ['config', 'user.name']); } catch {}
@@ -667,7 +667,7 @@ if (require.main === module) {
     const usage = message => { throw Object.assign(new Error(message), { code: 'USAGE', exitCode: 2 }); };
     const extending = verb === 'extend';
     if (!['status', 'gate', 'fix-tickets', 'publish', 'extend'].includes(verb) || (!extending && (!argv[1] || argv[1].startsWith('--'))))
-      usage('usage: phase-code-review.cjs <status|gate|fix-tickets|publish> <phase-directory> --phase N --pr P [--repo owner/name] [--graph dir] [--worktree path]');
+      usage('phase-code-review.cjs <status|gate|fix-tickets|publish> <phase-directory> --phase N --pr P [--repo owner/name] [--graph dir] [--worktree path]');
     const input = extending ? {} : { phaseDirectory: argv[1] }, seen = new Set();
     const names = { '--phase': 'phase', '--pr': 'pr', '--repo': 'repo', '--graph': 'graphDir', '--worktree': 'worktree',
       ...(extending ? { '--reason': 'reason', '--confirm': 'confirm' } : {}) };
