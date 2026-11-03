@@ -2604,12 +2604,20 @@ function ciFailureSnapshot(prepared, file, digest) {
   atomicWrite(destination, original.bytes, { exclusive: true });
   const copy = ciPhysical(destination, MAX_GRAPH_BYTES, true);
   if (!copy.bytes.equals(original.bytes)) fail('CI_EVIDENCE_CHANGED', 'protected failure snapshot differs');
-  return Object.freeze({ path: destination, sha256: digest, bytes: copy.pin.bytes, original: original.pin, copy: copy.pin });
+  const viewDirectory = privateDirectory(path.dirname(path.dirname(prepared.stateRoot)), 'ci-input-views', sha256(prepared.repository));
+  const viewFile = path.join(viewDirectory, digest + '.log');
+  if (atomicWrite(viewFile, original.bytes, { exclusive: true })) fs.chmodSync(viewFile, 0o400);
+  const view = ciPhysical(viewFile, MAX_GRAPH_BYTES, true);
+  if ((view.pin.mode & 0o777) !== 0o400 || !view.bytes.equals(original.bytes))
+    fail('CI_EVIDENCE_CHANGED', 'read-only model failure input differs from its original');
+  return Object.freeze({ path: destination, sha256: digest, bytes: copy.pin.bytes,
+    original: original.pin, copy: copy.pin, model_input: view.pin });
 }
 
 function recheckCiFailure(evidence) {
-  for (const [kind, pin] of [['original', evidence.original], ['copy', evidence.copy]]) {
-    if (!pin || canonical(ciPhysical(pin.path, MAX_GRAPH_BYTES, kind === 'copy').pin) !== canonical(pin))
+  for (const [kind, pin] of [['original', evidence.original], ['copy', evidence.copy],
+    ...(evidence.model_input ? [['model_input', evidence.model_input]] : [])]) {
+    if (!pin || canonical(ciPhysical(pin.path, MAX_GRAPH_BYTES, kind !== 'original').pin) !== canonical(pin))
       fail('CI_EVIDENCE_CHANGED', 'original CI failure custody changed');
   }
 }
@@ -2791,7 +2799,8 @@ function prepareCiRepair(options, scope, context) {
         dispatch_id: item.attempt.dispatch_id, notes: item.attempt.notes, hypothesis: item.attempt.hypothesis,
         receipt_sha256: item.attempt.receipt_sha256, artifact_ref: item.attempt.artifact_ref, artifact_digest: item.attempt.artifact_digest })), journal: null });
     const prompt = 'Repair current CI for canonical ticket ' + scope.ticket + ' PR ' + pr + '. '
-      + 'Read the complete protected failure file referenced below. Leave source uncommitted and pushed=false. '
+      + 'Read the complete authenticated read-only failure input: ' + JSON.stringify(evidence.model_input.path) + '\n'
+      + 'Leave source uncommitted and pushed=false. '
       + 'Only declared PLAN paths may change. Write complete producer evidence to .shipyard-repair-evidence.md. '
       + 'Return only shipyard.repair-result.v1 JSON with exactly schema="shipyard.repair-result.v1", id, pr, '
       + 'status (fixed/no-op/escalate), pushed=false, notes and hypothesis. No additional fields. '
@@ -3119,6 +3128,11 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
         || ciPhysical(path.join(root, builder)).pin.sha256 !== operation.pins.builder.trusted
         || (fs.lstatSync(path.join(root, builder)).mode & 0o111 ? '100755' : '100644') !== operation.pins.builder.entry.split(' ')[0])
       fail('GENERATED_MERGE_CHANGED', 'generated merge graph, source, base, branch, builder or signer changed');
+    for (const entry of operation.mechanical?.paths || []) {
+      if (entry.original_pin
+          && canonical(ciPhysical(entry.original_pin.path, MAX_GRAPH_BYTES, true, true).pin) !== canonical(entry.original_pin))
+        fail('GENERATED_MERGE_CHANGED', 'retained mechanical original changed');
+    }
     if (operation.generation) {
       const scratch = path.join(directory, operation.id, operation.generation.directory);
       privatePin(scratch);
@@ -3175,6 +3189,88 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
       fail('GENERATED_MERGE_CHANGED', 'original conflict stages, AUTO_MERGE or combined source changed');
     if (!operation.observed) { operation.observed = observed; operation.phase = 'conflicted'; save(); }
     return observed;
+  };
+  const mechanicalFile = file => {
+    const target = path.join(root, file);
+    for (let cursor = path.dirname(target); cursor !== root; cursor = path.dirname(cursor)) {
+      const stat = fs.lstatSync(cursor);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(cursor) !== cursor)
+        fail('GENERATED_MERGE_CHANGED', 'mechanical path ancestry changed');
+    }
+    try {
+      const read = ciPhysical(target, MAX_GRAPH_BYTES, false, true);
+      return { type: 'file', mode: read.pin.mode & 0o777, bytes: read.pin.bytes, sha256: read.pin.sha256 };
+    } catch (error) {
+      if (!fs.existsSync(target)) {
+        try { fs.lstatSync(target); } catch (missing) { if (missing.code === 'ENOENT') return { type: 'absent' }; }
+      }
+      throw error;
+    }
+  };
+  const mechanicalState = () => {
+    check();
+    const intent = operation.mechanical, rows = stageRows(), names = new Set(intent.paths.map(entry => entry.path));
+    if (canonical(rows.filter(row => !names.has(row.path)))
+        !== canonical(operation.observed.stages.filter(row => !names.has(row.path))))
+      fail('GENERATED_MERGE_CHANGED', 'index changed outside original mechanical intent');
+    for (const entry of intent.paths) {
+      const current = rows.filter(row => row.path === entry.path), actual = mechanicalFile(entry.path);
+      if (![entry.original_stages, entry.intended_stages].some(state => canonical(state) === canonical(current))
+          || ![entry.original, entry.intended].some(state => canonical(state) === canonical(actual)))
+        fail('GENERATED_MERGE_CHANGED', 'mechanical path has third bytes, mode, type or stages');
+    }
+    const dirty = rawGit(['diff', '--name-only', '-z', operation.observed.automatic, '--']).toString('utf8').split('\0').filter(Boolean);
+    if (dirty.some(file => !names.has(file))) fail('GENERATED_MERGE_CHANGED', 'source changed outside original mechanical intent');
+  };
+  const mechanical = () => {
+    check();
+    if (operation.generation) return operation.taken;
+    const observed = operation.observed || observe();
+    if (!operation.mechanical) {
+      if (canonical(stageRows()) !== canonical(observed.stages))
+        fail('GENERATED_MERGE_CHANGED', 'mechanical resolution lacks original conflict stages');
+      const owner = require('./path-owner.cjs').owns;
+      const names = observed.unmerged.filter(file => !declared.some(pattern => owner(pattern, file)));
+      const originals = privateDirectory(directory, operation.id, 'mechanical-originals'), paths = [];
+      for (const file of names) {
+        const original = mechanicalFile(file), automatic = g(['ls-tree', observed.automatic, '--', file]);
+        const originalEntry = /^(100644|100755) blob ([a-f0-9]{40,64})\t([^]+)$/.exec(automatic);
+        if (automatic ? !originalEntry || originalEntry[3] !== file || original.type !== 'file'
+            || original.sha256 !== sha256(rawGit(['cat-file', 'blob', originalEntry[2]]))
+            || original.mode !== (originalEntry[1] === '100755' ? 0o755 : 0o644) : original.type !== 'absent')
+          fail('GENERATED_MERGE_CHANGED', 'mechanical original differs from AUTO_MERGE');
+        let originalPin = null;
+        if (original.type === 'file') {
+          const snapshot = path.join(originals, sha256(file));
+          atomicWrite(snapshot, ciPhysical(path.join(root, file), MAX_GRAPH_BYTES, false, true).bytes, { exclusive: true });
+          originalPin = ciPhysical(snapshot, MAX_GRAPH_BYTES, true, true).pin;
+          if (originalPin.sha256 !== original.sha256 || originalPin.bytes !== original.bytes)
+            fail('GENERATED_MERGE_CHANGED', 'mechanical original changed during retention');
+        }
+        const baseEntry = g(['ls-tree', operation.pins.base, '--', file]);
+        const match = /^(100644|100755) blob ([a-f0-9]{40,64})\t([^]+)$/.exec(baseEntry);
+        if (baseEntry && (!match || match[3] !== file)) fail('GENERATED_MERGE_INVALID', 'unsupported mechanical base entry');
+        const bytes = match && rawGit(['cat-file', 'blob', match[2]]);
+        if (bytes && bytes.length > MAX_GRAPH_BYTES) fail('GENERATED_MERGE_INVALID', 'mechanical base entry exceeds custody bound');
+        paths.push({ path: file, original, original_pin: originalPin,
+          original_stages: observed.stages.filter(row => row.path === file),
+          intended: match ? { type: 'file', mode: match[1] === '100755' ? 0o755 : 0o644, bytes: bytes.length, sha256: sha256(bytes) } : { type: 'absent' },
+          intended_stages: match ? [{ mode: match[1], oid: match[2], stage: 0, path: file }] : [] });
+      }
+      operation.mechanical = { paths }; mechanicalState(); save();
+    }
+    mechanicalState();
+    for (const entry of operation.mechanical.paths) {
+      mechanicalState();
+      if (canonical(mechanicalFile(entry.path)) === canonical(entry.intended)
+          && canonical(stageRows().filter(row => row.path === entry.path)) === canonical(entry.intended_stages)) continue;
+      if (entry.intended.type === 'absent') g(['rm', '-q', '--', entry.path]);
+      else g(['checkout', operation.pins.base, '--', entry.path]);
+      mechanicalState();
+    }
+    operation.taken = operation.mechanical.paths.map(entry => entry.path);
+    operation.combined_stages = stageRows(); save();
+    return operation.taken;
   };
   const applyState = () => {
     check();
@@ -3398,6 +3494,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
       check();
       if (operation.phase === 'prepared' && absent('MERGE_HEAD') && absent('AUTO_MERGE')) return null;
       if (!operation.observed) observe();
+      if (!operation.generation) mechanical();
       return complete();
     },
     prepare() {
@@ -3413,6 +3510,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
       proofFile = path.join(directory, id + '.json'); save();
     },
     observe() { return observe(); },
+    mechanical() { return mechanical(); },
     complete(taken) {
       const before = operation.observed.stages, current = stageRows();
       const owner = require('./path-owner.cjs').owns;

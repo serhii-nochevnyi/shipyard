@@ -310,10 +310,12 @@ if (!conflicted.length) {
 }
 
 if (generatedMerge) { try { generatedMerge.observe(); } catch (error) { fail(error.message); } }
-const taken = [];
+let taken = [];
+if (generatedMerge) { try { taken = [...generatedMerge.mechanical()]; } catch (error) { fail(error.message); } }
 const real = [];
 const contested = [];
 for (const p of conflicted) {
+  if (taken.includes(p)) continue;
   if (owns(p)) {
     real.push(p);
     const claims = contestedBy(p);

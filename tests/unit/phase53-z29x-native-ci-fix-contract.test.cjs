@@ -176,7 +176,10 @@ function ciFixture(signing, { declaredRepo = 'fixture/repository', producerScrip
         if (row.item?.type === 'agent_message') row.item.text = final;
       }
       const child = new EventEmitter(); child.pid = 45678; child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
-      child.stdin = { write(prompt) { user.payload.content = [{ type: 'input_text', text: String(prompt).trim() }]; }, end() {
+      child.stdin = { write(prompt) {
+        control.inspectInput?.(String(prompt), args, spawnOptions);
+        user.payload.content = [{ type: 'input_text', text: String(prompt).trim() }];
+      }, end() {
         process.nextTick(() => {
           const date = new Date(), directory = path.join(spawnOptions.env.CODEX_HOME, 'sessions', String(date.getFullYear()), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
           fs.mkdirSync(directory, { recursive: true }); control.mutateNative?.(rows, cli);

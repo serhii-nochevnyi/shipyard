@@ -759,6 +759,62 @@ if (require.main === module) {
       });
     } finally { signing.close(); }
   });
+  test('native CI launch exposes exact bounded failure bytes through an external read-only input view', bounded, async () => {
+    const signing = signingFixture();
+    try {
+      const f = ciFixture(signing);
+      f.control.source = false; f.output.status = 'no-op';
+      const prepared = host.prepareCiRepair(f.options, f.scope, f.request.context);
+      const view = prepared.repair.evidence.model_input;
+      assert.equal(view.mode & 0o777, 0o400);
+      assert.equal(view.sha256, hash(f.failureBytes)); assert.equal(view.bytes, f.failureBytes.length);
+      assert.equal(view.path.startsWith(prepared.stateRoot + path.sep), false);
+      assert.equal(view.path.startsWith(f.worktree + path.sep), false);
+      let reads = 0;
+      f.control.inspectInput = (prompt, args) => {
+        const quoted = prompt.split('Read the complete authenticated read-only failure input: ')[1].split('\n')[0];
+        assert.equal(JSON.parse(quoted), view.path);
+        assert.ok(args.some(arg => /^permissions\.[^.]+\.extends=":workspace"$/.test(arg)));
+        const filesystem = args.find(arg => /^permissions\.[^.]+\.filesystem=/.test(arg));
+        assert.ok(filesystem);
+        const denied = [...filesystem.matchAll(/("(?:[^"\\]|\\.)*")="deny"/g)].map(match => JSON.parse(match[1]));
+        assert.ok(denied.includes(prepared.stateRoot));
+        assert.equal(denied.some(file => view.path === file || view.path.startsWith(file + path.sep)), false);
+        assert.equal(filesystem.includes('="write"'), false);
+        const child = spawnSync(process.execPath, ['-e', 'process.stdout.write(require("node:fs").readFileSync(process.argv[1]));', view.path],
+          { timeout: 10000, maxBuffer: 8 * 1024 * 1024 });
+        assert.equal(child.status, 0, String(child.stderr)); assert.deepEqual(child.stdout, f.failureBytes); reads++;
+      };
+      await f.run(); assert.equal(reads, 1); assert.equal(f.launches, 1); assert.equal(f.pushes, 0);
+    } finally { signing.close(); }
+  });
+  test('CI input-view and original substitutions refuse before launch or after original completion without publication', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      for (const mutation of ['view-bytes', 'view-replacement', 'view-symlink', 'original', 'private-copy', 'late-view']) await t.test(mutation, bounded, async () => {
+        const f = ciFixture(signing), prepared = host.prepareCiRepair(f.options, f.scope, f.request.context);
+        const evidence = prepared.repair.evidence, view = evidence.model_input.path;
+        const change = () => {
+          if (mutation === 'view-replacement') {
+            fs.renameSync(view, view + '.original'); fs.writeFileSync(view, f.failureBytes, { mode: 0o400 });
+          } else if (mutation === 'view-symlink') { fs.unlinkSync(view); fs.symlinkSync(f.failureFile, view); }
+          else {
+            const target = mutation === 'original' ? f.failureFile : mutation === 'private-copy' ? evidence.path : view;
+            if (target === view) fs.chmodSync(target, 0o600);
+            fs.writeFileSync(target, Buffer.alloc(f.failureBytes.length, 120));
+          }
+        };
+        if (mutation === 'late-view') f.control.inspectInput = change;
+        else change();
+        const run = () => host.createCodexDeliveryHost(f.options).run({ role: 'ci-fix', context: f.request.context });
+        if (mutation === 'late-view') await assert.rejects(run);
+        else await assert.rejects(run, { code: 'CI_EVIDENCE_CHANGED' });
+        assert.throws(() => host.prepareCiRepair(f.options, f.scope, f.request.context), { code: 'CI_EVIDENCE_CHANGED' });
+        assert.equal(f.launches, mutation === 'late-view' ? 1 : 0); assert.equal(f.pushes, 0);
+        assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), f.originalHead);
+      });
+    } finally { signing.close(); }
+  });
   test('late failure, scope and native-result changes retain the original completion and refuse signing or publication', bounded, async t => {
     const signing = signingFixture();
     try {

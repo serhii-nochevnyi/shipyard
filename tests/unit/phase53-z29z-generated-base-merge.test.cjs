@@ -11,9 +11,11 @@ const coverage = require(path.join(scripts, 'conveyor-coverage.cjs'));
 const canonical = 'plugins/delivery-pipeline/scripts/role-artifact.cjs';
 const mirror = 'plugins/shipyard/host/' + canonical;
 const identityPaths = ['plugins/shipyard/.codex-plugin/plugin.json', 'plugins/shipyard/package-build.json'];
-function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false, wrappedBoard = false, multipleConflicts = false, mechanicalCanonical = false } = {}) {
+function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false, wrappedBoard = false, multipleConflicts = false, mechanicalCanonical = false, mechanicalPaths = false } = {}) {
   const worktree = path.join(signing.directory, 'source-' + crypto.randomUUID());
   fs.mkdirSync(worktree); packageSource(worktree);
+  if (mechanicalPaths) for (const file of ['mechanical-file.txt', 'mechanical-delete.txt'])
+    fs.writeFileSync(path.join(worktree, file), 'original\n');
   git(worktree, 'init', '-q', '-b', 'main');
   for (const [key, value] of Object.entries({ 'user.name': 'Fixture', 'user.email': 'fixture@example.test', 'user.signingkey': signing.signer, 'commit.gpgsign': 'true' }))
     git(worktree, 'config', key, value);
@@ -21,6 +23,8 @@ function divergentFixture(signing, { conflict = false, generatedEntry = false, m
   git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'fixture supported package');
   git(worktree, 'switch', '-c', 'ticket/T-53-31');
   const file = path.join(worktree, canonical), original = fs.readFileSync(file, 'utf8');
+  if (mechanicalPaths) for (const name of ['mechanical-file.txt', 'mechanical-delete.txt'])
+    fs.writeFileSync(path.join(worktree, name), 'ticket conflict\n');
   fs.writeFileSync(file, original.replace("'use strict';", "'use strict';\nvoid 'ticket canonical change';"));
   if (mechanicalCanonical) fs.appendFileSync(path.join(worktree, 'plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), "\nvoid 'stale ticket canonical change';\n");
   const generate = () => {
@@ -32,6 +36,11 @@ function divergentFixture(signing, { conflict = false, generatedEntry = false, m
   git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'fixture ticket canonical generation');
   const head = git(worktree, 'rev-parse', 'HEAD'), headTree = git(worktree, 'rev-parse', 'HEAD^{tree}');
   git(worktree, 'switch', 'main');
+  if (mechanicalPaths) {
+    fs.writeFileSync(path.join(worktree, 'mechanical-file.txt'), 'base resolution\n');
+    fs.chmodSync(path.join(worktree, 'mechanical-file.txt'), 0o755);
+    fs.unlinkSync(path.join(worktree, 'mechanical-delete.txt'));
+  }
   fs.writeFileSync(file, (conflict || multipleConflicts) ? original.replace("'use strict';", multipleConflicts ? "'use strict';\nvoid 'upstream canonical change';" : "'use strict';\nvoid 'upstream semantic conflict';") : original + "\nvoid 'upstream canonical change';\n");
   fs.appendFileSync(path.join(worktree, 'plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), "\nvoid 'independent upstream canonical change';\n");
   generate(); git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'fixture incoming canonical generation');
@@ -137,6 +146,54 @@ if (require.main === module) {
       const operation = retainedOperation(f);
       assert.ok(operation.observed.unmerged.includes('plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'));
       assert.equal(operation.combined_stages.some(row => row.stage !== 0 && row.path.startsWith('plugins/delivery-pipeline/')), false);
+    } finally { signing.close(); }
+  });
+  test('cold mechanical recovery retains original per-path intent before checkout, removal and combined-state persistence', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      for (const phase of ['retained', 'checkout', 'remove', 'combined']) await t.test(phase, bounded, () => {
+        const f = divergentFixture(signing, { mechanicalCanonical: true, mechanicalPaths: true });
+        const injection = `const fs=require('node:fs'),cp=require('node:child_process');const phase=${JSON.stringify(phase)},root=${JSON.stringify(f.worktree)},proof=${JSON.stringify(f.proofDirectory)};
+          const rename=fs.renameSync;fs.renameSync=function(a,b,...rest){const r=rename.call(this,a,b,...rest);if(b.startsWith(proof)&&b.endsWith('.json')){const p=JSON.parse(fs.readFileSync(b)).payload;if(p.mechanical&&((phase==='retained'&&!p.taken.length)||(phase==='combined'&&p.taken.length&&!p.generation)))process.exit(86);}return r;};
+          const exec=cp.execFileSync;cp.execFileSync=function(command,args,...rest){const r=exec.call(this,command,args,...rest);if(command==='git'&&args[1]===root&&((phase==='checkout'&&args[2]==='checkout')||(phase==='remove'&&args[2]==='rm')))process.exit(87);return r;};`;
+        assert.equal(f.run(injection).status, ['retained', 'combined'].includes(phase) ? 86 : 87);
+        const original = retainedOperation(f);
+        assert.equal(original.phase, 'conflicted'); assert.ok(original.mechanical.paths.length >= 3);
+        assert.ok(original.mechanical.paths.some(entry => entry.intended.type === 'absent'));
+        for (const entry of original.mechanical.paths) if (entry.original_pin)
+          assert.equal(hash(fs.readFileSync(entry.original_pin.path)), entry.original.sha256);
+        const result = inspectSuccess(f, f.run());
+        assert.equal(retainedOperation(f).id, original.id);
+        assert.equal(git(f.worktree, 'rev-list', '--count', '--merges', `${f.head}..HEAD`), '1');
+        assert.deepEqual(result.taken_from_base, original.mechanical.paths.map(entry => entry.path));
+        assert.equal(fs.readFileSync(path.join(f.worktree, 'mechanical-file.txt'), 'utf8'), 'base resolution\n');
+        assert.equal(fs.statSync(path.join(f.worktree, 'mechanical-file.txt')).mode & 0o777, 0o755);
+        assert.equal(fs.existsSync(path.join(f.worktree, 'mechanical-delete.txt')), false);
+        assert.equal(inspectSuccess(f, f.run()).commit, result.commit);
+      });
+    } finally { signing.close(); }
+  });
+  test('partial mechanical recovery refuses foreign bytes, modes, stages, source and retained originals without writes', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      for (const mutation of ['bytes', 'mode', 'stage', 'source', 'original', 'deleted-path']) await t.test(mutation, bounded, () => {
+        const f = divergentFixture(signing, { mechanicalPaths: true });
+        const injection = `const cp=require('node:child_process'),exec=cp.execFileSync;cp.execFileSync=function(command,args,...rest){const r=exec.call(this,command,args,...rest);if(command==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args[2]==='checkout')process.exit(87);return r;};`;
+        assert.equal(f.run(injection).status, 87);
+        const op = retainedOperation(f), entry = op.mechanical.paths.find(entry => entry.path === 'mechanical-file.txt');
+        const target = path.join(f.worktree, entry.path);
+        if (mutation === 'bytes') fs.writeFileSync(target, 'foreign mechanical content\n');
+        if (mutation === 'mode') fs.chmodSync(target, 0o600);
+        if (mutation === 'stage') { fs.writeFileSync(target, 'foreign staged content\n'); git(f.worktree, 'add', '--', entry.path); }
+        if (mutation === 'source') fs.appendFileSync(path.join(f.worktree, canonical), '\nvoid "foreign source";\n');
+        if (mutation === 'original') fs.appendFileSync(entry.original_pin.path, 'foreign retained content');
+        if (mutation === 'deleted-path') fs.writeFileSync(path.join(f.worktree, 'mechanical-delete.txt'), 'foreign deleted content\n');
+        const before = inventory(f.worktree), proof = inventory(f.proofDirectory);
+        const response = f.run(); assert.notEqual(response.status, 0, response.stdout);
+        assert.deepEqual(inventory(f.worktree), before); assert.deepEqual(inventory(f.proofDirectory), proof);
+        assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), f.head);
+        assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: f.head }).covered, false);
+      });
     } finally { signing.close(); }
   });
   test('unresolved canonical source conflict stays owned and uncommitted with both semantic sides retained', bounded, () => {
