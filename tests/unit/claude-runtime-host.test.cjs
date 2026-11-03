@@ -234,6 +234,7 @@ test('native launcher ignores conflicting stdout model and effort and records tr
         CODEX_API_KEY: 'test-codex-key',
         GITHUB_TOKEN: 'test-token',
         CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-token',
+        SHIPYARD_ROLE_CHILD: '0',
       },
       spawn: (executable, args, options) => {
         calls.push({ executable, args, options });
@@ -271,6 +272,7 @@ test('native launcher ignores conflicting stdout model and effort and records tr
     assert.ok(settings.sandbox.credentials.envVars.some((item) => item.name === 'CLAUDE_CODE_OAUTH_TOKEN' && item.mode === 'deny'));
     assert.equal(calls[0].options.env.CLAUDE_CONFIG_DIR, path.join(root, 'claude'));
     assert.equal(calls[0].options.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+    assert.equal(calls[0].options.env.SHIPYARD_ROLE_CHILD, '1');
     assert.equal(calls[0].options.env.ANTHROPIC_API_KEY, 'test-key');
     assert.equal(calls[0].options.env.ANTHROPIC_BASE_URL, 'https://provider.invalid');
     assert.equal(calls[0].options.env.OPENAI_API_KEY, undefined);

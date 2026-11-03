@@ -82,7 +82,7 @@ function bounded(value, max = 4096) {
 }
 
 function claudeEnvironment(source = process.env) {
-  const environment = { ...source, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1' };
+  const environment = { ...source, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1', SHIPYARD_ROLE_CHILD: '1' };
   for (const name of CROSS_PROVIDER_CREDENTIAL_ENV) delete environment[name];
   return environment;
 }

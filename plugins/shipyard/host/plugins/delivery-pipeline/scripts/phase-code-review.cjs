@@ -171,7 +171,7 @@ function status(input, options = {}) {
       disagreement_suppressed: current.disagreement_suppressed, partitions_not_reviewed: current.partitions_not_reviewed,
       artifact_ref: current.artifact_ref, reason: current.verdict === 'pass' ? 'the complete verdict is current'
         : `the current verdict is ${current.verdict} with ${current.blocking_count} BLOCKERs` });
-    details.set(result, { mode, current, ctx, prior: countable });
+    details.set(result, { mode, current, ctx, prior: countable, history });
     return Object.freeze(result);
   }
   const incomplete = current || prior.filter(entry => entry.head === live.headRefOid
@@ -182,7 +182,7 @@ function status(input, options = {}) {
       ? refusal('limit', core.limitMessage(next), mode)
       : `${incomplete ? (incomplete.review_completeness !== 'complete' ? 'the sealed review is incomplete'
         : 'the sealed delta has no complete full-scope lineage') + '; ' : ''}run deliver-dispatch.cjs build code-review first` });
-  details.set(result, { mode, current, ctx, prior: countable });
+  details.set(result, { mode, current, ctx, prior: countable, history });
   return Object.freeze(result);
 }
 
@@ -483,6 +483,47 @@ function appendExtension(ctx, record) {
   }, { label: 'code review extension', waitMs: 10000 });
 }
 
+const EXTEND_CONFIRM = 'extend-review-round';
+const EXTEND_USAGE = `phase-code-review.cjs extend --phase N --pr P --reason "..." --confirm ${EXTEND_CONFIRM} [--repo owner/name] [--graph dir] [--worktree path]`;
+const refuseExtension = message => { throw Object.assign(new Error(message), { code: 'EXTENSION_REFUSED' }); };
+const cleanText = value => String(value).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/[@<>`]/g, '').replace(/\s+/g, ' ').trim();
+
+function extend(input, options = {}) {
+  // @security: only the operator grants a round; a role-hosted child is refused before any other step.
+  if (process.env.SHIPYARD_ROLE_CHILD === '1') refuseExtension('a role-hosted child cannot grant a review round; only the operator runs extend');
+  if (input.confirm !== EXTEND_CONFIRM || typeof input.reason !== 'string')
+    throw Object.assign(new Error(`usage: ${EXTEND_USAGE}`), { exitCode: 2 });
+  const worktree = input.worktree || input.worktreePath || process.cwd();
+  let named = '';
+  try { named = git(worktree, ['config', 'user.name']); } catch {}
+  const operator = cleanText(named) || cleanText(require('node:os').userInfo().username), reason = cleanText(input.reason);
+  if (!reason) refuseExtension('the reason is empty after cleaning; state why one more round is needed');
+  if (Buffer.byteLength(reason) > 200) refuseExtension('the reason is over 200 bytes');
+  if (!operator || Buffer.byteLength(operator) > 128) refuseExtension('the operator name is empty or over 128 bytes');
+  const created_at = new Date().toISOString(), hygiene = require('./pr-hygiene.cjs');
+  if (hygiene.applies({ root: worktree })) {
+    const line = `round ${core.ROUND_CAP + 1} of ${core.ROUND_CAP}, extended by ${operator} at ${created_at}: ${reason}`;
+    const rules = [...new Set(['comment', 'status'].flatMap(field => hygiene.internalLeakViolations(field, line)).map(found => found.rule))];
+    if (rules.length) refuseExtension(`the reason or operator name would be refused in public text (${rules.join(', ')}); rephrase it`);
+  }
+  const current = status(input, options), { ctx, history } = details.get(current);
+  const records = readExtensions({ repository: ctx.repository, repo: ctx.repo, pr: ctx.pr, roots: [ctx.worktree, ctx.mode.project_root] });
+  const report = (record, recorded, round, limit) => ({ pr: ctx.pr, head: record.head, base_commit: record.base_commit, round, limit,
+    operator: record.operator, created_at: record.created_at, recorded });
+  const existing = records.find(row => row.head === current.head && row.base_commit === current.base_commit);
+  if (existing) return report(existing, 'existing', current.round, current.round_limit);
+  if (current.state === 'current') refuseExtension('this head already has a counted review; push the fixes first, then run extend for the new head');
+  if (current.state === 'owed') refuseExtension('no review limit has been reached for this head; the review is owed, so no extension is needed');
+  if (current.state !== 'limit') refuseExtension(`phase code review is ${current.state}: ${current.reason}`);
+  if (current.round_limit >= core.ROUND_CEILING) refuseExtension(`the ceiling of ${core.ROUND_CEILING} rounds is reached; the human decides from the findings on the PR,`
+    + ' or sets delivery_pipeline.code_review to "report", which applies to the whole project until it is set back to "hold"');
+  const probe = { head: current.head, base_commit: current.base_commit, operator, created_at, reason };
+  const lookup = core.roundLookup({ ...history, readRecords: () => [...records, probe] });
+  if (lookup.state !== 'ready') refuseExtension(core.limitMessage(lookup));
+  const stored = appendExtension(ctx, probe);
+  return report(stored, stored === probe ? 'created' : 'existing', lookup.round, lookup.limit);
+}
+
 function publish(input, options = {}) {
   const worktree = input.worktree || input.worktreePath || process.cwd(), repo = input.repo ?? null;
   assertPublicationConfig(resolveCodeReviewMode({ graphDir: input.graphDir, worktree }));
@@ -596,17 +637,19 @@ function verifyCodeReview(input, options = {}) {
   return { ...current, ok: gate.ok, reason: gate.ok ? current.reason : gate.message };
 }
 
-module.exports = { publish, readExtensions, appendExtension, statusDescription, status, evaluateGate, fixTickets, matchEpicPullRequest, refusalText: refusal, resolveCodeReviewMode, verifyCodeReview };
+module.exports = { publish, extend, readExtensions, appendExtension, statusDescription, status, evaluateGate, fixTickets, matchEpicPullRequest, refusalText: refusal, resolveCodeReviewMode, verifyCodeReview };
 
 if (require.main === module) {
   try {
     const argv = process.argv.slice(2), verb = argv[0];
     const usage = message => { throw Object.assign(new Error(message), { exitCode: 2 }); };
-    if (!['status', 'gate', 'fix-tickets', 'publish'].includes(verb) || !argv[1] || argv[1].startsWith('--'))
+    const extending = verb === 'extend';
+    if (!['status', 'gate', 'fix-tickets', 'publish', 'extend'].includes(verb) || (!extending && (!argv[1] || argv[1].startsWith('--'))))
       usage('usage: phase-code-review.cjs <status|gate|fix-tickets|publish> <phase-directory> --phase N --pr P [--repo owner/name] [--graph dir] [--worktree path]');
-    const input = { phaseDirectory: argv[1] }, seen = new Set();
-    const names = { '--phase': 'phase', '--pr': 'pr', '--repo': 'repo', '--graph': 'graphDir', '--worktree': 'worktree' };
-    for (let i = 2; i < argv.length; i += 2) {
+    const input = extending ? {} : { phaseDirectory: argv[1] }, seen = new Set();
+    const names = { '--phase': 'phase', '--pr': 'pr', '--repo': 'repo', '--graph': 'graphDir', '--worktree': 'worktree',
+      ...(extending ? { '--reason': 'reason', '--confirm': 'confirm' } : {}) };
+    for (let i = extending ? 1 : 2; i < argv.length; i += 2) {
       const name = names[argv[i]], value = argv[i + 1];
       if (!name || seen.has(name) || !value || value.startsWith('--')) usage(`invalid argument ${argv[i]}`);
       seen.add(name);
@@ -625,7 +668,8 @@ if (require.main === module) {
     } else if (verb === 'publish') {
       const result = publish(input); console.log(JSON.stringify(result));
       process.exitCode = result.status.ok && result.comment.ok ? 0 : 1;
-    } else console.log(JSON.stringify(verb === 'status' ? status(input) : fixTickets(input)));
+    } else if (extending) console.log(JSON.stringify(extend(input)));
+    else console.log(JSON.stringify(verb === 'status' ? status(input) : fixTickets(input)));
   } catch (error) {
     process.stderr.write(`${error.code ? error.code + ': ' : ''}${error.message}\n`);
     const hint = hintForError(error); if (hint) process.stderr.write(`${hint}\n`);
