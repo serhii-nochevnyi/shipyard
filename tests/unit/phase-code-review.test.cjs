@@ -376,6 +376,31 @@ test('extend usage errors exit 2 and write nothing', () => {
   } finally { f.cleanup(); cli.cleanup(); }
 });
 
+test('R-13 usage hint: status without --phase prints hint[USAGE]', () => {
+  const f = fixture(null), cli = extendCli(f);
+  try {
+    for (const [verb, list] of [['status', [f.phase, '--pr', '52']], ['extend', cli.args.filter((_, k) => k < 8 || k > 9)]]) {
+      const result = cli.run(list, {}, verb);
+      assert.equal(result.status, 2, result.stderr);
+      const lines = result.stderr.trim().split('\n');
+      assert.match(lines[0], /^USAGE: (?!usage: )\S/); assert.match(lines[1], /^hint\[USAGE\]: .*refused before any work started.* remedy: /);
+      assert.equal(lines.length, 2); assert.doesNotMatch(result.stderr, /does not name/);
+    }
+  } finally { f.cleanup(); cli.cleanup(); }
+});
+
+test('R-13 a refused extension prints hint[EXTENSION_REFUSED] on stderr', () => {
+  const f = fixture(null), cli = extendCli(f);
+  try {
+    const result = cli.run(cli.args, { SHIPYARD_ROLE_CHILD: '1' });
+    assert.equal(result.status, 1, result.stderr);
+    const lines = result.stderr.trim().split('\n');
+    assert.match(lines[0], /^EXTENSION_REFUSED: a role-hosted child cannot grant/);
+    assert.match(lines[1], /^hint\[EXTENSION_REFUSED\]: The extension was not recorded.* remedy: .*role-hosted child/);
+    assert.equal(lines.length, 2);
+  } finally { f.cleanup(); cli.cleanup(); }
+});
+
 test('extend writes one private head-bound record at the limit and repeats idempotently', () => {
   const f = fixture(null), cli = extendCli(f);
   try {

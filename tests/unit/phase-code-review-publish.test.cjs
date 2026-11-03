@@ -70,7 +70,7 @@ function fixture(jira = null, mode = 'report', pr = 52) {
     return [comments];
   } };
   const input = () => ({ phase: 52, phaseDirectory: f.phase, pr, worktree: f.root, graphDir: f.graphDir });
-  const seal = (result = raw(), round = 1, priorHead = null, priorFindings = [], scope = round === 1 ? 'full' : 'delta') => {
+  const seal = (result = raw(), round = 1, priorHead = null, priorFindings = [], scope = round === 1 ? 'full' : 'delta', extension) => {
     fs.writeFileSync(path.join(f.root, 'round.txt'), String(round));
     f.git(['add', 'round.txt']); f.git(['commit', '--quiet', '-m', 'round ' + round]);
     if (round > 1) {
@@ -84,8 +84,8 @@ function fixture(jira = null, mode = 'report', pr = 52) {
     if (planningRoot !== f.root) fs.cpSync(f.graphDir, path.join(planningRoot, '.planning/graph'), { recursive: true });
     const binding = target.phaseBinding({ graph: f.graph, state: f.state, phase: 52,
       repository: target.repositoryIdentity(f.root), branch, pr, head: live().headRefOid, base: f.base });
-    const request = f.input(binding, round, priorHead, raw());
-    Object.assign(request.result, core.normalizeResult(result, { round, scope,
+    const request = f.input(binding, round, priorHead, raw(), extension);
+    Object.assign(request.result, core.normalizeResult(result, { round, scope, extension,
       priorFindings, readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8') }));
     require('../fixtures/code-review/artifact-fixture.cjs').setOriginalReview(request, result, priorFindings);
     return artifact.sealJudgment(retainPlanningInput(f, request, planningRoot));
@@ -393,6 +393,237 @@ test('every status grammar uses safe integer counts and passes hygiene at the ma
     assert.equal(result.state, value.verdict === 'pass' ? 'success' : 'pending');
   }
   assert.throws(() => flow.statusDescription({ state: 'current', verdict: 'needs-fix', blocking_count: 'model text', warning_count: 0 }));
+});
+
+const GRANT = { operator: 'Ada Lovelace', at: '2026-11-02T10:45:12.345Z', reason: 'fixes are pushed' };
+const GRANT_LINE = 'round 4 of 3, extended by Ada Lovelace at 2026-11-02T10:45Z: fixes are pushed';
+const BASE_NEEDS_FIX = 'code review: 1 blocking issues, 0 notes';
+function sealExtended(f, extension = GRANT, last = raw(true, [blocker])) {
+  let prior = null;
+  for (let round = 1; round <= 3; round++) {
+    f.seal(round === 3 ? raw(true, [blocker]) : raw(), round, prior); prior = f.live().headRefOid;
+  }
+  f.seal(last, 4, prior, [], 'delta', extension);
+}
+const extended = (round, extension) => ({ state: 'current', verdict: 'needs-fix', blocking_count: 1, warning_count: 0, round, extension });
+
+test('extended round 4 shows the sealed line in the status and under the comment round line', () => {
+  const f = fixture(null, 'hold');
+  try {
+    sealExtended(f);
+    assert.deepEqual(flow.status(f.input(), f.options).extension, GRANT);
+    const result = flow.publish(f.input(), f.options);
+    assert.equal(result.status.description, BASE_NEEDS_FIX + '; ' + GRANT_LINE);
+    assert.equal(f.writes[0].fields.description, BASE_NEEDS_FIX + '; ' + GRANT_LINE);
+    assert.equal(result.comment.ok, true); assert.equal(result.comment.action, 'created'); assert.deepEqual(result.rules, []);
+    assert.deepEqual(f.comments[0].body.split('\n').slice(0, 4),
+      ['<!-- code-review -->', 'Code review — round 4, scope delta', GRANT_LINE, 'Verdict: needs-fix']);
+    assert.equal(f.comments[0].body.split(GRANT_LINE).length, 2);
+  } finally { f.cleanup(); }
+});
+
+test('extended passing round 4 appends the line to the success text', () => {
+  const f = fixture(null);
+  try {
+    sealExtended(f, GRANT, raw());
+    assert.equal(flow.publish(f.input(), f.options).status.description, 'code review: no blocking issues, 0 notes; ' + GRANT_LINE);
+  } finally { f.cleanup(); }
+});
+
+test('extended line shows the sealed value, not any record in the store', () => {
+  const f = fixture(null);
+  try {
+    sealExtended(f);
+    const head = f.live().headRefOid;
+    flow.appendExtension({ repository: target.repositoryIdentity(f.root), repo: null, pr: 52, worktree: f.root,
+      mode: flow.resolveCodeReviewMode(f.input()) }, { head, base_commit: f.base, operator: 'Mallory', created_at: '2027-01-01T00:00:00.000Z', reason: 'a different record' });
+    assert.equal(flow.readExtensions({ repository: target.repositoryIdentity(f.root), repo: null, pr: 52, roots: [f.root] })[0].operator, 'Mallory');
+    flow.publish(f.input(), f.options);
+    assert.equal(f.writes[0].fields.description, BASE_NEEDS_FIX + '; ' + GRANT_LINE);
+    assert.equal(f.comments[0].body.split('\n')[2], GRANT_LINE);
+    assert(!f.writes[0].fields.description.includes('Mallory') && !f.comments[0].body.includes('Mallory'));
+  } finally { f.cleanup(); }
+});
+
+test('extended line is absent for the limit and owed states, and the limit text is unchanged', () => {
+  const f = fixture(null);
+  try {
+    sealExtended(f);
+    fs.writeFileSync(path.join(f.root, 'after.txt'), 'new head');
+    f.git(['add', 'after.txt']); f.git(['commit', '--quiet', '-m', 'after round 4']);
+    const limited = flow.status(f.input(), f.options);
+    assert.equal(limited.state, 'limit'); assert.equal(limited.extension, null);
+    assert.equal(flow.publish(f.input(), f.options).status.description,
+      'code review limit reached: no further review will run for this head');
+  } finally { f.cleanup(); }
+  const incomplete = fixture(null);
+  try {
+    sealExtended(incomplete, GRANT, raw(false));
+    flow.appendExtension({ repository: target.repositoryIdentity(incomplete.root), repo: null, pr: 52, worktree: incomplete.root,
+      mode: flow.resolveCodeReviewMode(incomplete.input()) }, { head: incomplete.live().headRefOid, base_commit: incomplete.base,
+      operator: GRANT.operator, created_at: '2026-11-02T10:00:00.000Z', reason: GRANT.reason });
+    const owed = flow.status(incomplete.input(), incomplete.options);
+    assert.equal(owed.state, 'owed'); assert.equal(owed.extension, null);
+    const published = flow.publish(incomplete.input(), incomplete.options);
+    assert.equal(published.status.description, 'code review incomplete: 0 partitions not reviewed');
+    assert(!incomplete.comments[0].body.includes('extended by'));
+  } finally { incomplete.cleanup(); }
+  const grammar = { state: 'limit', extension: GRANT, round: 4 };
+  assert.equal(flow.statusDescription(grammar).description, 'code review limit reached: no further review will run for this head');
+  assert.equal(flow.statusDescription({ state: 'owed', retry: true, partitions_not_reviewed: 2, extension: GRANT, round: 4 }).description,
+    'code review incomplete: 2 partitions not reviewed');
+});
+
+test('extended-round fields absent: rounds 1 to 3 status and comment stay byte-identical', () => {
+  const f = fixture(null, 'hold');
+  try {
+    let prior = null;
+    for (let round = 1; round <= 3; round++) {
+      f.seal(round === 3 ? raw(true, [blocker]) : raw(), round, prior); prior = f.live().headRefOid;
+      assert.equal(flow.status(f.input(), f.options).extension, null);
+      const result = flow.publish(f.input(), f.options);
+      assert.equal(result.status.description, round === 3 ? BASE_NEEDS_FIX : 'code review: no blocking issues, 0 notes');
+      assert.equal(f.comments[0].body.split('\n').slice(0, 4).join('\n'),
+        `<!-- code-review -->\nCode review — round ${round}, scope ${round === 1 ? 'full' : 'delta'}\nVerdict: ${round === 3 ? 'needs-fix' : 'pass'}\n`);
+      assert(!f.comments[0].body.includes('extended by'));
+    }
+  } finally { f.cleanup(); }
+  for (const absent of [undefined, null]) {
+    assert.equal(flow.statusDescription({ ...extended(3), extension: absent }).description, BASE_NEEDS_FIX);
+    assert.equal(flow.statusDescription({ ...extended(1), extension: absent, verdict: 'pass', review_completeness: 'complete', blocking_count: 0 }).description,
+      'code review: no blocking issues, 0 notes');
+  }
+});
+
+test('extended status description truncates the reason first, then the operator, within 140', () => {
+  const at = '2026-11-02T10:45:12.345Z', fixed = ' at 2026-11-02T10:45Z: ', head = BASE_NEEDS_FIX + '; round 4 of 3, extended by ';
+  const describe = (operator, reason, over = {}) => flow.statusDescription({ ...extended(4, { operator, at, reason }), ...over }).description;
+  assert.equal(describe('Ada', 'x'.repeat(10)), head + 'Ada' + fixed + 'x'.repeat(10));
+  const room = 140 - (head + 'Ada' + fixed).length;
+  assert.equal(describe('Ada', 'x'.repeat(room)), head + 'Ada' + fixed + 'x'.repeat(room));
+  assert.equal(describe('Ada', 'x'.repeat(room + 1)), head + 'Ada' + fixed + 'x'.repeat(room));
+  assert.equal(describe('Ada', 'x'.repeat(200)).length, 140);
+  assert.equal(describe('Ada', 'x'.repeat(200)), head + 'Ada' + fixed + 'x'.repeat(room));
+  const maximum = Number.MAX_SAFE_INTEGER, counts = { blocking_count: maximum, warning_count: maximum };
+  for (const verdict of [{ ...counts }, { verdict: 'pass', review_completeness: 'complete', blocking_count: 0, warning_count: maximum }]) {
+    const base = flow.statusDescription({ ...extended(4), ...verdict }).description;
+    const text = describe('o'.repeat(128), 'r'.repeat(200), verdict);
+    assert(text.length <= 140, text.length);
+    assert(text.startsWith(base + '; round 4 of 3, extended by o'), text);
+    assert(/Z$/.test(text), 'the reason is gone before the operator is cut: ' + text);
+    assert.equal(text.length, 140);
+    assert.deepEqual(hygiene.internalLeakViolations('status', text), []);
+  }
+  const cutOperator = describe('o'.repeat(60), 'r'.repeat(200), { blocking_count: 1, warning_count: 0 });
+  assert.equal(cutOperator, head + 'o'.repeat(52) + fixed.slice(0, -2));
+  assert(!/\s$/.test(cutOperator));
+});
+
+test('extended line counts toward the 60000-character comment bound', () => {
+  const f = fixture(null);
+  try {
+    const many = Array.from({ length: 128 }, (_, i) => ({ ...blocker, id: 'finding-' + i, summary: 's'.repeat(200), failure_scenario: 'f'.repeat(250) }));
+    sealExtended(f, { operator: 'o'.repeat(128), at: GRANT.at, reason: 'r'.repeat(200) }, raw(true, many));
+    assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
+    const body = f.comments[0].body, more = body.match(/and (\d+) more findings\.\n/);
+    assert(more); assert(body.length <= 60000 - 64 + more[0].length, String(body.length));
+    assert.equal(body.split('\n')[2].length, 'round 4 of 3, extended by  at 2026-11-02T10:45Z: '.length + 328);
+  } finally { f.cleanup(); }
+});
+
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+test('extended truncation never leaves half of a surrogate pair', () => {
+  const at = '2026-11-02T10:45:12.345Z', counts = { blocking_count: 1, warning_count: 0 };
+  const describe = (operator, reason) => flow.statusDescription({ ...extended(4, { operator, at, reason }), ...counts }).description;
+  for (const [operator, reason] of [['a' + '\u{1F600}'.repeat(60), 'x'.repeat(200)], ['Ada', '\u{1F600}'.repeat(100)],
+    ['Ada', 'a' + '\u{1F600}'.repeat(100)], ['\u{1F600}'.repeat(60), '\u{1F600}'.repeat(100)]]) {
+    const text = describe(operator, reason);
+    assert(text.length <= 140 && text.length >= 138, String(text.length));
+    assert(!LONE_SURROGATE.test(text), JSON.stringify(text));
+    assert.equal(Buffer.from(text, 'utf8').toString('utf8'), text);
+    assert(!/\s$/.test(text));
+  }
+  assert(describe('Ada', '\u{1F600}'.repeat(100)).endsWith('Z: ' + '\u{1F600}'.repeat(23)));
+});
+
+test('extended status never ends in whitespace; a reason empty after cleaning shows unknown on both surfaces', () => {
+  const at = '2026-11-02T10:45:12.345Z', counts = { blocking_count: 1, warning_count: 0 };
+  const describe = (operator, reason) => flow.statusDescription({ ...extended(4, { operator, at, reason }), ...counts }).description;
+  assert(describe('o'.repeat(128), 'r'.repeat(200)).endsWith('Z'));
+  assert(describe('Ada', 'x'.repeat(46) + ' tail').endsWith('x'.repeat(46)));
+  assert.equal(describe('Ada', '@@'), BASE_NEEDS_FIX + '; round 4 of 3, extended by Ada at 2026-11-02T10:45Z: unknown');
+  const f = fixture(null);
+  try {
+    sealExtended(f, { ...GRANT, reason: '@@' });
+    flow.publish(f.input(), f.options);
+    assert.equal(f.writes[0].fields.description, BASE_NEEDS_FIX + '; round 4 of 3, extended by Ada Lovelace at 2026-11-02T10:45Z: unknown');
+    assert.equal(f.comments[0].body.split('\n')[2], 'round 4 of 3, extended by Ada Lovelace at 2026-11-02T10:45Z: unknown');
+  } finally { f.cleanup(); }
+});
+
+test('extended hostile sealed values are neutralized and cannot break the comment structure', () => {
+  const f = fixture(null);
+  try {
+    const hostile = { operator: '@ada `x` <!-- code-review --> **bold**', at: GRANT.at,
+      reason: 'ping @team <!-- code-review --> `tick` <b>x</b>\u2028\u0085 ' + 'y'.repeat(100) };
+    sealExtended(f, hostile);
+    const result = flow.publish(f.input(), f.options);
+    const lines = f.comments[0].body.split('\n'), line = lines[2];
+    assert.equal(result.comment.ok, true);
+    assert.equal(lines[0], '<!-- code-review -->'); assert.equal(f.comments[0].body.split('<!--').length, 2);
+    assert.equal(lines[1], 'Code review — round 4, scope delta'); assert.equal(lines[3], 'Verdict: needs-fix');
+    assert(line.startsWith('round 4 of 3, extended by ada x !-- code-review -- **bold** at 2026-11-02T10:45Z: ping team'), line);
+    assert(!/[@<>`\u2028\u0085]/.test(line), line);
+    assert(!/[@<>`\u2028\u0085]/.test(f.writes[0].fields.description), f.writes[0].fields.description);
+    assert(f.writes[0].fields.description.length <= 140);
+  } finally { f.cleanup(); }
+  const huge = fixture(null);
+  try {
+    sealExtended(huge, { operator: 'o'.repeat(128), at: GRANT.at, reason: 'r'.repeat(200) });
+    const result = flow.publish(huge.input(), huge.options);
+    assert.equal(result.status.description.length, 140);
+    assert.equal(result.comment.ok, true);
+    assert.equal(huge.comments[0].body.split('\n')[2], 'round 4 of 3, extended by ' + 'o'.repeat(128) + ' at 2026-11-02T10:45Z: ' + 'r'.repeat(200));
+  } finally { huge.cleanup(); }
+});
+
+test('extended value from an older writer with newlines, markup or huge text is neutralized and bounded', () => {
+  const f = fixture(null);
+  const entry = require.cache[require.resolve(path.join(scripts, 'role-artifact.cjs'))], exported = entry.exports;
+  try {
+    sealExtended(f);
+    for (const hostile of [
+      { operator: 'Ada\n-->\n<!-- code-review -->\r\n@all', at: '2026-11-02T10:45:12.345Z', reason: 'one\ntwo\n\n```\n<script>' },
+      { operator: 'o'.repeat(100000), at: '2026-11-02T10:45:12.345Z', reason: 'r'.repeat(100000) },
+      { operator: { toString: () => 'obj\n@x' }, at: '2026-11-02T10:45:12.345Z\n<!--', reason: ['a', 'b\n'] },
+      { operator: '@@<>``', at: '2026-11-02T10:45:12.345Z', reason: ' \u2028 ' }]) {
+      entry.exports = { ...exported, currentCodeReviewVerdict: args => {
+        const verdict = exported.currentCodeReviewVerdict(args); return verdict && { ...verdict, extension: hostile }; } };
+      f.writes.length = 0; f.comments.length = 0;
+      const result = flow.publish(f.input(), f.options), lines = f.comments[0].body.split('\n');
+      assert.equal(result.comment.ok, true);
+      assert(f.writes[0].fields.description.length <= 140 && !/[\n\r@<>`]/.test(f.writes[0].fields.description), f.writes[0].fields.description);
+      assert(f.comments[0].body.length <= 60000);
+      assert.deepEqual([lines[0], lines[1], lines[3]], ['<!-- code-review -->', 'Code review — round 4, scope delta', 'Verdict: needs-fix']);
+      assert(/^round 4 of 3, extended by \S.* at \S+Z: \S/.test(lines[2]) && lines[2].length <= 26 + 128 + 4 + 17 + 2 + 200, lines[2]);
+      assert(!/[@<>`]/.test(lines[2]) && f.comments[0].body.split('<!--').length === 2);
+    }
+  } finally { entry.exports = exported; f.cleanup(); }
+});
+
+test('extended sealed text that fails the hygiene scan refuses the comment and keeps a clean status', () => {
+  for (const [name, extension] of [['reason', { ...GRANT, reason: 'see T-12-03' }], ['operator', { ...GRANT, operator: 'gsd bot' }]]) {
+    const f = fixture(null);
+    try {
+      sealExtended(f, extension);
+      const result = flow.publish(f.input(), f.options);
+      assert.equal(result.comment.ok, false, name); assert.equal(result.comment.action, 'refused', name);
+      assert.equal(result.status.ok, true, name);
+      assert.equal(result.status.description, BASE_NEEDS_FIX, name);
+      assert.equal(f.writes[0].fields.description, BASE_NEEDS_FIX, name);
+      assert.equal(f.writes.length, 1); assert.equal(f.comments.length, 0);
+    } finally { f.cleanup(); }
+  }
 });
 
 test('D37 comment stays within 60000 characters and names omitted findings', () => {
