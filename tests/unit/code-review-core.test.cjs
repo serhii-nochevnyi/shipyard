@@ -554,3 +554,54 @@ test('resolveCitation normalizes each source line once per source, not once per 
   } finally { String.prototype.normalize = original; }
   assert.ok(normalizations <= lines.length + citations * 3, `normalizations=${normalizations}`);
 });
+
+const GRANT = { operator: 'operator', at: '2026-11-02T10:00:00.000Z', reason: 'one more round' };
+
+test('validateReviewExtension accepts a well-formed value only above the per-PR cap', () => {
+  for (const round of [4, 5]) assert.doesNotThrow(() => core.validateReviewExtension(GRANT, round));
+  for (const round of [1, 2, 3]) {
+    assert.doesNotThrow(() => core.validateReviewExtension(null, round));
+    assert.doesNotThrow(() => core.validateReviewExtension(undefined, round));
+    assert.throws(() => core.validateReviewExtension(GRANT, round), code('INVALID_RESULT'));
+  }
+  for (const round of [4, 5]) for (const missing of [null, undefined])
+    assert.throws(() => core.validateReviewExtension(missing, round), code('INVALID_RESULT'));
+});
+
+test('validateReviewExtension refuses missing and extra keys, bad strings and an unparsable time', () => {
+  const bad = [
+    ...['operator', 'at', 'reason'].map(key => Object.fromEntries(Object.entries(GRANT).filter(([name]) => name !== key))),
+    { ...GRANT, extra: 'x' }, [], 'text', 7,
+    { ...GRANT, operator: '' }, { ...GRANT, operator: '   ' }, { ...GRANT, operator: 'o'.repeat(129) },
+    { ...GRANT, reason: '' }, { ...GRANT, reason: 'r'.repeat(201) }, { ...GRANT, reason: 7 },
+    { ...GRANT, operator: 'op\nerator' }, { ...GRANT, reason: 'one\u0000more' }, { ...GRANT, reason: 'one\u007fmore' },
+    { ...GRANT, at: 'not a time' }, { ...GRANT, at: '2026-11-02T10:00:00Z' }, { ...GRANT, at: '2026-11-02T10:00:00.000+02:00' },
+    { ...GRANT, at: '2026-13-45T10:00:00.000Z' }, { ...GRANT, at: 7 },
+  ];
+  for (const value of bad) assert.throws(() => core.validateReviewExtension(value, 4),
+    error => error.code === 'INVALID_RESULT' && error.message === 'invalid review extension', JSON.stringify(value));
+  assert.doesNotThrow(() => core.validateReviewExtension({ ...GRANT, operator: 'o'.repeat(128), reason: 'r'.repeat(200) }, 5));
+});
+
+test('normalizeResult echoes the extension of an extended round and adds no key to rounds 1 to 3', () => {
+  for (const round of [4, 5]) assert.deepEqual(review(raw(), { round, scope: 'delta', extension: GRANT }).review_extension, GRANT);
+  for (const round of [1, 2, 3]) {
+    for (const extension of [undefined, null])
+      assert.equal(Object.hasOwn(review(raw(), { round, scope: round === 1 ? 'full' : 'delta', extension }), 'review_extension'), false);
+    assert.throws(() => review(raw(), { round, scope: round === 1 ? 'full' : 'delta', extension: GRANT }), code('INVALID_RESULT'));
+  }
+  for (const round of [4, 5]) for (const extension of [undefined, null, { ...GRANT, extra: 1 }])
+    assert.throws(() => review(raw(), { round, scope: 'delta', extension }), code('INVALID_RESULT'));
+});
+
+test('assemblePacket adds review_extension only for a non-null round extension', () => {
+  const identity = { id: 'subject', repository: '/repo', pr: 1, head: 'h', base_commit: 'b', merge_base: 'm', base_tree: 't', ticket_set_digest: 'd' };
+  const options = { subject: 'subject', identity, exactDiff: '', integrationBase: 'main', ticketSet: [], planAcceptance: [], priorFindings: [],
+    round: { round: 1, scope: 'full' }, changeMetadata: {}, referenceDigest: 'a'.repeat(64) };
+  const plain = core.assemblePacket(options);
+  assert.equal(Object.hasOwn(plain, 'review_extension'), false);
+  assert.deepEqual(core.assemblePacket({ ...options, round: { ...options.round, extension: null } }), plain);
+  const extended = core.assemblePacket({ ...options, round: { round: 4, scope: 'delta', priorHead: 'p', extension: GRANT } });
+  assert.deepEqual(extended.review_extension, GRANT);
+  assert.deepEqual(Object.keys(extended).filter(key => !Object.hasOwn(plain, key)), ['review_extension']);
+});

@@ -2783,9 +2783,9 @@ function completeCodeReviewFinding(finding, index, id) {
 }
 
 function codeReviewManifestFields(source) {
-  return Object.fromEntries(['review_round', 'review_scope', 'review_completeness', 'contract_digest', 'reuse_key', 'prior_head',
+  return { ...Object.fromEntries(['review_round', 'review_scope', 'review_completeness', 'contract_digest', 'reuse_key', 'prior_head',
     'dispositions_digest', 'disagreement_suppressed', 'citations_unresolved', 'partitions_total', 'partitions_not_reviewed']
-    .map(key => [key, source[key]]));
+    .map(key => [key, source[key]])), ...(source.review_extension ? { review_extension: source.review_extension } : {}) };
 }
 
 function codeReviewPlanningContext(packet) {
@@ -2996,7 +2996,8 @@ function authenticateCodeReviewAnswer({ trusted, result, evidence, identity, ret
       fail('REVIEW_NATIVE_INVALID', 'original carried citation differs from reviewed source');
   }
   authenticateCarriedCodeReviewFindings({ trusted, identity, packet, prior, readSource, state: lineage });
-  const options = { round: context.review_round, scope: context.review_scope, priorFindings: prior, readSource };
+  const options = { round: context.review_round, scope: context.review_scope, priorFindings: prior, readSource,
+    extension: context.review_extension ?? null };
   const parts = context.parts ?? [];
   if (parts.length) core.assertPathPartition(context.change_metadata.changes, parts);
   const normalized = core.normalizeFinal(withoutHostTicketSet(original), parts, options);
@@ -3101,6 +3102,7 @@ function codeReviewResultData(result, metadata, input, identity, ticketSet) {
       || (result.prior_head !== null && !/^[a-f0-9]{40}$/.test(result.prior_head || ''))
       || (result.review_scope === 'delta' && result.prior_head === null))
     fail('INVALID_RESULT', 'invalid code-review round, scope or prior_head');
+  core.validateReviewExtension(result.review_extension, result.review_round);
   if (!/^[a-f0-9]{64}$/.test(result.contract_digest || '')
       || result.reuse_key !== core.reuseKey({ head: identity.head, baseCommit: identity.base_commit, contractDigest: result.contract_digest })
       || (result.dispositions_digest !== null && !/^[a-f0-9]{64}$/.test(result.dispositions_digest || '')))
@@ -3416,7 +3418,7 @@ function currentCodeReviewVerdict({ worktreePath, pr, head, baseName, baseCommit
     currentDispositions = expectedDispositions;
     current = { authenticated: true, verdict: verdict.verdict, blocking_count: verdict.blocking_count,
       review_completeness: verdict.review_completeness, round: verdict.review_round, scope: verdict.review_scope,
-      prior_head: verdict.prior_head, head, base_commit: baseCommit, subject: binding.subject, dispatch_id: manifest.producer_dispatch,
+      prior_head: verdict.prior_head, extension: manifest.review_extension ?? null, head, base_commit: baseCommit, subject: binding.subject, dispatch_id: manifest.producer_dispatch,
       artifact_ref: verdict.artifact_ref, artifact_digest: verdict.artifact_digest, findings: verdict.findings,
       disagreement_suppressed: verdict.disagreement_suppressed, citations_unresolved: verdict.citations_unresolved,
       partitions_not_reviewed: verdict.partitions_not_reviewed };
