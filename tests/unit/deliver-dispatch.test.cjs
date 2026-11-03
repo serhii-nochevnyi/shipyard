@@ -1193,6 +1193,52 @@ for (const jira of [null, 'PRJ-42']) test(`default hold guards phase architectur
   } finally { f.cleanup(); }
 });
 
+test('R-13 an arch-review build refused at the round limit names the limit hint and no other refusal does', async () => {
+  await unreadableAuthorityRun;
+  await detachedChildRun;
+  const f = withOriginalPlanning(require('../fixtures/code-review/artifact-fixture.cjs').fixture());
+  const artifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  try {
+    f.graph.epics = { 52: { branch: f.branch, phaseDir: f.phase, repos: [null], jira: null } };
+    Object.assign(f.graph.tickets['T-52-01'], { epic: f.branch, branch: 'feat/review-ticket', repo: null, phaseDir: f.phase });
+    writeJson(path.join(f.root, '.planning/config.json'), { git: { base_branch: 'main' } });
+    f.writeGraph();
+    const live = () => ({ number: 52, state: 'OPEN', headRefName: f.branch, headRefOid: f.git(['rev-parse', 'HEAD']),
+      baseRefName: 'main', baseRefOid: f.base });
+    const options = { cwd: f.root, graphDir: f.graphDir, getPullRequest: live };
+    const args = ['arch-review', f.phase, '--phase', '52', '--pr', '52', '--runtime', 'claude'];
+    const refusal = () => { try { deliverDispatch.build(args, options); } catch (error) { return error; } throw new Error('build was not refused'); };
+    const owed = refusal();
+    assert.match(owed.message, /phase code review is owed/);
+    assert.strictEqual(owed.details, undefined);
+    const finding = { id: 'fix-source', rule: 'source-error', severity: 'BLOCKER', path: 'source.js', line: 1,
+      line_text: fs.readFileSync(path.join(__dirname, '../fixtures/code-review/source.js'), 'utf8').split('\n')[0],
+      summary: 'Repair the failing source', failure_scenario: 'A caller receives the wrong result.',
+      fix_ticket: { title: 'Repair source', scope: 'Correct the cited failure', files: ['source.js'], depends_on: [] } };
+    let prior = null;
+    for (let round = 1; round <= 3; round++) {
+      const binding = f.advance(round);
+      artifact.sealJudgment(f.input(binding, round, prior, { review_completeness: 'complete', limitations: [],
+        unresolved_sources: [], findings: [finding], dispositions: [] }));
+      prior = f.git(['rev-parse', 'HEAD']);
+    }
+    f.advance(4);
+    const limited = refusal();
+    assert.strictEqual(limited.code, 'BUILD_REFUSED');
+    assert.strictEqual(limited.field, '--pr');
+    assert.deepStrictEqual(limited.details, { hint_code: 'CODE_REVIEW_ROUND_LIMIT' });
+    assert.match(limited.message, /three rounds/);
+    const cli = spawnSync(process.execPath, [path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), 'build', ...args],
+      { cwd: f.root, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: f.graphDir } });
+    assert.strictEqual(cli.status, 2, cli.stderr);
+    const [message, hint] = cli.stderr.trim().split('\n');
+    assert.match(message, /three rounds/);
+    assert.match(hint, /^hint\[BUILD_REFUSED\]: .* remedy: .*phase-code-review\.cjs extend --phase N --pr P --reason "why" --confirm extend-review-round/);
+    assert.doesNotMatch(cli.stderr, /does not name/);
+  } finally { f.cleanup(); }
+});
+
 test('fix builds refuse caller-supplied launch fields even when the required file is given', () => {
   for (const [role, required] of [['review-fix', '--review-file'], ['ci-fix', '--failure-file']])
     for (const field of ['--model', '--effort', '--prompt', '--prepared'])

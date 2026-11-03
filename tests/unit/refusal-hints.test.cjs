@@ -290,3 +290,24 @@ test('an ARTIFACT_IDENTITY_MISMATCH refusal has its own hint and a re-run remedy
   assert.notEqual(hintFor('ARTIFACT_IDENTITY_MISMATCH'), hintFor(undefined));
   assert.match(formatHint('ARTIFACT_IDENTITY_MISMATCH'), /^hint\[ARTIFACT_IDENTITY_MISMATCH\]: .+ — remedy: Re-run the role .+$/);
 });
+
+test('R-13 the round-limit, refused-extension and usage refusals each have their own named hint', () => {
+  for (const code of ['CODE_REVIEW_ROUND_LIMIT', 'EXTENSION_REFUSED', 'USAGE']) {
+    assert.ok(Object.isFrozen(HINTS[code]), code);
+    assert.notEqual(hintFor(code), hintFor(undefined), code);
+    assert.match(formatHint(code), new RegExp(`^hint\\[${code}\\]: .+ — remedy: .+$`));
+  }
+  const limit = hintForError({ code: 'CODE_REVIEW_ROUND_LIMIT' });
+  assert.match(limit, /phase-code-review\.cjs extend --phase N --pr P --reason "why" --confirm extend-review-round/);
+  assert.match(limit, /five rounds in total at most/);
+  assert.match(limit, /code_review to report, which applies to the whole project until it is set back to hold/);
+  assert.match(hintForError({ code: 'EXTENSION_REFUSED' }), /operator shell.*below five rounds.*fixes being pushed first.*delta/);
+  assert.match(hintForError({ code: 'USAGE' }), /does not match the usage printed above/);
+});
+
+test('R-13 a build refusal that names the limit hint prints it under the BUILD_REFUSED label', () => {
+  const named = hintForError({ code: 'BUILD_REFUSED', field: '--pr', details: { hint_code: 'CODE_REVIEW_ROUND_LIMIT' } });
+  assert.match(named, /^hint\[BUILD_REFUSED\]: .*phase-code-review\.cjs extend /);
+  assert.equal(named, hintForError({ code: 'CODE_REVIEW_ROUND_LIMIT' }).replace('hint[CODE_REVIEW_ROUND_LIMIT]', 'hint[BUILD_REFUSED]'));
+  assert.doesNotMatch(hintForError({ code: 'BUILD_REFUSED', field: '--pr' }), /phase-code-review\.cjs extend/);
+});

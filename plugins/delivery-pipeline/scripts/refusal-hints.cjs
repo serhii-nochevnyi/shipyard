@@ -170,6 +170,18 @@ const HINTS = Object.freeze({
     hint: 'The repository identity could not be established.',
     remedy: 'Check that git can resolve the common directory of this worktree and that its real path contains no ";" or control character, then re-run.',
   }),
+  CODE_REVIEW_ROUND_LIMIT: Object.freeze({
+    hint: 'The phase code review has used every round it may run for this PR.',
+    remedy: 'Read the findings on the PR, then either push the fixes and run node {bundle}/scripts/phase-code-review.cjs extend --phase N --pr P --reason "why" --confirm extend-review-round from the operator shell to allow one more round bound to the new head (five rounds in total at most), or set delivery_pipeline.code_review to report, which applies to the whole project until it is set back to hold.',
+  }),
+  EXTENSION_REFUSED: Object.freeze({
+    hint: 'The extension was not recorded.',
+    remedy: 'Read the printed reason, which names the failed condition: the operator shell (a role-hosted child cannot grant a round), the limit being reached and below five rounds, the fixes being pushed first (a head that already has a counted review is not at the limit), a delta being possible, or a plain reason of at most 200 bytes with a git user.name of at most 128 bytes. Fix it and re-run.',
+  }),
+  USAGE: Object.freeze({
+    hint: 'The command line does not match the usage printed above.',
+    remedy: 'Fix the arguments to match it and re-run.',
+  }),
 });
 
 const LAUNCH_CODES = Object.freeze(["ARCHIVE_AUTHORITY_INVALID", "ARCHIVE_AUTHORITY_REQUIRED", "ARCHIVE_AUTHORITY_BUSY", "RUNTIME_CAPABILITY_MISSING", "LEGACY_WRITER_STATE", "UNKNOWN_RUNTIME", "AMBIGUOUS_RUNTIME", "INVALID_STORE", "ADR_REQUIRED", "ADR_PATH_INVALID", "ADR_UNAVAILABLE", "ADR_CHANGED", "ADR_DIGEST_MISMATCH", "DECOMPOSITION_SUBJECT_INVALID", "ENV_CONFLICT", "BUNDLE_MANIFEST_INVALID", "CAPABILITY_EVIDENCE_STALE", "CAPABILITY_SNAPSHOT_AGED", "LEGACY_HISTORY_UNKNOWN_MEMBER", "REPOSITORY_IDENTITY_INVALID", "REFERENCE_UNAVAILABLE", "RUNTIME_UNAVAILABLE", "STALE_GENERATED_AGENT", "CODEX_CONFIG_FIX", "CODEX_GENERATED_AGENT_FIX"]);
