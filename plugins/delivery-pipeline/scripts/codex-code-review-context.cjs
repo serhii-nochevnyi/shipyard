@@ -204,7 +204,7 @@ function collect(scope, options) {
   if (Buffer.byteLength(JSON.stringify(packet)) > CODE_REVIEW_MATERIAL_MAX_BYTES)
     fail('complete packet exceeds its material bytes per launch bound', 'CONTEXT_PACKET_OVER_BOUND');
   const serialized = JSON.stringify(packets.encodeUniqueContent(packet));
-  const materialBytes = Buffer.byteLength(serialized) + Buffer.byteLength(diff);
+  const materialBytes = Buffer.byteLength(serialized) + (options.semanticReview ? 0 : Buffer.byteLength(diff));
   if (materialBytes > CODE_REVIEW_MATERIAL_MAX_BYTES)
     fail('complete material exceeds its material bytes per launch bound', 'CONTEXT_PACKET_OVER_BOUND');
   for (const pin of [graphFile, stateFile, ...plans])
@@ -563,6 +563,8 @@ function semanticSource(value, runtime = 'codex') {
   const changes = require('./codex-arch-review-context.cjs').focusedChangeInventory(
     packet.role_context.change_metadata.name_status, packet.role_context.change_metadata.numstat);
   packet.product_sources = [];
+  packet.product_source_format = 'unique-content-references.v1';
+  const contents = new Map();
   const sources = new Map();
   for (const change of changes) for (const [relative, revision] of [
     [change.old_path, prepared.mergeBase], [change.new_path, prepared.canonical.head]]) {
@@ -578,9 +580,17 @@ function semanticSource(value, runtime = 'codex') {
   for (const { relative, revision } of sources.values()) {
     if (require('./development-artifacts.cjs').isDevelopmentArtifact(relative)) continue;
     const content = git(options, prepared.canonical.worktree, ['show', revision + ':' + relative]);
-    if (!content.includes('\0')) packet.product_sources.push({ path: relative, revision, content,
-      bytes: Buffer.byteLength(content), sha256: digest(content) });
+    if (!content.includes('\0')) {
+      const sha256 = digest(content), bytes = Buffer.byteLength(content);
+      const blob_oid = git(options, prepared.canonical.worktree, ['rev-parse', revision + ':' + relative]).trim();
+      if (!/^[a-f0-9]{40}$/.test(blob_oid)
+          || crypto.createHash('sha1').update('blob ' + bytes + '\0').update(content).digest('hex') !== blob_oid)
+        fail('product source blob differs from its complete bytes', 'STALE_CONTEXT');
+      contents.set(sha256, { sha256, bytes, content });
+      packet.product_sources.push({ path: relative, revision, blob_oid, bytes, sha256, content_ref: sha256 });
+    }
   }
+  packet.product_source_contents = [...contents.values()].sort((a, b) => a.sha256.localeCompare(b.sha256));
   const selection = require('./model-policy.cjs').resolveDispatch({ runtime, role: 'code-review', signals: prepared.signals });
   let instructions;
   if (runtime === 'codex') instructions = require('./codex-arch-review-context.cjs').instructionEvidence(
@@ -618,6 +628,20 @@ function recheckSemantic(snapshot, options = {}) {
       || digest(stable(packet)) !== snapshot.original_packet_sha256 || packet.role !== 'code-review'
       || packet.subject !== snapshot.subject || packet.source_revision !== identity.head)
     fail('semantic code-review source identity differs', 'STALE_CONTEXT');
+  if (packet.product_source_format === 'unique-content-references.v1') {
+    const trees = new Map();
+    for (const source of packet.product_sources) {
+      if (![identity.head, identity.merge_base].includes(source.revision))
+        fail('product source revision differs from the frozen review', 'STALE_CONTEXT');
+      if (!trees.has(source.revision)) trees.set(source.revision, new Map(
+        git(options, identity.worktree, ['ls-tree', '-r', '-z', source.revision]).split('\0').filter(Boolean).map(row => {
+          const match = /^100(?:644|755) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);
+          return match ? [match[2], match[1]] : [null, null];
+        })));
+      if (trees.get(source.revision).get(source.path) !== source.blob_oid)
+        fail('product source Git association differs', 'STALE_CONTEXT');
+    }
+  }
   if (fs.existsSync(path.join(identity.project, '.planning/config.json')) !== identity.config_present)
     fail('code-review configuration membership moved', 'STALE_CONTEXT');
   packets.authenticatedPlanningRoot(identity.worktree, packet.role_context.planning_reference);
