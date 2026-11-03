@@ -918,6 +918,7 @@ test('both native profiles deny the entire trusted archive namespace across work
   try {
     const artifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
     const namespace = artifacts.archiveAuthorityNamespace();
+    const publications = require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs').publicationsRoot();
     assert(artifacts.archiveAuthorityDirectory(first.root).startsWith(namespace + path.sep));
     assert(artifacts.archiveAuthorityDirectory(second.root).startsWith(namespace + path.sep));
     const cases = [
@@ -938,12 +939,13 @@ test('both native profiles deny the entire trusted archive namespace across work
       if (runtime === 'codex') {
         const filesystem = args.find(arg => arg.startsWith('permissions.shipyard-runtime.filesystem='));
         assert(filesystem.includes(JSON.stringify(namespace) + '="deny"'));
+        assert(filesystem.includes(JSON.stringify(publications) + '="deny"'));
         assert(filesystem.includes('.gnupg'));
       } else {
         const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
         assert.equal(args[args.indexOf('--setting-sources') + 1], '');
-        assert.deepEqual(settings.sandbox.filesystem.denyRead, [namespace]);
-        assert.deepEqual(settings.sandbox.filesystem.denyWrite, [namespace]);
+        assert.deepEqual(settings.sandbox.filesystem.denyRead, [namespace, publications]);
+        assert.deepEqual(settings.sandbox.filesystem.denyWrite, [namespace, publications]);
         assert.deepEqual(settings.sandbox.filesystem.allowWrite, [second.root]);
         assert.equal(settings.sandbox.allowUnsandboxedCommands, false);
         const glob = '//' + namespace.split(path.sep).filter(Boolean).join('/') + '/**';
