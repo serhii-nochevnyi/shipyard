@@ -576,7 +576,7 @@ test('validateReviewExtension refuses missing and extra keys, bad strings and an
     { ...GRANT, reason: '' }, { ...GRANT, reason: 'r'.repeat(201) }, { ...GRANT, reason: 7 },
     { ...GRANT, operator: 'op\nerator' }, { ...GRANT, reason: 'one\u0000more' }, { ...GRANT, reason: 'one\u007fmore' },
     { ...GRANT, at: 'not a time' }, { ...GRANT, at: '2026-11-02T10:00:00Z' }, { ...GRANT, at: '2026-11-02T10:00:00.000+02:00' },
-    { ...GRANT, at: '2026-13-45T10:00:00.000Z' }, { ...GRANT, at: 7 },
+    { ...GRANT, at: '2026-13-45T10:00:00.000Z' }, { ...GRANT, at: '2026-02-30T10:00:00.000Z' }, { ...GRANT, at: '2026-11-02T24:00:00.000Z' }, { ...GRANT, at: 7 },
   ];
   for (const value of bad) assert.throws(() => core.validateReviewExtension(value, 4),
     error => error.code === 'INVALID_RESULT' && error.message === 'invalid review extension', JSON.stringify(value));
@@ -592,6 +592,9 @@ test('normalizeResult echoes the extension of an extended round and adds no key 
   }
   for (const round of [4, 5]) for (const extension of [undefined, null, { ...GRANT, extra: 1 }])
     assert.throws(() => review(raw(), { round, scope: 'delta', extension }), code('INVALID_RESULT'));
+  const model = { ...GRANT, operator: 'model-operator', reason: 'supplied by the model' };
+  assert.deepEqual(review({ ...raw(), review_extension: model }, { round: 4, scope: 'delta', extension: GRANT }).review_extension, GRANT);
+  assert.throws(() => review({ ...raw(), review_extension: model }, { round: 4, scope: 'delta' }), code('INVALID_RESULT'));
 });
 
 test('assemblePacket adds review_extension only for a non-null round extension', () => {
