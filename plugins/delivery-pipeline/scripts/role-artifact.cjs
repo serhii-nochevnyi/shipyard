@@ -3096,7 +3096,7 @@ function codeReviewResultData(result, metadata, input, identity, ticketSet) {
       || (result.verdict === 'needs-fix' && (findings.blocking_count === 0 || result.review_completeness !== 'complete'))
       || (result.verdict === 'incomplete' && result.review_completeness !== 'incomplete'))
     fail('JUDGMENT_OUTCOME_MISMATCH', 'code-review verdict differs from completeness and findings');
-  if (!Number.isSafeInteger(result.review_round) || result.review_round < 1 || result.review_round > core.ROUND_CAP
+  if (!Number.isSafeInteger(result.review_round) || result.review_round < 1 || result.review_round > core.ROUND_CEILING
       || !['full', 'delta'].includes(result.review_scope)
       || (result.prior_head !== null && !/^[a-f0-9]{40}$/.test(result.prior_head || ''))
       || (result.review_scope === 'delta' && result.prior_head === null))
@@ -3140,7 +3140,7 @@ function codeReviewResultData(result, metadata, input, identity, ticketSet) {
 
 function authenticatedCodeReviewRecord(worktree, record, repository, lineage = codeReviewReplayState()) {
   const key = worktree + ':' + record.dispatch_id;
-  if (lineage.active.has(record.dispatch_id) || lineage.active.size >= require('./code-review-core.cjs').ROUND_CAP)
+  if (lineage.active.has(record.dispatch_id) || lineage.active.size >= require('./code-review-core.cjs').ROUND_CEILING)
     fail('REVIEW_NATIVE_INVALID', 'original code-review source lineage is cyclic or exceeds its bound');
   if (lineage.memo.has(key)) return lineage.memo.get(key);
   lineage.active.add(record.dispatch_id);

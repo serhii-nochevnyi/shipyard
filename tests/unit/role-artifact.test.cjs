@@ -43,6 +43,9 @@ const d37Case = name => [
   'code-review lineage survives real fix-ticket membership changes and keeps reuse exact',
   'sealed disagreements retain their original target through three rounds and twin ordinal shifts',
   'code-review reuse refuses a moved base or reference contract and ticket-form subject',
+  'code-review five-deep carried needs-fix lineage seals and authenticates on the Claude runtime',
+  'code-review five-deep carried needs-fix lineage seals and authenticates on the Codex runtime',
+  'code-review rounds 1 to 3 keep the sealed result and manifest shape',
 ].includes(name) || name.startsWith('existing-format foreign native input retains original planning pins: ');
 let pendingCase = Promise.resolve();
 function test(name, callback) {
@@ -2046,6 +2049,101 @@ test('sealed disagreements retain their original target through three rounds and
   }
 });
 
+const SHAPE_RESULT_KEYS = [
+  'base_commit', 'base_tree', 'blocking_count', 'citations_unresolved', 'context_digest', 'contract_digest',
+  'coverage', 'demoted_for_evidence', 'disagreement_suppressed', 'dispositions', 'dispositions_digest',
+  'finding_count', 'findings', 'head', 'id', 'info_dropped', 'launch_digest', 'limitations', 'merge_base', 'pr',
+  'prior_head', 'repository', 'reuse_key', 'review_completeness', 'review_contract', 'review_round', 'review_scope',
+  'ticket_set', 'ticket_set_digest', 'unresolved_sources', 'verdict'
+];
+const SHAPE_SEALED_KEYS = [
+  'artifactDigest', 'artifactRef', 'artifact_digest', 'artifact_kind', 'artifact_path', 'artifact_ref', 'envelope',
+  'evidenceIndex', 'evidence_index', 'findingsIndex', 'findings_index', 'pr', 'role', 'schema', 'subject'
+];
+const SHAPE_MANIFEST_KEYS = [
+  'artifact_kind', 'base', 'base_commit', 'base_tree', 'boundary_subject', 'citations_unresolved', 'contract_digest',
+  'current_review', 'disagreement_suppressed', 'dispatch_context', 'dispatch_id', 'dispositions_digest', 'envelope',
+  'files', 'head', 'head_tree', 'merge_base', 'merge_base_tree', 'partitions_not_reviewed', 'partitions_total',
+  'policy_hash', 'pr', 'prior_head', 'producer_dispatch', 'producer_dispatch_id', 'producer_launch', 'repository',
+  'repository_identity', 'repository_realpath', 'reuse_key', 'review_completeness', 'review_round', 'review_scope',
+  'reviewed', 'role', 'runtime', 'schema', 'source_evidence_path', 'subject', 'ticket_set_digest', 'version',
+  'worktree', 'worktree_realpath'
+];
+
+function sealCarriedLineage(f, rounds, options = {}) {
+  const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const readSource = file => fs.readFileSync(path.join(f.root, file), 'utf8');
+  const history = () => roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root, repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
+  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/code-review/review.json'), 'utf8'));
+  const sealedRounds = [];
+  for (let round = 1; round <= rounds; round++) {
+    const binding = f.advance(round);
+    let input;
+    if (round === 1) input = fixtures.retainPlanningInput(f, f.input(binding, 1, null, { ...raw, findings: [raw.findings[0]] }), f.root, null, options);
+    else {
+      const prior = history().at(-1);
+      const priorFindings = core.carryPriorFindings({ priorFindings: prior, deltaDiff: f.git(['diff', '--unified=50', prior.head, 'HEAD']), readSource });
+      const blank = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [],
+        dispositions: priorFindings.map(finding => ({ ref: finding.ref, disposition: 'unresolved', justification: 'still fails' })) };
+      input = f.input(binding, round, prior.head, { ...blank, dispositions: [] });
+      fixtures.setOriginalReview(input, blank, priorFindings);
+      fixtures.retainPlanningInput(f, input, f.root, null, options);
+    }
+    const sealed = roleArtifact.sealJudgment(input);
+    const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+    sealedRounds.push({ input, sealed, validated });
+  }
+  return { sealedRounds, history };
+}
+
+function assertFiveDeepLineage(options) {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const f = reviewFixture();
+  try {
+    const { history, sealedRounds } = sealCarriedLineage(f, 5, options);
+    const authenticated = () => history().map(verdict => [verdict.review_round, verdict.answer_authenticated]);
+    const allFive = [1, 2, 3, 4, 5].map(round => [round, true]);
+    assert.deepEqual(authenticated(), allFive);
+    const last = sealedRounds.at(-1).input;
+    assert.throws(() => roleArtifact.sealJudgment({ ...last, result: { ...last.result, review_round: 6 } }),
+      error => error.code === 'INVALID_RESULT' && error.message === 'invalid code-review round, scope or prior_head');
+    const current = f.lookup();
+    assert.equal(current.round, 5);
+    assert.equal(current.verdict, 'needs-fix');
+    const prior = history().at(-1);
+    assert.throws(() => f.input(f.advance(6), 6, prior.head, { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [] }),
+      error => error.code === 'INVALID_RESULT');
+    assert.equal(history().length, 5);
+    const file = path.join(roleArtifact.archiveAuthorityDirectory(f.root), 'catalogue.json');
+    const envelope = JSON.parse(fs.readFileSync(file)), ids = Object.keys(envelope.payload.records);
+    assert.equal(ids.length, 5);
+    for (const start of [3, 4, 5]) {
+      const order = [...ids.slice(0, start).reverse(), ...ids.slice(start)];
+      const records = Object.fromEntries(order.map(id => [id, envelope.payload.records[id]]));
+      fs.writeFileSync(file, JSON.stringify({ ...envelope, payload: { ...envelope.payload, records } }));
+      assert.deepEqual(authenticated(), allFive, 'a cold read starting at round ' + start);
+    }
+  } finally { f.cleanup(); }
+}
+
+test('code-review five-deep carried needs-fix lineage seals and authenticates on the Claude runtime', () => assertFiveDeepLineage({}));
+test('code-review five-deep carried needs-fix lineage seals and authenticates on the Codex runtime', () => assertFiveDeepLineage({ runtime: 'codex' }));
+
+test('code-review rounds 1 to 3 keep the sealed result and manifest shape', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const f = reviewFixture();
+  try {
+    const { sealedRounds } = sealCarriedLineage(f, 3);
+    for (const { input, sealed, validated } of sealedRounds) {
+      assert.deepEqual(Object.keys(input.result).sort(), SHAPE_RESULT_KEYS);
+      assert.deepEqual(Object.keys(sealed).sort(), SHAPE_SEALED_KEYS);
+      assert.deepEqual(Object.keys(validated.manifest).sort(), SHAPE_MANIFEST_KEYS);
+    }
+  } finally { f.cleanup(); }
+});
+
 test('code-review reuse refuses a moved base or reference contract and ticket-form subject', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const f = withOriginalPlanning(reviewFixture());
@@ -2318,6 +2416,6 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
   }
 });
 
-assert.equal(d37Selected, 6, 'exact role-artifact D37 registration');
+assert.equal(d37Selected, 9, 'exact role-artifact D37 registration');
 assert.equal(reuseSelected, 1, 'exact role-artifact reuse registration');
 done();

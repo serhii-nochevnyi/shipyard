@@ -194,7 +194,7 @@ function normalizeFinal(result, parts, options) {
 function normalizeResult(result, { round, scope, priorFindings = [], readSource } = {}) {
   if (!object(result) || !Array.isArray(result.findings) || result.findings.length > 128)
     fail('INVALID_RESULT', 'review requires at most 128 findings');
-  if (!positive(round) || round > ROUND_CAP || !['full', 'delta'].includes(scope)) fail('INVALID_RESULT', 'invalid review round or scope');
+  if (!positive(round) || round > ROUND_CEILING || !['full', 'delta'].includes(scope)) fail('INVALID_RESULT', 'invalid review round or scope');
   const limitations = boundedList(result.limitations, 'limitations');
   const unresolvedSources = boundedList(result.unresolved_sources, 'unresolved_sources');
   if (!['complete', 'incomplete'].includes(result.review_completeness)) fail('INVALID_RESULT', 'review_completeness must be complete or incomplete');
