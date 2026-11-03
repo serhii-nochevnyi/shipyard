@@ -272,6 +272,58 @@ test('rounds two and three admit their exact sealed archives and fourth refuses 
   } finally { f.cleanup(); }
 });
 
+function grantExtension(f, overrides) {
+  const record = { head: f.pr.headRefOid, base_commit: f.pr.baseRefOid, operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass', ...overrides };
+  require(path.join(scripts, 'phase-code-review.cjs')).appendExtension({
+    repository: target.repositoryIdentity(f.root), repo: null, pr: f.pr.number, worktree: f.root, mode: { project_root: f.project } }, record);
+  return { operator: record.operator, at: record.created_at, reason: record.reason };
+}
+
+function sealThreeRounds(f) {
+  for (let n = 1; n <= 3; n++) {
+    if (n > 1) f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), '\n'));
+    const r = review(f);
+    const manifest = JSON.parse(fs.readFileSync(r.result.artifact.ref));
+    for (const value of [r.value.prepared.packet.role_context, r.result.result, manifest]) assert.equal(Object.hasOwn(value, 'review_extension'), false);
+  }
+}
+
+test('code-review extended round seals the operator record for rounds 4 and 5 and leaves rounds 1 to 3 without one', () => {
+  const f = fixture();
+  try {
+    sealThreeRounds(f);
+    for (const [round, operator] of [[4, 'Ada'], [5, 'Grace']]) {
+      f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), '\n'));
+      const extension = grantExtension(f, { operator, reason: `pass ${round}` });
+      const r = review(f);
+      assert.equal(r.value.prepared.packet.role_context.review_round, round);
+      assert.deepEqual(r.value.prepared.packet.role_context.review_extension, extension);
+      assert.deepEqual(r.result.result.review_extension, extension);
+      assert.deepEqual(JSON.parse(fs.readFileSync(r.result.artifact.ref)).review_extension, extension);
+      const current = artifact.currentCodeReviewVerdict({ worktreePath: f.root, pr: f.pr.number, head: f.pr.headRefOid,
+        baseName: f.pr.baseRefName, baseCommit: f.pr.baseRefOid, graphDir: f.graphDir, headBranch: f.pr.headRefName });
+      assert.equal(current.round, round);
+      assert.deepEqual(current.extension, extension);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('code-review extended round refuses a reviewer-supplied review_extension, null or not, from the host', () => {
+  const f = fixture();
+  const supplied = [null, { operator: 'model', at: '2026-11-03T00:00:00.000Z', reason: 'self granted' }];
+  const refuse = value => assert.throws(() => review(f, raw => { raw.review_extension = value; }),
+    error => error.code === 'INVALID_RESULT' && /reserved to the host/.test(error.message));
+  try {
+    for (const value of supplied) refuse(value);
+    assert.equal(artifact.authenticatedArchivePins(f.root).length, 0);
+    sealThreeRounds(f);
+    f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), '\n'));
+    const extension = grantExtension(f);
+    for (const value of [...supplied, extension]) refuse(value);
+    assert.deepEqual(review(f).result.result.review_extension, extension);
+  } finally { f.cleanup(); }
+});
+
 function reverseReviewKeys(value) {
   if (Array.isArray(value)) return value.map(reverseReviewKeys);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).reverse()

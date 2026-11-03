@@ -2489,6 +2489,60 @@ test('code-review rounds 2 and 3 authenticate previous sealed archives and refus
   } finally { cleanupFixture(fixture); }
 });
 
+async function sealThreeRounds(fixture, seen = []) {
+  for (let round = 1; round <= 3; round++) {
+    if (round > 1) { write(fixture.root, 'src/role.txt', `fixed change ${round}\n`); codeReviewCommit(fixture); }
+    const result = await runCodeReview(fixture, { onLaunch(prompt) { seen.push(packetFromPrompt(prompt).role_context); } });
+    const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
+    for (const value of [seen.at(-1), result.result, manifest]) assert.equal(Object.hasOwn(value, 'review_extension'), false);
+  }
+}
+
+function grantExtension(fixture, overrides) {
+  const record = { head: fixture.head, base_commit: fixture.base, operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass', ...overrides };
+  require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs').appendExtension({
+    repository: reviewTargets.repositoryIdentity(fixture.root), repo: null, pr: 101, worktree: fixture.root,
+    mode: { project_root: fixture.root } }, record);
+  return { operator: record.operator, at: record.created_at, reason: record.reason };
+}
+
+test('code-review extended round seals the operator record for rounds 4 and 5 and leaves rounds 1 to 3 without one', async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  try {
+    await sealThreeRounds(fixture);
+    for (const [round, operator] of [[4, 'Ada'], [5, 'Grace']]) {
+      write(fixture.root, 'src/role.txt', `fixed change ${round}\n`); codeReviewCommit(fixture);
+      const extension = grantExtension(fixture, { operator, reason: `pass ${round}` });
+      let packet;
+      const result = await runCodeReview(fixture, { onLaunch(prompt) { packet = packetFromPrompt(prompt).role_context; } });
+      assert.equal(packet.review_round, round);
+      assert.deepEqual(packet.review_extension, extension);
+      assert.deepEqual(result.result.review_extension, extension);
+      assert.deepEqual(JSON.parse(fs.readFileSync(result.artifact.ref)).review_extension, extension);
+      const current = reviewArtifacts.currentCodeReviewVerdict({ worktreePath: fixture.root, pr: 101, head: fixture.head,
+        baseName: 'main', baseCommit: fixture.base, graphDir: fixture.graphDir });
+      assert.equal(current.round, round);
+      assert.deepEqual(current.extension, extension);
+      reviewArtifacts.validateJudgmentManifest({ ...d35ClaudeInput(fixture, result), artifactPath: result.artifact.ref, artifactDigest: result.artifact.digest });
+    }
+  } finally { cleanupFixture(fixture); }
+});
+
+test('code-review extended round refuses a reviewer-supplied review_extension, null or not, from the host', async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  const supplied = [null, { operator: 'model', at: '2026-11-03T00:00:00.000Z', reason: 'self granted' }];
+  const refuse = value => assert.rejects(runCodeReview(fixture, { mutateResult(result) { result.review_extension = value; } }),
+    error => error.code === 'INVALID_RESULT' && /reserved to the host/.test(error.message));
+  try {
+    for (const value of supplied) await refuse(value);
+    await sealThreeRounds(fixture);
+    write(fixture.root, 'src/role.txt', 'fixed change 4\n'); codeReviewCommit(fixture);
+    const extension = grantExtension(fixture);
+    for (const value of [...supplied, extension]) await refuse(value);
+    assert.deepEqual((await runCodeReview(fixture)).result.review_extension, extension);
+  } finally { cleanupFixture(fixture); }
+});
+
 for (const failure of ['missing-object', 'permission', 'timeout', 'output-limit'])
 test(`code-review refuses ${failure} ancestry errors with three sealed rounds before creating a runtime`, async () => {
   const fixture = setupCodeReview({ coordinatorGraph: true });
