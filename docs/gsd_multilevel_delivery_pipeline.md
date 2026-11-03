@@ -647,11 +647,18 @@ plain epic branches and Jira-named epic branches.
 `delivery_pipeline.code_review` in the project root's `.planning/config.json`
 selects `hold` (the shipped default) or `report`. Report mode observes without
 holding and shows proposed fix tickets without injecting them; hold feeds them
-to decompose Step 4 only in rounds 1 and 2. Round 3 requires an operator for
-remaining blockers. Incomplete reviews retry after the cause is fixed; the three-round cap permits no further
-review after limit. Hold stops with the printed reason and the single exit:
-set `delivery_pipeline.code_review` to `report` for this PR; there is no override
-flag or waiver record. The prelaunch gate and architecture builder require a
+to decompose Step 4 only in rounds 1 and 2. Three rounds are counted by default;
+an operator can grant up to two more, one per record written by
+`phase-code-review.cjs extend` (five rounds in total at most). Each extended
+round is bound to the head and base commit of its record and is always a delta
+from the last counted review, and repair tickets are proposed only in rounds 1
+and 2. Incomplete
+reviews retry after the cause is fixed. Hold stops with the printed reason and
+two exits: at the round limit, after the fixes are pushed and while the ceiling
+is not reached, run `extend` for one more round, or set
+`delivery_pipeline.code_review` to `report`. `report` applies to the
+whole project until it is set back to `hold`; restore `hold` once the PR
+merges. The prelaunch gate and architecture builder require a
 current complete pass with no blocking finding on the exact head in hold mode.
 Readiness and hand-off wait too. Both modes publish the status, and a human can
 still merge. A push re-owes code review before the later reviews.

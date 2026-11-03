@@ -1125,7 +1125,7 @@ for (const jira of [null, 'PRJ-42']) test(`phase code-review builders use graph 
     graph.epics[1].branch = branch;
     writeJson(path.join(f.graphDir, 'tickets.json'), graph);
     const arch = ['arch-review', ...args.slice(1)];
-    assert.throws(() => deliverDispatch.build(arch, options), /phase code review is owed.*delivery_pipeline.code_review.*report/);
+    assert.throws(() => deliverDispatch.build(arch, options), /phase code review is owed.*delivery_pipeline.code_review.*report.*whole project/);
     writeJson(path.join(f.root, '.planning/config.json'), { git: { base_branch: 'main' }, delivery_pipeline: { code_review: 'report' } });
     assert.strictEqual(deliverDispatch.build(arch, options).role, 'arch-review');
     graph.tickets[f.id].branch = branch; delete graph.epics[1];
@@ -1162,7 +1162,7 @@ for (const jira of [null, 'PRJ-42']) test(`default hold guards phase architectur
     const args = ['arch-review', f.phase, '--phase', '52', '--pr', '52'];
     for (const runtime of ['claude', 'codex']) {
       assert.throws(() => deliverDispatch.build([...args, '--runtime', runtime], options),
-        /phase code review is owed.*delivery_pipeline.code_review.*report/);
+        /phase code review is owed.*delivery_pipeline.code_review.*report.*whole project/);
     }
     const advance = round => {
       fs.writeFileSync(path.join(f.root, 'round.txt'), String(round));
@@ -1182,13 +1182,13 @@ for (const jira of [null, 'PRJ-42']) test(`default hold guards phase architectur
     const unknown = { ...options, getPullRequest: () => ({ ...live(), headRefName: unknownBranch }) };
     for (const runtime of ['claude', 'codex']) {
       assert.throws(() => deliverDispatch.build([...args, '--runtime', runtime], unknown),
-        /phase code review is unmatched.*delivery_pipeline.code_review.*report/);
+        /phase code review is unmatched.*delivery_pipeline.code_review.*report.*whole project/);
     }
     f.git(['branch', '-m', branch]);
     advance(2);
     for (const runtime of ['claude', 'codex']) {
       assert.throws(() => deliverDispatch.build([...args, '--runtime', runtime], options),
-        /phase code review is owed.*delivery_pipeline.code_review.*report/);
+        /phase code review is owed.*delivery_pipeline.code_review.*report.*whole project/);
     }
   } finally { f.cleanup(); }
 });
@@ -1228,12 +1228,12 @@ test('R-13 an arch-review build refused at the round limit names the limit hint 
     assert.strictEqual(limited.code, 'BUILD_REFUSED');
     assert.strictEqual(limited.field, '--pr');
     assert.deepStrictEqual(limited.details, { hint_code: 'CODE_REVIEW_ROUND_LIMIT' });
-    assert.match(limited.message, /three rounds/);
+    assert.match(limited.message, /three rounds.*extend.*whole project/);
     const cli = spawnSync(process.execPath, [path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), 'build', ...args],
       { cwd: f.root, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: f.graphDir } });
     assert.strictEqual(cli.status, 2, cli.stderr);
     const [message, hint] = cli.stderr.trim().split('\n');
-    assert.match(message, /three rounds/);
+    assert.match(message, /three rounds.*extend.*whole project/);
     assert.match(hint, /^hint\[BUILD_REFUSED\]: .* remedy: .*phase-code-review\.cjs extend --phase N --pr P --reason "why" --confirm extend-review-round/);
     assert.doesNotMatch(cli.stderr, /does not name/);
   } finally { f.cleanup(); }

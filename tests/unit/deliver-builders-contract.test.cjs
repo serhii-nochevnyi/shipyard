@@ -68,7 +68,7 @@ test('phase finale orders publication, prelaunch gate, integrator, architecture 
   assert.match(step5, /unmatched[\s\S]*stop in both modes/);
   assert.ok(step5.indexOf('status --porcelain --untracked-files=all') < step5.indexOf('build code-review'));
   assert.ok(deliver.includes('deliver-dispatch.cjs build code-review'));
-  assert.match(deliver.slice(0, deliver.indexOf('## Principle')), /delivery_pipeline.code_review[\s\S]*report/);
+  assert.match(deliver.slice(0, deliver.indexOf('## Principle')), /delivery_pipeline.code_review[\s\S]*report[\s\S]*whole project/);
   assert.ok(!/gsd-code-review[^\n]*--fix/.test(deliver));
   assert.ok(!deliver.includes('builder exits 2'));
 });
@@ -192,7 +192,7 @@ test('documented review argv selects project hold policy over a linked epic repo
           const implicit = argv.slice(0, argv.indexOf('--graph'));
           for (const request of [implicit, argv]) {
             if (argv[0] === 'code-review') assert.strictEqual(dispatcher.build(request, options).graph_dir, graphDir);
-            else assert.throws(() => dispatcher.build(request, options), /phase code review is owed.*delivery_pipeline.code_review.*report/);
+            else assert.throws(() => dispatcher.build(request, options), /phase code review is owed.*delivery_pipeline.code_review.*report.*whole project/);
           }
         }
       }
@@ -249,5 +249,18 @@ for (const outcome of ['passed', 'needs-fix', 'human-review-required']) {
     });
   });
 }
+
+test('R-14 wording: every text that offers report says it is project-wide and deliver.md names the extend command', () => {
+  const flat = text => text.replace(/\s+/g, ' ');
+  const capability = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'capabilities/delivery-pipeline/capability.json'), 'utf8'));
+  const wholeProject = /report[`"]? applies to the whole project until it is set back to [`"]?hold|which applies to the whole project until it is set back to [`"]?hold/;
+  const opening = flat(deliver.slice(0, deliver.indexOf('## Principle'))), finale = flat(step5);
+  for (const [name, text] of [['deliver.md opening', opening], ['deliver.md phase finale', finale], ['pipeline doc', flat(pipelineDocs)],
+    ['capability description', capability.config['delivery_pipeline.code_review'].description]]) {
+    assert.match(text, wholeProject, `${name} must say report is project-wide`);
+  }
+  assert.ok((finale.match(/whole project/g) || []).length >= 2, 'the finale says it where report is introduced and where the stop is named');
+  assert.match(finale, /phase-code-review\.cjs extend --phase <N> --pr <integration-pr> --reason "<why>" --confirm extend-review-round/);
+});
 
 done();

@@ -125,10 +125,10 @@ for (const jira of shapes) {
       };
       const refused = gate();
       assert.equal(refused.status, 1, refused.stderr);
-      assert.match(refused.stderr, /owed.*delivery_pipeline.code_review.*report/);
+      assert.match(refused.stderr, /owed.*delivery_pipeline.code_review.*report.*whole project/);
       const owed = flow.verifyCodeReview(f.input());
       assert.equal(owed.mode, 'hold'); assert.equal(owed.state, 'owed'); assert.equal(owed.ok, false);
-      assert.match(owed.reason, /delivery_pipeline.code_review.*report/);
+      assert.match(owed.reason, /delivery_pipeline.code_review.*report.*whole project/);
       const binding = f.advance(1);
       artifact.sealJudgment(artifactInput(f, binding, raw()));
       const passed = gate();
@@ -137,15 +137,15 @@ for (const jira of shapes) {
       const unknown = { ...f.live(), headRefName: jira ? 'epic/52-unmatched' : 'feat/PRJ-42-unmatched' };
       const unmatchedGate = gate(unknown);
       assert.equal(unmatchedGate.status, 1, unmatchedGate.stderr);
-      assert.match(unmatchedGate.stderr, /unmatched.*delivery_pipeline.code_review.*report/);
+      assert.match(unmatchedGate.stderr, /unmatched.*delivery_pipeline.code_review.*report.*whole project/);
       const unmatched = flow.verifyCodeReview({ ...f.input(), live: unknown });
       assert.notEqual(unmatched, null);
       assert.equal(unmatched.mode, 'hold'); assert.equal(unmatched.state, 'unmatched'); assert.equal(unmatched.ok, false);
-      assert.match(unmatched.reason, /delivery_pipeline.code_review.*report/);
+      assert.match(unmatched.reason, /delivery_pipeline.code_review.*report.*whole project/);
       f.advance(2);
       const moved = gate();
       assert.equal(moved.status, 1, moved.stderr);
-      assert.match(moved.stderr, /owed.*delivery_pipeline.code_review.*report/);
+      assert.match(moved.stderr, /owed.*delivery_pipeline.code_review.*report.*whole project/);
     } finally { f.cleanup(); fs.rmSync(temporary, { recursive: true, force: true }); }
   });
 
@@ -169,7 +169,7 @@ for (const jira of shapes) {
       assert.equal(state.review_completeness, 'incomplete');
       assert.match(state.reason, /incomplete/);
       const refusal = flow.evaluateGate(f.input());
-      for (const word of ['owed', 'incomplete', 'delivery_pipeline.code_review', 'report', path.join(f.root, '.planning/config.json')])
+      for (const word of ['owed', 'incomplete', 'delivery_pipeline.code_review', 'report', 'whole project', path.join(f.root, '.planning/config.json')])
         assert.ok(refusal.message.includes(word), word);
       assert.throws(() => builder.build(f.args('arch-review'), f.options), /phase code review is owed/);
       for (const mode of ['hold', 'report']) {
@@ -208,7 +208,7 @@ for (const jira of shapes) {
           assert.deepEqual(fixes[0].files, ['source.js']);
           if (round === 1 && mode === 'hold') assertFixGraph(fixes[0]);
         } else {
-          assert.match(diagnostic, /no longer re-check.*BLOCKERs stay visible.*delivery_pipeline.code_review.*report/);
+          assert.match(diagnostic, /no longer re-check.*BLOCKERs stay visible.*delivery_pipeline.code_review.*report.*whole project/);
         }
         const configPath = path.join(f.root, '.planning/config.json');
         const originalConfig = fs.readFileSync(configPath);
@@ -226,7 +226,7 @@ for (const jira of shapes) {
       const status = flow.status(f.input());
       assert.equal(status.state, 'limit'); assert.equal(status.rounds_used, 3); assert.equal(status.round, null);
       const gate = flow.evaluateGate(f.input());
-      assert.equal(gate.ok, mode === 'report'); assert.match(gate.message, /three rounds.*delivery_pipeline.code_review.*report/);
+      assert.equal(gate.ok, mode === 'report'); assert.match(gate.message, /three rounds.*extend.*delivery_pipeline.code_review.*report.*whole project/);
       f.mode('hold');
       const held = flow.evaluateGate(f.input());
       assert.equal(held.ok, false);
@@ -458,6 +458,137 @@ test('extend refuses at the ceiling and when no delta is possible', () => {
   } finally { f.cleanup(); }
 });
 
+const EXTEND_COMMAND = 'phase-code-review.cjs extend --phase N --pr P --reason "..." --confirm extend-review-round';
+const EXTEND_FILLED = EXTEND_COMMAND.replace('--phase N --pr P', '--phase 52 --pr 52');
+const WHOLE_PROJECT = /report applies to the whole project until it is set back to "hold"/;
+const OLD_CLAIMS = /waiver|override flag|for this PR|per PR/i;
+
+test('R-14 wording: the refusal text offers report as a project-wide setting in every state', () => {
+  const mode = { config_path: '/project/.planning/config.json' };
+  for (const state of ['owed', 'unmatched', 'ticket', 'current', 'limit']) {
+    const text = flow.refusalText(state, 'the reason', mode);
+    assert.ok(text.startsWith(`phase code review is ${state}: the reason.`), state);
+    assert.match(text, /delivery_pipeline\.code_review to "report" in \/project\/\.planning\/config\.json/, state);
+    assert.match(text, WHOLE_PROJECT, state); assert.match(text, /nothing is held in report mode/, state);
+    assert.doesNotMatch(text, OLD_CLAIMS, state); assert.doesNotMatch(text, /extend/, state);
+    assert.ok(!text.includes('\n'), state);
+  }
+  assert.match(flow.refusalText('owed', 'r', {}), /in the project root's \.planning\/config\.json/);
+});
+
+test('R-14 wording: the refusal names the extend command only for the limit state while the ceiling is not reached', () => {
+  const mode = { config_path: '/p/config.json' };
+  const open = flow.refusalText('limit', 'three rounds are spent', mode, { canExtend: true });
+  assert.ok(open.includes(EXTEND_COMMAND + '.'), open); assert.match(open, /one more round.*five in total at most/);
+  assert.match(open, WHOLE_PROJECT); assert.ok(open.indexOf('extend') < open.indexOf('"report"'), 'extend comes before report');
+  assert.doesNotMatch(open, OLD_CLAIMS);
+  assert.ok(flow.refusalText('limit', 'r', mode, { canExtend: true, phase: 7, pr: 12 }).includes(EXTEND_COMMAND.replace('--phase N --pr P', '--phase 7 --pr 12') + '.'));
+  for (const [state, options] of [['limit', { canExtend: false }], ['limit', {}], ['limit', undefined], ['owed', { canExtend: true }], ['current', { canExtend: true }]]) {
+    const closed = flow.refusalText(state, 'five rounds are spent', mode, options);
+    assert.doesNotMatch(closed, /extend/, `${state} ${JSON.stringify(options)}`); assert.match(closed, WHOLE_PROJECT);
+  }
+});
+
+test('R-14 wording: status at the limit names extend while another round can be granted and drops it at the ceiling', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f);
+    const open = flow.status(f.input());
+    assert.equal(open.state, 'limit'); assert.equal(open.round_limit, 3);
+    assert.match(open.reason, /^phase code review is limit: three rounds are spent; no further review can launch\./);
+    assert.ok(open.reason.includes(EXTEND_FILLED + '.'), open.reason); assert.match(open.reason, WHOLE_PROJECT);
+    assert.doesNotMatch(open.reason, OLD_CLAIMS);
+    const ceiling = { './code-review-core.cjs': { ...core, roundLookup: options => ({ ...core.roundLookup(options), limit: 5 }) } };
+    withFlowDependencies(ceiling, isolated => {
+      const closed = isolated.status(f.input());
+      assert.equal(closed.state, 'limit'); assert.equal(closed.round_limit, 5);
+      assert.match(closed.reason, /^phase code review is limit: five rounds are spent/);
+      assert.doesNotMatch(closed.reason, /extend/); assert.match(closed.reason, WHOLE_PROJECT);
+    });
+  } finally { f.cleanup(); }
+});
+
+test('R-14 wording: the refusal names extend exactly when the real extend would grant the round', () => {
+  const stub = change => ({ './code-review-core.cjs': { ...core, roundLookup: options => change(core.roundLookup(options), options) } });
+  const movedBase = f => {
+    atLimit(f, false); f.git(['switch', '--quiet', '-c', 'side', f.base]);
+    fs.writeFileSync(path.join(f.root, 'side.txt'), 'side'); f.git(['add', 'side.txt']); f.git(['commit', '--quiet', '-m', 'side']);
+    const moved = f.git(['rev-parse', 'HEAD']); f.git(['switch', '--quiet', f.branch]); f.git(['merge', '--no-ff', '--quiet', '-m', 'merge side', 'side']);
+    return { ...f.live(), baseRefOid: moved };
+  };
+  const recorded = f => { atLimit(f); flow.appendExtension({ repository: target.repositoryIdentity(f.root), repo: null, pr: 52, worktree: f.root,
+    mode: flow.resolveCodeReviewMode({ graphDir: f.graphDir, worktree: f.root }) }, { head: f.live().headRefOid, base_commit: f.base,
+    operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass' }); };
+  const scenarios = [
+    ['spent with a delta', f => atLimit(f), null, true, 'created'],
+    ['spent, base moved so no delta is possible', movedBase, null, false, /must be a delta/],
+    ['limit 4 without a record', f => atLimit(f), real => real.state === 'limit' ? { ...real, limit: 4 } : real, true, 'created'],
+    ['ceiling', f => atLimit(f), real => ({ ...real, limit: 5 }), false, /ceiling of 5 rounds/],
+    ['no delta with a record', recorded, (real, options) => options.readRecords().length === 1 ? { ...real, state: 'limit', round: null, reason: 'no-delta', limit: 4 } : real, false, 'existing'],
+    ['current needs-fix', f => atLimit(f, false), null, false, /push the fixes first/],
+    ['owed', () => {}, null, false, /no review limit has been reached/],
+    ['unmatched', f => ({ ...f.live(), headRefName: 'unknown' }), null, false, /unmatched/],
+    ['ticket PR', f => ({ ...f.live(), headRefName: 'feat/review-ticket' }), null, false, /ticket PR/],
+  ];
+  for (const [name, setup, change, offered, outcome] of scenarios) {
+    const f = fixture(null);
+    try {
+      const live = setup(f), options = live ? { ...f.options, getPullRequest: () => live } : f.options, input = live ? { live } : {};
+      const attempt = run => {
+        const message = action => { try { return action(); } catch (error) { return { error: error.message }; } };
+        return [message(() => run.evaluateGate({ ...f.input(), ...input }, options).message), message(() => run.extend(extendInput(f, input), options).recorded)];
+      };
+      const [text, result] = change ? withFlowDependencies(stub(change), attempt) : attempt(flow);
+      assert.equal(typeof text === 'string' && text.includes(EXTEND_FILLED + '.'), offered, `${name}: ${JSON.stringify(text)}`);
+      if (typeof outcome === 'string') assert.equal(result, outcome, name); else assert.match(result?.error ?? String(result), outcome, name);
+      if (typeof text === 'string' && !/ticket/.test(name)) assert.match(text, WHOLE_PROJECT, name);
+      assert.equal(offered, typeof outcome === 'string' && outcome === 'created', `${name}: the offer matches what extend does`);
+    } finally { f.cleanup(); }
+  }
+});
+
+test('R-14 wording: the owed refusal names report as project-wide and no extend command', () => {
+  const f = fixture(null);
+  try {
+    const state = flow.status(f.input());
+    assert.equal(state.state, 'owed');
+    const gate = flow.evaluateGate(f.input());
+    assert.equal(gate.ok, false); assert.match(gate.message, /^phase code review is owed: .*build code-review first\./);
+    assert.match(gate.message, WHOLE_PROJECT); assert.doesNotMatch(gate.message, /extend|waiver|override flag|for this PR/);
+    assert.throws(() => builder.build(f.args('arch-review'), f.options), error => error.message.includes(gate.message));
+  } finally { f.cleanup(); }
+});
+
+test('R-14 wording: the gate verb prints both exits on one line at the limit and nothing is held in report mode', () => {
+  const f = fixture(null), cli = extendCli(f);
+  try {
+    atLimit(f);
+    const gate = () => cli.run([f.phase, '--phase', '52', '--pr', '52', '--worktree', f.root, '--graph', f.graphDir], {}, 'gate');
+    const held = gate();
+    assert.equal(held.status, 1, held.stderr); assert.equal(held.stderr.trim().split('\n').length, 1);
+    assert.ok(held.stderr.includes(EXTEND_FILLED + '.'), held.stderr); assert.match(held.stderr, WHOLE_PROJECT);
+    assert.match(held.stderr, /three rounds.*extend.*delivery_pipeline\.code_review.*"report"/);
+    assert.doesNotMatch(held.stderr, OLD_CLAIMS);
+    f.mode('report');
+    const report = gate();
+    assert.equal(report.status, 0, report.stderr); assert.equal(report.stderr.trim().split('\n').length, 1);
+    assert.match(report.stderr, /nothing is held in report mode/);
+  } finally { f.cleanup(); cli.cleanup(); }
+});
+
+test('R-14 wording: the extend ceiling refusal says whole project, calls report no per-PR exit and names no waiver', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f);
+    const stub = { './code-review-core.cjs': { ...core, roundLookup: options => ({ ...core.roundLookup(options), limit: 5 }) } };
+    withFlowDependencies(stub, isolated => {
+      assert.throws(() => isolated.extend(extendInput(f), f.options), error => error.code === 'EXTENSION_REFUSED'
+        && /the ceiling of 5 rounds is reached/.test(error.message) && /report", which applies to the whole project until it is set back to "hold"/.test(error.message)
+        && !OLD_CLAIMS.test(error.message));
+    });
+  } finally { f.cleanup(); }
+});
+
 test('extend refuses an empty, long or hygiene-failing reason or operator', () => {
   const f = fixture(null);
   try {
@@ -668,7 +799,7 @@ for (const jira of shapes) test('CLI status, gate, repair and usage exits are st
       const gate = run('gate');
       assert.equal(gate.status, mode === 'hold' ? 1 : 0, gate.stderr);
       assert.equal(gate.stderr.trim().split('\n').length, 1);
-      assert.match(gate.stderr, mode === 'hold' ? /build code-review.*delivery_pipeline.code_review.*report/ : /nothing is held/);
+      assert.match(gate.stderr, mode === 'hold' ? /build code-review.*delivery_pipeline.code_review.*report.*whole project/ : /nothing is held/);
       const unknown = run('status', { headRefName: 'unknown' });
       assert.equal(unknown.status, 0, unknown.stderr); assert.equal(JSON.parse(unknown.stdout).state, 'unmatched');
       const unknownGate = run('gate', { headRefName: 'unknown' });
