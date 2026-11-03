@@ -180,6 +180,14 @@ test('rounds count only complete full-scope lineage, independently of ticket set
   assert.deepEqual([1,2,3].map(core.repairAllowed),[true,true,false]);
 });
 
+test('normalization accepts rounds up to the absolute ceiling and refuses the next', () => {
+  const extension = { operator: 'operator', reason: 'one more round', at: '2026-11-02T10:00:00.000Z' };
+  for (const round of [1, 2, 3]) assert.equal(review(raw(), { round }).findings.length, 2);
+  for (const round of [4, 5]) assert.equal(review(raw(), { round, extension }).findings.length, 2);
+  assert.throws(() => review(raw(), { round: 6, extension }), code('INVALID_RESULT'));
+  assert.throws(() => review(raw(), { round: 6 }), code('INVALID_RESULT'));
+});
+
 test('packet hides host digests, binds subject identity and refuses missing vocabulary', () => {
   const identity = {id:'subject',repository:'/repo',pr:1,head:'h',base_commit:'b',merge_base:'m',base_tree:'t',ticket_set_digest:'d'};
   const options = {subject:'subject',identity,exactDiff:'',integrationBase:'main',ticketSet:[],planAcceptance:[],priorFindings:carry(review().findings),round:{round:1,scope:'full'},changeMetadata:{},referenceDigest:'a'.repeat(64)};
