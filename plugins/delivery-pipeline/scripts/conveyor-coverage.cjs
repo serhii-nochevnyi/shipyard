@@ -301,9 +301,25 @@ function createCoverageWriter({ keyPath, root = coverageRoot() } = {}) {
 function verify({ commit, repo, worktree = process.cwd(), keyPath, root = coverageRoot() }) {
   try {
     const key = readKey(keyFile(root, keyPath));
-    const record = read(fileFor(root, repo, commit), key);
-    if (!record || record.commit !== commit || record.repo !== repo || !KINDS.has(record.kind)) throw new Error('coverage record missing or unauthenticated');
-    if (record.repository_id !== repositoryIdentity(worktree)) throw new Error('coverage repository identity mismatch');
+    const repository = repositoryIdentity(worktree);
+    let namespace = repoSlug(worktree, repo);
+    let file = fileFor(root, namespace, commit);
+    try { fs.lstatSync(file); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      let origin;
+      try {
+        origin = require('./repo-resolve.cjs').normalizeOrigin(execFileSync('git',
+          ['-C', worktree, 'remote', 'get-url', 'origin'], { encoding: 'utf8', env: gitEnv(),
+            stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, maxBuffer: 4096 }).trim());
+      } catch (_) { throw error; }
+      if (!origin || ![repository, origin].includes(namespace)) throw error;
+      namespace = namespace === repository ? origin : repository;
+      file = fileFor(root, namespace, commit);
+    }
+    const record = read(file, key);
+    if (!record || record.commit !== commit || record.repo !== namespace || !KINDS.has(record.kind)) throw new Error('coverage record missing or unauthenticated');
+    if (record.repository_id !== repository) throw new Error('coverage repository identity mismatch');
     const { parents, tree } = gitMetadata(worktree, commit);
     if (stableStringify(record.parents) !== stableStringify(parents) || record.tree !== tree) throw new Error('commit metadata mismatch');
     if (['executor', 'fixer'].includes(record.kind)) {

@@ -147,6 +147,20 @@ const git = (args, { tolerate = false } = {}) => {
 // A `git status` that FAILS prints nothing, and reading that silence as "clean"
 // is the same bug ticket-worktree.sh's GC checks went fail-closed for: a status
 // this script could not establish is never treated as a status of "no changes".
+let generatedMerge;
+try { generatedMerge = require('./codex-delivery-host.cjs').generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase: base, noFetch }); }
+catch (error) { fail(error.message); }
+if (generatedMerge) {
+  process.on('exit', () => generatedMerge.release());
+  try {
+    const recovered = generatedMerge.recover();
+    if (recovered) {
+      if (asJson) console.log(JSON.stringify(recovered, null, 2));
+      else console.log(`base-merge: ${ticket} — ${recovered.result}`);
+      process.exit(0);
+    }
+  } catch (error) { fail(error.message); }
+}
 let dirtyCheck;
 try {
   dirtyCheck = statusIgnoringScratch(worktree, { untracked: 'no' });
@@ -223,10 +237,16 @@ function recordMerge(taken) {
   } catch (error) { fail(`merge commit ${commit} exists but coverage recording failed: ${error.message}`); }
 }
 
-const merge = git(['merge', '--no-edit', baseRef], { tolerate: true });
+if (generatedMerge) {
+  const ancestor = git(['merge-base', '--is-ancestor', preMergeBase, preMergeHead], { tolerate: true });
+  if (ancestor.status !== 0 && ancestor.status !== 1) fail('cannot establish base ancestry before generated merge preparation');
+  if (ancestor.status === 1) { try { generatedMerge.prepare(); } catch (error) { fail(error.message); } }
+}
+const merge = generatedMerge ? generatedMerge.mergeOrdinary() : git(['merge', '--no-edit', baseRef], { tolerate: true });
 if (merge.status === 0) {
+  if (generatedMerge) generatedMerge.ordinary();
   const msg = /Already up to date/i.test(merge.out) ? 'already up to date' : 'merged cleanly';
-  if (git(['rev-parse', 'HEAD']).out !== preMergeHead) recordMerge([]);
+  if (!generatedMerge && git(['rev-parse', 'HEAD']).out !== preMergeHead) recordMerge([]);
   const carry = carryVerdict();
   if (asJson) console.log(JSON.stringify({ ticket, base: baseRef, requested_base: base, result: msg, taken_from_base: [], unresolved: [], contested: [], carry }, null, 2));
   else {
@@ -280,6 +300,7 @@ if (!conflicted.length) {
   catch { fail(`merge commit ${actual} exists but tracked cleanliness failed; coverage refused`); }
   if (!clean.ok || clean.entries.length) fail(`merge commit ${actual} exists but tracked changes remain; coverage refused`);
   recordMerge([]);
+  if (generatedMerge) generatedMerge.ordinary();
   const carry = carryVerdict();
   const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved without content changes',
     taken_from_base: [], unresolved: [], contested: [], carry };
@@ -288,10 +309,13 @@ if (!conflicted.length) {
   process.exit(0);
 }
 
-const taken = [];
+if (generatedMerge) { try { generatedMerge.observe(); } catch (error) { fail(error.message); } }
+let taken = [];
+if (generatedMerge) { try { taken = [...generatedMerge.mechanical()]; } catch (error) { fail(error.message); } }
 const real = [];
 const contested = [];
 for (const p of conflicted) {
+  if (taken.includes(p)) continue;
   if (owns(p)) {
     real.push(p);
     const claims = contestedBy(p);
@@ -309,7 +333,17 @@ for (const p of conflicted) {
   real.push(p); // could not apply the rule — do not pretend it is resolved
 }
 
+if (real.length && generatedMerge && generatedMerge.eligible(real)) {
+  try {
+    const completed = generatedMerge.complete(taken);
+    if (asJson) console.log(JSON.stringify(completed, null, 2));
+    else console.log(`base-merge: ${ticket} — ${completed.result}`);
+    process.exit(0);
+  } catch (error) { fail(error.message); }
+}
+
 if (real.length) {
+  if (generatedMerge) generatedMerge.manual();
   // No carry: nothing was committed, so the head has not moved and there is
   // nothing to prove about it.
   const payload = { ticket, base: baseRef, requested_base: base, result: 'conflicts remain', taken_from_base: taken, unresolved: real, contested, carry: null };
@@ -332,6 +366,13 @@ if (real.length) {
   process.exit(1);
 }
 
+if (generatedMerge) {
+  const completed = generatedMerge.completeMechanical(taken);
+  const carry = carryVerdict();
+  if (asJson) console.log(JSON.stringify({ ...completed, carry }, null, 2));
+  else console.log(`base-merge: ${ticket} — mechanically resolved original ${completed.commit}`);
+  process.exit(0);
+}
 git(['commit', '--no-edit']);
 recordMerge(taken);
 const carry = carryVerdict();

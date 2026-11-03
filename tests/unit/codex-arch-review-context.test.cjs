@@ -1182,7 +1182,33 @@ for (const [name, mutate] of [
 
 test('a genuine prior Codex repair archive cannot supply host bookkeeping and remains admitted by the following review', async () => {
   const f = fixture(), stores = [];
+  const TICKET = 'T-38-01';
+  f.ticket = TICKET;
+  for (const relative of ['.planning/graph/tickets.json', '.planning/graph/delivery-state.json']) {
+    const file = path.join(f.root, relative);
+    const document = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const tickets = relative.endsWith('/tickets.json') ? document.tickets : document;
+    tickets[TICKET] = tickets['T-38-01-role-host'];
+    delete tickets['T-38-01-role-host'];
+    fs.writeFileSync(file, JSON.stringify(document));
+  }
+  f.pr.title = f.pr.title.replace('T-38-01-role-host', TICKET);
+  f.pr.body = f.pr.body.replace('T-38-01-role-host', TICKET);
+  const signing = require('./phase53-z29x-native-ci-fix-contract.test.cjs').signingFixture();
   try {
+    git(f.root, ['config', 'user.signingkey', signing.signer]);
+    fs.mkdirSync(path.join(f.root, '.git/info'), { recursive: true });
+    fs.appendFileSync(path.join(f.root, '.git/info/exclude'), '\n/.planning/graph/dispatches.json\n/.planning/graph/delivery-front.json\n/.planning/graph/provenance/\n');
+    const boardFile = path.join(f.root, '.planning/graph/delivery-state.json');
+    const board = JSON.parse(fs.readFileSync(boardFile));
+    Object.assign(board[TICKET], { branch: BRANCH, base: 'main' });
+    fs.writeFileSync(boardFile, JSON.stringify(board));
+    const approvedPlan = path.join(f.root, planPath());
+    fs.writeFileSync(approvedPlan, fs.readFileSync(approvedPlan, 'utf8').replace(
+      '- node --test tests/unit/codex-arch-review-context.test.cjs', '- `node --test tests/unit/codex-arch-review-context.test.cjs`'));
+    git(f.root, ['add', '.planning/graph/tickets.json', '.planning/graph/delivery-state.json', planPath()]);
+    git(f.root, ['commit', '-m', 'test: bind the existing repair archive fixture to its live base']);
+    f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
     const first = await unitJudgment(f); stores.push(f.storage);
     const crypto = require('node:crypto');
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -1197,62 +1223,105 @@ test('a genuine prior Codex repair archive cannot supply host bookkeeping and re
         'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"')
       .replace('model = "' + prior.model + '"', 'model = "' + selected.model + '"')
       .replace('model_reasoning_effort = "' + prior.effort + '"', 'model_reasoning_effort = "' + selected.effort + '"');
+    instructions = instructions.replace('sandbox_mode = \"read-only\"', 'sandbox_mode = \"workspace-write\"');
     fs.writeFileSync(path.join(agents, selected.agent_file), instructions);
     const manifestFile = path.join(agents, '.shipyard-manifest.json');
     const manifest = JSON.parse(fs.readFileSync(manifestFile));
     manifest.agent_files.push(selected.agent_file);
     manifest.agent_digests[selected.agent_file] = crypto.createHash('sha256').update(instructions).digest('hex');
     fs.writeFileSync(manifestFile, JSON.stringify(manifest));
-    const result = { id: TICKET, pr: f.pr.number, status: 'no-op', pushed: false,
+    const result = { schema: 'shipyard.repair-result.v1', id: TICKET, pr: f.pr.number, status: 'no-op', pushed: false,
       notes: 'Captured unit repair found no further change.', hypothesis: 'The earlier patch resolved the issue.',
       host_context: { bookkeeping: [{ path: '.planning/graph/dispatches.json', sha256: 'a'.repeat(64), cleared_sha256: 'b'.repeat(64) }] } };
-    write(f.root, '.shipyard-repair-evidence.md', 'Complete retained Codex repair evidence.');
-    const nativeHost = { scope: first.scope, recorder: first.recorder,
+    const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+    const failureFile = path.join(f.storage, 'ci-failure.log'), failureBytes = Buffer.from('Original failing archive fixture check\n');
+    fs.writeFileSync(failureFile, failureBytes, { mode: 0o600 });
+    const transport = (program, args, options) => {
+      if (program !== 'gh') return execFileSync(program, args, options);
+      const endpoint = args[1];
+      if (args[0] === 'repo' && args[1] === 'view') return JSON.stringify({ owner: { login: 'fixture' }, name: 'repository' });
+      if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify(f.pr);
+      if (args[0] !== 'api') throw new Error('Unexpected CI archive request: ' + args.join(' '));
+      if (endpoint.endsWith('/pulls/' + f.pr.number)) return JSON.stringify({ number: f.pr.number, state: 'open',
+        head: { sha: f.head, repo: { full_name: 'fixture/repository' } }, base: { repo: { full_name: 'fixture/repository' } } });
+      if (endpoint.includes('/check-runs?')) return JSON.stringify([{ total_count: 1, check_runs: [{ id: 41, name: 'unit',
+        status: 'completed', conclusion: 'failure', head_sha: f.head, app: { id: 15368, slug: 'github-actions' },
+        check_suite: { id: 47 }, started_at: '2026-11-01T00:00:00Z',
+        details_url: 'https://github.com/fixture/repository/actions/runs/42/attempts/1/job/43' }] }]);
+      if (endpoint.includes('/status?')) return JSON.stringify([{ sha: f.head, total_count: 0, statuses: [] }]);
+      if (endpoint.includes('/actions/runs/42')) return JSON.stringify({ id: 42, head_sha: f.head,
+        head_repository: { full_name: 'fixture/repository' }, repository: { full_name: 'fixture/repository' },
+        check_suite_id: 47, workflow_id: 44, run_number: 1, run_attempt: 1, name: 'CI', event: 'pull_request' });
+      if (endpoint.endsWith('/actions/jobs/43/logs')) return failureBytes;
+      throw new Error('Unexpected CI archive request: ' + args.join(' '));
+    };
+    const request = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').build([
+      'ci-fix', TICKET, '--runtime', 'codex', '--pr', String(f.pr.number), '--failure-file', failureFile,
+    ], { cwd: f.root, graphDir: path.join(f.root, '.planning/graph') });
+    const repairScope = request.scope;
+    const nativeHost = { scope: repairScope, recorder: first.recorder,
       capabilities: { supportedModels: [selected.model], supportedEfforts: [selected.effort] },
-      launchStatic(selection) {
-        const session = crypto.randomUUID();
+      launchStatic(selection, launchContext) {
+        write(f.root, '.shipyard-repair-evidence.md', 'Complete retained Codex repair evidence.');
+        const session = crypto.randomUUID(), { host_context: _ignored, ...nativeResult } = result;
+        const text = JSON.stringify(nativeResult);
         const capture = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
           .trim().split('\n').map(line => JSON.parse(line));
-        const records = ['thread.started', 'item.completed', 'turn.completed']
+        const records = ['thread.started', 'turn.started', 'item.completed', 'turn.completed']
           .map(type => structuredClone(capture.find(record => record.type === type)));
-        records[0].thread_id = session; records[1].item.text = JSON.stringify(result);
-        const text = records.map(record => JSON.stringify(record)).join('\n') + '\n';
-        const transcript = path.join(f.storage, 'repair-transcript.jsonl'); fs.writeFileSync(transcript, text);
-        const runtimeEvidence = structuredClone(first.result.receipt.runtime_evidence);
-        runtimeEvidence.session_id = session;
-        runtimeEvidence.transcript = { path: transcript, bytes: Buffer.byteLength(text),
-          sha256: crypto.createHash('sha256').update(text).digest('hex') };
-        return { launch_id: 'codex-' + session, applied_model: selection.model,
-          applied_effort: selection.reasoning_effort, observed_model: selection.model,
-          observed_effort: selection.reasoning_effort, agent_file_digest: selection.agent_file_digest,
-          runtime_evidence: runtimeEvidence };
+        records[0].thread_id = session; records.find(record => record.type === 'item.completed').item.text = text;
+        const stream = records.map(record => JSON.stringify(record)).join('\n') + '\n';
+        const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+        const native = require('./helpers/codex-arch-review-fixtures.cjs').focusedNativeSession({
+          session, worktree: f.root, model: selection.model, effort: selection.reasoning_effort, text,
+          prompt: runtime.generatedInstructions(selection.agent_file_content) + '\n\n' + launchContext.prompt.trim(),
+        }).split('\n').filter(Boolean).map(JSON.parse);
+        for (const row of native) if (row.type === 'turn_context') row.payload.sandbox_policy.type = 'workspace-write';
+        const date = new Date(), directory = path.join(process.env.CODEX_HOME, 'sessions', String(date.getFullYear()),
+          String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, session + '.jsonl'), native.map(JSON.stringify).join('\n') + '\n');
+        return runtime.createCodexRuntimeHost({ scope: repairScope, recorder: first.recorder,
+          capabilities: nativeHost.capabilities, env: { CODEX_HOME: process.env.CODEX_HOME },
+          transcriptDir: path.join(f.storage, 'repair-transcripts'),
+          probe: { status: 'available', executable: 'codex', runtime_version: 'fixture', capabilities: nativeHost.capabilities },
+          spawn() {
+            const { EventEmitter } = require('node:events');
+            const child = new EventEmitter(); child.pid = process.pid; child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+            child.stdin = { write() {}, end() { process.nextTick(() => {
+              child.stdout.emit('data', Buffer.from(stream)); child.emit('close', 0);
+            }); } }; return child;
+          },
+        }).launchStatic({ model: selection.model, effort: selection.reasoning_effort, sandbox_mode: 'workspace-write',
+          agent_file: selected.agent_file, agent_file_content: instructions, agent_file_digest: selection.agent_file_digest }, launchContext);
       },
     };
-    const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
-    const repairScope = { ...first.scope, run_id: 'repair-' + crypto.randomUUID() };
-    nativeHost.scope = repairScope;
     const requestFile = path.join(f.storage, 'repair-request.json');
-    fs.writeFileSync(requestFile, JSON.stringify({ scope: repairScope,
-      role, signals: {}, context: { prompt: 'Evaluate the existing repair.' } }));
+    fs.writeFileSync(requestFile, JSON.stringify(request));
     let relay = '';
     await delivery.runCli(['--args-file', requestFile], { write: text => { relay += text; } }, {
       host: nativeHost, capabilities: nativeHost.capabilities, recorder: first.recorder,
       agentDir: agents, agentManifest: manifestFile, storageRoot: f.storage, graphDir: path.join(f.root, '.planning/graph'),
+      execFileSync: transport, getPullRequest: () => f.pr,
+      verificationAllowList: [{ argv: ['node', '--test', 'tests/unit/codex-arch-review-context.test.cjs'], profile: 'host', timeout_s: 600 }],
     });
     const dispatch = JSON.parse(relay);
     const provenance = path.join(f.root, '.planning/graph/provenance/' + dispatch.dispatch_id + '.json');
     assert(fs.existsSync(provenance));
     assert(artifacts.historicalBookkeepingPins(f.root).some(pin => pin.path.endsWith(dispatch.dispatch_id + '.json')));
-    const repair = artifacts.sealRole({ worktreePath: f.root, base: 'refs/remotes/origin/main', role,
-      ticket: TICKET, pr: f.pr.number, recorder: first.recorder, dispatchId: dispatch.dispatch_id, result });
+    const repair = { artifact_path: dispatch.repair.artifact_ref };
     const archived = fs.readFileSync(repair.artifact_path);
+    assert.throws(() => artifacts.sealRole({ worktreePath: f.root, base: 'refs/remotes/origin/main', role,
+      ticket: TICKET, pr: f.pr.number, branch: BRANCH, planPath: planPath(), recorder: first.recorder,
+      dispatchId: dispatch.dispatch_id, result }), error => error.code === 'ARTIFACT_MUTATED'
+        && error.message === 'archived role findings changed from its authenticated complete-byte count');
     assert(artifacts.historicalBookkeepingPins(f.root).every(pin => pin.sha256 !== 'a'.repeat(64) && pin.sha256 !== 'b'.repeat(64)));
     const second = await unitJudgment(f); stores.push(f.storage);
     assert.equal(second.result.artifact.outcome, 'conform');
     assert.deepEqual(fs.readFileSync(repair.artifact_path), archived);
     assert.equal(artifacts.authenticatedArchivePins(f.root).length, 9);
     artifacts.validateJudgmentManifest(second.validationInput);
-  } finally { cleanupJudgment(f); for (const store of stores) fs.rmSync(store, { recursive: true, force: true }); }
+  } finally { cleanupJudgment(f); for (const store of stores) fs.rmSync(store, { recursive: true, force: true }); signing.close(); }
 });
 
 test('both native profiles deny the entire trusted archive namespace across worktrees and reject child selectors', async () => {
