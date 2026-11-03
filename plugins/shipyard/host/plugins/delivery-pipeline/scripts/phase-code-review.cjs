@@ -131,7 +131,7 @@ function status(input, options = {}) {
     head: live.headRefOid, base_commit: live.baseRefOid, subject: null, state: 'unmatched', round: null,
     round_cap: core.ROUND_CAP, round_limit: core.ROUND_CAP, rounds_used: 0, scope: null, verdict: null, blocking_count: null,
     warning_count: null, review_completeness: null, reuse: false, retry: false, repair: 'none',
-    disagreement_suppressed: 0, partitions_not_reviewed: 0, artifact_ref: null, reason: match.reason || null };
+    disagreement_suppressed: 0, partitions_not_reviewed: 0, artifact_ref: null, extension: null, reason: match.reason || null };
   details.set(result, { mode, current: null, ctx });
   if (match.kind === 'unmatched') return Object.freeze(result);
   const binding = target.phaseBinding({ graph, state: ctx.state?.tickets || ctx.state, phase: match.phase,
@@ -169,7 +169,7 @@ function status(input, options = {}) {
       review_completeness: current.review_completeness, reuse: true,
       repair: current.verdict === 'needs-fix' ? (core.repairAllowed(current.round) ? 'tickets' : 'human') : 'none',
       disagreement_suppressed: current.disagreement_suppressed, partitions_not_reviewed: current.partitions_not_reviewed,
-      artifact_ref: current.artifact_ref, reason: current.verdict === 'pass' ? 'the complete verdict is current'
+      artifact_ref: current.artifact_ref, extension: current.extension ?? null, reason: current.verdict === 'pass' ? 'the complete verdict is current'
         : `the current verdict is ${current.verdict} with ${current.blocking_count} BLOCKERs` });
     details.set(result, { mode, current, ctx, prior: countable, history });
     return Object.freeze(result);
@@ -207,10 +207,26 @@ function fixTickets(input, options = {}) {
     files: [...finding.fix_ticket.files], depends_on: [...(finding.fix_ticket.depends_on || [])] }));
 }
 
+const clip = (value, max) => value.slice(0, Math.max(0, max)).replace(/[\ud800-\udbff]$/, '');
+// @security: sealed operator text is re-cleaned and cut here; it never reaches a public surface as markup.
+function extensionLine(round, extension, room = Infinity) {
+  let operator = clip(cleanText(extension.operator), 128) || 'unknown', reason = clip(cleanText(extension.reason), 200) || 'unknown';
+  const time = clip(cleanText(extension.at), 16);
+  const line = () => `round ${round} of ${core.ROUND_CAP}, extended by ${operator} at ${time}Z: ${reason}`;
+  const excess = () => Math.max(0, line().length - room);
+  reason = clip(reason, reason.length - excess());
+  operator = clip(operator, operator.length - excess());
+  return line();
+}
+
 function statusDescription(current) {
   const count = value => {
     if (!Number.isSafeInteger(value) || value < 0) throw new Error('status counts must be non-negative safe integers');
     return String(value);
+  };
+  const shown = text => {
+    if (current.state !== 'current' || !current.extension) return text;
+    return `${text}; ${extensionLine(current.round, current.extension, require('./gate-trailer.cjs').STATUS_MAX - text.length - 2)}`;
   };
   if (current.state === 'limit') return { state: 'pending',
     description: 'code review limit reached: no further review will run for this head' };
@@ -218,9 +234,9 @@ function statusDescription(current) {
     description: `code review incomplete: ${count(current.partitions_not_reviewed)} partitions not reviewed` };
   if (current.state === 'current' && current.verdict === 'pass' && current.review_completeness === 'complete'
       && current.blocking_count === 0) return { state: 'success',
-    description: `code review: no blocking issues, ${count(current.warning_count)} notes` };
+    description: shown(`code review: no blocking issues, ${count(current.warning_count)} notes`) };
   if (current.state === 'current' && current.verdict === 'needs-fix') return { state: 'pending',
-    description: `code review: ${count(current.blocking_count)} blocking issues, ${count(current.warning_count)} notes` };
+    description: shown(`code review: ${count(current.blocking_count)} blocking issues, ${count(current.warning_count)} notes`) };
   throw new Error('publication requires a sealed verdict for the exact head or the limit state');
 }
 
@@ -269,7 +285,8 @@ function originalLocator(finding, sealed, prior, ctx, readSource) {
 
 function findingsComment(current, sealed, prior, ctx) {
   const readSource = core.createSourceReader({ git: args => git(ctx.worktree, args), head: sealed.head });
-  const header = `<!-- code-review -->\nCode review — round ${sealed.round}, scope ${sealed.scope}\nVerdict: ${sealed.verdict}\n\n`;
+  const header = `<!-- code-review -->\nCode review — round ${sealed.round}, scope ${sealed.scope}\n`
+    + (current.extension ? extensionLine(sealed.round, current.extension) + '\n' : '') + `Verdict: ${sealed.verdict}\n\n`;
   const stop = current.mode === 'hold' && !(current.state === 'current' && current.verdict === 'pass');
   const footer = `\n${sealed.disagreement_suppressed} findings not raised again because of a recorded disagreement.\n`
     + `citations_unresolved: ${sealed.citations_unresolved}\n`
@@ -563,7 +580,10 @@ function publish(input, options = {}) {
   if (['number', 'state', 'headRefName', 'headRefOid', 'baseRefName', 'baseRefOid'].some(key => live[key] !== ctx.live[key])
       || live.headRefOid !== current.head || git(ctx.worktree, ['rev-parse', 'HEAD']) !== current.head)
     throw new Error('live phase PR identity changed before publication');
-  const summary = statusDescription(current);
+  const screen = require('./pr-hygiene.cjs');
+  let summary = statusDescription(current);
+  if (current.extension && screen.applies({ root: ctx.worktree }) && screen.internalLeakViolations('status', summary.description).length)
+    summary = statusDescription({ ...current, extension: null });
   const api = ctx.repo ? `repos/${ctx.repo}` : 'repos/{owner}/{repo}';
   const result = { schema: 'shipyard.phase-code-review-publish.v1',
     status: { ok: false, action: 'failed', head: current.head, ...summary }, comment: { ok: false }, rules: [] };
