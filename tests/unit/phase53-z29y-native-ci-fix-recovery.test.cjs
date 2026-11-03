@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
-const { root, scripts, hash, git, signingFixture, ciFixture, assertCurrent, bounded } = require('./phase53-z29x-native-ci-fix-contract.test.cjs');
+const { root, scripts, hash, git, historicalCiScripts, signingFixture, ciFixture, assertCurrent, fixtureController, bounded } = require('./phase53-z29x-native-ci-fix-contract.test.cjs');
 const host = require(path.join(scripts, 'codex-delivery-host.cjs'));
 const boundary = require(path.join(scripts, 'dispatch-boundary.cjs'));
 const identities = ['.codex-plugin/plugin.json', 'package-build.json'];
@@ -78,6 +78,183 @@ function coldOriginal(f, installed, expectedError, expectedPushes = 1) {
   return recovered.result;
 }
 if (require.main === module) {
+  test('shared coverage aliases retain historical native CI evidence and refuse corrupt direct records and foreign custody', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      const producerScripts = historicalCiScripts(path.join(signing.directory, 'historical-coverage-producer'));
+      const f = ciFixture(signing, { declaredRepo: null, producerScripts });
+      git(f.worktree, 'remote', 'add', 'origin', 'https://github.com/fixture/repository.git');
+      const result = await f.run(), authority = require(path.join(scripts, 'conveyor-coverage.cjs'));
+      const commit = result.artifact.commit, repository = authority.repositoryIdentity(f.worktree);
+      const coverageRoot = process.env.SHIPYARD_COVERAGE_ROOT;
+      const remoteFile = path.join(coverageRoot, 'coverage', encodeURIComponent('fixture/repository'), commit + '.json');
+      const directFile = path.join(coverageRoot, 'coverage', encodeURIComponent(repository), commit + '.json');
+      const remoteBytes = fs.readFileSync(remoteFile);
+      const operation = originalOperation(f).envelope.payload;
+      const receiptFile = path.join(operation.receipt_store, 'record-' + hash(result.receipt.dispatch_id) + '.json');
+      const receiptBytes = fs.readFileSync(receiptFile);
+      const read = (covered, repo, worktree = f.worktree) => {
+        const beforeCoverage = inventory(coverageRoot), beforeReceipts = inventory(operation.receipt_store);
+        const checked = authority.verify({ commit, repo, worktree });
+        assert.equal(checked.covered, covered, checked.reason);
+        const chain = authority.chain({ repo, worktreeOrCheckout: worktree, base: f.originalHead, head: commit });
+        assert.equal(chain.covered, covered, chain.reason);
+        if (covered) {
+          assert.equal(checked.record.repo, 'fixture/repository'); assert.equal(checked.record.repository_id, repository);
+          assert.equal(checked.record.ticket, f.scope.ticket); assert.equal(checked.record.dispatch_id, result.receipt.dispatch_id);
+          assert.deepEqual(chain.links, ['fixer']);
+        }
+        assert.deepEqual(inventory(coverageRoot), beforeCoverage); assert.deepEqual(inventory(operation.receipt_store), beforeReceipts);
+      };
+      for (const repo of [undefined, repository, 'fixture/repository']) read(true, repo);
+      f.options.controller.release(f.scope.run_id, 'fixture current host custody handoff'); delete f.options.controller;
+      fixtureController(f.options);
+      const resumed = await host.createCodexDeliveryHost(f.options).run({ role: f.request.role, context: f.request.context });
+      assert.equal(resumed.receipt.dispatch_id, result.receipt.dispatch_id);
+      assert.equal(resumed.receipt.runtime_evidence.session_id, result.receipt.runtime_evidence.session_id);
+      assert.equal(f.launches, 1); assert.equal(f.pushes, 1);
+      for (const mutation of ['missing-coverage', 'corrupt-coverage', 'foreign-coverage', 'missing-receipt', 'corrupt-receipt',
+        'foreign-receipt', 'corrupt-direct', 'conflicting-direct', 'symlink-direct', 'foreign-repo', 'foreign-origin', 'missing-origin', 'local-origin', 'foreign-checkout'])
+        await t.test(mutation, bounded, () => {
+          let repo, worktree = f.worktree, clone;
+          try {
+            if (mutation === 'missing-coverage') fs.unlinkSync(remoteFile);
+            if (['corrupt-coverage', 'foreign-coverage'].includes(mutation)) {
+              const changed = JSON.parse(remoteBytes);
+              if (mutation === 'foreign-coverage') changed.payload.repository_id = 'git-common:' + 'f'.repeat(64);
+              else changed.integrity.mac = '0'.repeat(64);
+              fs.writeFileSync(remoteFile, JSON.stringify(changed));
+            }
+            if (mutation === 'missing-receipt') fs.unlinkSync(receiptFile);
+            if (['corrupt-receipt', 'foreign-receipt'].includes(mutation)) {
+              const changed = JSON.parse(receiptBytes);
+              if (mutation === 'foreign-receipt') changed.payload.ticket = 'T-53-30';
+              else changed.integrity.mac = '0'.repeat(64);
+              fs.writeFileSync(receiptFile, JSON.stringify(changed));
+            }
+            if (mutation.endsWith('-direct')) {
+              fs.mkdirSync(path.dirname(directFile), { recursive: true, mode: 0o700 });
+              if (mutation === 'symlink-direct') fs.symlinkSync(path.join(signing.directory, 'absent-record'), directFile);
+              else fs.writeFileSync(directFile, mutation === 'conflicting-direct' ? remoteBytes : '{invalid', { mode: 0o600 });
+            }
+            if (mutation === 'foreign-repo') repo = 'foreign/repository';
+            if (mutation === 'foreign-origin') git(f.worktree, 'remote', 'set-url', 'origin', 'https://github.com/foreign/repository.git');
+            if (mutation === 'missing-origin') git(f.worktree, 'remote', 'remove', 'origin');
+            if (mutation === 'local-origin') git(f.worktree, 'remote', 'set-url', 'origin', signing.directory);
+            if (mutation === 'foreign-checkout') {
+              clone = path.join(signing.directory, 'foreign-checkout');
+              git(signing.directory, 'clone', '-q', '--no-hardlinks', f.worktree, clone);
+              git(clone, 'remote', 'set-url', 'origin', 'https://github.com/fixture/repository.git'); worktree = clone;
+            }
+            read(false, repo, worktree);
+          } finally {
+            fs.rmSync(directFile, { force: true });
+            if (mutation.endsWith('-direct')) fs.rmdirSync(path.dirname(directFile));
+            fs.writeFileSync(remoteFile, remoteBytes, { mode: 0o600 }); fs.writeFileSync(receiptFile, receiptBytes, { mode: 0o600 });
+            if (mutation === 'missing-origin') git(f.worktree, 'remote', 'add', 'origin', 'https://github.com/fixture/repository.git');
+            else git(f.worktree, 'remote', 'set-url', 'origin', 'https://github.com/fixture/repository.git');
+            if (clone) fs.rmSync(clone, { recursive: true, force: true });
+          }
+          read(true);
+          assert.equal(f.launches, 1); assert.equal(f.pushes, 1);
+        });
+      assert.deepEqual(fs.readFileSync(remoteFile), remoteBytes);
+      assert.deepEqual(fs.readFileSync(receiptFile), receiptBytes);
+    } finally { signing.close(); }
+  });
+  test('old module-written private CI markers stay read-only with valid, missing and corrupt original reservations', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      const producerScripts = historicalCiScripts(path.join(signing.directory, 'legacy-private-producer'));
+      for (const rung of [2, 3]) for (const custody of ['valid', 'missing', 'corrupt']) await t.test(`${rung}:${custody}`, bounded, async () => {
+        const f = ciFixture(signing, { producerScripts }); f.control.source = false; f.output.status = 'no-op';
+        let result;
+        for (let attempt = 1; attempt <= rung; attempt++) {
+          if (f.options.controller) { f.options.controller.release(f.scope.run_id, 'fixture original CI handoff'); delete f.options.controller; }
+          f.scope.run_id = 'legacy-original-' + require('node:crypto').randomUUID(); f.control.runAttempt = attempt;
+          result = await f.run();
+        }
+        const original = originalOperation(f).envelope.payload, store = original.receipt_store;
+        const predecessor = original.predecessor_dispatch_id;
+        assert.ok(predecessor); assert.equal(result.receipt.applied_effort, rung === 2 ? 'high' : 'xhigh');
+        const markerFile = path.join(store, 'repair-commit-' + hash(predecessor) + '.json');
+        const marker = JSON.parse(fs.readFileSync(markerFile)).payload;
+        assert.equal(marker.original_kind, undefined); assert.equal(marker.successor_dispatch_id, result.receipt.dispatch_id);
+        assert.equal(marker.record_input.receipt.runtime_evidence.session_id, result.receipt.runtime_evidence.session_id);
+        const reservation = path.join(store, 'reservation-' + hash(result.receipt.dispatch_id) + '.json');
+        assert.equal(JSON.parse(fs.readFileSync(reservation)).payload.original_kind, 'ci-fix');
+        if (custody === 'missing') fs.unlinkSync(reservation);
+        if (custody === 'corrupt') { const changed = JSON.parse(fs.readFileSync(reservation));
+          changed.integrity.mac = '0'.repeat(64); fs.writeFileSync(reservation, JSON.stringify(changed)); }
+        for (const file of ['record-' + hash(result.receipt.dispatch_id), 'latest-' + hash('codex:ci-fix'), 'consumed-' + hash(predecessor)])
+          fs.rmSync(path.join(store, file + '.json'), { force: true });
+        const before = inventory(store);
+        const child = spawnSync(process.execPath, ['-e', `const assert=require('node:assert/strict');
+          const r=require(process.argv[1]).createDurableRecorder(process.argv[2]);
+          assert.equal(r.isConsumed(process.argv[3]),true);
+          assert.deepEqual(r.claim(process.argv[3],'foreign-reader'),{claimed:false});
+          assert.equal(r.getVerifiedRecord(process.argv[4]),null);
+          assert.equal(r.getLatestReceipt('codex','ci-fix'),null);`,
+          path.join(scripts, 'dispatch-boundary.cjs'), store, predecessor, result.receipt.dispatch_id],
+        { encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+        assert.equal(child.status, 0, child.stderr); assert.deepEqual(inventory(store), before);
+        assert.equal(f.launches, rung); assert.equal(f.pushes, 0);
+      });
+    } finally { signing.close(); }
+  });
+  test('old generic native CI markers recover only with their valid unsigned legacy reservation', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      const producerScripts = historicalCiScripts(path.join(signing.directory, 'legacy-generic-producer'));
+      const producer = require(path.join(producerScripts, 'dispatch-boundary.cjs'));
+      for (const custody of ['valid', 'missing', 'corrupt', 'foreign-legacy']) await t.test(custody, bounded, async () => {
+        const f = ciFixture(signing, { producerScripts }); f.control.source = false; f.output.status = 'no-op';
+        const store = path.join(signing.directory, 'generic-receipts-' + custody);
+        const recorder = producer.createDurableRecorder(store);
+        const runtime = require(path.join(producerScripts, 'codex-runtime-host.cjs')).createCodexRuntimeHost({
+          ...f.options, recorder, transcriptDir: path.join(signing.directory, 'generic-transcripts-' + custody) });
+        const adapter = require(path.join(producerScripts, 'codex-dispatch-adapter.cjs')).createCodexDispatchAdapter({
+          agentsDir: f.options.agentDir, agentManifest: f.options.agentManifest, capabilities: f.options.capabilities, host: runtime });
+        const dispatch = producer.createDispatchBoundary({ adapters: { codex: adapter }, recorder, cwd: f.worktree });
+        const context = { ticket: f.scope.ticket, run_id: f.scope.run_id, phase: f.scope.phase,
+          worktree: f.worktree, prompt: 'Retain the original generic CI native receipt.' };
+        const first = await dispatch.dispatch({ runtime: 'codex', role: 'ci-fix', dispatch_id: 'generic-first-' + custody }, context);
+        const second = await dispatch.dispatch({ runtime: 'codex', role: 'ci-fix', dispatch_id: 'generic-repeat-' + custody,
+          previous_dispatch_id: first.dispatch_id, signals: { signatureState: 'repeat', priorApplied: first.receipt } }, context);
+        assert.equal(second.receipt.applied_effort, 'high'); assert.equal(f.launches, 2); assert.equal(f.pushes, 0);
+        const reservation = path.join(store, 'reservation-' + hash(second.dispatch_id) + '.json');
+        const legacy = JSON.parse(fs.readFileSync(reservation));
+        assert.equal(legacy.dispatch_id, second.dispatch_id); assert.equal(legacy.format, undefined);
+        assert.equal(legacy.original_kind, undefined);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(store, 'repair-commit-' + hash(first.dispatch_id) + '.json'))).payload.original_kind, undefined);
+        if (custody === 'missing') fs.unlinkSync(reservation);
+        if (custody === 'corrupt') fs.writeFileSync(reservation, '{invalid');
+        if (custody === 'foreign-legacy') fs.writeFileSync(reservation, JSON.stringify({ ...legacy, dispatch_id: first.dispatch_id }));
+        for (const file of ['record-' + hash(second.dispatch_id), 'latest-' + hash('codex:ci-fix'), 'consumed-' + hash(first.dispatch_id)])
+          fs.rmSync(path.join(store, file + '.json'), { force: true });
+        const before = inventory(store);
+        const child = spawnSync(process.execPath, ['-e', `const assert=require('node:assert/strict');
+          const r=require(process.argv[1]).createDurableRecorder(process.argv[2]);
+          assert.equal(r.isConsumed(process.argv[3]),true);
+          assert.deepEqual(r.claim(process.argv[3],'foreign-reader'),{claimed:false});
+          const expected=JSON.parse(process.argv[5]);
+          assert.deepEqual(r.getVerifiedRecord(process.argv[4])?.receipt||null,expected);
+          assert.equal(r.getLatestReceipt('codex','ci-fix')?.dispatch_id||null,expected?process.argv[4]:null);`,
+          path.join(scripts, 'dispatch-boundary.cjs'), store, first.dispatch_id, second.dispatch_id,
+          JSON.stringify(custody === 'valid' ? second.receipt : null)],
+        { encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+        assert.equal(child.status, 0, child.stderr);
+        if (custody !== 'valid') assert.deepEqual(inventory(store), before);
+        else {
+          const recovered = boundary.createDurableRecorder(store).getVerifiedRecord(second.dispatch_id);
+          assert.deepEqual(recovered.receipt, second.receipt);
+          assert.equal(recovered.predecessor_dispatch_id, first.dispatch_id);
+          assert.equal(recovered.receipt.runtime_evidence.session_id, second.receipt.runtime_evidence.session_id);
+          assert.equal(fs.existsSync(path.join(store, 'consumed-' + hash(first.dispatch_id) + '.json')), false);
+        }
+      });
+    } finally { signing.close(); }
+  });
   test('CI candidate association recovers admission and finalization crashes through the original cold operation', bounded, async t => {
     const signing = signingFixture();
     try {

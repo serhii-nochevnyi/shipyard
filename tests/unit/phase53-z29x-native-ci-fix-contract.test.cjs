@@ -22,6 +22,13 @@ function git(directory, ...args) {
   return execFileSync('git', ['-C', directory, ...args], { encoding: 'utf8', timeout: 180000,
     maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
+function historicalCiScripts(directory) {
+  fs.cpSync(scripts, directory, { recursive: true });
+  for (const file of ['codex-delivery-host.cjs', 'dispatch-boundary.cjs']) fs.writeFileSync(path.join(directory, file),
+    execFileSync('git', ['-C', root, 'show', '17a0ebbae24e35d86f1e41778a6c36fc61c78407:plugins/delivery-pipeline/scripts/' + file],
+      { timeout: 180000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
+  return directory;
+}
 function signingFixture() {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't31-')));
   const saved = Object.fromEntries(['HOME', 'GNUPGHOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'SHIPYARD_COVERAGE_ROOT'].map(key => [key, process.env[key]]));
@@ -39,7 +46,8 @@ function signingFixture() {
     assert.equal(stopped.status, 0, String(stopped.stderr));
   } };
 }
-function ciFixture(signing) {
+function ciFixture(signing, { declaredRepo = 'fixture/repository', producerScripts = scripts } = {}) {
+  const deliveryHost = require(path.join(producerScripts, 'codex-delivery-host.cjs'));
   const worktree = path.join(signing.directory, crypto.randomUUID()), project = path.join(signing.directory, crypto.randomUUID());
   process.env.SHIPYARD_COVERAGE_ROOT = path.join(signing.directory, 'coverage-' + hash(worktree));
   const graphDir = path.join(project, '.planning/graph'), plan = path.join(project, '.planning/PLAN.md');
@@ -54,7 +62,7 @@ function ciFixture(signing) {
   git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'original'); git(worktree, 'switch', '-c', 'ticket/T-53-31');
   const scope = { run_id: 'fixture-' + crypto.randomUUID(), ticket: 'T-53-31', phase: 53, worktree, runtime: 'codex', provider: 'openai' };
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets: { 'T-53-31': {
-    phase: 53, branch: 'ticket/T-53-31', pr_base: 'main', plan: '.planning/PLAN.md', files: ['src/owned.txt'], repo: 'fixture/repository',
+    phase: 53, branch: 'ticket/T-53-31', pr_base: 'main', plan: '.planning/PLAN.md', files: ['src/owned.txt'], repo: declaredRepo,
   } } }));
   fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify({ 'T-53-31': { pr: 501, base: 'main', branch: 'ticket/T-53-31' } }));
   fs.writeFileSync(plan, '# Approved\n\n## Verification commands\n\n- `node check.cjs`\n');
@@ -79,7 +87,7 @@ function ciFixture(signing) {
   const originalHead = git(worktree, 'rev-parse', 'HEAD'), base = git(worktree, 'rev-parse', 'main');
   let publishedHead = originalHead, launches = 0, pushes = 0;
   const requests = [], selections = [], responses = {};
-  const control = { failPush: false, source: true, runAttempt: 1, jobId: '43', mutateNative: null, mutateResponse: null };
+  const control = { failPush: false, source: true, role: 'ci-fix', runAttempt: 1, jobId: '43', mutateNative: null, mutateResponse: null };
   const live = () => ({ number: 501, state: 'OPEN', headRefName: 'ticket/T-53-31', headRefOid: publishedHead, baseRefName: 'main', baseRefOid: base });
   const transport = (program, args, options) => {
     requests.push({ program, args });
@@ -122,7 +130,7 @@ function ciFixture(signing) {
       const effort = JSON.parse(args.find(value => value.startsWith('model_reasoning_effort=')).split('=')[1]);
       const applied = { model: args[args.indexOf('--model') + 1], effort };
       selections.push(applied);
-      const file = variants.find(variant => variant.effort === effort).file;
+      const file = variants.find(variant => variant.effort === effort).file.replace('ci-fix', control.role);
       if (control.source) fs.writeFileSync(path.join(worktree, 'src/owned.txt'), 'fixed\n');
       fs.writeFileSync(path.join(worktree, '.shipyard-repair-evidence.md'), 'Original physical fixture producer evidence.\n');
       const captured = name => fs.readFileSync(path.join(root, 'tests/fixtures/captured', name), 'utf8').trim().split('\n').map(JSON.parse);
@@ -167,11 +175,11 @@ function ciFixture(signing) {
   return { worktree, graphDir, plan, scope, options, request, requestFile, failureFile, failureBytes, originalHead, base, control, output,
     get launches() { return launches; }, get pushes() { return pushes; }, selections, requests,
     async run() {
-      host.prepareCiRepair(options, scope, request.context);
-      if (!options.controller) fixtureController(options);
-      return host.createCodexDeliveryHost(options).run({ role: request.role, context: request.context });
+      deliveryHost.prepareCiRepair(options, scope, request.context);
+      if (!options.controller) fixtureController(options, producerScripts);
+      return deliveryHost.createCodexDeliveryHost(options).run({ role: request.role, context: request.context });
     },
-    cliRun() { return host.runCli(['--args-file', requestFile], { write() {} }, options); },
+    cliRun() { return deliveryHost.runCli(['--args-file', requestFile], { write() {} }, options); },
     coldSpec() { return { options: JSON.parse(JSON.stringify(options)), request, responses, live: live(), output }; },
     publish(head) { publishedHead = head; },
     stateRoot: path.join(options.storageRoot, 'finalization', hash(worktree)),
@@ -248,6 +256,103 @@ async function coldRecovery(spec, consumerScripts = scripts) {
   assert.equal(launches, 0); return { result, launches, pushes };
 }
 if (require.main === module) {
+  test('new default CI originals retain canonical repository identity through shared default and origin coverage readers', bounded, async () => {
+    const signing = signingFixture();
+    try {
+      const f = ciFixture(signing, { declaredRepo: null });
+      git(f.worktree, 'remote', 'add', 'origin', 'git@github.com:fixture/repository.git');
+      const result = await f.run();
+      const repository = coverage.repositoryIdentity(f.worktree);
+      for (const repo of [undefined, repository, 'fixture/repository']) {
+        const checked = coverage.verify({ commit: result.artifact.commit, repo, worktree: f.worktree });
+        assert.equal(checked.covered, true, checked.reason);
+        assert.equal(checked.record.repo, repository);
+        assert.equal(checked.record.repository_id, repository);
+        assert.equal(checked.record.dispatch_id, result.receipt.dispatch_id);
+        assert.deepEqual(coverage.chain({ repo, worktreeOrCheckout: f.worktree, base: f.originalHead,
+          head: result.artifact.commit }), { covered: true, links: ['fixer'] });
+      }
+      const original = fs.readdirSync(path.join(f.stateRoot, 'ci-originals')).map(file =>
+        JSON.parse(fs.readFileSync(path.join(f.stateRoot, 'ci-originals', file))).payload)[0];
+      assert.equal(original.preparation.repo, null);
+      assert.equal(original.preparation.repair.feedback.repository, 'fixture/repository');
+      assert.equal((await f.run()).receipt.dispatch_id, result.receipt.dispatch_id);
+      assert.equal(f.launches, 1); assert.equal(f.pushes, 1);
+      assert.equal(coverage.verify({ commit: result.artifact.commit, repo: 'foreign/repository', worktree: f.worktree }).covered, false);
+    } finally { signing.close(); }
+  });
+  test('genuine historical remote CI coverage admits the following default review source transition without rewriting custody', bounded, async () => {
+    const signing = signingFixture();
+    try {
+      const producerScripts = historicalCiScripts(path.join(signing.directory, 'historical-ci-scripts'));
+      const producer = require(path.join(producerScripts, 'codex-delivery-host.cjs'));
+      const f = ciFixture(signing, { declaredRepo: null, producerScripts });
+      git(f.worktree, 'remote', 'add', 'origin', 'https://github.com/fixture/repository.git');
+      const manifest = JSON.parse(fs.readFileSync(f.options.agentManifest));
+      const ciAgent = 'shipyard-ci-fix.toml', reviewAgent = 'shipyard-review-fix.toml';
+      const content = fs.readFileSync(path.join(f.options.agentDir, ciAgent), 'utf8').replaceAll('ci-fix', 'review-fix');
+      fs.writeFileSync(path.join(f.options.agentDir, reviewAgent), content);
+      manifest.agent_files.push(reviewAgent); manifest.agent_digests[reviewAgent] = hash(content);
+      fs.writeFileSync(f.options.agentManifest, JSON.stringify(manifest));
+      const actor = { __typename: 'User', id: 'original-host-user', login: 'delivery-host' }, replies = [];
+      const transport = f.options.execFileSync;
+      f.options.execFileSync = (program, args, options) => {
+        if (program === 'gh' && args[0] === 'pr') return JSON.stringify({ id: 'pr-body-501' });
+        const query = args.find(arg => arg.startsWith('query='));
+        if (program !== 'gh' || !query) return transport(program, args, options);
+        const value = key => args.find(arg => arg.startsWith(key + '='))?.slice(key.length + 1);
+        let data;
+        if (query.includes('viewer{id login}')) data = { viewer: actor };
+        else if (query.includes('addComment(input:')) {
+          const comment = { id: 'original-host-reply', body: value('body'), author: actor }; replies.push(comment);
+          data = { addComment: { commentEdge: { node: comment } } };
+        } else if (query.includes('{id body title}')) data = { repository: { pullRequest: {
+          id: 'pr-body-501', body: 'Original full PR finding', title: 'Original PR' } } };
+        else {
+          const field = query.includes('reviewThreads(') ? 'reviewThreads' : query.includes('reviews(') ? 'reviews' : 'comments';
+          data = { repository: { pullRequest: { [field]: { nodes: field === 'comments' ? replies : [],
+            pageInfo: { hasNextPage: false, endCursor: null } } } } };
+        }
+        return JSON.stringify({ data });
+      };
+      const reviewFile = path.join(signing.directory, 'original-review.md'); fs.writeFileSync(reviewFile, 'Complete original review.');
+      const review = builder.build(['review-fix', f.scope.ticket, '--runtime', 'codex', '--pr', '501', '--review-file', reviewFile],
+        { cwd: f.worktree, graphDir: f.graphDir });
+      f.control.role = 'review-fix'; f.control.source = false; f.output.status = 'no-op';
+      f.output.review_dispositions = [{ id: 'pr-body-501', action: 'reply', reply: 'Retain original reviewed finding.',
+        evidence: { command: 'inspect original', result: 'Complete original evidence inspected.' } }];
+      const first = await producer.createCodexDeliveryHost(f.options).run({ role: review.role, context: review.context });
+      assert.equal(first.receipt.role, 'review-fix'); assert.equal(replies.length, 1);
+      const actionsDirectory = path.join(f.stateRoot, 'repair-actions');
+      const actions = fs.readdirSync(actionsDirectory).map(name => ({ file: path.join(actionsDirectory, name),
+        bytes: fs.readFileSync(path.join(actionsDirectory, name)) }));
+      delete f.output.review_dispositions; f.control.role = 'ci-fix'; f.control.source = true; f.output.status = 'fixed';
+      const result = await f.run();
+      const commit = result.artifact.commit, repository = coverage.repositoryIdentity(f.worktree);
+      const coverageFile = path.join(process.env.SHIPYARD_COVERAGE_ROOT, 'coverage', encodeURIComponent('fixture/repository'), commit + '.json');
+      const bytes = fs.readFileSync(coverageFile);
+      for (const repo of [undefined, repository, 'fixture/repository']) {
+        const checked = coverage.verify({ worktree: f.worktree, commit, repo });
+        assert.equal(checked.covered, true, checked.reason); assert.equal(checked.record.repo, 'fixture/repository');
+        assert.equal(checked.record.ticket, f.scope.ticket); assert.equal(checked.record.dispatch_id, result.receipt.dispatch_id);
+        assert.equal(checked.record.receipt_digest, hash(stable(result.receipt)));
+        assert.deepEqual(checked.record.parents, [f.originalHead]); assert.equal(checked.record.tree, result.artifact.tree);
+        assert.deepEqual(coverage.chain({ repo, worktreeOrCheckout: f.worktree, base: f.originalHead, head: commit }),
+          { covered: true, links: ['fixer'] });
+      }
+      f.options.controller.release(f.scope.run_id, 'fixture following review'); delete f.options.controller;
+      const prepared = host.prepareRepair(f.options, f.scope, review.context);
+      assert.equal(prepared.repo, null);
+      assert.equal(prepared.repair.actionable_feedback.coverage.length, 1);
+      const transition = host.repairCoverageTransition(prepared.repair.actionable_feedback.coverage[0],
+        prepared.repair.actionable_feedback);
+      assert.equal(transition.historical, true); assert.equal(transition.semantic_credit, false);
+      assert.equal(transition.source_transition.from, f.originalHead); assert.equal(transition.source_transition.to, commit);
+      assert.equal(f.launches, 2); assert.equal(f.pushes, 1); assert.equal(replies.length, 1);
+      assert.deepEqual(fs.readFileSync(coverageFile), bytes);
+      for (const action of actions) assert.deepEqual(fs.readFileSync(action.file), action.bytes);
+    } finally { signing.close(); }
+  });
   test('builder and CLI bind real CI through original recorder, signed fixer and independent current reader', bounded, async () => {
     const signing = signingFixture();
     try {
@@ -278,4 +383,4 @@ if (require.main === module) {
     } finally { signing.close(); }
   });
 }
-module.exports = { root, scripts, hash, stable, git, signingFixture, ciFixture, assertCurrent, coldRecovery, fixtureController, bounded };
+module.exports = { root, scripts, hash, stable, git, historicalCiScripts, signingFixture, ciFixture, assertCurrent, coldRecovery, fixtureController, bounded };

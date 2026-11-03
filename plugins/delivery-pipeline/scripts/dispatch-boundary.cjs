@@ -619,8 +619,16 @@ function createDurableRecorder(storeDir) {
     if (!validRepairCommit(commit, predecessorDispatchId)) {
       throw boundaryError('RECORD_FAILED', 'durable repair commit is malformed', { dispatch_id: predecessorDispatchId });
     }
-    const original = readAuthenticated(reservationFile(commit.successor_dispatch_id));
-    if (commit.original_kind === 'ci-fix' || original?.original_kind === 'ci-fix') return commit;
+    const reservation = readStored(reservationFile(commit.successor_dispatch_id));
+    const genericReservation = reservation?.legacy && reservation.payload.dispatch_id === commit.successor_dispatch_id
+      && typeof reservation.payload.reserved_at === 'string'
+      && Number.isFinite(Date.parse(reservation.payload.reserved_at || ''))
+      && Object.keys(reservation.payload).every(key => ['dispatch_id', 'reserved_at'].includes(key));
+    if (commit.original_kind === 'ci-fix'
+        || (reservation?.authenticated && reservation.payload.original_kind === 'ci-fix')
+        || (commit.record_input.receipt?.role === 'ci-fix'
+          && (!reservation || reservation.payload?.dispatch_id !== commit.successor_dispatch_id
+            || (!reservation.authenticated && !genericReservation)))) return commit;
     const successorRecord = recordFile(commit.successor_dispatch_id);
     const existingStored = readStored(successorRecord);
     const existing = existingStored && existingStored.payload;

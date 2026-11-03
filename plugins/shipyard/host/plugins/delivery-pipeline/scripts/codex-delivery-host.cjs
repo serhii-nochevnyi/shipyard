@@ -2768,7 +2768,6 @@ function prepareCiRepair(options, scope, context) {
     const live = repairLive(options, prepared, pr);
     const feedback = collectRepairCi(options, prepared, pr, evidence);
     if (prepared.repo && prepared.repo.toLowerCase() !== feedback.repository.toLowerCase()) fail('CI_SUBJECT_REQUIRED', 'CI repository differs from graph');
-    prepared = { ...prepared, repo: feedback.repository };
     history = ciRepairHistory(prepared, pr);
     const signature = sha256(canonical({ repository: feedback.repository, ticket: scope.ticket, pr,
       failure: evidence.sha256, name: feedback.failure.name, workflow_id: feedback.failure.workflow_id }));
