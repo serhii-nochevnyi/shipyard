@@ -448,6 +448,9 @@ test('an extended round is owed only as a delta with a record for the current he
   const { countable, ...refused } = look(3, 'H4', [rec('H4')], 'H4');
   assert.equal(countable.length, 3);
   assert.deepEqual(refused, { round: null, state: 'limit', rounds_used: 3, limit: 4, extension: grant, reason: 'no-delta' });
+  const { countable: fifth, ...refusedFifth } = look(4, 'H5', [rec('H4'), rec('H5')], 'H5');
+  assert.equal(fifth.length, 4);
+  assert.deepEqual(refusedFifth, { round: null, state: 'limit', rounds_used: 4, limit: 5, extension: grant, reason: 'no-delta' });
   const early = rec('H3', '2026-03-02T12:00:00.000Z');
   for (const [sealed, head, records, limit] of [[3, 'H4', [early], 4], [4, 'H5', [early, rec('H4', '2026-03-02T12:00:00.000Z')], 5]]) {
     const { countable: used, ...result } = look(sealed, head, records);
