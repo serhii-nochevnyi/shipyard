@@ -11,7 +11,7 @@ const coverage = require(path.join(scripts, 'conveyor-coverage.cjs'));
 const canonical = 'plugins/delivery-pipeline/scripts/role-artifact.cjs';
 const mirror = 'plugins/shipyard/host/' + canonical;
 const identityPaths = ['plugins/shipyard/.codex-plugin/plugin.json', 'plugins/shipyard/package-build.json'];
-function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false, wrappedBoard = false, multipleConflicts = false } = {}) {
+function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false, wrappedBoard = false, multipleConflicts = false, mechanicalCanonical = false } = {}) {
   const worktree = path.join(signing.directory, 'source-' + crypto.randomUUID());
   fs.mkdirSync(worktree); packageSource(worktree);
   git(worktree, 'init', '-q', '-b', 'main');
@@ -22,6 +22,7 @@ function divergentFixture(signing, { conflict = false, generatedEntry = false, m
   git(worktree, 'switch', '-c', 'ticket/T-53-31');
   const file = path.join(worktree, canonical), original = fs.readFileSync(file, 'utf8');
   fs.writeFileSync(file, original.replace("'use strict';", "'use strict';\nvoid 'ticket canonical change';"));
+  if (mechanicalCanonical) fs.appendFileSync(path.join(worktree, 'plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), "\nvoid 'stale ticket canonical change';\n");
   const generate = () => {
     const r = spawnSync(process.execPath, [path.join(worktree, 'scripts/package-shipyard-codex.cjs')], { encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
     assert.equal(r.status, 0, r.stderr); verifyPackage(path.join(worktree, 'plugins/shipyard'));
@@ -127,6 +128,17 @@ if (require.main === module) {
       const before = git(f.worktree, 'rev-parse', 'HEAD'); inspectSuccess(f, f.run()); assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), before);
     } finally { signing.close(); }
   });
+  test('authenticated mechanical canonical resolution leaves only generated stages eligible', bounded, () => {
+    const signing = signingFixture();
+    try {
+      const f = divergentFixture(signing, { mechanicalCanonical: true });
+      const result = inspectSuccess(f, f.run());
+      assert.ok(result.taken_from_base.includes('plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'));
+      const operation = retainedOperation(f);
+      assert.ok(operation.observed.unmerged.includes('plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'));
+      assert.equal(operation.combined_stages.some(row => row.stage !== 0 && row.path.startsWith('plugins/delivery-pipeline/')), false);
+    } finally { signing.close(); }
+  });
   test('unresolved canonical source conflict stays owned and uncommitted with both semantic sides retained', bounded, () => {
     const signing = signingFixture();
     try {
@@ -134,6 +146,15 @@ if (require.main === module) {
       assert.notEqual(r.status, 0); assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), f.head);
       const stages = git(f.worktree, 'ls-files', '--unmerged', '--', canonical); assert.match(stages, / 2\t/); assert.match(stages, / 3\t/);
       assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: f.head }).covered, false);
+      assert.equal(retainedOperation(f).phase, 'manual');
+      git(f.worktree, 'checkout', '--ours', '--', '.'); git(f.worktree, 'add', '.');
+      git(f.worktree, 'commit', '--no-edit');
+      const manualHead = git(f.worktree, 'rev-parse', 'HEAD');
+      assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: manualHead }).covered, false);
+      const retry = f.run(); assert.equal(retry.status, 0, retry.stderr);
+      assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), manualHead);
+      assert.equal(retainedOperation(f).phase, 'manual');
+      assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: manualHead }).covered, false);
     } finally { signing.close(); }
   });
   test('same-original generated merge resumes signed-object, HEAD, cleanup and ambiguous coverage interruptions without a second commit', bounded, async t => {

@@ -3203,7 +3203,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
     check();
     const observed = operation.observed || observe();
     const combined = operation.combined_stages || observed.stages;
-    if (observed.unmerged.some(file => ['plugins/delivery-pipeline/', 'capabilities/delivery-pipeline/', 'scripts/'].some(prefix => file.startsWith(prefix))))
+    if (combined.some(row => row.stage !== 0 && ['plugins/delivery-pipeline/', 'capabilities/delivery-pipeline/', 'scripts/'].some(prefix => row.path.startsWith(prefix))))
       fail('GENERATED_MERGE_INELIGIBLE', 'canonical source conflicts cannot gain generated completion authority');
     if (!observed.unmerged.length || observed.unmerged.some(file => !eligible.has(file) && !operation.taken.includes(file)))
       fail('GENERATED_MERGE_INELIGIBLE', 'non-generated source conflict requires semantic resolution');
@@ -3384,7 +3384,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
     for (const name of files) {
       const prior = readSealed(path.join(directory, name), key);
       if (!prior || prior.pins?.ticket !== ticket) continue;
-      if (!['completed', 'ordinary'].includes(prior.phase)
+      if (!['completed', 'ordinary', 'manual'].includes(prior.phase)
           || (prior.phase === 'completed' && prior.commit === g(['rev-parse', 'HEAD']) && canonical(prior.pins) === canonical(pins()))) {
         if (operation) fail('GENERATED_MERGE_INVALID', 'multiple original generated merge operations');
         operation = prior; proofFile = path.join(directory, name);
@@ -3429,6 +3429,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
         fail('GENERATED_MERGE_CHANGED', 'combined source changed outside original mechanical resolutions');
       operation.taken = taken; operation.combined_stages = current; save(); return complete();
     },
+    manual() { check(); operation.phase = 'manual'; save(); },
     eligible(paths) { return paths.length > 0 && paths.every(file => eligible.has(file)); },
     ordinary() { if (operation) { operation.phase = 'ordinary'; operation.ordinary_head = g(['rev-parse', 'HEAD']); save(); } },
     release() { lock.release(); },

@@ -341,6 +341,7 @@ if (real.length && generatedMerge && generatedMerge.eligible(real)) {
 }
 
 if (real.length) {
+  if (generatedMerge) generatedMerge.manual();
   // No carry: nothing was committed, so the head has not moved and there is
   // nothing to prove about it.
   const payload = { ticket, base: baseRef, requested_base: base, result: 'conflicts remain', taken_from_base: taken, unresolved: real, contested, carry: null };
