@@ -12,6 +12,7 @@ const artifact = require('../../../plugins/delivery-pipeline/scripts/role-artifa
 const target = require('../../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 const core = require('../../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
 const { createDurableRecorder, createDispatchBoundary } = require('../../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const EXTENSION = Object.freeze({ operator: 'fixture-operator', at: '2026-11-02T10:00:00.000Z', reason: 'fixture host-authored extension' });
 const git = (root, args) => execFileSync('git',['-C',root,...args],{encoding:'utf8'}).trim();
 function fixture(suffix = 'plain') {
   const previousCodexHome = process.env.CODEX_HOME;
@@ -35,10 +36,11 @@ function fixture(suffix = 'plain') {
     writeGraph();
     return target.phaseBinding({graph,state,phase:52,repository:target.repositoryIdentity(root),pr:52,head:git(root,['rev-parse','HEAD']),base,branch});
   }
-  function input(binding, round=1, priorHead=null, rawResult) {
+  function input(binding, round=1, priorHead=null, rawResult, extension) {
     const dispatch = boundary.dispatch({runtime:'claude',role:'code-review',signals:{}},{ticket:binding.subject,subject_kind:'phase'});
     const raw = structuredClone(rawResult || JSON.parse(fs.readFileSync(path.join(__dirname,'review.json'),'utf8')));
-    const normalized = core.normalizeResult(raw,{round,scope:round===1?'full':'delta',readSource:file=>fs.readFileSync(path.join(root,file),'utf8')});
+    const granted = extension === undefined ? (round > core.ROUND_CAP ? { ...EXTENSION } : null) : extension;
+    const normalized = core.normalizeResult(raw,{round,scope:round===1?'full':'delta',extension:granted,readSource:file=>fs.readFileSync(path.join(root,file),'utf8')});
     const referenceDigest = require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(__dirname,'../../../plugins/delivery-pipeline/references/code-review.md'))).digest('hex');
     const contract = core.contractDigest(referenceDigest);
     fs.writeFileSync(path.join(root,'.shipyard-code-review-evidence.md'),'Complete review of all phase changes.\n');
@@ -81,7 +83,8 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
   const focused = { repository: target.repositoryIdentity(f.root), id: input.ticket, pr: input.pr, head,
     base_commit: base, merge_base: mergeBase, base_tree: git(f.root, ['rev-parse', mergeBase + '^{tree}']),
     ticket_set_digest: input.ticketSetDigest };
-  const round = { round: input.result.review_round, scope: input.result.review_scope, priorHead: input.result.prior_head };
+  const extension = options.extension !== undefined ? options.extension : input.result.review_extension ?? null;
+  const round = { round: input.result.review_round, scope: input.result.review_scope, priorHead: input.result.prior_head, extension };
   const roleContext = core.assemblePacket({ subject: input.ticket, identity: focused,
     exactDiff: { from: round.scope === 'delta' ? round.priorHead : mergeBase, to: head },
     integrationBase: { commit: base }, ticketSet: input.result.ticket_set, planAcceptance: [], priorFindings, round,
@@ -98,7 +101,7 @@ function retainPlanningInput(f, input, planningRoot = f.root, repo = null, optio
   Object.assign(raw, binding, { ticket_set: packet.role_context.ticket_set,
     evidence_markdown: raw.evidence_markdown || fs.readFileSync(path.join(f.root, '.shipyard-code-review-evidence.md'), 'utf8') });
   const dispatchId = crypto.randomUUID();
-  const normalization = { round: round.round, scope: round.scope, priorFindings,
+  const normalization = { round: round.round, scope: round.scope, priorFindings, extension,
     readSource: core.createSourceReader({ head, git: (args, maximum) => execFileSync('git', ['-C', f.root, ...args], { encoding: 'utf8', maxBuffer: maximum }) }) };
   const semantic = core.normalizeFinal(raw, options.parts ?? [], normalization);
   const { evidence_markdown: _markdown, host_context: _context, ...result } = semantic;
@@ -196,4 +199,4 @@ function writeCodexSession({ home, session, worktree, model, effort, prompt, raw
   return { native, nativeText };
 }
 
-module.exports = { fixture, retainPlanningInput, setOriginalReview, writeCodexSession };
+module.exports = { EXTENSION, fixture, retainPlanningInput, setOriginalReview, writeCodexSession };

@@ -23,6 +23,17 @@ function requireText(value, label, max = 1024) {
   if (!bounded(value, max)) fail('INVALID_RESULT', `${label} must be a non-empty string of at most ${max} bytes`);
   return value;
 }
+function validateReviewExtension(value, round) {
+  if (value === null || value === undefined) {
+    if (round > ROUND_CAP) fail('INVALID_RESULT', 'invalid review extension');
+    return;
+  }
+  const field = (key, max) => typeof value[key] === 'string' && bounded(value[key], max) && !/[\x00-\x1f\x7f]/.test(value[key]);
+  if (round <= ROUND_CAP || !object(value) || Object.keys(value).sort().join() !== 'at,operator,reason'
+      || !field('operator', 128) || !field('reason', 200) || !field('at', 24)
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.at) || !Number.isFinite(Date.parse(value.at)) || new Date(value.at).toISOString() !== value.at)
+    fail('INVALID_RESULT', 'invalid review extension');
+}
 function contractDigest(referenceDigest) { return hash(CONTRACT_ID + '\n' + referenceDigest); }
 function normalizeSourceLine(text) { return text.normalize('NFC').replace(/\s+/gu, ' ').trim(); }
 function normalizeCitedPath(value) {
@@ -191,10 +202,11 @@ function normalizeFinal(result, parts, options) {
     fail('JUDGMENT_OUTCOME_MISMATCH', 'an unresolved part BLOCKER requires a blocking finding');
   return own.length ? { ...normalized, part_dispositions: own.map(({ ref, disposition, justification }) => ({ ref, disposition, justification })) } : normalized;
 }
-function normalizeResult(result, { round, scope, priorFindings = [], readSource } = {}) {
+function normalizeResult(result, { round, scope, priorFindings = [], readSource, extension = null } = {}) {
   if (!object(result) || !Array.isArray(result.findings) || result.findings.length > 128)
     fail('INVALID_RESULT', 'review requires at most 128 findings');
   if (!positive(round) || round > ROUND_CEILING || !['full', 'delta'].includes(scope)) fail('INVALID_RESULT', 'invalid review round or scope');
+  validateReviewExtension(extension, round);
   const limitations = boundedList(result.limitations, 'limitations');
   const unresolvedSources = boundedList(result.unresolved_sources, 'unresolved_sources');
   if (!['complete', 'incomplete'].includes(result.review_completeness)) fail('INVALID_RESULT', 'review_completeness must be complete or incomplete');
@@ -295,7 +307,7 @@ function normalizeResult(result, { round, scope, priorFindings = [], readSource 
     fail('JUDGMENT_OUTCOME_MISMATCH', 'claimed verdict differs from completeness or blocking findings');
   return { ...result, findings, dispositions: [...dispositionMap.values()], verdict, blocking_count: blockingCount, finding_count: findings.length,
     review_round: round, review_scope: scope, review_completeness: complete ? 'complete' : 'incomplete',
-    limitations, unresolved_sources: unresolvedSources, ...stats };
+    limitations, unresolved_sources: unresolvedSources, ...stats, ...(extension ? { review_extension: extension } : {}) };
 }
 function countableVerdicts({ priorVerdicts, head, isAncestor }) {
   const countable = [], heads = new Set();
@@ -547,11 +559,12 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
     normalization_inputs: { prior_findings: structuredClone(priorFindings) },
     prior_findings: priorFindings.map(({ identity: _identity, stored_identity: _stored, disagreement_identity: _disagreement, ...finding }) => finding),
     review_round: round.round, review_scope: round.scope, prior_head: round.priorHead || null,
+    ...(round.extension ? { review_extension: round.extension } : {}),
     change_metadata: changeMetadata, contract_digest: contractDigest(referenceDigest),
     ...(part ? { part: { id: part.id, ordinal: part.ordinal, of: groups.length, paths: part.paths } } : {}), ...(parts?.length ? { parts } : {}) };
 }
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
-module.exports = { CONTRACT_ID, ROUND_CAP, ROUND_CEILING, extensionState, limitMessage, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
+module.exports = { CONTRACT_ID, ROUND_CAP, ROUND_CEILING, validateReviewExtension, extensionState, limitMessage, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
   lineageComplete, coverageComplete, nextRound, roundLookup, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };

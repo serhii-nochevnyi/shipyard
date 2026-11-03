@@ -46,6 +46,9 @@ const d37Case = name => [
   'code-review five-deep carried needs-fix lineage seals and authenticates on the Claude runtime',
   'code-review five-deep carried needs-fix lineage seals and authenticates on the Codex runtime',
   'code-review rounds 1 to 3 keep the sealed result and manifest shape',
+  'code-review extended rounds seal with a host-authored extension and expose it on the current verdict',
+  'code-review seal refuses an extended round without an extension, an early round with one and a malformed one',
+  'code-review replay stops authenticating when the sealed extension is altered in the archived manifest',
 ].includes(name) || name.startsWith('existing-format foreign native input retains original planning pins: ');
 let pendingCase = Promise.resolve();
 function test(name, callback) {
@@ -2144,6 +2147,101 @@ test('code-review rounds 1 to 3 keep the sealed result and manifest shape', () =
   } finally { f.cleanup(); }
 });
 
+function carriedRoundInput(f, binding, round, extension) {
+  const fixtures = require('../fixtures/code-review/artifact-fixture.cjs');
+  const core = require('../../plugins/delivery-pipeline/scripts/code-review-core.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const prior = roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root, repository: target.repositoryIdentity(f.root), phaseDir: f.phase }).at(-1);
+  const priorFindings = core.carryPriorFindings({ priorFindings: prior, readSource: file => fs.readFileSync(path.join(f.root, file), 'utf8'),
+    deltaDiff: f.git(['diff', '--unified=50', prior.head, 'HEAD']) });
+  const blank = { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [],
+    dispositions: priorFindings.map(finding => ({ ref: finding.ref, disposition: 'unresolved', justification: 'still fails' })) };
+  const input = f.input(binding, round, prior.head, { ...blank, dispositions: [] }, extension);
+  fixtures.setOriginalReview(input, blank, priorFindings);
+  return fixtures.retainPlanningInput(f, input, f.root, null, {});
+}
+
+const EXTENSION_GRANTS = [
+  { operator: 'first-operator', at: '2026-11-02T10:00:00.000Z', reason: 'the fourth round covers the repaired module' },
+  { operator: 'second-operator', at: '2026-11-03T08:15:30.250Z', reason: 'the fifth round covers the last fix' },
+];
+
+test('code-review extended rounds seal with a host-authored extension and expose it on the current verdict', () => {
+  const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const f = reviewFixture();
+  try {
+    const { sealedRounds } = sealCarriedLineage(f, 3);
+    assert.equal(f.lookup().extension, null);
+    for (const [index, extension] of EXTENSION_GRANTS.entries()) {
+      const round = 4 + index, input = carriedRoundInput(f, f.advance(round), round, extension);
+      const sealed = roleArtifact.sealJudgment(input);
+      const validated = roleArtifact.validateJudgmentManifest({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+      sealedRounds.push({ input, sealed, validated });
+      assert.deepEqual(input.result.review_extension, extension);
+      assert.deepEqual(validated.manifest.review_extension, extension);
+      const current = f.lookup();
+      assert.equal(current.round, round);
+      assert.deepEqual(current.extension, extension);
+    }
+    assert.notDeepEqual(EXTENSION_GRANTS[0], EXTENSION_GRANTS[1]);
+    for (const { input, validated } of sealedRounds.slice(0, 3)) {
+      assert.equal(Object.hasOwn(input.result, 'review_extension'), false);
+      assert.equal(Object.hasOwn(validated.manifest, 'review_extension'), false);
+    }
+    const history = roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root, repository: require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').repositoryIdentity(f.root), phaseDir: f.phase });
+    assert.deepEqual(history.map(verdict => [verdict.review_round, verdict.answer_authenticated]), [1, 2, 3, 4, 5].map(round => [round, true]));
+  } finally { f.cleanup(); }
+});
+
+test('code-review seal refuses an extended round without an extension, an early round with one and a malformed one', () => {
+  const { fixture: reviewFixture, EXTENSION } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const f = reviewFixture();
+  try {
+    sealCarriedLineage(f, 2);
+    const refused = input => assert.throws(() => roleArtifact.sealJudgment(input),
+      error => error.code === 'INVALID_RESULT' && error.message === 'invalid review extension');
+    const withExtension = (input, value) => ({ ...input, result: { ...input.result, review_extension: value } });
+    const early = carriedRoundInput(f, f.advance(3), 3, null);
+    refused(withExtension(early, { ...EXTENSION }));
+    roleArtifact.sealJudgment(early);
+    const extended = carriedRoundInput(f, f.advance(4), 4, { ...EXTENSION });
+    const { review_extension: _omitted, ...withoutExtension } = extended.result;
+    refused({ ...extended, result: withoutExtension });
+    refused(withExtension(extended, null));
+    for (const malformed of [{ ...EXTENSION, operator: '' }, { ...EXTENSION, reason: 'r'.repeat(201) }, { ...EXTENSION, at: 'yesterday' },
+      { ...EXTENSION, at: '2026-11-02T10:00:00Z' }, { ...EXTENSION, reason: 'two\nlines' }, { ...EXTENSION, granted_by: 'someone' }, 'extended'])
+      refused(withExtension(extended, malformed));
+    assert.ok(roleArtifact.sealJudgment(extended).artifact_ref);
+  } finally { f.cleanup(); }
+});
+
+test('code-review replay stops authenticating when the sealed extension is altered in the archived manifest', () => {
+  const { fixture: reviewFixture, EXTENSION } = require('../fixtures/code-review/artifact-fixture.cjs');
+  const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  const f = reviewFixture();
+  try {
+    sealCarriedLineage(f, 3);
+    const input = carriedRoundInput(f, f.advance(4), 4, { ...EXTENSION });
+    const divergent = { ...input, result: { ...input.result, review_extension: { ...EXTENSION, operator: 'someone-else' } } };
+    assert.throws(() => roleArtifact.sealJudgment(divergent), error => error.code === 'REVIEW_NATIVE_INVALID');
+    const sealed = roleArtifact.sealJudgment(input);
+    const original = fs.readFileSync(sealed.artifact_ref);
+    const history = () => roleArtifact.priorCodeReviewVerdicts({ worktreePath: f.root, repository: target.repositoryIdentity(f.root), phaseDir: f.phase });
+    assert.deepEqual(f.lookup().extension, EXTENSION);
+    const text = original.toString(), reason = JSON.stringify(EXTENSION.reason);
+    assert.ok(text.includes(reason));
+    for (const altered of [text.replace(reason, JSON.stringify('X' + EXTENSION.reason.slice(1))),
+      text.replace(reason, JSON.stringify('altered')), JSON.stringify((({ review_extension: _gone, ...rest }) => rest)(JSON.parse(text)))]) {
+      assert.notEqual(altered, text);
+      fs.writeFileSync(sealed.artifact_ref, altered);
+      assert.throws(history, error => error.code === 'ARCHIVE_AUTHORITY_INVALID');
+      assert.equal(f.lookup(), null);
+    }
+    fs.writeFileSync(sealed.artifact_ref, original);
+    assert.deepEqual(f.lookup().extension, EXTENSION);
+  } finally { f.cleanup(); }
+});
+
 test('code-review reuse refuses a moved base or reference contract and ticket-form subject', () => {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const f = withOriginalPlanning(reviewFixture());
@@ -2416,6 +2514,6 @@ test('code-review carrier freshness authentic canonical lifecycle on both runtim
   }
 });
 
-assert.equal(d37Selected, 9, 'exact role-artifact D37 registration');
+assert.equal(d37Selected, 12, 'exact role-artifact D37 registration');
 assert.equal(reuseSelected, 1, 'exact role-artifact reuse registration');
 done();
