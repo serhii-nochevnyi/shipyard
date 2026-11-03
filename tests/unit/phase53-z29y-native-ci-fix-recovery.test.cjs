@@ -806,7 +806,7 @@ if (require.main === module) {
         };
         if (mutation === 'late-view') f.control.inspectInput = change;
         else change();
-        const run = () => host.createCodexDeliveryHost(f.options).run({ role: 'ci-fix', context: f.request.context });
+        const run = () => f.run();
         if (mutation === 'late-view') await assert.rejects(run);
         else await assert.rejects(run, { code: 'CI_EVIDENCE_CHANGED' });
         assert.throws(() => host.prepareCiRepair(f.options, f.scope, f.request.context), { code: 'CI_EVIDENCE_CHANGED' });
