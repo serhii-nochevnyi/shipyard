@@ -1174,9 +1174,10 @@ function validateResult(prepared, result) {
       ...(result.merge_base_tree === undefined ? {} : { merge_base_tree: prepared.mergeBaseTree }) };
     assertIdentity(result, expected, 'code-review', 'PR');
     if (result.host_context !== undefined) reject('code-review host context is reserved to the host', 'INVALID_RESULT');
+    if (Object.hasOwn(result, 'review_extension')) reject('code-review review_extension is reserved to the host', 'INVALID_RESULT');
     const core = require('./code-review-core.cjs');
     return { ...core.normalizeFinal(result, prepared.packet.role_context.parts ?? [], { round: prepared.round.round,
-      scope: prepared.round.scope, priorFindings: prepared.priorFindings, readSource: prepared.readSource }),
+      scope: prepared.round.scope, extension: prepared.round.extension ?? null, priorFindings: prepared.priorFindings, readSource: prepared.readSource }),
       prior_head: prepared.round.priorHead || null, contract_digest: prepared.packet.role_context.contract_digest,
       reuse_key: core.reuseKey({ head: prepared.canonical.head, baseCommit: prepared.baseCommit,
         contractDigest: prepared.packet.role_context.contract_digest }), dispositions_digest: prepared.disagreements.dispositions_digest };
