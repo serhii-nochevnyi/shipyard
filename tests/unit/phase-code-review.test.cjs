@@ -276,6 +276,23 @@ test('status grants round 4 only for a valid operator record and ignores foreign
   } finally { f.cleanup(); }
 });
 
+test('an owed extended round is a delta from the last counted review, bound to its record', () => {
+  const f = fixture(null);
+  try {
+    const heads = [];
+    for (let round = 1; round <= 3; round++) {
+      artifact.sealJudgment(artifactInput(f, f.advance(round), raw(true, [blocker]), round, heads.at(-1) || null));
+      heads.push(f.live().headRefOid);
+    }
+    f.advance(4);
+    flow.appendExtension({ repository: target.repositoryIdentity(f.root), repo: null, pr: 52, worktree: f.root,
+      mode: flow.resolveCodeReviewMode({ graphDir: f.graphDir, worktree: f.root }) }, { head: f.live().headRefOid,
+      base_commit: f.base, operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass' });
+    const owed = flow.status(f.input());
+    assert.deepEqual([owed.state, owed.round, owed.scope, owed.round_limit, owed.rounds_used], ['owed', 4, 'delta', 4, 3]);
+  } finally { f.cleanup(); }
+});
+
 function artifactInput(f, binding, result, round = 1, priorHead = null) {
   return retainPlanningInput(f, f.inputArtifact(binding, round, priorHead, result));
 }

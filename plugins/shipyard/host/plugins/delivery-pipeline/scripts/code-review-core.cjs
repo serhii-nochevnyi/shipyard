@@ -338,7 +338,7 @@ function coverageComplete({ verdict, priorVerdicts, mergeBase, isAncestor }) {
 }
 function nextRound(options) {
   const verdicts = countableVerdicts(options), used = verdicts.length;
-  if (used >= (options.limit ?? ROUND_CAP)) return { round: null, state: 'limit', rounds_used: used };
+  if (used >= (options.limit ?? ROUND_CAP)) return { round: null, state: 'limit', rounds_used: used, reason: 'spent' };
   const inherit = used && verdicts.at(-1).answer_authenticated !== false
     && (options.mergeBase === undefined || coverageComplete({ verdict: verdicts.at(-1),
     priorVerdicts: verdicts, mergeBase: options.mergeBase, isAncestor: options.isAncestor }));
@@ -355,10 +355,19 @@ function roundLookup(options) {
   const countable = countableVerdicts(options);
   const valid = countable.length < ROUND_CAP ? [] : extensionState({ ...options, countable, records: options.readRecords() });
   const limit = Math.min(ROUND_CEILING, ROUND_CAP + valid.length), here = valid.find(record => record.head === options.head);
-  return { countable, ...nextRound({ ...options, limit }), limit,
-    extension: here ? { operator: here.operator, at: here.created_at, reason: here.reason } : null };
+  const extension = here ? { operator: here.operator, at: here.created_at, reason: here.reason } : null;
+  const next = nextRound({ ...options, limit });
+  const refused = next.state === 'ready' && countable.length >= ROUND_CAP && !(extension && next.scope === 'delta');
+  return { countable, ...(refused ? { round: null, state: 'limit', rounds_used: next.rounds_used,
+    reason: extension ? 'no-delta' : 'no-record' } : next), limit, extension };
 }
-function limitMessage({ limit }) { return `${['three', 'four', 'five'][limit - ROUND_CAP]} rounds are spent; no further review can launch`; }
+const LIMIT_REASONS = {
+  'no-record': 'no extension record bound to this head exists; no further review can launch',
+  'no-delta': 'the extended round must be a delta from the last counted review; the coverage chain does not allow one, so no full review will run',
+};
+function limitMessage({ limit, reason }) {
+  return LIMIT_REASONS[reason] || `${['three', 'four', 'five'][limit - ROUND_CAP]} rounds are spent; no further review can launch`;
+}
 function repairAllowed(round) { return round === 1 || round === 2; }
 
 function diffPath(value) {
