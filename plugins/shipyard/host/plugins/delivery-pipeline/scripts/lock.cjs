@@ -307,6 +307,24 @@ function releaseOwned(lockPath, owner) {
 }
 
 // Returns a handle ({ path, owner, release() }) or null when the wait ran out.
+const GENERATED_OWNER = Symbol('generated-merge-owner');
+function processIdentity(pid) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return null;
+  const result = require('child_process').spawnSync('/bin/ps', ['-p', String(pid), '-o', 'stat=', '-o', 'lstart='],
+    { encoding: 'utf8', timeout: 5000, env: { ...process.env, TZ: 'UTC', LC_ALL: 'C', LANG: 'C' } });
+  if (result.error || (result.status !== 0 && result.status !== 1))
+    throw Object.assign(new Error('cannot establish lock process identity'), { code: 'LOCK_PROCESS_UNKNOWN' });
+  if (result.status !== 0 || !result.stdout.trim()) return null;
+  const identity = /^(\S+)\s+(.+)$/.exec(result.stdout.trim());
+  if (!identity) throw Object.assign(new Error('cannot establish lock process state'), { code: 'LOCK_PROCESS_UNKNOWN' });
+  return identity[1].startsWith('Z') ? null : identity[2].trim();
+}
+function acquireGeneratedMergeLock(dir, name) {
+  if (!processIdentity(process.pid))
+    throw Object.assign(new Error('missing generated merge process identity'), { code: 'LOCK_PROCESS_UNKNOWN' });
+  return acquire(dir, name, { waitMs: 0, [GENERATED_OWNER]: true });
+}
+
 function acquire(dir, name, opts = {}) {
   const ttlMs = Number.isFinite(opts.ttlMs) ? opts.ttlMs : DEFAULT_TTL_MS;
   const waitMs = Number.isFinite(opts.waitMs) ? opts.waitMs : DEFAULT_WAIT_MS;
@@ -322,7 +340,7 @@ function acquire(dir, name, opts = {}) {
       // The token is what makes `release()` an assertion of ownership rather than
       // a guess. It is written WITH the rest of the owner record — one file, one
       // write — so a reader either sees a holder it can identify or sees nothing.
-      const owner = { pid: process.pid, label, at: new Date().toISOString(), token: crypto.randomBytes(12).toString('hex') };
+      const owner = { ...(opts[GENERATED_OWNER] ? { generated_process: processIdentity(process.pid) } : {}), pid: process.pid, label, at: new Date().toISOString(), token: crypto.randomBytes(12).toString('hex') };
       const fd = fs.openSync(ownerFile(lockPath), fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
       try {
         const stat = fs.fstatSync(fd), entry = fs.lstatSync(ownerFile(lockPath));
@@ -334,6 +352,12 @@ function acquire(dir, name, opts = {}) {
       return {
         path: lockPath,
         owner,
+        assertOwned() {
+          const current = ownerRecord(lockPath);
+          if (released || current.retryable || current.owner?.token !== owner.token
+              || (owner.generated_process && processIdentity(process.pid) !== owner.generated_process))
+            throw Object.assign(new Error('generated merge lock ownership lost'), { code: 'LOCK_OWNERSHIP_LOST' });
+        },
         release() {
           if (released) return;
           released = true;
@@ -361,7 +385,9 @@ function acquire(dir, name, opts = {}) {
         continue;
       }
       let stale;
-      if (holder && holder.at) {
+      if (holder?.generated_process) {
+        stale = processIdentity(holder.pid) !== holder.generated_process;
+      } else if (holder && holder.at) {
         // A lock that names its holder is stale once that holder's own
         // timestamp is older than the TTL. An unparseable timestamp is an
         // unknown age and is taken over at once — note the negated comparison,
@@ -432,7 +458,7 @@ function writeAtomic(file, data) {
   }
 }
 
-module.exports = { withLock, acquire, writeAtomic, lockDirFor, sleepSync, DEFAULT_TTL_MS, OWNERLESS_GRACE_MS };
+module.exports = { acquireGeneratedMergeLock, withLock, acquire, writeAtomic, lockDirFor, sleepSync, DEFAULT_TTL_MS, OWNERLESS_GRACE_MS };
 
 // ── CLI: the shell scripts take the same locks (git worktree/branch surgery) ──
 //   lock.cjs run <dir> <name> -- <command> [args...]
