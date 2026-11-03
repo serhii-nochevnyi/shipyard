@@ -290,3 +290,26 @@ test('an ARTIFACT_IDENTITY_MISMATCH refusal has its own hint and a re-run remedy
   assert.notEqual(hintFor('ARTIFACT_IDENTITY_MISMATCH'), hintFor(undefined));
   assert.match(formatHint('ARTIFACT_IDENTITY_MISMATCH'), /^hint\[ARTIFACT_IDENTITY_MISMATCH\]: .+ — remedy: Re-run the role .+$/);
 });
+
+test('R-13 the round-limit, refused-extension and usage refusals each have their own named hint', () => {
+  for (const code of ['CODE_REVIEW_ROUND_LIMIT', 'EXTENSION_REFUSED', 'USAGE']) {
+    assert.ok(Object.isFrozen(HINTS[code]), code);
+    assert.notEqual(hintFor(code), hintFor(undefined), code);
+    assert.match(formatHint(code), new RegExp(`^hint\\[${code}\\]: .+ — remedy: .+$`));
+  }
+  const limit = hintForError({ code: 'CODE_REVIEW_ROUND_LIMIT' });
+  assert.match(limit, /^hint\[CODE_REVIEW_ROUND_LIMIT\]: The phase code review has used every round .*phase-code-review\.cjs extend --phase N --pr P --reason "why" --confirm extend-review-round .*five rounds in total at most.*code_review to report, which applies to the whole project until it is set back to hold/);
+  assert.match(limit, /N and P are the phase and PR numbers.*role-hosted child is refused.*already granted/);
+  assert.match(limit, /fewer than five rounds are spent.*delta from the last counted review/);
+  assert.match(hintForError({ code: 'EXTENSION_REFUSED' }),
+    /not from a role-hosted child.*fewer than five rounds.*push the fixes first.*no extension is needed if it passed.*match the phase.*delta.*at most 200 bytes.*internal identifiers.*git user\.name.*at most 128 bytes/);
+  assert.match(hintForError({ code: 'USAGE' }), /refused before any work started.* remedy: Fix the argument or input named in the message/);
+  assert.doesNotMatch(formatHint('USAGE'), /printed above/);
+});
+
+test('R-13 a build refusal that names the limit hint prints it under the BUILD_REFUSED label', () => {
+  const named = hintForError({ code: 'BUILD_REFUSED', field: '--pr', details: { hint_code: 'CODE_REVIEW_ROUND_LIMIT' } });
+  assert.match(named, /^hint\[BUILD_REFUSED\]: .*phase-code-review\.cjs extend /);
+  assert.equal(named, hintForError({ code: 'CODE_REVIEW_ROUND_LIMIT' }).replace('hint[CODE_REVIEW_ROUND_LIMIT]', 'hint[BUILD_REFUSED]'));
+  assert.doesNotMatch(hintForError({ code: 'BUILD_REFUSED', field: '--pr' }), /phase-code-review\.cjs extend/);
+});

@@ -540,10 +540,11 @@ function parseLaunchArgs(argv) {
   return { runtime, ticket, role, graphDir };
 }
 
-function buildFail(field, message) {
+function buildFail(field, message, hintCode) {
   const error = new Error(`deliver-dispatch: ${message}`);
   error.code = 'BUILD_REFUSED';
   error.field = field;
+  if (hintCode) error.details = { hint_code: hintCode };
   error.exitCode = 2;
   throw error;
 }
@@ -1210,7 +1211,7 @@ function buildPhaseArchitectureRequest(args, options) {
   if (args.role === 'arch-review') {
     const gate = flow.evaluateGate({ phase: args.phase, pr: args.pr, worktree: input.worktree,
       graphDir: input.graphDir, repo, live }, options);
-    if (!gate.ok) buildFail('--pr', gate.message);
+    if (!gate.ok) buildFail('--pr', gate.message, gate.state === 'limit' ? 'CODE_REVIEW_ROUND_LIMIT' : undefined);
   }
   const binding = require('./architecture-target.cjs').phaseBinding({ graph: input.graph, state,
     phase: args.phase, repository, repo, branch: match.branch || branch, pr: args.pr, head: live.headRefOid, base: live.baseRefOid });
