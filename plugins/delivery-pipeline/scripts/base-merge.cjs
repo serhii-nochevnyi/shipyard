@@ -242,11 +242,11 @@ if (generatedMerge) {
   if (ancestor.status !== 0 && ancestor.status !== 1) fail('cannot establish base ancestry before generated merge preparation');
   if (ancestor.status === 1) { try { generatedMerge.prepare(); } catch (error) { fail(error.message); } }
 }
-const merge = git(['merge', '--no-edit', baseRef], { tolerate: true });
+const merge = generatedMerge ? generatedMerge.mergeOrdinary() : git(['merge', '--no-edit', baseRef], { tolerate: true });
 if (merge.status === 0) {
   if (generatedMerge) generatedMerge.ordinary();
   const msg = /Already up to date/i.test(merge.out) ? 'already up to date' : 'merged cleanly';
-  if (git(['rev-parse', 'HEAD']).out !== preMergeHead) recordMerge([]);
+  if (!generatedMerge && git(['rev-parse', 'HEAD']).out !== preMergeHead) recordMerge([]);
   const carry = carryVerdict();
   if (asJson) console.log(JSON.stringify({ ticket, base: baseRef, requested_base: base, result: msg, taken_from_base: [], unresolved: [], contested: [], carry }, null, 2));
   else {

@@ -11,12 +11,12 @@ const coverage = require(path.join(scripts, 'conveyor-coverage.cjs'));
 const canonical = 'plugins/delivery-pipeline/scripts/role-artifact.cjs';
 const mirror = 'plugins/shipyard/host/' + canonical;
 const identityPaths = ['plugins/shipyard/.codex-plugin/plugin.json', 'plugins/shipyard/package-build.json'];
-function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false, wrappedBoard = false, multipleConflicts = false, mechanicalCanonical = false, mechanicalPaths = false } = {}) {
+function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false, wrappedBoard = false, multipleConflicts = false, mechanicalCanonical = false, mechanicalPaths = false, ordinaryClean = false, objectFormat = 'sha1' } = {}) {
   const worktree = path.join(signing.directory, 'source-' + crypto.randomUUID());
   fs.mkdirSync(worktree); packageSource(worktree);
   if (mechanicalPaths) for (const file of ['mechanical-file.txt', 'mechanical-delete.txt'])
     fs.writeFileSync(path.join(worktree, file), 'original\n');
-  git(worktree, 'init', '-q', '-b', 'main');
+  git(worktree, 'init', '-q', '-b', 'main', '--object-format=' + objectFormat);
   for (const [key, value] of Object.entries({ 'user.name': 'Fixture', 'user.email': 'fixture@example.test', 'user.signingkey': signing.signer, 'commit.gpgsign': 'true' }))
     git(worktree, 'config', key, value);
   if (multipleConflicts) fs.writeFileSync(path.join(worktree, '.gitattributes'), canonical + ' merge=union\n');
@@ -25,7 +25,8 @@ function divergentFixture(signing, { conflict = false, generatedEntry = false, m
   const file = path.join(worktree, canonical), original = fs.readFileSync(file, 'utf8');
   if (mechanicalPaths) for (const name of ['mechanical-file.txt', 'mechanical-delete.txt'])
     fs.writeFileSync(path.join(worktree, name), 'ticket conflict\n');
-  fs.writeFileSync(file, original.replace("'use strict';", "'use strict';\nvoid 'ticket canonical change';"));
+  if (ordinaryClean) fs.writeFileSync(path.join(worktree, 'ordinary-ticket.txt'), 'ticket change\n');
+  else fs.writeFileSync(file, original.replace("'use strict';", "'use strict';\nvoid 'ticket canonical change';"));
   if (mechanicalCanonical) fs.appendFileSync(path.join(worktree, 'plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), "\nvoid 'stale ticket canonical change';\n");
   const generate = () => {
     const r = spawnSync(process.execPath, [path.join(worktree, 'scripts/package-shipyard-codex.cjs')], { encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
@@ -41,8 +42,9 @@ function divergentFixture(signing, { conflict = false, generatedEntry = false, m
     fs.chmodSync(path.join(worktree, 'mechanical-file.txt'), 0o755);
     fs.unlinkSync(path.join(worktree, 'mechanical-delete.txt'));
   }
-  fs.writeFileSync(file, (conflict || multipleConflicts) ? original.replace("'use strict';", multipleConflicts ? "'use strict';\nvoid 'upstream canonical change';" : "'use strict';\nvoid 'upstream semantic conflict';") : original + "\nvoid 'upstream canonical change';\n");
-  fs.appendFileSync(path.join(worktree, 'plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), "\nvoid 'independent upstream canonical change';\n");
+  if (ordinaryClean) fs.writeFileSync(path.join(worktree, 'ordinary-base.txt'), 'incoming change\n');
+  else fs.writeFileSync(file, (conflict || multipleConflicts) ? original.replace("'use strict';", multipleConflicts ? "'use strict';\nvoid 'upstream canonical change';" : "'use strict';\nvoid 'upstream semantic conflict';") : original + "\nvoid 'upstream canonical change';\n");
+  if (!ordinaryClean) fs.appendFileSync(path.join(worktree, 'plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), "\nvoid 'independent upstream canonical change';\n");
   generate(); git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'fixture incoming canonical generation');
   const base = git(worktree, 'rev-parse', 'HEAD'), baseTree = git(worktree, 'rev-parse', 'HEAD^{tree}');
   git(worktree, 'switch', 'ticket/T-53-31');
@@ -51,7 +53,7 @@ function divergentFixture(signing, { conflict = false, generatedEntry = false, m
   fs.writeFileSync(path.join(project, '.planning/PLAN.md'), '# Approved supported generated merge\n');
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets: { 'T-53-31': {
     phase: 53, branch: 'ticket/T-53-31', pr_base: 'main', plan: '.planning/PLAN.md',
-    files: [canonical, mirror, ...identityPaths], repo: 'fixture/repository',
+    files: [canonical, mirror, ...identityPaths, ...(ordinaryClean ? ['ordinary-ticket.txt'] : [])], repo: 'fixture/repository',
   } } }));
   const board = { 'T-53-31': { pr: 501, branch: 'ticket/T-53-31', base: 'main' } };
   fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify(wrappedBoard ? { tickets: board } : board));
@@ -130,6 +132,158 @@ function partialApplyInjection(f, phase) {
     const exec=cp.execFileSync;cp.execFileSync=function(command,args,...rest){const result=exec.call(this,command,args,...rest);if(command==='git'&&args[1]===root&&args[2]==='add'&&intended()?.apply){adds++;if((phase==='first-add'&&adds===1)||(phase==='multiple-adds'&&adds===2))process.exit(97);}return result;};`;
 }
 if (require.main === module) {
+  test('generated merge recovery retains SHA256 exact original generated and ordinary signed merges', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      for (const mode of ['generated', 'ordinary']) await t.test(mode, bounded, () => {
+        const f = divergentFixture(signing, { ordinaryClean: mode === 'ordinary', objectFormat: 'sha256' });
+        const injection = `const cp=require('node:child_process'),exec=cp.execFileSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&(${JSON.stringify(mode)}==='generated'?args[2]==='commit-tree':args.includes('merge')&&args.includes('--no-edit')))process.exit(86);return r;};`;
+        const first = f.run(injection); assert.equal(first.status, 86, first.stderr + first.stdout);
+        const op = retainedOperation(f); let oid;
+        if (mode === 'generated') {
+          const prefix = fs.readdirSync(op.signing.root.path)[0]; oid = prefix + fs.readdirSync(path.join(op.signing.root.path, prefix))[0];
+        } else oid = git(f.worktree, 'rev-parse', 'HEAD');
+        assert.equal(oid.length, 64);
+        const response = f.run(); assert.equal(response.status, 0, response.stderr + response.stdout);
+        const result = JSON.parse(response.stdout); assert.equal(result.commit, oid);
+        assert.match(git(f.worktree, 'cat-file', 'commit', oid), /^gpgsig-sha256 /m);
+        assert.equal(git(f.worktree, 'show', '-s', '--format=%P', oid), f.head + ' ' + f.base);
+        assert.equal(git(f.worktree, 'status', '--porcelain=v1', '--untracked-files=no'), ''); git(f.worktree, 'verify-commit', oid);
+        assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: oid }).covered, true);
+      });
+    } finally { signing.close(); }
+  });
+
+  test('ordinary merge recovery preserves resolved origin base when no merge operation is needed', bounded, () => {
+    const signing = signingFixture();
+    try {
+      const f = divergentFixture(signing, { ordinaryClean: true });
+      git(f.worktree, 'update-ref', 'refs/remotes/origin/main', f.head);
+      const response = f.run(); assert.equal(response.status, 0, response.stderr + response.stdout);
+      assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), f.head);
+      assert.equal(fs.existsSync(path.join(f.worktree, 'ordinary-base.txt')), false);
+      assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: f.head }).covered, false);
+    } finally { signing.close(); }
+  });
+  test('ordinary merge recovery recovers exact fast-forward without granting new merge coverage', bounded, () => {
+    const signing = signingFixture();
+    try {
+      const f = divergentFixture(signing, { ordinaryClean: true });
+      git(f.worktree, 'branch', '-f', 'main', f.head); git(f.worktree, 'switch', 'main');
+      fs.writeFileSync(path.join(f.worktree, 'ordinary-future.txt'), 'future\n'); git(f.worktree, 'add', '.'); git(f.worktree, 'commit', '-qm', 'incoming descendant');
+      const incoming = git(f.worktree, 'rev-parse', 'HEAD'); git(f.worktree, 'switch', 'ticket/T-53-31');
+      const injection = `const cp=require('node:child_process'),exec=cp.execFileSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args.includes('merge')&&args.includes('--no-edit'))process.exit(86);return r;};`;
+      const first = f.run(injection); assert.equal(first.status, 86, first.stderr + first.stdout);
+      assert.equal(retainedOperation(f).ordinary_intent.kind, 'fast-forward');
+      const response = f.run(); assert.equal(response.status, 0, response.stderr + response.stdout);
+      assert.equal(JSON.parse(response.stdout).commit, incoming); assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), incoming);
+      assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: incoming }).covered, false);
+    } finally { signing.close(); }
+  });
+  test('ordinary merge recovery refuses changed tracked source, index and signer before coverage or proof writes', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      for (const mutation of ['source', 'index', 'signer']) await t.test(mutation, bounded, () => {
+        const f = divergentFixture(signing, { ordinaryClean: true });
+        const injection = `const cp=require('node:child_process'),exec=cp.execFileSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args.includes('merge')&&args.includes('--no-edit'))process.exit(86);return r;};`;
+        assert.equal(f.run(injection).status, 86); const head = git(f.worktree, 'rev-parse', 'HEAD');
+        if (mutation === 'signer') git(f.worktree, 'config', 'user.signingkey', '0000000000000000000000000000000000000000');
+        else { fs.appendFileSync(path.join(f.worktree, 'ordinary-ticket.txt'), 'foreign\n'); if (mutation === 'index') git(f.worktree, 'add', '--', 'ordinary-ticket.txt'); }
+        const before = inventory(f.worktree), proof = inventory(f.proofDirectory), response = f.run();
+        assert.notEqual(response.status, 0); assert.deepEqual(inventory(f.worktree), before); assert.deepEqual(inventory(f.proofDirectory), proof);
+        assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), head);
+        assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: head }).covered, false);
+      });
+    } finally { signing.close(); }
+  });
+  test('ordinary merge recovery recovers post-HEAD and post-coverage interruptions as the exact original merge', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      for (const phase of ['head', 'coverage']) await t.test(phase, bounded, () => {
+        const f = divergentFixture(signing, { ordinaryClean: true }), counter = path.join(signing.directory, 'ordinary-calls-' + phase);
+        const injection = `const cp=require('node:child_process'),fs=require('node:fs'),exec=cp.execFileSync,link=fs.linkSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args.includes('merge')&&args.includes('--no-edit')){fs.appendFileSync(${JSON.stringify(counter)},'1');if(${JSON.stringify(phase)}==='head')process.exit(86);}return r;};fs.linkSync=function(a,b,...rest){const r=link.call(this,a,b,...rest);if(${JSON.stringify(phase)}==='coverage'&&b.startsWith(${JSON.stringify(path.join(signing.directory,'coverage'))})&&b.endsWith('.json'))process.exit(87);return r;};`;
+        const first = f.run(injection); assert.equal(first.status, phase === 'head' ? 86 : 87, first.stderr + first.stdout);
+        const originalOID = git(f.worktree, 'rev-parse', 'HEAD'), op = retainedOperation(f);
+        assert.equal(op.phase, 'prepared'); assert.equal(op.commit, undefined); assert.equal(op.ordinary_head, undefined);
+        assert.equal(op.ordinary_intent.kind, 'merge'); assert.notEqual(originalOID, f.head);
+        const response = f.run(); assert.equal(response.status, 0, response.stderr + response.stdout);
+        const result = JSON.parse(response.stdout); assert.equal(result.commit, originalOID);
+        assert.equal(fs.readFileSync(counter, 'utf8'), '1'); assert.equal(retainedOperation(f).id, op.id);
+        assert.equal(retainedOperation(f).phase, 'ordinary');
+        assert.equal(git(f.worktree, 'show', '-s', '--format=%P', originalOID), f.head + ' ' + f.base);
+        assert.equal(git(f.worktree, 'status', '--porcelain=v1', '--untracked-files=no'), ''); git(f.worktree, 'verify-commit', originalOID);
+        const checked = coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: originalOID });
+        assert.equal(checked.covered, true, checked.reason); assert.equal(checked.record.kind, 'base-merge');
+        assert.equal(git(f.worktree, 'rev-list', '--count', '--merges', `${f.head}..HEAD`), '1');
+      });
+    } finally { signing.close(); }
+  });
+  test('ordinary merge recovery refuses a different signed HEAD even with identical original parents and tree', bounded, () => {
+    const signing = signingFixture();
+    try {
+      const f = divergentFixture(signing, { ordinaryClean: true });
+      const injection = `const cp=require('node:child_process'),exec=cp.execFileSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args.includes('merge')&&args.includes('--no-edit'))process.exit(86);return r;};`;
+      const first = f.run(injection); assert.equal(first.status, 86, first.stderr + first.stdout);
+      const op = retainedOperation(f), original = git(f.worktree, 'rev-parse', 'HEAD');
+      const foreign = git(f.worktree, 'commit-tree', '-S' + signing.signer, op.ordinary_intent.tree, '-p', f.head, '-p', f.base, '-m', 'foreign signed merge');
+      git(f.worktree, 'update-ref', 'HEAD', foreign, original);
+      const before = inventory(f.worktree), proof = inventory(f.proofDirectory), response = f.run();
+      assert.notEqual(response.status, 0); assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), foreign);
+      assert.deepEqual(inventory(f.worktree), before); assert.deepEqual(inventory(f.proofDirectory), proof);
+      assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: foreign }).covered, false);
+    } finally { signing.close(); }
+  });
+
+  test('generated signing recovery refuses missing, ambiguous, substituted and aliased objects without replay', bounded, async t => {
+    const snapshot = directory => {
+      const entries = [], visit = (dir, prefix) => {
+        for (const name of fs.readdirSync(dir).sort()) {
+          const file = path.join(dir, name), stat = fs.lstatSync(file), relative = prefix + name;
+          const entry = { path: relative, mode: stat.mode & 0o777, dev: stat.dev, ino: stat.ino };
+          if (stat.isSymbolicLink()) entries.push({ ...entry, type: 'symlink', target: fs.readlinkSync(file) });
+          else if (stat.isDirectory()) { entries.push({ ...entry, type: 'directory' }); visit(file, relative + '/'); }
+          else { assert.equal(stat.isFile(), true); entries.push({ ...entry, type: 'file', bytes: stat.size, sha256: hash(fs.readFileSync(file)) }); }
+        }
+      }; visit(directory, ''); return entries;
+    };
+    const signing = signingFixture();
+    try {
+      for (const mutation of ['missing', 'ambiguous', 'substituted', 'symlink']) await t.test(mutation, bounded, () => {
+        const f = divergentFixture(signing), count = path.join(signing.directory, 'sign-count-' + mutation);
+        const injection = `const cp=require('node:child_process'),fs=require('node:fs'),exec=cp.execFileSync;cp.execFileSync=function(command,args,...rest){const r=exec.call(this,command,args,...rest);if(command==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args[2]==='commit-tree'){fs.appendFileSync(${JSON.stringify(count)},'1');process.exit(86);}return r;};`;
+        assert.equal(f.run(injection).status, 86);
+        const op = retainedOperation(f), objectRoot = op.signing.root.path, prefix = fs.readdirSync(objectRoot)[0], folder = path.join(objectRoot, prefix), suffix = fs.readdirSync(folder)[0], object = path.join(folder, suffix);
+        if (mutation === 'missing') fs.unlinkSync(object);
+        if (mutation === 'ambiguous') fs.copyFileSync(object, path.join(folder, (suffix[0] === 'a' ? 'b' : 'a') + suffix.slice(1)));
+        if (mutation === 'substituted') {
+          fs.chmodSync(object, 0o600);
+          fs.copyFileSync(path.join(f.worktree, '.git', 'objects', f.head.slice(0, 2), f.head.slice(2)), object);
+        }
+        if (mutation === 'symlink') { fs.renameSync(object, object + '.retained'); fs.symlinkSync(object + '.retained', object); }
+        const before = inventory(f.worktree), proof = snapshot(f.proofDirectory), response = f.run();
+        assert.notEqual(response.status, 0); assert.equal(fs.readFileSync(count, 'utf8'), '1');
+        assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), f.head);
+        assert.deepEqual(inventory(f.worktree), before); assert.deepEqual(snapshot(f.proofDirectory), proof);
+        assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: f.head }).covered, false);
+      });
+    } finally { signing.close(); }
+  });
+  test('generated signing recovery recovers exact object after signed creation before OID persistence without re-signing', bounded, () => {
+    const signing = signingFixture();
+    try {
+      const f = divergentFixture(signing), count = path.join(signing.directory, 'physical-signing-count');
+      const injection = `const cp=require('node:child_process'),fs=require('node:fs'),exec=cp.execFileSync;cp.execFileSync=function(command,args,...rest){const signed=command==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args[2]==='commit-tree';const r=exec.call(this,command,args,...rest);if(signed){fs.appendFileSync(${JSON.stringify(count)},'sign\\n');process.exit(86);}return r;};`;
+      const first = f.run(injection); assert.equal(first.status, 86, first.stderr + first.stdout);
+      const op = retainedOperation(f); assert.equal(op.phase, 'staged'); assert.equal(op.commit, undefined); assert.ok(op.signing);
+      const objectRoot = op.signing.root.path, objects = fs.readdirSync(objectRoot).flatMap(prefix => fs.readdirSync(path.join(objectRoot, prefix)).map(suffix => prefix + suffix));
+      assert.equal(objects.length, 1); const originalOID = objects[0];
+      const result = inspectSuccess(f, f.run()); assert.equal(result.commit, originalOID);
+      assert.equal(fs.readFileSync(count, 'utf8'), 'sign\n');
+      assert.equal(retainedOperation(f).id, op.id); assert.equal(git(f.worktree, 'rev-list', '--count', '--merges', `${f.head}..HEAD`), '1');
+      assert.equal(inspectSuccess(f, f.run()).commit, originalOID); assert.equal(fs.readFileSync(count, 'utf8'), 'sign\n');
+    } finally { signing.close(); }
+  });
+
   for (const wrappedBoard of [false, true]) for (const generatedEntry of [false, true]) test(`${wrappedBoard ? 'wrapped' : 'flat'} delivery state: actual divergent whole generations produce a signed covered combined merge through ${generatedEntry ? 'generated' : 'canonical'} entrypoint`, bounded, () => {
     const signing = signingFixture();
     try {

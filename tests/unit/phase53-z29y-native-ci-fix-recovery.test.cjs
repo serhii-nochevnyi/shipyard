@@ -91,6 +91,74 @@ function coldOriginal(f, installed, expectedError, expectedPushes = 1) {
   return recovered.result;
 }
 if (require.main === module) {
+  test('repair remote boundaries renew only the original live controller across serial work beyond TTL', bounded, () => {
+    const Module = require('node:module');
+    const filename = path.join(scripts, 'codex-delivery-host.cjs');
+    const loaded = new Module(filename, module);
+    loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+    loaded._compile(fs.readFileSync(filename, 'utf8')
+      + '\nmodule.exports.ownerTest = { repairOwnerRenewal, repairCommand, REPAIR_OWNER };\n', filename);
+    const { repairOwnerRenewal, repairCommand, REPAIR_OWNER } = loaded.exports.ownerTest;
+    const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't31-owner-')));
+    try {
+      let clock = 1000, calls = 0;
+      const { createRunController } = require(path.join(scripts, 'run-controller.cjs'));
+      const { createRunScope } = require(path.join(scripts, 'run-scope.cjs'));
+      const controller = createRunController({ storeDir: path.join(directory, 'runs'), now: () => clock });
+      const scope = { run_id: 'original-recovery', worktree: directory, phase: '53', ticket: 'T-53-31',
+        runtime: 'codex', provider: 'openai' };
+      const run = createRunScope({ ...scope, repository_id: 'fixture/repository', owner_id: controller.owner_id,
+        dispatch: { dispatch_id: 'original-recovery-dispatch', role: 'review-fix', model: 'gpt-6.1-sol', effort: 'low' } });
+      controller.begin(run);
+      const initial = controller.status(scope.run_id).owner;
+      const ttl = initial.expires_at - clock;
+      const options = { [REPAIR_OWNER]: repairOwnerRenewal(controller, scope), execFileSync() {
+        calls++; clock += Math.floor(ttl / 3); return '{"authenticated_step":true}';
+      } };
+      for (let i = 0; i < 8; i++) assert.equal(repairCommand(options, directory, ['api', 'graphql']).authenticated_step, true);
+      assert.ok(clock > initial.expires_at);
+      assert.equal(calls, 8); controller.assertOwner(scope.run_id);
+      const owner = controller.status(scope.run_id).owner;
+      assert.equal(owner.owner_id, initial.owner_id);
+      assert.equal(owner.epoch, initial.epoch);
+      clock += ttl + 1;
+      assert.throws(() => repairCommand(options, directory, ['api', 'graphql']), { code: 'LEASE_EXPIRED' });
+      assert.equal(calls, 8);
+      controller.recoverExpired();
+      const contender = createRunController({ storeDir: path.join(directory, 'runs'), now: () => clock });
+      contender.begin(run);
+      assert.throws(() => repairCommand(options, directory, ['api', 'graphql']));
+      assert.equal(calls, 8);
+      contender.release(scope.run_id);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test('one remote step exceeding its original live lease refuses without a second effect', bounded, () => {
+    const Module = require('node:module'), filename = path.join(scripts, 'codex-delivery-host.cjs');
+    const loaded = new Module(filename, module); loaded.filename = filename;
+    loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+    loaded._compile(fs.readFileSync(filename, 'utf8')
+      + '\nmodule.exports.ownerTest = { repairOwnerRenewal, repairCommand, REPAIR_OWNER };\n', filename);
+    const { repairOwnerRenewal, repairCommand, REPAIR_OWNER } = loaded.exports.ownerTest;
+    const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't31-expiry-')));
+    try {
+      let clock = 1000, effects = 0;
+      const controller = require(path.join(scripts, 'run-controller.cjs')).createRunController({
+        storeDir: path.join(directory, 'runs'), now: () => clock });
+      const scope = { run_id: 'long-original-step', worktree: directory, phase: '53', ticket: 'T-53-31', runtime: 'codex' };
+      controller.begin(require(path.join(scripts, 'run-scope.cjs')).createRunScope({ ...scope,
+        repository_id: 'fixture/repository', owner_id: controller.owner_id,
+        dispatch: { dispatch_id: 'long-original-dispatch', role: 'review-fix', model: 'gpt-6.1-sol', effort: 'low' } }));
+      const ttl = controller.status(scope.run_id).owner.expires_at - clock;
+      const options = { [REPAIR_OWNER]: repairOwnerRenewal(controller, scope), execFileSync() {
+        effects++; clock += ttl + 1; return '{}';
+      } };
+      assert.throws(() => repairCommand(options, directory, ['api', 'graphql']), { code: 'LEASE_EXPIRED' });
+      assert.throws(() => repairCommand(options, directory, ['api', 'graphql']), { code: 'LEASE_EXPIRED' });
+      assert.equal(effects, 1);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
   test('shared coverage aliases retain historical native CI evidence and refuse corrupt direct records and foreign custody', bounded, async t => {
     const signing = signingFixture();
     try {

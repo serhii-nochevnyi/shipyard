@@ -723,6 +723,7 @@ function verifySignedCommit(worktree, candidate, commit) {
 }
 
 function finalizeCandidate(candidate, stateRoot, key, options) {
+  options[REPAIR_OWNER]?.();
   const finalizeCommit = finalizer(options);
   const committed = finalizeCommit({
     ticket: candidate.ticket, worktree: candidate.worktree, expectedBranch: candidate.branch,
@@ -735,6 +736,7 @@ function finalizeCandidate(candidate, stateRoot, key, options) {
       verification_digest: candidate.verification.evidence_digest,
       receipt_store: options.recorder && options.recorder.storeDir },
   });
+  options[REPAIR_OWNER]?.();
   const artifact = signedArtifact(candidate.worktree, candidate, committed);
   atomicWrite(finalizationFile(stateRoot, candidate.candidate_id), JSON.stringify(seal({
     schema: FINALIZATION_SCHEMA, version: 1, candidate_id: candidate.candidate_id,
@@ -1807,12 +1809,40 @@ const MAX_REPAIR_FEEDBACK_BYTES = 512 * 1024;
 const MAX_REPAIR_PAGES = 100;
 const MAX_REPAIR_ITEMS = 4096;
 
+const REPAIR_OWNER = Symbol('repair-owner');
+
+function repairOwnerRenewal(controller, scope, writerSession) {
+  const verificationController = controller;
+  const verificationAuthority = verificationController?.authority(scope.run_id);
+  const verificationWriter = writerSession && { lease: writerSession.lease,
+    token: writerSession.handle?.token, epoch: writerSession.handle?.epoch,
+    base_revision: writerSession.base_revision };
+  return verificationController && (() => {
+    verificationController.assertOwner(scope.run_id);
+    if (!verificationAuthority || verificationController.authority(scope.run_id) !== verificationAuthority) {
+      fail('SESSION_FENCED', 'verification requires its original process-local owner');
+    }
+    if (verificationWriter) {
+      const { lease, token, epoch, base_revision: baseRevision } = verificationWriter;
+      if (lease?.schema !== 'shipyard.planning-writer-lease.v1'
+          || typeof lease.heartbeatFenced !== 'function' || typeof token !== 'string'
+          || !Number.isSafeInteger(epoch) || typeof baseRevision !== 'string') {
+        fail('WRITER_FENCED', 'verification requires its original complete writer session');
+      }
+      lease.heartbeatFenced({ token, epoch, base_revision: baseRevision });
+    }
+    verificationController.heartbeat(scope.run_id);
+  });
+}
+
 function repairCommand(options, worktree, argv, snapshot = false) {
+  options[REPAIR_OWNER]?.();
   let raw;
   try { raw = (options.execFileSync || execFileSync)('gh', argv, {
     cwd: worktree, encoding: 'utf8', timeout: 30000, maxBuffer: MAX_REPAIR_FEEDBACK_BYTES + 1,
     stdio: ['ignore', 'pipe', 'pipe'],
   }); } catch (error) { fail('REPAIR_FEEDBACK_UNAVAILABLE', 'original GitHub response failed: ' + String(error.stderr || error.message)); }
+  options[REPAIR_OWNER]?.();
   if (Buffer.byteLength(raw) > MAX_REPAIR_FEEDBACK_BYTES) fail('REPAIR_FEEDBACK_OVERFLOW', 'original GitHub response exceeds bound');
   let value;
   try { value = JSON.parse(raw); } catch { fail('REPAIR_FEEDBACK_UNAVAILABLE', 'original GitHub response is not complete JSON'); }
@@ -3074,7 +3104,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
   };
   lock = acquireGeneratedMergeLock(privateDirectory(stateRoot, 'generated-base-merge-locks'), sha256(root));
   if (!lock) fail('GENERATED_MERGE_BUSY', 'another host owns this generated merge');
-  let operation, proofFile;
+  let operation, proofFile, ordinaryCandidate = null;
   const save = () => {
     lock.assertOwned();
     if (Buffer.byteLength(canonical(operation)) > MAX_STATE_BYTES - 1024) fail('GENERATED_MERGE_INVALID', 'generated merge proof exceeds bound');
@@ -3145,7 +3175,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
       }
     }
     const head = g(['rev-parse', 'HEAD']);
-    if (head !== operation.head && head !== operation.commit) fail('GENERATED_MERGE_CHANGED', 'generated merge HEAD changed');
+    if (head !== operation.head && head !== operation.commit && head !== ordinaryCandidate) fail('GENERATED_MERGE_CHANGED', 'generated merge HEAD changed');
     if (operation.staged_index && operation.phase !== 'completed'
         && canonical(ciPhysical(path.resolve(root, g(['rev-parse', '--git-path', 'index']))).pin) !== canonical(operation.staged_index))
       fail('GENERATED_MERGE_CHANGED', 'sealed generated merge index changed');
@@ -3435,17 +3465,160 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
     operation.phase = 'staged'; save();
     return tree;
   };
+  const ordinaryMetadata = raw => {
+    const match = /^(.*) <([^<>]+)> (\d+ [+-]\d{4})$/.exec(raw);
+    if (!match) fail('GENERATED_MERGE_INVALID', 'unsupported ordinary signing identity');
+    return { raw, name: match[1], email: match[2], date: match[3] };
+  };
+  const finishOriginalOrdinary = () => {
+    const intent = operation.ordinary_intent, head = g(['rev-parse', 'HEAD']);
+    if (!intent || !['merge', 'fast-forward'].includes(intent.kind)) fail('GENERATED_MERGE_CHANGED', 'ordinary result lacks its original pre-effect intent');
+    if (intent.kind === 'fast-forward') {
+      if (head !== operation.pins.base || g(['show', '-s', '--format=%T', head]) !== operation.pins.base_tree)
+        fail('GENERATED_MERGE_CHANGED', 'ordinary fast-forward differs from original pinned incoming commit');
+    } else {
+      const bytes = rawGit(['cat-file', 'commit', head]).toString('utf8'); let signature = false, count = 0;
+      const signatureHeader = g(['rev-parse', '--show-object-format']) === 'sha256' ? 'gpgsig-sha256 ' : 'gpgsig ';
+      const unsigned = bytes.split('\n').filter(line => {
+        if (line.startsWith(signatureHeader)) { signature = true; count++; return false; }
+        if (signature && line.startsWith(' ')) return false;
+        signature = false; return true;
+      }).join('\n');
+      if (count !== 1 || unsigned !== intent.unsigned || sha256(unsigned) !== intent.unsigned_sha256
+          || g(['show', '-s', '--format=%P', head]) !== `${operation.head} ${operation.pins.base}`
+          || g(['show', '-s', '--format=%T', head]) !== intent.tree)
+        fail('GENERATED_MERGE_CHANGED', 'ordinary result differs from exact original signed intent');
+      g(['verify-commit', head]);
+      if (g(['show', '-s', '--format=%GF', head]) !== operation.pins.signer
+          || !['G', 'U'].includes(g(['show', '-s', '--format=%G?', head])))
+        fail('GENERATED_MERGE_CHANGED', 'ordinary result differs from configured signer');
+    }
+    ordinaryCandidate = head;
+    try {
+      check();
+      if (!absent('MERGE_HEAD') || !absent('AUTO_MERGE') || g(['status', '--porcelain=v1', '--untracked-files=no']))
+        fail('GENERATED_MERGE_CHANGED', 'original ordinary result is not clean and complete');
+      let verified = null;
+      if (intent.kind === 'merge') {
+        lock.assertOwned();
+        const record = coverage.createCoverageWriter().record({ commit: head, parents: [operation.head, operation.pins.base],
+          tree: intent.tree, ticket, repo: operation.pins.repo, worktree: root, kind: 'base-merge',
+          base_merge: { base: operation.pins.base_ref, requested_base: requestedBase, taken_from_base: [] } });
+        verified = coverage.verify({ commit: head, repo: operation.pins.repo, worktree: root });
+        if (!verified.covered || canonical(verified.record) !== canonical(record))
+          fail('GENERATED_MERGE_CHANGED', 'original ordinary merge coverage did not verify');
+      }
+      operation.ordinary_head = head; operation.phase = 'ordinary'; save();
+      return { ticket, base: operation.pins.base_ref, requested_base: requestedBase, result: 'merged cleanly',
+        taken_from_base: [], unresolved: [], contested: [], commit: head, coverage: verified };
+    } finally { ordinaryCandidate = null; }
+  };
+  const mergeOrdinary = () => {
+    let env = environment(), args = ['merge', '--no-edit', operation ? operation.pins.base_ref : resolveBaseRef(root, requestedBase)];
+    if (operation) {
+      check();
+      if (!operation.ordinary_intent) {
+        let kind = 'merge', tree = null;
+        try { g(['merge-base', '--is-ancestor', operation.head, operation.pins.base]); kind = 'fast-forward'; }
+        catch (error) { if (error.status !== 1) throw error; }
+        let ff = ''; try { ff = g(['config', '--get', 'merge.ff']); } catch (error) { if (error.status !== 1) throw error; }
+        if (['false', 'no', 'off', '0'].includes(ff.toLowerCase())) kind = 'merge';
+        if (kind === 'merge') {
+          try { tree = g(['merge-tree', '--write-tree', operation.head, operation.pins.base]).split('\n')[0]; }
+          catch (error) { if (error.status !== 1) throw error; kind = 'conflict'; }
+        }
+        const author = ordinaryMetadata(g(['var', 'GIT_AUTHOR_IDENT'])), committer = ordinaryMetadata(g(['var', 'GIT_COMMITTER_IDENT']));
+        const message = `Merge ${operation.pins.base_ref} into ${operation.pins.branch}\n\nShipyard-Operation: ${crypto.randomUUID()}`;
+        const unsigned = kind === 'merge' ? `tree ${tree}\nparent ${operation.head}\nparent ${operation.pins.base}\nauthor ${author.raw}\ncommitter ${committer.raw}\n\n${message}` : null;
+        operation.ordinary_intent = { kind, tree, author, committer, message, unsigned,
+          unsigned_sha256: unsigned && sha256(unsigned) }; save();
+      }
+      const intent = operation.ordinary_intent;
+      if (intent.kind === 'merge') {
+        env = { ...env, GIT_AUTHOR_NAME: intent.author.name, GIT_AUTHOR_EMAIL: intent.author.email, GIT_AUTHOR_DATE: intent.author.date,
+          GIT_COMMITTER_NAME: intent.committer.name, GIT_COMMITTER_EMAIL: intent.committer.email, GIT_COMMITTER_DATE: intent.committer.date };
+        args = ['-c', 'commit.cleanup=verbatim', 'merge', '--no-edit', '-S' + operation.pins.signer, '-m', intent.message, operation.pins.base_ref];
+      }
+    }
+    try { const out = run('git', ['-C', root, ...args], { env }); return { status: 0, out: out.trim(), raw: Buffer.from(out) }; }
+    catch (error) { if (!Number.isInteger(error.status)) throw error; return { status: error.status, out: String(error.stdout || '') + String(error.stderr || ''), raw: error.stdout }; }
+  };
+  const originalSignedObject = () => {
+    const first = !operation.signing;
+    if (first) {
+      const parse = raw => {
+        const match = /^(.*) <([^<>]+)> (\d+ [+-]\d{4})$/.exec(raw);
+        if (!match) fail('GENERATED_MERGE_INVALID', 'unsupported original signing identity');
+        return { raw, name: match[1], email: match[2], date: match[3] };
+      };
+      const objectRoot = privateDirectory(directory, operation.id, 'signing-objects');
+      if (fs.readdirSync(objectRoot).length) fail('GENERATED_MERGE_CHANGED', 'new signing object directory is not empty');
+      const author = parse(g(['var', 'GIT_AUTHOR_IDENT'])), committer = parse(g(['var', 'GIT_COMMITTER_IDENT']));
+      const message = `Merge ${operation.pins.base_ref} into ${operation.pins.branch}\n\nShipyard-Operation: ${crypto.randomUUID()}`;
+      const unsigned = `tree ${operation.tree}\nparent ${operation.head}\nparent ${operation.pins.base}\nauthor ${author.raw}\ncommitter ${committer.raw}\n\n${message}\n`;
+      operation.signing = { root: privatePin(objectRoot), author, committer, message, unsigned,
+        unsigned_sha256: sha256(unsigned), signer: operation.pins.signer,
+        alternate_objects: fs.realpathSync(path.resolve(root, g(['rev-parse', '--git-path', 'objects']))) };
+      save();
+    }
+    check();
+    const intent = operation.signing;
+    if (canonical(privatePin(intent.root.path)) !== canonical(intent.root)
+        || intent.signer !== operation.pins.signer || sha256(intent.unsigned) !== intent.unsigned_sha256
+        || fs.realpathSync(path.resolve(root, g(['rev-parse', '--git-path', 'objects']))) !== intent.alternate_objects)
+      fail('GENERATED_MERGE_CHANGED', 'original signing directory, signer or unsigned bytes changed');
+    const env = { ...environment(), GIT_OBJECT_DIRECTORY: intent.root.path,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: intent.alternate_objects,
+      GIT_AUTHOR_NAME: intent.author.name, GIT_AUTHOR_EMAIL: intent.author.email, GIT_AUTHOR_DATE: intent.author.date,
+      GIT_COMMITTER_NAME: intent.committer.name, GIT_COMMITTER_EMAIL: intent.committer.email, GIT_COMMITTER_DATE: intent.committer.date };
+    const qg = (args, extra = {}) => run('git', ['-C', root, ...args], { env, ...extra });
+    if (first) qg(['commit-tree', '-S' + intent.signer, operation.tree, '-p', operation.head,
+      '-p', operation.pins.base, '-m', intent.message]);
+    const objects = [];
+    for (const prefix of fs.readdirSync(intent.root.path)) {
+      const folder = path.join(intent.root.path, prefix), stat = fs.lstatSync(folder);
+      if (!/^[a-f0-9]{2}$/.test(prefix) || !stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(folder) !== folder)
+        fail('GENERATED_MERGE_CHANGED', 'foreign entry in original signing object directory');
+      for (const suffix of fs.readdirSync(folder)) {
+        const object = path.join(folder, suffix), read = ciPhysical(object, MAX_GRAPH_BYTES, false, true);
+        if (!/^(?:[a-f0-9]{38}|[a-f0-9]{62})$/.test(suffix) || read.pin.bytes === 0 || objects.length)
+          fail('GENERATED_MERGE_CHANGED', 'ambiguous or invalid original signing object');
+        objects.push(prefix + suffix);
+      }
+    }
+    if (objects.length !== 1) fail('GENERATED_MERGE_CHANGED', 'original signing intent has no unique completed object; refusing signing replay');
+    const oid = objects[0];
+    if (qg(['cat-file', '-t', oid]).trim() !== 'commit') fail('GENERATED_MERGE_CHANGED', 'original signed object is not a commit');
+    const bytes = qg(['cat-file', 'commit', oid], { encoding: null }), text = bytes.toString('utf8');
+    let signature = false, signatures = 0;
+    const signatureHeader = g(['rev-parse', '--show-object-format']) === 'sha256' ? 'gpgsig-sha256 ' : 'gpgsig ';
+    const unsigned = text.split('\n').filter(line => {
+      if (line.startsWith(signatureHeader)) { signature = true; signatures++; return false; }
+      if (signature && line.startsWith(' ')) return false;
+      signature = false; return true;
+    }).join('\n');
+    if (signatures !== 1 || unsigned !== intent.unsigned || sha256(unsigned) !== intent.unsigned_sha256)
+      fail('GENERATED_MERGE_CHANGED', 'original signed object differs from its exact unsigned intent');
+    qg(['verify-commit', oid]);
+    if (qg(['show', '-s', '--format=%GF', oid]).trim() !== intent.signer
+        || !['G', 'U'].includes(qg(['show', '-s', '--format=%G?', oid]).trim()))
+      fail('GENERATED_MERGE_CHANGED', 'original signed object differs from configured signer');
+    check();
+    const imported = run('git', ['-C', root, 'hash-object', '-t', 'commit', '-w', '--stdin'],
+      { input: bytes, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    if (imported !== oid) fail('GENERATED_MERGE_CHANGED', 'imported original signed bytes changed object identity');
+    return oid;
+  };
   const complete = () => {
     check();
     if (!operation.commit) {
       if (operation.phase === 'conflicted') generate();
       if (operation.phase !== 'staged' || stagedTree() !== operation.tree || g(['diff', '--name-only']))
         fail('GENERATED_MERGE_CHANGED', 'generated merge has not retained its exact staged output');
-      generate();
+      if (!operation.signing) generate();
       check();
       if (stagedTree() !== operation.tree || g(['diff', '--name-only'])) fail('GENERATED_MERGE_CHANGED', 'generated output moved before signing');
-      const commit = g(['commit-tree', '-S' + operation.pins.signer, operation.tree, '-p', operation.head,
-        '-p', operation.pins.base, '-m', `Merge ${operation.pins.base_ref} into ${operation.pins.branch}`]);
+      const commit = originalSignedObject();
       operation.commit = commit; operation.phase = 'signed'; save();
     }
     check(); verifyCommit();
@@ -3491,6 +3664,9 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
     recover() {
       if (!operation) return null;
       if (!noFetch) g(['fetch', 'origin', '--prune']);
+      if (operation.phase === 'prepared' && operation.ordinary_intent
+          && operation.ordinary_intent.kind !== 'conflict' && g(['rev-parse', 'HEAD']) !== operation.head)
+        return finishOriginalOrdinary();
       check();
       if (operation.phase === 'prepared' && absent('MERGE_HEAD') && absent('AUTO_MERGE')) return null;
       if (!operation.observed) observe();
@@ -3529,7 +3705,11 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
     },
     manual() { check(); operation.phase = 'manual'; save(); },
     eligible(paths) { return paths.length > 0 && paths.every(file => eligible.has(file)); },
-    ordinary() { if (operation) { operation.phase = 'ordinary'; operation.ordinary_head = g(['rev-parse', 'HEAD']); save(); } },
+    mergeOrdinary() { return mergeOrdinary(); },
+    ordinary() {
+      if (operation?.ordinary_intent && ['merge', 'fast-forward'].includes(operation.ordinary_intent.kind)) return finishOriginalOrdinary();
+      if (operation) { operation.phase = 'ordinary'; operation.ordinary_head = g(['rev-parse', 'HEAD']); save(); }
+    },
     release() { lock.release(); },
   });
 }
@@ -3631,6 +3811,7 @@ function recheckRepairJournal(prepared) {
 }
 
 function recheckRepair(prepared, options, { clean = false, feedback = prepared.repair.feedback, signedHead } = {}) {
+  options[REPAIR_OWNER]?.();
   if (prepared.repair.role === 'ci-fix') return recheckCiRepair(prepared, options, { clean, signedHead });
   const root = prepared.commit.worktree;
   const historicalEndpoint = repairHistoricalEndpoint(prepared);
@@ -3723,6 +3904,7 @@ function repairCompletion(completed, result, prepared, recorder) {
 }
 
 function publishSignedRepair(prepared, signed, options) {
+  options[REPAIR_OWNER]?.();
   const lock = acquireLock(privateDirectory(prepared.stateRoot, 'repair-publication-locks'), signed.artifact.candidate_id, { waitMs: 0 });
   if (!lock) fail('REPAIR_PUBLICATION_PENDING', 'another host owns this signed publication');
   try { return performSignedRepairPublication(prepared, signed, options); }
@@ -3772,9 +3954,11 @@ function performSignedRepairPublication(prepared, signed, options) {
   atomicWrite(publicationFile, JSON.stringify(seal({ candidate_id: candidate.candidate_id,
     commit: artifact.commit, status: 'pending', subject: prepared.repair }, prepared.key)) + String.fromCharCode(10), { exclusive: true });
   const runner = options.execFileSync || execFileSync;
+  options[REPAIR_OWNER]?.();
   try { runner('git', ['push', '--porcelain', 'origin', 'HEAD:refs/heads/' + prepared.commit.expectedBranch],
     { cwd: prepared.commit.worktree, encoding: 'utf8', timeout: 120000, maxBuffer: MAX_REPAIR_FEEDBACK_BYTES }); }
   catch (error) { fail('REPAIR_PUBLICATION_PENDING', 'signed publication requires independent recovery: ' + error.message); }
+  options[REPAIR_OWNER]?.();
   const live = repairLive(options, transitioned, prepared.repair.pr);
   const next = Object.freeze({ ...transitioned, repair: Object.freeze({ ...prepared.repair, live,
     signed_transition: { candidate_id: artifact.candidate_id, from: prepared.commit.expectedHead,
@@ -3946,11 +4130,16 @@ function performRepairActions(prepared, output, options, dispatchId) {
       resolved: disposition.action === 'reply-and-resolve', ...(relation ? { reply_review: relation } : {}) }], pending: null };
     atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
   }
+  options[REPAIR_OWNER]?.();
   return Object.freeze({ status: output.status === 'escalate' ? 'escalated' : 'confirmed', confirmed: state.confirmed });
 }
 
 function resumeRepairActions(options, dispatchId, liveScopeInput) {
   const scope = canonicalCliScope(liveScopeInput);
+  if (options.controller) {
+    options = { ...options, [REPAIR_OWNER]: repairOwnerRenewal(options.controller, scope, options.writerSession) };
+    options[REPAIR_OWNER]();
+  }
   const root = hostStateRoot(options, scope), key = hostKey(root);
   const graphPath = graphFile(options, scope.worktree), graph = graphSnapshot(graphPath, scope.ticket);
   const locator = { stateRoot: root, key, graphFile: graphPath, commit: { worktree: scope.worktree, ticket: scope.ticket },
@@ -3959,6 +4148,25 @@ function resumeRepairActions(options, dispatchId, liveScopeInput) {
   const previous = history.history.find(item => item.attempt.dispatch_id === dispatchId);
   if (!previous?.attempt.preparation || !previous.attempt.result || !previous.receipt)
     fail('REPAIR_PREDECESSOR_INVALID', 'action recovery lacks original protected completion and preparation');
+  if (!options.controller) {
+    const controller = createRunController({ storeDir: path.join(storageDirectory(options, scope), 'runs') });
+    const receipt = previous.receipt;
+    const original = authenticatedReceipt(previous.recorder, dispatchId, 'review-fix');
+    const policyVersion = original.policy_version;
+    const recoveryScope = { ...scope, run_id: 'action-recovery-' + crypto.randomUUID() };
+    controller.begin(createRunScope({ ...recoveryScope, repository_id: previous.attempt.preparation.repository,
+      owner_id: controller.owner_id, dispatch: { dispatch_id: 'action-recovery-' + crypto.randomUUID(),
+        role: 'review-fix', model: receipt.model, effort: receipt.effort,
+        policy_version: policyVersion, policy_hash: receipt.policy_hash } }));
+    try {
+      const result = resumeRepairActions({ ...options, controller }, dispatchId, recoveryScope);
+      controller.complete(recoveryScope.run_id, { reason: 'reconciled original repair actions ' + dispatchId });
+      return result;
+    } catch (error) {
+      try { controller.fail(recoveryScope.run_id, { reason: historyReason(error.message) }); } catch {}
+      throw error;
+    }
+  }
   const selected = previous.attempt.preparation;
   if (previous.receipt.runtime_evidence.phase !== scope.phase || selected.commit.worktree !== scope.worktree
       || selected.commit.ticket !== scope.ticket || selected.graphFile !== graphPath)
@@ -4173,6 +4381,8 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     fail('INVALID_INPUT', 'candidate id must be a 64-character hex digest');
   }
   const liveScope = normalizeScope({ ...liveScopeInput, runtime: 'codex', provider: 'openai' });
+  options = { ...options, [REPAIR_OWNER]: repairOwnerRenewal(options.controller, liveScope, options.writerSession) };
+  options[REPAIR_OWNER]?.();
   const worktree = fs.realpathSync(liveScope.worktree);
   const stateRoot = hostStateRoot(options, { worktree });
   const key = hostKey(stateRoot);
@@ -4363,27 +4573,8 @@ function createCodexDeliveryHost(options = {}) {
       fail('WRITER_FENCED', 'host writer lease is not bound to the scoped phase');
     }
   }
-  const verificationController = options.controller;
-  const verificationAuthority = verificationController?.authority(scope.run_id);
-  const verificationWriter = writerSession && { lease: writerSession.lease,
-    token: writerSession.handle?.token, epoch: writerSession.handle?.epoch,
-    base_revision: writerSession.base_revision };
-  const renewVerificationOwner = verificationController && (() => {
-    verificationController.assertOwner(scope.run_id);
-    if (!verificationAuthority || verificationController.authority(scope.run_id) !== verificationAuthority) {
-      fail('SESSION_FENCED', 'verification requires its original process-local owner');
-    }
-    if (verificationWriter) {
-      const { lease, token, epoch, base_revision: baseRevision } = verificationWriter;
-      if (lease?.schema !== 'shipyard.planning-writer-lease.v1'
-          || typeof lease.heartbeatFenced !== 'function' || typeof token !== 'string'
-          || !Number.isSafeInteger(epoch) || typeof baseRevision !== 'string') {
-        fail('WRITER_FENCED', 'verification requires its original complete writer session');
-      }
-      lease.heartbeatFenced({ token, epoch, base_revision: baseRevision });
-    }
-    verificationController.heartbeat(scope.run_id);
-  });
+  const renewVerificationOwner = repairOwnerRenewal(options.controller, scope, writerSession);
+  options = { ...options, [REPAIR_OWNER]: renewVerificationOwner };
   const completedTyped = new Map();
   const preRecordValidation = writerSession && function validateHostWriter({ dispatch_id: dispatchId, gsd_role: gsdRole, receipt }) {
     const { lease, handle, base_revision: baseRevision, snapshot, phaseDir } = writerSession;
@@ -5120,7 +5311,7 @@ async function runResumeCli(argv, stdout, options) {
   let result;
   try {
     const host = createFinalizationRecoveryHost({
-      controller, graphDir: options.graphDir, storageRoot: options.storageRoot,
+      controller, writerSession: options.writerSession, graphDir: options.graphDir, storageRoot: options.storageRoot,
       recoveryGraphSnapshot: parsed.recoveryGraphSnapshot,
       finalizeCommit: options.finalizeCommit, verification: options.verification,
       verificationAllowList: options.verificationAllowList,
