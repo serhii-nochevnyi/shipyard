@@ -899,9 +899,24 @@ const gitReaderDeltas = [
   }
 ];
 
+const materialRetentionDeltas = [
+  {
+    "before": "const retain = (name, content) => {",
+    "after": "const retain = (name, content, maximum) => {"
+  },
+  {
+    "before": "writeImmutableArtifactFile(fs, file, value, 'complete semantic input');",
+    "after": "writeImmutableArtifactFile(fs, file, value, 'complete semantic input', maximum);"
+  },
+  {
+    "before": "...retain(source.source_id + '.txt', content) }));",
+    "after": "...retain(source.source_id + '.txt', content, snapshot.role === 'code-review'\n        ? require('./claude-role-host.cjs').CODE_REVIEW_MATERIAL_MAX_BYTES : undefined) }));"
+  }
+];
+
 function originalGitReaderSource(source = fs.readFileSync(path.join(scripts, 'role-artifact.cjs'), 'utf8')) {
   let original = source;
-  for (const { before, after } of gitReaderDeltas) {
+  for (const { before, after } of [...materialRetentionDeltas, ...gitReaderDeltas]) {
     assert.equal(original.split(after).length - 1, 1, 'only the exact private Git reader seam may be inverted');
     original = original.replace(after, before);
   }
