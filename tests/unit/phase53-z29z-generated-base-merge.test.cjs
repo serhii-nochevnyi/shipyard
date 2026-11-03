@@ -132,30 +132,47 @@ function partialApplyInjection(f, phase) {
     const exec=cp.execFileSync;cp.execFileSync=function(command,args,...rest){const result=exec.call(this,command,args,...rest);if(command==='git'&&args[1]===root&&args[2]==='add'&&intended()?.apply){adds++;if((phase==='first-add'&&adds===1)||(phase==='multiple-adds'&&adds===2))process.exit(97);}return result;};`;
 }
 if (require.main === module) {
-  test('legacy pending signed merge refuses replay while finished original remains admitted', bounded, async t => {
+  test('legacy real finished signed merge remains admitted without new signing or altered original identity', bounded, () => {
     const signing = signingFixture();
     try {
-      const oldScripts = historicalCiScripts(path.join(signing.directory, 'legacy-merge-producer'));
-      for (const finished of [false, true]) await t.test(finished ? 'finished' : 'pending', bounded, () => {
-        const f = divergentFixture(signing), counter = path.join(signing.directory, 'legacy-sign-' + finished);
-        const injection = `const Module=require('node:module'),load=Module._load,cp=require('node:child_process'),fs=require('node:fs');
-          Module._load=function(request,parent,...rest){if(request==='./codex-delivery-host.cjs'&&parent?.filename===${JSON.stringify(f.script)})return load.call(this,${JSON.stringify(path.join(oldScripts, 'codex-delivery-host.cjs'))},parent,...rest);return load.call(this,request,parent,...rest);};
-          const exec=cp.execFileSync;cp.execFileSync=function(cmd,args,...rest){const result=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args[2]==='commit-tree'&&args.some(a=>a.startsWith('-S'))){fs.appendFileSync(${JSON.stringify(counter)},'1');if(!${finished})process.exit(86);}return result;};`;
-        const first = f.run(injection); assert.equal(first.status, finished ? 0 : 86, first.stderr + first.stdout);
-        const op = retainedOperation(f); assert.equal(op.intent_protocol, undefined); assert.equal(op.signing, undefined);
-        const before = { head: git(f.worktree, 'rev-parse', 'HEAD'), index: execTree(f.worktree, git(f.worktree, 'write-tree')),
-          proof: fs.readFileSync(path.join(f.proofDirectory, fs.readdirSync(f.proofDirectory).find(n => n.endsWith('.json'))), 'utf8'),
-          source: inventory(f.worktree).filter(e => e.path !== '.git' && !e.path.startsWith('.git/')) };
-        const response = f.run();
-        if (finished) { assert.equal(response.status, 0, response.stderr + response.stdout); assert.equal(JSON.parse(response.stdout).commit, before.head);
-          assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: before.head }).covered, true); }
-        else { assert.notEqual(response.status, 0); assert.match(response.stderr, /legacy pending merge has no authenticated original intent/); }
-        assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), before.head);
-        assert.deepEqual(execTree(f.worktree, git(f.worktree, 'write-tree')), before.index);
-        assert.deepEqual(inventory(f.worktree).filter(e => e.path !== '.git' && !e.path.startsWith('.git/')), before.source);
-        assert.equal(fs.readFileSync(path.join(f.proofDirectory, fs.readdirSync(f.proofDirectory).find(n => n.endsWith('.json'))), 'utf8'), before.proof);
-        assert.equal(fs.readFileSync(counter, 'utf8'), '1');
-      });
+      const f = divergentFixture(signing), root = path.resolve(__dirname, '../..'), legacy = path.join(signing.directory, 'legacy-source');
+      fs.mkdirSync(legacy); fs.cpSync(path.join(root, 'scripts'), path.join(legacy, 'scripts'), { recursive: true });
+      fs.cpSync(path.join(root, 'plugins'), path.join(legacy, 'plugins'), { recursive: true });
+      const oldScripts = path.join(legacy, 'plugins/delivery-pipeline/scripts');
+      historicalCiScripts(oldScripts);
+      const counter = path.join(signing.directory, 'legacy-finished-sign-count'), entry = path.join(signing.directory, 'legacy-finished-entry.cjs');
+      fs.writeFileSync(entry, `const cp=require('node:child_process'),fs=require('node:fs'),exec=cp.execFileSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args[2]==='commit-tree'&&args.some(a=>a.startsWith('-S')))fs.appendFileSync(${JSON.stringify(counter)},'1');return r;};const h=require(${JSON.stringify(path.join(oldScripts,'codex-delivery-host.cjs'))}).generatedBaseMergeAuthority({worktree:${JSON.stringify(f.worktree)},ticket:'T-53-31',graphDir:${JSON.stringify(f.graphDir)},requestedBase:'main',noFetch:true});process.on('exit',()=>h.release());h.prepare();try{cp.execFileSync('git',['-C',${JSON.stringify(f.worktree)},'merge','--no-edit','main'],{stdio:'pipe'});}catch(e){if(e.status!==1)throw e;}h.observe();h.complete([]);`);
+      const first = spawnSync(process.execPath, [entry], { encoding: 'utf8', timeout: 180000, maxBuffer: 8*1024*1024 });
+      assert.equal(first.status, 0, first.stderr + first.stdout);
+      const old = retainedOperation(f), oid = git(f.worktree, 'rev-parse', 'HEAD');
+      assert.equal(old.phase, 'completed'); assert.equal(old.signing, undefined); assert.equal(old.intent_protocol, undefined);
+      const injection = `const cp=require('node:child_process'),fs=require('node:fs'),exec=cp.execFileSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args[2]==='commit-tree'&&args.some(a=>a.startsWith('-S')))fs.appendFileSync(${JSON.stringify(counter)},'1');return r;};`;
+      const response = f.run(injection); assert.equal(response.status, 0, response.stderr + response.stdout);
+      assert.equal(JSON.parse(response.stdout).commit, oid); assert.equal(fs.readFileSync(counter, 'utf8'), '1');
+      assert.equal(retainedOperation(f).id, old.id); assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), oid);
+      assert.equal(coverage.verify({ worktree: f.worktree, repo: 'fixture/repository', commit: oid }).covered, true);
+    } finally { signing.close(); }
+  });
+
+  test('legacy real captured producer post-object gap never gains a second signing during current recovery', bounded, () => {
+    const signing = signingFixture();
+    try {
+      const f = divergentFixture(signing), root = path.resolve(__dirname, '../..'), legacy = path.join(signing.directory, 'legacy-source');
+      fs.mkdirSync(legacy); fs.cpSync(path.join(root, 'scripts'), path.join(legacy, 'scripts'), { recursive: true });
+      fs.cpSync(path.join(root, 'plugins'), path.join(legacy, 'plugins'), { recursive: true });
+      const oldScripts = path.join(legacy, 'plugins/delivery-pipeline/scripts');
+      historicalCiScripts(oldScripts);
+      const counter = path.join(signing.directory, 'legacy-sign-count'), entry = path.join(signing.directory, 'legacy-merge-entry.cjs');
+      fs.writeFileSync(entry, `const cp=require('node:child_process'),fs=require('node:fs'),exec=cp.execFileSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args[2]==='commit-tree'&&args.some(a=>a.startsWith('-S'))){fs.appendFileSync(${JSON.stringify(counter)},'1');process.exit(86);}return r;};const h=require(${JSON.stringify(path.join(oldScripts,'codex-delivery-host.cjs'))}).generatedBaseMergeAuthority({worktree:${JSON.stringify(f.worktree)},ticket:'T-53-31',graphDir:${JSON.stringify(f.graphDir)},requestedBase:'main',noFetch:true});process.on('exit',()=>h.release());h.prepare();try{cp.execFileSync('git',['-C',${JSON.stringify(f.worktree)},'merge','--no-edit','main'],{stdio:'pipe'});}catch(e){if(e.status!==1)throw e;}h.observe();h.complete([]);`);
+      const first = spawnSync(process.execPath, [entry], { encoding: 'utf8', timeout: 180000, maxBuffer: 8*1024*1024 });
+      assert.equal(first.status, 86, first.stderr + first.stdout);
+      const op = retainedOperation(f); assert.equal(op.phase, 'staged'); assert.equal(op.commit, undefined); assert.equal(op.signing, undefined);
+      const injection = `const cp=require('node:child_process'),fs=require('node:fs'),exec=cp.execFileSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args[2]==='commit-tree'&&args.some(a=>a.startsWith('-S')))fs.appendFileSync(${JSON.stringify(counter)},'1');return r;};`;
+      const before = inventory(f.worktree), proof = inventory(f.proofDirectory), resumed = f.run(injection);
+      assert.equal(fs.readFileSync(counter, 'utf8'), '1', 'legacy original had already physically signed; current recovery must not sign again');
+      assert.notEqual(resumed.status, 0, 'unbound legacy original object must not be adopted');
+      assert.deepEqual(inventory(f.worktree), before); assert.deepEqual(inventory(f.proofDirectory), proof);
+      assert.equal(git(f.worktree, 'rev-parse', 'HEAD'), f.head);
     } finally { signing.close(); }
   });
 
