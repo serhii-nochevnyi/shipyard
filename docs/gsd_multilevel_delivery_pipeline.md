@@ -844,6 +844,28 @@ same-session native dispatch receipt, with distinct requested, applied, and
 observed model/effort values and its application evidence. A claimed request or
 a process exit is not proof that the runtime applied it.
 
+Signed `review-fix` publication is confirmed against the live PR after the push.
+A mismatch names each differing field (`headRefOid`, `baseRefOid`,
+`headRefName`, `state`, `number`, `baseRef`) with its expected and observed value
+and the stage that read it. Only one case is reread, a bounded number of times:
+the sole difference is `headRefOid` still showing the pre-push head. A different
+head, a changed base, branch, PR number or a closed PR refuses at once, and
+exhausting the rereads leaves the pending publication in place as
+`REPAIR_PUBLICATION_PENDING`. Recover with
+`--resume-finalization <candidate-id> --scope-file <scope>` and a fresh `run_id`
+(the persisted run scope cannot be reused). It confirms the remote head without a
+second push, then applies the original review dispositions once, and repeats
+idempotently. `--resume-repair-actions` refuses with `REPAIR_PUBLICATION_PENDING`
+while the dispatch has a signed publication, naming the candidate to resume.
+Recovery accepts a verification allow-list that differs from the original only
+when the PLAN's assigned commands resolve identically, and journal records
+appended after the attempt only when they concern other tickets or are the
+host's own `escalation-record` declaration for this PR; any other record for the
+repaired ticket refuses. The live review-feedback inventory may differ from the
+sealed one only in the `line` of threads on files the signed commit changed (a
+published fix outdates them); ids, bodies, resolution state, `path` and
+`original_line` must match, and a thread on an unchanged file keeps its `line`.
+
 ### 7.5.2. Adapters, boundary, and receipts
 
 Every routed launch — research, decomposition, executor, sentinel, drift,
