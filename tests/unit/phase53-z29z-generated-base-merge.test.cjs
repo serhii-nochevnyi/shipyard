@@ -11,12 +11,13 @@ const coverage = require(path.join(scripts, 'conveyor-coverage.cjs'));
 const canonical = 'plugins/delivery-pipeline/scripts/role-artifact.cjs';
 const mirror = 'plugins/shipyard/host/' + canonical;
 const identityPaths = ['plugins/shipyard/.codex-plugin/plugin.json', 'plugins/shipyard/package-build.json'];
-function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false, wrappedBoard = false } = {}) {
+function divergentFixture(signing, { conflict = false, generatedEntry = false, modeIntent = false, wrappedBoard = false, multipleConflicts = false } = {}) {
   const worktree = path.join(signing.directory, 'source-' + crypto.randomUUID());
   fs.mkdirSync(worktree); packageSource(worktree);
   git(worktree, 'init', '-q', '-b', 'main');
   for (const [key, value] of Object.entries({ 'user.name': 'Fixture', 'user.email': 'fixture@example.test', 'user.signingkey': signing.signer, 'commit.gpgsign': 'true' }))
     git(worktree, 'config', key, value);
+  if (multipleConflicts) fs.writeFileSync(path.join(worktree, '.gitattributes'), canonical + ' merge=union\n');
   git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'fixture supported package');
   git(worktree, 'switch', '-c', 'ticket/T-53-31');
   const file = path.join(worktree, canonical), original = fs.readFileSync(file, 'utf8');
@@ -30,7 +31,7 @@ function divergentFixture(signing, { conflict = false, generatedEntry = false, m
   git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'fixture ticket canonical generation');
   const head = git(worktree, 'rev-parse', 'HEAD'), headTree = git(worktree, 'rev-parse', 'HEAD^{tree}');
   git(worktree, 'switch', 'main');
-  fs.writeFileSync(file, conflict ? original.replace("'use strict';", "'use strict';\nvoid 'upstream semantic conflict';") : original + "\nvoid 'upstream canonical change';\n");
+  fs.writeFileSync(file, (conflict || multipleConflicts) ? original.replace("'use strict';", multipleConflicts ? "'use strict';\nvoid 'upstream canonical change';" : "'use strict';\nvoid 'upstream semantic conflict';") : original + "\nvoid 'upstream canonical change';\n");
   fs.appendFileSync(path.join(worktree, 'plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), "\nvoid 'independent upstream canonical change';\n");
   generate(); git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'fixture incoming canonical generation');
   const base = git(worktree, 'rev-parse', 'HEAD'), baseTree = git(worktree, 'rev-parse', 'HEAD^{tree}');
@@ -157,7 +158,7 @@ if (require.main === module) {
     const signing = signingFixture();
     try {
       for (const phase of ['write', 'chmod', 'first-add', 'multiple-adds']) await t.test(phase, bounded, () => {
-        const f = divergentFixture(signing, { modeIntent: phase === 'chmod' });
+        const f = divergentFixture(signing, { modeIntent: phase === 'chmod', multipleConflicts: true });
         const first = f.run(partialApplyInjection(f, phase));
         assert.equal(first.status, phase === 'write' ? 95 : phase === 'chmod' ? 96 : 97, first.stderr + first.stdout);
         const original = retainedOperation(f);

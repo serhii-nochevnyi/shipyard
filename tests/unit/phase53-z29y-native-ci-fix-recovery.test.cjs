@@ -648,7 +648,7 @@ if (require.main === module) {
       'phase53-z29t-role-architecture-archives.test.cjs', 'phase53-z29u-role-containment.test.cjs',
       'phase53-z29v-role-code-review.test.cjs', 'phase53-z29w-role-integration.test.cjs'];
     const baseline = require('./phase53-z29g-historical-action-covered.test.cjs').original.shards;
-    const historicalFiles = [...new Set([...baseline.flat(), ...names])];
+    const historicalFiles = [...new Set([...baseline.flat().map(task => shards.parseTask(task).file), ...names])];
     assert.ok(historicalFiles.every(name => !prerequisites.includes(name)));
     const tasks = shards.unitTasks(historicalFiles);
     const delivered = shards.appendShard(frozen, tasks.filter(task => !names.includes(task)));
@@ -680,7 +680,7 @@ if (require.main === module) {
     const four = ['phase53-z29t-role-architecture-archives.test.cjs', 'phase53-z29u-role-containment.test.cjs',
       'phase53-z29v-role-code-review.test.cjs', 'phase53-z29w-role-integration.test.cjs'];
     const three = ['phase53-z29x-native-ci-fix-contract.test.cjs', 'phase53-z29y-native-ci-fix-recovery.test.cjs', 'phase53-z29z-generated-base-merge.test.cjs'];
-    const historicalTasks = shards.unitTasks([...new Set([...baseline.flat(), ...seven, ...two, ...four])]);
+    const historicalTasks = shards.unitTasks([...new Set([...baseline.flat().map(task => shards.parseTask(task).file), ...seven, ...two, ...four])]);
     const before = shards.appendShard(frozen, historicalTasks);
     assert.equal(before.shards.length, 64); assert.equal(before.shards.length + 3, 67);
     assert.deepEqual(before.shards.slice(0, 51), baseline);
