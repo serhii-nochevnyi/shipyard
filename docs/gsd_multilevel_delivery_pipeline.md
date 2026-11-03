@@ -856,12 +856,21 @@ exhausting the rereads leaves the pending publication in place as
 (the persisted run scope cannot be reused). It confirms the remote head without a
 second push, then applies the original review dispositions once, and repeats
 idempotently. `--resume-repair-actions` refuses with `REPAIR_PUBLICATION_PENDING`
-while the dispatch has a signed publication, naming the candidate to resume.
-Recovery accepts a verification allow-list that differs from the original only
-when the PLAN's assigned commands resolve identically, and journal records
-appended after the attempt only when they concern other tickets or are the
-host's own `escalation-record` declaration for this PR; any other record for the
-repaired ticket refuses.
+while the dispatch has a signed publication and names the candidate: a pending
+one is reconciled first, a confirmed one is already published and is continued
+with `--resume-finalization`, which applies the review dispositions. A confirmed
+publication whose head is still not visible at the `recheck` stage fails the same
+way and says it is already confirmed rather than pending.
+Recovery accepts a verification allow-list that differs from the original (which
+the candidate digest authenticates) only when the PLAN's assigned commands
+resolve identically; outside recovery any difference refuses. Journal rows
+appended after the attempt are accepted only if they are one of two kinds: an
+unrelated row, meaning a row for another ticket or without a `ticket`, whose `pr`
+is not this PR, with a non-empty `event` and a canonical millisecond ISO `ts`; or
+the host's own `escalation-record` declaration for the repaired ticket and this
+PR. Everything else refuses: any other row for the repaired ticket, any row
+naming this PR (even without a `ticket`), a non-string `ticket`, and a row that
+is not an object.
 
 After a signed publication the live review-feedback inventory may differ from
 the sealed one only in these ways, each re-read from GitHub: the `line` of a

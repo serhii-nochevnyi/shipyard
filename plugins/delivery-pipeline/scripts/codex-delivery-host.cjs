@@ -2037,6 +2037,14 @@ function recheckRepairAllowList(prepared, options) {
   if (canonical(original) !== canonical(now)) changed();
 }
 
+function confirmedPublicationId(prepared) {
+  const id = prepared.repair.signed_transition?.candidate_id;
+  try {
+    const record = id && readSealed(path.join(prepared.stateRoot, 'repair-publications', id + '.json'), prepared.key);
+    return record?.status === 'confirmed' ? id : null;
+  } catch { return null; }
+}
+
 function recheckRepair(prepared, options, { clean = false, feedback = prepared.repair.feedback, signedHead } = {}) {
   const root = prepared.commit.worktree;
   const historicalEndpoint = repairHistoricalEndpoint(prepared);
@@ -2056,7 +2064,14 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
     fail('REPAIR_EVIDENCE_CHANGED', 'original evidence was replaced');
   const board = JSON.parse(fs.readFileSync(path.join(path.dirname(prepared.graphFile), 'delivery-state.json'), 'utf8'));
   if (board[prepared.commit.ticket]?.pr !== prepared.repair.pr) fail('REPAIR_SUBJECT_CHANGED', 'canonical PR changed');
-  repairLive(options, prepared, prepared.repair.pr, { stage: 'recheck', staleHead: prepared.repair.signed_transition?.from });
+  try { repairLive(options, prepared, prepared.repair.pr, { stage: 'recheck', staleHead: prepared.repair.signed_transition?.from }); }
+  catch (error) {
+    const confirmed = error.stale && confirmedPublicationId(prepared);
+    if (confirmed) error.message = 'codex-delivery-host: signed publication is already confirmed but its head is not yet visible on the live PR (stage '
+      + error.stage + '): ' + describeRepairMismatch(error.mismatches) + '; no push is replayed; continue with --resume-finalization '
+      + confirmed + ' and a fresh run id';
+    throw error;
+  }
   const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
   for (const prior of prepared.repair.actionable_feedback?.coverage || []) {
     const file = path.join(privateDirectory(prepared.stateRoot, 'repair-actions'), sha256(prior.dispatch_id) + '.json');
@@ -2366,8 +2381,11 @@ function resumeRepairActions(options, dispatchId, liveScopeInput) {
   if (!previous?.attempt.preparation || !previous.attempt.result || !previous.receipt)
     fail('REPAIR_PREDECESSOR_INVALID', 'action recovery lacks original protected completion and preparation');
   const signed = signedPublicationOf(root, key, dispatchId);
-  if (signed) fail('REPAIR_PUBLICATION_PENDING', 'dispatch ' + dispatchId + ' has a ' + signed.status
-    + ' signed publication; reconcile it first with --resume-finalization ' + signed.candidate_id + ' and a fresh run id');
+  if (signed) fail('REPAIR_PUBLICATION_PENDING', signed.status === 'confirmed'
+    ? 'dispatch ' + dispatchId + ' has a confirmed signed publication, already published and never replayed; continue with '
+      + '--resume-finalization ' + signed.candidate_id + ' and a fresh run id to apply its review dispositions'
+    : 'dispatch ' + dispatchId + ' has a ' + signed.status + ' signed publication; reconcile it first with --resume-finalization '
+      + signed.candidate_id + ' and a fresh run id');
   const selected = previous.attempt.preparation;
   if (previous.receipt.runtime_evidence.phase !== scope.phase || selected.commit.worktree !== scope.worktree
       || selected.commit.ticket !== scope.ticket || selected.graphFile !== graphPath)
