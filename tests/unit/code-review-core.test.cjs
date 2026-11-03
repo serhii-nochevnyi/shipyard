@@ -378,19 +378,52 @@ test('coverage and permanent round costs stay independent across expanding and n
 test('roundLookup equals the countable verdicts joined with the next round for every history', () => {
   const verdict = n => ({ head: 'h' + n, sealed_at: '2026-01-0' + n, review_completeness: 'complete',
     review_scope: n === 1 ? 'full' : 'delta', prior_head: n === 1 ? null : 'h' + (n - 1), answer_authenticated: true });
-  const all = [1, 2, 3].map(verdict), isAncestor = () => true;
+  const all = [1, 2, 3].map(verdict), isAncestor = () => true, readRecords = () => [];
   const histories = [];
   for (const mergeBase of [undefined, 'm'])
-    for (let used = 0; used <= 3; used++) histories.push({ priorVerdicts: all.slice(0, used), head: 'current', isAncestor, mergeBase });
-  histories.push({ priorVerdicts: [{ ...all[0], review_completeness: 'incomplete' }, all[1]], head: 'current', isAncestor });
-  histories.push({ priorVerdicts: all.slice(0, 2), head: 'current', isAncestor: head => head !== 'h2' });
-  histories.push({ priorVerdicts: [all[0], { ...all[1], answer_authenticated: false }], head: 'current', isAncestor });
-  histories.push({ priorVerdicts: [all[0], { ...all[1], answer_authenticated: false }], head: 'current', isAncestor, mergeBase: 'm' });
+    for (let used = 0; used <= 3; used++) histories.push({ priorVerdicts: all.slice(0, used), head: 'current', isAncestor, mergeBase, readRecords });
+  histories.push({ priorVerdicts: [{ ...all[0], review_completeness: 'incomplete' }, all[1]], head: 'current', isAncestor, readRecords });
+  histories.push({ priorVerdicts: all.slice(0, 2), head: 'current', readRecords, isAncestor: head => head !== 'h2' });
+  histories.push({ priorVerdicts: [all[0], { ...all[1], answer_authenticated: false }], head: 'current', isAncestor, readRecords });
+  histories.push({ priorVerdicts: [all[0], { ...all[1], answer_authenticated: false }], head: 'current', isAncestor, readRecords, mergeBase: 'm' });
   for (const history of histories)
-    assert.deepEqual(core.roundLookup(history), { countable: core.countableVerdicts(history), ...core.nextRound(history) });
+    assert.deepEqual(core.roundLookup(history), { countable: core.countableVerdicts(history), ...core.nextRound(history),
+      limit: 3, extension: null });
   assert.equal(core.roundLookup(histories[3]).state, 'limit');
   assert.equal(core.roundLookup(histories[1]).countable.length, 1);
   assert.equal(core.roundLookup(histories.at(-3)).countable.length, 1);
+});
+
+test('the limit is the cap plus the valid records, clamped to the ceiling, and consumption comes from the sealed history', () => {
+  const heads = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'], isAncestor = (a, b) => heads.indexOf(a) <= heads.indexOf(b);
+  const verdict = n => ({ head: heads[n - 1], sealed_at: `2026-02-0${n}`, review_completeness: 'complete',
+    review_scope: n === 1 ? 'full' : 'delta', prior_head: n === 1 ? null : heads[n - 2], answer_authenticated: true });
+  const rec = (head, extra = {}) => ({ head, base_commit: 'B', operator: 'Ada', created_at: '2026-02-03T12:00:00.000Z', reason: 'why', ...extra });
+  const look = (sealed, records, head, baseCommit = 'B') => {
+    const { limit, state, round, extension } = core.roundLookup({ priorVerdicts: [1, 2, 3, 4, 5].slice(0, sealed).map(verdict),
+      head, baseCommit, isAncestor, readRecords: () => records });
+    return { limit, state, round, extension };
+  };
+  const owed = (limit, round) => ({ limit, state: 'ready', round, extension: null });
+  const limited = limit => ({ limit, state: 'limit', round: null, extension: null });
+  const grant = { operator: 'Ada', at: '2026-02-03T12:00:00.000Z', reason: 'why' };
+  assert.deepEqual(look(3, [], 'H4'), limited(3));
+  assert.deepEqual(look(3, [rec('H4')], 'H4'), { ...owed(4, 4), extension: grant });
+  assert.deepEqual(look(4, [rec('H4')], 'H5'), limited(4));
+  assert.deepEqual(look(4, [rec('H4'), rec('H5')], 'H5'), { ...owed(5, 5), extension: grant });
+  assert.deepEqual(look(5, [rec('H4'), rec('H5'), rec('H6')], 'H6'), { ...limited(5), extension: grant });
+  assert.deepEqual(look(3, [rec('H4'), rec('H4', { base_commit: 'C' })], 'H4'), { ...owed(4, 4), extension: grant });
+  assert.deepEqual(look(3, [rec('H4'), rec('H4', { operator: 'Bob' })], 'H4').limit, 5);
+  assert.deepEqual(look(3, [rec('H4'), rec('H4'), rec('H4'), rec('H4')], 'H4').limit, 5);
+  for (const [name, records, head, base] of [['head moved with no verdict for it', [rec('H4')], 'H5'],
+    ['base differs', [rec('H4')], 'H4', 'C'], ['verdict sealed before the record', [rec('H3')], 'H4'],
+    ['record head not in the history', [rec('X')], 'H4']])
+    assert.deepEqual(look(3, records, head, base), limited(3), name);
+  assert.equal(core.ROUND_CEILING, 5);
+  assert.deepEqual([3, 4, 5].map(limit => core.limitMessage({ limit })), ['three', 'four', 'five'].map(word =>
+    `${word} rounds are spent; no further review can launch`));
+  for (const sealed of [0, 2]) assert.deepEqual(core.roundLookup({ priorVerdicts: [1, 2].slice(0, sealed).map(verdict), head: 'H3',
+    isAncestor, readRecords() { throw Error('read below the cap'); } }).limit, 3);
 });
 
 test('the part budget is one weight bound per runtime', () => {

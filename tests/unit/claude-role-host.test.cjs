@@ -13,6 +13,10 @@ const { activeDispatches } = require('../../plugins/delivery-pipeline/scripts/di
 const { agentsInFlight } = require('../../plugins/delivery-pipeline/scripts/front.cjs');
 const { loadClaudeReferenceContent } = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs');
 const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
+const stateHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'claude-host-home-')));
+const realHomedir = os.homedir;
+os.homedir = () => stateHome;
+process.on('exit', () => { os.homedir = realHomedir; fs.rmSync(stateHome, { recursive: true, force: true }); });
 
 function preparationOnlyHost() {
   const Module = require('node:module');
@@ -2424,7 +2428,7 @@ test(`code-review incomplete full review retries round 1 after ${mode}`, async (
   } finally { cleanupFixture(fixture); }
 });
 
-test('code-review rounds 2 and 3 authenticate previous sealed archives and refuse a fourth launch', async () => {
+test('code-review rounds 2 and 3 authenticate previous sealed archives and refuse a fourth launch unless an operator record opens round 4', async () => {
   const fixture = setupCodeReview({ coordinatorGraph: true });
   let launches = 0;
   try {
@@ -2453,8 +2457,22 @@ test('code-review rounds 2 and 3 authenticate previous sealed archives and refus
       assert.equal(fs.existsSync(path.join(fixture.root, '.planning/graph/dispatches.json')), false);
       previous = fixture.head;
     }
-    await assert.rejects(runCodeReview(fixture, { onLaunch() { launches++; } }), error =>
+    const refused = () => assert.rejects(runCodeReview(fixture, { onLaunch() { launches++; } }), error =>
       error.code === 'CODE_REVIEW_ROUND_LIMIT' && /three rounds/.test(error.message));
+    await refused();
+    write(fixture.root, 'src/role.txt', 'fixed change 4\n'); codeReviewCommit(fixture);
+    await refused();
+    const record = { head: fixture.head, base_commit: fixture.base, operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass' };
+    const writeRecord = overrides => require('../../plugins/delivery-pipeline/scripts/phase-code-review.cjs').appendExtension({
+      repository: reviewTargets.repositoryIdentity(fixture.root), repo: null, pr: 101, worktree: fixture.root,
+      mode: { project_root: fixture.root } }, { ...record, ...overrides });
+    writeRecord({ head: 'c'.repeat(40) }); writeRecord({ base_commit: 'c'.repeat(40) });
+    await refused();
+    writeRecord();
+    let round4;
+    await assert.rejects(runCodeReview(fixture, { onLaunch(prompt) {
+      round4 = packetFromPrompt(prompt).role_context.review_round; throw new Error('stopped after preparation'); } }), /stopped after preparation/);
+    assert.equal(round4, 4);
     assert.equal(launches, 3);
   } finally { cleanupFixture(fixture); }
 });

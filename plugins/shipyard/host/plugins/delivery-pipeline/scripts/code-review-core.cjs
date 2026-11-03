@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const CONTRACT_ID = 'shipyard.phase-code-review.v1';
 const ROUND_CAP = 3;
+const ROUND_CEILING = 5;
 const PART_BUDGET = Object.freeze({ claude: 40000, codex: 10000 });
 const PART_MAX_BYTES = 32 * 1024;
 const PART_SCHEMA = Object.freeze({ type: 'object', required: ['part', 'review_completeness', 'limitations', 'unresolved_sources', 'summary', 'findings'],
@@ -337,14 +338,27 @@ function coverageComplete({ verdict, priorVerdicts, mergeBase, isAncestor }) {
 }
 function nextRound(options) {
   const verdicts = countableVerdicts(options), used = verdicts.length;
-  if (used >= ROUND_CAP) return { round: null, state: 'limit', rounds_used: used };
+  if (used >= (options.limit ?? ROUND_CAP)) return { round: null, state: 'limit', rounds_used: used };
   const inherit = used && verdicts.at(-1).answer_authenticated !== false
     && (options.mergeBase === undefined || coverageComplete({ verdict: verdicts.at(-1),
     priorVerdicts: verdicts, mergeBase: options.mergeBase, isAncestor: options.isAncestor }));
   return { round: used + 1, state: 'ready', scope: inherit ? 'delta' : 'full', rounds_used: used,
     priorHead: used ? verdicts.at(-1).head : null, deltaBase: inherit ? verdicts.at(-1).head : null };
 }
-function roundLookup(options) { return { countable: countableVerdicts(options), ...nextRound(options) }; }
+// @invariant: a record is valid at its base for its current head, or once a countable verdict for it sealed later.
+function extensionState({ records, countable, head, baseCommit }) {
+  return records.filter(record => record.base_commit === baseCommit && (record.head === head
+    || countable.some(verdict => verdict.head === record.head && verdict.sealed_at > record.created_at)));
+}
+// @contract: the record store is read only once the countable verdicts reach ROUND_CAP.
+function roundLookup(options) {
+  const countable = countableVerdicts(options);
+  const valid = countable.length < ROUND_CAP ? [] : extensionState({ ...options, countable, records: options.readRecords() });
+  const limit = Math.min(ROUND_CEILING, ROUND_CAP + valid.length), here = valid.find(record => record.head === options.head);
+  return { countable, ...nextRound({ ...options, limit }), limit,
+    extension: here ? { operator: here.operator, at: here.created_at, reason: here.reason } : null };
+}
+function limitMessage({ limit }) { return `${['three', 'four', 'five'][limit - ROUND_CAP]} rounds are spent; no further review can launch`; }
 function repairAllowed(round) { return round === 1 || round === 2; }
 
 function diffPath(value) {
@@ -528,7 +542,7 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
     ...(part ? { part: { id: part.id, ordinal: part.ordinal, of: groups.length, paths: part.paths } } : {}), ...(parts?.length ? { parts } : {}) };
 }
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
-module.exports = { CONTRACT_ID, ROUND_CAP, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
+module.exports = { CONTRACT_ID, ROUND_CAP, ROUND_CEILING, extensionState, limitMessage, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
   lineageComplete, coverageComplete, nextRound, roundLookup, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };

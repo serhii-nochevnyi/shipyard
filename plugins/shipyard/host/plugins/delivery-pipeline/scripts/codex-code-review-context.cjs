@@ -144,9 +144,11 @@ function collect(scope, options) {
     try { git(options, worktree, ['merge-base', '--is-ancestor', ancestor, current]); return true; }
     catch (error) { if (error.status === 1) return false; throw error; }
   };
-  const roundOptions = { priorVerdicts, head, isAncestor, mergeBase };
+  const roundOptions = { priorVerdicts, head, isAncestor, mergeBase, baseCommit: live.baseRefOid,
+    readRecords: () => require('./phase-code-review.cjs').readExtensions({ repository, repo: options.phaseRepo ?? null,
+      pr: number, roots: [worktree, project] }) };
   const { countable: verdicts, ...round } = core.roundLookup(roundOptions);
-  if (round.state === 'limit') fail('three countable reviews have already run', 'CODE_REVIEW_ROUND_LIMIT');
+  if (round.state === 'limit') fail(core.limitMessage(round), 'CODE_REVIEW_ROUND_LIMIT');
   const deltaBase = round.deltaBase || mergeBase;
   const changeMetadata = {};
   for (const [key, flag] of [['name_status', '--name-status'], ['numstat', '--numstat']])
