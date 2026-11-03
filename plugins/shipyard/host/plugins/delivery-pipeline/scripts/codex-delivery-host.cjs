@@ -3663,6 +3663,9 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
   return Object.freeze({
     recover() {
       if (!operation) return null;
+      if (!['completed', 'ordinary', 'manual'].includes(operation.phase) && !operation.commit
+          && !operation.signing && !operation.ordinary_intent && operation.intent_protocol !== 'original-intent-v1')
+        fail('GENERATED_MERGE_CHANGED', 'legacy pending merge has no authenticated original intent; refusing replay');
       if (!noFetch) g(['fetch', 'origin', '--prune']);
       if (operation.phase === 'prepared' && operation.ordinary_intent
           && operation.ordinary_intent.kind !== 'conflict' && g(['rev-parse', 'HEAD']) !== operation.head)
@@ -3681,7 +3684,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
         fail('GENERATED_MERGE_INVALID', 'generated merge branch or incoming builder is not trusted');
       const head = g(['rev-parse', 'HEAD']);
       const id = sha256(canonical({ pins: p, head }));
-      operation = { schema: 'shipyard.generated-base-merge.v1', id, pins: p, head,
+      operation = { schema: 'shipyard.generated-base-merge.v1', intent_protocol: 'original-intent-v1', id, pins: p, head,
         head_tree: g(['rev-parse', 'HEAD^{tree}']), private_root: privatePin(directory), phase: 'prepared', taken: [] };
       proofFile = path.join(directory, id + '.json'); save();
     },
