@@ -207,12 +207,12 @@ function fixTickets(input, options = {}) {
     files: [...finding.fix_ticket.files], depends_on: [...(finding.fix_ticket.depends_on || [])] }));
 }
 
-const clip = (value, max) => value.slice(0, Math.max(0, max)).replace(/[\ud800-\udbff]$/, '');
+const clip = (value, max) => value.slice(0, Math.max(0, max)).replace(/[\ud800-\udbff]$/, '').trimEnd();
 // @security: sealed operator text is re-cleaned and cut here; it never reaches a public surface as markup.
 function extensionLine(round, extension, room = Infinity) {
   let operator = clip(cleanText(extension.operator), 128) || 'unknown', reason = clip(cleanText(extension.reason), 200) || 'unknown';
   const time = clip(cleanText(extension.at), 16);
-  const line = () => `round ${round} of ${core.ROUND_CAP}, extended by ${operator} at ${time}Z: ${reason}`;
+  const line = () => `round ${round} of ${core.ROUND_CAP}, extended by ${operator} at ${time}Z${reason ? `: ${reason}` : ''}`;
   const excess = () => Math.max(0, line().length - room);
   reason = clip(reason, reason.length - excess());
   operator = clip(operator, operator.length - excess());

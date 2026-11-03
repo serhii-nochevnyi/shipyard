@@ -510,12 +510,13 @@ test('extended status description truncates the reason first, then the operator,
     const text = describe('o'.repeat(128), 'r'.repeat(200), verdict);
     assert(text.length <= 140, text.length);
     assert(text.startsWith(base + '; round 4 of 3, extended by o'), text);
-    assert(text.endsWith('Z: '), 'the reason is gone before the operator is cut: ' + text);
+    assert(/Z$/.test(text), 'the reason is gone before the operator is cut: ' + text);
     assert.equal(text.length, 140);
     assert.deepEqual(hygiene.internalLeakViolations('status', text), []);
   }
   const cutOperator = describe('o'.repeat(60), 'r'.repeat(200), { blocking_count: 1, warning_count: 0 });
-  assert.equal(cutOperator, head + 'o'.repeat(50) + fixed);
+  assert.equal(cutOperator, head + 'o'.repeat(52) + fixed.slice(0, -2));
+  assert(!/\s$/.test(cutOperator));
 });
 
 test('extended line counts toward the 60000-character comment bound', () => {
@@ -527,6 +528,36 @@ test('extended line counts toward the 60000-character comment bound', () => {
     const body = f.comments[0].body, more = body.match(/and (\d+) more findings\.\n/);
     assert(more); assert(body.length <= 60000 - 64 + more[0].length, String(body.length));
     assert.equal(body.split('\n')[2].length, 'round 4 of 3, extended by  at 2026-11-02T10:45Z: '.length + 328);
+  } finally { f.cleanup(); }
+});
+
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+test('extended truncation never leaves half of a surrogate pair', () => {
+  const at = '2026-11-02T10:45:12.345Z', counts = { blocking_count: 1, warning_count: 0 };
+  const describe = (operator, reason) => flow.statusDescription({ ...extended(4, { operator, at, reason }), ...counts }).description;
+  for (const [operator, reason] of [['a' + '\u{1F600}'.repeat(60), 'x'.repeat(200)], ['Ada', '\u{1F600}'.repeat(100)],
+    ['Ada', 'a' + '\u{1F600}'.repeat(100)], ['\u{1F600}'.repeat(60), '\u{1F600}'.repeat(100)]]) {
+    const text = describe(operator, reason);
+    assert(text.length <= 140 && text.length >= 138, String(text.length));
+    assert(!LONE_SURROGATE.test(text), JSON.stringify(text));
+    assert.equal(Buffer.from(text, 'utf8').toString('utf8'), text);
+    assert(!/\s$/.test(text));
+  }
+  assert(describe('Ada', '\u{1F600}'.repeat(100)).endsWith('Z: ' + '\u{1F600}'.repeat(23)));
+});
+
+test('extended status never ends in whitespace; a reason empty after cleaning shows unknown on both surfaces', () => {
+  const at = '2026-11-02T10:45:12.345Z', counts = { blocking_count: 1, warning_count: 0 };
+  const describe = (operator, reason) => flow.statusDescription({ ...extended(4, { operator, at, reason }), ...counts }).description;
+  assert(describe('o'.repeat(128), 'r'.repeat(200)).endsWith('Z'));
+  assert(describe('Ada', 'x'.repeat(46) + ' tail').endsWith('x'.repeat(46)));
+  assert.equal(describe('Ada', '@@'), BASE_NEEDS_FIX + '; round 4 of 3, extended by Ada at 2026-11-02T10:45Z: unknown');
+  const f = fixture(null);
+  try {
+    sealExtended(f, { ...GRANT, reason: '@@' });
+    flow.publish(f.input(), f.options);
+    assert.equal(f.writes[0].fields.description, BASE_NEEDS_FIX + '; round 4 of 3, extended by Ada Lovelace at 2026-11-02T10:45Z: unknown');
+    assert.equal(f.comments[0].body.split('\n')[2], 'round 4 of 3, extended by Ada Lovelace at 2026-11-02T10:45Z: unknown');
   } finally { f.cleanup(); }
 });
 
