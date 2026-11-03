@@ -2102,8 +2102,13 @@ function assertFiveDeepLineage(options) {
   const { fixture: reviewFixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const f = reviewFixture();
   try {
-    const { history } = sealCarriedLineage(f, 5, options);
-    assert.deepEqual(history().map(verdict => [verdict.review_round, verdict.answer_authenticated]), [1, 2, 3, 4, 5].map(round => [round, true]));
+    const { history, sealedRounds } = sealCarriedLineage(f, 5, options);
+    const authenticated = () => history().map(verdict => [verdict.review_round, verdict.answer_authenticated]);
+    const allFive = [1, 2, 3, 4, 5].map(round => [round, true]);
+    assert.deepEqual(authenticated(), allFive);
+    const last = sealedRounds.at(-1).input;
+    assert.throws(() => roleArtifact.sealJudgment({ ...last, result: { ...last.result, review_round: 6 } }),
+      error => error.code === 'INVALID_RESULT' && error.message === 'invalid code-review round, scope or prior_head');
     const current = f.lookup();
     assert.equal(current.round, 5);
     assert.equal(current.verdict, 'needs-fix');
@@ -2111,6 +2116,15 @@ function assertFiveDeepLineage(options) {
     assert.throws(() => f.input(f.advance(6), 6, prior.head, { review_completeness: 'complete', limitations: [], unresolved_sources: [], findings: [], dispositions: [] }),
       error => error.code === 'INVALID_RESULT');
     assert.equal(history().length, 5);
+    const file = path.join(roleArtifact.archiveAuthorityDirectory(f.root), 'catalogue.json');
+    const envelope = JSON.parse(fs.readFileSync(file)), ids = Object.keys(envelope.payload.records);
+    assert.equal(ids.length, 5);
+    for (const start of [3, 4, 5]) {
+      const order = [...ids.slice(0, start).reverse(), ...ids.slice(start)];
+      const records = Object.fromEntries(order.map(id => [id, envelope.payload.records[id]]));
+      fs.writeFileSync(file, JSON.stringify({ ...envelope, payload: { ...envelope.payload, records } }));
+      assert.deepEqual(authenticated(), allFive, 'a cold read starting at round ' + start);
+    }
   } finally { f.cleanup(); }
 }
 
