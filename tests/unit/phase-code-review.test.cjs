@@ -459,6 +459,7 @@ test('extend refuses at the ceiling and when no delta is possible', () => {
 });
 
 const EXTEND_COMMAND = 'phase-code-review.cjs extend --phase N --pr P --reason "..." --confirm extend-review-round';
+const EXTEND_FILLED = EXTEND_COMMAND.replace('--phase N --pr P', '--phase 52 --pr 52');
 const WHOLE_PROJECT = /report applies to the whole project until it is set back to "hold"/;
 const OLD_CLAIMS = /waiver|override flag|for this PR|per PR/i;
 
@@ -478,23 +479,24 @@ test('R-14 wording: the refusal text offers report as a project-wide setting in 
 test('R-14 wording: the refusal names the extend command only for the limit state while the ceiling is not reached', () => {
   const mode = { config_path: '/p/config.json' };
   const open = flow.refusalText('limit', 'three rounds are spent', mode, { canExtend: true });
-  assert.ok(open.includes(EXTEND_COMMAND), open); assert.match(open, /one more round.*five in total at most/);
+  assert.ok(open.includes(EXTEND_COMMAND + '.'), open); assert.match(open, /one more round.*five in total at most/);
   assert.match(open, WHOLE_PROJECT); assert.ok(open.indexOf('extend') < open.indexOf('"report"'), 'extend comes before report');
   assert.doesNotMatch(open, OLD_CLAIMS);
+  assert.ok(flow.refusalText('limit', 'r', mode, { canExtend: true, phase: 7, pr: 12 }).includes(EXTEND_COMMAND.replace('--phase N --pr P', '--phase 7 --pr 12') + '.'));
   for (const [state, options] of [['limit', { canExtend: false }], ['limit', {}], ['limit', undefined], ['owed', { canExtend: true }], ['current', { canExtend: true }]]) {
     const closed = flow.refusalText(state, 'five rounds are spent', mode, options);
     assert.doesNotMatch(closed, /extend/, `${state} ${JSON.stringify(options)}`); assert.match(closed, WHOLE_PROJECT);
   }
 });
 
-test('R-14 wording: status at the limit names extend while another round can be granted and drops it at the ceiling or without a delta', () => {
+test('R-14 wording: status at the limit names extend while another round can be granted and drops it at the ceiling', () => {
   const f = fixture(null);
   try {
     atLimit(f);
     const open = flow.status(f.input());
     assert.equal(open.state, 'limit'); assert.equal(open.round_limit, 3);
     assert.match(open.reason, /^phase code review is limit: three rounds are spent; no further review can launch\./);
-    assert.ok(open.reason.includes(EXTEND_COMMAND)); assert.match(open.reason, WHOLE_PROJECT);
+    assert.ok(open.reason.includes(EXTEND_FILLED + '.'), open.reason); assert.match(open.reason, WHOLE_PROJECT);
     assert.doesNotMatch(open.reason, OLD_CLAIMS);
     const ceiling = { './code-review-core.cjs': { ...core, roundLookup: options => ({ ...core.roundLookup(options), limit: 5 }) } };
     withFlowDependencies(ceiling, isolated => {
@@ -503,13 +505,46 @@ test('R-14 wording: status at the limit names extend while another round can be 
       assert.match(closed.reason, /^phase code review is limit: five rounds are spent/);
       assert.doesNotMatch(closed.reason, /extend/); assert.match(closed.reason, WHOLE_PROJECT);
     });
-    const noDelta = { './code-review-core.cjs': { ...core, roundLookup: options => ({ ...core.roundLookup(options), limit: 4, reason: 'no-delta' }) } };
-    withFlowDependencies(noDelta, isolated => {
-      const closed = isolated.status(f.input());
-      assert.equal(closed.state, 'limit'); assert.equal(closed.round_limit, 4);
-      assert.match(closed.reason, /must be a delta/); assert.doesNotMatch(closed.reason, /extend --phase|one more round/); assert.match(closed.reason, WHOLE_PROJECT);
-    });
   } finally { f.cleanup(); }
+});
+
+test('R-14 wording: the refusal names extend exactly when the real extend would grant the round', () => {
+  const stub = change => ({ './code-review-core.cjs': { ...core, roundLookup: options => change(core.roundLookup(options), options) } });
+  const movedBase = f => {
+    atLimit(f, false); f.git(['switch', '--quiet', '-c', 'side', f.base]);
+    fs.writeFileSync(path.join(f.root, 'side.txt'), 'side'); f.git(['add', 'side.txt']); f.git(['commit', '--quiet', '-m', 'side']);
+    const moved = f.git(['rev-parse', 'HEAD']); f.git(['switch', '--quiet', f.branch]); f.git(['merge', '--no-ff', '--quiet', '-m', 'merge side', 'side']);
+    return { ...f.live(), baseRefOid: moved };
+  };
+  const recorded = f => { atLimit(f); flow.appendExtension({ repository: target.repositoryIdentity(f.root), repo: null, pr: 52, worktree: f.root,
+    mode: flow.resolveCodeReviewMode({ graphDir: f.graphDir, worktree: f.root }) }, { head: f.live().headRefOid, base_commit: f.base,
+    operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass' }); };
+  const scenarios = [
+    ['spent with a delta', f => atLimit(f), null, true, 'created'],
+    ['spent, base moved so no delta is possible', movedBase, null, false, /must be a delta/],
+    ['limit 4 without a record', f => atLimit(f), real => real.state === 'limit' ? { ...real, limit: 4 } : real, true, 'created'],
+    ['ceiling', f => atLimit(f), real => ({ ...real, limit: 5 }), false, /ceiling of 5 rounds/],
+    ['no delta with a record', recorded, (real, options) => options.readRecords().length === 1 ? { ...real, state: 'limit', round: null, reason: 'no-delta', limit: 4 } : real, false, 'existing'],
+    ['current needs-fix', f => atLimit(f, false), null, false, /push the fixes first/],
+    ['owed', () => {}, null, false, /no review limit has been reached/],
+    ['unmatched', f => ({ ...f.live(), headRefName: 'unknown' }), null, false, /unmatched/],
+    ['ticket PR', f => ({ ...f.live(), headRefName: 'feat/review-ticket' }), null, false, /ticket PR/],
+  ];
+  for (const [name, setup, change, offered, outcome] of scenarios) {
+    const f = fixture(null);
+    try {
+      const live = setup(f), options = live ? { ...f.options, getPullRequest: () => live } : f.options, input = live ? { live } : {};
+      const attempt = run => {
+        const message = action => { try { return action(); } catch (error) { return { error: error.message }; } };
+        return [message(() => run.evaluateGate({ ...f.input(), ...input }, options).message), message(() => run.extend(extendInput(f, input), options).recorded)];
+      };
+      const [text, result] = change ? withFlowDependencies(stub(change), attempt) : attempt(flow);
+      assert.equal(typeof text === 'string' && text.includes(EXTEND_FILLED + '.'), offered, `${name}: ${JSON.stringify(text)}`);
+      if (typeof outcome === 'string') assert.equal(result, outcome, name); else assert.match(result?.error ?? String(result), outcome, name);
+      if (typeof text === 'string' && !/ticket/.test(name)) assert.match(text, WHOLE_PROJECT, name);
+      assert.equal(offered, typeof outcome === 'string' && outcome === 'created', `${name}: the offer matches what extend does`);
+    } finally { f.cleanup(); }
+  }
 });
 
 test('R-14 wording: the owed refusal names report as project-wide and no extend command', () => {
@@ -531,7 +566,7 @@ test('R-14 wording: the gate verb prints both exits on one line at the limit and
     const gate = () => cli.run([f.phase, '--phase', '52', '--pr', '52', '--worktree', f.root, '--graph', f.graphDir], {}, 'gate');
     const held = gate();
     assert.equal(held.status, 1, held.stderr); assert.equal(held.stderr.trim().split('\n').length, 1);
-    assert.ok(held.stderr.includes(EXTEND_COMMAND), held.stderr); assert.match(held.stderr, WHOLE_PROJECT);
+    assert.ok(held.stderr.includes(EXTEND_FILLED + '.'), held.stderr); assert.match(held.stderr, WHOLE_PROJECT);
     assert.match(held.stderr, /three rounds.*extend.*delivery_pipeline\.code_review.*"report"/);
     assert.doesNotMatch(held.stderr, OLD_CLAIMS);
     f.mode('report');

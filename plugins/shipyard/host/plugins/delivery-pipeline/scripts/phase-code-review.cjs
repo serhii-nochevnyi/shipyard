@@ -9,7 +9,8 @@ const core = require('./code-review-core.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { loadConfig, DEFAULTS } = require('./pipeline-config.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
-const EXTEND_USAGE_COMMAND = 'phase-code-review.cjs extend --phase N --pr P --reason "..." --confirm extend-review-round';
+const EXTEND_CONFIRM = 'extend-review-round';
+const extendCommand = (phase, pr) => `phase-code-review.cjs extend --phase ${phase ?? 'N'} --pr ${pr ?? 'P'} --reason "..." --confirm ${EXTEND_CONFIRM}`;
 const details = new WeakMap();
 const phaseNumber = value => Number(String(value).match(/^0*(\d+)/)?.[1]);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -87,7 +88,7 @@ function git(worktree, args) {
 
 function refusal(state, reason, mode, options = {}) {
   const extend = state === 'limit' && options.canExtend === true;
-  return `phase code review is ${state}: ${reason}.${extend ? ` The operator can allow one more round (one per record, five in total at most): ${EXTEND_USAGE_COMMAND}.` : ''}`
+  return `phase code review is ${state}: ${reason}.${extend ? ` The operator can allow one more round (one per record, five in total at most): ${extendCommand(options.phase, options.pr)}.` : ''}`
     + ` The operator can ${extend ? 'also ' : ''}set delivery_pipeline.code_review to "report" in ${mode.config_path || "the project root's .planning/config.json"}`
     + ' (nothing is held in report mode); report applies to the whole project until it is set back to "hold".';
 }
@@ -124,6 +125,14 @@ function context(input, options) {
   } catch { graph = null; state = null; }
   const match = matchEpicPullRequest({ graph, state, live, repo, phase: input.phase });
   return { worktree, repository, mode, repo, live, pr, graph, state, match };
+}
+
+const probeLookup = (history, records, probe) => core.roundLookup({ ...history, readRecords: () => [...records, probe] });
+// @contract: the refusal names extend only when extend's own probe lookup would grant a round for this head and base.
+function extensionGrantable(history, live, limit) {
+  const records = history.readRecords();
+  return limit < core.ROUND_CEILING && !records.some(row => row.head === live.headRefOid && row.base_commit === live.baseRefOid)
+    && probeLookup(history, records, { head: live.headRefOid, base_commit: live.baseRefOid, operator: 'probe', created_at: new Date().toISOString(), reason: 'probe' }).state === 'ready';
 }
 
 function status(input, options = {}) {
@@ -182,7 +191,7 @@ function status(input, options = {}) {
   Object.assign(result, { state: next.state === 'limit' ? 'limit' : 'owed', round: next.round, scope: next.scope || null,
     retry: !!incomplete, review_completeness: incomplete?.review_completeness || null,
     partitions_not_reviewed: incomplete?.partitions_not_reviewed ?? 0, reason: next.state === 'limit'
-      ? refusal('limit', core.limitMessage(next), mode, { canExtend: next.limit < core.ROUND_CEILING && next.reason !== 'no-delta' })
+      ? refusal('limit', core.limitMessage(next), mode, { canExtend: extensionGrantable(history, live, next.limit), phase: match.phase, pr })
       : `${incomplete ? (incomplete.review_completeness !== 'complete' ? 'the sealed review is incomplete'
         : 'the sealed delta has no complete full-scope lineage') + '; ' : ''}run deliver-dispatch.cjs build code-review first` });
   details.set(result, { mode, current, ctx, prior: countable, history });
@@ -509,8 +518,7 @@ function appendExtension(ctx, record) {
   }, { label: 'code review extension', waitMs: 10000 });
 }
 
-const EXTEND_CONFIRM = 'extend-review-round';
-const EXTEND_USAGE = `${EXTEND_USAGE_COMMAND} [--repo owner/name] [--graph dir] [--worktree path]`;
+const EXTEND_USAGE = `${extendCommand()} [--repo owner/name] [--graph dir] [--worktree path]`;
 const refuseExtension = message => { throw Object.assign(new Error(message), { code: 'EXTENSION_REFUSED' }); };
 const cleanText = value => String(value).replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, ' ').replace(/[@<>`]/g, '').replace(/\s+/g, ' ').trim();
 
@@ -545,7 +553,7 @@ function extend(input, options = {}) {
   if (current.round_limit >= core.ROUND_CEILING) refuseExtension(`the ceiling of ${core.ROUND_CEILING} rounds is reached; the human decides from the findings on the PR,`
     + ' or sets delivery_pipeline.code_review to "report", which applies to the whole project until it is set back to "hold"');
   const probe = { head: current.head, base_commit: current.base_commit, operator, created_at, reason };
-  const lookup = core.roundLookup({ ...history, readRecords: () => [...records, probe] });
+  const lookup = probeLookup(history, records, probe);
   if (lookup.state !== 'ready') refuseExtension(core.limitMessage(lookup));
   const stored = appendExtension(ctx, probe);
   return report(stored, stored === probe ? 'created' : 'existing', lookup.round, lookup.limit);

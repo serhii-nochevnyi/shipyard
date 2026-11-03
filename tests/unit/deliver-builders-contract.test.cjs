@@ -250,4 +250,17 @@ for (const outcome of ['passed', 'needs-fix', 'human-review-required']) {
   });
 }
 
+test('R-14 wording: every text that offers report says it is project-wide and deliver.md names the extend command', () => {
+  const flat = text => text.replace(/\s+/g, ' ');
+  const capability = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'capabilities/delivery-pipeline/capability.json'), 'utf8'));
+  const wholeProject = /report[`"]? applies to the whole project until it is set back to [`"]?hold|which applies to the whole project until it is set back to [`"]?hold/;
+  const opening = flat(deliver.slice(0, deliver.indexOf('## Principle'))), finale = flat(step5);
+  for (const [name, text] of [['deliver.md opening', opening], ['deliver.md phase finale', finale], ['pipeline doc', flat(pipelineDocs)],
+    ['capability description', capability.config['delivery_pipeline.code_review'].description]]) {
+    assert.match(text, wholeProject, `${name} must say report is project-wide`);
+  }
+  assert.ok((finale.match(/whole project/g) || []).length >= 2, 'the finale says it where report is introduced and where the stop is named');
+  assert.match(finale, /phase-code-review\.cjs extend --phase <N> --pr <integration-pr> --reason "<why>" --confirm extend-review-round/);
+});
+
 done();
