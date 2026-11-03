@@ -939,18 +939,21 @@ test('both native profiles deny the entire trusted archive namespace across work
       if (runtime === 'codex') {
         const filesystem = args.find(arg => arg.startsWith('permissions.shipyard-runtime.filesystem='));
         assert(filesystem.includes(JSON.stringify(namespace) + '="deny"'));
-        assert(filesystem.includes(JSON.stringify(publications) + '="deny"'));
+        assert(!filesystem.includes(JSON.stringify(publications)));
         assert(filesystem.includes('.gnupg'));
       } else {
         const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
         assert.equal(args[args.indexOf('--setting-sources') + 1], '');
-        assert.deepEqual(settings.sandbox.filesystem.denyRead, [namespace, publications]);
+        assert.deepEqual(settings.sandbox.filesystem.denyRead, [namespace]);
         assert.deepEqual(settings.sandbox.filesystem.denyWrite, [namespace, publications]);
         assert.deepEqual(settings.sandbox.filesystem.allowWrite, [second.root]);
         assert.equal(settings.sandbox.allowUnsandboxedCommands, false);
         const glob = '//' + namespace.split(path.sep).filter(Boolean).join('/') + '/**';
         for (const tool of ['Read', 'Edit', 'Write', 'Glob', 'Grep'])
           assert(settings.permissions.deny.includes(tool + '(' + glob + ')'));
+        const publicationsGlob = '//' + publications.split(path.sep).filter(Boolean).join('/') + '/**';
+        for (const tool of ['Read', 'Edit', 'Write', 'Glob', 'Grep'])
+          assert.equal(settings.permissions.deny.includes(tool + '(' + publicationsGlob + ')'), ['Edit', 'Write'].includes(tool));
         assert(settings.permissions.deny.some(rule => rule.includes('shipyard-claude-session-start-')));
       }
       for (const key of ['archiveAuthorityPath', 'archiveCataloguePath', 'archive_authority_path', 'archive_catalogue_path'])

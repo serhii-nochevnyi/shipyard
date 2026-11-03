@@ -755,13 +755,13 @@ function createClaudeCliLauncher(options = {}) {
           failIfUnavailable: true,
           allowUnsandboxedCommands: false,
           autoAllowBashIfSandboxed: true,
-          filesystem: { allowWrite: [path.resolve(scope.worktree)], denyRead: [archiveAuthority, publications], denyWrite: [archiveAuthority, publications] },
+          filesystem: { allowWrite: [path.resolve(scope.worktree)], denyRead: [archiveAuthority], denyWrite: [archiveAuthority, publications] },
           credentials: { envVars: SENSITIVE_SUBPROCESS_ENV.map((name) => ({ name, mode: 'deny' })) },
         },
         permissions: {
           blockReadsOutsideWorkingDirectories: true,
           deny: ['Read', 'Edit', 'Write', 'Glob', 'Grep'].flatMap((tool) =>
-            [evidenceGlob, archiveGlob, publicationsGlob].map(glob => `${tool}(${glob})`)),
+            [evidenceGlob, archiveGlob, ...(['Edit', 'Write'].includes(tool) ? [publicationsGlob] : [])].map(glob => `${tool}(${glob})`)),
         },
         hooks: {
           SessionStart: [{

@@ -302,8 +302,8 @@ test('Codex launcher passes explicit model and reasoning effort to exec', async 
     assert.ok(calls[0].args.includes('default_permissions="shipyard-runtime"'));
     assert.ok(calls[0].args.includes('permissions.shipyard-runtime.extends=":workspace"'));
     const publications = path.join(fs.realpathSync(os.homedir()), '.local/state/shipyard/code-review-publications');
-    assert.ok(result.runtime_evidence.sandbox_evidence.protected_paths.includes(publications));
-    assert.ok(calls[0].args.some((arg) => arg.includes(JSON.stringify(publications) + '="deny"')));
+    assert.ok(!result.runtime_evidence.sandbox_evidence.protected_paths.includes(publications), 'a deny entry would also block reads by gate verification');
+    assert.ok(!calls[0].args.some((arg) => arg.includes(JSON.stringify(publications))));
     assert.ok(result.runtime_evidence.sandbox_evidence.protected_paths.length >= 2);
     assert.equal(calls[0].options.env.OPENAI_API_KEY, undefined);
     assert.equal(calls[0].options.env.CODEX_API_KEY, undefined);

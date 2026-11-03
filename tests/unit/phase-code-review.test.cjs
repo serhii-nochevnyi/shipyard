@@ -390,6 +390,7 @@ test('extend writes one private head-bound record at the limit and repeats idemp
     const full = path.join(home, '.local/state/shipyard', file);
     assert.equal(fs.statSync(full).mode & 0o777, 0o600); assert.equal(fs.statSync(path.dirname(full)).mode & 0o777, 0o700);
     assert.ok(!full.startsWith(f.root));
+    assert.ok(full.startsWith(flow.publicationsRoot() + path.sep), 'the sandbox deny lists protect the directory the records live in');
     const read = () => flow.readExtensions({ repository: target.repositoryIdentity(f.root), repo: null, pr: 52, roots: [f.root] });
     assert.deepEqual(read(), [{ head, base_commit: f.base, operator: 'Code Review Test', created_at: out.created_at, reason: 'fixes are pushed' }]);
     const owed = flow.status(f.input());

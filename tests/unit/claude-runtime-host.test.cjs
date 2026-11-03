@@ -268,8 +268,9 @@ test('native launcher ignores conflicting stdout model and effort and records tr
     }
     const publications = path.join(fs.realpathSync(os.homedir()), '.local/state/shipyard/code-review-publications');
     const publicationsGlob = `//${publications.split(path.sep).filter(Boolean).join('/')}/**`;
-    for (const list of [settings.sandbox.filesystem.denyRead, settings.sandbox.filesystem.denyWrite]) assert.ok(list.includes(publications));
-    for (const tool of ['Read', 'Edit', 'Write', 'Glob', 'Grep']) assert.ok(settings.permissions.deny.includes(`${tool}(${publicationsGlob})`));
+    assert.ok(settings.sandbox.filesystem.denyWrite.includes(publications));
+    assert.ok(!settings.sandbox.filesystem.denyRead.includes(publications), 'a child may read the extension records, since gate verification reads them');
+    for (const tool of ['Read', 'Edit', 'Write', 'Glob', 'Grep']) assert.equal(settings.permissions.deny.includes(`${tool}(${publicationsGlob})`), ['Edit', 'Write'].includes(tool));
     assert.deepEqual(settings.sandbox.filesystem.allowWrite[0], root);
     assert.equal(settings.sandbox.filesystem.allowWrite.length, 1);
     assert.ok(settings.sandbox.credentials.envVars.some((item) => item.name === 'GITHUB_TOKEN' && item.mode === 'deny'));
