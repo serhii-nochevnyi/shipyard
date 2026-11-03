@@ -234,6 +234,7 @@ test('native launcher ignores conflicting stdout model and effort and records tr
         CODEX_API_KEY: 'test-codex-key',
         GITHUB_TOKEN: 'test-token',
         CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-token',
+        SHIPYARD_ROLE_CHILD: '0',
       },
       spawn: (executable, args, options) => {
         calls.push({ executable, args, options });
@@ -265,12 +266,18 @@ test('native launcher ignores conflicting stdout model and effort and records tr
     for (const tool of ['Read', 'Edit', 'Write', 'Glob', 'Grep']) {
       assert.ok(settings.permissions.deny.includes(`${tool}(${evidenceGlob})`));
     }
+    const publications = path.join(fs.realpathSync(os.homedir()), '.local/state/shipyard/code-review-publications');
+    const publicationsGlob = `//${publications.split(path.sep).filter(Boolean).join('/')}/**`;
+    assert.ok(settings.sandbox.filesystem.denyWrite.includes(publications));
+    assert.ok(!settings.sandbox.filesystem.denyRead.includes(publications), 'a child may read the extension records, since gate verification reads them');
+    for (const tool of ['Read', 'Edit', 'Write', 'Glob', 'Grep']) assert.equal(settings.permissions.deny.includes(`${tool}(${publicationsGlob})`), ['Edit', 'Write'].includes(tool));
     assert.deepEqual(settings.sandbox.filesystem.allowWrite[0], root);
     assert.equal(settings.sandbox.filesystem.allowWrite.length, 1);
     assert.ok(settings.sandbox.credentials.envVars.some((item) => item.name === 'GITHUB_TOKEN' && item.mode === 'deny'));
     assert.ok(settings.sandbox.credentials.envVars.some((item) => item.name === 'CLAUDE_CODE_OAUTH_TOKEN' && item.mode === 'deny'));
     assert.equal(calls[0].options.env.CLAUDE_CONFIG_DIR, path.join(root, 'claude'));
     assert.equal(calls[0].options.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+    assert.equal(calls[0].options.env.SHIPYARD_ROLE_CHILD, '1');
     assert.equal(calls[0].options.env.ANTHROPIC_API_KEY, 'test-key');
     assert.equal(calls[0].options.env.ANTHROPIC_BASE_URL, 'https://provider.invalid');
     assert.equal(calls[0].options.env.OPENAI_API_KEY, undefined);

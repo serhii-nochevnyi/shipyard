@@ -1166,7 +1166,7 @@ function createCodexCliLauncher(options = {}) {
       if (error.code === 'INVALID_INPUT') fail('RUNTIME_UNAVAILABLE', 'Codex process input failed: ' + error.message);
       throw error;
     }
-    const env = launchEnvironment(installedHost, { ...process.env, ...environment });
+    const env = { ...launchEnvironment(installedHost, { ...process.env, ...environment }), SHIPYARD_ROLE_CHILD: '1' };
     const task = agent ? writeTaskFile(taskDir, scope, launchOptions.dispatch_id, launchPrompt(prompt)) : null;
     try {
     const protectedPaths = normalizeProtectedPaths([...signerProtectionPaths(env, scope.worktree), ...hostProtectedPaths]);

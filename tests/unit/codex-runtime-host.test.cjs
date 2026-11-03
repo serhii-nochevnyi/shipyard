@@ -275,6 +275,7 @@ test('Codex launcher passes explicit model and reasoning effort to exec', async 
         ANTHROPIC_API_KEY: 'ignored-anthropic-key',
         ANTHROPIC_AUTH_TOKEN: 'ignored-anthropic-token',
         CLAUDE_CODE_OAUTH_TOKEN: 'ignored-claude-token',
+        SHIPYARD_ROLE_CHILD: '0',
       },
       spawn: (executable, args, options) => {
         calls.push({ executable, args, options });
@@ -300,12 +301,16 @@ test('Codex launcher passes explicit model and reasoning effort to exec', async 
     assert.ok(!calls[0].args.includes('--sandbox'));
     assert.ok(calls[0].args.includes('default_permissions="shipyard-runtime"'));
     assert.ok(calls[0].args.includes('permissions.shipyard-runtime.extends=":workspace"'));
+    const publications = path.join(fs.realpathSync(os.homedir()), '.local/state/shipyard/code-review-publications');
+    assert.ok(!result.runtime_evidence.sandbox_evidence.protected_paths.includes(publications), 'a deny entry would also block reads by gate verification');
+    assert.ok(!calls[0].args.some((arg) => arg.includes(JSON.stringify(publications))));
     assert.ok(result.runtime_evidence.sandbox_evidence.protected_paths.length >= 2);
     assert.equal(calls[0].options.env.OPENAI_API_KEY, undefined);
     assert.equal(calls[0].options.env.CODEX_API_KEY, undefined);
     assert.equal(calls[0].options.env.ANTHROPIC_API_KEY, undefined);
     assert.equal(calls[0].options.env.ANTHROPIC_AUTH_TOKEN, undefined);
     assert.equal(calls[0].options.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+    assert.equal(calls[0].options.env.SHIPYARD_ROLE_CHILD, '1');
     assert.ok(calls[0].args.includes('--cd'));
     assert.equal(calls[0].options.cwd, root);
     assert.equal(input.join(''), prompt);

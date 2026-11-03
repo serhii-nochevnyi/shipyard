@@ -5,11 +5,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync, execFileSync } = require('node:child_process');
+const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase-review-authority-')));
 const homedir = os.homedir;
 os.homedir = () => home;
 process.on('exit', () => { os.homedir = homedir; fs.rmSync(home, { recursive: true, force: true }); });
+delete process.env.SHIPYARD_ROLE_CHILD;
+const withoutMarker = environment => { const copy = { ...environment }; delete copy.SHIPYARD_ROLE_CHILD; return copy; };
 const scripts = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts');
 const flow = require(path.join(scripts, 'phase-code-review.cjs'));
 const target = require(path.join(scripts, 'architecture-target.cjs'));
@@ -72,6 +74,11 @@ function fixture(jira) {
   };
   return { ...f, inputArtifact: f.input, branch, mode, live, input, options, args, advance };
 }
+
+test('extend tests start without the role-child marker', () => {
+  assert.equal(process.env.SHIPYARD_ROLE_CHILD, undefined);
+  assert.deepEqual(withoutMarker({ KEEP: '1', SHIPYARD_ROLE_CHILD: '1' }), { KEEP: '1' });
+});
 
 for (const jira of shapes) {
   test('exact graph matching, including unknown and ambiguous heads: ' + jira, () => {
@@ -291,6 +298,225 @@ test('an owed extended round is a delta from the last counted review, bound to i
     const owed = flow.status(f.input());
     assert.deepEqual([owed.state, owed.round, owed.scope, owed.round_limit, owed.rounds_used], ['owed', 4, 'delta', 4, 3]);
   } finally { f.cleanup(); }
+});
+
+const stateFiles = () => { try { return fs.readdirSync(path.join(home, '.local/state/shipyard'), { recursive: true }).sort(); } catch { return []; } };
+const extendInput = (f, patch = {}) => ({ ...f.input(), reason: 'fixes pushed for the findings', confirm: 'extend-review-round', ...patch });
+function atLimit(f, push = true) {
+  const heads = [];
+  for (let round = 1; round <= 3; round++) {
+    artifact.sealJudgment(artifactInput(f, f.advance(round), raw(true, [blocker]), round, heads.at(-1) || null));
+    heads.push(f.live().headRefOid);
+  }
+  if (push) f.advance(4);
+}
+function refusedExtend(f, patch, pattern, run = flow) {
+  const before = stateFiles();
+  assert.throws(() => run.extend(extendInput(f, patch), f.options), error => error.code === 'EXTENSION_REFUSED' && pattern.test(error.message));
+  assert.deepEqual(stateFiles(), before);
+}
+function extendCli(f) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-extend-')));
+  const prFile = path.join(dir, 'pr.json');
+  fs.writeFileSync(path.join(dir, 'gh'), '#!/usr/bin/env node\nprocess.stdout.write(require("node:fs").readFileSync(process.env.REVIEW_PR));\n', { mode: 0o755 });
+  const args = ['--phase', '52', '--pr', '52', '--worktree', f.root, '--graph', f.graphDir, '--reason', 'fixes are pushed', '--confirm', 'extend-review-round'];
+  const run = (list, env = {}, verb = 'extend') => {
+    write(prFile, f.live());
+    return spawnSync(process.execPath, [path.join(scripts, 'phase-code-review.cjs'), verb, ...list], { cwd: dir, encoding: 'utf8',
+      env: { ...withoutMarker(process.env), HOME: home, PATH: dir + path.delimiter + process.env.PATH, REVIEW_PR: prFile, ...env } });
+  };
+  const start = list => new Promise(resolve => {
+    write(prFile, f.live());
+    const child = spawn(process.execPath, [path.join(scripts, 'phase-code-review.cjs'), 'extend', ...list], { cwd: dir,
+      env: { ...withoutMarker(process.env), HOME: home, PATH: dir + path.delimiter + process.env.PATH, REVIEW_PR: prFile } });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('close', status => resolve({ status, stdout, stderr }));
+  });
+  return { args, run, start, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+const readRecords = f => flow.readExtensions({ repository: target.repositoryIdentity(f.root), repo: null, pr: 52, roots: [f.root] });
+
+test('extend refuses under the role-child marker before any write, direct and CLI', () => {
+  const f = fixture(null), cli = extendCli(f);
+  try {
+    atLimit(f);
+    const before = stateFiles();
+    process.env.SHIPYARD_ROLE_CHILD = '1';
+    try { for (const confirm of ['extend-review-round', 'wrong']) assert.throws(() => flow.extend(extendInput(f, { confirm }), f.options), { code: 'EXTENSION_REFUSED' }); }
+    finally { Reflect.deleteProperty(process.env, 'SHIPYARD_ROLE_CHILD'); }
+    const child = cli.run(cli.args, { SHIPYARD_ROLE_CHILD: '1' });
+    assert.equal(child.status, 1, child.stderr); assert.match(child.stderr, /EXTENSION_REFUSED/);
+    assert.deepEqual(stateFiles(), before);
+    const operator = cli.run(cli.args);
+    assert.equal(operator.status, 0, operator.stderr); assert.equal(JSON.parse(operator.stdout).recorded, 'created');
+  } finally { f.cleanup(); cli.cleanup(); }
+});
+
+test('extend usage errors exit 2 and write nothing', () => {
+  const f = fixture(null), cli = extendCli(f);
+  try {
+    atLimit(f);
+    const before = stateFiles(), without = name => cli.args.filter((_, k) => k !== cli.args.indexOf(name) && k !== cli.args.indexOf(name) + 1);
+    for (const [list, pattern] of [[without('--confirm'), /--confirm extend-review-round/],
+      [[...without('--confirm'), '--confirm', 'extend-review-rounds'], /--confirm extend-review-round/],
+      [without('--reason'), /--reason/], [without('--phase'), /--phase and --pr/], [[f.phase, ...cli.args], /invalid argument/],
+      [[...cli.args, '--rounds', '2'], /invalid argument --rounds/]]) {
+      const result = cli.run(list);
+      assert.equal(result.status, 2, result.stderr); assert.match(result.stderr, pattern);
+    }
+    for (const name of ['--reason', '--confirm']) {
+      const other = cli.run([f.phase, '--phase', '52', '--pr', '52', name, 'x'], {}, 'status');
+      assert.equal(other.status, 2, other.stderr); assert.match(other.stderr, new RegExp('invalid argument ' + name));
+    }
+    for (const confirm of [undefined, '', 'extend', 'extend-review-round ', 'Extend-Review-Round'])
+      assert.throws(() => flow.extend(extendInput(f, { confirm }), f.options), { exitCode: 2 });
+    assert.throws(() => flow.extend(extendInput(f, { reason: undefined }), f.options), { exitCode: 2 });
+    assert.deepEqual(stateFiles(), before);
+  } finally { f.cleanup(); cli.cleanup(); }
+});
+
+test('extend writes one private head-bound record at the limit and repeats idempotently', () => {
+  const f = fixture(null), cli = extendCli(f);
+  try {
+    atLimit(f);
+    const before = stateFiles(), first = cli.run(cli.args);
+    assert.equal(first.status, 0, first.stderr);
+    const out = JSON.parse(first.stdout), head = f.live().headRefOid;
+    assert.deepEqual(Object.keys(out).sort(), ['base_commit', 'created_at', 'head', 'limit', 'operator', 'pr', 'recorded', 'round']);
+    assert.deepEqual({ ...out, created_at: null }, { pr: 52, head, base_commit: f.base, round: 4, limit: 4,
+      operator: 'Code Review Test', created_at: null, recorded: 'created' });
+    const file = stateFiles().filter(name => !before.includes(name)).find(name => name.endsWith('52.extensions.json'));
+    const full = path.join(home, '.local/state/shipyard', file);
+    assert.equal(fs.statSync(full).mode & 0o777, 0o600); assert.equal(fs.statSync(path.dirname(full)).mode & 0o777, 0o700);
+    assert.ok(!full.startsWith(f.root));
+    assert.ok(full.startsWith(flow.publicationsRoot() + path.sep), 'the sandbox deny lists protect the directory the records live in');
+    const read = () => flow.readExtensions({ repository: target.repositoryIdentity(f.root), repo: null, pr: 52, roots: [f.root] });
+    assert.deepEqual(read(), [{ head, base_commit: f.base, operator: 'Code Review Test', created_at: out.created_at, reason: 'fixes are pushed' }]);
+    const owed = flow.status(f.input());
+    assert.deepEqual([owed.state, owed.round, owed.scope, owed.round_limit], ['owed', 4, 'delta', 4]);
+    const second = cli.run(cli.args);
+    assert.equal(second.status, 0, second.stderr);
+    assert.deepEqual(JSON.parse(second.stdout), { ...out, recorded: 'existing' });
+    assert.equal(read().length, 1);
+  } finally { f.cleanup(); cli.cleanup(); }
+});
+
+test('extend refuses unless the limit is reached and a push settled the head', () => {
+  const f = fixture(null);
+  try {
+    refusedExtend(f, {}, /no review limit has been reached/);
+    atLimit(f, false);
+    assert.equal(flow.status(f.input()).state, 'current');
+    refusedExtend(f, {}, /push the fixes first/);
+    refusedExtend(f, { live: { ...f.live(), headRefName: 'unknown' } }, /unmatched/);
+    const passed = fixture(null);
+    try {
+      artifact.sealJudgment(artifactInput(passed, passed.advance(1), raw()));
+      refusedExtend(passed, {}, /no extension is needed/);
+    } finally { passed.cleanup(); }
+  } finally { f.cleanup(); }
+});
+
+test('extend refuses at the ceiling and when no delta is possible', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f);
+    const stub = override => { let calls = 0; return { './code-review-core.cjs': { ...core, roundLookup: options => ++calls === 1
+      ? { ...core.roundLookup(options), ...override.first } : { ...core.roundLookup(options), ...override.next } } }; };
+    withFlowDependencies(stub({ first: { limit: 5 }, next: {} }), isolated => {
+      refusedExtend(f, {}, /whole project.*report|report.*whole project/s, isolated);
+    });
+    withFlowDependencies(stub({ first: {}, next: { state: 'limit', round: null, reason: 'no-delta' } }), isolated => {
+      refusedExtend(f, {}, /must be a delta/, isolated);
+    });
+  } finally { f.cleanup(); }
+});
+
+test('extend refuses an empty, long or hygiene-failing reason or operator', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f);
+    for (const [reason, pattern] of [['@<>`', /empty/], ['x'.repeat(201), /200 bytes/], ['é'.repeat(101), /200 bytes/],
+      ['see T-54-07 notes', /ticket-id/], ['Phase 54 findings', /phase-number/], ['per ADR-035', /adr-number/],
+      ['look in .planning/ files', /planning-path/], ['the shipyard run', /internal-tool-word/]]) refusedExtend(f, { reason }, pattern);
+    f.git(['config', 'user.name', 'Shipyard Dev']);
+    refusedExtend(f, {}, /internal-tool-word/);
+    const hygiene = require(path.join(scripts, 'pr-hygiene.cjs')), seen = [];
+    withFlowDependencies({ './pr-hygiene.cjs': { ...hygiene, internalLeakViolations: (field, text) => { seen.push(field); return hygiene.internalLeakViolations(field, text); } } },
+      isolated => refusedExtend(f, {}, /internal-tool-word/, isolated));
+    assert.deepEqual(seen, ['comment', 'status']);
+    refusedExtend(f, {}, /set a different git user\.name/);
+  } finally { f.cleanup(); }
+});
+
+test('extend stores the reason and operator cleaned, falling back to the OS user', () => {
+  const saved = { ...process.env };
+  try {
+    Object.assign(process.env, { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' });
+    for (const [name, operator, reason, cleaned] of [
+      ['Ada <ada@example.test> `L`', 'Ada adaexample.test L', '  fix\u0007ed <b>@ada</b> `x`\n now ', 'fix ed bada/b x now'],
+      [null, os.userInfo().username, 'plain reason', 'plain reason'],
+      ['Ada\u202e\u0085\u200bX\u2066Y', 'Ada X Y', 'a\u202eb\u0085c\u200bd\u2066e\u2028f\u2029g\ufeffh', 'a b c d e f g h']]) {
+      const f = fixture(null);
+      try {
+        atLimit(f);
+        if (name) f.git(['config', 'user.name', name]); else f.git(['config', '--unset', 'user.name']);
+        const out = flow.extend(extendInput(f, { reason }), f.options);
+        assert.equal(out.operator, operator);
+        const [record] = readRecords(f);
+        assert.deepEqual([record.operator, record.reason], [operator, cleaned]);
+        assert.doesNotMatch(record.operator + record.reason, /[@<>`\p{Cc}\p{Cf}\u2028\u2029]/u);
+      } finally { f.cleanup(); }
+    }
+  } finally { for (const key of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM']) if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
+});
+
+test('extend accepts the exact byte bounds and refuses one byte more', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f);
+    f.git(['config', 'user.name', 'a'.repeat(129)]);
+    refusedExtend(f, {}, /git user\.name.*128 bytes/);
+    f.git(['config', 'user.name', 'a'.repeat(128)]);
+    refusedExtend(f, { reason: 'x'.repeat(201) }, /200 bytes/);
+    const out = flow.extend(extendInput(f, { reason: 'x'.repeat(200) }), f.options);
+    assert.deepEqual([out.operator.length, readRecords(f)[0].reason.length], [128, 200]);
+  } finally { f.cleanup(); }
+});
+
+test('extend creates a new record for the same head on a different base commit', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f);
+    assert.equal(flow.extend(extendInput(f), f.options).recorded, 'created');
+    const moved = f.git(['commit-tree', f.base + '^{tree}', '-p', f.base, '-m', 'base moved']);
+    const live = { ...f.live(), baseRefOid: moved };
+    const out = flow.extend(extendInput(f, { live }), { ...f.options, getPullRequest: () => live });
+    assert.deepEqual([out.recorded, out.base_commit], ['created', moved]);
+    assert.deepEqual(readRecords(f).map(row => row.base_commit), [f.base, moved]);
+  } finally { f.cleanup(); }
+});
+
+test('extend refuses only for the marker value 1, the sandbox being the real barrier', () => {
+  const saved = process.env.SHIPYARD_ROLE_CHILD;
+  try {
+    for (const [value, code] of [['1', 'EXTENSION_REFUSED'], ['0', undefined], ['', undefined], ['true', undefined]]) {
+      process.env.SHIPYARD_ROLE_CHILD = value;
+      assert.throws(() => flow.extend({ confirm: 'wrong', reason: 'x' }), error => code ? error.code === code : error.exitCode === 2);
+    }
+  } finally { if (saved === undefined) Reflect.deleteProperty(process.env, 'SHIPYARD_ROLE_CHILD'); else process.env.SHIPYARD_ROLE_CHILD = saved; }
+});
+
+test('extend run by concurrent processes records one round once', async () => {
+  const f = fixture(null), cli = extendCli(f);
+  try {
+    atLimit(f);
+    const results = await Promise.all([1, 2, 3].map(() => cli.start(cli.args)));
+    for (const result of results) assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(results.map(result => JSON.parse(result.stdout).recorded).sort(), ['created', 'existing', 'existing']);
+    assert.equal(readRecords(f).length, 1);
+  } finally { f.cleanup(); cli.cleanup(); }
 });
 
 function artifactInput(f, binding, result, round = 1, priorHead = null) {

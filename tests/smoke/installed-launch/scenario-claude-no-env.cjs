@@ -65,7 +65,7 @@ try {
     claudeHomeReaders: homeReaders,
     terminal: outcome.terminal,
   };
-  assert.deepEqual(measure.shipyardVariablesSeen, []);
+  assert.deepEqual(measure.shipyardVariablesSeen, ['SHIPYARD_ROLE_CHILD'], 'the role-child marker is the only Shipyard variable a Claude child sees');
   assert.deepEqual(measure.claudeHomeReaders, [], 'no script may read CLAUDE_HOME');
   console.log('MEASURE: ' + JSON.stringify(measure));
 
