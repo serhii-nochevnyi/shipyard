@@ -248,6 +248,34 @@ function currentBinding(f) {
   return target.phaseBinding({ graph: f.graph, state: f.state, phase: 52, repository: target.repositoryIdentity(f.root),
     branch: f.branch, pr: 52, head: f.live().headRefOid, base: f.base });
 }
+test('status grants round 4 only for a valid operator record and ignores foreign records', () => {
+  const f = fixture(null);
+  try {
+    const heads = [];
+    for (let round = 1; round <= 3; round++) {
+      const binding = f.advance(round);
+      artifact.sealJudgment(artifactInput(f, binding, raw(true, [blocker]), round, heads.at(-1) || null));
+      heads.push(f.live().headRefOid);
+    }
+    f.advance(4);
+    const head = f.live().headRefOid, other = 'c'.repeat(40);
+    const mode = flow.resolveCodeReviewMode({ graphDir: f.graphDir, worktree: f.root });
+    const write = (pr, overrides = {}) => flow.appendExtension({ repository: target.repositoryIdentity(f.root), repo: null, pr,
+      worktree: f.root, mode }, { head, base_commit: f.base, operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass', ...overrides });
+    const limited = () => { const status = flow.status(f.input());
+      assert.deepEqual([status.state, status.round, status.round_cap, status.round_limit], ['limit', null, 3, 3]); };
+    limited();
+    write(52, { head: other }); write(52, { base_commit: other }); write(53);
+    limited();
+    write(52);
+    const granted = flow.status(f.input());
+    assert.deepEqual([granted.state, granted.round, granted.round_cap, granted.round_limit, granted.rounds_used], ['owed', 4, 3, 4, 3]);
+    const store = path.join(home, '.local/state/shipyard/code-review-publications');
+    for (const dir of fs.readdirSync(store)) fs.writeFileSync(path.join(store, dir, '52.extensions.json'), '{');
+    assert.throws(() => flow.status(f.input()), /JSON/);
+  } finally { f.cleanup(); }
+});
+
 function artifactInput(f, binding, result, round = 1, priorHead = null) {
   return retainPlanningInput(f, f.inputArtifact(binding, round, priorHead, result));
 }

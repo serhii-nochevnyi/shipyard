@@ -240,7 +240,7 @@ test('semicolon repository rejected at producer with unchanged code', () => {
   finally { f.cleanup(); }
 });
 
-test('rounds two and three admit their exact sealed archives and fourth refuses before launch', () => {
+test('rounds two and three admit their exact sealed archives and fourth refuses before launch unless an operator record opens round 4', () => {
   const f = fixture();
   try {
     for (let n = 1; n <= 3; n++) {
@@ -249,7 +249,26 @@ test('rounds two and three admit their exact sealed archives and fourth refuses 
       assert.equal(artifact.authenticatedArchivePins(f.root).length, 3 * n);
       if (n < 3) f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), '\n'));
     }
-    assert.throws(() => f.prepare(), { code: 'CODE_REVIEW_ROUND_LIMIT' });
+    const refused = () => assert.throws(() => f.prepare(), error => error.code === 'CODE_REVIEW_ROUND_LIMIT' && /three rounds/.test(error.message));
+    refused();
+    f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), '\n'));
+    refused();
+    const grant = overrides => require(path.join(scripts, 'phase-code-review.cjs')).appendExtension({
+      repository: target.repositoryIdentity(f.root), repo: null, pr: f.pr.number, worktree: f.root, mode: { project_root: f.project } },
+    { head: f.pr.headRefOid, base_commit: f.pr.baseRefOid, operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass', ...overrides });
+    grant({ head: 'c'.repeat(40) }); grant({ base_commit: 'c'.repeat(40) });
+    refused();
+    grant();
+    assert.equal(f.prepare().prepared.round.round, 4);
+    const mergeBase = f.pr.baseRefOid;
+    f.pr.baseRefOid = git(f.root, ['commit-tree', `${mergeBase}^{tree}`, '-p', mergeBase, '-m', 'base moves']);
+    git(f.root, ['update-ref', 'refs/remotes/origin/main', f.pr.baseRefOid]);
+    refused();
+    grant({ base_commit: f.pr.baseRefOid });
+    assert.equal(f.prepare().prepared.round.round, 4);
+    const store = path.join(home, '.local/state/shipyard/code-review-publications');
+    for (const dir of fs.readdirSync(store)) fs.writeFileSync(path.join(store, dir, `${f.pr.number}.extensions.json`), '{');
+    assert.throws(() => f.prepare(), error => error.code !== 'CODE_REVIEW_ROUND_LIMIT');
   } finally { f.cleanup(); }
 });
 

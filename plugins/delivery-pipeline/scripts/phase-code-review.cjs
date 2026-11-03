@@ -129,7 +129,7 @@ function status(input, options = {}) {
   if (match.kind === 'ticket') rejectTicket(mode);
   const result = { schema: 'shipyard.phase-code-review-status.v1', mode: mode.mode, phase: null, pr,
     head: live.headRefOid, base_commit: live.baseRefOid, subject: null, state: 'unmatched', round: null,
-    round_cap: core.ROUND_CAP, rounds_used: 0, scope: null, verdict: null, blocking_count: null,
+    round_cap: core.ROUND_CAP, round_limit: core.ROUND_CAP, rounds_used: 0, scope: null, verdict: null, blocking_count: null,
     warning_count: null, review_completeness: null, reuse: false, retry: false, repair: 'none',
     disagreement_suppressed: 0, partitions_not_reviewed: 0, artifact_ref: null, reason: match.reason || null };
   details.set(result, { mode, current: null, ctx });
@@ -144,7 +144,8 @@ function status(input, options = {}) {
   const authority = require('./role-artifact.cjs');
   const prior = authority.priorCodeReviewVerdicts({ worktreePath: worktree, repository,
     phaseDir: binding.phase, graphDir: mode.graph_dir });
-  const history = { priorVerdicts: prior, mergeBase: git(worktree, ['merge-base', live.baseRefOid, live.headRefOid]), head: live.headRefOid, isAncestor: (a, b) => {
+  const history = { priorVerdicts: prior, mergeBase: git(worktree, ['merge-base', live.baseRefOid, live.headRefOid]), head: live.headRefOid,
+    baseCommit: live.baseRefOid, readRecords: () => readExtensions({ repository, repo, pr, roots: [worktree, mode.project_root] }), isAncestor: (a, b) => {
     try { git(worktree, ['merge-base', '--is-ancestor', a, b]); return true; }
     catch (error) {
       if (error.status === 1 && !error.signal && !error.code && !error.killed && !error.error) return false;
@@ -159,7 +160,7 @@ function status(input, options = {}) {
   } catch (error) {
     if (error.code === 'REPOSITORY_IDENTITY_INVALID') throw error;
   }
-  result.rounds_used = countable.length;
+  result.rounds_used = countable.length; result.round_limit = next.limit;
   const counted = current && current.subject === binding.subject && countable.some(entry => entry.artifact_ref === current.artifact_ref
     && entry.head === current.head && entry.base_commit === current.base_commit);
   if (current && current.review_completeness === 'complete' && counted) {
@@ -178,7 +179,7 @@ function status(input, options = {}) {
   Object.assign(result, { state: next.state === 'limit' ? 'limit' : 'owed', round: next.round, scope: next.scope || null,
     retry: !!incomplete, review_completeness: incomplete?.review_completeness || null,
     partitions_not_reviewed: incomplete?.partitions_not_reviewed ?? 0, reason: next.state === 'limit'
-      ? refusal('limit', 'three rounds are spent; no further review can launch', mode)
+      ? refusal('limit', core.limitMessage(next), mode)
       : `${incomplete ? (incomplete.review_completeness !== 'complete' ? 'the sealed review is incomplete'
         : 'the sealed delta has no complete full-scope lineage') + '; ' : ''}run deliver-dispatch.cjs build code-review first` });
   details.set(result, { mode, current, ctx, prior: countable });

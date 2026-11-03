@@ -596,7 +596,9 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
   const priorVerdicts = roleArtifact.priorCodeReviewVerdicts({ worktreePath: canonical.worktree,
     repository: canonical.commonPath, phaseDir: binding.phase, graphDir: graph.directory });
   const ancestry = new Map();
-  const history = { priorVerdicts, mergeBase, head: canonical.head, isAncestor(earlier, current) {
+  const history = { priorVerdicts, mergeBase, head: canonical.head, baseCommit: live.baseRefOid,
+    readRecords: () => require('./phase-code-review.cjs').readExtensions({ repository: canonical.commonPath, repo: request.repo,
+      pr: live.number, roots: [canonical.worktree, canonical.projectRoot] }), isAncestor(earlier, current) {
     const key = `${earlier}:${current}`;
     if (!ancestry.has(key)) {
       try { ancestry.set(key, git(options, canonical.worktree, ['merge-base', earlier, current]) === earlier); }
@@ -609,7 +611,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
     return ancestry.get(key);
   } };
   const { countable, ...round } = core.roundLookup(history);
-  if (round.state === 'limit') reject('three rounds are spent; no code-review launch is allowed', 'CODE_REVIEW_ROUND_LIMIT');
+  if (round.state === 'limit') reject(core.limitMessage(round), 'CODE_REVIEW_ROUND_LIMIT');
   const deltaBase = round.deltaBase || mergeBase;
   const range = [deltaBase, canonical.head];
   const readSource = core.createSourceReader({ git: (args, maxBuffer) =>
