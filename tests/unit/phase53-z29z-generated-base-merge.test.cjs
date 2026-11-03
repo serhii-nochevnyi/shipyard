@@ -132,6 +132,65 @@ function partialApplyInjection(f, phase) {
     const exec=cp.execFileSync;cp.execFileSync=function(command,args,...rest){const result=exec.call(this,command,args,...rest);if(command==='git'&&args[1]===root&&args[2]==='add'&&intended()?.apply){adds++;if((phase==='first-add'&&adds===1)||(phase==='multiple-adds'&&adds===2))process.exit(97);}return result;};`;
 }
 if (require.main === module) {
+  test('mechanical-only original merge reconciles post-HEAD and post-coverage without a new signed commit', bounded, async t => {
+    const signing = signingFixture();
+    try {
+      for (const phase of ['head','coverage']) await t.test(phase, bounded, () => {
+        const f = divergentFixture(signing, { ordinaryClean:true, mechanicalPaths:true });
+        const injection = `const cp=require('node:child_process'),fs=require('node:fs'),exec=cp.execFileSync,link=fs.linkSync;cp.execFileSync=function(cmd,args,...rest){const r=exec.call(this,cmd,args,...rest);if(${JSON.stringify(phase)}==='head'&&cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&(args[2]==='commit'||args[2]==='update-ref'&&args[3]==='HEAD'))process.exit(86);return r;};const spawn=cp.spawnSync;cp.spawnSync=function(cmd,args,...rest){const r=spawn.call(this,cmd,args,...rest);if(${JSON.stringify(phase)}==='head'&&cmd==='git'&&args[1]===${JSON.stringify(f.worktree)}&&args[2]==='commit'&&r.status===0)process.exit(86);return r;};fs.linkSync=function(a,b,...rest){const r=link.call(this,a,b,...rest);if(${JSON.stringify(phase)}==='coverage'&&b.startsWith(${JSON.stringify(path.join(signing.directory,'coverage'))})&&b.endsWith('.json'))process.exit(87);return r;};`;
+        const first = f.run(injection); assert.equal(first.status, phase==='head'?86:87, first.stderr+first.stdout);
+        const original = retainedOperation(f), oid = git(f.worktree,'rev-parse','HEAD'); assert.notEqual(oid,f.head);
+        const response = f.run(); assert.equal(response.status,0,response.stderr+response.stdout);
+        const result = JSON.parse(response.stdout); assert.equal(result.commit,oid); assert.equal(result.result,'resolved mechanically');
+        assert.equal(retainedOperation(f).id,original.id); assert.equal(retainedOperation(f).generation,undefined);
+        assert.equal(git(f.worktree,'rev-list','--count','--merges',`${f.head}..HEAD`),'1');
+        assert.equal(git(f.worktree,'show','-s','--format=%P',oid),f.head+' '+f.base); git(f.worktree,'verify-commit',oid);
+        assert.equal(coverage.verify({worktree:f.worktree,repo:'fixture/repository',commit:oid}).covered,true);
+        assert.equal(git(f.worktree,'status','--porcelain=v1','--untracked-files=no'),'');
+        assert.equal(fs.readFileSync(path.join(f.worktree,'mechanical-file.txt'),'utf8'),'base resolution\n');
+        assert.equal(fs.statSync(path.join(f.worktree,'mechanical-file.txt')).mode&0o777,0o755);
+        assert.equal(fs.existsSync(path.join(f.worktree,'mechanical-delete.txt')),false);
+      });
+    } finally { signing.close(); }
+  });
+
+  test('generated owner lock reclaims actual unreaped zombie while retaining live owner fencing', bounded, async () => {
+    const { spawn } = require('node:child_process'), os = require('node:os');
+    const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't31-zombie-'))), locks = path.join(directory, 'locks');
+    const ready = path.join(directory, 'ready'), script = path.join(directory, 'owner.cjs');
+    fs.writeFileSync(script, `const fs=require('node:fs'),l=require(${JSON.stringify(path.join(scripts,'lock.cjs'))});const h=l.acquireGeneratedMergeLock(${JSON.stringify(locks)},'held');if(!h)throw Error('fixture owner missing');fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},10000);`);
+    const python = `import os,sys,signal\nsignal.signal(signal.SIGCHLD,signal.SIG_DFL)\npid=os.fork()\nif pid==0: os.execl(sys.argv[1],sys.argv[1],sys.argv[2])\nprint(pid,flush=True)\nsys.stdin.readline()\nos.waitpid(pid,0)\n`;
+    const supervisor = spawn('python3', ['-u', '-c', python.replaceAll('\\n','\n'), process.execPath, script], { stdio: ['pipe','pipe','pipe'] });
+    let childPid = null, reclaimed;
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    try {
+      childPid = await new Promise((resolve, reject) => {
+        let buffer = ''; const timer = setTimeout(() => reject(new Error('fixture pid missing')), 5000);
+        supervisor.stdout.on('data', b => { buffer += b; if (buffer.includes('\n')) { clearTimeout(timer); resolve(Number(buffer.trim())); } });
+        supervisor.once('error', reject);
+      });
+      assert.ok(Number.isSafeInteger(childPid) && childPid > 1);
+      const deadline = Date.now() + 10000;
+      while (!fs.existsSync(ready) && Date.now() < deadline) await delay(20);
+      assert.equal(fs.existsSync(ready), true); process.kill(childPid, 'SIGKILL');
+      let zombie = false;
+      while (Date.now() < deadline) {
+        const observed = spawnSync('/bin/ps', ['-p', String(childPid), '-o', 'stat='], { encoding:'utf8', timeout:5000 });
+        if (observed.status === 0 && observed.stdout.trim().startsWith('Z')) { zombie = true; break; }
+        await delay(20);
+      }
+      assert.equal(zombie, true, 'real exited owner must remain unreaped during proof');
+      const lock = require(path.join(scripts,'lock.cjs')); reclaimed = lock.acquireGeneratedMergeLock(locks,'held');
+      assert.ok(reclaimed, 'zombie cannot retain an unexpiring generated-owner lock');
+      assert.equal(lock.acquireGeneratedMergeLock(locks,'held'), null, 'actual live replacement remains fenced');
+    } finally {
+      reclaimed?.release();
+      if (childPid) { try { process.kill(childPid,'SIGKILL'); } catch {} }
+      supervisor.stdin.end('\n'); await new Promise(resolve => supervisor.once('close',resolve));
+      fs.rmSync(directory,{recursive:true,force:true});
+    }
+  });
+
   test('legacy real finished signed merge remains admitted without new signing or altered original identity', bounded, () => {
     const signing = signingFixture();
     try {

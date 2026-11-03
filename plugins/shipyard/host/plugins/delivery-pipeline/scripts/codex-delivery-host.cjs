@@ -3615,7 +3615,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
       if (operation.phase === 'conflicted') generate();
       if (operation.phase !== 'staged' || stagedTree() !== operation.tree || g(['diff', '--name-only']))
         fail('GENERATED_MERGE_CHANGED', 'generated merge has not retained its exact staged output');
-      if (!operation.signing) generate();
+      if (!operation.signing && !operation.mechanical_completion) generate();
       check();
       if (stagedTree() !== operation.tree || g(['diff', '--name-only'])) fail('GENERATED_MERGE_CHANGED', 'generated output moved before signing');
       const commit = originalSignedObject();
@@ -3644,8 +3644,22 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
     if (!verified.covered || canonical(verified.record) !== canonical(record)) fail('GENERATED_MERGE_CHANGED', 'original merge coverage did not independently verify');
     operation.phase = 'completed'; save();
     return { ticket, base: operation.pins.base_ref, requested_base: requestedBase,
-      result: 'regenerated supported package', taken_from_base: operation.taken, unresolved: [], contested: [],
+      result: operation.mechanical_completion ? 'resolved mechanically' : 'regenerated supported package', taken_from_base: operation.taken, unresolved: [], contested: [],
       commit: operation.commit, tree: operation.tree, parents: [operation.head, operation.pins.base], coverage: verified };
+  };
+  const completeMechanical = taken => {
+    check();
+    if (!Array.isArray(taken) || !taken.length || !operation.mechanical
+        || canonical(taken) !== canonical(operation.taken)
+        || canonical(taken) !== canonical(operation.mechanical.paths.map(entry => entry.path)))
+      fail('GENERATED_MERGE_CHANGED', 'mechanical-only completion lacks original exact taken intent');
+    mechanicalState();
+    if (stageRows().some(row => row.stage !== 0) || g(['diff', '--name-only']))
+      fail('GENERATED_MERGE_CHANGED', 'mechanical-only original has unresolved or foreign tracked state');
+    operation.tree = g(['write-tree']);
+    operation.staged_index = ciPhysical(path.resolve(root, g(['rev-parse', '--git-path', 'index']))).pin;
+    operation.mechanical_completion = true; operation.phase = 'staged'; save();
+    return complete();
   };
   try {
     const files = fs.readdirSync(directory).filter(file => file.endsWith('.json'));
@@ -3673,7 +3687,10 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
       check();
       if (operation.phase === 'prepared' && absent('MERGE_HEAD') && absent('AUTO_MERGE')) return null;
       if (!operation.observed) observe();
-      if (!operation.generation) mechanical();
+      if (!operation.generation && !operation.mechanical_completion) {
+        const taken = mechanical();
+        if (stageRows().every(row => row.stage === 0)) return completeMechanical(taken);
+      }
       return complete();
     },
     prepare() {
@@ -3690,6 +3707,7 @@ function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase
     },
     observe() { return observe(); },
     mechanical() { return mechanical(); },
+    completeMechanical(taken) { return completeMechanical(taken); },
     complete(taken) {
       const before = operation.observed.stages, current = stageRows();
       const owner = require('./path-owner.cjs').owns;

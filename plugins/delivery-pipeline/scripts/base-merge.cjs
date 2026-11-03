@@ -366,9 +366,15 @@ if (real.length) {
   process.exit(1);
 }
 
+if (generatedMerge) {
+  const completed = generatedMerge.completeMechanical(taken);
+  const carry = carryVerdict();
+  if (asJson) console.log(JSON.stringify({ ...completed, carry }, null, 2));
+  else console.log(`base-merge: ${ticket} — mechanically resolved original ${completed.commit}`);
+  process.exit(0);
+}
 git(['commit', '--no-edit']);
 recordMerge(taken);
-if (generatedMerge) generatedMerge.ordinary();
 const carry = carryVerdict();
 const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved mechanically', taken_from_base: taken, unresolved: [], contested: [], carry };
 if (asJson) console.log(JSON.stringify(payload, null, 2));

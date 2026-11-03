@@ -310,11 +310,14 @@ function releaseOwned(lockPath, owner) {
 const GENERATED_OWNER = Symbol('generated-merge-owner');
 function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid < 1) return null;
-  const result = require('child_process').spawnSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='],
+  const result = require('child_process').spawnSync('/bin/ps', ['-p', String(pid), '-o', 'stat=', '-o', 'lstart='],
     { encoding: 'utf8', timeout: 5000, env: { ...process.env, TZ: 'UTC', LC_ALL: 'C', LANG: 'C' } });
   if (result.error || (result.status !== 0 && result.status !== 1))
     throw Object.assign(new Error('cannot establish lock process identity'), { code: 'LOCK_PROCESS_UNKNOWN' });
-  return result.status === 0 ? result.stdout.trim() || null : null;
+  if (result.status !== 0 || !result.stdout.trim()) return null;
+  const identity = /^(\S+)\s+(.+)$/.exec(result.stdout.trim());
+  if (!identity) throw Object.assign(new Error('cannot establish lock process state'), { code: 'LOCK_PROCESS_UNKNOWN' });
+  return identity[1].startsWith('Z') ? null : identity[2].trim();
 }
 function acquireGeneratedMergeLock(dir, name) {
   if (!processIdentity(process.pid))

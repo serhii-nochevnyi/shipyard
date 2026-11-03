@@ -2828,6 +2828,7 @@ function createDispatchBoundary(options = {}) {
           const recovered = record.recoverOriginalCi(validatedResolution.dispatch_id, RECORDER_AUTHORITY, options.originalCiOperation);
           if (!recovered.recovered) refuse('RECORD_FAILED', 'original CI finalization or consumption was not acknowledged');
           registerReceipt(applicationReceipt, validatedResolution, record, recovered.record);
+          if (handoffReservation) handoffController.completeLaunch(handoffReservation, { recorded: true, receipt: applicationReceipt });
           if (priorLease) priorLease.stop();
           if (capacityHeartbeat) capacityHeartbeat.stop();
           releaseCapacityBestEffort(capacityLease);

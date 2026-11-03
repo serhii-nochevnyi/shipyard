@@ -91,6 +91,22 @@ function coldOriginal(f, installed, expectedError, expectedPushes = 1) {
   return recovered.result;
 }
 if (require.main === module) {
+  test('original CI recording completes actual host handoff before the next reservation', bounded, async () => {
+    const signing = signingFixture();
+    try {
+      const f = ciFixture(signing); f.control.source = false; f.output.status = 'no-op';
+      const { createSessionHandoff, withSessionHandoff } = require(path.join(scripts, 'session-handoff.cjs'));
+      const handoff = createSessionHandoff({ cwd: f.worktree, storeDir: path.join(signing.directory, 'handoff-store') });
+      const owner = handoff.begin({ phase: '53', tickets: ['T-53-31'], runtime: 'codex', runId: f.scope.run_id, sessionId: 'original-ci-session' });
+      const result = await withSessionHandoff(owner, () => f.run());
+      assert.equal(result.receipt.compliance, 'verified'); assert.equal(f.launches, 1); assert.equal(f.pushes, 0);
+      assert.equal(handoff.inspect(owner.scope_id).scopes[0].pending_launch, null);
+      const next = handoff.reserveLaunch(owner, { dispatch_id: 'after-original-ci', role: 'ci-fix', runtime: 'codex' });
+      handoff.completeLaunch(next, { recorded: true, aborted: true });
+      assert.equal(handoff.inspect(owner.scope_id).scopes[0].pending_launch, null); assert.equal(f.launches, 1);
+    } finally { signing.close(); }
+  });
+
   test('repair remote boundaries renew only the original live controller across serial work beyond TTL', bounded, () => {
     const Module = require('node:module');
     const filename = path.join(scripts, 'codex-delivery-host.cjs');
