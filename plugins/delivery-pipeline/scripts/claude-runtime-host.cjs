@@ -701,6 +701,7 @@ function createClaudeCliLauncher(options = {}) {
   const childEnvironment = claudeEnvironment({ ...process.env, ...environment });
   const uuid = typeof options.uuid === 'function' ? options.uuid : crypto.randomUUID;
   const archiveAuthority = require('./role-artifact.cjs').archiveAuthorityNamespace(true);
+  const publications = require('./phase-code-review.cjs').publicationsRoot();
 
   return async function launch(prompt, launchOptions = {}) {
     if (typeof prompt !== 'string' || prompt.trim() === '') fail('INVALID_INPUT', 'Claude prompt must be non-empty text');
@@ -747,19 +748,20 @@ function createClaudeCliLauncher(options = {}) {
     try {
       const evidenceGlob = `//${evidenceDirectory.split(path.sep).filter(Boolean).join('/')}/**`;
       const archiveGlob = `//${archiveAuthority.split(path.sep).filter(Boolean).join('/')}/**`;
+      const publicationsGlob = `//${publications.split(path.sep).filter(Boolean).join('/')}/**`;
       const settings = JSON.stringify({
         sandbox: {
           enabled: true,
           failIfUnavailable: true,
           allowUnsandboxedCommands: false,
           autoAllowBashIfSandboxed: true,
-          filesystem: { allowWrite: [path.resolve(scope.worktree)], denyRead: [archiveAuthority], denyWrite: [archiveAuthority] },
+          filesystem: { allowWrite: [path.resolve(scope.worktree)], denyRead: [archiveAuthority, publications], denyWrite: [archiveAuthority, publications] },
           credentials: { envVars: SENSITIVE_SUBPROCESS_ENV.map((name) => ({ name, mode: 'deny' })) },
         },
         permissions: {
           blockReadsOutsideWorkingDirectories: true,
           deny: ['Read', 'Edit', 'Write', 'Glob', 'Grep'].flatMap((tool) =>
-            [evidenceGlob, archiveGlob].map(glob => `${tool}(${glob})`)),
+            [evidenceGlob, archiveGlob, publicationsGlob].map(glob => `${tool}(${glob})`)),
         },
         hooks: {
           SessionStart: [{

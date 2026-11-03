@@ -1109,7 +1109,7 @@ function createCodexCliLauncher(options = {}) {
   }
   const installedHost = resolveHostEnvironment({ scriptDir: __dirname, runtime: 'codex', env: { ...process.env, ...environment } });
   const archiveAuthority = require('./role-artifact.cjs').archiveAuthorityNamespace(true);
-  const hostProtectedPaths = normalizeProtectedPaths([archiveAuthority, ...(options.additionalProtectedPaths || [])]);
+  const hostProtectedPaths = normalizeProtectedPaths([archiveAuthority, require('./phase-code-review.cjs').publicationsRoot(), ...(options.additionalProtectedPaths || [])]);
   const taskDir = taskStateDir(options, scope);
 
   return async function launch(prompt, launchOptions = {}) {

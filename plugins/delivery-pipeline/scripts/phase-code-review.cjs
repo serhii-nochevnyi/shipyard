@@ -304,6 +304,8 @@ const publicationHash = value => crypto.createHash('sha256').update(value).diges
 const positiveId = value => Number.isSafeInteger(value) && value > 0;
 const PUBLICATION_BOUND = 8192;
 
+const publicationsRoot = () => path.join(fs.realpathSync(require('node:os').homedir()), '.local/state/shipyard/code-review-publications');
+
 function publicationLocation(input) {
   const { repository, repo = null, pr, roots } = input ?? {};
   if (!positiveId(pr)) throw new Error('a pull request number is required');
@@ -311,8 +313,7 @@ function publicationLocation(input) {
   if (!Array.isArray(roots) || !roots.some(Boolean)) throw new Error('the checkout roots are required');
   const home = fs.realpathSync(require('node:os').homedir());
   const selector = repo === null ? null : repo.trim().toLowerCase();
-  const directory = path.join(home, '.local/state/shipyard/code-review-publications',
-    publicationHash(JSON.stringify([repository, selector])));
+  const directory = path.join(publicationsRoot(), publicationHash(JSON.stringify([repository, selector])));
   for (const root of roots.filter(Boolean)) {
     const relative = path.relative(fs.realpathSync(root), directory);
     if (!relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)))
@@ -486,7 +487,7 @@ function appendExtension(ctx, record) {
 const EXTEND_CONFIRM = 'extend-review-round';
 const EXTEND_USAGE = `phase-code-review.cjs extend --phase N --pr P --reason "..." --confirm ${EXTEND_CONFIRM} [--repo owner/name] [--graph dir] [--worktree path]`;
 const refuseExtension = message => { throw Object.assign(new Error(message), { code: 'EXTENSION_REFUSED' }); };
-const cleanText = value => String(value).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/[@<>`]/g, '').replace(/\s+/g, ' ').trim();
+const cleanText = value => String(value).replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, ' ').replace(/[@<>`]/g, '').replace(/\s+/g, ' ').trim();
 
 function extend(input, options = {}) {
   // @security: only the operator grants a round; a role-hosted child is refused before any other step.
@@ -499,12 +500,12 @@ function extend(input, options = {}) {
   const operator = cleanText(named) || cleanText(require('node:os').userInfo().username), reason = cleanText(input.reason);
   if (!reason) refuseExtension('the reason is empty after cleaning; state why one more round is needed');
   if (Buffer.byteLength(reason) > 200) refuseExtension('the reason is over 200 bytes');
-  if (!operator || Buffer.byteLength(operator) > 128) refuseExtension('the operator name is empty or over 128 bytes');
+  if (!operator || Buffer.byteLength(operator) > 128) refuseExtension('the operator name from git user.name is empty or over 128 bytes; set a shorter git user.name and run extend again');
   const created_at = new Date().toISOString(), hygiene = require('./pr-hygiene.cjs');
   if (hygiene.applies({ root: worktree })) {
     const line = `round ${core.ROUND_CAP + 1} of ${core.ROUND_CAP}, extended by ${operator} at ${created_at}: ${reason}`;
     const rules = [...new Set(['comment', 'status'].flatMap(field => hygiene.internalLeakViolations(field, line)).map(found => found.rule))];
-    if (rules.length) refuseExtension(`the reason or operator name would be refused in public text (${rules.join(', ')}); rephrase it`);
+    if (rules.length) refuseExtension(`the reason or the git user.name would be refused in public text (${rules.join(', ')}); rephrase the reason or set a different git user.name`);
   }
   const current = status(input, options), { ctx, history } = details.get(current);
   const records = readExtensions({ repository: ctx.repository, repo: ctx.repo, pr: ctx.pr, roots: [ctx.worktree, ctx.mode.project_root] });
@@ -512,7 +513,8 @@ function extend(input, options = {}) {
     operator: record.operator, created_at: record.created_at, recorded });
   const existing = records.find(row => row.head === current.head && row.base_commit === current.base_commit);
   if (existing) return report(existing, 'existing', current.round, current.round_limit);
-  if (current.state === 'current') refuseExtension('this head already has a counted review; push the fixes first, then run extend for the new head');
+  if (current.state === 'current') refuseExtension(current.verdict === 'pass' ? 'this head already has a passing counted review; no extension is needed'
+    : 'this head already has a counted review that needs fixes; push the fixes first, then run extend for the new head');
   if (current.state === 'owed') refuseExtension('no review limit has been reached for this head; the review is owed, so no extension is needed');
   if (current.state !== 'limit') refuseExtension(`phase code review is ${current.state}: ${current.reason}`);
   if (current.round_limit >= core.ROUND_CEILING) refuseExtension(`the ceiling of ${core.ROUND_CEILING} rounds is reached; the human decides from the findings on the PR,`
@@ -637,7 +639,7 @@ function verifyCodeReview(input, options = {}) {
   return { ...current, ok: gate.ok, reason: gate.ok ? current.reason : gate.message };
 }
 
-module.exports = { publish, extend, readExtensions, appendExtension, statusDescription, status, evaluateGate, fixTickets, matchEpicPullRequest, refusalText: refusal, resolveCodeReviewMode, verifyCodeReview };
+module.exports = { publish, extend, publicationsRoot, readExtensions, appendExtension, statusDescription, status, evaluateGate, fixTickets, matchEpicPullRequest, refusalText: refusal, resolveCodeReviewMode, verifyCodeReview };
 
 if (require.main === module) {
   try {
