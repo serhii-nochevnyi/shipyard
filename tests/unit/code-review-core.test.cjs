@@ -177,7 +177,7 @@ test('rounds count only complete full-scope lineage, independently of ticket set
   assert.equal(core.nextRound({priorVerdicts:incomplete,head:'current',isAncestor:()=>true}).round,1);
   assert.equal(core.lineageComplete({verdict:priorVerdicts[1],priorVerdicts:incomplete}),false);
   assert.equal(core.nextRound({priorVerdicts,head:'current',isAncestor:()=>false}).round,1);
-  assert.deepEqual([1,2,3].map(core.repairAllowed),[true,true,false]);
+  assert.deepEqual([1,2,3,4,5].map(core.repairAllowed),[true,true,false,false,false]);
 });
 
 test('normalization accepts rounds up to the absolute ceiling and refuses the next', () => {
@@ -432,6 +432,33 @@ test('the limit is the cap plus the valid records, clamped to the ceiling, and c
     `${word} rounds are spent; no further review can launch`));
   for (const sealed of [0, 2]) assert.deepEqual(core.roundLookup({ priorVerdicts: [1, 2].slice(0, sealed).map(verdict), head: 'H3',
     isAncestor, readRecords() { throw Error('read below the cap'); } }).limit, 3);
+});
+
+test('an extended round is owed only as a delta with a record for the current head, never as a full review', () => {
+  const order = ['B0', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'], isAncestor = (a, b) => order.indexOf(a) <= order.indexOf(b);
+  const verdict = n => ({ head: 'H' + n, sealed_at: '2026-03-0' + n, review_completeness: 'complete', answer_authenticated: true,
+    review_scope: n === 1 ? 'full' : 'delta', prior_head: n === 1 ? null : 'H' + (n - 1),
+    coverage_range: { from: n === 1 ? 'B0' : 'H' + (n - 1), to: 'H' + n, merge_base: 'B0' } });
+  const rec = (head, created_at = '2026-03-03T12:00:00.000Z') => ({ head, base_commit: 'B', operator: 'Ada', created_at, reason: 'why' });
+  const look = (sealed, head, records, mergeBase = 'B0') => core.roundLookup({ priorVerdicts: [1, 2, 3, 4].slice(0, sealed).map(verdict),
+    head, baseCommit: 'B', mergeBase, isAncestor, readRecords: () => records });
+  const grant = { operator: 'Ada', at: '2026-03-03T12:00:00.000Z', reason: 'why' };
+  const ready = look(3, 'H4', [rec('H4')]);
+  assert.deepEqual([ready.state, ready.round, ready.scope, ready.deltaBase, ready.limit], ['ready', 4, 'delta', 'H3', 4]);
+  const { countable, ...refused } = look(3, 'H4', [rec('H4')], 'H4');
+  assert.equal(countable.length, 3);
+  assert.deepEqual(refused, { round: null, state: 'limit', rounds_used: 3, limit: 4, extension: grant, reason: 'no-delta' });
+  const early = rec('H3', '2026-03-02T12:00:00.000Z');
+  for (const [sealed, head, records, limit] of [[3, 'H4', [early], 4], [4, 'H5', [early, rec('H4', '2026-03-02T12:00:00.000Z')], 5]]) {
+    const { countable: used, ...result } = look(sealed, head, records);
+    assert.equal(used.length, sealed);
+    assert.deepEqual(result, { round: null, state: 'limit', rounds_used: sealed, limit, extension: null, reason: 'no-record' });
+  }
+  assert.equal(look(3, 'H4', []).reason, 'spent');
+  assert.deepEqual(['spent', 'no-record', 'no-delta'].map(reason => core.limitMessage({ limit: 4, reason })), [
+    'four rounds are spent; no further review can launch',
+    'no extension record bound to this head exists; no further review can launch',
+    'the extended round must be a delta from the last counted review; the coverage chain does not allow one, so no full review will run']);
 });
 
 test('the part budget is one weight bound per runtime', () => {
