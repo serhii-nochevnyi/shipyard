@@ -4157,7 +4157,7 @@ function resumeRepairActions(options, dispatchId, liveScopeInput) {
     const original = authenticatedReceipt(previous.recorder, dispatchId, 'review-fix');
     const policyVersion = original.policy_version;
     const recoveryScope = { ...scope, run_id: 'action-recovery-' + crypto.randomUUID() };
-    controller.begin(createRunScope({ ...recoveryScope, repository_id: previous.attempt.preparation.repository,
+    controller.begin(createRunScope({ ...recoveryScope, repository: { repository_id: previous.attempt.preparation.repository, worktree: scope.worktree },
       owner_id: controller.owner_id, dispatch: { dispatch_id: 'action-recovery-' + crypto.randomUUID(),
         role: 'review-fix', model: receipt.model, effort: receipt.effort,
         policy_version: policyVersion, policy_hash: receipt.policy_hash } }));
