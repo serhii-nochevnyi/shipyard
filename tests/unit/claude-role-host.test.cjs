@@ -2543,6 +2543,36 @@ test('code-review extended round refuses a reviewer-supplied review_extension, n
   } finally { cleanupFixture(fixture); }
 });
 
+test('code-review extended round refuses the reserved key before normalization judges the rest of the result', async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  const invalid = result => { result.findings = [{ bogus: true }]; };
+  try {
+    await assert.rejects(runCodeReview(fixture, { mutateResult: invalid }),
+      error => error.code !== undefined && !/reserved to the host/.test(error.message));
+    await assert.rejects(runCodeReview(fixture, { mutateResult(result) { invalid(result); result.review_extension = null; } }),
+      error => error.code === 'INVALID_RESULT' && /review_extension is reserved to the host/.test(error.message));
+  } finally { cleanupFixture(fixture); }
+});
+
+test('code-review extended round pins that a record removed after prepare still seals the prepare-time extension in the Claude host', async () => {
+  const fixture = setupCodeReview({ coordinatorGraph: true });
+  try {
+    await sealThreeRounds(fixture);
+    write(fixture.root, 'src/role.txt', 'fixed change 4\n'); codeReviewCommit(fixture);
+    const extension = grantExtension(fixture);
+    const store = path.join(stateHome, '.local/state/shipyard/code-review-publications');
+    const result = await runCodeReview(fixture, { onLaunch() {
+      for (const dir of fs.readdirSync(store)) fs.rmSync(path.join(store, dir, '101.extensions.json'));
+    } });
+    assert.deepEqual(result.result.review_extension, extension);
+    const current = reviewArtifacts.currentCodeReviewVerdict({ worktreePath: fixture.root, pr: 101, head: fixture.head,
+      baseName: 'main', baseCommit: fixture.base, graphDir: fixture.graphDir });
+    assert.deepEqual(current.extension, extension);
+    write(fixture.root, 'src/role.txt', 'fixed change 5\n'); codeReviewCommit(fixture);
+    await assert.rejects(runCodeReview(fixture), error => error.code === 'CODE_REVIEW_ROUND_LIMIT');
+  } finally { cleanupFixture(fixture); }
+});
+
 for (const failure of ['missing-object', 'permission', 'timeout', 'output-limit'])
 test(`code-review refuses ${failure} ancestry errors with three sealed rounds before creating a runtime`, async () => {
   const fixture = setupCodeReview({ coordinatorGraph: true });

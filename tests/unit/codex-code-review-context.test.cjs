@@ -324,6 +324,30 @@ test('code-review extended round refuses a reviewer-supplied review_extension, n
   } finally { f.cleanup(); }
 });
 
+test('code-review extended round refuses the reserved key before normalization judges the rest of the result', () => {
+  const f = fixture();
+  const invalid = raw => { raw.findings = [{ bogus: true }]; };
+  try {
+    assert.throws(() => review(f, invalid), error => error.code !== undefined && !/reserved to the host/.test(error.message));
+    assert.throws(() => review(f, raw => { invalid(raw); raw.review_extension = null; }),
+      error => error.code === 'INVALID_RESULT' && /review_extension is reserved to the host/.test(error.message));
+  } finally { f.cleanup(); }
+});
+
+test('code-review extended round pins that a record removed after prepare makes the Codex finish refuse with the round limit', () => {
+  const f = fixture();
+  try {
+    sealThreeRounds(f);
+    f.commit(() => fs.appendFileSync(path.join(f.root, 'src/reviewed.txt'), '\n'));
+    grantExtension(f);
+    const store = path.join(home, '.local/state/shipyard/code-review-publications');
+    assert.throws(() => review(f, () => {
+      for (const dir of fs.readdirSync(store)) fs.rmSync(path.join(store, dir, `${f.pr.number}.extensions.json`));
+    }), error => error.code === 'CODE_REVIEW_ROUND_LIMIT');
+    assert.equal(artifact.authenticatedArchivePins(f.root).length, 9);
+  } finally { f.cleanup(); }
+});
+
 function reverseReviewKeys(value) {
   if (Array.isArray(value)) return value.map(reverseReviewKeys);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).reverse()
