@@ -51,7 +51,7 @@
     "delivery_pipeline.code_review": {
       "type": "string",
       "default": "hold",
-      "description": "Phase code review: report runs and seals the review while holding nothing; hold requires a current complete pass before integration and phase architecture review. The operator can exit the hold for this PR by setting delivery_pipeline.code_review to report in the project root's .planning/config.json; there is no override flag or waiver record."
+      "description": "Phase code review: report runs and seals the review while holding nothing; hold requires a current complete pass before integration and phase architecture review. The operator has two exits from the hold: at the round limit, one more round with the phase-code-review extend command (five rounds in total at most), or setting delivery_pipeline.code_review to report in the project root's .planning/config.json, which applies to the whole project until it is set back to hold."
     },
     "delivery_pipeline.sentinel": {
       "type": "string",

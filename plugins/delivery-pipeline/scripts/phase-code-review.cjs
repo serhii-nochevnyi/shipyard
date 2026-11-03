@@ -9,6 +9,7 @@ const core = require('./code-review-core.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { loadConfig, DEFAULTS } = require('./pipeline-config.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
+const EXTEND_USAGE_COMMAND = 'phase-code-review.cjs extend --phase N --pr P --reason "..." --confirm extend-review-round';
 const details = new WeakMap();
 const phaseNumber = value => Number(String(value).match(/^0*(\d+)/)?.[1]);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -84,9 +85,11 @@ function git(worktree, args) {
     stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, maxBuffer: 65536 }).trim();
 }
 
-function refusal(state, reason, mode) {
-  return `phase code review is ${state}: ${reason}. The operator can set delivery_pipeline.code_review to "report" in ${
-    mode.config_path || "the project root's .planning/config.json"} for this PR (nothing is held in report mode); there is no override flag and no waiver record.`;
+function refusal(state, reason, mode, options = {}) {
+  const extend = state === 'limit' && options.canExtend === true;
+  return `phase code review is ${state}: ${reason}.${extend ? ` The operator can allow one more round (one per record, five in total at most): ${EXTEND_USAGE_COMMAND}.` : ''}`
+    + ` The operator can ${extend ? 'also ' : ''}set delivery_pipeline.code_review to "report" in ${mode.config_path || "the project root's .planning/config.json"}`
+    + ' (nothing is held in report mode); report applies to the whole project until it is set back to "hold".';
 }
 
 function rejectTicket(mode) {
@@ -179,7 +182,7 @@ function status(input, options = {}) {
   Object.assign(result, { state: next.state === 'limit' ? 'limit' : 'owed', round: next.round, scope: next.scope || null,
     retry: !!incomplete, review_completeness: incomplete?.review_completeness || null,
     partitions_not_reviewed: incomplete?.partitions_not_reviewed ?? 0, reason: next.state === 'limit'
-      ? refusal('limit', core.limitMessage(next), mode)
+      ? refusal('limit', core.limitMessage(next), mode, { canExtend: next.limit < core.ROUND_CEILING && next.reason !== 'no-delta' })
       : `${incomplete ? (incomplete.review_completeness !== 'complete' ? 'the sealed review is incomplete'
         : 'the sealed delta has no complete full-scope lineage') + '; ' : ''}run deliver-dispatch.cjs build code-review first` });
   details.set(result, { mode, current, ctx, prior: countable, history });
@@ -288,9 +291,14 @@ function findingsComment(current, sealed, prior, ctx) {
   const header = `<!-- code-review -->\nCode review — round ${sealed.round}, scope ${sealed.scope}\n`
     + (current.extension ? extensionLine(sealed.round, current.extension) + '\n' : '') + `Verdict: ${sealed.verdict}\n\n`;
   const stop = current.mode === 'hold' && !(current.state === 'current' && current.verdict === 'pass');
+  const projectWide = 'set delivery_pipeline.code_review to "report", which applies to the whole project until it is set back to "hold".';
+  const exits = current.round_limit < core.ROUND_CEILING
+    ? `Operator exits: when the rounds are spent and the fixes are pushed, the operator can allow one more round with the extend command (five rounds in total at most); the operator can also ${projectWide}`
+    : `Operator exit: ${projectWide}`;
   const footer = `\n${sealed.disagreement_suppressed} findings not raised again because of a recorded disagreement.\n`
     + `citations_unresolved: ${sealed.citations_unresolved}\n`
-    + (stop ? '\nOperator exit: set delivery_pipeline.code_review to "report" for this PR.\n' : '');
+    + (stop ? `\n${exits}\n` : '')
+    + (current.mode === 'report' ? '\nReport mode is on for the whole project and nothing is held; set delivery_pipeline.code_review back to "hold" when this PR merges.\n' : '');
   const blocks = sealed.findings.map(finding => {
     let text = `${finding.severity} [${finding.rule}] ${finding.path || '(unresolved path)'}:${finding.line || '?'}`
       + (finding.suppressed ? ' (recorded disagreement; not blocking)' : '') + '\n'
@@ -502,7 +510,7 @@ function appendExtension(ctx, record) {
 }
 
 const EXTEND_CONFIRM = 'extend-review-round';
-const EXTEND_USAGE = `phase-code-review.cjs extend --phase N --pr P --reason "..." --confirm ${EXTEND_CONFIRM} [--repo owner/name] [--graph dir] [--worktree path]`;
+const EXTEND_USAGE = `${EXTEND_USAGE_COMMAND} [--repo owner/name] [--graph dir] [--worktree path]`;
 const refuseExtension = message => { throw Object.assign(new Error(message), { code: 'EXTENSION_REFUSED' }); };
 const cleanText = value => String(value).replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, ' ').replace(/[@<>`]/g, '').replace(/\s+/g, ' ').trim();
 

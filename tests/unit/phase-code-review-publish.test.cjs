@@ -179,7 +179,7 @@ for (const jira of [null, 'PRJ-42']) {
       assert.equal(published.comment.ok, true);
       assert.deepEqual(published.rules, []);
       if (name === 'needs-fix') assert.match(f.comments[0].body, /Proposed fix-ticket title: Repair source/);
-      assert.match(f.comments[0].body, /delivery_pipeline.code_review.*report/);
+      assert.match(f.comments[0].body, /delivery_pipeline.code_review.*report.*whole project/);
       assert(!f.writes.some(write => ['failure', 'error'].includes(write.fields.state)));
     } finally { f.cleanup(); }
   });
@@ -357,8 +357,72 @@ test('D37 third-round needs-fix publishes pending with the operator exit', () =>
     const result = flow.publish(f.input(), f.options);
     assert.equal(result.status.state, 'pending');
     assert.equal(result.comment.ok, true); assert.match(f.comments[0].body, /round 3/);
-    assert.match(f.comments[0].body, /delivery_pipeline.code_review.*report/);
+    assert.match(f.comments[0].body, /extend command.*delivery_pipeline.code_review.*report.*whole project/);
   } finally { f.cleanup(); }
+});
+
+const lastLines = body => body.trimEnd().split('\n');
+function thirdRound(f, findings = [blocker]) {
+  let prior = null;
+  for (let round = 1; round <= 3; round++) { f.seal(round === 3 ? raw(true, findings) : raw(), round, prior); prior = f.live().headRefOid; }
+}
+
+test('R-14 wording: the hold footer names the extend command in words and report as a project-wide setting', () => {
+  const f = fixture(null, 'hold');
+  try {
+    thirdRound(f);
+    const result = flow.publish(f.input(), f.options);
+    assert.equal(result.comment.ok, true); assert.deepEqual(result.rules, []);
+    const body = f.comments[0].body, footer = lastLines(body).at(-1);
+    assert.match(footer, /^Operator exits: when the rounds are spent and the fixes are pushed, the operator can allow one more round with the extend command \(five rounds in total at most\); /);
+    assert.match(footer, /set delivery_pipeline\.code_review to "report", which applies to the whole project until it is set back to "hold"\.$/);
+    assert.doesNotMatch(body, /phase-code-review|extend-review-round|--confirm|waiver|override flag|for this PR/);
+    assert.deepEqual(hygiene.internalLeakViolations('comment', body), []);
+    const original = core.roundLookup;
+    core.roundLookup = options => ({ ...original(options), limit: core.ROUND_CEILING });
+    try {
+      assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
+    } finally { core.roundLookup = original; }
+    const ceiling = lastLines(f.comments.at(-1).body).at(-1);
+    assert.equal(ceiling, 'Operator exit: set delivery_pipeline.code_review to "report", which applies to the whole project until it is set back to "hold".');
+    assert.doesNotMatch(f.comments.at(-1).body, /extend/);
+  } finally { f.cleanup(); }
+});
+
+test('R-14 wording: the report-mode footer says report is on for the whole project and tells the operator to restore hold', () => {
+  const f = fixture(null, 'report');
+  try {
+    thirdRound(f);
+    const result = flow.publish(f.input(), f.options);
+    assert.equal(result.comment.ok, true); assert.deepEqual(result.rules, []);
+    const body = f.comments[0].body;
+    assert.equal(lastLines(body).at(-1), 'Report mode is on for the whole project and nothing is held; set delivery_pipeline.code_review back to "hold" when this PR merges.');
+    assert.doesNotMatch(body, /Operator exit|extend|waiver/);
+    assert.deepEqual(hygiene.internalLeakViolations('comment', body), []);
+  } finally { f.cleanup(); }
+});
+
+test('R-14 wording: a passing hold comment carries no operator exit and the length bound counts the footer', () => {
+  const f = fixture(null, 'hold');
+  try {
+    f.seal(raw());
+    assert.equal(flow.publish(f.input(), f.options).comment.ok, true);
+    assert.doesNotMatch(f.comments[0].body, /Operator exit|extend|"report"/);
+  } finally { f.cleanup(); }
+  const publishMany = extra => {
+    const many = fixture(null, 'report');
+    try {
+      many.seal(raw(true, Array.from({ length: 128 }, (_, k) => ({ ...blocker, id: 'finding-' + k, summary: 's'.repeat(240 + extra), failure_scenario: 'f'.repeat(250) }))));
+      assert.equal(flow.publish(many.input(), many.options).comment.ok, true);
+      const body = many.comments[0].body, more = body.match(/\nand (\d+) more findings\.\n/);
+      assert(more && body.length <= 60000);
+      return { body, included: 128 - Number(more[1]), slack: 60000 - 64 - (body.length - more[0].length + 1) };
+    } finally { many.cleanup(); }
+  };
+  const loose = publishMany(0), tight = publishMany(Math.floor((loose.slack - 20) / loose.included));
+  assert.equal(tight.included, loose.included);
+  assert.ok(tight.slack >= 0 && tight.slack < 60, `the omission loop counts the whole footer, including the report-mode line: slack ${tight.slack}`);
+  assert.match(lastLines(tight.body).at(-1), /^Report mode is on for the whole project/);
 });
 
 test('injected gh runner covers every read as well as writes and refuses a head race', () => {
