@@ -133,11 +133,12 @@ function keyDigest(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
-function readJsonFile(file) {
+function readJsonFile(file, malformedIsMissing = false) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
     if (error && error.code === 'ENOENT') return null;
+    if (malformedIsMissing && error instanceof SyntaxError) return null;
     refuse('RECORD_FAILED', `durable dispatch store could not be read: ${error.message}`, { file });
   }
 }
@@ -255,8 +256,8 @@ function durablePayload(raw, key) {
   return crypto.timingSafeEqual(expectedBytes, actualBytes) ? raw.payload : null;
 }
 
-function readDurableFile(file, key) {
-  const raw = readJsonFile(file);
+function readDurableFile(file, key, malformedIsMissing = false) {
+  const raw = readJsonFile(file, malformedIsMissing);
   if (!raw) return null;
   if (isObject(raw) && raw.format === DURABLE_ENVELOPE_FORMAT) {
     const payload = durablePayload(raw, key);
@@ -619,16 +620,15 @@ function createDurableRecorder(storeDir) {
     if (!validRepairCommit(commit, predecessorDispatchId)) {
       throw boundaryError('RECORD_FAILED', 'durable repair commit is malformed', { dispatch_id: predecessorDispatchId });
     }
-    const reservation = readStored(reservationFile(commit.successor_dispatch_id));
+    if (commit.original_kind === 'ci-fix') return commit;
+    const ciReceipt = commit.record_input.receipt?.role === 'ci-fix';
+    const reservation = readDurableFile(reservationFile(commit.successor_dispatch_id), authorityKey, ciReceipt);
     const genericReservation = reservation?.legacy && reservation.payload.dispatch_id === commit.successor_dispatch_id
       && typeof reservation.payload.reserved_at === 'string'
       && Number.isFinite(Date.parse(reservation.payload.reserved_at || ''))
       && Object.keys(reservation.payload).every(key => ['dispatch_id', 'reserved_at'].includes(key));
-    if (commit.original_kind === 'ci-fix'
-        || (reservation?.authenticated && reservation.payload.original_kind === 'ci-fix')
-        || (commit.record_input.receipt?.role === 'ci-fix'
-          && (!reservation || reservation.payload?.dispatch_id !== commit.successor_dispatch_id
-            || (!reservation.authenticated && !genericReservation)))) return commit;
+    if ((reservation?.authenticated && reservation.payload.original_kind === 'ci-fix')
+        || (ciReceipt && !genericReservation)) return commit;
     const successorRecord = recordFile(commit.successor_dispatch_id);
     const existingStored = readStored(successorRecord);
     const existing = existingStored && existingStored.payload;

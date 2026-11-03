@@ -315,7 +315,9 @@ if (require.main === module) {
         }
         return JSON.stringify({ data });
       };
-      const reviewFile = path.join(signing.directory, 'original-review.md'); fs.writeFileSync(reviewFile, 'Complete original review.');
+      const reviewDirectory = path.join(f.worktree, '.shipyard-role-artifacts', 'review-inputs');
+      fs.mkdirSync(reviewDirectory, { recursive: true });
+      const reviewFile = path.join(reviewDirectory, 'original-review.md'); fs.writeFileSync(reviewFile, 'Complete original review.');
       const review = builder.build(['review-fix', f.scope.ticket, '--runtime', 'codex', '--pr', '501', '--review-file', reviewFile],
         { cwd: f.worktree, graphDir: f.graphDir });
       f.control.role = 'review-fix'; f.control.source = false; f.output.status = 'no-op';

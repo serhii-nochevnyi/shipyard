@@ -21,6 +21,19 @@ function inventory(directory) {
   };
   visit(directory, ''); return entries;
 }
+function custodySnapshot(directory) {
+  const entries = [];
+  const visit = (directory, prefix) => {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const file = path.join(directory, name), stat = fs.lstatSync(file), relative = prefix + name;
+      const entry = { path: relative, mode: stat.mode & 0o777, dev: stat.dev, ino: stat.ino };
+      if (stat.isSymbolicLink()) entries.push({ ...entry, type: 'symlink', target: fs.readlinkSync(file) });
+      else if (stat.isDirectory()) { entries.push({ ...entry, type: 'directory' }); visit(file, relative + '/'); }
+      else { assert.equal(stat.isFile(), true); entries.push({ ...entry, type: 'file', bytes: stat.size, sha256: hash(fs.readFileSync(file)) }); }
+    }
+  };
+  visit(directory, ''); return entries;
+}
 function verifyPackage(directory) {
   const entries = inventory(directory), crypto = require('node:crypto'), digest = crypto.createHash('sha256');
   for (const entry of entries) if (entry.type === 'file' && !identities.includes(entry.path)) {
@@ -94,7 +107,7 @@ if (require.main === module) {
       const receiptFile = path.join(operation.receipt_store, 'record-' + hash(result.receipt.dispatch_id) + '.json');
       const receiptBytes = fs.readFileSync(receiptFile);
       const read = (covered, repo, worktree = f.worktree) => {
-        const beforeCoverage = inventory(coverageRoot), beforeReceipts = inventory(operation.receipt_store);
+        const beforeCoverage = custodySnapshot(coverageRoot), beforeReceipts = custodySnapshot(operation.receipt_store);
         const checked = authority.verify({ commit, repo, worktree });
         assert.equal(checked.covered, covered, checked.reason);
         const chain = authority.chain({ repo, worktreeOrCheckout: worktree, base: f.originalHead, head: commit });
@@ -104,7 +117,7 @@ if (require.main === module) {
           assert.equal(checked.record.ticket, f.scope.ticket); assert.equal(checked.record.dispatch_id, result.receipt.dispatch_id);
           assert.deepEqual(chain.links, ['fixer']);
         }
-        assert.deepEqual(inventory(coverageRoot), beforeCoverage); assert.deepEqual(inventory(operation.receipt_store), beforeReceipts);
+        assert.deepEqual(custodySnapshot(coverageRoot), beforeCoverage); assert.deepEqual(custodySnapshot(operation.receipt_store), beforeReceipts);
       };
       for (const repo of [undefined, repository, 'fixture/repository']) read(true, repo);
       f.options.controller.release(f.scope.run_id, 'fixture current host custody handoff'); delete f.options.controller;
@@ -207,7 +220,7 @@ if (require.main === module) {
     try {
       const producerScripts = historicalCiScripts(path.join(signing.directory, 'legacy-generic-producer'));
       const producer = require(path.join(producerScripts, 'dispatch-boundary.cjs'));
-      for (const custody of ['valid', 'missing', 'corrupt', 'foreign-legacy']) await t.test(custody, bounded, async () => {
+      for (const custody of ['valid', 'missing', 'corrupt', 'foreign-legacy', 'bad-HMAC']) await t.test(custody, bounded, async () => {
         const f = ciFixture(signing, { producerScripts }); f.control.source = false; f.output.status = 'no-op';
         const store = path.join(signing.directory, 'generic-receipts-' + custody);
         const recorder = producer.createDurableRecorder(store);
@@ -229,6 +242,8 @@ if (require.main === module) {
         assert.equal(JSON.parse(fs.readFileSync(path.join(store, 'repair-commit-' + hash(first.dispatch_id) + '.json'))).payload.original_kind, undefined);
         if (custody === 'missing') fs.unlinkSync(reservation);
         if (custody === 'corrupt') fs.writeFileSync(reservation, '{invalid');
+        if (custody === 'bad-HMAC') fs.writeFileSync(reservation, JSON.stringify({ format: 'adr-014.durable-boundary.v1',
+          payload: legacy, integrity: { algorithm: 'hmac-sha256', mac: '0'.repeat(64) } }));
         if (custody === 'foreign-legacy') fs.writeFileSync(reservation, JSON.stringify({ ...legacy, dispatch_id: first.dispatch_id }));
         for (const file of ['record-' + hash(second.dispatch_id), 'latest-' + hash('codex:ci-fix'), 'consumed-' + hash(first.dispatch_id)])
           fs.rmSync(path.join(store, file + '.json'), { force: true });
