@@ -413,12 +413,12 @@ test('the limit is the cap plus the valid records, clamped to the ceiling, and c
   assert.deepEqual(look(4, [rec('H4'), rec('H5')], 'H5'), { ...owed(5, 5), extension: grant });
   assert.deepEqual(look(5, [rec('H4'), rec('H5'), rec('H6')], 'H6'), { ...limited(5), extension: grant });
   assert.deepEqual(look(3, [rec('H4'), rec('H4', { base_commit: 'C' })], 'H4'), { ...owed(4, 4), extension: grant });
-  assert.deepEqual(look(3, [rec('H4'), rec('H4', { operator: 'Bob' })], 'H4').limit, 5);
-  assert.deepEqual(look(3, [rec('H4'), rec('H4'), rec('H4'), rec('H4')], 'H4').limit, 5);
-  for (const [name, records, head, base] of [['head moved with no verdict for it', [rec('H4')], 'H5'],
+  for (const [name, records, head, base, sealed = 3] of [['head moved with no verdict for it', [rec('H4')], 'H5'],
     ['base differs', [rec('H4')], 'H4', 'C'], ['verdict sealed before the record', [rec('H3')], 'H4'],
-    ['record head not in the history', [rec('X')], 'H4']])
-    assert.deepEqual(look(3, records, head, base), limited(3), name);
+    ['record head not in the history', [rec('X')], 'H4'],
+    ['a later verdict for another head', [rec('X')], 'H5', 'B', 4],
+    ['verdict sealed in the same instant as the record', [rec('H3', { created_at: '2026-02-03' })], 'H4']])
+    assert.deepEqual(look(sealed, records, head, base), limited(3), name);
   assert.equal(core.ROUND_CEILING, 5);
   assert.deepEqual([3, 4, 5].map(limit => core.limitMessage({ limit })), ['three', 'four', 'five'].map(word =>
     `${word} rounds are spent; no further review can launch`));

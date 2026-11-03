@@ -270,6 +270,9 @@ test('status grants round 4 only for a valid operator record and ignores foreign
     write(52);
     const granted = flow.status(f.input());
     assert.deepEqual([granted.state, granted.round, granted.round_cap, granted.round_limit, granted.rounds_used], ['owed', 4, 3, 4, 3]);
+    const store = path.join(home, '.local/state/shipyard/code-review-publications');
+    for (const dir of fs.readdirSync(store)) fs.writeFileSync(path.join(store, dir, '52.extensions.json'), '{');
+    assert.throws(() => flow.status(f.input()), /JSON/);
   } finally { f.cleanup(); }
 });
 

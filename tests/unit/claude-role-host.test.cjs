@@ -2469,10 +2469,22 @@ test('code-review rounds 2 and 3 authenticate previous sealed archives and refus
     writeRecord({ head: 'c'.repeat(40) }); writeRecord({ base_commit: 'c'.repeat(40) });
     await refused();
     writeRecord();
-    let round4;
-    await assert.rejects(runCodeReview(fixture, { onLaunch(prompt) {
-      round4 = packetFromPrompt(prompt).role_context.review_round; throw new Error('stopped after preparation'); } }), /stopped after preparation/);
-    assert.equal(round4, 4);
+    const prepareRound4 = async () => {
+      let round;
+      await assert.rejects(runCodeReview(fixture, { onLaunch(prompt) {
+        round = packetFromPrompt(prompt).role_context.review_round; throw new Error('stopped after preparation'); } }), /stopped after preparation/);
+      return round;
+    };
+    assert.equal(await prepareRound4(), 4);
+    const mergeBase = fixture.base;
+    fixture.base = git(fixture.root, ['commit-tree', `${mergeBase}^{tree}`, '-p', mergeBase, '-m', 'base moves']);
+    git(fixture.root, ['update-ref', 'refs/remotes/origin/main', fixture.base]);
+    await refused();
+    writeRecord({ base_commit: fixture.base });
+    assert.equal(await prepareRound4(), 4);
+    const store = path.join(stateHome, '.local/state/shipyard/code-review-publications');
+    for (const dir of fs.readdirSync(store)) fs.writeFileSync(path.join(store, dir, '101.extensions.json'), '{');
+    await assert.rejects(runCodeReview(fixture, { onLaunch() { launches++; } }), error => error.code !== 'CODE_REVIEW_ROUND_LIMIT');
     assert.equal(launches, 3);
   } finally { cleanupFixture(fixture); }
 });

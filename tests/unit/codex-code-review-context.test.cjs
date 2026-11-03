@@ -260,6 +260,15 @@ test('rounds two and three admit their exact sealed archives and fourth refuses 
     refused();
     grant();
     assert.equal(f.prepare().prepared.round.round, 4);
+    const mergeBase = f.pr.baseRefOid;
+    f.pr.baseRefOid = git(f.root, ['commit-tree', `${mergeBase}^{tree}`, '-p', mergeBase, '-m', 'base moves']);
+    git(f.root, ['update-ref', 'refs/remotes/origin/main', f.pr.baseRefOid]);
+    refused();
+    grant({ base_commit: f.pr.baseRefOid });
+    assert.equal(f.prepare().prepared.round.round, 4);
+    const store = path.join(home, '.local/state/shipyard/code-review-publications');
+    for (const dir of fs.readdirSync(store)) fs.writeFileSync(path.join(store, dir, `${f.pr.number}.extensions.json`), '{');
+    assert.throws(() => f.prepare(), error => error.code !== 'CODE_REVIEW_ROUND_LIMIT');
   } finally { f.cleanup(); }
 });
 
