@@ -1218,14 +1218,50 @@ if (isMainThread) for (const followup of [false, true])
       process.stdout.write(result.stdout);
     });
 
-async function metadataRegression(helper, runtime) {
+function historicalCollector(file) {
+  const fs = require('node:fs'), assert = require('node:assert/strict');
+  const hash = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  assert.equal(fs.realpathSync(file), file, 'physical historical collector fixture');
+  const stat = fs.lstatSync(file);
+  assert.equal(stat.isFile(), true, 'regular historical collector fixture');
+  assert.ok(stat.size <= 73728, 'bounded historical collector descriptor');
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  let descriptor;
+  try {
+    const opened = fs.fstatSync(fd);
+    assert.equal(opened.dev, stat.dev); assert.equal(opened.ino, stat.ino);
+    assert.ok(opened.size <= 73728);
+    const buffer = Buffer.alloc(73729); let count = 0, size;
+    do { size = fs.readSync(fd, buffer, count, buffer.length - count, null); count += size; }
+    while (size && count < buffer.length);
+    assert.ok(count <= 73728); assert.equal(count, opened.size);
+    for (const observed of [fs.fstatSync(fd), fs.lstatSync(file)])
+      for (const key of ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs']) assert.equal(observed[key], opened[key]);
+    descriptor = JSON.parse(buffer.subarray(0, count).toString('utf8'));
+  } finally { fs.closeSync(fd); }
+  assert.deepEqual(Object.keys(descriptor).sort(), ['schema', 'revision', 'source_path', 'bytes', 'sha256', 'encoding', 'source'].sort());
+  assert.equal(descriptor.schema, 'shipyard.historical-h3-collector-fixture.v1');
+  assert.equal(descriptor.revision, '5ca137ef8a59fa8f30696f1b80cb93c0acc17afb');
+  assert.equal(descriptor.source_path, 'plugins/delivery-pipeline/scripts/codex-code-review-context.cjs');
+  assert.equal(descriptor.bytes, 52719);
+  assert.equal(descriptor.sha256, '1b914f3aaa69aafa4647d325448cd7055b1ee44bbe01b0c44f352483a6f151c2');
+  assert.equal(descriptor.encoding, 'base64');
+  assert.equal(typeof descriptor.source, 'string'); assert.equal(descriptor.source.length, 4 * Math.ceil(52719 / 3));
+  assert.match(descriptor.source, /^[A-Za-z0-9+/]+$/);
+  const source = Buffer.from(descriptor.source, 'base64');
+  assert.equal(source.length, 52719); assert.equal(source.toString('base64'), descriptor.source);
+  assert.equal(hash(source), descriptor.sha256);
+  assert.deepEqual(Buffer.from(source.toString('utf8')), source, 'lossless complete UTF8 source');
+  return source;
+}
+async function metadataRegression(helper, runtime, readHistoricalCollector) {
   const h = require(helper), fs = require('node:fs'), path = require('node:path'), Module = require('node:module'),
     cp = require('node:child_process'), assert = require('node:assert/strict');
   const integration = h.setup('phase53-codex-integration.test.cjs', "test('ordinary Codex caller", 'publicIntegrationFixture, commit');
   const code = h.setup('phase53-code-review.test.cjs', "for (const runtime of ['codex', 'claude']) {", 'setup');
   const architecture = h.setup('phase53-codex-architecture.test.cjs', "test('caller architecture", 'phaseBinding, agent');
   const collectorFile = path.join(h.SCRIPTS, 'codex-code-review-context.cjs');
-  const baselineBytes = cp.execFileSync('git', ['-C', h.ROOT, 'show', '5ca137ef8a59fa8f30696f1b80cb93c0acc17afb:plugins/delivery-pipeline/scripts/codex-code-review-context.cjs']);
+  const baselineBytes = readHistoricalCollector(path.join(path.dirname(helper), 'h3-code-review-context.json'));
   assert.equal(h.hash(baselineBytes), '1b914f3aaa69aafa4647d325448cd7055b1ee44bbe01b0c44f352483a6f151c2');
   const baseline = new Module(collectorFile, module); baseline.filename = collectorFile;
   baseline.paths = Module._nodeModulePaths(path.dirname(collectorFile)); baseline._compile(baselineBytes.toString('utf8'), collectorFile);
@@ -1374,7 +1410,7 @@ if (isMainThread) for (const runtime of ['codex', 'claude'])
     t.after(() => fs.rmSync(home, { recursive: true, force: true }));
     const result = cp.spawnSync(process.execPath, ['-e', '(' + metadataRegression.toString() + ')('
       + JSON.stringify(require.resolve('../fixtures/phase53/semantic-result-helpers.cjs')) + ',' + JSON.stringify(runtime)
-      + ').catch(error => { console.error(error); process.exitCode = 1; })'],
+      + ',(' + historicalCollector.toString() + ')).catch(error => { console.error(error); process.exitCode = 1; })'],
       { env: environment(home), encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
     assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stdout + result.stderr);
     process.stdout.write(result.stdout);
