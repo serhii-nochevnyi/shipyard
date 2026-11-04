@@ -187,8 +187,18 @@ function established(file, rawFailure = '') {
 }
 function recordWindow(f, point) {
   const names = fs.readdirSync(f.original.receipt_store);
-  assert.equal(names.filter(name => name.startsWith('record-')).length, point === 'before_record' ? 0 : 1);
-  assert.equal(names.filter(name => name.startsWith('latest-')).length, ['index', 'ack'].includes(point) ? 1 : 0);
+  assert.equal(names.filter(name => /^record-[a-f0-9]{64}\.json$/.test(name)).length, point === 'before_record' ? 0 : 1);
+  assert.equal(names.filter(name => /^latest-[a-f0-9]{64}\.json$/.test(name)).length, ['index', 'ack'].includes(point) ? 1 : 0);
+  const receipts = require(path.join(scripts, 'dispatch-boundary.cjs')).createDurableRecorder(f.original.receipt_store);
+  const record = receipts.getVerifiedRecord(f.original.dispatch_id);
+  if (point === 'before_record') assert.equal(record, null);
+  else {
+    assert.ok(record);
+    assert.equal(record.dispatch_id, f.original.dispatch_id);
+    assert.equal(record.receipt.dispatch_id, f.original.dispatch_id);
+    assert.equal(record.receipt.runtime_evidence.session_id, f.original.completed.session_id);
+  }
+  assert.deepEqual(receipts.getLatestReceipt('codex', 'ci-fix'), ['index', 'ack'].includes(point) ? record : null);
   assert.equal(operation(f.spec).payload.state === 'acknowledged', point === 'ack');
 }
 function finished(f, consumer = SOURCE) {
@@ -221,7 +231,16 @@ function finished(f, consumer = SOURCE) {
     .filter(row => row.dispatch_id === op.dispatch_id);
   assert.equal(attempts.length, 1);
   const expected = { scope: spec.options.scope, worktree: spec.options.scope.worktree, output: spec.output, stateRoot };
-  fixture.assertCurrent(expected, op.result, path.dirname(consumer));
+  const fixtureNamespace = path.join(spec.signing.directory, 'coverage-' + hash(spec.options.scope.worktree));
+  assert.deepEqual(spec.fixtureEnv, { SHIPYARD_COVERAGE_ROOT: fixtureNamespace });
+  const savedCoverageRoot = process.env.SHIPYARD_COVERAGE_ROOT;
+  try {
+    Object.assign(process.env, spec.fixtureEnv);
+    fixture.assertCurrent(expected, op.result, path.dirname(consumer));
+  } finally {
+    if (savedCoverageRoot === undefined) delete process.env.SHIPYARD_COVERAGE_ROOT;
+    else process.env.SHIPYARD_COVERAGE_ROOT = savedCoverageRoot;
+  }
   if (spec.outcome === 'fixed') {
     const candidate = JSON.parse(fs.readFileSync(path.join(stateRoot, 'candidates', op.result.artifact.candidate_id + '.json'))).payload;
     assert.equal(candidate.run_id, f.original.scope.run_id);
