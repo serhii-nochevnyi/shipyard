@@ -581,6 +581,7 @@ function semanticSource(value, runtime = 'codex') {
   packet.product_sources = [];
   const contents = new Map();
   const sources = new Map();
+  const metadata = new Map();
   for (const change of changes) for (const [relative, revision] of [
     [change.old_path, prepared.mergeBase], [change.new_path, prepared.canonical.head]]) {
     if (relative && !change.binary) sources.set(revision + ':' + relative, { relative, revision });
@@ -588,16 +589,27 @@ function semanticSource(value, runtime = 'codex') {
   for (const { row } of prepared.rows) for (const relative of row.files || []) {
     if (typeof relative !== 'string' || /[*?\[]/.test(relative)) continue;
     const revision = prepared.canonical.head;
-    const listing = git(options, prepared.canonical.worktree, ['ls-tree', '-z', revision, '--', relative]);
-    if (/^100(?:644|755) blob [a-f0-9]{40}\t/.test(listing) && listing.split('\0').filter(Boolean).length === 1)
-      sources.set(revision + ':' + relative, { relative, revision });
+    const key = revision + ':' + relative;
+    if (!metadata.has(key)) {
+      const listing = git(options, prepared.canonical.worktree, ['ls-tree', '-z', revision, '--', relative]);
+      let blob_oid = null;
+      if (/^100(?:644|755) blob /.test(listing)) {
+        const match = /^100(?:644|755) blob ([a-f0-9]{40})\t([^\0]+)\0$/.exec(listing);
+        if (!match || match[0] !== listing || match[2] !== relative)
+          fail('product source listing differs from its exact path', 'STALE_CONTEXT');
+        blob_oid = match[1];
+      }
+      metadata.set(key, blob_oid);
+    }
+    if (metadata.get(key)) sources.set(key, { relative, revision });
   }
   for (const { relative, revision } of sources.values()) {
     if (require('./development-artifacts.cjs').isDevelopmentArtifact(relative)) continue;
     const content = git(options, prepared.canonical.worktree, ['show', revision + ':' + relative]);
     if (!content.includes('\0')) {
       const sha256 = digest(content), bytes = Buffer.byteLength(content);
-      const blob_oid = git(options, prepared.canonical.worktree, ['rev-parse', revision + ':' + relative]).trim();
+      const blob_oid = metadata.get(revision + ':' + relative)
+        || git(options, prepared.canonical.worktree, ['rev-parse', revision + ':' + relative]).trim();
       if (!/^[a-f0-9]{40}$/.test(blob_oid)
           || crypto.createHash('sha1').update('blob ' + bytes + '\0').update(content).digest('hex') !== blob_oid)
         fail('product source blob differs from its complete bytes', 'STALE_CONTEXT');
