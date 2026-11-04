@@ -553,6 +553,22 @@ function assertSemanticRequest(value, scope, request) {
     fail('semantic request differs from its private preparation', 'CODE_REVIEW_CONTEXT_REQUIRED');
 }
 
+function selectProductSources(packet, contents) {
+  const references = packet.product_sources;
+  packet.product_sources = references.map(({ path, revision, sha256, bytes }) =>
+    ({ path, revision, content: contents.get(sha256).content, bytes, sha256 }));
+  if (contents.size === references.length) return;
+  const inlineBytes = Buffer.byteLength(JSON.stringify(packet));
+  const compact = { ...packet, product_sources: references,
+    product_source_format: 'unique-content-references.v1',
+    product_source_contents: [...contents.values()].sort((a, b) => a.sha256.localeCompare(b.sha256)) };
+  if (Buffer.byteLength(JSON.stringify(compact)) < inlineBytes) {
+    packet.product_sources = references;
+    packet.product_source_format = compact.product_source_format;
+    packet.product_source_contents = compact.product_source_contents;
+  }
+}
+
 function semanticSource(value, runtime = 'codex') {
   requirePrepared(value);
   const options = preparedOptions.get(value), prepared = value.prepared;
@@ -563,7 +579,6 @@ function semanticSource(value, runtime = 'codex') {
   const changes = require('./codex-arch-review-context.cjs').focusedChangeInventory(
     packet.role_context.change_metadata.name_status, packet.role_context.change_metadata.numstat);
   packet.product_sources = [];
-  packet.product_source_format = 'unique-content-references.v1';
   const contents = new Map();
   const sources = new Map();
   for (const change of changes) for (const [relative, revision] of [
@@ -590,7 +605,7 @@ function semanticSource(value, runtime = 'codex') {
       packet.product_sources.push({ path: relative, revision, blob_oid, bytes, sha256, content_ref: sha256 });
     }
   }
-  packet.product_source_contents = [...contents.values()].sort((a, b) => a.sha256.localeCompare(b.sha256));
+  selectProductSources(packet, contents);
   const selection = require('./model-policy.cjs').resolveDispatch({ runtime, role: 'code-review', signals: prepared.signals });
   let instructions;
   if (runtime === 'codex') instructions = require('./codex-arch-review-context.cjs').instructionEvidence(
