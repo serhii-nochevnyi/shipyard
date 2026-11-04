@@ -1824,6 +1824,7 @@ function deliveryControlScope(options, scope) {
   if (canonical(saved) !== canonical(control.binding)
       || saved.original_sha256 !== ciOriginalDigest(control.state.operation))
     fail('CI_ORIGINAL_INVALID', 'CI control association differs from its immutable original');
+  assertCompletedCiOwner(control.state);
   const authority = control.controller.authority(control.scope.run_id);
   if (authority !== control.authority) fail('WRITER_FENCED', 'CI control lost its process-local authority');
   require('./run-contract.cjs').assertHostAuthority(authority,
@@ -3039,7 +3040,24 @@ function ciProducerIdentity() {
 
 function ciOriginalDigest(op) {
   return sha256(canonical(Object.fromEntries(['scope', 'selectors', 'dispatch_id', 'preparation', 'predecessor_dispatch_id',
-    'producer', 'resolution', 'completed', 'native_custody', 'output', 'receipt_store', 'recorder_identity'].map(key => [key, op[key]]))));
+    'producer', 'controller_owner', 'resolution', 'completed', 'native_custody', 'output', 'receipt_store', 'recorder_identity'].map(key => [key, op[key]]))));
+}
+
+function assertCompletedCiOwner(state) {
+  const { operation: op, options } = state, pinned = op.controller_owner;
+  const controller = createRunController({ storeDir: path.join(storageDirectory(options, op.scope), 'runs') });
+  const status = controller.status(op.scope.run_id), owner = status?.owner;
+  if (!pinned || !status || canonical(status.scope) !== canonical(pinned.scope)
+      || owner.owner_id !== pinned.owner_id || owner.lease_id !== pinned.lease_id || owner.epoch !== pinned.epoch)
+    fail('WRITER_FENCED', 'original CI controller differs from its authenticated native producer');
+  // @invariant: Native completion and the original controller's factual state remain separate.
+  if (['released', 'failed', 'completed'].includes(owner.status)) return;
+  if (!['active', 'expired'].includes(owner.status) || pinned.hostname !== os.hostname()
+      || !Number.isSafeInteger(pinned.pid) || pinned.pid <= 0)
+    fail('WRITER_FENCED', 'original CI producer has no released lease or provably dead local owner');
+  try { process.kill(pinned.pid, 0); }
+  catch (error) { if (error.code === 'ESRCH') return; }
+  fail('WRITER_FENCED', 'original CI producer is still live or its liveness is unknown');
 }
 
 async function authenticateCompletedCi(state, options) {
@@ -3093,14 +3111,12 @@ async function recoverCompletedCi(state, scope, options, request, stdout) {
   let controller, controlScope;
   try {
     await authenticateCompletedCi(state, options);
-    const originalController = createRunController({ storeDir: path.join(storageDirectory(options, scope), 'runs') });
-    const originalStatus = originalController.status(scope.run_id);
-    if (!originalStatus || !['failed', 'completed'].includes(originalStatus.state))
-      fail('WRITER_FENCED', 'original CI controller must be terminal before fresh control admission');
+    assertCompletedCiOwner(state);
     controlScope = Object.freeze({ ...scope, run_id: 'ci-original-recovery-' + crypto.randomUUID() });
     controller = createRunController({ storeDir: path.join(storageDirectory(options, controlScope), 'runs') });
     const resolution = state.operation.resolution;
-    controller.begin(createRunScope({ ...controlScope, repository_id: p.repository, owner_id: controller.owner_id,
+    controller.begin(createRunScope({ ...controlScope,
+      repository: { repository_id: p.repository, worktree: scope.worktree }, owner_id: controller.owner_id,
       dispatch: { dispatch_id: 'recovery-' + crypto.randomUUID(), role: 'ci-fix', model: resolution.model,
         effort: resolution.effort, policy_version: resolution.policy_version, policy_hash: resolution.policy_hash } }));
     const owner = controller.status(controlScope.run_id).owner;
@@ -3174,6 +3190,9 @@ function validateOriginalCiOperation(handle, stage, facts) {
     fail('CI_ORIGINAL_INVALID', 'original CI recorder directory or authority key changed');
   if (stage === 'start') {
     if (op.state !== 'prepared') fail('CI_ORIGINAL_UNKNOWN', 'original CI already started; reconcile before any launch');
+    const status = state.options.controller.status(op.scope.run_id);
+    op.controller_owner = { scope: status.scope, owner_id: status.owner.owner_id,
+      lease_id: status.owner.lease_id, epoch: status.owner.epoch, pid: process.pid, hostname: os.hostname() };
     op.recorder_identity = ciRecorderIdentity(facts.store);
     op.receipt_store = fs.realpathSync(facts.store); op.resolution = facts.resolution; op.state = 'started';
     writeCiOperation(state);
@@ -4600,7 +4619,12 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     fail('INVALID_INPUT', 'candidate id must be a 64-character hex digest');
   }
   const liveScope = normalizeScope({ ...liveScopeInput, runtime: 'codex', provider: 'openai' });
-  options = { ...options, [REPAIR_OWNER]: repairOwnerRenewal(options.controller, liveScope, options.writerSession) };
+  const renewOwner = repairOwnerRenewal(options.controller, liveScope, options.writerSession);
+  options = { ...options, [REPAIR_OWNER]: options[CI_CONTROL] ? () => {
+    assertDeliveryOwner(options, options.scope);
+    renewOwner?.();
+    assertDeliveryOwner(options, options.scope);
+  } : renewOwner };
   options[REPAIR_OWNER]?.();
   const worktree = fs.realpathSync(liveScope.worktree);
   const stateRoot = hostStateRoot(options, { worktree });
@@ -4635,7 +4659,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     { ttlMs: LOCK_TTL_MS, waitMs: 0, label: 'resume-finalization:' + liveScope.run_id });
   if (!lock) throw candidateRefusal('RECOVERY_IN_PROGRESS', 'another recovery holds candidate ' + candidateId, candidate);
   try {
-    options.controller?.assertOwner(liveScope.run_id);
+    assertDeliveryOwner(options, options[CI_CONTROL] ? options.scope : liveScope);
     const finalized = readSealed(finalizationFile(stateRoot, candidateId), key);
     if (finalized) {
       const changed = git(worktree, ['diff', '--name-only', '--no-renames', candidate.expected_head, finalized.commit])
@@ -4728,7 +4752,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
       throw candidateRefusal('IDENTITY_CHANGED', 'candidate ' + candidateId + ' is stale; invalidated checks: '
         + invalidated.join(', '), candidate, invalidated);
     }
-    options.controller?.assertOwner(liveScope.run_id);
+    assertDeliveryOwner(options, options[CI_CONTROL] ? options.scope : liveScope);
     const artifact = finalizeCandidate(candidate, stateRoot, key, { ...options, recorder });
     return Object.freeze({ schema: SCHEMA, status: 'committed', resumed: true, idempotent: false,
       candidate_id: candidateId, artifact, ...(['ci-fix', 'review-fix'].includes(candidate.expected_role)
@@ -4760,6 +4784,7 @@ function createCodexDeliveryHost(options = {}) {
   const stateRoot = hostStateRoot(options, scope);
   const runtimeHost = options.host || createCodexRuntimeHost(handoffLaunchPreparation(options, {
     scope,
+    run_id: deliveryControlScope(options, scope).run_id,
     agentDir: options.agentDir, agentManifest: options.agentManifest,
     controller: options.controller,
     capabilities: options.capabilities,

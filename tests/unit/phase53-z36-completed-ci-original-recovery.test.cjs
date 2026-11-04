@@ -19,7 +19,7 @@ if (process.argv[2] === '--fixture-child') {
     const exports = load.call(this, name, ...args);
     if (name.endsWith('/codex-delivery-host.cjs') || name === './codex-delivery-host.cjs')
       return { ...exports, validateOriginalCiOperation(...input) {
-        const result = exports.validateOriginalCiOperation(...input); globalThis.t36AfterTransition?.(input[1]); return result;
+        const result = exports.validateOriginalCiOperation(...input); globalThis.t36AfterTransition?.(input[1], input[2]); return result;
       } };
     return name.endsWith('/role-artifact.cjs') || name === './role-artifact.cjs'
       ? { ...exports, sealRole(...input) { const sealed = exports.sealRole(...input); globalThis.t36AfterSeal?.(); return sealed; } }
@@ -46,11 +46,17 @@ async function child(specFile, action, point, consumer) {
   if (spec.fixtureEnv) Object.assign(process.env, spec.fixtureEnv);
   const events = specFile + '.events';
   const event = (kind, data = {}) => fs.appendFileSync(events, JSON.stringify({ kind, pid: process.pid, ...data }) + '\n');
+  process.on('exit', code => {
+    const usage = process.resourceUsage();
+    fs.appendFileSync(specFile + '.resources', JSON.stringify({ pid: process.pid, code,
+      user_cpu_us: usage.userCPUTime, system_cpu_us: usage.systemCPUTime }) + '\n');
+  });
   const mode = point.split(':')[0];
   if (['exit', 'hold'].includes(mode)) point = point.slice(mode.length + 1);
   let options;
   if (action === 'establish') {
     f = fixture.ciFixture(spec.signing, { producerScripts: path.dirname(consumer) });
+    delete f.options.verificationAllowList;
     f.control.source = spec.outcome === 'fixed'; f.output.status = spec.outcome;
     const spawn = f.options.spawn;
     f.options.spawn = (...args) => { event('native'); return spawn(...args); };
@@ -107,7 +113,9 @@ async function child(specFile, action, point, consumer) {
     throw error;
   }
   globalThis.t36AfterSeal = () => { if (point === 'seal') interrupt(); };
-  globalThis.t36AfterTransition = stage => { if (point === 'before_record' && stage === 'pre-record') interrupt(); };
+  globalThis.t36AfterTransition = (stage, facts) => {
+    if (point === 'before_record' && (stage === 'pre-record' || stage === 'recover' && !facts.record)) interrupt();
+  };
   globalThis.t36BeforeCommand = () => {
     if (point !== 'attempt' || injected) return;
     const directory = path.join(options.storageRoot, 'finalization', hash(options.scope.worktree), 'ci-repair-attempts');
@@ -137,14 +145,23 @@ async function child(specFile, action, point, consumer) {
     const result = await require(consumer).runCli(['--args-file', spec.requestFile], { write() {} }, options);
     save(); event('result', { result });
   } catch (error) {
-    save(); event('error', { code: error.code, message: error.message });
+    save();
+    const op = operation(spec).payload;
+    const storeDir = path.join(spec.options.storageRoot, hash(op.scope.run_id + '\0' + op.scope.worktree), 'runs');
+    event('original-controller', { status: require(path.join(path.dirname(consumer), 'run-controller.cjs'))
+      .createRunController({ storeDir }).status(op.scope.run_id) });
+    event('error', { code: error.code, message: error.message });
     process.stderr.write(error.stack + '\n'); process.exitCode = 1;
   } finally { fs.renameSync = rename; fs.linkSync = link; }
 }
 
 function invoke(specFile, action = 'retry', point = '', consumer = SOURCE) {
-  return spawnSync(process.execPath, [__filename, '--fixture-child', specFile, action, point, consumer],
+  const started = process.hrtime.bigint();
+  const result = spawnSync(process.execPath, [__filename, '--fixture-child', specFile, action, point, consumer],
     { encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+  fs.appendFileSync(specFile + '.invocations', JSON.stringify({ action, point, pid: result.pid,
+    status: result.status, signal: result.signal, wall_ms: Number(process.hrtime.bigint() - started) / 1e6 }) + '\n');
+  return result;
 }
 function events(file) {
   return fs.readFileSync(file + '.events', 'utf8').trim().split('\n').map(JSON.parse);
@@ -153,19 +170,33 @@ function establish(signing, outcome, point = 'before_record', consumer = SOURCE)
   const file = path.join(signing.directory, 'cli-' + require('node:crypto').randomUUID() + '.json');
   fs.writeFileSync(file, JSON.stringify({ signing: { directory: signing.directory, signer: signing.signer }, outcome }));
   const failed = invoke(file, 'establish', point, consumer);
-  assert.equal(failed.status, 1, failed.stderr);
-  assert.ok(events(file).some(row => row.kind === 'interruption' && row.point === point), failed.stderr);
+  assert.equal(failed.status, point.startsWith('exit:') ? 86 : 1, failed.stderr);
+  assert.ok(events(file).some(row => row.kind === 'interruption' && row.point === point.replace(/^exit:/, '')), failed.stderr);
+  return established(file, failed.stderr);
+}
+function established(file, rawFailure = '') {
   const spec = JSON.parse(fs.readFileSync(file)), original = operation(spec).payload;
   assert.ok(original.completed?.session_id); assert.equal(original.candidate_result, undefined);
   const runStore = path.join(spec.options.storageRoot, hash(original.scope.run_id + '\0' + original.scope.worktree), 'runs/runs.json');
-  return { file, spec, original, runStore, originalRunBytes: fs.readFileSync(runStore), rawFailure: failed.stderr };
+  const originalStatus = require(path.join(scripts, 'run-controller.cjs')).createRunController({ storeDir: path.dirname(runStore) })
+    .status(original.scope.run_id);
+  assert.equal(originalStatus.owner.owner_id, original.controller_owner.owner_id);
+  assert.equal(originalStatus.owner.lease_id, original.controller_owner.lease_id);
+  assert.equal(originalStatus.owner.epoch, original.controller_owner.epoch);
+  return { file, spec, original, runStore, originalStatus, originalRunBytes: fs.readFileSync(runStore), rawFailure };
+}
+function recordWindow(f, point) {
+  const names = fs.readdirSync(f.original.receipt_store);
+  assert.equal(names.filter(name => name.startsWith('record-')).length, point === 'before_record' ? 0 : 1);
+  assert.equal(names.filter(name => name.startsWith('latest-')).length, ['index', 'ack'].includes(point) ? 1 : 0);
+  assert.equal(operation(f.spec).payload.state === 'acknowledged', point === 'ack');
 }
 function finished(f, consumer = SOURCE) {
   const result = invoke(f.file, 'retry', '', consumer);
   assert.equal(result.status, 0, result.stderr);
   const spec = JSON.parse(fs.readFileSync(f.file)), op = operation(spec).payload;
   assert.equal(op.state, 'finished');
-  for (const key of ['scope', 'dispatch_id', 'resolution', 'completed', 'native_custody', 'preparation', 'output', 'receipt_store', 'recorder_identity'])
+  for (const key of ['scope', 'dispatch_id', 'controller_owner', 'resolution', 'completed', 'native_custody', 'preparation', 'output', 'receipt_store', 'recorder_identity'])
     assert.deepEqual(op[key], f.original[key], 'immutable original ' + key);
   assert.equal(op.result.receipt.dispatch_id, f.original.dispatch_id);
   assert.equal(op.result.receipt.runtime_evidence.session_id, f.original.completed.session_id);
@@ -180,8 +211,9 @@ function finished(f, consumer = SOURCE) {
   }
   const originalStore = path.join(spec.options.storageRoot, hash(f.original.scope.run_id + '\0' + f.original.scope.worktree), 'runs');
   const originalController = require(path.join(scripts, 'run-controller.cjs')).createRunController({ storeDir: originalStore });
-  assert.equal(originalController.status(f.original.scope.run_id).state, 'failed');
-  assert.deepEqual(fs.readFileSync(f.runStore), f.originalRunBytes, 'original terminal controller remains byte-identical');
+  assert.deepEqual(originalController.status(f.original.scope.run_id), f.originalStatus,
+    'original factual controller status and owner remain unchanged');
+  assert.deepEqual(fs.readFileSync(f.runStore), f.originalRunBytes, 'original controller remains byte-identical');
   const receipts = require(path.join(scripts, 'dispatch-boundary.cjs')).createDurableRecorder(op.receipt_store);
   assert.equal(receipts.getLatestReceipt('codex', 'ci-fix').dispatch_id, f.original.dispatch_id);
   assert.deepEqual(receipts.getVerifiedRecord(op.dispatch_id).receipt, op.result.receipt);
@@ -206,6 +238,15 @@ function finished(f, consumer = SOURCE) {
   assert.equal(count('native'), 1);
   for (const kind of ['HOST', 'sign', 'push']) assert.equal(count(kind), spec.outcome === 'fixed' ? 1 : 0, kind);
   assert.equal(git(spec.options.scope.worktree, 'rev-list', '--count', f.original.preparation.commit.expectedHead + '..HEAD'), spec.outcome === 'fixed' ? '1' : '0');
+  const readRows = suffix => fs.readFileSync(f.file + suffix, 'utf8').trim().split('\n').map(JSON.parse);
+  const resources = readRows('.resources'), invocations = readRows('.invocations');
+  process.stdout.write('# T36-recovery ' + JSON.stringify({ outcome: spec.outcome,
+    original_state: f.originalStatus.state, original_lease: f.originalStatus.owner.status,
+    controls: controls.length, interruptions: rows.filter(row => row.kind === 'interruption').map(row => row.point),
+    effects: Object.fromEntries(['native', 'HOST', 'sign', 'push'].map(kind => [kind, count(kind)])),
+    receipt_dispatch: op.dispatch_id, retained_attempts: attempts.length,
+    invoked_wall_ms: invocations.reduce((sum, row) => sum + row.wall_ms, 0),
+    resources, invocations, killed_process_cpu: 'unknown' }) + '\n');
   return op;
 }
 
@@ -219,7 +260,17 @@ if (process.argv[2] === '--fixture-child') {
   for (const outcome of ['no-op', 'fixed']) for (const point of ['record', 'index', 'ack'])
     test('T36-crash fresh CLI ' + outcome + ' HTTP502 at ' + point, bounded, () => {
       const signing = fixture.signingFixture();
-      try { finished(establish(signing, outcome, point)); } finally { signing.close(); }
+      try { const f = establish(signing, outcome, point); recordWindow(f, point); finished(f); } finally { signing.close(); }
+    });
+  for (const outcome of ['no-op', 'fixed']) for (const point of ['before_record', 'record', 'index', 'ack'])
+    test('T36-crash original producer process exit ' + outcome + ' at ' + point, bounded, () => {
+      const signing = fixture.signingFixture();
+      try {
+        const f = establish(signing, outcome, 'exit:' + point);
+        recordWindow(f, point);
+        assert.equal(f.originalStatus.owner.status, 'active', 'real process exit retains the original lease');
+        finished(f);
+      } finally { signing.close(); }
     });
   for (const outcome of ['no-op', 'fixed']) for (const point of ['before_record', 'record', 'index', 'ack'])
     test('T36-crash fresh recovery process exit ' + outcome + ' at ' + point, bounded, () => {
@@ -227,6 +278,7 @@ if (process.argv[2] === '--fixture-child') {
       try {
         const f = establish(signing, outcome), failed = invoke(f.file, 'retry', 'exit:' + point);
         assert.equal(failed.status, 86, failed.stderr);
+        recordWindow(f, point);
         finished(f);
       } finally { signing.close(); }
     });
@@ -274,6 +326,14 @@ if (process.argv[2] === '--fixture-child') {
     } },
     signer: { code: 'SIGNER_UNAVAILABLE', change(f) { git(f.spec.options.scope.worktree, 'config', 'user.signingkey', '0'.repeat(40)); } },
     branch: { code: 'CI_SUBJECT_CHANGED', change(f) { git(f.spec.options.scope.worktree, 'branch', '-m', 'foreign-branch'); } },
+    head: { code: 'CI_SUBJECT_CHANGED', change(f) {
+      git(f.spec.options.scope.worktree, 'commit', '--allow-empty', '-qm', 'foreign fixture head');
+    } },
+    base: { code: 'CI_SUBJECT_CHANGED', change(f) {
+      const root = f.spec.options.scope.worktree;
+      const commit = git(root, 'commit-tree', git(root, 'rev-parse', 'main^{tree}'), '-p', f.original.preparation.commit.expectedBase, '-m', 'foreign fixture base');
+      git(root, 'update-ref', 'refs/heads/main', commit);
+    } },
   };
   for (const [name, mutation] of Object.entries(mutations)) test('T36-refusal authentic completed CLI ' + name, bounded, () => {
     const signing = fixture.signingFixture();
@@ -331,6 +391,44 @@ if (process.argv[2] === '--fixture-child') {
       finished(f);
     } finally { holder?.kill('SIGKILL'); signing.close(); }
   });
+  test('T36-refusal live original producer and dead original takeover preserve factual state', bounded, async () => {
+    const signing = fixture.signingFixture(); let holder;
+    try {
+      const file = path.join(signing.directory, 'live-original.json');
+      fs.writeFileSync(file, JSON.stringify({ signing: { directory: signing.directory, signer: signing.signer }, outcome: 'fixed' }));
+      holder = spawn(process.execPath, [__filename, '--fixture-child', file, 'establish', 'hold:before_record', SOURCE], { stdio: 'pipe' });
+      let stderr = ''; holder.stderr.on('data', data => { stderr += data; });
+      const ended = new Promise(resolve => holder.on('close', (code, signal) => resolve({ code, signal })));
+      const deadline = Date.now() + 30000;
+      while (!fs.existsSync(file + '.events') || !events(file).some(row => row.kind === 'interruption')) {
+        assert.ok(Date.now() < deadline, 'actual original CLI reached native completion: ' + stderr);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      const f = established(file);
+      assert.equal(f.originalStatus.owner.status, 'active');
+      const refused = invoke(file); assert.equal(refused.status, 1, refused.stderr);
+      assert.equal(events(file).at(-1).code, 'WRITER_FENCED', refused.stderr);
+      assert.deepEqual(fs.readFileSync(f.runStore), f.originalRunBytes);
+      holder.kill('SIGKILL'); assert.equal((await ended).signal, 'SIGKILL'); holder = null;
+      finished(f);
+    } finally { holder?.kill('SIGKILL'); signing.close(); }
+  });
+  test('T36-refusal foreign replacement controller lease cannot acquire original recovery', bounded, () => {
+    const signing = fixture.signingFixture();
+    try {
+      const f = establish(signing, 'fixed');
+      assert.equal(f.originalStatus.owner.status, 'released');
+      const controller = require(path.join(scripts, 'run-controller.cjs')).createRunController({ storeDir: path.dirname(f.runStore) });
+      controller.begin(controller.store.get(f.original.scope.run_id).run);
+      const before = fs.readFileSync(f.runStore), failed = invoke(f.file);
+      assert.equal(failed.status, 1, failed.stderr);
+      assert.equal(events(f.file).at(-1).code, 'WRITER_FENCED', failed.stderr);
+      assert.deepEqual(fs.readFileSync(f.runStore), before);
+      assert.equal(events(f.file).filter(row => ['HOST', 'sign', 'push'].includes(row.kind)).length, 0);
+      assert.equal(events(f.file).filter(row => row.kind === 'native').length, 1);
+      controller.release(f.original.scope.run_id);
+    } finally { signing.close(); }
+  });
   test('T36-refusal unchanged terminal runs, default TTL and stale controller fences', bounded, () => {
     const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't36-fences-')));
     try {
@@ -356,6 +454,77 @@ if (process.argv[2] === '--fixture-child') {
       contender.assertOwner(fresh.run_id); contender.fail(fresh.run_id, { reason: 'fixture control complete' });
       assert.equal(first.status(run.run_id).state, 'failed');
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+  test('T36-refusal private owner guard checks actual controller leases and dead processes', bounded, () => {
+    const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't36-owner-')));
+    const savedHome = process.env.HOME;
+    process.env.HOME = directory;
+    try {
+      const Module = require('node:module'), loaded = new Module(SOURCE, module);
+      loaded.filename = SOURCE; loaded.paths = Module._nodeModulePaths(path.dirname(SOURCE));
+      loaded._compile(fs.readFileSync(SOURCE, 'utf8') + '\nmodule.exports = { ownerGuard: assertCompletedCiOwner };', SOURCE);
+      const { createRunController } = require(path.join(scripts, 'run-controller.cjs'));
+      const { createRunScope } = require(path.join(scripts, 'run-scope.cjs'));
+      const worktree = path.join(directory, 'worktree'), storageRoot = path.join(directory, 'host-state');
+      fs.mkdirSync(worktree);
+      const scope = { run_id: 'original-owner', repository_id: 'fixture/repository', worktree,
+        phase: 53, ticket: 'T-53-36', runtime: 'codex', provider: 'openai' };
+      const storeDir = path.join(storageRoot, hash(scope.run_id + '\0' + worktree), 'runs');
+      const controller = createRunController({ storeDir });
+      controller.begin(createRunScope({ ...scope, owner_id: controller.owner_id,
+        dispatch: { dispatch_id: 'original-dispatch', role: 'ci-fix', model: 'gpt-6.1-sol', effort: 'low' } }));
+      const status = controller.status(scope.run_id);
+      const pinned = { scope: status.scope, owner_id: status.owner.owner_id, lease_id: status.owner.lease_id,
+        epoch: status.owner.epoch, pid: process.pid, hostname: os.hostname() };
+      const state = { operation: { scope, controller_owner: pinned }, options: { storageRoot } };
+      assert.throws(() => loaded.exports.ownerGuard(state), { code: 'WRITER_FENCED' });
+      controller.release(scope.run_id);
+      const originalBytes = fs.readFileSync(path.join(storeDir, 'runs.json'));
+      loaded.exports.ownerGuard(state);
+      assert.deepEqual(fs.readFileSync(path.join(storeDir, 'runs.json')), originalBytes);
+      const recoveryScope = { ...scope, run_id: 'fresh-runtime-control' };
+      const recovery = createRunController({ storeDir: path.join(storageRoot, hash(recoveryScope.run_id + '\0' + worktree), 'runs') });
+      recovery.begin(createRunScope({ ...recoveryScope, owner_id: recovery.owner_id,
+        dispatch: { dispatch_id: 'recovery-dispatch', role: 'ci-fix', model: 'gpt-6.1-sol', effort: 'low' } }));
+      const runtimeOptions = { scope, controller: recovery, probe: { status: 'available', executable: 'fixture',
+        capabilities: { supportedModels: ['gpt-6.1-sol'], supportedEfforts: ['low'] } },
+      recorderDir: path.join(storageRoot, 'receipts'), env: { CODEX_HOME: path.join(directory, 'native') },
+      spawn() { assert.fail('constructing recovery must never launch native work'); } };
+      const runtime = require(path.join(scripts, 'codex-runtime-host.cjs'));
+      assert.throws(() => runtime.createCodexRuntimeHost(runtimeOptions), { code: 'RUN_NOT_FOUND' });
+      const host = runtime.createCodexRuntimeHost({ ...runtimeOptions, run_id: recoveryScope.run_id });
+      assert.equal(host.scope.run_id, scope.run_id);
+      assert.equal(host.run_id, recoveryScope.run_id);
+      recovery.release(recoveryScope.run_id);
+      assert.deepEqual(fs.readFileSync(path.join(storeDir, 'runs.json')), originalBytes);
+      const foreign = createRunController({ storeDir });
+      foreign.begin(controller.store.get(scope.run_id).run);
+      assert.throws(() => loaded.exports.ownerGuard(state), { code: 'WRITER_FENCED' });
+      foreign.release(scope.run_id);
+
+      const file = path.join(directory, 'dead-owner.json');
+      const child = spawnSync(process.execPath, ['-e', `
+        const fs = require('node:fs'), os = require('node:os');
+        const scope = JSON.parse(process.argv[1]);
+        const controller = require(process.argv[2]).createRunController({ storeDir: process.argv[3] });
+        controller.begin(require(process.argv[4]).createRunScope({ ...scope, owner_id: controller.owner_id,
+          dispatch: { dispatch_id: 'original-dispatch', role: 'ci-fix', model: 'gpt-6.1-sol', effort: 'low' } }));
+        const status = controller.status(scope.run_id);
+        fs.writeFileSync(process.argv[5], JSON.stringify({ scope: status.scope, owner_id: status.owner.owner_id,
+          lease_id: status.owner.lease_id, epoch: status.owner.epoch, pid: process.pid, hostname: os.hostname() }));
+      `, JSON.stringify(scope), path.join(scripts, 'run-controller.cjs'), storeDir, path.join(scripts, 'run-scope.cjs'), file],
+      { encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024 });
+      assert.equal(child.status, 0, child.stderr);
+      state.operation.controller_owner = JSON.parse(fs.readFileSync(file));
+      const deadBytes = fs.readFileSync(path.join(storeDir, 'runs.json'));
+      loaded.exports.ownerGuard(state);
+      assert.deepEqual(fs.readFileSync(path.join(storeDir, 'runs.json')), deadBytes);
+      state.operation.controller_owner.hostname += '-foreign';
+      assert.throws(() => loaded.exports.ownerGuard(state), { code: 'WRITER_FENCED' });
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
   test('T36-package complete whole-builder inventory, modes, bytes and both identities', bounded, () => {
     const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't36-package-')));
