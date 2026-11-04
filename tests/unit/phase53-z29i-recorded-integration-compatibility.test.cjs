@@ -914,14 +914,57 @@ const materialRetentionDeltas = [
   }
 ];
 
-function originalGitReaderSource(source = fs.readFileSync(path.join(scripts, 'role-artifact.cjs'), 'utf8')) {
-  let original = source;
-  for (const { before, after } of [...materialRetentionDeltas, ...gitReaderDeltas]) {
-    assert.equal(original.split(after).length - 1, 1, 'only the exact private Git reader seam may be inverted');
-    original = original.replace(after, before);
+function loadPinnedGitReaderSource(descriptor) {
+  if (descriptor === undefined) {
+    const file = path.join(__dirname, '../fixtures/phase53/pre-batch-git-reader-role-artifact.json');
+    const stat = fs.lstatSync(file);
+    assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size === 201023, 'bounded pinned oracle descriptor');
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    let raw;
+    try {
+      const opened = fs.fstatSync(fd); assert.equal(opened.isFile(), true);
+      for (const key of ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs']) assert.equal(opened[key], stat[key]);
+      const bounded = Buffer.alloc(201024); let count = 0, size;
+      do { size = fs.readSync(fd, bounded, count, bounded.length - count, null); count += size; }
+      while (size && count < bounded.length);
+      assert.equal(count, 201023); raw = bounded.subarray(0, count);
+      const after = fs.lstatSync(file), finished = fs.fstatSync(fd);
+      for (const observed of [after, finished]) for (const key of ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'])
+        assert.equal(observed[key], opened[key]);
+    } finally { fs.closeSync(fd); }
+    assert.equal(raw.length, 201023);
+    assert.equal(hash(raw), '82187413d397d34d96664d9021b8331c793e0b53471b489f6526196b6d6cb746');
+    descriptor = JSON.parse(raw.toString('utf8'));
   }
-  assert.equal(hash(original), '7b8e6c9fde7b4b5f505c0149d651caca6730dfa3cad236e56588d42797d78f5e');
-  return original;
+  assert.ok(descriptor && typeof descriptor === 'object' && !Array.isArray(descriptor));
+  assert.deepEqual(Object.keys(descriptor).sort(), ['schema', 'source_bytes', 'source_sha256', 'encoding',
+    'compression', 'compressed_bytes', 'compressed_sha256', 'data'].sort(), 'closed pinned oracle descriptor');
+  const expected = { schema: 'shipyard.pre-batch-git-reader-fixture.v1', encoding: 'base64', compression: 'gzip',
+    source_bytes: 719718, source_sha256: '7b8e6c9fde7b4b5f505c0149d651caca6730dfa3cad236e56588d42797d78f5e',
+    compressed_bytes: 150523, compressed_sha256: '7132f5c8aff8bf68f1378a133291a4837e793456a28762fbe033e19bc0fc2430' };
+  for (const [key, value] of Object.entries(expected)) assert.equal(descriptor[key], value, 'pinned oracle ' + key);
+  for (const key of ['source_bytes', 'compressed_bytes']) assert.ok(Number.isSafeInteger(descriptor[key]));
+  assert.equal(typeof descriptor.data, 'string');
+  assert.equal(descriptor.data.length, 4 * Math.ceil(expected.compressed_bytes / 3));
+  assert.match(descriptor.data, /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
+  const compressed = Buffer.from(descriptor.data, 'base64');
+  assert.equal(compressed.toString('base64'), descriptor.data, 'canonical oracle base64');
+  assert.equal(compressed.length, expected.compressed_bytes);
+  assert.equal(hash(compressed), expected.compressed_sha256);
+  const raw = require('node:zlib').gunzipSync(compressed, { maxOutputLength: expected.source_bytes });
+  assert.equal(raw.length, expected.source_bytes); assert.equal(hash(raw), expected.source_sha256);
+  const source = raw.toString('utf8'); assert.deepEqual(Buffer.from(source), raw, 'complete UTF-8 oracle source');
+  new (require('node:vm').Script)(source, { filename: 'pinned-pre-batch-role-artifact.cjs' });
+  return source;
+}
+
+function originalGitReaderSource(source = fs.readFileSync(path.join(scripts, 'role-artifact.cjs'), 'utf8')) {
+  for (const { after } of [...materialRetentionDeltas, ...gitReaderDeltas])
+    assert.equal(source.split(after).length - 1, 1, 'only the exact private Git reader seam may be inverted');
+  const guard = "  if (rawBytes > maximumBytes) fail('CONTEXT_OVER_BOUND', 'complete impact packet exceeds its bound: raw_lineage_bytes observed ' + rawBytes\n"
+    + "    + ', required at most ' + maximumBytes);";
+  assert.equal(source.split(guard).length - 1, 1, 'complete impact packet retains its original bound guard');
+  return loadPinnedGitReaderSource();
 }
 
 function isolatedImpactReader(source, exec) {
@@ -1010,10 +1053,11 @@ function gitBatchBoundary(bodies, mutate = (raw) => raw) {
 }
 
 function registerTests(test) {
-  test('known-parent Git oracle rejects unrelated edits, missing deltas and duplicate seams', () => {
+  test('known-parent Git oracle accepts unrelated edits and rejects missing deltas and duplicate seams', () => {
     originalGitReaderSource();
     const current = fs.readFileSync(path.join(scripts, 'role-artifact.cjs'), 'utf8');
-    for (const changed of [current + '\n', current.replace(gitReaderDeltas[0].after, ''),
+    assert.equal(originalGitReaderSource(current + '\n'), originalGitReaderSource());
+    for (const changed of [current.replace(gitReaderDeltas[0].after, ''),
       current + gitReaderDeltas[0].after, current.replace("'complete impact packet exceeds its bound: raw_lineage_bytes observed '", "'changed bound '")])
       assert.throws(() => originalGitReaderSource(changed));
   });
