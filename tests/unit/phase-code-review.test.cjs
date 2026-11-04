@@ -255,51 +255,6 @@ function currentBinding(f) {
   return target.phaseBinding({ graph: f.graph, state: f.state, phase: 52, repository: target.repositoryIdentity(f.root),
     branch: f.branch, pr: 52, head: f.live().headRefOid, base: f.base });
 }
-test('status grants round 4 only for a valid operator record and ignores foreign records', () => {
-  const f = fixture(null);
-  try {
-    const heads = [];
-    for (let round = 1; round <= 3; round++) {
-      const binding = f.advance(round);
-      artifact.sealJudgment(artifactInput(f, binding, raw(true, [blocker]), round, heads.at(-1) || null));
-      heads.push(f.live().headRefOid);
-    }
-    f.advance(4);
-    const head = f.live().headRefOid, other = 'c'.repeat(40);
-    const mode = flow.resolveCodeReviewMode({ graphDir: f.graphDir, worktree: f.root });
-    const write = (pr, overrides = {}) => flow.appendExtension({ repository: target.repositoryIdentity(f.root), repo: null, pr,
-      worktree: f.root, mode }, { head, base_commit: f.base, operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass', ...overrides });
-    const limited = () => { const status = flow.status(f.input());
-      assert.deepEqual([status.state, status.round, status.round_cap, status.round_limit], ['limit', null, 3, 3]); };
-    limited();
-    write(52, { head: other }); write(52, { base_commit: other }); write(53);
-    limited();
-    write(52);
-    const granted = flow.status(f.input());
-    assert.deepEqual([granted.state, granted.round, granted.round_cap, granted.round_limit, granted.rounds_used], ['owed', 4, 3, 4, 3]);
-    const store = path.join(home, '.local/state/shipyard/code-review-publications');
-    for (const dir of fs.readdirSync(store)) fs.writeFileSync(path.join(store, dir, '52.extensions.json'), '{');
-    assert.throws(() => flow.status(f.input()), /JSON/);
-  } finally { f.cleanup(); }
-});
-
-test('an owed extended round is a delta from the last counted review, bound to its record', () => {
-  const f = fixture(null);
-  try {
-    const heads = [];
-    for (let round = 1; round <= 3; round++) {
-      artifact.sealJudgment(artifactInput(f, f.advance(round), raw(true, [blocker]), round, heads.at(-1) || null));
-      heads.push(f.live().headRefOid);
-    }
-    f.advance(4);
-    flow.appendExtension({ repository: target.repositoryIdentity(f.root), repo: null, pr: 52, worktree: f.root,
-      mode: flow.resolveCodeReviewMode({ graphDir: f.graphDir, worktree: f.root }) }, { head: f.live().headRefOid,
-      base_commit: f.base, operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass' });
-    const owed = flow.status(f.input());
-    assert.deepEqual([owed.state, owed.round, owed.scope, owed.round_limit, owed.rounds_used], ['owed', 4, 'delta', 4, 3]);
-  } finally { f.cleanup(); }
-});
-
 const stateFiles = () => { try { return fs.readdirSync(path.join(home, '.local/state/shipyard'), { recursive: true }).sort(); } catch { return []; } };
 const extendInput = (f, patch = {}) => ({ ...f.input(), reason: 'fixes pushed for the findings', confirm: 'extend-review-round', ...patch });
 function atLimit(f, push = true) {
@@ -675,8 +630,214 @@ test('extend run by concurrent processes records one round once', async () => {
   } finally { f.cleanup(); cli.cleanup(); }
 });
 
-function artifactInput(f, binding, result, round = 1, priorHead = null) {
-  return retainPlanningInput(f, f.inputArtifact(binding, round, priorHead, result));
+const pusher = (f, count = 3) => () => f.advance(++count);
+const recordWrite = (f, pr, patch = {}) => flow.appendExtension({ repository: target.repositoryIdentity(f.root), repo: null, pr, worktree: f.root,
+  mode: flow.resolveCodeReviewMode({ graphDir: f.graphDir, worktree: f.root }) }, { head: f.live().headRefOid, base_commit: f.base,
+  operator: 'Ada', created_at: new Date().toISOString(), reason: 'one more pass', ...patch });
+function grant(f, live = f.live()) {
+  const options = { ...f.options, getPullRequest: () => live };
+  assert.equal(flow.extend(extendInput(f, { live }), options).recorded, 'created');
+  const record = readRecords(f).find(row => row.head === live.headRefOid && row.base_commit === live.baseRefOid);
+  return { operator: record.operator, at: record.created_at, reason: record.reason };
+}
+function extendedRound(f, push, round, prior) {
+  const binding = push(), extension = grant(f);
+  artifact.sealJudgment(artifactInput(f, binding, raw(true, [blocker]), round, prior, extension));
+  return { head: f.live().headRefOid, extension };
+}
+function derived(f) {
+  const seen = [], spy = { './code-review-core.cjs': { ...core, roundLookup: options => { const result = core.roundLookup(options); seen.push(result); return result; } } };
+  withFlowDependencies(spy, isolated => isolated.status(f.input()));
+  return seen[0];
+}
+function limited(f, used, limit, input = f.input()) {
+  const status = flow.status(input);
+  assert.deepEqual([status.state, status.round, status.round_cap, status.rounds_used, status.round_limit], ['limit', null, 3, used, limit]);
+  assert.equal(flow.evaluateGate(input).ok, false);
+  return status;
+}
+function humanRepair(f) {
+  let diagnostic = '';
+  assert.deepEqual(flow.fixTickets(f.input(), { stderr: { write: text => { diagnostic += text; } } }), []);
+  assert.match(diagnostic, /no longer re-check.*BLOCKERs stay visible.*delivery_pipeline.code_review.*report.*whole project/);
+}
+function extendedStatus(f, round, used, extension) {
+  const current = flow.status(f.input());
+  assert.deepEqual([current.state, current.round, current.rounds_used, current.round_limit, current.repair, current.verdict],
+    ['current', round, used, round, 'human', 'needs-fix']);
+  assert.deepEqual(current.extension, extension);
+  humanRepair(f);
+}
+
+for (const jira of shapes) test('R-11 sequence: refusal, round 4, new push, new record, round 5, push, limit and a refused third extend: ' + jira, () => {
+  const f = fixture(jira);
+  try {
+    f.git(['config', 'user.name', 'Ada Lovelace']);
+    atLimit(f, false);
+    const push = pusher(f), round3 = f.live().headRefOid;
+    let binding = push();
+    const refused = limited(f, 3, 3);
+    assert.ok(refused.reason.includes(EXTEND_FILLED + '.'), refused.reason); assert.match(refused.reason, WHOLE_PROJECT);
+    const first = grant(f);
+    assert.equal(first.operator, 'Ada Lovelace');
+    const owed4 = flow.status(f.input());
+    assert.deepEqual([owed4.state, owed4.round, owed4.scope, owed4.round_cap, owed4.round_limit, owed4.rounds_used], ['owed', 4, 'delta', 3, 4, 3]);
+    const lookup4 = derived(f);
+    assert.deepEqual([lookup4.priorHead, lookup4.extension], [round3, first]);
+    artifact.sealJudgment(artifactInput(f, binding, raw(true, [blocker]), 4, round3, first));
+    const round4 = f.live().headRefOid;
+    extendedStatus(f, 4, 4, first);
+    binding = push();
+    const spent4 = limited(f, 4, 4);
+    assert.match(spent4.reason, /^phase code review is limit: four rounds are spent/); assert.ok(spent4.reason.includes(EXTEND_FILLED + '.'));
+    const second = grant(f);
+    const owed5 = flow.status(f.input());
+    assert.deepEqual([owed5.state, owed5.round, owed5.scope, owed5.round_limit, owed5.rounds_used], ['owed', 5, 'delta', 5, 4]);
+    const lookup5 = derived(f);
+    assert.deepEqual([lookup5.priorHead, lookup5.extension], [round4, second]);
+    artifact.sealJudgment(artifactInput(f, binding, raw(true, [blocker]), 5, round4, second));
+    extendedStatus(f, 5, 5, second);
+    assert.notDeepEqual(second, first);
+    push();
+    const spent5 = limited(f, 5, 5);
+    assert.match(spent5.reason, /^phase code review is limit: five rounds are spent/); assert.doesNotMatch(spent5.reason, /extend/);
+    assert.match(spent5.reason, WHOLE_PROJECT);
+    refusedExtend(f, {}, /the ceiling of 5 rounds is reached/);
+    assert.equal(readRecords(f).length, 2);
+  } finally { f.cleanup(); }
+});
+
+test('R-11 many fixes cost one round: three pushes before any record give one round 4 from the round-3 head', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f, false);
+    const push = pusher(f), round3 = f.live().headRefOid, pushed = [];
+    for (let k = 0; k < 3; k++) { pushed.push(push()); limited(f, 3, 3); }
+    const extension = grant(f), owed = flow.status(f.input());
+    assert.equal(derived(f).priorHead, round3);
+    assert.deepEqual([owed.state, owed.round, owed.scope, owed.round_limit, owed.rounds_used], ['owed', 4, 'delta', 4, 3]);
+    artifact.sealJudgment(artifactInput(f, pushed.at(-1), raw(true, [blocker]), 4, round3, extension));
+    extendedStatus(f, 4, 4, extension);
+    assert.equal(readRecords(f).length, 1);
+  } finally { f.cleanup(); }
+});
+
+test('R-11 a record voided by a push costs nothing and a fresh record at the new head still yields round 4', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f, false);
+    const push = pusher(f), round3 = f.live().headRefOid;
+    push();
+    grant(f);
+    assert.equal(flow.status(f.input()).round_limit, 4);
+    const binding = push();
+    limited(f, 3, 3);
+    const fresh = grant(f), owed = flow.status(f.input());
+    assert.deepEqual([owed.state, owed.round, owed.scope, owed.round_limit, owed.rounds_used], ['owed', 4, 'delta', 4, 3]);
+    assert.equal(readRecords(f).length, 2);
+    artifact.sealJudgment(artifactInput(f, binding, raw(true, [blocker]), 4, round3, fresh));
+    extendedStatus(f, 4, 4, fresh);
+    push();
+    limited(f, 4, 4);
+  } finally { f.cleanup(); }
+});
+
+test('R-11 a record voided by a base move or written for another head, base or PR applies to nothing', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f);
+    const other = 'c'.repeat(40);
+    recordWrite(f, 52, { head: other }); recordWrite(f, 52, { base_commit: other }); recordWrite(f, 53);
+    limited(f, 3, 3);
+    grant(f);
+    assert.equal(flow.status(f.input()).round_limit, 4);
+    const moved = f.git(['commit-tree', f.base + '^{tree}', '-p', f.base, '-m', 'base moved']);
+    const live = { ...f.live(), baseRefOid: moved }, options = { ...f.options, getPullRequest: () => live };
+    limited(f, 3, 3, { ...f.input(), live });
+    assert.equal(flow.extend(extendInput(f, { live }), options).recorded, 'created');
+    const owed = flow.status({ ...f.input(), live }, options);
+    assert.deepEqual([owed.state, owed.round, owed.round_limit], ['owed', 4, 4]);
+    const store = path.join(home, '.local/state/shipyard/code-review-publications');
+    for (const dir of fs.readdirSync(store)) fs.writeFileSync(path.join(store, dir, '52.extensions.json'), '{');
+    assert.throws(() => flow.status(f.input()), /JSON/);
+  } finally { f.cleanup(); }
+});
+
+test('R-11 a role-hosted child cannot grant a round: the CLI refuses with the named hint and writes no state', () => {
+  const f = fixture(null), cli = extendCli(f), isolated = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-child-home-')));
+  try {
+    atLimit(f);
+    const refusal = /^EXTENSION_REFUSED: a role-hosted child cannot grant a review round/;
+    const alone = cli.run(cli.args, { HOME: isolated, SHIPYARD_ROLE_CHILD: '1' });
+    assert.equal(alone.status, 1, alone.stderr); assert.match(alone.stderr, refusal); assert.match(alone.stderr, /^hint\[EXTENSION_REFUSED\]: /m);
+    assert.deepEqual(fs.readdirSync(isolated), []);
+    const before = stateFiles(), child = cli.run(cli.args, { SHIPYARD_ROLE_CHILD: '1' });
+    assert.equal(child.status, 1, child.stderr); assert.match(child.stderr, refusal);
+    assert.deepEqual(stateFiles(), before); assert.deepEqual(readRecords(f), []);
+    const operator = cli.run(cli.args);
+    assert.equal(operator.status, 0, operator.stderr); assert.equal(JSON.parse(operator.stdout).recorded, 'created');
+  } finally { f.cleanup(); cli.cleanup(); fs.rmSync(isolated, { recursive: true, force: true }); }
+});
+
+test('R-11 a record written after its head was already reviewed grants nothing once the head moves', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f, false);
+    recordWrite(f, 52);
+    assert.equal(flow.status(f.input()).round_limit, 4);
+    f.advance(4);
+    limited(f, 3, 3);
+  } finally { f.cleanup(); }
+});
+
+test('R-11 the ceiling of five is final: a hand-written third record leaves the limit at five', () => {
+  const f = fixture(null);
+  try {
+    atLimit(f, false);
+    const push = pusher(f);
+    let prior = f.live().headRefOid;
+    for (const round of [4, 5]) prior = extendedRound(f, push, round, prior).head;
+    push();
+    limited(f, 5, 5);
+    recordWrite(f, 52);
+    assert.equal(readRecords(f).length, 3);
+    const status = limited(f, 5, 5);
+    assert.doesNotMatch(status.reason, /extend/);
+  } finally { f.cleanup(); }
+});
+
+for (const jira of shapes) test('R-11 publication: the sealed round 4 shows the extension in status and comment, the limit posts status only: ' + jira, () => {
+  const f = fixture(jira), writes = [], comments = [];
+  const options = { ...f.options, getPullRequest: ({ pr }) => pr === 52 ? f.live() : { number: pr, headRefOid: f.base },
+    gh(args) {
+      const field = args.filter((_, i) => args[i - 1] === '-f').map(value => [value.slice(0, value.indexOf('=')), value.slice(value.indexOf('=') + 1)]);
+      const fields = Object.fromEntries(field);
+      if (args[1].includes('/statuses/')) { writes.push(fields); return {}; }
+      if (!args.includes('--method')) return [comments];
+      const comment = { id: 77 + comments.length, body: fields.body }; comments.push(comment); return { ...comment };
+    } };
+  try {
+    f.git(['config', 'user.name', 'Ada Lovelace']);
+    atLimit(f, false);
+    const push = pusher(f);
+    const sealed = extendedRound(f, push, 4, f.live().headRefOid);
+    const line = `round 4 of 3, extended by Ada Lovelace at ${sealed.extension.at.slice(0, 16)}Z: fixes pushed for the findings`;
+    const result = flow.publish({ ...f.input(), live: undefined }, options);
+    assert.deepEqual([result.status.ok, result.comment.ok], [true, true]);
+    assert.equal(writes[0].description, 'code review: 1 blocking issues, 0 notes; ' + line);
+    assert.deepEqual(comments[0].body.split('\n').slice(0, 3), ['<!-- code-review -->', 'Code review \u2014 round 4, scope delta', line]);
+    extendedRound(f, push, 5, sealed.head);
+    push();
+    limited(f, 5, 5);
+    const spent = flow.publish({ ...f.input(), live: undefined }, options);
+    assert.deepEqual([writes.length, comments.length, spent.status.ok, spent.comment.action], [2, 1, true, 'skipped']);
+    assert.equal(writes[1].state, 'pending');
+    assert.equal(writes[1].description, 'code review limit reached: no further review will run for this head');
+  } finally { f.cleanup(); }
+});
+
+function artifactInput(f, binding, result, round = 1, priorHead = null, extension) {
+  return retainPlanningInput(f, f.inputArtifact(binding, round, priorHead, result, extension));
 }
 
 function assertFixGraph(fix) {
