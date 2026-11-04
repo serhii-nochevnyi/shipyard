@@ -1810,6 +1810,34 @@ const MAX_REPAIR_PAGES = 100;
 const MAX_REPAIR_ITEMS = 4096;
 
 const REPAIR_OWNER = Symbol('repair-owner');
+const CI_CONTROL = Symbol('ci-control');
+const ciControls = new WeakMap();
+
+function deliveryControlScope(options, scope) {
+  const handle = options[CI_CONTROL];
+  if (!handle) return scope;
+  const control = ciControls.get(handle);
+  if (!control || control.controller !== options.controller || canonical(scope) !== canonical(control.originalScope))
+    fail('WRITER_FENCED', 'CI control does not belong to this original or controller');
+  control.lock.assertOwned();
+  const saved = readSealed(control.file, control.state.prepared.key);
+  if (canonical(saved) !== canonical(control.binding)
+      || saved.original_sha256 !== ciOriginalDigest(control.state.operation))
+    fail('CI_ORIGINAL_INVALID', 'CI control association differs from its immutable original');
+  const authority = control.controller.authority(control.scope.run_id);
+  if (authority !== control.authority) fail('WRITER_FENCED', 'CI control lost its process-local authority');
+  require('./run-contract.cjs').assertHostAuthority(authority,
+    { run_id: control.scope.run_id, owner_id: control.controller.owner_id });
+  control.controller.assertOwner(control.scope.run_id);
+  const owner = control.controller.status(control.scope.run_id).owner;
+  if (owner.lease_id !== saved.lease_id || owner.epoch !== saved.epoch)
+    fail('WRITER_FENCED', 'CI control lease or epoch changed');
+  return control.scope;
+}
+
+function assertDeliveryOwner(options, scope) {
+  options.controller?.assertOwner(deliveryControlScope(options, scope).run_id);
+}
 
 function repairOwnerRenewal(controller, scope, writerSession) {
   const verificationController = controller;
@@ -2749,7 +2777,7 @@ function writeCiOperation(state) {
   state.operation = operation;
 }
 
-function reconcileCiCandidate(state) {
+function reconcileCiCandidate(state, { persist = true } = {}) {
   const { operation: op, prepared } = state;
   if (!op.candidate_result || op.signed_result) return;
   const candidateId = op.candidate_result.candidate_id;
@@ -2767,6 +2795,8 @@ function reconcileCiCandidate(state) {
   const signed = { ...retained, artifact };
   const authenticated = { ...state, operation: { ...op, state: 'finished', signed_result: signed, result: signed } };
   authenticateFinishedCi(authenticated, { finalizationOnly: true });
+  if (!persist) return signed;
+  if (state.options[CI_CONTROL]) assertDeliveryOwner(state.options, op.scope);
   op.signed_result = signed;
   writeCiOperation(state);
 }
@@ -2846,12 +2876,15 @@ function prepareCiRepair(options, scope, context) {
   const { key: _key, stateRoot: _state, delivery: _delivery, ...preparation } = result;
   const operation = saved || { schema: 'shipyard.original-ci-operation.v1', scope, selectors: { ...context },
     dispatch_id: newDispatchId(), preparation, predecessor_dispatch_id: repairPredecessors.get(result).selected?.attempt.dispatch_id || null,
+    producer: ciProducerIdentity(),
     state: 'prepared' };
   const state = { prepared: result, options, file: operationFile, operation };
   originalCiOperations.set(handle, state); preparedCiOperations.set(result, handle);
   if (!saved) writeCiOperation(state);
-  reconcileCiCandidate(state);
-  recheckCiRepair(result, options, { signedHead: state.operation.signed_result?.artifact?.commit });
+  const deferCandidate = saved?.producer && createRunController({
+    storeDir: path.join(storageDirectory(options, scope), 'runs') }).status(scope.run_id);
+  state.pendingSigned = reconcileCiCandidate(state, { persist: !deferCandidate });
+  recheckCiRepair(result, options, { signedHead: (state.operation.signed_result || state.pendingSigned)?.artifact?.commit });
   if (saved?.state === 'finished') {
     authenticateFinishedCi(state);
     if (!saved.signed_result) {
@@ -2874,6 +2907,8 @@ function prepareCiRepair(options, scope, context) {
 
 function authenticateFinishedCi(state, { finalizationOnly = false } = {}) {
   const { operation: op, prepared, options } = state;
+  if (op.producer && canonical(op.producer) !== canonical(ciProducerIdentity()))
+    fail('CI_ORIGINAL_INVALID', 'finished CI original belongs to a different producer generation');
   const recorder = createDurableRecorder(op.receipt_store);
   const original = authenticatedReceipt(recorder, op.dispatch_id, 'ci-fix');
   if (op.state !== 'finished' || !op.result || canonical(op.result.receipt) !== canonical(original.receipt)
@@ -2997,6 +3032,121 @@ function ciRecorderIdentity(directory) {
   return { path: directory, dev: stat.dev, ino: stat.ino, mode: stat.mode, key: ciPhysical(keyPath, KEY_BYTES, true).pin };
 }
 
+function ciProducerIdentity() {
+  return Object.fromEntries(['codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'dispatch-boundary.cjs',
+    'role-artifact.cjs', 'delivery-commit-finalizer.cjs'].map(name => [name, sha256(fs.readFileSync(path.join(__dirname, name)))]));
+}
+
+function ciOriginalDigest(op) {
+  return sha256(canonical(Object.fromEntries(['scope', 'selectors', 'dispatch_id', 'preparation', 'predecessor_dispatch_id',
+    'producer', 'resolution', 'completed', 'native_custody', 'output', 'receipt_store', 'recorder_identity'].map(key => [key, op[key]]))));
+}
+
+async function authenticateCompletedCi(state, options) {
+  const { operation: op, prepared: p } = state, completed = op.completed, resolution = op.resolution;
+  if (!completed || !resolution || !op.output || !op.receipt_store || !op.recorder_identity)
+    fail('CI_ORIGINAL_UNKNOWN', 'started original lacks a durable native completion; no relaunch');
+  if (canonical(readSealed(state.file, p.key)) !== canonical(op)
+      || canonical(op.producer) !== canonical(ciProducerIdentity())
+      || canonical(ciRecorderIdentity(op.receipt_store)) !== canonical(op.recorder_identity))
+    fail('CI_ORIGINAL_INVALID', 'completed original producer or physical recorder changed');
+  recheckCiRepair(p, options, { signedHead: (op.signed_result || state.pendingSigned)?.artifact?.commit });
+  if (!op.signed_result && !state.pendingSigned && canonical(scopedTreeOf(p, options)) !== canonical(op.output))
+    fail('CI_ORIGINAL_INVALID', 'original completed output tree changed');
+  const agentOptions = installedAgentOptions(options, resolution, options.host?.capabilities || options.capabilities || {});
+  const adapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
+    agentsDir: agentOptions.agentDir, agentManifest: agentOptions.agentManifest,
+    capabilities: options.host?.capabilities || options.capabilities || {} });
+  policy.validateResolution(resolution, { requireDispatchId: true });
+  adapter.validate(resolution);
+  const agent = adapter.validateGeneratedAgent(resolution);
+  const custody = op.native_custody, native = completed.runtime_evidence;
+  const instructions = require('./codex-runtime-host.cjs').generatedInstructions(fs.readFileSync(path.join(agentOptions.agentDir, resolution.agent_file), 'utf8'));
+  if (resolution.agent_file_digest !== agent.agent_file_digest || resolution.dispatch_id !== op.dispatch_id
+      || resolution.runtime !== 'codex' || resolution.role !== 'ci-fix' || resolution.policy_hash !== policy.POLICY_HASH
+      || custody?.agent_file_digest !== agent.agent_file_digest || custody.canonical_prompt_sha256 !== sha256(p.prompt.trim())
+      || custody.instructions_sha256 !== sha256(instructions)
+      || custody.combined_prompt_sha256 !== sha256(instructions + '\n\n' + p.prompt.trim())
+      || native?.run_id !== op.scope.run_id || native.dispatch_id !== op.dispatch_id
+      || native.session_id !== completed.session_id || native.worktree !== op.scope.worktree
+      || native.applied_model !== resolution.model || native.applied_effort !== resolution.effort
+      || typeof completed.last_agent_message !== 'string' || Buffer.byteLength(completed.last_agent_message) > 128 * 1024)
+    fail('CI_ORIGINAL_INVALID', 'completed original native selection, prompt or installed instructions changed');
+  const raw = ciPhysical(native.transcript.path, 128 * 1024 * 1024, true).bytes;
+  const stream = parseCodexStream(raw.toString('utf8'));
+  if (raw.length !== native.transcript.bytes || sha256(raw) !== native.transcript.sha256
+      || stream.session_id !== completed.session_id || repairStreamFinal(stream) !== completed.last_agent_message)
+    fail('CI_ORIGINAL_INVALID', 'completed original CLI transcript changed');
+  authenticateRepairNative({ runtime_evidence: native, agent_file_digest: agent.agent_file_digest }, custody,
+    p.commit.worktree, completed.last_agent_message);
+  const verified = await require('./codex-runtime-host.cjs').verifyCompletedNativeLaunch({
+    session_id: completed.session_id, selection: resolution, resultText: completed.last_agent_message,
+    env: { ...(options.env || process.env), CODEX_HOME: custody.native_home } });
+  if (canonical(verified.native_session_evidence) !== canonical(native.native_session_evidence))
+    fail('CI_ORIGINAL_INVALID', 'completed original native evidence changed');
+}
+
+async function recoverCompletedCi(state, scope, options, request, stdout) {
+  const p = state.prepared;
+  const lock = acquireGeneratedMergeLock(privateDirectory(p.stateRoot, 'ci-recovery-locks'), path.basename(state.file, '.json'));
+  if (!lock) fail('RECOVERY_IN_PROGRESS', 'another host controls this original CI reconciliation');
+  let controller, controlScope;
+  try {
+    await authenticateCompletedCi(state, options);
+    const originalController = createRunController({ storeDir: path.join(storageDirectory(options, scope), 'runs') });
+    const originalStatus = originalController.status(scope.run_id);
+    if (!originalStatus || !['failed', 'completed'].includes(originalStatus.state))
+      fail('WRITER_FENCED', 'original CI controller must be terminal before fresh control admission');
+    controlScope = Object.freeze({ ...scope, run_id: 'ci-original-recovery-' + crypto.randomUUID() });
+    controller = createRunController({ storeDir: path.join(storageDirectory(options, controlScope), 'runs') });
+    const resolution = state.operation.resolution;
+    controller.begin(createRunScope({ ...controlScope, repository_id: p.repository, owner_id: controller.owner_id,
+      dispatch: { dispatch_id: 'recovery-' + crypto.randomUUID(), role: 'ci-fix', model: resolution.model,
+        effort: resolution.effort, policy_version: resolution.policy_version, policy_hash: resolution.policy_hash } }));
+    const owner = controller.status(controlScope.run_id).owner;
+    const binding = { schema: 'shipyard.ci-original-control.v1', original_run_id: scope.run_id,
+      original_dispatch_id: state.operation.dispatch_id, original_sha256: ciOriginalDigest(state.operation),
+      run_id: controlScope.run_id, owner_id: controller.owner_id, lease_id: owner.lease_id, epoch: owner.epoch };
+    const file = path.join(privateDirectory(p.stateRoot, 'ci-controls'), sha256(controlScope.run_id) + '.json');
+    atomicWrite(file, JSON.stringify(seal(binding, p.key)) + '\n', { exclusive: true });
+    const handle = Object.freeze(Object.create(null));
+    ciControls.set(handle, { controller, state, scope: controlScope, originalScope: scope, binding, file, lock,
+      authority: controller.authority(controlScope.run_id) });
+    options = { ...options, scope, controller, [CI_CONTROL]: handle, repairContext: p,
+      recorder: createDurableRecorder(state.operation.receipt_store) };
+    const renewOwner = repairOwnerRenewal(controller, controlScope);
+    options[REPAIR_OWNER] = () => { assertDeliveryOwner(options, scope); renewOwner(); };
+    state.options = options;
+    reconcileCiCandidate(state);
+    const heartbeat = setInterval(() => {
+      try { assertDeliveryOwner(options, scope); controller.heartbeat(controlScope.run_id); }
+      catch { clearInterval(heartbeat); }
+    }, Math.min(60_000, Math.floor(DEFAULT_LEASE_TTL_MS / 3)));
+    heartbeat.unref?.();
+    let result;
+    try {
+      const host = createCodexDeliveryHost(options);
+      result = await host.run(request);
+      assertDeliveryOwner(options, scope);
+      if (result.status === 'blocked' || result.status === 'verification_failed')
+        finishDeliveryRun(controller, controlScope.run_id, { cause: verificationFailureReason(result) });
+      else {
+        const restored = prepareCiRepair(options, scope, state.operation.selectors);
+        const finished = originalCiOperations.get(preparedCiOperations.get(restored));
+        authenticateFinishedCi(finished);
+        if (canonical(result) !== canonical(finished.operation.result))
+          fail('CI_ORIGINAL_INVALID', 'recovered result differs from its authenticated finished original');
+        controller.complete(controlScope.run_id, { reason: 'reconciled original CI ' + state.operation.dispatch_id });
+      }
+    } finally { clearInterval(heartbeat); }
+    stdout.write(JSON.stringify(result) + '\n');
+    return result;
+  } catch (error) {
+    if (controller && controlScope) finishDeliveryRun(controller, controlScope.run_id, { cause: error.message });
+    throw error;
+  } finally { lock.release(); }
+}
+
 function validateOriginalCiOperation(handle, stage, facts) {
   const state = originalCiOperations.get(handle);
   if (!state || !object(facts)) fail('CI_ORIGINAL_INVALID', 'original CI recovery requires a host-private operation handle');
@@ -3004,9 +3154,10 @@ function validateOriginalCiOperation(handle, stage, facts) {
   if (canonical(saved) !== canonical(state.operation)) fail('CI_ORIGINAL_INVALID', 'original CI operation changed');
   const op = state.operation, p = state.prepared;
   if (!state.options.controller) fail('WRITER_FENCED', 'original CI mutation requires its current host controller');
-  require('./run-contract.cjs').assertHostAuthority(state.options.controller.authority(op.scope.run_id),
-    { run_id: op.scope.run_id, owner_id: state.options.controller.owner_id });
-  state.options.controller.assertOwner(op.scope.run_id);
+  const controlScope = deliveryControlScope(state.options, op.scope);
+  require('./run-contract.cjs').assertHostAuthority(state.options.controller.authority(controlScope.run_id),
+    { run_id: controlScope.run_id, owner_id: state.options.controller.owner_id });
+  state.options.controller.assertOwner(controlScope.run_id);
   recheckCiRepair(p, state.options, { signedHead: op.signed_result?.artifact?.commit });
   if (facts.dispatch_id !== op.dispatch_id || facts.ticket !== p.commit.ticket
       || facts.runtime !== 'codex' || facts.role !== 'ci-fix'
@@ -3926,7 +4077,10 @@ function repairCompletion(completed, result, prepared, recorder) {
 
 function publishSignedRepair(prepared, signed, options) {
   options[REPAIR_OWNER]?.();
-  const lock = acquireLock(privateDirectory(prepared.stateRoot, 'repair-publication-locks'), signed.artifact.candidate_id, { waitMs: 0 });
+  const directory = privateDirectory(prepared.stateRoot, 'repair-publication-locks');
+  const lock = prepared.repair.role === 'ci-fix'
+    ? acquireGeneratedMergeLock(directory, signed.artifact.candidate_id)
+    : acquireLock(directory, signed.artifact.candidate_id, { waitMs: 0 });
   if (!lock) fail('REPAIR_PUBLICATION_PENDING', 'another host owns this signed publication');
   try { return performSignedRepairPublication(prepared, signed, options); }
   finally { lock.release(); }
@@ -4021,6 +4175,7 @@ function finishRepairRecovery(candidate, artifact, options, stateRoot, key, reco
     if (ciOperation.candidate_result) {
       ciOriginalPrepared = prepareCiRepair(options, ciOperation.scope, ciSelectors);
       const state = originalCiOperations.get(preparedCiOperations.get(ciOriginalPrepared));
+      reconcileCiCandidate(state);
       authenticateFinishedCi({ ...state, operation: { ...state.operation, state: 'finished', result: state.operation.signed_result } },
         { finalizationOnly: true });
     }
@@ -4223,6 +4378,47 @@ function verificationAssignmentBlock(assignment) {
     + 'Historical GPG cause remains unknown. Actual assertion failures block; denial, missing evidence and unknown or unapproved commands remain HOLD.';
 }
 
+function ciVerificationEvidence(prepared, options, renewOwner, tree) {
+  const state = originalCiOperations.get(preparedCiOperations.get(prepared));
+  if (!state || !Array.isArray(prepared.verificationAllowList))
+    fail('CI_ORIGINAL_INVALID', 'CI verification requires its original protected command assignment');
+  assertDeliveryOwner(options, options.scope);
+  const directory = privateDirectory(prepared.stateRoot, 'verification');
+  const names = () => fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+  const identity = { original_sha256: ciOriginalDigest(state.operation), tree: tree.tree,
+    spec_sha256: prepared.verification.digest, allow_list_sha256: allowListDigest(prepared.verificationAllowList) };
+  const prior = state.operation.verification_recovery;
+  const admitted = hostVerification.assignPlan(prepared.plan.text, prepared.verificationAllowList);
+  const matches = digest => {
+    const evidence = hostVerification.readEvidence(path.join(directory, digest + '.json'), digest);
+    return evidence?.ticket === prepared.commit.ticket && evidence.plan_sha256 === prepared.plan.sha256
+      && evidence.verification === 'configured' && evidence.results.length === admitted.length
+      && evidence.results.every((row, index) => row.outcome === 'passed' && row.status === 0 && !row.signal
+        && !row.timed_out && !row.error_code && !row.authority_error_code
+        && row.tree_before === tree.tree && row.tree_after === tree.tree
+        && canonical(row.argv) === canonical(admitted[index].argv) && row.profile === admitted[index].profile
+        && row.timeout_ms === admitted[index].timeout_ms);
+  };
+  if (prior) {
+    if (canonical(prior.identity) !== canonical(identity)) fail('CI_ORIGINAL_INVALID', 'original CI verification subject changed');
+    const digests = prior.digest ? [prior.digest] : names().filter(name => !prior.before.includes(name))
+      .map(name => name.slice(0, -5)).filter(matches);
+    if (digests.length !== 1 || !matches(digests[0]))
+      fail('CI_ORIGINAL_UNKNOWN', 'original CI verification has no unique durable successful result; no gate replay');
+    const digest = digests[0];
+    if (!prior.digest) { prior.digest = digest; writeCiOperation(state); }
+    renewOwner?.();
+    return Object.assign(prepared.verification.spec.commands.map(command => ({ id: command.id,
+      record_sha256: digest, outcome: 'passed', host_evidence_digest: digest })), { evidenceDigest: digest });
+  }
+  state.operation.verification_recovery = { identity, before: names() };
+  writeCiOperation(state);
+  const records = collectVerificationEvidence(prepared, prepared.verification, options, renewOwner);
+  state.operation.verification_recovery.digest = records.evidenceDigest;
+  writeCiOperation(state);
+  return records;
+}
+
 function finalizedArtifact(result, prepared, options, renewOwner) {
   if (!object(result) || !object(result.receipt) || result.receipt.compliance !== 'verified') {
     fail('MISSING_RECEIPT', 'executor has no verified dispatch receipt');
@@ -4258,7 +4454,9 @@ function finalizedArtifact(result, prepared, options, renewOwner) {
   });
   const staged = { ...prepared, identity };
   let records;
-  try { records = collectVerificationEvidence(staged, prepared.verification, options, renewOwner); }
+  try { records = prepared.expectedRole === 'ci-fix'
+    ? ciVerificationEvidence(prepared, options, renewOwner, tree)
+    : collectVerificationEvidence(staged, prepared.verification, options, renewOwner); }
   catch (error) {
     if (error.status !== 'verification_failed') throw error;
     return Object.freeze({ ...result, status: 'verification_failed', command: error.command,
@@ -4267,7 +4465,7 @@ function finalizedArtifact(result, prepared, options, renewOwner) {
   }
   if (prepared.repair) recheckRepair(prepared, options);
   const candidate = admitCandidate(staged, prepared.verification, records, tree);
-  options.controller?.assertOwner(options.scope.run_id);
+  assertDeliveryOwner(options, options.scope);
   if (prepared.expectedRole === 'ci-fix') {
     const state = originalCiOperations.get(preparedCiOperations.get(prepared));
     if (!state || state.operation.dispatch_id !== candidate.dispatch_id)
@@ -4594,7 +4792,12 @@ function createCodexDeliveryHost(options = {}) {
       fail('WRITER_FENCED', 'host writer lease is not bound to the scoped phase');
     }
   }
-  const renewVerificationOwner = repairOwnerRenewal(options.controller, scope, writerSession);
+  const renewControlOwner = repairOwnerRenewal(options.controller, deliveryControlScope(options, scope), writerSession);
+  const renewVerificationOwner = renewControlOwner && (() => {
+    assertDeliveryOwner(options, scope);
+    renewControlOwner();
+    assertDeliveryOwner(options, scope);
+  });
   options = { ...options, [REPAIR_OWNER]: renewVerificationOwner };
   const completedTyped = new Map();
   const preRecordValidation = writerSession && function validateHostWriter({ dispatch_id: dispatchId, gsd_role: gsdRole, receipt }) {
@@ -4719,7 +4922,7 @@ function createCodexDeliveryHost(options = {}) {
       if (request.gsd_role !== undefined && GSD_DELIVERY_ROLES[request.gsd_role] !== request.role) {
         fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
       }
-      options.controller?.assertOwner(scope.run_id);
+      assertDeliveryOwner(options, scope);
       request.dispatch_id = request.dispatch_id || newDispatchId();
       let repairPrepared = ['ci-fix', 'review-fix'].includes(request.role) ? options.repairContext
         || (request.role === 'ci-fix' ? prepareCiRepair(options, scope, request.context) : prepareRepair(options, scope, request.context)) : null;
@@ -4741,7 +4944,7 @@ function createCodexDeliveryHost(options = {}) {
       if (request.role === 'ci-fix') {
         const state = originalCiOperations.get(preparedCiOperations.get(repairPrepared));
         if (state.operation.candidate_result && !state.operation.signed_result) {
-          const resumed = await resumeFinalization(options, state.operation.candidate_result.candidate_id, scope);
+          const resumed = await resumeFinalization(options, state.operation.candidate_result.candidate_id, deliveryControlScope(options, scope));
           const saved = readSealed(state.file, repairPrepared.key);
           if (saved?.state !== 'finished' || saved.dispatch_id !== state.operation.dispatch_id
               || saved.result?.artifact?.commit !== resumed.artifact.commit)
@@ -5108,7 +5311,7 @@ function createCodexDeliveryHost(options = {}) {
         result = await recordCompletedSource();
       }
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
-      options.controller?.assertOwner(scope.run_id);
+      assertDeliveryOwner(options, scope);
       if (request.role === 'code-review')
         return codeReviewContext.finish(options.codeReviewContext, result, runtimeHost.recorder);
       if (request.role === 'arch-review') {
@@ -5483,6 +5686,10 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       stdout.write(JSON.stringify(state.operation.result) + '\n');
       return state.operation.result;
     }
+    const cliOriginal = state.operation.producer && createRunController({
+      storeDir: path.join(storageDirectory(options, scope), 'runs') }).status(scope.run_id);
+    if (cliOriginal && state.operation.state !== 'prepared')
+      return recoverCompletedCi(state, scope, options, request, stdout);
     if (state.operation.candidate_result) {
       const candidateId = state.operation.candidate_result.candidate_id;
       const candidate = readSealed(candidateFile(preparedRepair.stateRoot, candidateId), preparedRepair.key);
@@ -5507,6 +5714,8 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
         throw error;
       }
     }
+    if (state.operation.state !== 'prepared')
+      return recoverCompletedCi(state, scope, options, request, stdout);
   }
   const fileInputContext = preparedReview ? null : prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
   const archReviewSignals = preparedArchReview && !archReviewContext.isSemanticArchitecture(preparedArchReview) ? admitArchitectureInput(preparedArchReview, request, { ...options, automaticReader: !options.readerCapacity },
