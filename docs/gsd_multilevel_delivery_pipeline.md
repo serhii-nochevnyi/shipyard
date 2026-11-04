@@ -851,6 +851,47 @@ same-session native dispatch receipt, with distinct requested, applied, and
 observed model/effort values and its application evidence. A claimed request or
 a process exit is not proof that the runtime applied it.
 
+Signed `review-fix` publication is confirmed against the live PR after the push.
+A mismatch names each differing field (`headRefOid`, `baseRefOid`,
+`headRefName`, `state`, `number`, `baseRef`) with its expected and observed value
+and the stage that read it. Only one case is reread, a bounded number of times:
+the sole difference is `headRefOid` still showing the pre-push head. A different
+head, a changed base, branch, PR number or a closed PR refuses at once, and
+exhausting the rereads leaves the pending publication in place as
+`REPAIR_PUBLICATION_PENDING`. Recover with
+`--resume-finalization <candidate-id> --scope-file <scope>` and a fresh `run_id`
+(the persisted run scope cannot be reused). It confirms the remote head without a
+second push, then applies the original review dispositions once, and repeats
+idempotently. `--resume-repair-actions` refuses with `REPAIR_PUBLICATION_PENDING`
+while the dispatch has a signed publication and names the candidate: a pending
+one is reconciled first, a confirmed one is already published and is continued
+with `--resume-finalization`, which applies the review dispositions. A confirmed
+publication whose head is still not visible at the `recheck` stage fails the same
+way and says it is already confirmed rather than pending.
+Recovery accepts a verification allow-list that differs from the original (which
+the candidate digest authenticates) only when the PLAN's assigned commands
+resolve identically; outside recovery any difference refuses. Journal rows
+appended after the attempt are accepted only if they are one of two kinds: an
+unrelated row, meaning a row for another ticket or without a `ticket`, whose `pr`
+is not this PR, with a non-empty `event` and a canonical millisecond ISO `ts`; or
+the host's own `escalation-record` declaration for the repaired ticket and this
+PR. Everything else refuses: any other row for the repaired ticket, any row
+naming this PR (even without a `ticket`), a non-string `ticket`, and a row that
+is not an object.
+
+After a signed publication the live review-feedback inventory may differ from
+the sealed one only in these ways, each re-read from GitHub: the `line` of a
+thread on a file the signed commit changed (a published fix outdates it); the
+body of a top-level comment whose author is a `Bot`; the PR description edited
+by a `Bot` or by the host's own authenticated actor; a thread resolved by that
+actor; and new reviews, comments and thread comments authored by a `Bot` or
+that actor (for example a review bot re-reviewing the new head). New feedback is
+not covered by the original dispositions and stays for the next repair round.
+Everything else must match: sealed items may not disappear, and ids, authors,
+`path`, `original_line`, resolution by anyone else, an edited human comment and
+feedback added by another person are feedback changes and refuse. The same
+tolerance applies in the normal post-push check and in recovery.
+
 ### 7.5.2. Adapters, boundary, and receipts
 
 Every routed launch — research, decomposition, executor, sentinel, drift,

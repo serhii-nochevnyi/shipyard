@@ -1108,16 +1108,65 @@ function repairEvidence(file, expectedDigest, worktree) {
   } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-function repairLive(options, prepared, pr) {
+const REPAIR_LIVE_RETRY_DELAYS_MS = Object.freeze([1000, 2000, 4000, 8000, 8000]);
+
+function pauseSync(options, ms) {
+  if (typeof options.pause === 'function') options.pause(ms);
+  else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function repairLiveMismatches(worktree, prepared, pr, live) {
+  if (!object(live)) return [{ field: 'response', expected: 'object', observed: typeof live }];
+  const found = [];
+  const check = (field, expected, observed) => { if (observed !== expected) found.push({ field, expected, observed }); };
+  check('number', pr, live.number);
+  check('state', 'OPEN', live.state);
+  check('headRefName', prepared.commit.expectedBranch, live.headRefName);
+  check('headRefOid', prepared.commit.expectedHead, live.headRefOid);
+  check('baseRefOid', prepared.commit.expectedBase, live.baseRefOid);
+  let resolved = null;
+  try { resolved = resolveBaseRef(worktree, live.baseRefName); } catch { resolved = null; }
+  check('baseRef', prepared.baseRef, resolved);
+  return found;
+}
+
+function describeRepairMismatch(found) {
+  return found.map(item => item.field + ' expected=' + JSON.stringify(item.expected)
+    + ' observed=' + JSON.stringify(item.observed)).join('; ');
+}
+
+function repairLive(options, prepared, pr, { stage = 'recheck', staleHead } = {}) {
   const worktree = prepared.commit.worktree;
-  const live = options.getPullRequest ? options.getPullRequest({ worktree, pr, repo: prepared.repo })
+  const read = () => options.getPullRequest ? options.getPullRequest({ worktree, pr, repo: prepared.repo })
     : repairCommand(options, worktree, ['pr', 'view', String(pr), ...(prepared.repo ? ['--repo', prepared.repo] : []),
       '--json', 'number,state,headRefName,headRefOid,baseRefName,baseRefOid,url']);
-  if (!object(live) || live.number !== pr || live.state !== 'OPEN'
-      || live.headRefName !== prepared.commit.expectedBranch || live.headRefOid !== prepared.commit.expectedHead
-      || live.baseRefOid !== prepared.commit.expectedBase
-      || resolveBaseRef(worktree, live.baseRefName) !== prepared.baseRef)
-    fail('REPAIR_SUBJECT_CHANGED', 'actual live OPEN PR differs from canonical repair subject');
+  const delays = Array.isArray(options.repairLiveRetryDelaysMs) ? options.repairLiveRetryDelaysMs : REPAIR_LIVE_RETRY_DELAYS_MS;
+  let live, mismatches;
+  for (let attempt = 0; ; attempt++) {
+    live = read();
+    mismatches = repairLiveMismatches(worktree, prepared, pr, live);
+    if (!mismatches.length) break;
+    const staleOnly = typeof staleHead === 'string' && mismatches.length === 1
+      && mismatches[0].field === 'headRefOid' && mismatches[0].observed === staleHead;
+    if (!staleOnly) {
+      const error = new Error('codex-delivery-host: actual live OPEN PR differs from canonical repair subject (stage '
+        + stage + '): ' + describeRepairMismatch(mismatches));
+      error.code = 'REPAIR_SUBJECT_CHANGED';
+      error.stage = stage;
+      error.mismatches = mismatches;
+      throw error;
+    }
+    if (attempt >= delays.length) {
+      const error = new Error('codex-delivery-host: signed push is not yet visible on the live PR (stage ' + stage + '): '
+        + describeRepairMismatch(mismatches) + '; the pending publication is retained and no push is replayed');
+      error.code = 'REPAIR_PUBLICATION_PENDING';
+      error.stage = stage;
+      error.mismatches = mismatches;
+      error.stale = true;
+      throw error;
+    }
+    pauseSync(options, delays[attempt]);
+  }
   return Object.freeze({ number: live.number, state: live.state, headRefName: live.headRefName,
     headRefOid: live.headRefOid, baseRefName: live.baseRefName, baseRefOid: live.baseRefOid });
 }
@@ -1292,12 +1341,7 @@ function repairHistory(prepared, pr) {
       if (row.ticket !== prepared.commit.ticket || !['attempt', 'fix_round', 'escalation'].includes(row.event)
           || !['review-fix', undefined].includes(row.artifact_role || row.role)) continue;
       if (row.pr !== undefined && row.pr !== pr) fail('REPAIR_PREDECESSOR_INVALID', 'journal predecessor belongs to a foreign PR');
-      const operationalDeclaration = row.event === 'escalation' && row.by === 'escalation-record'
-        && Object.keys(row).sort().join(',') === 'by,event,pr,reason,ticket,ts'
-        && row.pr === pr && typeof row.reason === 'string' && row.reason.trim().length > 0
-        && typeof row.ts === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.ts)
-        && Number.isFinite(Date.parse(row.ts)) && new Date(row.ts).toISOString() === row.ts;
-      if (operationalDeclaration) continue;
+      if (isOperationalEscalation(row, pr)) continue;
       if (!row.artifact_ref || !row.artifact_digest || !row.dispatch_id || !(row.boundary_store || row.boundary_store_path))
         fail('REPAIR_PREDECESSOR_INVALID', 'unsigned repair carry cannot authorize another attempt');
       const artifact = roleArtifact.read({ role: 'review-fix', ticket: prepared.commit.ticket, pr, base: prepared.baseRef,
@@ -1309,6 +1353,14 @@ function repairHistory(prepared, pr) {
     }
   }
   return { history, journal, tipFile, reference: tip?.reference || null };
+}
+
+function isOperationalEscalation(row, pr) {
+  return row !== null && typeof row === 'object' && row.event === 'escalation' && row.by === 'escalation-record'
+    && Object.keys(row).sort().join(',') === 'by,event,pr,reason,ticket,ts'
+    && row.pr === pr && typeof row.reason === 'string' && row.reason.trim().length > 0
+    && typeof row.ts === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.ts)
+    && Number.isFinite(Date.parse(row.ts)) && new Date(row.ts).toISOString() === row.ts;
 }
 
 function retainRepairAttempt(prepared, sealed, output, recorder, dispatchId) {
@@ -1907,16 +1959,90 @@ function recheckRepairJournal(prepared) {
   let rows;
   try { rows = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(pin.bytes)).slice(0, -1).split('\n').map(JSON.parse); }
   catch { fail('REPAIR_PREDECESSOR_INVALID', 'invalid appended repair history'); }
+  const { ticket } = prepared.commit, pr = prepared.repair.pr;
   for (const row of rows) {
-    if (!object(row) || Object.keys(row).some(key => !['ts', 'event', 'ticket', 'from', 'to', 'pr'].includes(key))
-        || row.event !== 'status_change' || typeof row.ticket !== 'string' || !/^T-\d+-\d+$/.test(row.ticket)
-        || row.ticket === prepared.commit.ticket || typeof row.ts !== 'string'
-        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.ts)
-        || !Number.isFinite(Date.parse(row.ts)) || new Date(row.ts).toISOString() !== row.ts
-        || !(row.from === null || typeof row.from === 'string' && row.from.length > 0)
-        || typeof row.to !== 'string' || !row.to || row.pr !== null)
-      fail('REPAIR_PREDECESSOR_INVALID', 'appended repair history is not an unrelated status change');
+    const own = object(row) && row.ticket === ticket;
+    const unrelated = object(row) && !own && (row.ticket === undefined || typeof row.ticket === 'string') && row.pr !== pr
+      && typeof row.event === 'string' && row.event.length > 0 && typeof row.ts === 'string'
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.ts) && new Date(row.ts).toISOString() === row.ts;
+    if (!(own ? isOperationalEscalation(row, pr) : unrelated))
+      fail('REPAIR_PREDECESSOR_INVALID', 'appended repair history contains a record relevant to this repair subject');
   }
+}
+
+function repairFeedbackMovedByPublication(prepared, current, feedback, options) {
+  const transition = prepared.repair.signed_transition;
+  if (!transition) return false;
+  const candidate = readSealed(candidateFile(prepared.stateRoot, transition.candidate_id), prepared.key);
+  if (!candidate || !Array.isArray(candidate.changed)) return false;
+  const changed = new Set(candidate.changed);
+  const before = new Map(feedback.inventory.map(item => [item.id, item]));
+  const retained = current.inventory.filter(item => before.has(item.id));
+  const added = current.inventory.filter(item => !before.has(item.id));
+  if (retained.length !== feedback.inventory.length) return false;
+  const edited = [], resolved = [], described = [];
+  const normalized = retained.map(item => {
+    const old = before.get(item.id);
+    if (old.kind !== item.kind) return item;
+    if (item.kind === 'comment' && item.body_sha256 !== old.body_sha256) {
+      edited.push(item);
+      return { ...item, body: old.body, body_sha256: old.body_sha256 };
+    }
+    if (item.kind === 'pr-body' && item.body_sha256 !== old.body_sha256) {
+      described.push(item);
+      return { ...item, body: old.body, body_sha256: old.body_sha256 };
+    }
+    if (item.kind === 'thread' && item.resolved === true && old.resolved === false) {
+      resolved.push(item);
+      return { ...item, resolved: false };
+    }
+    return item;
+  });
+  const unlocated = inventory => inventory.map(item => item.kind === 'thread' && changed.has(item.path)
+    ? { ...item, line: null } : item);
+  if (canonical(unlocated(normalized)) !== canonical(unlocated(feedback.inventory))) return false;
+  const authored = added.filter(item => item.kind !== 'thread');
+  if (added.some(item => item.kind === 'pr-body')) return false;
+  const read = (query, id) => repairCommand(options, prepared.commit.worktree,
+    ['api', 'graphql', '-f', 'query=' + query, '-f', 'id=' + id]).data?.node;
+  const actor = edited.length + resolved.length + described.length + authored.length ? repairActor(options, prepared) : null;
+  const byBot = person => object(person) && person.__typename === 'Bot';
+  const byActor = person => object(person) && person.id === actor.id && person.login === actor.login;
+  return edited.every(item => {
+    const author = read('query($id:ID!){node(id:$id){... on IssueComment{author{__typename login}}}}', item.id)?.author;
+    return byBot(author) && author.login === item.author;
+  }) && resolved.every(item => byActor(read(
+    'query($id:ID!){node(id:$id){... on PullRequestReviewThread{resolvedBy{id login}}}}', item.id)?.resolvedBy))
+    && described.every(item => {
+      const editor = read('query($id:ID!){node(id:$id){... on PullRequest{editor{__typename login ... on Node{id}}}}}', item.id)?.editor;
+      return byBot(editor) || byActor(editor);
+    }) && authored.every(item => {
+      const author = read('query($id:ID!){node(id:$id){... on PullRequestReview{author{__typename login ... on Node{id}}} '
+        + '... on IssueComment{author{__typename login ... on Node{id}}} '
+        + '... on PullRequestReviewComment{author{__typename login ... on Node{id}}}}}', item.id)?.author;
+      return byBot(author) || byActor(author);
+    });
+}
+
+function recheckRepairAllowList(prepared, options) {
+  const current = configuredAllowList(prepared, options);
+  if (allowListDigest(current) === allowListDigest(prepared.verificationAllowList)) return;
+  const changed = () => fail('REPAIR_SUBJECT_CHANGED', 'canonical repair source, PLAN, graph or verification policy changed');
+  if (!prepared[terminalRepairRecovery]) changed();
+  let original, now;
+  try {
+    original = hostVerification.assignPlan(prepared.plan.text, prepared.verificationAllowList);
+    now = hostVerification.assignPlan(prepared.plan.text, current);
+  } catch { changed(); }
+  if (canonical(original) !== canonical(now)) changed();
+}
+
+function confirmedPublicationId(prepared) {
+  const id = prepared.repair.signed_transition?.candidate_id;
+  try {
+    const record = id && readSealed(path.join(prepared.stateRoot, 'repair-publications', id + '.json'), prepared.key);
+    return record?.status === 'confirmed' ? id : null;
+  } catch { return null; }
 }
 
 function recheckRepair(prepared, options, { clean = false, feedback = prepared.repair.feedback, signedHead } = {}) {
@@ -1931,14 +2057,21 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
       || 'git-common:' + sha256(fs.realpathSync(git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']))) !== prepared.repository
       || git(root, ['rev-parse', 'HEAD']) !== (signedHead || prepared.commit.expectedHead)
       || git(root, ['rev-parse', prepared.baseRef]) !== prepared.commit.expectedBase
-      || git(root, ['symbolic-ref', '--short', 'HEAD']) !== prepared.commit.expectedBranch
-      || allowListDigest(configuredAllowList(prepared, options)) !== allowListDigest(prepared.verificationAllowList))
+      || git(root, ['symbolic-ref', '--short', 'HEAD']) !== prepared.commit.expectedBranch)
     fail('REPAIR_SUBJECT_CHANGED', 'canonical repair source, PLAN, graph or verification policy changed');
+  recheckRepairAllowList(prepared, options);
   if (canonical(repairEvidence(prepared.repair.evidence.path, prepared.repair.evidence.sha256, root)) !== canonical(prepared.repair.evidence))
     fail('REPAIR_EVIDENCE_CHANGED', 'original evidence was replaced');
   const board = JSON.parse(fs.readFileSync(path.join(path.dirname(prepared.graphFile), 'delivery-state.json'), 'utf8'));
   if (board[prepared.commit.ticket]?.pr !== prepared.repair.pr) fail('REPAIR_SUBJECT_CHANGED', 'canonical PR changed');
-  repairLive(options, prepared, prepared.repair.pr);
+  try { repairLive(options, prepared, prepared.repair.pr, { stage: 'recheck', staleHead: prepared.repair.signed_transition?.from }); }
+  catch (error) {
+    const confirmed = error.stale && confirmedPublicationId(prepared);
+    if (confirmed) error.message = 'codex-delivery-host: signed publication is already confirmed but its head is not yet visible on the live PR (stage '
+      + error.stage + '): ' + describeRepairMismatch(error.mismatches) + '; no push is replayed; continue with --resume-finalization '
+      + confirmed + ' and a fresh run id';
+    throw error;
+  }
   const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
   for (const prior of prepared.repair.actionable_feedback?.coverage || []) {
     const file = path.join(privateDirectory(prepared.stateRoot, 'repair-actions'), sha256(prior.dispatch_id) + '.json');
@@ -1959,7 +2092,9 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
         prior.reply_review, 'REPAIR_PREDECESSOR_INVALID');
     }
   }
-  if (current.repo !== feedback.repo || current.digest !== feedback.digest) fail('REPAIR_SUBJECT_CHANGED', 'full live feedback changed');
+  if (current.repo !== feedback.repo || (current.digest !== feedback.digest
+      && !repairFeedbackMovedByPublication(prepared, current, feedback, options)))
+    fail('REPAIR_SUBJECT_CHANGED', 'full live feedback changed');
   const dirty = git(root, ['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean)
     .filter(entry => !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
   if (clean && dirty.length) fail('WORKTREE_NOT_READY', 'repair launch requires a clean baseline');
@@ -2032,8 +2167,11 @@ function performSignedRepairPublication(prepared, signed, options) {
         fail('REPAIR_PUBLICATION_PENDING', 'pending publication changed its original signed subject');
       const transitioned = { ...prepared, commit: { ...prepared.commit, expectedHead: artifact.commit } };
       let live;
-      try { live = repairLive(options, transitioned, prepared.repair.pr); }
-      catch { fail('REPAIR_PUBLICATION_PENDING', 'original publication outcome is not independently confirmed; no push is replayed'); }
+      try { live = repairLive(options, transitioned, prepared.repair.pr, { stage: 'pending-recovery' }); }
+      catch (error) {
+        fail('REPAIR_PUBLICATION_PENDING', 'original publication outcome is not independently confirmed; no push is replayed'
+          + (error.mismatches ? ' (' + describeRepairMismatch(error.mismatches) + ')' : ''));
+      }
       const restored = { ...transitioned, repair: { ...prepared.repair, live, signed_transition: {
         candidate_id: artifact.candidate_id, from: prepared.commit.expectedHead,
         to: artifact.commit, tree: artifact.tree, signer: artifact.signer } } };
@@ -2062,7 +2200,13 @@ function performSignedRepairPublication(prepared, signed, options) {
   try { runner('git', ['push', '--porcelain', 'origin', 'HEAD:refs/heads/' + prepared.commit.expectedBranch],
     { cwd: prepared.commit.worktree, encoding: 'utf8', timeout: 120000, maxBuffer: MAX_REPAIR_FEEDBACK_BYTES }); }
   catch (error) { fail('REPAIR_PUBLICATION_PENDING', 'signed publication requires independent recovery: ' + error.message); }
-  const live = repairLive(options, transitioned, prepared.repair.pr);
+  let live;
+  try { live = repairLive(options, transitioned, prepared.repair.pr, { stage: 'post-push', staleHead: prepared.commit.expectedHead }); }
+  catch (error) {
+    if (error.stale) fail('REPAIR_PUBLICATION_PENDING', error.message.replace(/^codex-delivery-host: /, '')
+      + '; recover with --resume-finalization ' + artifact.candidate_id + ' and a fresh run id');
+    throw error;
+  }
   const next = Object.freeze({ ...transitioned, repair: Object.freeze({ ...prepared.repair, live,
     signed_transition: { candidate_id: artifact.candidate_id, from: prepared.commit.expectedHead,
       to: artifact.commit, tree: artifact.tree, signer: artifact.signer } }) });
@@ -2079,12 +2223,17 @@ function finishRepairRecovery(candidate, artifact, options, stateRoot, key, reco
     plan: planSnapshot(graphFile(options, candidate.worktree), graph.row), baseRef: candidate.base_ref,
     repair: candidate.repair_subject, repo: candidate.repo, repository: candidate.repository,
     stateRoot, key, verificationAllowList: configuredAllowList({ graphFile: graphFile(options, candidate.worktree), repo: candidate.repo }, options) };
-  if (prepared.plan.sha256 !== candidate.plan_sha256
-      || allowListDigest(prepared.verificationAllowList) !== candidate.verification.allow_list_sha256)
+  if (prepared.plan.sha256 !== candidate.plan_sha256)
     fail('REPAIR_SUBJECT_CHANGED', 'signed repair recovery changed its original PLAN or verification assignment');
   const history = repairHistory(prepared, candidate.repair_subject.pr);
   const attempt = history.history.find(item => item.attempt.dispatch_id === candidate.dispatch_id)?.attempt;
   if (!attempt?.result) fail('REPAIR_PREDECESSOR_INVALID', 'recovery lacks complete original sealed repair dispositions');
+  const retained = attempt.preparation?.verificationAllowList;
+  if (Array.isArray(retained) && allowListDigest(retained) === candidate.verification.allow_list_sha256)
+    prepared.verificationAllowList = retained;
+  if (allowListDigest(prepared.verificationAllowList) !== candidate.verification.allow_list_sha256)
+    fail('REPAIR_SUBJECT_CHANGED', 'signed repair recovery changed its original PLAN or verification assignment');
+  recheckRepairAllowList(prepared, options);
   repairNativeCustody.set(prepared, attempt.native_custody);
   const original = authenticatedReceipt(recorder, candidate.dispatch_id, 'review-fix').receipt;
   const stream = parseCodexStream(fs.readFileSync(original.runtime_evidence.transcript.path, 'utf8'));
@@ -2207,6 +2356,20 @@ function performRepairActions(prepared, output, options, dispatchId) {
   return Object.freeze({ status: output.status === 'escalate' ? 'escalated' : 'confirmed', confirmed: state.confirmed });
 }
 
+function signedPublicationOf(stateRoot, key, dispatchId) {
+  const directory = privateDirectory(stateRoot, 'candidates');
+  for (const name of fs.readdirSync(directory)) {
+    if (!/^[0-9a-f]{64}\.json$/.test(name)) continue;
+    const candidate = readSealed(path.join(directory, name), key);
+    if (candidate?.dispatch_id !== dispatchId || candidate.expected_role !== 'review-fix') continue;
+    const file = path.join(privateDirectory(stateRoot, 'repair-publications'), candidate.candidate_id + '.json');
+    if (!fs.existsSync(file)) continue;
+    const publication = readSealed(file, key);
+    return { candidate_id: candidate.candidate_id, status: publication?.status || 'unknown' };
+  }
+  return null;
+}
+
 function resumeRepairActions(options, dispatchId, liveScopeInput) {
   const scope = canonicalCliScope(liveScopeInput);
   const root = hostStateRoot(options, scope), key = hostKey(root);
@@ -2217,6 +2380,12 @@ function resumeRepairActions(options, dispatchId, liveScopeInput) {
   const previous = history.history.find(item => item.attempt.dispatch_id === dispatchId);
   if (!previous?.attempt.preparation || !previous.attempt.result || !previous.receipt)
     fail('REPAIR_PREDECESSOR_INVALID', 'action recovery lacks original protected completion and preparation');
+  const signed = signedPublicationOf(root, key, dispatchId);
+  if (signed) fail('REPAIR_PUBLICATION_PENDING', signed.status === 'confirmed'
+    ? 'dispatch ' + dispatchId + ' has a confirmed signed publication, already published and never replayed; continue with '
+      + '--resume-finalization ' + signed.candidate_id + ' and a fresh run id to apply its review dispositions'
+    : 'dispatch ' + dispatchId + ' has a ' + signed.status + ' signed publication; reconcile it first with --resume-finalization '
+      + signed.candidate_id + ' and a fresh run id');
   const selected = previous.attempt.preparation;
   if (previous.receipt.runtime_evidence.phase !== scope.phase || selected.commit.worktree !== scope.worktree
       || selected.commit.ticket !== scope.ticket || selected.graphFile !== graphPath)

@@ -1296,6 +1296,15 @@ function resealCandidate(f, id, mutate) {
   return nextId;
 }
 
+function sealRecord(f, file, payload) {
+  const sorted = (value) => Array.isArray(value) ? value.map(sorted)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])])) : value;
+  const key = fs.readFileSync(path.join(stateRoot(f), 'finalization-authority', 'hmac.key'));
+  const mac = crypto.createHmac('sha256', key).update(JSON.stringify(sorted(payload))).digest('hex');
+  fs.writeFileSync(file, JSON.stringify({ format: 'shipyard.host-authenticated.v1', payload,
+    integrity: { algorithm: 'hmac-sha256', mac } }) + '\n', { mode: 0o600 });
+}
+
 test('recovery CLI derives a legacy candidate version only from bound authenticated authority and refuses conflicts', async () => {
   for (const variant of ['legacy', 'conflict', 'null', 'missing-authority', 'historical']) {
     const f = fixture();
@@ -2092,6 +2101,9 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   const graphFile = path.join(f.graphDir, 'tickets.json');
   const graph = JSON.parse(fs.readFileSync(graphFile)); graph.tickets[f.scope.ticket].phase = '38';
   fs.writeFileSync(graphFile, JSON.stringify(graph));
+  const journalFile = path.join(f.graphDir, 'delivery-log.jsonl');
+  if (mutation === 'stale-read-exhausted') fs.writeFileSync(journalFile, JSON.stringify({ ts: '2026-11-03T10:00:00.000Z',
+    event: 'status_change', ticket: 'T-38-01', from: null, to: 'pending', pr: null }) + '\n');
   const built = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').build(['review-fix', f.scope.ticket,
     '--runtime', 'codex', '--pr', '501', '--review-file', evidenceFile, '--graph', f.graphDir], { cwd: f.root });
   f.scope = { ...f.scope, ...built.scope };
@@ -2099,7 +2111,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   const legacyActions = mutation?.startsWith('companion-cli-legacy-');
   const threadId = legacyActions ? 'PRRT_kwDOTmU9jc6rQN4b' : 'thread-1';
   const commentId = legacyActions ? 'PRRC_kwDOTmU9jc784inG' : 'comment-1';
-  const locationMutation = mutation?.includes('-location-');
+  const locationMutation = mutation?.includes('-location-') || mutation === 'stale-read-exhausted';
   const feedback = [{ id: threadId, isResolved: false,
     ...((locationMutation || mutation?.startsWith('issue-')) ? { path: 'src/owned.txt', originalLine: 1616, line: 1653 } : {}) }];
   const originalThreadComment = { id: commentId, body: mutation?.startsWith('issue-') ? '[rule-a] Full original thread comment' : 'Full original thread comment' };
@@ -2127,12 +2139,26 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       reply: 'Launch setup exceptions are covered by the outer failure-retention handler.' }];
   }
   let swapReplyTarget = false, mutateRelation = false;
-  let launches = 0, publishedHead = f.base, pushes = 0;
+  let launches = 0, publishedHead = f.base, pushes = 0, pauses = 0, reads = 0, postPushReads = 0, readScript = null, onRead = null;
+  const pauseLog = [];
+  const stalePostPush = { 'recheck-stale-recovers': n => n === 2, 'recheck-stale-exhausted': n => n >= 2,
+    'post-push-stale-head-and-base': () => true, 'stale-exhausted-default-delays': () => true };
+  let staleReads = mutation === 'stale-read-recovers' ? 2 : mutation === 'stale-read-exhausted' ? 99 : 0;
   let relationReads = 0;
   const readOnlyResponses = new Map();
-  const live = () => ({ number: mutation === 'foreign-pr' ? 502 : 501, state: mutation === 'closed-pr' ? 'CLOSED' : 'OPEN',
-    headRefName: 'ticket/T-38-04', headRefOid: mutation === 'stale-head' ? '1'.repeat(40) : publishedHead,
-    baseRefName: 'main', baseRefOid: mutation === 'stale-base' ? '2'.repeat(40) : f.base });
+  const live = () => {
+    reads++;
+    onRead?.(reads);
+    const afterPush = pushes > 0 ? ++postPushReads : 0;
+    const stale = pushes > 0 && (readScript ? readScript(reads) : stalePostPush[mutation] ? stalePostPush[mutation](afterPush)
+      : staleReads > 0 && (staleReads--, true));
+    return { number: mutation === 'foreign-pr' ? 502 : 501, state: mutation === 'closed-pr' ? 'CLOSED' : 'OPEN',
+      headRefName: 'ticket/T-38-04',
+      headRefOid: mutation === 'stale-head' ? '1'.repeat(40)
+        : pushes > 0 && mutation === 'post-push-foreign-head' ? '3'.repeat(40) : stale ? f.base : publishedHead,
+      baseRefName: 'main', baseRefOid: mutation === 'stale-base'
+        || (pushes > 0 && ['post-push-base-change', 'post-push-stale-head-and-base'].includes(mutation)) ? '2'.repeat(40) : f.base };
+  };
   const gh = (_program, args) => {
     if (_program === 'git' && args[0] === 'push') {
       pushes++; publishedHead = git(f.root, 'rev-parse', 'HEAD');
@@ -2162,7 +2188,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         author: replies.length === 0 && Object.hasOwn(forgedAuthor, mutation) ? forgedAuthor[mutation] : actor }; replies.push(comment);
       if (!reviews.length) reviews.push({ id: legacyActions ? 'PRR_kwDOTmU9jc8AAAABRu8U6g' : 'companion-review-1',
         body: '', state: 'COMMENTED', author: actor });
-      if ((mutation === 'thread-response-loss' || mutation === 'companion-cli-response-loss' || mutation === 'companion-cli-legacy-absent'
+      if ((mutation?.startsWith('thread-response-loss') || mutation === 'companion-cli-response-loss' || mutation === 'companion-cli-legacy-absent'
           || mutation?.startsWith('pending-')) && replies.length === 1) throw new Error('Original accepted thread reply response lost');
       if ((mutation === 'companion-cli-reuse-response-loss' && replies.length === 2)
           || (historicalRecovery === 'action' && launches > 1 && replies.length === 3))
@@ -2260,6 +2286,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       const hostOptions = { ...cliOptions(f), host: undefined, scope: f.scope,
       agentManifest, getPullRequest: live, execFileSync: transport, verification: undefined,
       verificationAllowList, hostVerificationRunner: hostRunner(),
+      pause(ms) { pauses++; pauseLog.push(ms); },
+      ...(mutation === 'stale-exhausted-default-delays' ? {} : { repairLiveRetryDelaysMs: [1, 1, 1] }),
       probe: { status: 'available', executable: 'codex', runtime_version: 'fixture',
         capabilities: { supportedModels: [selected.model], supportedEfforts: ['low', 'high', 'xhigh'] } },
       env: { CODEX_HOME: home },
@@ -2408,7 +2436,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       }
       return createCodexDeliveryHost(hostOptions).run(request);
     };
-    if (['thread-response-loss', 'comment-response-loss', 'resolve-response-loss', 'companion-cli-response-loss',
+    if (['thread-response-loss', 'thread-response-loss-foreign-publication', 'comment-response-loss', 'resolve-response-loss', 'companion-cli-response-loss',
       'companion-cli-pending-id', 'companion-cli-reuse-response-loss', 'companion-cli-legacy-id', 'companion-cli-legacy-absent'].includes(mutation)
         || mutation?.startsWith('pending-') || mutation?.startsWith('companion-cli-refuse-')) {
       await assert.rejects(run, { code: 'REPAIR_FEEDBACK_UNAVAILABLE' });
@@ -2425,13 +2453,17 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
           const envelope = JSON.parse(fs.readFileSync(file)); envelope.payload.pending.reply_id = 'foreign-reply';
           fs.writeFileSync(file, JSON.stringify(envelope));
         }
+        const refusedAllowList = mutation === 'companion-cli-refuse-allowlist'
+          ? [...verificationAllowList, { argv: ['node', 'unrelated.cjs'], profile: 'host', timeout_s: 600 }] : verificationAllowList;
         const bytes = fs.readFileSync(file), scopeFile = path.join(home, 'refused-action-scope.json');
         const { runtime: _runtime, provider: _provider, ...scope } = f.scope;
         fs.writeFileSync(scopeFile, JSON.stringify(scope));
         await assert.rejects(() => runCli(['--resume-repair-actions', dispatchId, '--scope-file', scopeFile],
           { write() { throw new Error('refusal cannot produce a success result'); } },
-          { ...cliOptions(f), getPullRequest: live, execFileSync: transport, verificationAllowList }),
-        { code: mutation === 'companion-cli-refuse-ledger' ? 'STATE_RECORD_INVALID' : 'REPAIR_SUBJECT_CHANGED' });
+          { ...cliOptions(f), getPullRequest: live, execFileSync: transport, verificationAllowList: refusedAllowList }),
+        { code: mutation === 'companion-cli-refuse-ledger' ? 'STATE_RECORD_INVALID' : 'REPAIR_SUBJECT_CHANGED',
+          ...(mutation === 'companion-cli-refuse-allowlist'
+            ? { message: 'codex-delivery-host: canonical repair source, PLAN, graph or verification policy changed' } : {}) });
         assert.deepEqual(fs.readFileSync(file), bytes);
         assert.equal(launches, 1); assert.equal(replies.length, 1); assert.equal(prReplies.length, 0);
         assert.equal(feedback[0].isResolved, false);
@@ -2522,7 +2554,25 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         assert.deepEqual(repeated, recovered);
         for (const [file, bytes] of snapshots) assert.deepEqual(fs.readFileSync(path.join(receiptDir, file)), bytes);
         assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
-      } else recovered = recoveryHost.resumeRepairActions(dispatchId, f.scope);
+      } else {
+        if (mutation === 'thread-response-loss-foreign-publication') {
+          const publish = (id, dispatch, status) => {
+            for (const directory of ['candidates', 'repair-publications']) fs.mkdirSync(path.join(stateRoot(f), directory), { recursive: true, mode: 0o700 });
+            sealRecord(f, path.join(stateRoot(f), 'candidates', id + '.json'),
+              { candidate_id: id, dispatch_id: dispatch, expected_role: 'review-fix' });
+            sealRecord(f, path.join(stateRoot(f), 'repair-publications', id + '.json'), { candidate_id: id, commit: 'c'.repeat(40), status });
+          };
+          const own = 'b'.repeat(64), foreign = 'd'.repeat(64);
+          publish(own, dispatchId, 'confirmed');
+          assert.throws(() => recoveryHost.resumeRepairActions(dispatchId, f.scope), error => error.code === 'REPAIR_PUBLICATION_PENDING'
+            && error.message === 'codex-delivery-host: dispatch ' + dispatchId + ' has a confirmed signed publication, already published and never '
+              + 'replayed; continue with --resume-finalization ' + own + ' and a fresh run id to apply its review dispositions');
+          assert.equal(replies.length, 1); assert.equal(feedback[0].isResolved, false);
+          for (const directory of ['candidates', 'repair-publications']) fs.rmSync(path.join(stateRoot(f), directory, own + '.json'));
+          publish(foreign, 'another-dispatch', 'confirmed');
+        }
+        recovered = recoveryHost.resumeRepairActions(dispatchId, f.scope);
+      }
       assert.equal(recovered.actions.confirmed.length, legacyActions ? 5 : 3);
       assert.equal(replies.length + prReplies.length, legacyActions ? 5 : 3, 'accepted replies with lost responses are not replayed');
       assert.equal(feedback[0].isResolved, !legacyActions);
@@ -2560,6 +2610,137 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       assert.equal(replies.length + prReplies.length, 3, 'authenticated recovery confirms the original reply without replay');
       assert.equal(feedback[0].isResolved, true); assert.equal(launches, 1);
       assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      return;
+    }
+    if (mutation === 'stale-read-exhausted') {
+      const caught = await Promise.resolve().then(run).then(() => null, error => error);
+      const [candidateFileName] = fs.readdirSync(path.join(stateRoot(f), 'candidates'));
+      const candidateId = candidateFileName.replace(/\.json$/, '');
+      const stale = 'headRefOid expected=' + JSON.stringify(publishedHead) + ' observed=' + JSON.stringify(f.base);
+      assert.equal(caught?.code, 'REPAIR_PUBLICATION_PENDING');
+      assert.equal(caught.message, 'codex-delivery-host: signed push is not yet visible on the live PR (stage post-push): ' + stale
+        + '; the pending publication is retained and no push is replayed; recover with --resume-finalization ' + candidateId + ' and a fresh run id');
+      assert.equal(pauses, 3); assert.equal(pushes, 1);
+      const publicationFile = path.join(stateRoot(f), 'repair-publications', candidateFileName);
+      assert.equal(JSON.parse(fs.readFileSync(publicationFile)).payload.status, 'pending');
+      const recover = allowList => createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport,
+        verification: undefined, verificationAllowList: allowList, hostVerificationRunner: hostRunner(),
+        pause(ms) { pauses++; pauseLog.push(ms); }, repairLiveRetryDelaysMs: [1, 1, 1] })
+        .resumeFinalization(candidateId, f.scope);
+      const changed = verificationAllowList.map(entry => ({ ...entry, timeout_s: 1200 }));
+      await assert.rejects(() => recover(changed), error => error.code === 'REPAIR_SUBJECT_CHANGED');
+      assert.equal(JSON.parse(fs.readFileSync(publicationFile)).payload.status, 'pending');
+      const waited = { pauses, reads };
+      await assert.rejects(() => recover(verificationAllowList), error => error.code === 'REPAIR_PUBLICATION_PENDING'
+        && error.message === 'codex-delivery-host: original publication outcome is not independently confirmed; no push is replayed (' + stale + ')');
+      assert.deepEqual({ pauses, reads }, { pauses: waited.pauses, reads: waited.reads + 1 },
+        'a stale read while recovering a pending publication refuses at once, without a wait or a second read');
+      const extended = [...verificationAllowList, { argv: ['node', 'unrelated.cjs'], profile: 'host', timeout_s: 600 }];
+      const dispatchId = JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'candidates', candidateFileName))).payload.dispatch_id;
+      assert.throws(() => createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport,
+        verificationAllowList: extended }).resumeRepairActions(dispatchId, f.scope),
+      error => error.code === 'REPAIR_PUBLICATION_PENDING' && error.message === 'codex-delivery-host: dispatch ' + dispatchId
+        + ' has a pending signed publication; reconcile it first with --resume-finalization ' + candidateId + ' and a fresh run id');
+      staleReads = 0;
+      const pinnedJournal = fs.readFileSync(journalFile, 'utf8');
+      const line = value => JSON.stringify(value) + '\n';
+      const ts = '2026-11-03T11:37:04.420Z';
+      for (const relevant of [
+        { ts, event: 'attempt', ticket: f.scope.ticket, pr: 501 },
+        { ts, event: 'status_change', ticket: 'T-38-01', from: 'pr-open', to: 'merged', pr: 501 },
+        { ts, event: 'escalation', ticket: f.scope.ticket, by: 'operator', reason: 'native failure', pr: 501 },
+      ]) {
+        fs.writeFileSync(journalFile, pinnedJournal + line(relevant));
+        await assert.rejects(() => recover(extended), { code: 'REPAIR_PREDECESSOR_INVALID' });
+      }
+      fs.writeFileSync(journalFile, pinnedJournal);
+      let injected = false;
+      onRead = () => {
+        if (injected) return;
+        injected = true;
+        fs.appendFileSync(journalFile, line({ ts, event: 'escalation', ticket: f.scope.ticket, by: 'escalation-record', reason: 'native failure', pr: 502 }));
+      };
+      await assert.rejects(() => recover(extended), error => error.code === 'REPAIR_PREDECESSOR_INVALID'
+        && error.message.includes('appended repair history contains a record relevant to this repair subject'));
+      onRead = null;
+      assert.ok(injected, 'the row is appended after the original history was read, so only the pinned-journal recheck can see it');
+      fs.writeFileSync(journalFile, pinnedJournal + line({ ts, event: 'status_change', ticket: 'T-38-09', from: 'pending', to: 'pr-open', pr: 205 })
+        + line({ ts, event: 'jira_transition', ticket: 'T-38-09', to: 'On Review' })
+        + line({ ts, event: 'base_merge', ticket: 'T-38-09', pr: 205, head: 'f'.repeat(40) })
+        + line({ ts, event: 'escalation', ticket: f.scope.ticket, by: 'escalation-record', reason: 'native failure', pr: 501 }));
+      feedback[0].originalLine = 1;
+      await assert.rejects(() => recover(extended), { code: 'REPAIR_SUBJECT_CHANGED' });
+      feedback[0].originalLine = 1616; feedback[0].line = null;
+      assert.equal(JSON.parse(fs.readFileSync(publicationFile)).payload.status, 'pending');
+      const finalizedFile = id => path.join(stateRoot(f), 'finalized', id + '.json');
+      const tampered = resealCandidate(f, candidateId, payload => {
+        payload.verification = { ...payload.verification, allow_list_sha256: 'a'.repeat(64) };
+      });
+      sealRecord(f, finalizedFile(tampered), { ...JSON.parse(fs.readFileSync(finalizedFile(candidateId))).payload, candidate_id: tampered });
+      const pushed = pushes;
+      await assert.rejects(() => createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport,
+        verification: undefined, verificationAllowList: extended, hostVerificationRunner: hostRunner() }).resumeFinalization(tampered, f.scope),
+      error => error.code === 'REPAIR_SUBJECT_CHANGED' && error.message
+        === 'codex-delivery-host: signed repair recovery changed its original PLAN or verification assignment');
+      assert.equal(pushes, pushed); assert.ok(!fs.existsSync(path.join(stateRoot(f), 'repair-publications', tampered + '.json')));
+      const secondRead = { pauses, base: reads };
+      readScript = n => n === secondRead.base + 2;
+      const recovered = await recover(extended);
+      readScript = null;
+      assert.equal(pauses, secondRead.pauses + 1, 'only the recheck read waits; the pending-recovery stage is one read');
+      assert.equal(recovered.publication.status, 'confirmed');
+      assert.equal(recovered.artifact.commit, publishedHead);
+      assert.equal(recovered.actions.status, 'confirmed');
+      const repeated = await recover(extended);
+      assert.equal(repeated.publication.status, 'confirmed');
+      assert.deepEqual(repeated.actions, recovered.actions);
+      readScript = () => true;
+      const confirmedWaits = pauses;
+      await assert.rejects(() => recover(extended), error => error.code === 'REPAIR_PUBLICATION_PENDING' && error.message
+        === 'codex-delivery-host: signed publication is already confirmed but its head is not yet visible on the live PR (stage recheck): '
+        + stale + '; no push is replayed; continue with --resume-finalization ' + candidateId + ' and a fresh run id');
+      readScript = null;
+      assert.equal(pauses, confirmedWaits + 3);
+      assert.equal(pushes, 1, 'an independently confirmed signed push is never replayed');
+      assert.equal(launches, 1);
+      assert.equal(replies.length + prReplies.length, 0, 'recovery replays no review reply');
+      return;
+    }
+    if (['post-push-foreign-head', 'post-push-base-change', 'post-push-stale-head-and-base'].includes(mutation)) {
+      const fields = { 'post-push-foreign-head': ['headRefOid'], 'post-push-base-change': ['baseRefOid'],
+        'post-push-stale-head-and-base': ['headRefOid', 'baseRefOid'] }[mutation];
+      await assert.rejects(run, error => error.code === 'REPAIR_SUBJECT_CHANGED' && fields.every(field => error.message.includes(field))
+        && error.message.includes('post-push') && !error.message.includes('not yet visible'));
+      assert.equal(pauses, 0); assert.equal(pushes, 1);
+      assert.equal(postPushReads, 1, 'a mismatch beyond the stale head is refused on the first read');
+      const [candidateFileName] = fs.readdirSync(path.join(stateRoot(f), 'candidates'));
+      const publicationFile = path.join(stateRoot(f), 'repair-publications', candidateFileName);
+      assert.equal(JSON.parse(fs.readFileSync(publicationFile)).payload.status, 'pending');
+      await assert.rejects(() => createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport,
+        verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() })
+        .resumeFinalization(candidateFileName.replace(/\.json$/, ''), f.scope), { code: 'REPAIR_PUBLICATION_PENDING' });
+      assert.equal(JSON.parse(fs.readFileSync(publicationFile)).payload.status, 'pending');
+      assert.equal(pushes, 1);
+      return;
+    }
+    if (['recheck-stale-exhausted', 'stale-exhausted-default-delays'].includes(mutation)) {
+      const caught = await Promise.resolve().then(run).then(() => null, error => error);
+      assert.equal(caught?.code, 'REPAIR_PUBLICATION_PENDING');
+      const [candidateFileName] = fs.readdirSync(path.join(stateRoot(f), 'candidates'));
+      const stale = 'headRefOid expected=' + JSON.stringify(publishedHead) + ' observed=' + JSON.stringify(f.base);
+      if (mutation === 'recheck-stale-exhausted') {
+        assert.equal(caught.message, 'codex-delivery-host: signed push is not yet visible on the live PR (stage recheck): ' + stale
+          + '; the pending publication is retained and no push is replayed');
+        assert.equal(pauses, 3); assert.equal(postPushReads, 5, 'one fresh post-push read, then the stale recheck read and its three retries');
+      } else {
+        assert.equal(caught.message, 'codex-delivery-host: signed push is not yet visible on the live PR (stage post-push): ' + stale
+          + '; the pending publication is retained and no push is replayed; recover with --resume-finalization '
+          + candidateFileName.replace(/\.json$/, '') + ' and a fresh run id');
+        assert.deepEqual(pauseLog, [1000, 2000, 4000, 8000, 8000]);
+        assert.equal(postPushReads, 6, 'the default table allows six reads');
+      }
+      assert.equal(pushes, 1);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-publications', candidateFileName))).payload.status, 'pending');
       return;
     }
     if (mutation === 'publication-response-loss') {
@@ -2896,8 +3077,9 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
           }
           await assert.rejects(() => recovery.resumeFinalization(candidate.candidate_id, { ...f.scope, repository: 'foreign-repository' }));
           unchangedCounters();
-          verificationAllowList.push({ argv: ['node', '--invalid-recovery-policy'], profile: 'host', timeout_s: 600 });
-          try { await assert.rejects(resume); unchangedCounters(); } finally { verificationAllowList.pop(); }
+          const approvedPolicy = verificationAllowList.map(entry => ({ ...entry }));
+          for (const entry of verificationAllowList) entry.timeout_s = 1200;
+          try { await assert.rejects(resume); unchangedCounters(); } finally { verificationAllowList.splice(0, Infinity, ...approvedPolicy); }
           const baseBefore = git(f.root, 'rev-parse', 'main');
           try {
             git(f.root, 'update-ref', 'refs/heads/main', candidate.expected_head === baseBefore ? 'HEAD' : candidate.expected_head);
@@ -2938,12 +3120,12 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
             for (const invalid of [JSON.stringify(row), 'false\n', '{bad}\n',
               JSON.stringify({ ...row, ticket: f.scope.ticket }) + '\n',
               JSON.stringify({ ...row, pr: candidate.repair_subject.pr }) + '\n',
-              JSON.stringify({ ...row, event: 'repair_attempt' }) + '\n',
-              JSON.stringify({ ...row, to: false }) + '\n', Buffer.from([0xff, 10])]) {
+              JSON.stringify({ ...row, ts: 'yesterday' }) + '\n', JSON.stringify({ ...row, event: undefined }) + '\n',
+              Buffer.from([0xff, 10])]) {
               append(invalid);
               await assert.rejects(resume); unchangedCounters();
             }
-            append(JSON.stringify(row) + '\n');
+            append(JSON.stringify({ ...row, event: 'repair_attempt', to: false, pr: 1 }) + '\n' + JSON.stringify(row) + '\n');
             const evolved = JSON.parse(originalGraph);
             evolved.tickets['T-999-99'] = { ...evolved.tickets[f.scope.ticket], depends_on: [f.scope.ticket] };
             fs.writeFileSync(graphFile, JSON.stringify(evolved));
@@ -3061,7 +3243,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       assert.equal(git(f.root, 'rev-parse', 'HEAD'), historicalRecovery === 'direct' ? second.artifact.commit : currentHead);
       return;
     }
-    if (mutation) {
+    if (mutation && !['stale-read-recovers', 'recheck-stale-recovers'].includes(mutation)) {
       const expectedCode = {
         'foreign-pr': 'REPAIR_SUBJECT_CHANGED', 'closed-pr': 'REPAIR_SUBJECT_CHANGED',
         'stale-head': 'REPAIR_SUBJECT_CHANGED', 'stale-base': 'REPAIR_SUBJECT_CHANGED',
@@ -3150,6 +3332,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
       assert.equal(result.actions.status, 'confirmed');
       assert.equal(publishedHead, result.artifact.commit);
+      if (mutation === 'stale-read-recovers') { assert.equal(pauses, 2); assert.equal(pushes, 1); }
+      if (mutation === 'recheck-stale-recovers') { assert.equal(pauses, 1); assert.equal(pushes, 1); }
       assert.ok(git(f.root, 'show', '-s', '--format=%B', 'HEAD').includes('Shipyard-Verification-Evidence:'));
       const signedCandidate = JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'candidates', result.artifact.candidate_id + '.json'))).payload;
       assert.equal(signedCandidate.expected_role, 'review-fix');
@@ -3160,6 +3344,10 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       const resumed = await recoveryHost.resumeFinalization(result.artifact.candidate_id, f.scope);
       assert.equal(resumed.idempotent, true); assert.equal(resumed.artifact.commit, result.artifact.commit);
       assert.equal(resumed.publication.status, 'confirmed'); assert.equal(launches, 1);
+      assert.throws(() => recoveryHost.resumeRepairActions(result.receipt.dispatch_id, f.scope), error => error.code === 'REPAIR_PUBLICATION_PENDING'
+        && error.message === 'codex-delivery-host: dispatch ' + result.receipt.dispatch_id + ' has a confirmed signed publication, already published '
+          + 'and never replayed; continue with --resume-finalization ' + result.artifact.candidate_id
+          + ' and a fresh run id to apply its review dispositions');
     } else {
       assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
       assert.equal(result.artifact, undefined);
@@ -3187,6 +3375,19 @@ for (const outcome of ['source', 'no-op', 'escalate']) test('canonical builder t
 for (const mutation of ['missing-schema', 'foreign-schema', 'extra-result-field', 'extra-disposition-field', 'escalate-resolve'])
   test('complete multi-message escalated native fixer refuses ' + mutation + ' before any host action',
     () => withGraphDirEnv(undefined, () => originalFixerFixture('escalate', mutation)));
+test('signed fixer publication confirms after a bounded stale post-push read',
+  () => withGraphDirEnv(undefined, () => originalFixerFixture('source', 'stale-read-recovers')));
+test('signed fixer publication confirms after a bounded stale recheck read',
+  () => withGraphDirEnv(undefined, () => originalFixerFixture('source', 'recheck-stale-recovers')));
+for (const mutation of ['stale-read-exhausted', 'post-push-foreign-head', 'post-push-base-change'])
+  test('signed fixer publication ' + mutation + ' names the failing field and recovers without a second push or replies',
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
+test('signed fixer publication refuses at once when the stale head comes with another differing field',
+  () => withGraphDirEnv(undefined, () => originalFixerFixture('source', 'post-push-stale-head-and-base')));
+test('signed fixer publication keeps the pending publication when the recheck read stays stale',
+  () => withGraphDirEnv(undefined, () => originalFixerFixture('source', 'recheck-stale-exhausted')));
+test('signed fixer publication waits the default 1, 2, 4, 8, 8 second table across six reads',
+  () => withGraphDirEnv(undefined, () => originalFixerFixture('source', 'stale-exhausted-default-delays')));
 test('signed fixer publication recovers a lost response without replaying its confirmed push',
   () => withGraphDirEnv(undefined, () => originalFixerFixture('source', 'publication-response-loss')));
 for (const mutation of ['foreign-pr', 'closed-pr', 'stale-head', 'stale-base', 'failed-page', 'overflow', 'disposition-budget', 'duplicate-feedback',
@@ -3201,6 +3402,7 @@ for (const mutation of ['thread-response-loss', 'comment-response-loss', 'resolv
   'companion-cli-response-loss', 'companion-cli-pending-id', 'companion-cli-legacy-id', 'companion-cli-legacy-absent',
   'companion-cli-reuse-response-loss',
   'companion-cli-refuse-head', 'companion-cli-refuse-graph', 'companion-cli-refuse-plan', 'companion-cli-refuse-ledger',
+  'companion-cli-refuse-allowlist', 'thread-response-loss-foreign-publication',
   'pending-duplicate', 'pending-author', 'pending-body', 'pending-target', 'pending-external', 'pending-missing'])
   test('original feedback action recovers ' + mutation + ' without reply replay',
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
@@ -3374,6 +3576,70 @@ for (const mutation of ['attempt', 'fix-round', 'native-escalation', 'marker-ext
     () => operationalEscalationHistoryRegression(mutation));
 
 
+
+function feedbackMovedByPublication() {
+  const source = fs.readFileSync(path.join(__dirname, '../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs'), 'utf8');
+  const body = source.slice(source.indexOf('function repairFeedbackMovedByPublication('), source.indexOf('function recheckRepairAllowList('));
+  const canonical = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
+  const remote = { author: { __typename: 'Bot', login: 'coderabbitai' }, resolvedBy: { id: 'me', login: 'me' },
+    editor: { __typename: 'Bot', login: 'coderabbitai' }, added: { __typename: 'Bot', login: 'coderabbitai' } };
+  const check = new Function('readSealed', 'candidateFile', 'canonical', 'repairCommand', 'object', 'repairActor',
+    body + '; return repairFeedbackMovedByPublication;')(
+    () => ({ changed: ['src/a.ts'] }), () => 'candidate', canonical,
+    (_options, _worktree, args) => {
+      const query = args.find(arg => arg.startsWith('query='));
+      return { data: { node: query.includes('PullRequestReview{') ? { author: remote.added }
+        : query.includes('IssueComment') ? { author: remote.author }
+          : query.includes('PullRequestReviewThread') ? { resolvedBy: remote.resolvedBy } : { editor: remote.editor } } };
+    },
+    value => value !== null && typeof value === 'object' && !Array.isArray(value), () => ({ id: 'me', login: 'me' }));
+  const thread = (id, file, line) => ({ kind: 'thread', id, path: file, line, original_line: 10, resolved: false, body: '', body_sha256: 'e' });
+  const comment = (id, text, author = 'coderabbitai') => ({ kind: 'comment', id, body: text, body_sha256: 'h-' + text, author, author_id: 'a-' + author });
+  const sealed = { inventory: [thread('t1', 'src/a.ts', 5), thread('t2', 'src/b.ts', 7), comment('c1', 'old'),
+    { kind: 'pr-body', id: 'pr', body: 'old body', body_sha256: 'h-old-body', title: 'T', author: null }] };
+  const prepared = { repair: { signed_transition: { candidate_id: 'x' } }, stateRoot: 'r', key: 'k', commit: { worktree: 'w' } };
+  const verdict = (inventory, subject = prepared) => check(subject, { inventory }, sealed, {});
+  const edit = (index, patch) => sealed.inventory.map((item, at) => at === index ? { ...item, ...patch } : item);
+  return { sealed, verdict, edit, comment, remote, prepared };
+}
+
+test('published fix tolerates covered line movement, bot edits and the host actor own resolution or description edit', () => {
+  const { sealed, verdict, edit, comment, remote, prepared } = feedbackMovedByPublication();
+  assert.equal(verdict(edit(0, { line: null })), true);
+  assert.equal(verdict(edit(1, { line: null })), false, 'a thread on an unchanged file keeps its line');
+  assert.equal(verdict(edit(0, { original_line: 11 })), false);
+  assert.equal(verdict(edit(0, { path: 'src/b.ts' })), false);
+  assert.equal(verdict(edit(2, { body: 'new', body_sha256: 'h-new' })), true);
+  assert.equal(verdict(edit(2, { body: 'new', body_sha256: 'h-new', author: 'someone', author_id: 'a-someone' })), false);
+  remote.author = { __typename: 'User', login: 'coderabbitai' };
+  assert.equal(verdict(edit(2, { body: 'new', body_sha256: 'h-new' })), false, 'a human comment edit is a feedback change');
+  remote.author = { __typename: 'Bot', login: 'coderabbitai' };
+  assert.equal(verdict(edit(0, { resolved: true })), true, 'the host actor may resolve a thread');
+  remote.resolvedBy = { id: 'other', login: 'other' };
+  assert.equal(verdict(edit(0, { resolved: true })), false, 'another person resolving a thread is a feedback change');
+  remote.resolvedBy = { id: 'me', login: 'me' };
+  assert.equal(verdict(sealed.inventory.map(item => item.id === 't1' ? { ...item, resolved: true } : item)
+    .map(item => item.id === 't2' ? { ...item, resolved: false } : item)), true);
+  assert.equal(verdict(edit(3, { body: 'new body', body_sha256: 'h-new-body' })), true, 'a bot or the host actor may edit the PR description');
+  remote.editor = { __typename: 'User', id: 'other', login: 'other' };
+  assert.equal(verdict(edit(3, { body: 'new body', body_sha256: 'h-new-body' })), false);
+  remote.editor = { __typename: 'User', id: 'me', login: 'me' };
+  assert.equal(verdict(edit(3, { body: 'new body', body_sha256: 'h-new-body' })), true);
+  assert.equal(verdict(edit(3, { title: 'Other' })), false);
+  assert.equal(verdict([...sealed.inventory, comment('c2', 'extra')]), true, 'a bot re-review of the new head adds feedback');
+  assert.equal(verdict([...sealed.inventory, { kind: 'review', id: 'r2', body: 'x', body_sha256: 'h-x', state: 'CHANGES_REQUESTED', author: 'coderabbitai' }]), true);
+  remote.added = { __typename: 'User', id: 'other', login: 'other' };
+  assert.equal(verdict([...sealed.inventory, comment('c2', 'extra')]), false, 'feedback added by another person is not tolerated');
+  remote.added = { __typename: 'User', id: 'me', login: 'me' };
+  assert.equal(verdict([...sealed.inventory, { kind: 'review', id: 'r2', body: 'x', body_sha256: 'h-x', author: 'me' }]), true);
+  remote.added = { __typename: 'Bot', login: 'coderabbitai' };
+  assert.equal(verdict([...sealed.inventory, { kind: 'thread', id: 't3', path: 'src/z.ts', line: 3, original_line: 3, resolved: false, body: '', body_sha256: 'e' },
+    { kind: 'thread-comment', id: 'tc3', thread_id: 't3', body: 'x', body_sha256: 'h-x', author: 'coderabbitai' }]), true);
+  assert.equal(verdict(sealed.inventory.slice(0, 3)), false, 'sealed feedback may not disappear');
+  assert.equal(verdict([...sealed.inventory.slice(0, 3), { kind: 'pr-body', id: 'pr2', body: 'x', body_sha256: 'h-x', title: 'T' }]), false);
+  assert.equal(verdict(edit(2, { body: 'new', body_sha256: 'h-new' }), { ...prepared, repair: {} }), false, 'nothing is tolerated before a signed publication');
+});
 
 test('focused prepared custody is forbidden in caller delivery request context', () => {
   const host = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
