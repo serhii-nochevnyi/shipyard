@@ -37,9 +37,12 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --wo
 
 For the phase epic PR run the phase code review first, then the integrator,
 then `arch-review`; in `hold` mode the builder refuses until a current verdict
-with no blocking finding exists for the exact head, with the operator exit of
-setting `delivery_pipeline.code_review` to `report` for this PR in the project
-root's `.planning/config.json` (no override flag or waiver record).
+with no blocking finding exists for the exact head. The operator has two exits:
+at the round limit, allow one more round with `phase-code-review.cjs extend`
+(one more round per operator record, five rounds in total at most), or set
+`delivery_pipeline.code_review` to `report` in the project root's
+`.planning/config.json`. `report` applies to the whole project until it is set
+back to `hold`; nothing is held while it is on.
 
 For a foreign repository phase, pass `--repo owner/name` to both commands to
 select that repository’s phase tickets and integration PR. For a local repository
@@ -1382,7 +1385,8 @@ driving PRs hands the user a half-truth.
      checkout; state-sync's `⚠ epic … has N commit(s) but no PR` line is the trigger
      and it is actionable work, not a note);
    - **Phase code review.** `delivery_pipeline.code_review` defaults to `hold`;
-     `report` observes without holding and is the single exit for this PR.
+     `report` observes without holding and applies to the whole project until it
+     is set back to `hold`; restore `hold` once the PR merges.
      Before any review launch, list the epic worktree
      (list only; clear nothing at this point):
 
@@ -1452,12 +1456,17 @@ driving PRs hands the user a half-truth.
      --pr <integration-pr> --graph <project-root>/.planning/graph` into decompose
      Step 4 and the next delivery loop, only in rounds 1 and 2. In `report`, show
      those proposed tickets without injecting them and continue. In `hold`,
-     `needs-fix` with `repair: human` (round 3), `incomplete` and `limit` stop for
-     the operator with the printed reason and named exit: set
-     `delivery_pipeline.code_review` to `report` for this PR in the project root's
-     `.planning/config.json`; there is no override flag or waiver record.
-     For `incomplete`, fix the cause and retry, or use that exit. Report mode
-     shows the reason and exit without holding integration. Reviews run once on
+     `needs-fix` with `repair: human` (round 3, 4 or 5), `incomplete` and `limit`
+     stop for the operator with the printed reason and its named exits: at
+     `limit`, `phase-code-review.cjs extend --phase <N> --pr <integration-pr>
+     --reason "<why>" --confirm extend-review-round` grants one more round
+     (a delta from the last counted review, five rounds in total at most; the
+     operator runs it, a role-hosted child is refused), or set
+     `delivery_pipeline.code_review` to `report` in the project root's
+     `.planning/config.json`, which applies to the whole project until it is set
+     back to `hold`. For `incomplete`, fix the cause and retry, or use `report`.
+     Report mode shows the reason and exits without holding integration; the
+     operator sets `hold` again once the PR merges. Reviews run once on
      the final head: the integrator and phase architecture review are not
      launched until the verdict is current or the mode is `report`. Any push
      re-owes code review first.
