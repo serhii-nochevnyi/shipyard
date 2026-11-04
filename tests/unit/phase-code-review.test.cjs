@@ -725,15 +725,20 @@ test('R-11 many fixes cost one round: three pushes before any record give one ro
 test('R-11 a record voided by a push costs nothing and a fresh record at the new head still yields round 4', () => {
   const f = fixture(null);
   try {
-    atLimit(f);
-    const push = pusher(f, 4);
+    atLimit(f, false);
+    const push = pusher(f), round3 = f.live().headRefOid;
+    push();
     grant(f);
     assert.equal(flow.status(f.input()).round_limit, 4);
-    push();
+    const binding = push();
     limited(f, 3, 3);
     const fresh = grant(f), owed = flow.status(f.input());
     assert.deepEqual([owed.state, owed.round, owed.scope, owed.round_limit, owed.rounds_used], ['owed', 4, 'delta', 4, 3]);
     assert.equal(readRecords(f).length, 2);
+    artifact.sealJudgment(artifactInput(f, binding, raw(true, [blocker]), 4, round3, fresh));
+    extendedStatus(f, 4, 4, fresh);
+    push();
+    limited(f, 4, 4);
   } finally { f.cleanup(); }
 });
 
@@ -779,6 +784,7 @@ test('R-11 a record written after its head was already reviewed grants nothing o
   try {
     atLimit(f, false);
     recordWrite(f, 52);
+    assert.equal(flow.status(f.input()).round_limit, 4);
     f.advance(4);
     limited(f, 3, 3);
   } finally { f.cleanup(); }
@@ -825,6 +831,7 @@ for (const jira of shapes) test('R-11 publication: the sealed round 4 shows the 
     limited(f, 5, 5);
     const spent = flow.publish({ ...f.input(), live: undefined }, options);
     assert.deepEqual([writes.length, comments.length, spent.status.ok, spent.comment.action], [2, 1, true, 'skipped']);
+    assert.equal(writes[1].state, 'pending');
     assert.equal(writes[1].description, 'code review limit reached: no further review will run for this head');
   } finally { f.cleanup(); }
 });
