@@ -1452,7 +1452,6 @@ function repairReplyReview(options, prepared, feedback, reply, original, actor, 
 }
 
 function confirmRepairReply(options, prepared, feedback, current, reply, original, disposition, actor) {
-  const additions = current.inventory.filter(item => !feedback.inventory.some(old => old.id === item.id));
   const known = feedback.inventory.find(item => item.id === reply?.id);
   if (current.repo !== feedback.repo || !matchingRepairReply(reply, original, disposition, actor)
       || (known && canonical(known) !== canonical(reply)))
@@ -1460,11 +1459,24 @@ function confirmRepairReply(options, prepared, feedback, current, reply, origina
   const relation = reply.kind === 'thread-comment'
     ? repairReplyReview(options, prepared, current, reply, original, actor) : null;
   const created = relation && !feedback.inventory.some(item => item.id === relation.review.id);
-  const expected = new Set([...(known ? [] : [reply.id]), ...(created ? [relation.review.id] : [])]);
-  if (additions.length !== expected.size || additions.some(item => !expected.has(item.id))
-      || (created && (relation.review.body !== '' || relation.review.state !== 'COMMENTED')))
-    fail('REPAIR_ACTION_PENDING', 'reply added feedback beyond its exact independently linked companion review');
+  if (created && (relation.review.body !== '' || relation.review.state !== 'COMMENTED'))
+    fail('REPAIR_ACTION_PENDING', 'reply companion review differs from its expected empty COMMENTED review');
   return relation ? { ...relation, created: !!created } : null;
+}
+
+function repairFeedbackChanges(before, current, reply, relation, resolvedThread = null) {
+  const expected = new Map(before.inventory.map(item => [item.id, item]));
+  if (reply) expected.set(reply.id, reply);
+  if (relation?.created) expected.set(relation.review.id, relation.review);
+  if (resolvedThread && expected.has(resolvedThread))
+    expected.set(resolvedThread, { ...expected.get(resolvedThread), resolved: true });
+  const actual = new Map(current.inventory.map(item => [item.id, item]));
+  const added = current.inventory.filter(item => !expected.has(item.id)).map(item => item.id);
+  const removed = [...expected.keys()].filter(id => !actual.has(id));
+  const changed = [...expected].filter(([id, item]) => actual.has(id) && canonical(actual.get(id)) !== canonical(item))
+    .map(([id, item]) => ({ id, fields: [...new Set([...Object.keys(item), ...Object.keys(actual.get(id))])]
+      .filter(field => canonical(item[field]) !== canonical(actual.get(id)[field])) }));
+  return added.length || removed.length || changed.length ? { added, removed, changed } : null;
 }
 
 function repairRevisionSigner(root, commit, expectedSigner = null) {
@@ -2186,7 +2198,7 @@ function performSignedRepairPublication(prepared, signed, options) {
     const actionFile = path.join(privateDirectory(prepared.stateRoot, 'repair-actions'), sha256(candidate.dispatch_id) + '.json');
     const actions = fs.existsSync(actionFile) ? readSealed(actionFile, prepared.key) : null;
     if (fs.existsSync(actionFile) && !actions) fail('REPAIR_ACTION_PENDING', 'protected action recovery authentication failed');
-    recheckRepair(restored, options, { clean: true, feedback: actions?.pending
+    recheckRepair(restored, options, { clean: true, feedback: actions
       ? completeRepairFeedback(options, restored, restored.repair.pr) : actions?.feedback || restored.repair.feedback });
     return Object.freeze(restored);
   }
@@ -2265,6 +2277,27 @@ function performRepairActions(prepared, output, options, dispatchId) {
   if (state.actor && canonical(repairActor(options, prepared)) !== canonical(state.actor))
     fail('REPAIR_ACTION_PENDING', 'remote action author changed from its original protected identity');
   let feedback = state.feedback || prepared.repair.feedback;
+  const result = () => Object.freeze({ status: state.feedback_changes ? 'feedback_changed'
+    : output.status === 'escalate' ? 'escalated' : 'confirmed', confirmed: state.confirmed,
+    ...(state.feedback_changes ? { requires_reassessment: true, feedback_changes: state.feedback_changes } : {}) });
+  const confirm = (current, disposition, reply, relation, resolved = false) => {
+    for (const prior of state.confirmed) {
+      const retained = state.feedback.inventory.find(item => item.id === prior.reply_id);
+      if (canonical(current.inventory.find(item => item.id === prior.reply_id)) !== canonical(retained)
+          || (prior.reply_review && canonical(current.inventory.find(item => item.id === prior.reply_review.review.id))
+            !== canonical(prior.reply_review.review)))
+        fail('REPAIR_ACTION_PENDING', 'previously confirmed reply or companion review changed during action confirmation');
+    }
+    const original = prepared.repair.feedback.inventory.find(item => item.id === disposition.id);
+    const threadId = original.kind === 'thread' ? original.id : original.thread_id;
+    const changes = repairFeedbackChanges(feedback, current, reply, relation, resolved ? threadId : null);
+    feedback = current;
+    state = { ...state, feedback, pending: null,
+      ...(changes ? { feedback_changes: changes } : {}),
+      confirmed: [...state.confirmed.filter(item => item.feedback_id !== disposition.id),
+        { feedback_id: disposition.id, reply_id: reply.id, resolved, ...(relation ? { reply_review: relation } : {}) }] };
+    atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
+  };
   if (state.pending) {
     const disposition = output.review_dispositions.find(item => item.id === state.pending.feedback_id);
     const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
@@ -2274,24 +2307,22 @@ function performRepairActions(prepared, output, options, dispatchId) {
     const matches = (state.pending.reply_id ? current.inventory.filter(item => item.id === state.pending.reply_id) : additions)
       .filter(item => matchingRepairReply(item, original, disposition, state.actor));
     const reply = matches.length === 1 ? matches[0] : null;
-    const expected = feedback.inventory.map(item => state.pending.action === 'resolve' && item.id === threadId
-      ? { ...item, resolved: current.inventory.find(now => now.id === threadId)?.resolved } : item);
     if (!['reply', 'resolve'].includes(state.pending.action) || current.repo !== feedback.repo
-        || !disposition || !matchingRepairReply(reply, original, disposition, state.actor) || sha256(reply.body) !== state.pending.body_sha256
-        || expected.some(item => canonical(current.inventory.find(now => now.id === item.id)) !== canonical(item)))
-      fail('REPAIR_ACTION_PENDING', 'uncertain action cannot be independently reconciled with its original ID and complete inventory');
+        || !disposition || !matchingRepairReply(reply, original, disposition, state.actor) || sha256(reply.body) !== state.pending.body_sha256)
+      fail('REPAIR_ACTION_PENDING', 'uncertain action cannot be independently reconciled with its original ID, author, body and target');
     let relation = confirmRepairReply(options, prepared, feedback, current, reply, original, disposition, state.actor);
     if (state.pending.reply_review) {
       repairReplyReview(options, prepared, current, reply, original, state.actor, state.pending.reply_review);
       relation = state.pending.reply_review;
     }
+    confirm(current, disposition, reply, relation,
+      state.pending.action === 'resolve' && current.inventory.find(item => item.id === threadId)?.resolved === true);
+  }
+  if (stored && !state.pending) {
+    const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
+    const changes = repairFeedbackChanges(feedback, current);
+    if (changes && !state.feedback_changes) state = { ...state, feedback_changes: changes };
     feedback = current;
-    const confirmation = { feedback_id: disposition.id, reply_id: reply.id,
-      resolved: disposition.action === 'reply-and-resolve' && current.inventory.find(item => item.id === threadId)?.resolved === true,
-      ...(relation ? { reply_review: relation } : {}) };
-    state = { ...state, feedback, pending: null,
-      confirmed: [...state.confirmed.filter(item => item.feedback_id !== disposition.id), confirmation] };
-    atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
   }
   recheckRepair(prepared, options, { clean: true, feedback });
   for (const action of state.confirmed) {
@@ -2301,6 +2332,11 @@ function performRepairActions(prepared, output, options, dispatchId) {
     if (!matchingRepairReply(reply, original, disposition, state.actor) || (action.resolved && !original?.resolved))
       fail('REPAIR_ACTION_PENDING', 'retained confirmed action no longer matches its actual full live inventory');
     if (action.reply_review) repairReplyReview(options, prepared, feedback, reply, original, state.actor, action.reply_review);
+  }
+  if (state.feedback_changes) {
+    state = { ...state, feedback };
+    atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
+    return result();
   }
   for (const disposition of output.review_dispositions) {
     if (disposition.action === 'escalate' || output.status === 'escalate') continue;
@@ -2329,11 +2365,10 @@ function performRepairActions(prepared, output, options, dispatchId) {
       state = { ...state, pending: { ...state.pending, reply_id: posted.id } };
       atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
       const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
-      if (feedback.inventory.some(old => canonical(current.inventory.find(item => item.id === old.id)) !== canonical(old)))
-        fail('REPAIR_ACTION_PENDING', 'reply was not independently confirmed in the complete live inventory');
       relation = confirmRepairReply(options, prepared, feedback, current,
         current.inventory.find(item => item.id === posted.id), entry, disposition, state.actor);
-      feedback = current;
+      confirm(current, disposition, current.inventory.find(item => item.id === posted.id), relation);
+      if (state.feedback_changes) return result();
     }
     if (disposition.action === 'reply-and-resolve') {
       recheckRepair(prepared, options, { clean: true, feedback });
@@ -2345,15 +2380,13 @@ function performRepairActions(prepared, output, options, dispatchId) {
       if (resolution.data?.resolveReviewThread?.thread?.id !== threadId || resolution.data.resolveReviewThread.thread.isResolved !== true)
         fail('REPAIR_ACTION_PENDING', 'original resolve response did not confirm actual thread');
       const resolved = completeRepairFeedback(options, prepared, prepared.repair.pr);
-      const expected = feedback.inventory.map(item => item.id === threadId ? { ...item, resolved: true } : item);
-      if (canonical(resolved.inventory) !== canonical(expected)) fail('REPAIR_ACTION_PENDING', 'resolution was not independently confirmed');
-      feedback = resolved;
+      if (resolved.inventory.find(item => item.id === threadId)?.resolved !== true)
+        fail('REPAIR_ACTION_PENDING', 'resolution was not independently confirmed for its exact thread');
+      confirm(resolved, disposition, resolved.inventory.find(item => item.id === posted.id), relation, true);
+      if (state.feedback_changes) return result();
     }
-    state = { ...state, feedback, confirmed: [...state.confirmed.filter(action => action.feedback_id !== entry.id), { feedback_id: entry.id, reply_id: posted.id,
-      resolved: disposition.action === 'reply-and-resolve', ...(relation ? { reply_review: relation } : {}) }], pending: null };
-    atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
   }
-  return Object.freeze({ status: output.status === 'escalate' ? 'escalated' : 'confirmed', confirmed: state.confirmed });
+  return result();
 }
 
 function signedPublicationOf(stateRoot, key, dispatchId) {
@@ -2403,7 +2436,7 @@ function resumeRepairActions(options, dispatchId, liveScopeInput) {
     last_agent_message: text }, { receipt: previous.receipt }, prepared, previous.recorder);
   if (canonical(output) !== canonical(previous.attempt.result)) fail('REPAIR_PREDECESSOR_INVALID', 'original protected dispositions changed');
   const actionState = readSealed(path.join(privateDirectory(root, 'repair-actions'), sha256(dispatchId) + '.json'), key);
-  recheckRepair(prepared, options, { feedback: actionState?.pending
+  recheckRepair(prepared, options, { feedback: actionState
     ? completeRepairFeedback(options, prepared, prepared.repair.pr) : actionState?.feedback || prepared.repair.feedback, clean: true });
   return Object.freeze({ repair_result: output, actions: applyRepairActions(prepared, output, options, dispatchId), resumed: true });
 }

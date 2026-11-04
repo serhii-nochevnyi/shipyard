@@ -2132,6 +2132,10 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
     : { __typename: 'User', id: 'authenticated-host-user', login: 'delivery-host' };
   const originalComments = legacyActions ? Array.from({ length: 3 }, (_, index) =>
     ({ id: 'original-pr-comment-' + index, body: 'Complete original external feedback ' + index })) : [];
+  if (mutation === 'drift-removed') {
+    originalComments.push({ id: 'removed-comment', body: 'External feedback removed during reply' });
+    output.review_dispositions.push({ ...output.review_dispositions[1], id: 'removed-comment' });
+  }
   if (legacyActions) {
     output.review_dispositions = [output.review_dispositions[2], ...originalComments.map(comment => ({
       ...structuredClone(output.review_dispositions[2]), id: comment.id })),
@@ -2186,6 +2190,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       };
       const comment = { id: legacyActions && !replies.length ? 'PRRC_kwDOTmU9jc7865lw' : 'reply-' + (replies.length + 1), body: value('body'),
         author: replies.length === 0 && Object.hasOwn(forgedAuthor, mutation) ? forgedAuthor[mutation] : actor }; replies.push(comment);
+      if (mutation === 'drift-edited') originalThreadComment.body += ' edited during reply';
+      if (mutation === 'drift-removed') originalComments.length = 0;
       if (!reviews.length) reviews.push({ id: legacyActions ? 'PRR_kwDOTmU9jc8AAAABRu8U6g' : 'companion-review-1',
         body: '', state: 'COMMENTED', author: actor });
       if ((mutation?.startsWith('thread-response-loss') || mutation === 'companion-cli-response-loss' || mutation === 'companion-cli-legacy-absent'
@@ -2201,6 +2207,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       return JSON.stringify({ data: { addComment: { commentEdge: { node: comment } } } });
     }
     if (query.includes('resolveReviewThread(input:')) { feedback[0].isResolved = true;
+      if (mutation === 'drift-resolve') originalThreadComment.body += ' edited during resolve';
       if (mutation === 'resolve-response-loss') throw new Error('Original accepted resolve response lost');
       return JSON.stringify({ data: { resolveReviewThread: { thread: feedback[0] } } }); }
     if (query.includes('{id body title}')) return JSON.stringify({ data: { repository: { pullRequest: { id: 'pr-body-501', body: 'Original complete PR body', title: 'Original PR title' } } } });
@@ -2477,6 +2484,27 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         if (mutation === 'pending-external') external.push({ id: 'unexpected-external', body: 'complete unknown feedback' });
         if (mutation === 'pending-missing') replies.length = 0;
         const before = replies.length + prReplies.length;
+        if (['pending-external', 'pending-edited'].includes(mutation)) {
+          if (mutation === 'pending-edited') originalThreadComment.body += ' externally edited';
+          const recovered = recoveryHost.resumeRepairActions(dispatchId, f.scope);
+          assert.equal(recovered.actions.status, 'feedback_changed');
+          assert.equal(recovered.actions.requires_reassessment, true);
+          assert.equal(recovered.actions.confirmed.length, 1);
+          assert.equal(recovered.actions.confirmed[0].resolved, false);
+          assert.equal(feedback[0].isResolved, false);
+          assert.equal(replies.length + prReplies.length, before);
+          const actionFile = path.join(stateRoot(f), 'repair-actions', records[0]);
+          const saved = JSON.parse(fs.readFileSync(actionFile)).payload;
+          assert.equal(saved.pending, null);
+          if (mutation === 'pending-external') assert.deepEqual(recovered.actions.feedback_changes.added, ['unexpected-external']);
+          if (mutation === 'pending-edited') assert.ok(recovered.actions.feedback_changes.changed
+            .some(item => item.id === commentId && item.fields.includes('body')));
+          assert.deepEqual(saved.confirmed, recovered.actions.confirmed);
+          assert.deepEqual(recoveryHost.resumeRepairActions(dispatchId, f.scope).actions, recovered.actions);
+          assert.equal(replies.length + prReplies.length, before);
+          assert.equal(launches, 1);
+          return;
+        }
         assert.throws(() => recoveryHost.resumeRepairActions(dispatchId, f.scope), { code: 'REPAIR_ACTION_PENDING' });
         assert.equal(replies.length + prReplies.length, before);
         assert.equal(launches, 1); assert.equal(feedback[0].isResolved, false);
@@ -2576,6 +2604,47 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       assert.equal(recovered.actions.confirmed.length, legacyActions ? 5 : 3);
       assert.equal(replies.length + prReplies.length, legacyActions ? 5 : 3, 'accepted replies with lost responses are not replayed');
       assert.equal(feedback[0].isResolved, !legacyActions);
+      return;
+    }
+    if (mutation === 'post-confirm-drift') {
+      const first = await run();
+      assert.equal(first.actions.status, 'confirmed');
+      const file = fs.readdirSync(path.join(stateRoot(f), 'repair-actions'))[0];
+      const saved = JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-actions', file))).payload;
+      assert.equal(saved.pending, null);
+      external.push({ id: 'late-feedback', body: 'New feedback after all confirmations' });
+      const host = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport, verificationAllowList });
+      const recovered = host.resumeRepairActions(saved.dispatch_id, f.scope);
+      assert.equal(recovered.actions.status, 'feedback_changed');
+      assert.deepEqual(recovered.actions.confirmed, first.actions.confirmed);
+      assert.deepEqual(recovered.actions.feedback_changes.added, ['late-feedback']);
+      assert.deepEqual(host.resumeRepairActions(saved.dispatch_id, f.scope).actions, recovered.actions);
+      assert.equal(replies.length + prReplies.length, 3);
+      assert.equal(launches, 1);
+      return;
+    }
+    if (['companion-extra-review', 'companion-reuse-extra-review', 'drift-edited', 'drift-resolve', 'drift-removed'].includes(mutation)) {
+      const result = await run();
+      assert.equal(result.actions.status, 'feedback_changed');
+      assert.equal(result.actions.requires_reassessment, true);
+      const expected = mutation === 'companion-reuse-extra-review' ? 2 : 1;
+      assert.equal(result.actions.confirmed.length, expected);
+      assert.equal(replies.length, expected);
+      assert.equal(prReplies.length, 0);
+      assert.equal(feedback[0].isResolved, ['companion-reuse-extra-review', 'drift-resolve'].includes(mutation));
+      const file = fs.readdirSync(path.join(stateRoot(f), 'repair-actions'))[0];
+      const pending = JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-actions', file))).payload;
+      assert.equal(pending.pending, null);
+      if (mutation === 'drift-removed') assert.deepEqual(result.actions.feedback_changes.removed, ['removed-comment']);
+      const host = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport, verificationAllowList });
+      assert.deepEqual(host.resumeRepairActions(pending.dispatch_id, f.scope).actions, result.actions);
+      assert.equal(replies.length, expected);
+      assert.equal(prReplies.length, 0);
+      if (mutation === 'drift-edited') {
+        const fresh = await run();
+        assert.equal(launches, 2, 'changed feedback starts a fresh model assessment');
+        assert.equal(fresh.actions.status, 'feedback_changed');
+      }
       return;
     }
     if (mutation?.startsWith('companion-')) {
@@ -3403,7 +3472,7 @@ for (const mutation of ['thread-response-loss', 'comment-response-loss', 'resolv
   'companion-cli-reuse-response-loss',
   'companion-cli-refuse-head', 'companion-cli-refuse-graph', 'companion-cli-refuse-plan', 'companion-cli-refuse-ledger',
   'companion-cli-refuse-allowlist', 'thread-response-loss-foreign-publication',
-  'pending-duplicate', 'pending-author', 'pending-body', 'pending-target', 'pending-external', 'pending-missing'])
+  'pending-duplicate', 'pending-author', 'pending-body', 'pending-target', 'pending-external', 'pending-edited', 'pending-missing'])
   test('original feedback action recovers ' + mutation + ' without reply replay',
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 
@@ -3444,9 +3513,13 @@ for (const evolution of ['plan', 'owners', 'allowlist', 'base', 'all', 'stale-pl
 test('historical scope alone starts a fresh current round without prior semantic approval',
   () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', 'normalized-repeat', 'plan')));
 
+for (const mutation of ['companion-extra-review', 'companion-reuse-extra-review', 'drift-edited', 'drift-resolve', 'drift-removed', 'post-confirm-drift'])
+  test('confirmed action separates concurrent feedback changes ' + mutation,
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
+
 for (const mutation of ['companion-wrong-link', 'companion-wrong-pr', 'companion-wrong-review-pr', 'companion-wrong-repo',
   'companion-wrong-target', 'companion-truncated', 'companion-review-body', 'companion-review-state', 'companion-review-author',
-  'companion-extra-review', 'companion-reuse-extra-review', 'companion-reuse-review-body'])
+  'companion-reuse-review-body'])
   test('complete reply mutation and original pending recovery refuse ' + mutation,
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 
