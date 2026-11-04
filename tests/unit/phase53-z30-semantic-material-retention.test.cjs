@@ -1624,7 +1624,9 @@ test('physical z30/z30b reconstructs generation53/checks56 and visits every actu
   const generation = s.appendShard({ ...manifest, shards: first67 }, [...first67.flat(), ...filenames].sort());
   assert.deepEqual(generation.shards, [...first67, ...filenames.map(file => [file])]);
   assert.equal(generation.shards.length, 73); assert.equal(generation.shards.length + 3, 76);
-  assert.deepEqual(actual.shards, generation.shards);
+  const registered = new Set(generation.shards.flat());
+  const appended = s.unitTasks(files).filter(task => !registered.has(task));
+  assert.deepEqual(actual.shards, [...generation.shards, ...appended.map(task => [task])]);
   for (const file of filenames) assert.equal(actual.shards.flat().filter(row => row === file).length, 1);
   assert.equal(cases.length, 61); assert.equal(new Set(cases.map(entry => entry.title)).size, 61);
   const partitions = physicalFiles.map((_, shard) => cases.flatMap((entry, index) => purposeOwners[index] === shard ? [index] : []));

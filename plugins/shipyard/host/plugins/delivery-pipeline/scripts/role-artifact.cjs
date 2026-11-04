@@ -4503,6 +4503,16 @@ function assertSemanticSnapshot(snapshot) {
         ? ['architecture-boundaries', 'architecture-obligations'] : snapshot.role === 'code-review'
           ? ['code-correctness', 'code-acceptance'] : ['producer-contract', 'consumer-acceptance']))
     semanticError('semantic snapshot identity differs');
+  if (snapshot.role === 'code-review' && (snapshot.code_review_packet?.product_source_format !== undefined
+      || snapshot.code_review_packet?.product_source_contents !== undefined
+      || snapshot.material.some(source => source.aliases.some(alias => alias.blob_oid !== undefined)))) {
+    const packet = snapshot.code_review_packet;
+    if (digest(stable(packet)) !== snapshot.original_packet_sha256
+        || packet.source_revision !== snapshot.identity.head
+        || packet.product_sources.some(source => ![snapshot.identity.head, snapshot.identity.merge_base].includes(source.revision))
+        || stable(partitionInventory(packet)) !== stable({ material: snapshot.material, obligations: snapshot.obligations }))
+      semanticError('complete source-reference material, aliases or obligations differ');
+  }
   const expected = snapshot.obligations.map(item => item.id).sort();
   const assigned = snapshot.assignments.flatMap(item => item.primary_obligation_ids);
   if (new Set(assigned).size !== assigned.length || stable([...assigned].sort()) !== stable(expected)
@@ -5906,21 +5916,79 @@ function partitionFullPacket(packet, bundle, checked, facts) {
   return { ...packet, frozen_material: { current_sources: full.newly_reviewed,
     source_inventories: full.source_inventories, impact: full.impact, limitations: full.limitations } };
 }
+function codeReviewSourceReferences(packet) {
+  if (packet.product_source_format === undefined && packet.product_source_contents === undefined
+      && !packet.product_sources?.some(source => object(source) && Object.hasOwn(source, 'content_ref'))) return null;
+  const shape = (value, keys) => object(value) && stable(Object.keys(value).sort()) === stable([...keys].sort());
+  if (packet.role !== 'code-review' || packet.product_source_format !== 'unique-content-references.v1'
+      || !Array.isArray(packet.product_sources) || !Array.isArray(packet.product_source_contents))
+    partitionError('unsupported code-review source-reference format');
+  const contents = new Map(), reached = new Set(), identities = new Set(), references = [];
+  let previous = '', uniqueBytes = 0, logicalBytes = 0;
+  for (const entry of packet.product_source_contents) {
+    if (!shape(entry, ['sha256', 'bytes', 'content']) || typeof entry.content !== 'string'
+        || !/^[a-f0-9]{64}$/.test(entry.sha256 || '') || entry.sha256 <= previous
+        || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || entry.content.includes('\0')
+        || bytes(entry.content) !== entry.bytes || digest(entry.content) !== entry.sha256)
+      partitionError('invalid complete source-reference content');
+    uniqueBytes += entry.bytes;
+    if (!Number.isSafeInteger(uniqueBytes) || uniqueBytes > 32 * 1024 * 1024)
+      partitionError('unique source content exceeds its bound');
+    contents.set(entry.sha256, { ...entry, blob_oid: crypto.createHash('sha1')
+      .update('blob ' + entry.bytes + '\0').update(entry.content).digest('hex') });
+    previous = entry.sha256;
+  }
+  for (const [index, source] of packet.product_sources.entries()) {
+    if (!shape(source, ['path', 'revision', 'blob_oid', 'bytes', 'sha256', 'content_ref'])
+        || typeof source.path !== 'string' || !source.path || source.path.includes('\0') || source.path.includes('\\')
+        || path.posix.isAbsolute(source.path) || source.path.split('/').some(part => !part || part === '.' || part === '..' || /^\.git$/i.test(part))
+        || require('./development-artifacts.cjs').isDevelopmentArtifact(source.path)
+        || !/^[a-f0-9]{40}$/.test(source.revision || '') || !/^[a-f0-9]{40}$/.test(source.blob_oid || '')
+        || !Number.isSafeInteger(source.bytes) || source.bytes < 0 || source.content_ref !== source.sha256)
+      partitionError('invalid logical source-reference identity');
+    const entry = contents.get(source.content_ref), identity = source.revision + ':' + source.path;
+    if (!entry || entry.bytes !== source.bytes || entry.blob_oid !== source.blob_oid || identities.has(identity))
+      partitionError('missing, conflicting or duplicate source reference');
+    logicalBytes += source.bytes;
+    if (!Number.isSafeInteger(logicalBytes)) partitionError('logical source bytes exceed safe arithmetic');
+    identities.add(identity); reached.add(source.content_ref);
+    const pointer = '/product_sources/' + index + '/content';
+    references.push({ identity: pointer, content_sha256: source.sha256, source_path: source.path,
+      source_revision: source.revision, source_sha256: source.sha256, source_bytes: source.bytes,
+      mandatory: true, purpose: '/product_sources/' + index, provenance: [pointer], blob_oid: source.blob_oid });
+  }
+  if (reached.size !== contents.size) partitionError('unreferenced extra source content');
+  return references;
+}
 function partitionInventory(packet) {
   const encoded = require('./context-packet.cjs').encodeUniqueContent(packet, 32 * 1024 * 1024);
+  const references = codeReviewSourceReferences(packet);
+  if (references && bytes(JSON.stringify(encoded)) > 32 * 1024 * 1024)
+    partitionError('complete encoded source-reference packet exceeds its bound');
+  const logical = references ? [...encoded.obligations.filter(item => !item.identity.startsWith('/product_source_contents/')),
+    ...references] : encoded.obligations;
+  const byContent = new Map();
+  for (const item of logical) {
+    if (!byContent.has(item.content_sha256)) byContent.set(item.content_sha256, []);
+    byContent.get(item.content_sha256).push(item);
+  }
   const material = encoded.dictionary.map(entry => {
-    const aliases = encoded.obligations.filter(item => item.content_sha256 === entry.sha256).map(item => {
+    const aliases = byContent.get(entry.sha256).map(item => {
       const parent = item.identity.split('/').slice(1, -1).reduce((value, key) => value?.[key.replace(/~1/g, '/').replace(/~0/g, '~')], packet);
       return { path: item.source_path, pointer: item.identity, kind: parent?.obligation || item.purpose,
-        revision: parent?.revision || item.source_revision };
+        revision: parent?.revision || item.source_revision,
+        ...(item.blob_oid ? { blob_oid: item.blob_oid, bytes: item.source_bytes, sha256: item.source_sha256,
+          provenance: item.provenance } : {}) };
     });
     return { source_id: 's-' + entry.sha256, path: aliases[0].path, kind: aliases[0].kind,
       revision: aliases[0].revision, bytes: entry.bytes, sha256: entry.sha256, aliases, content: entry.content };
   });
-  const obligations = encoded.obligations.map(item => ({
+  const obligations = logical.map(item => ({
     id: 'o-' + digest(stable([item.source_path, item.identity, item.content_sha256])),
     path: item.source_path, pointer: item.identity, sha256: item.content_sha256,
     source_id: 's-' + item.content_sha256, kind: 'logical-completion', mandatory: item.mandatory,
+    ...(item.blob_oid ? { revision: item.source_revision, blob_oid: item.blob_oid, bytes: item.source_bytes,
+      provenance: item.provenance } : {}),
   }));
   function visit(value, pointer, sourcePath, applicable = false) {
     const active = applicable || /\/(?:phase_contracts|acceptance|verification|governing|impact|limitations|adr_unresolved|adr_excluded)(?:\/|$)/.test(pointer);
@@ -5942,6 +6010,8 @@ function partitionInventory(packet) {
   visit(packet, '', packet.subject || packet.role_context?.phase || 'integration');
   obligations.sort((a, b) => a.pointer.localeCompare(b.pointer) || a.id.localeCompare(b.id));
   if (new Set(obligations.map(item => item.id)).size !== obligations.length) partitionError('duplicate logical obligation identity');
+  if (references && bytes(stable({ material: material.map(({ content, ...source }) => source), obligations }))
+      > HISTORICAL_ARCHIVE_MAX_BYTES) partitionError('complete source-reference catalog metadata exceeds its bound');
   return { material, obligations };
 }
 const partitionSegmentCache = new WeakMap();

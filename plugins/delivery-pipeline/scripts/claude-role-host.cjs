@@ -52,6 +52,7 @@ const TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 const USAGE_FIELDS = Object.freeze(['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens']);
 const integratorContexts = new WeakMap();
 const nativeIntegratorCollection = Symbol('native integrator collection');
+const nativeCodeReviewCollection = Symbol('native code-review collection');
 const nativeIntegrationStages = new WeakMap();
 const nativeSemanticArchitectures = new WeakMap();
 
@@ -335,17 +336,104 @@ function fileText(worktree, relative, maxBytes = 192 * 1024) {
   return content;
 }
 
+function gsdPlanCriteria(plan) {
+  if (Buffer.byteLength(plan) > 65536) reject('GSD plan criteria exceed the complete plan bound');
+  const parser = require('./frontmatter.cjs');
+  const header = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(plan);
+  if (!header) reject('GSD plan frontmatter is missing or malformed');
+  const lines = header[1].split(/\r?\n/), quoted = new Map();
+  let inTruths = false;
+  const normalized = lines.map((line, index) => {
+    if (/^  truths:/.test(line)) inTruths = true;
+    else if (/^\S|^  \S/.test(line)) inTruths = false;
+    if (!inTruths || !/^    - ["']/.test(line)) return line;
+    const value = parser.stripComment(line.slice(6)).trim();
+    if (!/^(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')$/.test(value)) reject('GSD quoted truth is malformed');
+    const key = `shipyard_truth_${index}`;
+    if (header[1].includes(key)) reject('GSD truth normalization is ambiguous');
+    quoted.set(key, parser.scalar(value));
+    return '    - ' + key;
+  }).join('\n');
+  const frontmatter = parser.parseFrontmatter('---\n' + normalized + '\n---\n');
+  if (!frontmatter.data || frontmatter.errors.length) reject('GSD plan frontmatter is missing or malformed');
+  const starts = lines.filter(line => /^must_haves:/.test(line));
+  if (starts.length !== 1 || !object(frontmatter.data.must_haves)) reject('GSD must_haves are ambiguous or malformed');
+  const start = lines.findIndex(line => /^must_haves:/.test(line));
+  const end = lines.findIndex((line, i) => i > start && /^[^\s#]/.test(line));
+  if (lines.slice(start + 1, end < 0 ? lines.length : end).filter(line => /^  truths:/.test(line)).length !== 1)
+    reject('GSD truths are ambiguous or malformed');
+  const values = frontmatter.data.must_haves.truths;
+  const truths = Array.isArray(values) ? values.map(value => quoted.get(value) ?? value) : values;
+  if (!Array.isArray(truths) || !truths.length || truths.some(value => typeof value !== 'string' || !value.trim()))
+    reject('GSD truths must be a nonempty string list');
+  const acceptance = truths.map((value, i) => `[must_haves.truths[${i}]]\n${value}`);
+  const body = plan.slice(header[0].length), stack = [], seen = new Set();
+  let task = -1, taskCriteria = 0, success = false;
+  const tags = /<\/?(?:tasks|task|success_criteria|behavior|done|acceptance|acceptance_criteria)\b/g;
+  for (const match of body.matchAll(tags)) {
+    const token = /^<\/?(?:tasks|task|success_criteria|behavior|done|acceptance|acceptance_criteria)(?:[^<>]*)>/.exec(body.slice(match.index));
+    if (!token) reject('GSD criteria delimiter is truncated');
+    const parsed = /^<(\/)?(tasks|task|success_criteria|behavior|done|acceptance|acceptance_criteria)([^>]*)>$/.exec(token[0]);
+    const [, closing, name, attributes] = parsed;
+    if (attributes && (closing || name !== 'task' || !/^(?:\s+[a-z_]+="[^"\r\n]*")+\s*$/.test(attributes)))
+      reject('GSD criteria delimiter is malformed');
+    if (closing) {
+      const open = stack.pop();
+      if (!open || open.name !== name) reject('GSD criteria delimiters are unbalanced');
+      if (name === 'task' && !taskCriteria) reject('GSD task has no normative criteria');
+      if (!['tasks', 'task'].includes(name)) {
+        const content = body.slice(open.end, match.index).trim();
+        if (!content) reject('GSD criteria section is empty');
+        acceptance.push(`[${open.provenance}]\n${content}`);
+      }
+      continue;
+    }
+    const parent = stack.at(-1)?.name;
+    if (name === 'tasks') {
+      if (parent || seen.has('tasks')) reject('GSD tasks section is ambiguous');
+      seen.add('tasks');
+    } else if (name === 'task') {
+      if (parent !== 'tasks') reject('GSD task boundary is ambiguous');
+      task++; taskCriteria = 0;
+    } else if (name === 'success_criteria') {
+      if (parent || success) reject('GSD success criteria are ambiguous');
+      success = true;
+    } else {
+      if (parent !== 'task') reject('GSD task criteria lack task provenance');
+      const key = `${task}:${name}`;
+      if (seen.has(key)) reject('GSD task criteria are ambiguous');
+      seen.add(key); taskCriteria++;
+    }
+    stack.push({ name, end: match.index + token[0].length,
+      provenance: name === 'success_criteria' ? name : `tasks[${task}].${name}` });
+  }
+  if (stack.length || !success || !seen.has('tasks') || task < 0) reject('GSD criteria are incomplete or unrecognized');
+  return acceptance;
+}
+
 function parsePlan(plan) {
+  let sections = plan;
+  if (/^#{2,3}\s+Acceptance criteria\s*$/mi.test(plan)) {
+    sections = plan.replace(/\n(#{2,3} Complete accepted prerequisite plan \(original phase[0-9]+ identity\)\r?\n)(---[\s\S]*?\r?\n<\/output>[ \t]*(?:\r?\n|$))/g,
+      (_match, heading, source) => { gsdPlanCriteria(source); return '\n' + heading; });
+  }
   const section = (name) => {
-    const lines = plan.split(/\r?\n/);
-    const start = lines.findIndex((line) => new RegExp(`^#{2,3}\\s+${name}\\s*$`, 'i').test(line.trim()));
-    if (start < 0) return [];
+    const lines = sections.split(/\r?\n/);
+    if (lines.some(line => new RegExp(`^#{1,6}\\s*${name}\\b`, 'i').test(line.trim())
+        && !new RegExp(`^#{2,3}\\s+${name}\\s*$`, 'i').test(line.trim()))) reject(`plan ${name} heading is malformed`);
+    const starts = lines.flatMap((line, i) => new RegExp(`^#{2,3}\\s+${name}\\s*$`, 'i').test(line.trim()) ? [i] : []);
+    if (!starts.length) return null;
+    if (starts.length !== 1) reject(`plan ${name} section is ambiguous`);
+    const start = starts[0];
     const end = lines.findIndex((line, index) => index > start && /^#{2,3}\s+/.test(line));
-    return lines.slice(start + 1, end < 0 ? lines.length : end)
+    const values = lines.slice(start + 1, end < 0 ? lines.length : end)
       .map((line) => line.trim())
       .filter((line) => /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line));
+    if (!values.length || values.some(value => /^(?:[-*]|\d+\.)\s*$/.test(value))) reject(`plan ${name} section is empty or malformed`);
+    return values;
   };
-  return { acceptance: section('Acceptance criteria'), verification: section('Verification commands') };
+  const acceptance = section('Acceptance criteria'), verification = section('Verification commands') || [];
+  return { acceptance: acceptance || gsdPlanCriteria(plan), verification };
 }
 
 function architectureFileId(name) {
@@ -611,7 +699,7 @@ function loadCodeReviewDisagreements(graph, phase, priorFindings) {
     } });
 }
 
-function prepareCodeReview(options, request, canonical, graph, rows) {
+function prepareCodeReview(options, request, canonical, graph, rows, collection) {
   const core = require('./code-review-core.cjs');
   const target = require('./architecture-target.cjs');
   const collector = require('./codex-arch-review-context.cjs');
@@ -689,7 +777,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
   roleContext.reference_digest = referenceDigest(reference);
   roleContext.ticket_set_digest = binding.membership;
   roleContext.phase_repo = binding.repo;
-  const packet = buildPacket(canonical, 'code-review', binding.subject, sources, plans[0], roleContext);
+  const packet = buildPacket(canonical, 'code-review', binding.subject, sources, plans[0], roleContext, collection);
   const semantic = request.review_contract === roleArtifact.SEMANTIC_REVIEW_V1;
   const prompt = semantic ? undefined : makePrompt('code-review', binding.subject, packet, reference);
   const signals = observedSignals(request, rows, [live], semantic ? packet.accounting.estimated_tokens : Math.ceil(Buffer.byteLength(prompt) / 4));
@@ -1314,7 +1402,7 @@ function buildPacket(canonical, role, subject, sources, plan, roleContext, colle
     reject(`${role} context packet is ${packet.accounting.estimated_tokens} tokens, over its bound of `
       + `${packet.accounting.soft_ceiling}; remedy: ${packetRemedy(role)}`, 'CONTEXT_PACKET_OVER_BOUND');
   }
-  if (codeReview) preflightCodeReviewMaterial(packet);
+  if (codeReview) preflightCodeReviewMaterial(packet, collection);
   return (role === 'arch-review' || codeReview) && packet.role_context?.focused
     ? decodeUniqueContent(encodeUniqueContent(packet)) : packet;
 }
@@ -1376,7 +1464,7 @@ function estimatePromptTokens(role, packet, plan, pr, reference, readOnlySmoke =
   return Math.ceil(Buffer.byteLength(makePrompt(role, subject, packet, reference, readOnlySmoke), 'utf8') / 4);
 }
 
-function prepareInvocation(options, request) {
+function prepareInvocation(options, request, collection) {
   const canonical = canonicalWorktree(options, request.worktree, (request.role === 'arch-review' && !!request.phase)
     || (request.role === 'integrator' && ['shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3, roleArtifact.SEMANTIC_REVIEW_V1].includes(request.review_contract)), request.role === 'code-review', request.repo,
     request.role === 'integrator' && request.review_contract === roleArtifact.SEMANTIC_REVIEW_V1);
@@ -1385,7 +1473,7 @@ function prepareInvocation(options, request) {
   const prepared = request.role === 'arch-review'
     ? prepareArch(options, request, canonical, graph, rows)
     : request.role === 'code-review'
-      ? prepareCodeReview(options, request, canonical, graph, rows)
+      ? prepareCodeReview(options, request, canonical, graph, rows, collection)
     : request.role === 'integrator'
       ? prepareIntegrator(options, request, canonical, graph,
         [roleArtifact.INTEGRATION_REVIEW_V3, roleArtifact.SEMANTIC_REVIEW_V1].includes(request.review_contract) ? nativeIntegratorCollection : undefined)
@@ -2023,16 +2111,19 @@ function sealResult(prepared, result, recorder, dispatchId, evidenceMarkdown) {
   return { artifact, validated };
 }
 
-function preflightCodeReviewMaterial(packet) {
-  const material = JSON.stringify(encodeUniqueContent(packet));
+function preflightCodeReviewMaterial(packet, collection) {
+  const semantic = collection === nativeCodeReviewCollection;
+  const raw = semantic ? Buffer.byteLength(JSON.stringify(packet)) : 0;
+  const material = raw > CODE_REVIEW_MATERIAL_MAX_BYTES ? '' : JSON.stringify(encodeUniqueContent(packet));
   const sources = [{ content: packet.diff?.content ?? packet.role_context?.exact_diff?.content },
     ...(packet.refs || packet.required_refs)];
-  const required = Buffer.byteLength(material) + sources.reduce((sum, source) => sum + Buffer.byteLength(source.content), 0);
-  if (required > CODE_REVIEW_MATERIAL_MAX_BYTES) {
+  const required = Buffer.byteLength(material) + (semantic ? 0
+    : sources.reduce((sum, source) => sum + Buffer.byteLength(source.content), 0));
+  if (raw > CODE_REVIEW_MATERIAL_MAX_BYTES || required > CODE_REVIEW_MATERIAL_MAX_BYTES) {
     const error = new Error('code-review complete material exceeds its material bytes per launch bound');
     error.code = 'CONTEXT_PACKET_OVER_BOUND';
-    error.refusal = { schema: 'shipyard.review-preflight-refusal.v1', limiting_field: 'complete_material_bytes',
-      observed: CODE_REVIEW_MATERIAL_MAX_BYTES, required };
+    error.refusal = { schema: 'shipyard.review-preflight-refusal.v1', limiting_field: raw > CODE_REVIEW_MATERIAL_MAX_BYTES ? 'raw_packet_bytes' : 'complete_material_bytes',
+      observed: CODE_REVIEW_MATERIAL_MAX_BYTES, required: raw > CODE_REVIEW_MATERIAL_MAX_BYTES ? raw : required };
     throw error;
   }
   return material;
@@ -2206,7 +2297,7 @@ async function runClaudeSemanticReview(options, request) {
   }
   const delivery = require('./codex-delivery-host.cjs');
   const collector = require('./codex-arch-review-context.cjs');
-  let original = prepareInvocation(options, request);
+  let original = prepareInvocation(options, request, request.role === 'code-review' ? nativeCodeReviewCollection : undefined);
   const scope = { worktree: original.canonical.worktree, phase: original.phaseNumber,
     ticket: original.ticket, run_id: newDispatchId() };
   const storage = storageDirectory(options, scope.run_id, scope.worktree);
