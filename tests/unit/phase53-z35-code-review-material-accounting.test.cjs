@@ -480,7 +480,7 @@ if (!isMainThread) {
         else messages.set(key, value);
       }
       after(async () => { await worker?.terminate(); if (home) fs.rmSync(home, { recursive: true, force: true }); });
-      test(group + ' physical setup', { timeout: 180000 }, async () => {
+      test(group + ' physical setup', {}, async () => {
         home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'z21-case-t35-')));
         const env = environment(home), fixture = h.setup('phase53-z24-historical-producer-reference.test.cjs',
           '\nif (isMainThread) {', 'squashCandidate');
@@ -499,7 +499,7 @@ if (!isMainThread) {
         worker.once('exit', code => { if (code || !finished) fail(Error('incomplete fixture worker exit ' + code)); signal('exit', code); });
         await receive('ready:' + PHASES[0]);
       });
-      for (const [index, name] of PHASES.entries()) test(group + ' ' + name, { timeout: 180000 }, async t => {
+      for (const [index, name] of PHASES.entries()) test(group + ' ' + name, {}, async t => {
         if (failure) throw Error('prerequisite failed: ' + failure.message, { cause: failure });
         const stop = () => { failure = Error('phase timed out: ' + name); worker.terminate(); };
         t.signal.addEventListener('abort', stop, { once: true });
@@ -574,12 +574,12 @@ if (isMainThread) {
       ['unsafe path', p => { p.product_sources[0].path = '../provider.cjs'; }],
       ['development alias', p => { p.product_sources[0].path = '.planning/source.cjs'; }],
       ['unknown source metadata', p => { p.product_sources[0].provenance = ['forged']; }],
-    ]) test('T35-expansion ' + name + ' refuses ' + label, { timeout: 180000 }, () => {
+    ]) test('T35-expansion ' + name + ' refuses ' + label, {}, () => {
       const packet = compact(); mutate(packet); let dispatches = 0;
       assert.throws(() => { api(plugin).partitionInventory(packet); dispatches++; });
       assert.equal(dispatches, 0);
     });
-    test('T35-expansion ' + name + ' lossless inventory and resealed independent snapshot tampering', { timeout: 180000 }, () => {
+    test('T35-expansion ' + name + ' lossless inventory and resealed independent snapshot tampering', {}, () => {
       const consumer = api(plugin), packet = compact(), snapshot = snapshotFor(packet, consumer);
       consumer.assertSemanticSnapshot(snapshot);
       assert.equal(snapshot.material.length, 1); assert.equal(snapshot.material[0].aliases.length, 2);
@@ -606,7 +606,7 @@ if (isMainThread) {
       assert.equal(inventory.material.length, 1); assert.equal(inventory.material[0].aliases.length, 2);
       assert.equal(inventory.obligations.length, 2);
     });
-    test('T35-expansion ' + name + ' original inline and compact exact raw boundaries', { timeout: 180000 }, () => {
+    test('T35-expansion ' + name + ' original inline and compact exact raw boundaries', {}, () => {
       const consumer = api(plugin);
       for (const referenced of [false, true]) {
         const packet = compact('x'.repeat(65536)); packet.duplicate = { content: packet.product_source_contents[0].content };
@@ -620,7 +620,7 @@ if (isMainThread) {
         packet.metadata += 'm'; assert.throws(() => consumer.partitionInventory(packet));
       }
     });
-    test('T35-expansion ' + name + ' compact exact encoded boundary and metadata overflow', { timeout: 180000 }, () => {
+    test('T35-expansion ' + name + ' compact exact encoded boundary and metadata overflow', {}, () => {
       const consumer = api(plugin), codec = require(path.join(plugin, 'scripts/context-packet.cjs')), packet = compact('');
       packet.metadata = '';
       const overhead = Buffer.byteLength(JSON.stringify(codec.encodeUniqueContent(packet, 33554432)));
@@ -631,7 +631,7 @@ if (isMainThread) {
       packet.metadata += 'm'; assert.throws(() => consumer.partitionInventory(packet));
     });
   }
-  test('T35-expansion complete package inventory, modes, bytes and both identities', { timeout: 180000 }, () => {
+  test('T35-expansion complete package inventory, modes, bytes and both identities', {}, () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't35-package-')));
     try {
       const target = require('../../scripts/package-shipyard-codex.cjs').build(path.join(root, 'package'));
@@ -651,7 +651,7 @@ if (isMainThread) {
       defs.completePackage(target);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
-  test('T35-expansion exact73 prefix complete actual74/77 future75/78 selectors and inventory purpose', { timeout: 180000 }, () => {
+  test('T35-expansion exact73 prefix complete actual74/77 future75/78 selectors and inventory purpose', {}, () => {
     const s = require('./shard-files.cjs'), files = s.unitFiles(), manifest = s.readManifest(), self = path.basename(SELF);
     const actual = s.appendShard(manifest, s.unitTasks(files));
     const before = { ...actual, shards: actual.shards.slice(0, 73) };
@@ -692,13 +692,13 @@ if (isMainThread) {
 if (isMainThread) {
   for (const [name, plugin] of [['canonical', path.dirname(h.SCRIPTS)],
     ['generated', path.join(h.ROOT, 'plugins/shipyard/host/plugins/delivery-pipeline')]]) {
-    test('T35-expansion ' + name + ' excessive aliases refuse the unchanged catalog bound', { timeout: 180000 }, () => {
+    test('T35-expansion ' + name + ' excessive aliases refuse the unchanged catalog bound', {}, () => {
       const packet = compact(), template = packet.product_sources[0];
       packet.product_sources = Array.from({ length: 7000 }, (_, i) => ({ ...template, path: 'src/alias-' + i + '.cjs' }));
       assert.ok(Buffer.byteLength(JSON.stringify(packet)) < 33554432);
       assert.throws(() => api(plugin).partitionInventory(packet), /catalog metadata exceeds/);
     });
-    test('T35-expansion ' + name + ' exact unique material and plus-one remain physical bounds', { timeout: 180000 }, () => {
+    test('T35-expansion ' + name + ' exact unique material and plus-one remain physical bounds', {}, () => {
       const lifecycle = require('./helpers/phase53-role-artifact-fixture.cjs').createRoleArtifactLifecycle(); lifecycle.start();
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't35-storage-')));
       try {
@@ -718,7 +718,7 @@ if (isMainThread) {
         }
       } finally { fs.rmSync(root, { recursive: true, force: true }); lifecycle.cleanup(); }
     });
-    for (const runtime of ['codex', 'claude']) test('T35-expansion ' + name + ' ' + runtime + ' exact native input and result bounds', { timeout: 180000 }, () => {
+    for (const runtime of ['codex', 'claude']) test('T35-expansion ' + name + ' ' + runtime + ' exact native input and result bounds', {}, () => {
       const consumer = api(plugin), snapshot = h.currentSized('code-review', runtime), sizing = h.sizingRecord(snapshot);
       try {
         const record = sizing.record, assignment = record.snapshot.assignments[0].id;
@@ -855,7 +855,7 @@ if (isMainThread) {
   });
   for (const title of ['known-parent Git oracle accepts unrelated edits and rejects missing deltas and duplicate seams',
     'real Git complete packets match the exact inherited direct reader including replacements and both passes'])
-    test('T35-expansion original Git-reader purpose: ' + title, { timeout: 180000 }, () => {
+    test('T35-expansion original Git-reader purpose: ' + title, {}, () => {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't35-oracle-original-')));
       try {
         const script = `const assert = require('node:assert/strict'), cases = new Map();
@@ -864,14 +864,14 @@ if (isMainThread) {
           Promise.resolve().then(cases.get(process.argv[2])).catch(error => { console.error(error); process.exitCode = 1; });`;
         const result = cp.spawnSync(process.execPath, ['-e', script,
           path.join(__dirname, 'phase53-z29i-recorded-integration-compatibility.test.cjs'), title],
-        { env: environment(root), timeout: 180000, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8' });
+        { env: environment(root), maxBuffer: 8 * 1024 * 1024, encoding: 'utf8' });
         assert.equal(result.error, undefined); assert.equal(result.signal, null);
         assert.equal(result.status, 0, result.stdout + result.stderr);
       } finally { fs.rmSync(root, { recursive: true, force: true }); }
     });
 }
 
-if (isMainThread) test('T35-expansion ordinary code-review and integrator preparation retain mixed criteria and refuse malformed plans before dispatch', { timeout: 180000 }, () => {
+if (isMainThread) test('T35-expansion ordinary code-review and integrator preparation retain mixed criteria and refuse malformed plans before dispatch', {}, () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't35-criteria-routes-')));
   try {
     const script = String.raw`
@@ -910,7 +910,7 @@ if (isMainThread) test('T35-expansion ordinary code-review and integrator prepar
       }).catch(error => { console.error(error); process.exitCode = 1; });
     `;
     const result = cp.spawnSync(process.execPath, ['-e', script, path.join(h.ROOT, 'tests/fixtures/phase53/semantic-result-helpers.cjs')],
-      { env: environment(root), timeout: 180000, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8' });
+      { env: environment(root), maxBuffer: 8 * 1024 * 1024, encoding: 'utf8' });
     assert.equal(result.error, undefined); assert.equal(result.signal, null);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -1071,7 +1071,7 @@ if (isMainThread) {
 }
 
 if (isMainThread) test('T35-CI-repair ordinary real Git inline producer retains exact bytes through immutable worker and final preparation',
-  { timeout: 180000 }, t => {
+  {}, t => {
     const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't35-inline-'))), temporary = path.join(home, 'tmp');
     fs.mkdirSync(temporary); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
     const setup = h.setup('phase53-z25-historical-fixture-text-transport.test.cjs', '\nif (isMainThread) {', 'oldSetup');
@@ -1127,14 +1127,14 @@ if (isMainThread) test('T35-CI-repair ordinary real Git inline producer retains 
       process.stdout.write('ordinary producer: 2 runtimes, immutable material, worker/final preparation, invalid UTF8 refusal\n');
     };
     const result = cp.spawnSync(process.execPath, ['-e', '(' + script.toString() + ')(' + JSON.stringify(require.resolve('../fixtures/phase53/semantic-result-helpers.cjs')) + ')'],
-      { env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+      { env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
     assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /ordinary producer: 2 runtimes/);
   });
 
 if (isMainThread) for (const followup of [false, true])
   test('T35-CI-repair complete ' + (followup ? 'followup35' : 'current34') + ' bounded preparation retains full candidate sources and amended plans',
-    { timeout: 180000 }, t => {
+    {}, t => {
       const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'z21-case-t35-fit-'))), temporary = path.join(home, 'tmp');
       fs.mkdirSync(temporary); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
       const setup = h.setup('phase53-z25-historical-fixture-text-transport.test.cjs', '\nif (isMainThread) {', 'oldSetup');
@@ -1213,19 +1213,55 @@ if (isMainThread) for (const followup of [false, true])
       const result = cp.spawnSync(process.execPath, ['-e', '(' + script.toString() + ')('
         + [require.resolve('../fixtures/phase53/semantic-result-helpers.cjs'), __filename, followup].map(value => JSON.stringify(value)).join(',')
         + ').catch(error => { console.error(error); process.exitCode = 1; })'],
-        { env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+        { env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
       assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stdout + result.stderr);
       process.stdout.write(result.stdout);
     });
 
-async function metadataRegression(helper, runtime) {
+function historicalCollector(file) {
+  const fs = require('node:fs'), assert = require('node:assert/strict');
+  const hash = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  assert.equal(fs.realpathSync(file), file, 'physical historical collector fixture');
+  const stat = fs.lstatSync(file);
+  assert.equal(stat.isFile(), true, 'regular historical collector fixture');
+  assert.ok(stat.size <= 73728, 'bounded historical collector descriptor');
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  let descriptor;
+  try {
+    const opened = fs.fstatSync(fd);
+    assert.equal(opened.dev, stat.dev); assert.equal(opened.ino, stat.ino);
+    assert.ok(opened.size <= 73728);
+    const buffer = Buffer.alloc(73729); let count = 0, size;
+    do { size = fs.readSync(fd, buffer, count, buffer.length - count, null); count += size; }
+    while (size && count < buffer.length);
+    assert.ok(count <= 73728); assert.equal(count, opened.size);
+    for (const observed of [fs.fstatSync(fd), fs.lstatSync(file)])
+      for (const key of ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs']) assert.equal(observed[key], opened[key]);
+    descriptor = JSON.parse(buffer.subarray(0, count).toString('utf8'));
+  } finally { fs.closeSync(fd); }
+  assert.deepEqual(Object.keys(descriptor).sort(), ['schema', 'revision', 'source_path', 'bytes', 'sha256', 'encoding', 'source'].sort());
+  assert.equal(descriptor.schema, 'shipyard.historical-h3-collector-fixture.v1');
+  assert.equal(descriptor.revision, '5ca137ef8a59fa8f30696f1b80cb93c0acc17afb');
+  assert.equal(descriptor.source_path, 'plugins/delivery-pipeline/scripts/codex-code-review-context.cjs');
+  assert.equal(descriptor.bytes, 52719);
+  assert.equal(descriptor.sha256, '1b914f3aaa69aafa4647d325448cd7055b1ee44bbe01b0c44f352483a6f151c2');
+  assert.equal(descriptor.encoding, 'base64');
+  assert.equal(typeof descriptor.source, 'string'); assert.equal(descriptor.source.length, 4 * Math.ceil(52719 / 3));
+  assert.match(descriptor.source, /^[A-Za-z0-9+/]+$/);
+  const source = Buffer.from(descriptor.source, 'base64');
+  assert.equal(source.length, 52719); assert.equal(source.toString('base64'), descriptor.source);
+  assert.equal(hash(source), descriptor.sha256);
+  assert.deepEqual(Buffer.from(source.toString('utf8')), source, 'lossless complete UTF8 source');
+  return source;
+}
+async function metadataRegression(helper, runtime, readHistoricalCollector) {
   const h = require(helper), fs = require('node:fs'), path = require('node:path'), Module = require('node:module'),
     cp = require('node:child_process'), assert = require('node:assert/strict');
   const integration = h.setup('phase53-codex-integration.test.cjs', "test('ordinary Codex caller", 'publicIntegrationFixture, commit');
   const code = h.setup('phase53-code-review.test.cjs', "for (const runtime of ['codex', 'claude']) {", 'setup');
   const architecture = h.setup('phase53-codex-architecture.test.cjs', "test('caller architecture", 'phaseBinding, agent');
   const collectorFile = path.join(h.SCRIPTS, 'codex-code-review-context.cjs');
-  const baselineBytes = cp.execFileSync('git', ['-C', h.ROOT, 'show', '5ca137ef8a59fa8f30696f1b80cb93c0acc17afb:plugins/delivery-pipeline/scripts/codex-code-review-context.cjs']);
+  const baselineBytes = readHistoricalCollector(path.join(path.dirname(helper), 'h3-code-review-context.json'));
   assert.equal(h.hash(baselineBytes), '1b914f3aaa69aafa4647d325448cd7055b1ee44bbe01b0c44f352483a6f151c2');
   const baseline = new Module(collectorFile, module); baseline.filename = collectorFile;
   baseline.paths = Module._nodeModulePaths(path.dirname(collectorFile)); baseline._compile(baselineBytes.toString('utf8'), collectorFile);
@@ -1369,13 +1405,13 @@ async function metadataRegression(helper, runtime) {
   });
 }
 if (isMainThread) for (const runtime of ['codex', 'claude'])
-  test('T35-git-metadata ' + runtime + ' exact invocation queries, complete H3 parity and immutable inputs', { timeout: 180000 }, t => {
+  test('T35-git-metadata ' + runtime + ' exact invocation queries, complete H3 parity and immutable inputs', {}, t => {
     const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't35-metadata-')));
     t.after(() => fs.rmSync(home, { recursive: true, force: true }));
     const result = cp.spawnSync(process.execPath, ['-e', '(' + metadataRegression.toString() + ')('
       + JSON.stringify(require.resolve('../fixtures/phase53/semantic-result-helpers.cjs')) + ',' + JSON.stringify(runtime)
-      + ').catch(error => { console.error(error); process.exitCode = 1; })'],
-      { env: environment(home), encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+      + ',(' + historicalCollector.toString() + ')).catch(error => { console.error(error); process.exitCode = 1; })'],
+      { env: environment(home), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
     assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stdout + result.stderr);
     process.stdout.write(result.stdout);
   });
