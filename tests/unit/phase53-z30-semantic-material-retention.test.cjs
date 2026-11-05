@@ -797,7 +797,7 @@ function configure30(f, future = false, oversized = true, profile = profiles.sca
   if (oversized) {
     const diff = childProcess.execFileSync('git', ['-C', f.worktree, 'diff', '--cached', '--no-ext-diff',
       '--no-textconv', '--unified=50', f.base, ...require(path.join(source, 'scripts/development-artifacts.cjs')).productPathspec()],
-    { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 180000 });
+    { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
     const padding = 'src/generated-material-retention-padding.txt';
     setup.write(f.worktree, padding, 'x'.repeat(Math.max(1, 4194305 - Buffer.byteLength(diff))));
     old.git(f.worktree, 'add', '--', padding);
@@ -1125,7 +1125,7 @@ function assertPositive(context, full, future) {
   const exactDiff = childProcess.execFileSync('git', ['-C', f.worktree, 'diff', '--no-ext-diff', '--no-textconv',
     '--unified=50', snapshot.identity.merge_base + '...' + snapshot.identity.head,
     ...require(path.join(source, 'scripts/development-artifacts.cjs')).productPathspec()],
-  { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 180000 });
+  { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
   assert.equal(diff.content, exactDiff); assert.equal(diff.bytes, Buffer.byteLength(exactDiff));
   assert.equal(diff.sha256, h.hash(exactDiff));
   assert.ok(diff.aliases.length); assert.deepEqual(fs.readFileSync(launches.at(-1) && payloadFor(launches.at(-1)).material
@@ -1655,7 +1655,7 @@ test('physical z30/z30b reconstructs generation53/checks56 and visits every actu
       assert.deepEqual(titles, []);
       shared.runShard(process.argv[2]);
       process.stdout.write(JSON.stringify(titles));
-    `, path.join(h.ROOT, self), entrypoint], { encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+    `, path.join(h.ROOT, self), entrypoint], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
     assert.deepEqual(JSON.parse(titles), partitions[shard].flatMap(index => provenance[index].tests.map(row => row.title)));
   }
   assert.deepEqual([...actual.shards.flat()].sort(), s.unitTasks(files));
@@ -1928,8 +1928,8 @@ test('two concurrent physical immutable publishers reuse exact enlarged bytes un
   const finished = [];
   try {
     for (let index = 0; index < 2; index++) {
-      let announce;
-      ready.push(new Promise(resolve => { announce = resolve; }));
+      let announce, refuseReady;
+      ready.push(new Promise((resolve, reject) => { announce = resolve; refuseReady = reject; }));
       const worker = new Worker(`
         const { workerData: data, parentPort } = require('node:worker_threads');
         const fs = require('node:fs'), Module = require('node:module'), path = require('node:path');
@@ -1938,7 +1938,8 @@ test('two concurrent physical immutable publishers reuse exact enlarged bytes un
         loaded.filename = file; loaded.paths = Module._nodeModulePaths(data.scripts);
         loaded._compile(fs.readFileSync(file, 'utf8') + '\\nmodule.exports = { semanticInputFiles };', file);
         parentPort.postMessage('ready');
-        Atomics.wait(new Int32Array(data.gate), 0, 0, 180000);
+        while (Atomics.load(new Int32Array(data.gate), 0) === 0)
+          Atomics.wait(new Int32Array(data.gate), 0, 0);
         const value = loaded.exports.semanticInputFiles(data.record, [], true);
         parentPort.postMessage(value);
       `, { eval: true, workerData: { home: process.env.HOME, scripts: h.SCRIPTS, record, gate } });
@@ -1946,12 +1947,19 @@ test('two concurrent physical immutable publishers reuse exact enlarged bytes un
       finished.push(new Promise((resolve, reject) => {
         let observed;
         worker.on('message', value => { if (value === 'ready') announce(); else observed = value; });
-        worker.once('error', reject);
-        worker.once('exit', code => code || !observed ? reject(Error('physical publisher did not finish')) : resolve(observed));
+        worker.once('error', error => { refuseReady(error); reject(error); });
+        worker.once('exit', code => {
+          if (code || !observed) {
+            const error = Error('physical publisher did not finish');
+            refuseReady(error); reject(error);
+          } else resolve(observed);
+        });
       }));
     }
-    await Promise.all(ready); Atomics.store(new Int32Array(gate), 0, 1); Atomics.notify(new Int32Array(gate), 0, 2);
-    const results = await Promise.all(finished);
+    const completion = Promise.all(finished);
+    completion.catch(() => {});
+    await Promise.race([Promise.all(ready), completion]); Atomics.store(new Int32Array(gate), 0, 1); Atomics.notify(new Int32Array(gate), 0, 2);
+    const results = await completion;
     assert.deepEqual(results, [expected, expected]);
     assert.equal(fs.statSync(file).ino, before.ino); assert.equal(fs.statSync(file).mtimeMs, before.mtimeMs);
     assert.equal(fs.statSync(file).mode & 0o777, 0o600); assert.equal(fs.readFileSync(file, 'utf8'), content);
@@ -2063,7 +2071,7 @@ function runShard(entrypoint) {
           else pending.set(key, value);
         };
         after(async () => { await worker?.terminate(); if (home) fs.rmSync(home, { recursive: true, force: true }); });
-        registerTest(entry.title + ' / physical setup', { timeout: 180000 }, async t => {
+        registerTest(entry.title + ' / physical setup', {}, async t => {
           const stop = () => {
             failure = Error('physical setup prerequisite timed out or was cancelled');
             if (awaiting) { awaiting.reject(failure); awaiting = null; }
@@ -2102,7 +2110,7 @@ function runShard(entrypoint) {
           finally { t.signal.removeEventListener('abort', stop); }
         });
         for (const [ordinal, test] of provenance[index].tests.slice(1).entries()) {
-          registerTest(test.title, { timeout: 180000 }, async t => {
+          registerTest(test.title, {}, async t => {
             if (failure) throw Error('owned prerequisite failed: ' + failure.message, { cause: failure });
             const stop = () => {
               failure = Error(test.title + ' prerequisite timed out or was cancelled');

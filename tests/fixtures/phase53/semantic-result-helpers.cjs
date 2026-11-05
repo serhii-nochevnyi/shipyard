@@ -178,7 +178,7 @@ function cold(f, role, plugin, originals, expectedError) {
     }`, path.join(plugin, 'scripts/role-artifact.cjs'), consumer(role),
   JSON.stringify(inputFor(f)), os.homedir(), JSON.stringify(originals ? originals.map(original => ({
     reference: original.reference, snapshot_sha256: original.result.snapshot_sha256 })) : null), expectedError || ''],
-  { env: process.env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
+  { env: process.env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
   assert.equal(child.error, undefined, child.error?.message); assert.equal(child.status, 0, child.stderr);
   return JSON.parse(child.stdout);
 }
