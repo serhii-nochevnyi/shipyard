@@ -147,12 +147,16 @@ for (const [name, result, code] of [
   ['blocked', { status: 'blocked', summary: 'primary refusal' }, 'PLANNING_REFUSED'],
   ['verification_failed', { status: 'verification_failed' }, 'PLANNING_REFUSED'],
   ['missing receipt', { status: 'completed' }, 'UNVERIFIED_RECEIPT'],
+  ['checker missing verdict', { gsd_role: 'gsd-plan-checker' }, 'CHECKER_VERDICT_UNVERIFIED'],
+  ['checker receipt alone', { gsd_role: 'gsd-plan-checker', status: 'completed' }, 'CHECKER_VERDICT_UNVERIFIED'],
+  ['checker issues', { gsd_role: 'gsd-plan-checker', status: 'issues_found', verdict: 'issues_found' }, 'PLANNING_REFUSED'],
+  ['checker blocked', { gsd_role: 'gsd-plan-checker', status: 'blocked', verdict: 'blocked' }, 'PLANNING_REFUSED'],
   ['foreign receipt', { status: 'completed', receipt: { dispatch_id: 'foreign', compliance: 'verified' } }, 'UNVERIFIED_RECEIPT'],
   ['forged receipt', { status: 'completed', receipt: { compliance: 'verified', gsd_role: 'gsd-planner', policy_hash: policy.POLICY_HASH } }, 'UNVERIFIED_RECEIPT'],
 ]) test(`readable terminal ${name} refuses and repeat consumption does not launch`, async () => {
   const f = fixture();
   try {
-    const request = { ...requestFor(f.root), dispatch_id: 'original-dispatch' };
+    const request = { ...requestFor(f.root), ...(result.gsd_role ? { gsd_role: result.gsd_role } : {}), dispatch_id: 'original-dispatch' };
     const file = argsFile(f.root, request);
     const stateDir = path.join(f.root, 'dispatch');
     let launches = 0;

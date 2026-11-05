@@ -199,8 +199,13 @@ function completedResult(waited, scope, request, options) {
   const semantic = result && (result.status || result.result?.status);
   const refusal = [result?.status, result?.result?.status].find((status) => status && status !== 'completed');
   if (refusal) refuse('PLANNING_REFUSED', 'original planning result is ' + refusal);
-  if (!object(result) || (!semantic && request.gsd_role !== 'gsd-plan-checker')) {
-    refuse('PLANNING_REFUSED', 'original planning result has no semantic completion');
+  if (!object(result) || !semantic) {
+    refuse(request.gsd_role === 'gsd-plan-checker' ? 'CHECKER_VERDICT_UNVERIFIED' : 'PLANNING_REFUSED',
+      'original planning result has no semantic completion');
+  }
+  if (request.gsd_role === 'gsd-plan-checker'
+      && (result.schema !== 'shipyard.checker-result.v1' || result.verdict !== 'pass')) {
+    refuse('CHECKER_VERDICT_UNVERIFIED', 'original checker result has no explicit semantic pass');
   }
   const receipt = result.receipt;
   if (!object(receipt) || receipt.dispatch_id !== id || receipt.compliance !== 'verified'

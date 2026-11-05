@@ -2,6 +2,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const checkerResult = require('./checker-result.cjs');
 const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -515,6 +516,7 @@ function createCodexDecomposeHost(options = {}) {
           const chosen = ROLES[request.gsd_role];
           const agent = installedGsdAgent(request.gsd_role, env);
           let launched = false;
+          let checkerOutput;
           const host = Object.freeze({
         ...runtimeHost,
         async launchTypedGsd(selection, context) {
@@ -527,6 +529,7 @@ function createCodexDecomposeHost(options = {}) {
               runtime: 'codex', role: chosen.role, signals: request.signals, dispatch_id: context.dispatch_id,
             });
             let prompt = context.prompt;
+            if (request.gsd_role === 'gsd-plan-checker') prompt += checkerResult.instructions;
           let selected = {
             model: selection.model,
             reasoning_effort: selection.reasoning_effort,
@@ -718,6 +721,9 @@ function createCodexDecomposeHost(options = {}) {
           if (current.file !== agent.file || current.sha256 !== agent.sha256) {
             fail('STALE_GSD_AGENT', 'installed GSD role changed during launch');
           }
+          if (request.gsd_role === 'gsd-plan-checker') {
+            checkerOutput = applied.last_agent_message;
+          }
           return chosen.role === 'research'
             ? { ...applied, agent_file_digest: selection.agent_file_digest }
             : applied;
@@ -798,7 +804,10 @@ function createCodexDecomposeHost(options = {}) {
         const sealed = sealPlans(scope, sealRoot, output, leaseCtx, request.adr);
         return recoveredFields ? Object.freeze({ ...sealed, ...recoveredFields }) : sealed;
       }
-      return recoveredFields ? Object.freeze({ ...output, ...recoveredFields }) : output;
+      const checked = checkerResult.sealCheckerResult({ raw: checkerOutput, receipt: output.receipt,
+        root: path.join(sealRoot, 'checker'), sourceRevision: sourceRevision(scope.worktree),
+        phaseDir: phaseDirectory(scope.worktree, scope.phase) });
+      return recoveredFields ? Object.freeze({ ...checked, ...recoveredFields }) : checked;
     },
   });
 }
@@ -1170,6 +1179,7 @@ async function recoverCli(argv, stdout, options) {
       };
     }
     const applied = Object.freeze({
+      last_agent_message: output,
       launch_id: completed.launch_id,
       session_id: completed.parent_session_id,
       ...(Number.isInteger(completed.pid) ? { process_id: completed.pid } : {}),

@@ -143,7 +143,11 @@ function recordedTypedSession() {
     .find((record) => record.type === 'response_item' && record.payload.role === 'developer')
     .payload.content[0].text;
   const instructions = elided + '\n';
-  const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
+  const childRaw = transformJsonl(recorded.replace(JSON.stringify(elided), JSON.stringify(instructions)), record => {
+    if (record.payload?.type === 'custom_tool_call_output') record.payload.output = [record.payload.output[0],
+      { type: 'input_text', text: 'TASK_SHA256=' + CAPTURED_SHA256 }];
+    return record;
+  });
   return { parentRaw, childRaw, parent: PARENT_ID, child: CHILD_ID, instructions };
 }
 
@@ -1004,7 +1008,7 @@ test('typed launch relays the task by host-owned file path and digest outside th
     'first tool call reading TASK_FILE': { mutate: (raw, task) => onToolCall((item) => {
       item.input = item.input.split(task.file).join(task.file.slice(0, -3));
     })(raw) },
-    'TASK_SHA256 in child tool output': { mutate: (raw) => raw.split(CAPTURED_SHA256 + '  ').join('0'.repeat(64) + '  ') },
+    'TASK_SHA256 in child tool output': { mutate: (raw) => raw.split(CAPTURED_SHA256).join('0'.repeat(64)) },
     'unchanged task file': { onTask: (task) => fs.appendFileSync(task.file, 'shortened\n') },
     '/root agent_message to /root/gsd_task': { mutate: (raw) => raw.split('\n')
       .filter((line) => !line.includes('"type":"agent_message"')).join('\n') },

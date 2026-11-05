@@ -239,6 +239,7 @@ function fixture() {
       calls.push({ selection, context });
       state.write(root, context.gsd_role);
       return {
+        last_agent_message: JSON.stringify({ verdict: 'pass', summary: 'Plans checked.', findings: [] }),
         launch_id: 'codex-decompose-' + calls.length,
         applied_model: selection.model,
         applied_effort: selection.reasoning_effort,
@@ -316,7 +317,8 @@ for (const [gsdRole, logicalRole, sandbox] of [
         assert.equal(result.plan_count, 2);
         assert.match(result.artifact_index.sha256, /^[a-f0-9]{64}$/);
       } else {
-        assert.equal(f.calls[0].context.prompt, 'Plan this phase.');
+        assert.match(f.calls[0].context.prompt, /Return your checker conclusion/);
+        assert.equal(result.verdict, 'pass');
       }
     } finally { f.clean(); }
   });
@@ -546,6 +548,10 @@ function buildNativeChildFixture(gsdRole, artifactPathsOrOptions = {}) {
   }
   const transform = (raw) => raw.split('\n').filter(Boolean).map((line) => {
     const record = JSON.parse(line);
+    if (record.type === 'response_item' && record.payload.type === 'custom_tool_call_output') {
+      record.payload.output = [record.payload.output[0],
+        { type: 'input_text', text: 'TASK_SHA256=' + CAPTURED_SHA256 }];
+    }
     if (record.type === 'turn_context') {
       record.payload.model = 'gpt-6.1-sol';
       record.payload.effort = 'high';
@@ -562,7 +568,8 @@ function buildNativeChildFixture(gsdRole, artifactPathsOrOptions = {}) {
       record.payload.source.subagent.thread_spawn.agent_role = gsdRole;
     }
     if (record.type === 'event_msg' && record.payload.type === 'task_complete') {
-      record.payload.last_agent_message = 'Work completed.';
+      record.payload.last_agent_message = gsdRole === 'gsd-plan-checker'
+        ? JSON.stringify({ verdict: 'pass', summary: 'Plans checked.', findings: [] }) : 'Work completed.';
     }
     return JSON.stringify(record);
   }).join('\n') + '\n';
@@ -1425,7 +1432,8 @@ test('recover rebuilds the original ' + gsdRole + ' receipt after completion was
     const result = await setup.recover();
     assert.equal(setup.spawned.length, 0);
     assert.equal(result.recovered, true);
-    assert.equal(result.recovered_output, 'Work completed.');
+    assert.equal(result.recovered_output, gsdRole === 'gsd-plan-checker'
+      ? JSON.stringify({ verdict: 'pass', summary: 'Plans checked.', findings: [] }) : 'Work completed.');
     assert.equal(result.receipt.dispatch_id, setup.dispatchId);
     assert.equal(result.receipt.compliance, 'verified');
     assert.equal(result.receipt.gsd_role, gsdRole);
@@ -2011,6 +2019,10 @@ function measuredFixtureData(gsdRole) {
   const raw = childRaw.replace(JSON.stringify(elided), JSON.stringify(instructions));
   const transform = (source) => source.split('\n').filter(Boolean).map((line) => {
     const record = JSON.parse(line);
+    if (record.type === 'response_item' && record.payload.type === 'custom_tool_call_output') {
+      record.payload.output = [record.payload.output[0],
+        { type: 'input_text', text: 'TASK_SHA256=' + CAPTURED_SHA256 }];
+    }
     if (record.type === 'turn_context') {
       record.payload.model = 'gpt-6.1-sol';
       record.payload.effort = 'high';
@@ -2027,7 +2039,8 @@ function measuredFixtureData(gsdRole) {
       record.payload.source.subagent.thread_spawn.agent_role = gsdRole;
     }
     if (record.type === 'event_msg' && record.payload.type === 'task_complete') {
-      record.payload.last_agent_message = 'Work completed.';
+      record.payload.last_agent_message = gsdRole === 'gsd-plan-checker'
+        ? JSON.stringify({ verdict: 'pass', summary: 'Plans checked.', findings: [] }) : 'Work completed.';
     }
     return JSON.stringify(record) + (record.type === 'turn_context' ? '\n' + JSON.stringify(record) : '');
   }).join('\n') + '\n';
@@ -2666,3 +2679,29 @@ test('a seal names the repository identity when the request supplies none and ke
     assert.equal(sealScope({ worktree: root, phase: 38, repository: { repository_id: 'owner/repo' } }, output, 's').repository, 'owner/repo');
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
+
+for (const verdict of ['pass', 'issues_found', 'blocked', 'missing']) {
+  test('checker callback keeps receipt compliance separate from semantic ' + verdict, async () => {
+    const f = fixture();
+    try {
+      const originalLaunch = f.host.launchTypedGsd;
+      f.host.launchTypedGsd = async (selection, context) => ({
+        ...await originalLaunch(selection, context),
+        last_agent_message: verdict === 'missing' ? '## VERIFICATION PASSED' : JSON.stringify({
+          verdict, summary: 'Original checker conclusion.', findings: verdict === 'issues_found'
+            ? [{ severity: 'blocker', message: 'Binding failed.' }] : [],
+        }),
+      });
+      const request = { gsd_role: 'gsd-plan-checker', prompt: 'Check the original plan.' };
+      if (verdict === 'missing') {
+        await assert.rejects(f.create().run(request), { code: 'CHECKER_VERDICT_UNVERIFIED' });
+      } else {
+        const result = await f.create().run(request);
+        assert.equal(result.receipt.compliance, 'verified');
+        assert.equal(result.verdict, verdict);
+        assert.equal(result.status, verdict === 'pass' ? 'completed' : verdict);
+        assert.equal(JSON.parse(fs.readFileSync(result.artifact_index.path)).verdict, verdict);
+      }
+    } finally { f.clean(); }
+  });
+}

@@ -2,6 +2,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const checkerResult = require('./checker-result.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -404,10 +405,10 @@ async function runDecomposition(request, dependencies = {}) {
           },
         });
         const output = await createClaudeWorkflowDispatch({
-          host, prompt: scope.prompt, role: ROLES[scope.role], gsdRole: scope.role,
+          host, prompt: scope.prompt + (scope.role === 'gsd-plan-checker' ? checkerResult.instructions : ''), role: ROLES[scope.role], gsdRole: scope.role,
           model: resolution.model, effort: resolution.effort, signals: scope.signals,
           dispatchId, requireGsdRole: true,
-          agentOptions: { session_id: sessionId, schema: {
+          agentOptions: { session_id: sessionId, schema: scope.role === 'gsd-plan-checker' ? checkerResult.schema : {
             type: 'object', additionalProperties: false,
             properties: { summary: { type: 'string', maxLength: 500 } },
           } },
@@ -427,7 +428,7 @@ async function runDecomposition(request, dependencies = {}) {
         if (launchRecord.completed) validateJudgmentWriter(
           scope, phaseDir, writerLease, leaseHandle, preLaunchSnapshot, launchRecord);
         let envelope = null;
-        if (ROLES[scope.role] === 'decomposition') {
+        if (scope.role === 'gsd-planner') {
           writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
             base_revision: git(scope.worktree, 'rev-parse', 'HEAD') });
           const directory = phaseDirectory(scope.worktree, scope.phase);
@@ -439,9 +440,12 @@ async function runDecomposition(request, dependencies = {}) {
           }
           envelope = decompositionEnvelope(scope, store, output);
         }
+        const checked = scope.role === 'gsd-plan-checker' ? checkerResult.sealCheckerResult({
+          raw: output.result?.output ?? output.result, receipt: output.receipt, root: path.join(store, 'checker'),
+          sourceRevision: git(scope.worktree, 'rev-parse', 'HEAD'), phaseDir }) : null;
         controller.complete(runId);
         return Object.freeze({ role: scope.role, result: output.result, receipt: output.receipt,
-          run_id: runId, dispatch_id: dispatchId, ...(envelope ? { envelope } : {}) });
+          run_id: runId, dispatch_id: dispatchId, ...(envelope ? { envelope } : {}), ...(checked || {}) });
       } catch (error) {
         if (controller.status(runId).state === 'running') controller.fail(runId, { reason: error.message });
         throw error;
@@ -598,10 +602,13 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
     if (!receiptCompliant(output, scope, resolution)) {
       refuse('NONCOMPLIANT_RECEIPT', 'typed GSD dispatch has no compliant exact-role receipt');
     }
-    const envelope = ROLES[scope.role] === 'decomposition' ? decompositionEnvelope(scope, store, output) : null;
+    const envelope = scope.role === 'gsd-planner' ? decompositionEnvelope(scope, store, output) : null;
+    const checked = scope.role === 'gsd-plan-checker' ? checkerResult.sealCheckerResult({
+      raw: output.result?.output ?? output.result, receipt: output.receipt, root: path.join(store, 'checker'),
+      sourceRevision: git(scope.worktree, 'rev-parse', 'HEAD'), phaseDir }) : null;
     return Object.freeze({ role: scope.role, result: output.result, receipt: output.receipt,
       run_id: launch.run_id, dispatch_id: dispatchId, recovered: true,
-      ...(envelope ? { envelope } : {}) });
+      ...(envelope ? { envelope } : {}), ...(checked || {}) });
   } finally {
     try { writerLease.release({ token: leaseHandle.token, epoch: leaseHandle.epoch }); }
     catch { }

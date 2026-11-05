@@ -615,6 +615,7 @@ function taskRelayInput(role, model, effort, task) {
     + 'Use the complete absolute TASK_FILE path as one literal in that first tool call. Do not reconstruct it from a root variable, relative path, concatenation, or environment variable; the relay verifier matches the exact path.\n'
     + 'Make this first read/hash filesystem read-only using inline python -c or node -e. Do not use shell heredocs, create temporary files, or use shell features that require temporary files.\n'
     + 'In that same call, compute SHA-256 from the TASK_FILE bytes; do not print the supplied expected digest without reading and hashing those bytes. Emit TASK_SHA256=<computed digest> as the first small standalone output, before any source bodies, task text, or tool inventory. Reading mandatory sources first does not require printing them first.\n'
+    + 'Keep the first command digest-only: read mandatory sources silently, hash TASK_FILE, and print only the computed marker. Read source/task bodies in bounded separate later calls. Never combine proof with a task/source dump.\n'
     + 'When using functions.exec, explicitly forward that computed marker as a separate FIRST text item with text(marker), then emit the remaining output. Preserve it through BOTH the nested command output budget and the outer functions.exec output budget; increasing only the nested budget is insufficient. Then follow TASK_FILE exactly.\n'
     + 'Wait for that child to finish. Do not perform the task yourself.';
 }
@@ -650,9 +651,17 @@ function toolCommand(item) {
   return null;
 }
 
-function toolOutput(item) {
-  if (typeof item.output === 'string') return item.output;
-  return Array.isArray(item.output) ? messageText({ content: item.output }) : '';
+function firstRelayMarker(item, digest) {
+  if (!item) return false;
+  const marker = 'TASK_SHA256=' + digest;
+  const output = item.output;
+  if (typeof output === 'string') return output.replace(/\r?\n$/, '') === marker;
+  if (!Array.isArray(output)) return false;
+  const items = output.slice();
+  // @contract: only standalone runtime framing is metadata; arbitrary leading text remains binding.
+  if (object(items[0]) && ['input_text', 'text'].includes(items[0].type) && /^Script completed\r?\nWall time [0-9.]+ seconds\r?\nOutput:\r?\n$/.test(items[0].text)) items.shift();
+  return object(items[0]) && ['input_text', 'text'].includes(items[0].type)
+    && typeof items[0].text === 'string' && items[0].text.replace(/\r?\n$/, '') === marker;
 }
 
 function verifyTaskRelay(childRaw, task, relay = {}, allowMissingTaskFile = false) {
@@ -679,7 +688,7 @@ function verifyTaskRelay(childRaw, task, relay = {}, allowMissingTaskFile = fals
     }
     if (record.type !== 'response_item') continue;
     if (item.type === 'custom_tool_call_output' || item.type === 'function_call_output') {
-      if (typeof item.call_id === 'string' && !outputs.has(item.call_id)) outputs.set(item.call_id, toolOutput(item));
+      if (typeof item.call_id === 'string' && !outputs.has(item.call_id)) outputs.set(item.call_id, item);
       continue;
     }
     if (firstCall) continue;
@@ -691,10 +700,8 @@ function verifyTaskRelay(childRaw, task, relay = {}, allowMissingTaskFile = fals
   }
   if (!parentBound) missing.push('child session parent');
   if (!delivered && !plaintext) missing.push('/root agent_message to ' + (relay.task_path || 'child task'));
-  if (!plaintext) {
-    if (!firstCall || !readsExactPath(toolCommand(firstCall), task.path)) missing.push('first tool call reading TASK_FILE');
-    else if (!String(outputs.get(firstCall.call_id) || '').includes(task.sha256)) missing.push('TASK_SHA256 in child tool output');
-  }
+  if (!firstCall || !readsExactPath(toolCommand(firstCall), task.path)) missing.push('first tool call reading TASK_FILE');
+  else if (!firstRelayMarker(outputs.get(firstCall.call_id), task.sha256)) missing.push('TASK_SHA256 in child tool output');
   let taskFileMissing = false;
   try {
     const stat = fs.lstatSync(task.path);
@@ -1439,6 +1446,7 @@ function createCodexCliLauncher(options = {}) {
         observed_model: selection.model,
         observed_effort: selection.effort,
         runtime_evidence: freeze(runtimeEvidence),
+        last_agent_message: verified.last_agent_message,
         ...(launchOptions.agent_file ? {
           agent_file: launchOptions.agent_file,
           agent_file_digest: launchOptions.agent_file_digest,

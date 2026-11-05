@@ -8,7 +8,11 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
-const { transcriptEvidence } = require('./claude-test-evidence.cjs');
+const { transcriptEvidence: baseTranscriptEvidence } = require('./claude-test-evidence.cjs');
+function transcriptEvidence(value) {
+  return baseTranscriptEvidence({ ...value, ...(value.gsd_role === 'gsd-plan-checker'
+    ? { output: { verdict: 'pass', summary: 'Completed fixture', findings: [] } } : {}) });
+}
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
 const { ROLES, canonicalRequest, inlineReferences, trustedAgent, parseArguments,
@@ -243,7 +247,7 @@ test('routes each role through the boundary and durably records exact-role evide
       assert.ok(files.some((file) => file.startsWith('record-')));
       const state = JSON.parse(fs.readFileSync(path.join(f.root, `store-${role}`, 'runs', 'runs.json'), 'utf8'));
       assert.equal(state.runs[output.run_id].run.state, 'completed');
-      if (ROLES[role] === 'decomposition') {
+      if (role === 'gsd-planner') {
         assert.equal(output.envelope.schema, 'shipyard.decomposition-result.v1');
         assert.equal(output.envelope.role, 'decomposition');
         assert.equal(output.envelope.plan_count, 2);
@@ -574,7 +578,8 @@ function recoveryFixture(role, { cli = false, extraPlannerBaseline = false } = {
   fs.writeFileSync(streamFile, [
     { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
     { type: 'result', session_id: sessionId, result: 'completed',
-      structured_output: { summary: 'Completed fixture' } },
+      structured_output: role === 'gsd-plan-checker'
+        ? { verdict: 'pass', summary: 'Completed fixture', findings: [] } : { summary: 'Completed fixture' } },
   ].map((item) => JSON.stringify(item)).join('\n') + '\n', { mode: 0o600 });
   const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   const record = { dispatch_id: dispatchId, run_id: runId, session_id: sessionId,
@@ -646,7 +651,8 @@ test('a live Claude launcher saves evidence that verifies identically after the 
     const stream = [
       { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
       { type: 'result', session_id: sessionId, result: 'completed',
-        structured_output: { summary: 'Completed fixture' } },
+        structured_output: role === 'gsd-plan-checker'
+        ? { verdict: 'pass', summary: 'Completed fixture', findings: [] } : { summary: 'Completed fixture' } },
     ].map(JSON.stringify).join('\n') + '\n';
     let spawned = 0;
     let completed = 0;
@@ -848,7 +854,7 @@ test('a completed saved Claude launch recovers one receipt per judgment role wit
       assert.equal(output.receipt.gsd_role, role);
       assert.equal(output.result.output.summary, 'Completed fixture');
       assert.equal(f.recorder.getReservation(f.dispatchId).recorded, true);
-      assert.equal(ROLES[role] === 'decomposition', Boolean(output.envelope));
+      assert.equal(role === 'gsd-planner', Boolean(output.envelope));
       await assert.rejects(recoverDecomposition(f.dispatchId, f.deps), { code: 'RECOVERY_ALREADY_RECORDED' });
     } finally { f.finish(); }
   }
@@ -1249,3 +1255,29 @@ test('a seal subject with the old owner/repo form verifies through acceptedRepos
     assert.equal(decompositionAdr.assertDecompositionSubject(old, { worktree: f.worktree, repository, adr, acceptedRepositories: [...accepted, 'owner/repo'] }).repository, 'owner/repo');
   } finally { f.clean(); }
 });
+
+for (const verdict of ['pass', 'issues_found', 'blocked', 'missing']) {
+  test('Claude checker independently seals semantic ' + verdict, async () => {
+    const f = preparedPhaseFixture();
+    try {
+      const { deps } = successDependencies(f, { store: path.join(f.root, 'store'),
+        mutateEvidence(value) {
+          value.output = verdict === 'missing' ? { summary: 'Completed.' } : {
+            verdict, summary: 'Original checker conclusion.', findings: verdict === 'issues_found'
+              ? [{ severity: 'blocker', message: 'Binding failed.' }] : [],
+          };
+        } });
+      if (verdict === 'missing') {
+        await assert.rejects(runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps),
+          { code: 'CHECKER_VERDICT_UNVERIFIED' });
+      } else {
+        const result = await runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps);
+        assert.equal(result.receipt.compliance, 'verified');
+        assert.equal(result.verdict, verdict);
+        assert.equal(result.status, verdict === 'pass' ? 'completed' : verdict);
+        assert.equal(result.envelope, undefined);
+        assert.equal(JSON.parse(fs.readFileSync(result.artifact_index.path)).verdict, verdict);
+      }
+    } finally { f.clean(); }
+  });
+}

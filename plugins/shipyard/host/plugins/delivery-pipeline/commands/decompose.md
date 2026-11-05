@@ -295,12 +295,25 @@ seals `shipyard.role-artifact.v1` with one of these envelopes:
 | callback | envelope | authenticated subject | complete files that must remain on disk |
 | --- | --- | --- | --- |
 | `gsd-phase-researcher` | `shipyard.research-result.v1` | `<INV-ID>:<line-id>` | the complete line artifact |
-| `gsd-planner` / `gsd-plan-checker` | `shipyard.decomposition-result.v1` | `phase=<phase>;repository=<repo>;adr=<ADR digest>` | `CONTEXT.md` and every materialized `PLAN.md` |
+| `gsd-planner` | `shipyard.decomposition-result.v1` | `phase=<phase>;repository=<repo>;adr=<ADR digest>` | `CONTEXT.md` and every materialized `PLAN.md` |
 
-This table is identical on both runtimes: `claude-decompose-host.cjs` and
-`codex-decompose-host.cjs` each seal their `gsd-planner` / `gsd-plan-checker`
-callback into this same `shipyard.decomposition-result.v1` envelope — one
-shared sealer, not a runtime-specific format.
+Both runtimes seal planner output as `shipyard.decomposition-result.v1`.
+The checker returns `shipyard.checker-result.v1` with an explicit `verdict`
+(`pass`, `issues_found`, or `blocked`), a short summary, findings, its independently
+verified application receipt, and an `artifact_index` for the original result,
+receipt/transcript references and checked PLAN digests. A verified receipt
+proves the launch, not a positive checker conclusion. Only `verdict: pass` with
+`status: completed` may advance to Gate 2. Missing/invalid semantic output refuses
+with `CHECKER_VERDICT_UNVERIFIED`; retain negative results and retry only the
+failed checker, preserving accepted researcher/planner output and PLAN bytes.
+
+Codex relay proof must be the first standalone `TASK_SHA256=<computed digest>`
+forwarded text item of the first tool call after reading the exact TASK_FILE.
+Only a standalone `Script completed` / `Wall time … seconds` / `Output:` framing
+item is ignored. Warnings before the marker, a marker embedded in source text,
+or a marker from a later call refuse with `TASK_RELAY_UNVERIFIED`, including
+plaintext task delivery. Keep the first command digest-only and read bodies in
+bounded later calls to avoid both nested and outer truncation.
 
 The decomposition envelope must carry a bounded `artifact_index` reference.
 That index lists the exact relative paths, byte counts, and SHA-256 digests of
