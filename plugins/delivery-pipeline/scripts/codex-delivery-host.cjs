@@ -2096,6 +2096,7 @@ function retainRepairAttempt(prepared, sealed, output, recorder, dispatchId) {
       fail('REPAIR_PREDECESSOR_INVALID', 'original CI attempt changed during acknowledgement recovery');
     return;
   }
+  if (prepared.repair.role === 'ci-fix') privateDirectory(prepared.stateRoot, 'ci-repair-attempts');
   const lock = acquireLock(privateDirectory(prepared.stateRoot, 'repair-locks'), sha256(prepared.commit.ticket + ':' + prepared.repair.pr), { waitMs: 0 });
   if (!lock) fail('REPAIR_PREDECESSOR_INVALID', 'another original repair holds the predecessor chain');
   try {
@@ -2687,8 +2688,150 @@ function collectRepairCi(options, prepared, pr, evidence) {
   return Object.freeze({ ...stable, failure: matches[0], digest: sha256(canonical(stable)) });
 }
 
-function ciRepairHistory(prepared, pr) {
-  const directory = privateDirectory(prepared.stateRoot, 'ci-repair-attempts');
+function ciHistorySignature(item) {
+  const subject = item.attempt.subject, evidence = subject?.evidence;
+  const job = subject?.feedback?.failure;
+  if (!evidence?.copy || !job?.name || !job.workflow_id || !job.run_id || !job.run_attempt || !job.job_id
+      || subject.feedback.checked_head !== item.attempt.preparation.commit.expectedHead)
+    fail('REPAIR_PREDECESSOR_INVALID', 'original CI snapshot or actual checked-job binding is unavailable');
+  const copy = ciPhysical(evidence.copy.path, MAX_GRAPH_BYTES, true);
+  if (canonical(copy.pin) !== canonical(evidence.copy) || copy.bytes.length !== evidence.bytes
+      || sha256(copy.bytes) !== evidence.sha256)
+    fail('REPAIR_PREDECESSOR_INVALID', 'protected complete original CI failure changed');
+  if (evidence.original && fs.existsSync(evidence.original.path)
+      && canonical(ciPhysical(evidence.original.path).pin) !== canonical(evidence.original))
+    fail('REPAIR_PREDECESSOR_INVALID', 'external original CI failure changed');
+  const signatures = require('./failure-signature.cjs');
+  return { ...signatures.computeSignature(copy.bytes.toString('utf8'), job.name), job, raw_sha256: evidence.sha256 };
+}
+
+function readCiPlanGenerationHistory({ worktree, graphDir, ticket, pr, generation, events }) {
+  const root = fs.realpathSync(worktree);
+  const file = path.join(path.resolve(graphDir), 'tickets.json'), graph = graphSnapshot(file, ticket);
+  const stateRoot = path.join(os.homedir(), '.local/state/shipyard/codex/finalization', sha256(root));
+  let key;
+  try { key = ciPhysical(path.join(stateRoot, 'finalization-authority/hmac.key'), KEY_BYTES, true).bytes; }
+  catch (error) { fail('CI_GENERATION_UNAVAILABLE', 'original Source finalization authority is unavailable: ' + error.message); }
+  if (key.length !== KEY_BYTES) fail('CI_GENERATION_UNAVAILABLE', 'original Source key is unavailable');
+  const board = JSON.parse(ciPhysical(path.join(path.dirname(file), 'delivery-state.json')).bytes);
+  if ((board.tickets || board)[ticket]?.pr !== pr)
+    fail('CI_GENERATION_UNAVAILABLE', 'current canonical PR differs from the original conclusion');
+  const prepared = { stateRoot, key, baseRef: effectiveBaseRef(root, file, ticket, graph),
+    repository: 'git-common:' + sha256(fs.realpathSync(git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']))),
+    repo: graph.row.repo || null,
+    commit: { ticket, worktree: root } };
+  const history = ciRepairHistory(prepared, pr, roleArtifact.readonlyOriginalRecorder).history;
+  if (generation !== undefined) {
+    const current = { ...prepared, graphFile: file, graphDigest: graph.sha256, plan: planSnapshot(file, graph.row),
+      commit: { ...prepared.commit, expectedHead: git(root, ['rev-parse', 'HEAD']),
+        expectedBranch: graph.row.branch, expectedBase: git(root, ['rev-parse', prepared.baseRef]),
+        expectedSigner: signerFingerprint(root), files_modified: graph.row.files } };
+    if (git(root, ['symbolic-ref', '--short', 'HEAD']) !== current.commit.expectedBranch
+        || history.some(item => !ciGenerationTransition(current, item, generation, events)))
+      fail('CI_GENERATION_UNAVAILABLE', 'original preparation lacks the exact admitted scope and covered current source/base transition');
+  }
+  return history.map(item => {
+    const semantic = ciHistorySignature(item);
+    const heads = [item.attempt.preparation.commit.expectedHead];
+    const candidates = path.join(stateRoot, 'candidates');
+    if (fs.existsSync(candidates)) for (const name of fs.readdirSync(candidates)) {
+      const candidate = readSealed(path.join(candidates, name), key);
+      if (candidate?.dispatch_id !== item.attempt.dispatch_id || candidate.expected_role !== 'ci-fix') continue;
+      const final = readSealed(finalizationFile(stateRoot, candidate.candidate_id), key);
+      if (!final) continue;
+      verifySignedCommit(root, candidate, final.commit);
+      const proof = require('./conveyor-coverage.cjs').verify({ commit: final.commit, repo: prepared.repo, worktree: root });
+      if (!proof.covered || proof.record.dispatch_id !== item.attempt.dispatch_id
+          || proof.record.receipt_digest !== item.attempt.receipt_sha256)
+        fail('CI_GENERATION_UNAVAILABLE', 'journal head lacks its exact original signed coverage');
+      heads.push(final.commit);
+    }
+    return Object.freeze({ ticket: item.attempt.ticket, pr: item.attempt.pr,
+      dispatch_id: item.attempt.dispatch_id, plan_sha256: item.attempt.preparation.plan.sha256,
+      preparation: item.attempt.preparation, signature: semantic.signature, receipt_sha256: item.attempt.receipt_sha256,
+      applied_effort: item.receipt.applied_effort, heads });
+  });
+}
+
+function ciGenerationTransition(prepared, item, generation, events) {
+  const facts = roleArtifact.admittedCiPlanGenerationFacts(generation, events, {
+    ticket: prepared.commit.ticket, head: prepared.commit.expectedHead });
+  if (!facts || facts.plan_sha256 !== prepared.plan.sha256 || facts.pr !== item.attempt.pr
+      || !facts.old_attempts.some(original => original.dispatch_id === item.attempt.dispatch_id
+        && original.plan_sha256 === item.attempt.preparation.plan.sha256
+        && original.receipt_sha256 === item.attempt.receipt_sha256)) return false;
+  const old = item.attempt.preparation, root = prepared.commit.worktree;
+  if (old.commit.expectedBranch !== prepared.commit.expectedBranch || old.commit.expectedSigner !== prepared.commit.expectedSigner
+      || old.repository !== prepared.repository || old.repo !== prepared.repo || old.baseRef !== prepared.baseRef) return false;
+  try {
+    const baseFrom = old.commit.expectedBase, baseTo = prepared.commit.expectedBase;
+    git(root, ['merge-base', '--is-ancestor', baseFrom, baseTo]);
+    git(root, ['merge-base', '--is-ancestor', old.commit.expectedHead, prepared.commit.expectedHead]);
+    const imported = new Set(git(root, ['rev-list', baseFrom + '..' + baseTo]).split('\n').filter(Boolean));
+    for (const commit of imported) repairRevisionSigner(root, commit);
+    const commits = git(root, ['rev-list', '--first-parent', '--reverse',
+      old.commit.expectedHead + '..' + prepared.commit.expectedHead]).split('\n').filter(Boolean);
+    if (baseFrom !== baseTo && !commits.length) return false;
+    let parent = old.commit.expectedHead, mergedBase = baseFrom;
+    const coveredPaths = new Set();
+    for (const commit of commits) {
+      repairRevisionSigner(root, commit, prepared.commit.expectedSigner);
+      const proof = require('./conveyor-coverage.cjs').verify({ worktree: root, repo: prepared.repo, commit });
+      const parents = git(root, ['show', '-s', '--format=%P', commit]).split(' ');
+      if (!proof.covered || parents[0] !== parent) return false;
+      if (proof.record.kind === 'base-merge') {
+        if (parents.length !== 2 || parents[1] !== baseTo) return false;
+        repairBaseMerge(root, commit, parent, baseTo); mergedBase = baseTo;
+      } else {
+        if (!['executor', 'fixer'].includes(proof.record.kind) || proof.record.ticket !== prepared.commit.ticket
+            || proof.record.repository_id !== prepared.repository || parents.length !== 1) return false;
+        const original = authenticatedCoveredReceipt(proof.record);
+        if (original.digest !== proof.record.receipt_digest) return false;
+        for (const file of git(root, ['diff-tree', '--no-commit-id', '--name-only', '-r', commit]).split('\n').filter(Boolean)) coveredPaths.add(file);
+      }
+      parent = commit;
+    }
+    if (parent !== prepared.commit.expectedHead || mergedBase !== baseTo) return false;
+    const currentOwners = prepared.commit.files_modified;
+    const owned = file => currentOwners.some(owner => require('./path-owner.cjs').owns(owner, file));
+    if ([...coveredPaths].some(file => !owned(file))) return false;
+    for (const owner of old.commit.files_modified.filter(file => !owned(file))) {
+      if (git(root, ['diff', '--name-only', baseFrom, old.commit.expectedHead, '--', owner])
+          || git(root, ['diff', '--name-only', baseTo, prepared.commit.expectedHead, '--', owner])) return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
+function ciRepairVerdict(prepared, signature, pr) {
+  const module = require('./failure-signature.cjs'), journalPath = path.join(path.dirname(prepared.graphFile), 'delivery-log.jsonl');
+  const events = fs.existsSync(journalPath) ? ciPhysical(journalPath, MAX_GRAPH_BYTES, false, true).bytes.toString('utf8').split('\n')
+    .filter(Boolean).map(JSON.parse).filter(row => row.ticket === prepared.commit.ticket) : [];
+  const config = loadConfig(path.resolve(path.dirname(prepared.graphFile), '../..'));
+  if (config.valid === false) fail('CI_PLAN_DEFECT', 'canonical CI configuration is invalid');
+  const input = { signature, head: prepared.commit.expectedHead, ticket: prepared.commit.ticket,
+    k: config.config.plan_defect_signatures };
+  let verdict = module.computeVerdict(events, input), generation = null;
+  if (verdict.verdict === 'plan_defect') {
+    try {
+      generation = roleArtifact.readAdmittedCiPlanGeneration({ worktree: prepared.commit.worktree,
+        graphDir: path.dirname(prepared.graphFile), ticket: prepared.commit.ticket, head: input.head, events });
+      verdict = module.computeVerdict(events, { ...input, generation });
+    } catch (error) {
+      const refusal = new Error('codex-delivery-host: current plan-defect conclusion still applies: ' + error.message);
+      refusal.code = 'CI_PLAN_DEFECT';
+      refusal.details = { verdict, prerequisite: error.code, evidence: error.details || null, pr };
+      throw refusal;
+    }
+  }
+  if (['plan_defect', 'flake', 'flake_candidate'].includes(verdict.verdict))
+    fail(verdict.verdict === 'plan_defect' ? 'CI_PLAN_DEFECT' : 'CI_FLAKE_RERUN_REQUIRED',
+      'public CI verdict refuses a new repair operation: ' + verdict.verdict, { verdict, pr });
+  return { generation, verdict, events };
+}
+
+function ciRepairHistory(prepared, pr, originalRecorder = createDurableRecorder) {
+  const directory = path.join(prepared.stateRoot, 'ci-repair-attempts');
   const tipFile = path.join(directory, sha256(prepared.commit.ticket + ':' + pr) + '.json');
   const tip = readSealed(tipFile, prepared.key), history = [], visited = new Set();
   for (let cursor = tip?.reference; cursor;) {
@@ -2700,7 +2843,7 @@ function ciRepairHistory(prepared, pr) {
         || attempt.ticket !== prepared.commit.ticket || attempt.pr !== pr || attempt.repository !== prepared.repository
         || attempt.worktree !== prepared.commit.worktree || attempt.base !== prepared.baseRef)
       fail('REPAIR_PREDECESSOR_INVALID', 'CI history belongs to a different original subject');
-    const recorder = createDurableRecorder(attempt.receipt_store);
+    const recorder = originalRecorder(attempt.receipt_store);
     const original = authenticatedReceipt(recorder, attempt.dispatch_id, 'ci-fix');
     if (original.digest !== attempt.receipt_sha256) fail('REPAIR_PREDECESSOR_INVALID', 'original CI receipt changed');
     const artifact = roleArtifact.read({ role: 'ci-fix', ticket: attempt.ticket, pr, worktreePath: prepared.commit.worktree,
@@ -2807,20 +2950,28 @@ function prepareCiRepair(options, scope, context) {
     const feedback = collectRepairCi(options, prepared, pr, evidence);
     if (prepared.repo && prepared.repo.toLowerCase() !== feedback.repository.toLowerCase()) fail('CI_SUBJECT_REQUIRED', 'CI repository differs from graph');
     history = ciRepairHistory(prepared, pr);
-    const signature = sha256(canonical({ repository: feedback.repository, ticket: scope.ticket, pr,
-      failure: evidence.sha256, name: feedback.failure.name, workflow_id: feedback.failure.workflow_id }));
-    for (const [index, item] of history.history.entries()) if (item.attempt.signature === signature
-        && (canonical(item.attempt.preparation.commit.files_modified) !== canonical(prepared.commit.files_modified)
-          || item.attempt.preparation.plan.sha256 !== plan.sha256
-          || item.attempt.preparation.graphDigest !== prepared.graphDigest
-          || !ciPredecessorHead(index === 0 ? prepared : { ...prepared,
-            commit: { ...prepared.commit, expectedHead: history.history[index - 1].attempt.preparation.commit.expectedHead } }, item)))
-      fail('REPAIR_PREDECESSOR_INVALID', 'matching original CI history lacks a compatible graph, scope or covered source transition');
-    const compatible = history.history.filter(item => item.attempt.signature === signature
-      && canonical(item.attempt.preparation.commit.files_modified) === canonical(prepared.commit.files_modified)
-      && item.attempt.preparation.plan.sha256 === plan.sha256
-      && ciPredecessorHead(prepared, item));
-    const selected = compatible[0];
+    const signatureModule = require('./failure-signature.cjs');
+    const current = signatureModule.computeSignature(ciPhysical(evidence.copy.path, MAX_GRAPH_BYTES, true).bytes.toString('utf8'), feedback.failure.name);
+    const signature = current.signature;
+    const admission = ciRepairVerdict(prepared, signature, pr);
+    const matching = [];
+    for (const [index, item] of history.history.entries()) {
+      const prior = ciHistorySignature(item);
+      const sameJob = prior.job.name === feedback.failure.name && prior.job.workflow_id === feedback.failure.workflow_id;
+      const unknown = signatureModule.isUnknownSignature(signature) || signatureModule.isUnknownSignature(prior.signature);
+      if (unknown && prior.raw_sha256 !== evidence.sha256)
+        fail('REPAIR_PREDECESSOR_INVALID', 'unknown CI history cannot establish progress or a new root');
+      const endpoint = index === 0 ? prepared : { ...prepared,
+        commit: { ...prepared.commit, expectedHead: history.history[index - 1].attempt.preparation.commit.expectedHead } };
+      const unchanged = canonical(item.attempt.preparation.commit.files_modified) === canonical(prepared.commit.files_modified)
+        && item.attempt.preparation.plan.sha256 === plan.sha256
+        && item.attempt.preparation.graphDigest === prepared.graphDigest
+        && ciPredecessorHead(endpoint, item);
+      if (!unchanged && !ciGenerationTransition(prepared, item, admission.generation, admission.events))
+        fail('REPAIR_PREDECESSOR_INVALID', 'matching original CI history lacks a compatible graph, scope or covered source transition');
+      if (prior.signature === signature && sameJob) matching.push(item);
+    }
+    const selected = matching[0];
     const signatureState = !selected ? 'first' : selected.receipt.applied_effort === 'low' ? 'repeat'
       : selected.receipt.applied_effort === 'high' ? 'repeat_exhausted' : 'exhausted';
     if (signatureState === 'exhausted') fail('REPAIR_POLICY_EXHAUSTED', 'original deepest CI repair remains unresolved');
@@ -2839,7 +2990,7 @@ function prepareCiRepair(options, scope, context) {
       + planDeliveryBlock(prepared.delivery, prepared.plan.path) + verificationAssignmentBlock(prepared.verificationAssignment);
     if (Buffer.byteLength(prompt) > MAX_STATE_BYTES) fail('CI_OPERATION_OVERFLOW', 'complete CI prompt exceeds native input bound');
     result = Object.freeze({ ...prepared, expectedRole: 'ci-fix', repair, prompt });
-    repairPredecessors.set(result, { ...history, selected });
+    repairPredecessors.set(result, { ...history, selected, admission });
     roleArtifact.prepareRoleArtifact({ role: 'ci-fix', worktreePath: scope.worktree });
   }
   const handle = Object.freeze(Object.create(null));
@@ -2958,6 +3109,15 @@ function recheckCiRepair(prepared, options, { clean = false, signedHead } = {}) 
   const board = JSON.parse(fs.readFileSync(path.join(path.dirname(prepared.graphFile), 'delivery-state.json'), 'utf8'));
   if ((board.tickets || board)[prepared.commit.ticket]?.pr !== prepared.repair.pr) fail('CI_SUBJECT_CHANGED', 'canonical CI PR changed');
   recheckCiFailure(prepared.repair.evidence);
+  const admission = repairPredecessors.get(prepared)?.admission;
+  const originalState = originalCiOperations.get(preparedCiOperations.get(prepared));
+  if (admission?.generation && originalState?.operation.state === 'prepared') {
+    const fresh = roleArtifact.readAdmittedCiPlanGeneration({ worktree: root, graphDir: path.dirname(prepared.graphFile),
+      ticket: prepared.commit.ticket, head: prepared.commit.expectedHead, events: admission.events });
+    if (canonical(roleArtifact.admittedCiPlanGenerationFacts(fresh, admission.events, { head: prepared.commit.expectedHead }))
+        !== canonical(roleArtifact.admittedCiPlanGenerationFacts(admission.generation, admission.events, { head: prepared.commit.expectedHead })))
+      fail('CI_GENERATION_UNAVAILABLE', 'admitted generation changed before the new Source operation');
+  }
   let live;
   try { live = repairLive(options, prepared, prepared.repair.pr); }
   catch (error) {
@@ -5675,6 +5835,7 @@ module.exports = Object.freeze({
   requestValue,
   prepareRepair,
   prepareCiRepair,
+  readCiPlanGenerationHistory,
   generatedBaseMergeAuthority,
   validateOriginalCiOperation,
   shareRepairTransitions,

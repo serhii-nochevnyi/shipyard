@@ -442,7 +442,8 @@ function isGreen(e, i, lastLiftAt) {
  * at the deeper effort on it. All three are measured over the WINDOW: the failures
  * since the last green, because that is what "with no green between them" means.
  */
-function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
+function computeVerdict(events, { signature, head, k = DEFAULT_K, generation, ticket }) {
+  const admitted = require('./role-artifact.cjs').admittedCiPlanGenerationFacts(generation, events, { signature, head, ticket });
   let lastFlake = -1;
   let lastLift = -1;
   let lastSame = -1;          // most recent prior attempt carrying THIS signature
@@ -478,7 +479,7 @@ function computeVerdict(events, { signature, head, k = DEFAULT_K }) {
   // TREE moved, and a green in between makes "same signature, same head" the
   // definition of a flake rather than an excuse to dispatch a fixer at one.
   const distinct = new Set(
-    [...priorSignatures, signature].filter((s) => !isUnknownSignature(s))
+    [...priorWindow.filter(a => !admitted || a.at > admitted.conclusion_at).map(a => a.signature), signature].filter((s) => !isUnknownSignature(s))
   ).size;
   const seen = priorSignatures.filter((s) => s === signature).length;
 
@@ -604,6 +605,13 @@ function readLog(flags) {
   }
 }
 
+module.exports = {
+  computeSignature, computeVerdict, normalize, relativize,
+  isUnknownSignature, UNKNOWN_PREFIX, VERDICTS, DEFAULT_K,
+  EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORT, UNMEASURED_EFFORTS,
+  resourceState,
+};
+
 if (require.main === module) {
   const { flags, positional } = parseArgs(ARGV);
   const [cmd, ticket] = positional;
@@ -620,11 +628,26 @@ if (require.main === module) {
     if (!flags.head) usage('verdict needs --head <sha>: "same failure, unchanged tree" is the flake test');
     const k = Number(flags.k);
     requireGraph();
-    const got = computeVerdict(readJournal(ticket), {
-      signature: flags.signature,
-      head: flags.head,
-      k: Number.isFinite(k) && k > 0 ? k : DEFAULT_K,
-    });
+    const events = readJournal(ticket);
+    const input = { signature: flags.signature, head: flags.head, ticket,
+      k: Number.isFinite(k) && k > 0 ? k : DEFAULT_K };
+    let got = computeVerdict(events, input);
+    if (got.verdict === 'plan_defect') {
+      try {
+        const graph = JSON.parse(fs.readFileSync(path.join(GRAPH_DIR, 'tickets.json')));
+        const branch = graph.tickets?.[ticket]?.branch;
+        const worktrees = require('node:child_process').execFileSync('git', ['worktree', 'list', '--porcelain'],
+          { cwd: path.resolve(GRAPH_DIR, '../..'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
+        const matches = worktrees.split('\n\n').filter(block => block.split('\n').includes('branch refs/heads/' + branch));
+        if (matches.length !== 1) throw new Error('current ticket worktree is missing or ambiguous');
+        const worktree = matches[0].split('\n').find(line => line.startsWith('worktree ')).slice(9);
+        const generation = require('./role-artifact.cjs').readAdmittedCiPlanGeneration({ worktree,
+          graphDir: GRAPH_DIR, ticket, head: flags.head, events });
+        got = computeVerdict(events, { ...input, generation });
+      } catch (error) {
+        process.stderr.write('failure-signature: admitted generation unavailable: ' + error.message + '\n');
+      }
+    }
     // The one place a verdict withholds a rung the count alone would have given,
     // so it is also the one place that has to SAY SO. Silence here reads as a
     // broken ladder: the operator sees a signature at the threshold, no ceiling
@@ -683,10 +706,3 @@ if (require.main === module) {
 
   usage('usage: failure-signature.cjs <compute|verdict|rerun|lift> … [--graph <dir>]');
 }
-
-module.exports = {
-  computeSignature, computeVerdict, normalize, relativize,
-  isUnknownSignature, UNKNOWN_PREFIX, VERDICTS, DEFAULT_K,
-  EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORT, UNMEASURED_EFFORTS,
-  resourceState,
-};
