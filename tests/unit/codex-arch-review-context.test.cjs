@@ -885,18 +885,24 @@ test('a genuine prior Codex repair archive cannot supply host bookkeeping and re
           runtime_evidence: runtimeEvidence };
       },
     };
-    const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+    // This fixture tests archive custody at the dispatch boundary. Public CI
+    // delivery requires canonical failure evidence and is covered by host tests.
     const repairScope = { ...first.scope, run_id: 'repair-' + crypto.randomUUID() };
     nativeHost.scope = repairScope;
-    const requestFile = path.join(f.storage, 'repair-request.json');
-    fs.writeFileSync(requestFile, JSON.stringify({ scope: repairScope,
-      role, signals: {}, context: { prompt: 'Evaluate the existing repair.' } }));
-    let relay = '';
-    await delivery.runCli(['--args-file', requestFile], { write: text => { relay += text; } }, {
-      host: nativeHost, capabilities: nativeHost.capabilities, recorder: first.recorder,
-      agentDir: agents, agentManifest: manifestFile, storageRoot: f.storage, graphDir: path.join(f.root, '.planning/graph'),
-    });
-    const dispatch = JSON.parse(relay);
+    const dispatchId = 'archive-repair-' + crypto.randomUUID();
+    const inflight = { graphDir: path.join(f.root, '.planning/graph'), worktree: f.root,
+      ticket: TICKET, role, dispatch_id: dispatchId, pid: process.pid, host: 'codex', refreshBoard: false };
+    const bookkeeping = require('../../plugins/delivery-pipeline/scripts/dispatch-record.cjs');
+    bookkeeping.recordInflight(inflight);
+    let dispatch;
+    try {
+      dispatch = await require('../../plugins/delivery-pipeline/scripts/codex-agent.cjs').launchAgent(role, {
+        host: nativeHost, capabilities: nativeHost.capabilities, recorder: first.recorder,
+        agentDir: agents, agentManifest: manifestFile, cwd: f.root, dispatch_id: dispatchId,
+        context: { prompt: 'Evaluate the existing repair.', run_id: repairScope.run_id,
+          ticket: TICKET, phase: repairScope.phase, worktreePath: f.root, runtime: 'codex', provider: 'openai' },
+      });
+    } finally { bookkeeping.clearInflight(inflight); }
     const provenance = path.join(f.root, '.planning/graph/provenance/' + dispatch.dispatch_id + '.json');
     assert(fs.existsSync(provenance));
     assert(artifacts.historicalBookkeepingPins(f.root).some(pin => pin.path.endsWith(dispatch.dispatch_id + '.json')));

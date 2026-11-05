@@ -56,6 +56,11 @@ function fixtureData(gsdRole) {
       record.payload.agent_role = gsdRole;
       record.payload.source.subagent.thread_spawn.agent_role = gsdRole;
     }
+    if (record.type === 'response_item' && record.payload.type === 'custom_tool_call_output'
+        && Array.isArray(record.payload.output)
+        && record.payload.output.some(block => typeof block.text === 'string' && block.text.includes(CAPTURED_SHA256))) {
+      record.payload.output = [{ type: 'input_text', text: 'TASK_SHA256=' + CAPTURED_SHA256 }];
+    }
     if (record.type === 'event_msg' && record.payload.type === 'task_complete') {
       record.payload.last_agent_message = 'Work completed.';
     }
