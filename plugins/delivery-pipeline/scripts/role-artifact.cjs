@@ -4878,9 +4878,10 @@ function semanticNative(trusted, launch, record, result, facts, binding = [recor
         resource_failure = { code: error.code, message: error.message };
     }
   }
-  const reads = require(claude ? './claude-runtime-host.cjs' : './codex-runtime-host.cjs')
-    .verifySemanticReads(raw.toString('utf8'), claude ? runtime.session_id
-      : { input: launch.input, initialContext: initial?.launch, sessionId: runtime.session_id });
+  const reads = immutableFileFact(facts, 'semantic-reads', pin.path, raw, binding, () =>
+    require(claude ? './claude-runtime-host.cjs' : './codex-runtime-host.cjs')
+      .verifySemanticReads(raw.toString('utf8'), claude ? runtime.session_id
+        : { input: launch.input, initialContext: initial?.launch, sessionId: runtime.session_id }));
   return { native_pin: pin, output_pin: runtime.transcript, observation, accounting, resource_failure, reads, session_id: runtime.session_id };
 }
 // @security: Reconstruct only pinned facts; preserve all native judgments.
@@ -4946,7 +4947,7 @@ function semanticWireBound(original) {
       { result_bytes: resultBytes, terminal_bytes: terminalBytes, limit_bytes: PARTITION_RESULT_LIMIT });
 }
 function authenticatedSemanticResult(trusted, launch, record, facts = immutableVerificationFacts(), carrier) {
-  const binding = [record.snapshot.snapshot_sha256, record.snapshot.pins, record.historical, trusted.receipt, launch];
+  const binding = digest(stable([record.snapshot.snapshot_sha256, record.snapshot.pins, record.historical, trusted.receipt, launch]));
   const original = semanticOriginalResult(trusted, facts, binding);
   semanticWireBound(original);
   if (carrier !== undefined && stable(carrier) !== stable(original.result))
@@ -5249,7 +5250,7 @@ function validateSemanticOriginal(record, assignment_id, facts) {
   if (!retained || stable(retained.receipt) !== stable(trusted.receipt)
       || retained.semantic_review?.snapshot_sha256 !== snapshot.snapshot_sha256 || retained.semantic_review.stage !== 'worker')
     semanticError('original semantic archive custody missing', 'SEMANTIC_REVIEW_MISSING_ORIGINAL');
-  const binding = [snapshot.snapshot_sha256, snapshot.pins, record.historical, trusted.receipt, launch, saved.reference];
+  const binding = digest(stable([snapshot.snapshot_sha256, snapshot.pins, record.historical, trusted.receipt, launch, saved.reference]));
   const read = (pin, label) => readPinnedArchiveFile(worktree, pin, label, facts, binding);
   const parse = (pin, label) => {
     const raw = read(pin, label);

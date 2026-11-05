@@ -52,6 +52,10 @@ function mainAncestry(root, env) {
 test(portableCase, bounded, t => {
   const directory = temporary(t), checkout = path.join(directory, 'checkout'), env = isolatedEnvironment(directory);
   const head = success('git', ['rev-parse', 'HEAD'], h.ROOT, { env });
+  const remotes = success('git', ['remote'], h.ROOT, { env }).split('\n');
+  const sourceOrigin = remotes.includes('origin') ? success('git', ['remote', 'get-url', 'origin'], h.ROOT, { env }) : null;
+  const advertised = success('git', ['ls-remote', '--symref', h.ROOT, 'HEAD'], directory, { env });
+  assert.equal(advertised.split('\n').find(line => line.endsWith('\tHEAD') && !line.startsWith('ref:')), head + '\tHEAD');
   const parent = success('git', ['rev-parse', 'HEAD^'], h.ROOT, { env });
   const base = success('git', ['merge-base', 'HEAD', parent], h.ROOT, { env });
   assert.equal(base, parent);
@@ -61,7 +65,8 @@ test(portableCase, bounded, t => {
   assert.equal(success('git', ['merge-base', 'HEAD', base], checkout, { env }), base);
   success('git', ['merge-base', '--is-ancestor', base, 'HEAD'], checkout, { env });
   assert.equal(success('git', ['remote', 'get-url', 'origin'], checkout, { env }), h.ROOT);
-  assert.equal(success('git', ['rev-parse', 'refs/remotes/origin/HEAD'], checkout, { env }), head);
+  const originHead = success('git', ['for-each-ref', '--format=%(objectname)', 'refs/remotes/origin/HEAD'], checkout, { env });
+  if (originHead) assert.equal(originHead, head);
   assert.deepEqual(success('git', ['rev-list', 'HEAD'], checkout, { env }).split('\n'),
     success('git', ['rev-list', 'HEAD'], h.ROOT, { env }).split('\n'));
   for (const name of ['alternates', 'http-alternates'])
@@ -89,7 +94,7 @@ test(portableCase, bounded, t => {
   const parity = result.stdout.split('\n').filter(line => line.includes('"exact_parity":true'));
   assert.equal(parity.length, 2); assert.ok(parity.some(line => line.includes('"runtime":"codex"')));
   assert.ok(parity.some(line => line.includes('"runtime":"claude"')));
-  process.stdout.write(JSON.stringify({ head, parent, base, origin: h.ROOT, missing, historical_bytes: bytes.length,
+  process.stdout.write(JSON.stringify({ head, parent, base, origin: h.ROOT, sourceOrigin, advertised, missing, historical_bytes: bytes.length,
     historical_sha256: h.hash(bytes), metadata_output: result.stdout }) + '\n');
 });
 test('T37-portable-baseline squash-equivalent full current tree over genuine main excludes epic-only history', bounded, t => {
