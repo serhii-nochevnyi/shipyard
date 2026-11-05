@@ -2145,7 +2145,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
     { ...output.review_dispositions[0], action: 'escalate' }, { ...output.review_dispositions[1], action: 'reply',
       reply: 'Launch setup exceptions are covered by the outer failure-retention handler.' }];
   }
-  let swapReplyTarget = false, mutateRelation = false;
+  let swapReplyTarget = false, mutateRelation = false, ciConfirmation = false;
   let launches = 0, publishedHead = f.base, pushes = 0, pauses = 0, reads = 0, postPushReads = 0, readScript = null, onRead = null;
   const pauseLog = [];
   const stalePostPush = { 'recheck-stale-recovers': n => n === 2, 'recheck-stale-exhausted': n => n >= 2,
@@ -2162,7 +2162,9 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       : staleReads > 0 && (staleReads--, true));
     return { number: mutation === 'foreign-pr' ? 502 : 501, state: mutation === 'closed-pr' ? 'CLOSED' : 'OPEN',
       headRefName: 'ticket/T-38-04',
-      headRefOid: mutation === 'stale-head' ? '1'.repeat(40)
+      headRefOid: mutation === 'ci-pending-publication' && pushes > 0 && !ciConfirmation ? f.base
+        : mutation === 'ci-foreign-publication' && pushes > 0 ? '3'.repeat(40)
+        : mutation === 'stale-head' ? '1'.repeat(40)
         : pushes > 0 && mutation === 'post-push-foreign-head' ? '3'.repeat(40) : stale ? f.base : publishedHead,
       baseRefName: 'main', baseRefOid: mutation === 'stale-base'
         || (pushes > 0 && ['post-push-base-change', 'post-push-stale-head-and-base'].includes(mutation)) ? '2'.repeat(40) : f.base };
@@ -2170,7 +2172,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   const gh = (_program, args) => {
     if (_program === 'git' && args[0] === 'push') {
       pushes++; publishedHead = git(f.root, 'rev-parse', 'HEAD');
-      if (mutation === 'publication-response-loss' || (historicalRecovery === 'pending' && launches > 1)) throw new Error('Original push response was lost after remote confirmation');
+      if (['publication-response-loss', 'ci-push-response-loss'].includes(mutation) || (historicalRecovery === 'pending' && launches > 1)) throw new Error('Original push response was lost after remote confirmation');
       return 'confirmed host push';
     }
     if (args[0] === 'repo') return JSON.stringify({ nameWithOwner: 'fixture/repository' });
@@ -2321,6 +2323,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         const final = JSON.stringify(output);
         if (historicalRecovery && !executing && launches > 1) fs.writeFileSync(path.join(f.root, 'outside.txt'), 'Subsequent native source correction.\n');
         if (outcome === 'source' || executing || (historicalRecovery && launches > 1)) fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
+        if (mutation === 'ci-verification-failed') fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'still broken\n');
         if (mutation === 'foreign-dirty') fs.writeFileSync(path.join(f.root, 'outside.txt'), 'foreign mutation');
         if (mutation === 'self-commit') { git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'unauthorized producer commit'); }
         if (mutation === 'plan-movement') fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
@@ -2457,16 +2460,35 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       return createCodexDeliveryHost(hostOptions).run(request);
     };
     if (ci) {
-      if (mutation !== 'ci-source') {
-        await assert.rejects(run, { code: mutation === 'ci-foreign-callback' ? 'MISSING_RECEIPT' : 'CI_FIX_SUBJECT_CHANGED' });
-        assert.equal(launches, mutation === 'ci-foreign-callback' ? 1 : 0);
-      } else {
+      if (mutation === 'ci-pending-publication' || mutation === 'ci-foreign-publication') {
+        let refused;
+        await assert.rejects(run, error => { refused = error; return error.code === 'REPAIR_PUBLICATION_PENDING'; });
+        assert.equal(pushes, 1); assert.equal(launches, 1);
+        if (mutation === 'ci-pending-publication') {
+          ciConfirmation = true;
+          const candidate = JSON.parse(fs.readFileSync(candidatePath(f, refused.candidate_id))).payload;
+          const recovered = await createFinalizationRecoveryHost({ ...cliOptions(f),
+            recorder: createDurableRecorder(candidate.receipt_store), getPullRequest: live,
+            execFileSync: transport, verificationAllowList }).resumeFinalization(refused.candidate_id, f.scope);
+          assert.equal(recovered.publication.status, 'confirmed');
+          assert.equal(pushes, 1); assert.equal(launches, 1);
+        }
+      } else if (['ci-source', 'ci-push-response-loss', 'ci-verification-failed'].includes(mutation)) {
         const repaired = await run();
         assert.equal(repaired.receipt.role, 'ci-fix');
         assert.equal(repaired.receipt.compliance, 'verified');
-        assert.equal(repaired.artifact.gates.pre_commit, 'passed');
-        assert.equal(repaired.repair_result.status, 'fixed');
-        git(f.root, 'verify-commit', 'HEAD');
+        if (mutation === 'ci-verification-failed') {
+          assert.equal(repaired.status, 'verification_failed');
+          assert.equal(pushes, 0); assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+        } else {
+          assert.equal(repaired.artifact.gates.pre_commit, 'passed');
+          assert.equal(repaired.repair_result.status, 'fixed');
+          assert.equal(repaired.publication.status, 'confirmed'); assert.equal(pushes, 1);
+          git(f.root, 'verify-commit', 'HEAD');
+        }
+      } else {
+        await assert.rejects(run, { code: mutation === 'ci-foreign-callback' ? 'MISSING_RECEIPT' : 'CI_FIX_SUBJECT_CHANGED' });
+        assert.equal(launches, mutation === 'ci-foreign-callback' ? 1 : 0);
       }
       return;
     }
@@ -4328,7 +4350,7 @@ assert.equal(entrySelected, 43, 'exact code-review entry registration');
 assert.equal(entryVariants, 7, 'all original CLI variants');
 
 
-for (const mutation of ['ci-source', 'ci-evidence', 'ci-pr', 'ci-plan', 'ci-head', 'ci-before-launch', 'ci-foreign-callback'])
+for (const mutation of ['ci-source', 'ci-evidence', 'ci-pr', 'ci-plan', 'ci-head', 'ci-before-launch', 'ci-foreign-callback', 'ci-push-response-loss', 'ci-pending-publication', 'ci-foreign-publication', 'ci-verification-failed'])
   test('bound CI native launch: ' + mutation, () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
 
 done();

@@ -13,14 +13,11 @@ printf "module.exports = value => value + 1;\n" > "$project/src/value.cjs"
 printf "const assert = require('node:assert/strict');\nconst value = require('../src/value.cjs');\nassert.equal(value(2), 3);\n" > "$project/tests/value.test.cjs"
 printf '.planning/\ndist/\n.shipyard*\n' > "$project/.gitignore"
 cp "$ROOT/tests/fixtures/live-project/planning/config.json" "$project/.planning/config.json"
-cat > "$project/.planning/PLAN.md" <<'PLAN'
-# Repair increment regression
-Restore increment(value) returning value + 1. Only src/value.cjs may change.
-Reproduce the actual assertion failure and restore the function. Leave tests intact.
+printf '%s\n' '# Repair increment regression' \
+ 'Restore increment(value) returning value + 1. Only src/value.cjs may change.' \
+ 'Reproduce the actual assertion failure and restore the function. Leave tests intact.' '' \
+ '## Verification commands' '- `node --test tests/value.test.cjs`' > "$project/.planning/PLAN.md"
 
-## Verification commands
-- `node --test tests/value.test.cjs`
-PLAN
 (
  cd "$project"
  git init -q -b main
@@ -43,7 +40,6 @@ fs.writeFileSync(path.join(p,'.planning/graph/tickets.json'), JSON.stringify({ti
 fs.writeFileSync(path.join(p,'.planning/graph/delivery-state.json'),JSON.stringify({'T-01-01':{
  branch:'ticket/T-01-01',base:'main',pr:Number(pr),status:'pr-open'}}));
 NODE
-# Wait for GitHub's original failing run; capture its real failure evidence.
 run=""
 for _ in $(seq 1 90); do
  run="$(gh run list --repo "$repo" --branch ticket/T-01-01 --json databaseId,status,conclusion --jq '.[] | select(.status=="completed" and .conclusion=="failure") | .databaseId' | head -1)"
@@ -57,7 +53,6 @@ gh run view "$run" --repo "$repo" --log-failed > "$project/dist/.shipyard-ci-fai
  node "$ROOT/plugins/delivery-pipeline/scripts/deliver-dispatch.cjs" build ci-fix T-01-01 --runtime "$runtime" --pr "$pr" --failure-file "$project/dist/.shipyard-ci-failure.log" --graph "$project/.planning/graph" > "$work/request.json"
  if [ "$runtime" = codex ]; then
    node "$ROOT/plugins/delivery-pipeline/scripts/codex-delivery-host.cjs" --args-file "$work/request.json" > "$work/result.json" 2> "$work/host.log"
-   git push origin HEAD
  else
    node "$ROOT/plugins/delivery-pipeline/scripts/claude-delivery-host.cjs" --workflow fix-round --request-file "$work/request.json" > "$work/result.json" 2> "$work/host.log"
  fi

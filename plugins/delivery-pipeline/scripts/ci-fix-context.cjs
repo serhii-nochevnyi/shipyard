@@ -1,6 +1,5 @@
 'use strict';
 
-// Shared launch custody for both native hosts. Evidence is data, never instructions.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -44,19 +43,19 @@ function prepare({ graphDir, ticket, worktree, pr, expected_head, plan_sha256, e
       || !fs.lstatSync(planPath).isFile() || !/^[0-9a-f]{64}$/.test(plan_sha256 || '')
       || digest(fs.readFileSync(planPath)) !== plan_sha256) refuse('PLAN changed');
   const head = git(['rev-parse', 'HEAD']);
-  if (!expected_head || head !== expected_head) refuse('HEAD changed');
+  if (!expected_head || head !== (options.expectedLocalHead || expected_head)) refuse('HEAD changed');
   const base = board.base || row.pr_base;
   const live = options.getPullRequest ? options.getPullRequest({ worktree, pr, repo: row.repo || null })
     : JSON.parse((options.execFileSync || execFileSync)('gh', ['pr', 'view', String(pr),
       ...(row.repo ? ['--repo', row.repo] : []), '--json', 'number,state,headRefName,headRefOid,baseRefName'],
     { cwd: worktree, encoding: 'utf8', timeout: 30000 }));
   if (live.number !== pr || live.state !== 'OPEN' || live.headRefName !== row.branch
-      || live.headRefOid !== head || live.baseRefName !== base) refuse('live OPEN PR differs');
+      || live.headRefOid !== expected_head || live.baseRefName !== base) refuse('live OPEN PR differs');
   const evidence = readEvidence(evidence_path, evidence_sha256, worktree);
   if (git(['rev-parse', 'HEAD']) !== head || git(['symbolic-ref', '--short', 'HEAD']) !== row.branch
       || digest(fs.readFileSync(planPath)) !== plan_sha256 || digest(fs.readFileSync(graphFile)) !== digest(graphBytes))
     refuse('canonical inputs changed during live PR authentication');
-  return Object.freeze({ ticket, pr, worktree, head, plan_sha256, graph_sha256: digest(graphBytes), evidence });
+  return Object.freeze({ ticket, pr, worktree, head: expected_head, base, plan_sha256, graph_sha256: digest(graphBytes), evidence });
 }
 function recheck(selector, prepared, options) {
   const current = prepare(selector, options);

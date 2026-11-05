@@ -885,8 +885,6 @@ test('a genuine prior Codex repair archive cannot supply host bookkeeping and re
           runtime_evidence: runtimeEvidence };
       },
     };
-    // This fixture tests archive custody at the dispatch boundary. Public CI
-    // delivery requires canonical failure evidence and is covered by host tests.
     const repairScope = { ...first.scope, run_id: 'repair-' + crypto.randomUUID() };
     nativeHost.scope = repairScope;
     const dispatchId = 'archive-repair-' + crypto.randomUUID();

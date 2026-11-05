@@ -2157,6 +2157,62 @@ function repairCompletion(completed, result, prepared, recorder) {
   return output;
 }
 
+function publishSignedCiRepair(candidateId, artifact, options, stateRoot, key) {
+  const lock = acquireLock(privateDirectory(stateRoot, 'ci-publication-locks'), candidateId, { waitMs: 0 });
+  if (!lock) fail('REPAIR_PUBLICATION_PENDING', 'another host owns this signed CI publication');
+  try {
+    const candidate = readSealed(candidateFile(stateRoot, candidateId), key);
+    const finalized = readSealed(finalizationFile(stateRoot, candidateId), key);
+    if (!candidate || candidate.expected_role !== 'ci-fix' || candidate.candidate_id !== candidateId
+        || !candidate.ci_subject || finalized?.commit !== artifact.commit)
+      fail('REPAIR_SUBJECT_CHANGED', 'CI publication requires its original signed candidate');
+    const { candidate_id: _id, ...body } = candidate;
+    const original = authenticatedReceipt(options.recorder, candidate.dispatch_id, 'ci-fix');
+    if (sha256(canonical(body)) !== candidateId || original.digest !== candidate.receipt_sha256)
+      fail('MISSING_RECEIPT', 'CI publication receipt differs from original candidate');
+    const root = candidate.worktree;
+    if (git(root, ['rev-parse', 'HEAD']) !== artifact.commit
+        || git(root, ['symbolic-ref', '--short', 'HEAD']) !== candidate.branch)
+      fail('REPAIR_SUBJECT_CHANGED', 'signed CI repair moved before publication');
+    verifySignedCommit(root, candidate, artifact.commit);
+    const dirty = git(root, ['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean)
+      .filter(entry => !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
+    if (dirty.length) fail('REPAIR_SUBJECT_CHANGED', 'CI publication requires its clean signed source');
+    const ci = require('./ci-fix-context.cjs');
+    const subject = candidate.ci_subject;
+    const identity = { candidate_id: candidateId, commit: artifact.commit, receipt_sha256: original.digest,
+      subject_sha256: sha256(canonical(subject)) };
+    const file = path.join(privateDirectory(stateRoot, 'ci-publications'), candidateId + '.json');
+    const stored = fs.existsSync(file) ? readSealed(file, key) : null;
+    if (fs.existsSync(file) && (!stored || canonical({ ...stored, status: undefined }) !== canonical({ ...identity, status: undefined })
+        || !['pending', 'confirmed'].includes(stored.status)))
+      fail('REPAIR_PUBLICATION_PENDING', 'original CI publication custody changed');
+    const livePrepared = { commit: candidateCommit(candidate), baseRef: candidate.base_ref, repo: candidate.repo };
+    if (!stored) {
+      ci.recheck(subject.selector, subject.prepared, { ...options, expectedLocalHead: artifact.commit });
+      repairLive(options, livePrepared, subject.selector.pr, { stage: 'ci-pre-push' });
+      atomicWrite(file, JSON.stringify(seal({ ...identity, status: 'pending' }, key)) + '\n', { exclusive: true });
+      try {
+        (options.execFileSync || execFileSync)('git', ['push', '--porcelain', 'origin',
+          artifact.commit + ':refs/heads/' + candidate.branch], { cwd: root, encoding: 'utf8', timeout: 120000 });
+      } catch (_) { /* @contract: an uncertain push is resolved only by a live remote read below. */ }
+    }
+    try {
+      repairLive(options, { ...livePrepared, commit: { ...livePrepared.commit, expectedHead: artifact.commit } },
+        subject.selector.pr, { stage: 'ci-post-push', staleHead: candidate.expected_head });
+      ci.recheck({ ...subject.selector, expected_head: artifact.commit },
+        { ...subject.prepared, head: artifact.commit }, options);
+    } catch (error) {
+      const refusal = candidateRefusal('REPAIR_PUBLICATION_PENDING',
+        'signed CI publication needs independent confirmation; resume candidate ' + candidateId + ': ' + error.message, candidate);
+      throw refusal;
+    }
+    atomicWrite(file, JSON.stringify(seal({ ...identity, status: 'confirmed' }, key)) + '\n', { exclusive: false });
+    return Object.freeze({ status: 'confirmed', pushed: true, commit: artifact.commit,
+      previous_head: candidate.expected_head, pr: subject.selector.pr, candidate_id: candidateId });
+  } finally { lock.release(); }
+}
+
 function publishSignedRepair(prepared, signed, options) {
   const lock = acquireLock(privateDirectory(prepared.stateRoot, 'repair-publication-locks'), signed.artifact.candidate_id, { waitMs: 0 });
   if (!lock) fail('REPAIR_PUBLICATION_PENDING', 'another host owns this signed publication');
@@ -2596,7 +2652,9 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
         gates: Object.freeze({ pre_commit: 'passed', downstream: Object.freeze(pendingGates()) }) });
       return Object.freeze({ schema: SCHEMA, status: 'committed', resumed: true, idempotent: true,
         candidate_id: candidateId, artifact, ...(candidate.expected_role === 'review-fix'
-          ? finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder) : {}) });
+          ? finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder)
+          : candidate.expected_role === 'ci-fix' ? { publication: publishSignedCiRepair(candidateId, artifact,
+            { ...options, recorder }, stateRoot, key) } : {}) });
     }
 
     const liveHead = git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']);
@@ -2679,7 +2737,9 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     const artifact = finalizeCandidate(candidate, stateRoot, key, { ...options, recorder });
     return Object.freeze({ schema: SCHEMA, status: 'committed', resumed: true, idempotent: false,
       candidate_id: candidateId, artifact, ...(candidate.expected_role === 'review-fix'
-        ? finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder) : {}) });
+        ? finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder)
+          : candidate.expected_role === 'ci-fix' ? { publication: publishSignedCiRepair(candidateId, artifact,
+            { ...options, recorder }, stateRoot, key) } : {}) });
   } finally {
     lock.release();
   }
@@ -3026,7 +3086,11 @@ function createCodexDeliveryHost(options = {}) {
             || canonical(ciCompleted.runtime_evidence) !== canonical(original.runtime_evidence)
             || canonical(result.receipt) !== canonical(original)) fail('MISSING_RECEIPT', 'CI repair completion differs from original receipt');
         authenticateRepairNative(original, ciNativeCustody, scope.worktree, ciCompleted.last_agent_message);
-        const stream = parseCodexStream(fs.readFileSync(original.runtime_evidence.transcript.path, 'utf8'));
+        const transcript = original.runtime_evidence.transcript;
+        const raw = fs.readFileSync(transcript.path, 'utf8');
+        if (sha256(raw) !== transcript.sha256 || Buffer.byteLength(raw) !== transcript.bytes)
+          fail('MISSING_RECEIPT', 'CI transcript differs from its authenticated receipt');
+        const stream = parseCodexStream(raw);
         if (repairStreamFinal(stream, 'INVALID_RESULT') !== ciCompleted.last_agent_message) fail('MISSING_RECEIPT', 'CI completion differs from authenticated transcript');
         let output;
         try { output = JSON.parse(ciCompleted.last_agent_message); } catch { fail('INVALID_RESULT', 'CI repair needs complete JSON result'); }
@@ -3040,7 +3104,10 @@ function createCodexDeliveryHost(options = {}) {
           return Object.freeze({ ...result, repair_result: output });
         }
         const artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
-        return Object.freeze({ ...artifact, repair_result: output, ci_subject: ciPrepared });
+        if (!artifact.artifact) return Object.freeze({ ...artifact, repair_result: output });
+        const publication = publishSignedCiRepair(artifact.artifact.candidate_id, artifact.artifact,
+          { ...options, recorder: runtimeHost.recorder }, prepared.stateRoot, prepared.key);
+        return Object.freeze({ ...artifact, repair_result: output, publication });
       }
       if (!committing) return result;
       let artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
