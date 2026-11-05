@@ -927,6 +927,9 @@ if (require.main === module) {
     const signing = signingFixture();
     try {
       const f = ciFixture(signing); f.control.source = false; f.output.status = 'no-op';
+      f.failureBytes.fill(32); f.failureBytes.write('TypeError tests/alpha.test.cjs\n');
+      fs.writeFileSync(f.failureFile, f.failureBytes);
+      f.request.context.evidence_sha256 = hash(f.failureBytes);
       for (let attempt = 1; attempt <= 3; attempt++) {
         f.control.runAttempt = attempt;
         const result = await f.run(); assert.equal(result.receipt.role, 'ci-fix');
@@ -937,7 +940,7 @@ if (require.main === module) {
       f.control.runAttempt = 4; await assert.rejects(f.run, { code: 'REPAIR_POLICY_EXHAUSTED' });
       assert.equal(f.launches, 3); assert.equal(f.pushes, 0);
       assert.deepEqual(f.selections.map(item => item.model), ['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol']);
-      f.failureBytes[0] ^= 1;
+      f.failureBytes.fill(32); f.failureBytes.write('TypeError tests/bravo.test.cjs\n');
       const progressed = path.join(signing.directory, 'new-current-progress.log'); fs.writeFileSync(progressed, f.failureBytes, { mode: 0o600 });
       f.request.context.evidence_path = progressed; f.request.context.evidence_sha256 = hash(f.failureBytes);
       const reset = await f.run(); assert.equal(reset.receipt.applied_effort, 'low'); assert.equal(f.launches, 4);
