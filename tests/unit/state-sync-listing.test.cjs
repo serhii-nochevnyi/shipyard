@@ -66,7 +66,14 @@ if (args[0] === 'pr' && args[1] === 'list') {
     const number = Number(endpoint.match(/\\/pulls\\/(\\d+)\\/reviews$/)[1]);
     if (Object.prototype.hasOwnProperty.call(fixture.pullReviewsRaw || {}, number)) emit(fixture.pullReviewsRaw[number]);
     else emit((fixture.pullReviews || {})[number] || []);
-  } else { process.stderr.write('unexpected api request: ' + endpoint + '\\n'); process.exit(2); }
+  } else if (/\\/pulls\\/\\d+$/.test(endpoint)) {
+    const number = Number(endpoint.split('/').pop());
+    const row = (fixture.view || {})[number] || (fixture.open || []).find(p => p.number === number);
+    emit(row ? { number, state: row.state.toLowerCase(), head: { sha: row.headRefOid },
+      base: { repo: { full_name: endpoint.split('/').slice(1, 3).join('/').replace('{owner}/{repo}', 'acme/demo') } } } : null);
+  } else if (endpoint.includes('/check-runs?')) emit([{ total_count: 0, check_runs: [] }]);
+  else if (endpoint.includes('/status?')) emit([{ sha: endpoint.split('/commits/')[1].split('/')[0], total_count: 0, statuses: [] }]);
+  else { process.stderr.write('unexpected api request: ' + endpoint + '\\n'); process.exit(2); }
 } else if (args[0] === 'repo' && args[1] === 'view') {
   if ((value('--json') || '').includes('owner,name')) emit({ owner: { login: 'acme' }, name: 'demo' });
   else emit((fixture.defaultBranch || 'main') + '\\n');

@@ -81,9 +81,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
 let activeSharedLockDeadline = Number.POSITIVE_INFINITY;
+let activeSharedLockRead = false;
 const lockModule = require(path.join(__dirname, 'lock.cjs'));
 const { withLock, lockDirFor, writeAtomic } = lockModule;
 const sharedWithLock = lockModule.withLock;
@@ -92,7 +94,8 @@ lockModule.withLock = (dir, name, fn, options = {}) => {
       || !Number.isFinite(activeSharedLockDeadline)) {
     return sharedWithLock(dir, name, fn, options);
   }
-  const remaining = remainingTimeoutMs(DEFAULT_LOCK_WAIT_MS, activeSharedLockDeadline, LOCK_TAIL_RESERVE_MS);
+  const remaining = remainingTimeoutMs(DEFAULT_LOCK_WAIT_MS, activeSharedLockDeadline,
+    activeSharedLockRead ? 25 : LOCK_TAIL_RESERVE_MS);
   if (remaining <= 0) throw new Error('wait call deadline reached before shared lock');
   const waitMs = Number.isFinite(options.waitMs) ? Math.min(options.waitMs, remaining) : remaining;
   return sharedWithLock(dir, name, fn, { ...options, waitMs });
@@ -101,7 +104,7 @@ lockModule.withLock = (dir, name, fn, options = {}) => {
 // reimplemented: two stores that expire against the same subject must not come to
 // disagree about what "the PR moved" means.
 const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
-const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { classify, CHECK_FIELDS, compatibleCiObservation } = require(path.join(__dirname, 'check-state.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const waitEvents = require(path.join(__dirname, 'wait-events.cjs'));
 const runWaker = require(path.join(__dirname, 'run-waker.cjs'));
@@ -425,6 +428,10 @@ function checksOf({ pr, repo }) {
   // list, and it was the only one of three that called ACTION_REQUIRED failing —
   // three copies, three answers. The SHAPE stays {total, pending, failing}: it is
   // what `--json` reports and what the settle test below reads. Keep the raw
+  return checksResult(rows);
+}
+
+function checksResult(rows) {
   const c = classify(rows);
   return { total: c.total, pending: c.pending, failing: c.failing, cancelled: c.cancelled,
     cancelled_runs: c.cancelled_runs, rows };
@@ -940,10 +947,15 @@ function waitWallDeadline() {
     : callDeadline;
 }
 
-function withSharedLockDeadline(deadlineAt, fn) {
+function withSharedLockDeadline(deadlineAt, fn, readOnly = false) {
   const previous = activeSharedLockDeadline;
+  const previousRead = activeSharedLockRead;
   activeSharedLockDeadline = deadlineAt;
-  try { return fn(); } finally { activeSharedLockDeadline = previous; }
+  activeSharedLockRead = readOnly;
+  try { return fn(); } finally {
+    activeSharedLockDeadline = previous;
+    activeSharedLockRead = previousRead;
+  }
 }
 let nextWakeAt = null;
 let lastWaitEvent = null;
@@ -1007,20 +1019,23 @@ let publisherHealthy = !publisherEnabled;
 
 function refreshPublishedState() {
   if (!publisherEnabled) return { enabled: false, ok: true };
+  publisherHealthy = false;
   const current = readJson(path.join(GRAPH, 'delivery-front.json')) || {};
   const parked = Array.isArray(current.parked_by_run) ? current.parked_by_run : [];
   const args = parked.length ? [STATE_SYNC, '--parked', parked.join(',')] : [STATE_SYNC];
   const timeoutMs = remainingTimeoutMs(60000, deadline);
   if (timeoutMs <= 0) return { enabled: true, ok: false, reason: 'wait call deadline reached before state refresh' };
+  const pollId = crypto.randomUUID();
   const sync = runBounded(process.execPath, args, {
     cwd: LOCK_ROOT,
+    env: { ...process.env, SHIPYARD_CI_POLL_ID: pollId },
     timeoutMs,
   });
   if (sync.error || sync.status !== 0) {
     publisherHealthy = false;
     return { enabled: true, ok: false, reason: `state-sync did not publish (${diagnostic(sync)})` };
   }
-  const published = withSharedLockDeadline(deadline, () => waitEvents.readPublished({ graphDir: GRAPH }));
+  const published = withSharedLockDeadline(deadline, () => waitEvents.readPublished({ graphDir: GRAPH }), true);
   if (!published || !published.ok) {
     publisherHealthy = false;
     return { enabled: true, ok: false, reason: published && published.reason ? published.reason : 'published state binding is unavailable' };
@@ -1029,13 +1044,10 @@ function refreshPublishedState() {
   front = readJson(path.join(GRAPH, 'delivery-front.json')) || front;
   const previousWatch = watch;
   const rebuiltWatch = buildWatch();
-  // A settled PR disappears from `waiting` during this refresh. Keep its last
-  // target for one final `gh pr checks` read so the waiter can return the
-  // settlement that caused the board to change; when the board still has a wait,
-  // the rebuilt list (including a changed parent target) fully replaces it.
+  // @contract: Retain a settled target for its final observation when refresh empties the watch list.
   watch = rebuiltWatch.length ? rebuiltWatch : previousWatch;
   publisherHealthy = true;
-  return { enabled: true, ok: true };
+  return { enabled: true, ok: true, pollId, published };
 }
 
 // Publish the live check/review fact to the durable event inbox without making
@@ -1129,7 +1141,12 @@ for (;;) {
   const seen = [];
   const refresh = refreshPublishedState();
   for (const w of watch) {
-    const c = checksOf(w);
+    // @security: Only the current complete poll is reusable, including after same-head reruns.
+    const ci = refresh.ok && refresh.published && !refresh.published.overlay_changed
+      ? refresh.published.ci_observations[w.id] : null;
+    const c = compatibleCiObservation(ci, { pr: w.pr, repo: w.repo,
+      head: (state[w.id] || {}).head_sha, pollId: refresh.pollId })
+      ? checksResult(ci.rows) : checksOf(w);
     if (c) goodEver.add(w.id);
     const rerun = handleCancelled(w, c);
     if (rerun && c) c.rerun = rerun;

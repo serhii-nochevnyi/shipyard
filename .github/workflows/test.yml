@@ -15,7 +15,7 @@
 # reported", and `state-sync` had to warn on each one that "green" meant
 # "nothing ran". See .planning/backlog/no-ci-in-the-conveyors-own-repo.md.
 
-# @contract: unit runs as 6 shards and the rest as make test-fast-rest; the test-fast job is the one result.
+# @contract: unit uses frozen baseline shards plus isolated new tasks; test-fast is the aggregate result.
 
 name: test
 
@@ -34,14 +34,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  shards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+      - id: matrix
+        run: |
+          matrix=$(node tests/unit/shard-files.cjs --matrix)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   unit:
-    name: unit (shard ${{ matrix.shard }}/6)
+    needs: shards
+    name: unit (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+      matrix: ${{ fromJSON(needs.shards.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,17 +75,17 @@ jobs:
         if: steps.scope.outputs.product_changes == 'true'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap
+          sudo apt-get install -y -qq bubblewrap ripgrep
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
           bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true
 
-      - name: unit tests, shard ${{ matrix.shard }}/6
+      - name: unit tests, shard ${{ matrix.shard }}
         if: steps.scope.outputs.product_changes == 'true'
         env:
           SHIPYARD_REQUIRE_OS_SANDBOX: "1"
-          UNIT_SHARD: ${{ matrix.shard }}/6
+          UNIT_SHARD: ${{ matrix.shard }}
           COMMENT_POLICY_BASE: origin/${{ github.base_ref || 'main' }}
         run: ./tests/unit/run.sh
 
@@ -121,16 +136,17 @@ jobs:
         run: make test-fast-rest
 
   test-fast:
-    needs: [unit, rest]
+    needs: [shards, unit, rest]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: every part of test-fast passed
         env:
+          SHARDS: ${{ needs.shards.result }}
           UNIT: ${{ needs.unit.result }}
           REST: ${{ needs.rest.result }}
         run: |
           echo "unit shards: $UNIT"
           echo "gates and smoke: $REST"
-          [ "$UNIT" = "success" ] && [ "$REST" = "success" ]
+          [ "$SHARDS" = "success" ] && [ "$UNIT" = "success" ] && [ "$REST" = "success" ]

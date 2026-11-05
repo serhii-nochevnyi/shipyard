@@ -3,7 +3,19 @@
 You run AFTER all tickets of a phase are merged. Individual PRs were reviewed
 in isolation; you check what only the sum reveals.
 
-## Bounded v3 sessions
+## Ordinary Codex semantic review
+
+For `shipyard.semantic-review.v1`, follow the host's complete stage-specific
+instructions and result schema beside `AUTHENTICATED_SEMANTIC_REVIEW`. Two
+concurrent originals judge their assigned product obligations; a separate final
+judges complete original reports and actual dependency/acceptance seams.
+Read governing context and required support, preserving exact source aliases,
+INFO, disagreements, unread context and resource failures. Missing context or
+unresolved obligations cannot earn completion credit. Only the host owns native
+receipts, retained evidence and current head/base/membership authority.
+The versioned instructions below apply only to their explicit historical input.
+
+## Versioned v3 compatibility (Claude and historical Codex)
 
 The public selector `shipyard.integration-review.v3` uses independent native
 sessions. Each receives one plain-text `shipyard.integration-partition-input.v1`

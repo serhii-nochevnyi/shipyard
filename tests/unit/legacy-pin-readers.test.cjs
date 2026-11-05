@@ -156,7 +156,7 @@ test('the review context builder takes its pins from the authenticated accessor 
   for (const forbidden of ['legacy_bookkeeping', 'legacyBookkeepingMembers', 'classifyLegacyProvenance', 'bookkeeping_state']) {
     assert.ok(!source.includes(forbidden), 'review context references ' + forbidden);
   }
-  assert.equal(source.match(/roleArtifact\.historicalBookkeepingPins\(/g).length, 2, 'two producers, both the accessor');
+  assert.equal(source.match(/roleArtifact\.historicalBookkeepingPins\(/g).length, 3, 'three producers, all the accessor');
   const fixture = adoptedProject();
   const attestationInput = JSON.stringify({ historical_bookkeeping: roleArtifact.historicalBookkeepingPins(fixture.root) });
   for (const [legacyPath, digest] of Object.entries(fixture.digests)) {

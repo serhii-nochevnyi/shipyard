@@ -1527,18 +1527,73 @@ test('same-generation packaged fixer authenticates source publication and comple
         return value.split('../../plugins/delivery-pipeline/').join('../../plugins/shipyard/host/plugins/delivery-pipeline/');
       return value;
     };
-    const source = fs.readFileSync(file, 'utf8');
-    const prefix = '../../plugins/delivery-pipeline/';
-    if (!source.includes(prefix)) throw new Error('original fixer package import seam changed');
-    entry._compile(source.split(prefix).join('../../plugins/shipyard/host/plugins/delivery-pipeline/'), file);
+    if (process.argv[3] === 'role-artifact.test.cjs') {
+      let lifecycle;
+      (async () => {
+        const fixture = require(path.join(process.argv[1], 'tests/unit/helpers/phase53-role-artifact-fixture.cjs'));
+        lifecycle = fixture.createRoleArtifactLifecycle();
+        lifecycle.start();
+        const context = fixture.createRoleArtifactFixture({ unitDir: path.dirname(file),
+          scriptsDir: path.join(packaged, 'scripts'), require: originalRequire, module: entry,
+          assert: require('node:assert'), suite() {}, lifecycle });
+        if (context.ROLE_ARTIFACT !== path.join(packaged, 'scripts/role-artifact.cjs'))
+          throw new Error('original role package import seam changed');
+        const collect = (name, callback) => {
+          if (registered.has(name)) throw new Error('duplicate original role fixture: ' + name);
+          registered.set(name, callback);
+        };
+        require(file).registerRoleArtifacts(collect, context);
+        require(path.join(path.dirname(file), 'phase53-z29t-role-architecture-archives.test.cjs')).registerRoleArtifacts(collect, context);
+        require(path.join(path.dirname(file), 'phase53-z29u-role-containment.test.cjs')).registerRoleArtifacts(collect, context);
+        require(path.join(path.dirname(file), 'phase53-z29v-role-code-review.test.cjs')).registerRoleArtifacts(collect, context);
+        require(path.join(path.dirname(file), 'phase53-z29w-role-integration.test.cjs')).registerRoleArtifacts(collect, context);
+        for (const name of JSON.parse(process.argv[2])) {
+          const callback = registered.get(name);
+          if (typeof callback !== 'function') throw new Error('missing original fixer fixture: ' + name);
+          await lifecycle.run(callback);
+        }
+        process.stdout.write('packaged-original-fixer-contracts-pass\\n');
+      })().catch(error => { process.stderr.write(error.stack + '\\n'); process.exitCode = 1; })
+        .finally(() => {
+          try { if (lifecycle) lifecycle.cleanup(); }
+          finally { fs.readFileSync = originalRead; Module._load = load; }
+        });
+    } else {
+    let lifecycle;
+    if (!process.argv[3]) {
+      lifecycle = require(path.join(process.argv[1], 'tests/unit/helpers/phase53-delivery-fixture.cjs'))
+        .createDeliveryLifecycle({ scripts: path.join(packaged, 'scripts') });
+      const context = lifecycle.start();
+      for (const owner of [
+        'codex-delivery-host.test.cjs',
+        'phase53-z29a-fixer-original-custody.test.cjs',
+        'phase53-z29b-fixer-source-history.test.cjs',
+        'phase53-z29c-historical-direct.test.cjs',
+        'phase53-z29d-historical-admitted.test.cjs',
+        'phase53-z29e-historical-pending.test.cjs',
+        'phase53-z29f-historical-action-repeat.test.cjs',
+        'phase53-z29g-historical-action-covered.test.cjs',
+      ]) {
+        const definitions = require(path.join(process.argv[1], 'tests/unit', owner));
+        (definitions.registerDeliveryTests || definitions.registerTests)((name, callback) => registered.set(name, callback), context);
+      }
+    } else {
+      const source = fs.readFileSync(file, 'utf8');
+      const prefix = '../../plugins/delivery-pipeline/';
+      if (!source.includes(prefix)) throw new Error('original fixer package import seam changed');
+      entry._compile(source.split(prefix).join('../../plugins/shipyard/host/plugins/delivery-pipeline/'), file);
+    }
     (async () => {
+      try {
       for (const name of JSON.parse(process.argv[2])) {
         const callback = registered.get(name);
         if (typeof callback !== 'function') throw new Error('missing original fixer fixture: ' + name);
         await callback();
       }
       process.stdout.write('packaged-original-fixer-contracts-pass\\n');
+      } finally { lifecycle?.cleanup(); }
     })().catch(error => { process.stderr.write(error.stack + '\\n'); process.exitCode = 1; });
+    }
   `;
   const observed = execFileSync(process.execPath, ['-e', exercise, ROOT, JSON.stringify(names)],
     { timeout: 420000, maxBuffer: 1024 * 1024, encoding: 'utf8', stdio: 'pipe' });

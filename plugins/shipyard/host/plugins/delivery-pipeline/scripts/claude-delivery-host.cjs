@@ -19,7 +19,7 @@ const roleArtifact = require('./role-artifact.cjs');
 const { resolveBaseRef, resolveGraphDir } = require('./graph-dir.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
-const { preflight, emitPreflight } = require('./runtime-context.cjs');
+const { preflight, emitPreflight, handoffLaunchPreparation } = require('./runtime-context.cjs');
 const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
 const { acceptedRepositoryValues } = require('./architecture-target.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
@@ -195,14 +195,12 @@ function runtimeOptions(options) {
   const storage = storageDirectory(options);
   const scrub = signingFreeEnvironment();
   const env = { ...(options.env || {}), ...scrub };
-  const probe = options.probe || probeClaudeRuntime({ env: { ...process.env, ...env } });
-  return {
+  return handoffLaunchPreparation(options, {
     ...options,
     env,
-    probe,
     recorderDir: options.recorderDir || path.join(storage, 'receipts'),
     transcriptDir: options.transcriptDir || path.join(storage, 'transcripts'),
-  };
+  });
 }
 
 function git(worktree, args) {
@@ -1064,7 +1062,7 @@ function parseCli(argv) {
   return { workflow: rest[1], requestFile: rest[3], preflightOnly };
 }
 
-function launchPreflight(worktree, hostOptions, output, needsRepositoryIdentity = false) {
+function launchPreflight(worktree, hostOptions, output, needsRepositoryIdentity = false, prepareLaunch = false) {
   const stderr = hostOptions.stderr || process.stderr;
   const result = preflight({
     runtime: 'claude',
@@ -1074,11 +1072,13 @@ function launchPreflight(worktree, hostOptions, output, needsRepositoryIdentity 
     scope: 'launch',
     needsRepositoryIdentity,
     host: 'claude-delivery-host.cjs',
-    env: hostOptions.preflightEnv || process.env,
+    env: hostOptions.preflightEnv || { ...process.env, ...hostOptions.env },
+    launchOptions: prepareLaunch ? hostOptions : undefined,
     probe: () => (typeof hostOptions.probe === 'function' ? hostOptions.probe()
-      : hostOptions.probe || probeClaudeRuntime({ env: process.env })),
+      : hostOptions.probe || probeClaudeRuntime({ ...hostOptions, env: { ...process.env, ...hostOptions.env } })),
   });
   emitPreflight(result, { stdout: output, stderr });
+  if (result.ok) handoffLaunchPreparation(result, hostOptions);
   return result;
 }
 
@@ -1149,6 +1149,7 @@ function cliDispatch(workflow, args) {
 async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = process.stdout, hostOptions = {}) {
   const { workflow, requestFile, preflightOnly } = parseCli(argv);
   if (!object(hostOptions)) reject('CLI host options must be an object');
+  hostOptions = { ...hostOptions };
   if (preflightOnly && !requestFile) {
     return launchPreflight(fs.realpathSync(process.cwd()), hostOptions, output);
   }
@@ -1159,7 +1160,7 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
     reject('CLI run scope must name the canonical repository root');
   }
   const checked = launchPreflight(worktree, hostOptions, preflightOnly ? output : { write() {} },
-    workflow === 'investigation-research');
+    workflow === 'investigation-research', !preflightOnly);
   if (preflightOnly) return checked;
   if (!checked.ok) {
     const error = new Error(`claude-delivery-host: preflight found ${checked.findings.length} incompatibilities: ${checked.findings.map((item) => item.code).join(', ')}`);
@@ -1195,9 +1196,9 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
     if (inflight) {
       recordInflight({ ...inflight, ticket: hostScope.ticket, role: dispatch.role, host: 'claude' });
     }
-    const result = await createClaudeDeliveryHost({
+    const result = await createClaudeDeliveryHost(handoffLaunchPreparation(hostOptions, {
       ...hostOptions, scope: hostScope, controller,
-    }).run(workflow, request.args);
+    })).run(workflow, request.args);
     if (heartbeatError) throw heartbeatError;
     const verificationFailed = Array.isArray(result)
       ? result.find((entry) => entry?.status === 'verification_failed') : null;

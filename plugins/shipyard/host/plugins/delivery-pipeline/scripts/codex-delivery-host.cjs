@@ -26,11 +26,11 @@ const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { hintForError, stripControl } = require('./refusal-hints.cjs');
 const { resolveHostEnvironment, launchEnvironment, resolveCodexHome, preflight, emitPreflight,
-  roleNeedsRepositoryIdentity, stateRefusalOf } = require('./runtime-context.cjs');
+  roleNeedsRepositoryIdentity, stateRefusalOf, handoffLaunchPreparation } = require('./runtime-context.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
-const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
+const { acquireGeneratedMergeLock, acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
-const { isScratch } = require('./conveyor-scratch.cjs');
+const { isScratch, ARCH_REVIEW_EVIDENCE_NAME, CODE_REVIEW_EVIDENCE_NAME } = require('./conveyor-scratch.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
   assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
 
@@ -100,13 +100,13 @@ function requestValue(input) {
   }
   if (typeof input.role !== 'string' || !input.role.trim()) fail('INVALID_INPUT', 'role is required');
   const role = ROLE_ALIASES[input.role.trim()] || input.role.trim();
-  if (input.context?.review_contract === roleArtifact.INTEGRATION_REVIEW_V3
+  if ([roleArtifact.INTEGRATION_REVIEW_V3, roleArtifact.SEMANTIC_REVIEW_V1].includes(input.context?.review_contract)
       && (role !== 'integrator' || input.gsd_role !== undefined || input.dispatch_id !== undefined
         || Object.keys(input.signals || {}).length
         || Object.keys(input.context).some(key => key !== 'review_contract')))
-    fail('INVALID_INPUT', 'v3 accepts only the integrator contract selector; all stage authority is host-owned');
+    fail('INVALID_INPUT', 'integration accepts only the integrator contract selector; all stage authority is host-owned');
   if (input.signals !== undefined && !object(input.signals)) fail('INVALID_INPUT', 'signals must be an object');
-  if (role === 'review-fix' && Object.keys(input.signals || {}).length)
+  if (['ci-fix', 'review-fix'].includes(role) && Object.keys(input.signals || {}).length)
     fail('INVALID_INPUT', 'repair rungs are derived only from original protected repair history');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
   for (const key of Object.keys(input.context || {})) {
@@ -122,7 +122,7 @@ function requestValue(input) {
     fail('INVALID_INPUT', 'context.plan_sha256 must be a 64-character hex digest');
   }
   if (input.context?.review_contract !== undefined
-      && (role !== 'integrator' || !['shipyard.integration-review.v1', 'shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3].includes(input.context.review_contract)))
+      && (role !== 'integrator' || !['shipyard.integration-review.v1', 'shipyard.integration-review.v2', roleArtifact.INTEGRATION_REVIEW_V3, roleArtifact.SEMANTIC_REVIEW_V1].includes(input.context.review_contract)))
     fail('INVALID_INPUT', 'unsupported integration review contract');
   if (input.dispatch_id !== undefined
       && (typeof input.dispatch_id !== 'string' || !input.dispatch_id.trim())) {
@@ -239,7 +239,7 @@ function effectiveBaseRef(worktree, file, ticket, snapshot) {
     fail('BOARD_UNAVAILABLE', 'cannot read canonical delivery board: ' + error.message);
   }
   const row = snapshot.row;
-  const live = board && board[ticket];
+  const live = board && (board.tickets || board)[ticket];
   if (!object(live) || live.branch !== row.branch || typeof live.base !== 'string' || !live.base.trim()) {
     fail('BASE_MISMATCH', `ticket ${ticket} has no matching live delivery base`);
   }
@@ -392,7 +392,7 @@ function readSealed(file, key) {
 }
 
 function authenticatedReceipt(recorder, dispatchId, expectedRole = 'executor') {
-  if (!['executor', 'review-fix'].includes(expectedRole)) fail('MISSING_RECEIPT', 'unsupported candidate role');
+  if (!['executor', 'ci-fix', 'review-fix'].includes(expectedRole)) fail('MISSING_RECEIPT', 'unsupported candidate role');
   if (!recorder || typeof recorder.getVerifiedRecord !== 'function') {
     fail('MISSING_RECEIPT', 'host recorder cannot authenticate the original dispatch receipt');
   }
@@ -418,6 +418,14 @@ function authenticatedReceipt(recorder, dispatchId, expectedRole = 'executor') {
     fail('MISSING_RECEIPT', 'authenticated original receipt has no consistent registered policy identity');
   }
   return Object.freeze({ receipt, digest: sha256(canonical(receipt)), policy_version: version });
+}
+
+function authenticatedCoveredReceipt(record) {
+  const recorder = createDurableRecorder(record.receipt_store);
+  const role = recorder.getVerifiedRecord(record.dispatch_id)?.receipt?.role;
+  if (record.kind === 'fixer' && !['ci-fix', 'review-fix'].includes(role))
+    fail('MISSING_RECEIPT', 'covered fixer has no authenticated repair role');
+  return authenticatedReceipt(recorder, record.dispatch_id, record.kind === 'executor' ? 'executor' : role);
 }
 
 function planSnapshot(graph, row) {
@@ -541,7 +549,7 @@ function scopedTreeOf(prepared, options) {
   }
 }
 
-function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
+function collectVerificationEvidence(prepared, verificationSpec, options = {}, renewOwner) {
   const allowList = prepared.verificationAllowList;
   if (Array.isArray(allowList)) {
     const verified = hostVerification.collectVerificationEvidence({ planText: prepared.plan.text, allowList,
@@ -549,7 +557,7 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
       planSha256: prepared.plan.sha256, expectedHead: prepared.commit.expectedHead,
       files_modified: prepared.commit.files_modified, sandboxRunner: options.verificationRunner,
       hostRunner: options.hostVerificationRunner,
-      treeDigest: options.scopedTree ? () => scopedTreeOf(prepared, options).tree : undefined });
+      treeDigest: options.scopedTree ? () => scopedTreeOf(prepared, options).tree : undefined }, renewOwner);
     return Object.freeze(Object.assign(verificationSpec.spec.commands.map((command) => Object.freeze({
       id: command.id, record_sha256: verified.digest, outcome: 'passed',
       host_evidence_digest: verified.digest,
@@ -559,27 +567,51 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
   const directory = privateDirectory(prepared.stateRoot, 'verification');
   const records = [];
   const failed = [];
+  const tree = () => {
+    try { return { digest: scopedTreeOf(prepared, options).tree, error: null }; }
+    catch (error) { return { digest: null, error: error.code || 'SCOPED_TREE_UNAVAILABLE' }; }
+  };
+  let authorityError = null;
+  let failedCommand = null;
   for (const command of verificationSpec.spec.commands) {
-    const before = scopedTreeOf(prepared, options).tree;
-    let result;
+    const before = tree();
+    let result = { status: null, stdout_sha256: sha256(''), stderr_sha256: sha256('') };
+    let invoked = false;
     try {
-      result = runner.run({ ...command, cwd: path.join(prepared.commit.worktree, command.cwd) });
+      if (before.error) fail(before.error, 'scoped tree unavailable before verification');
+      const spec = { ...command, cwd: path.join(prepared.commit.worktree, command.cwd) };
+      try { renewOwner?.(); }
+      catch (error) { authorityError = error.code || 'VERIFICATION_AUTHORITY_LOST'; }
+      if (!authorityError) {
+        invoked = true;
+        result = runner.run(spec);
+      }
     } catch (error) {
-      result = { status: null, signal: null, error_code: error.code || 'RUNNER_FAILED', timed_out: false,
-        stdout_sha256: sha256(''), stderr_sha256: sha256(String(error.message)), backend: null, profile_sha256: null };
+      result = { status: error.status ?? null, signal: error.signal || null, error_code: error.code || 'RUNNER_FAILED',
+        timed_out: Boolean(error.timed_out), stdout_sha256: error.stdout_sha256 || sha256(error.stdout || ''),
+        stderr_sha256: error.stderr_sha256 || sha256(error.stderr || String(error.message)),
+        backend: null, profile_sha256: null };
+    } finally {
+      if (invoked) {
+        try { renewOwner?.(); }
+        catch (error) { authorityError = error.code || 'VERIFICATION_AUTHORITY_LOST'; }
+      }
     }
-    const after = scopedTreeOf(prepared, options).tree;
-    const passed = result.status === 0 && !result.signal && !result.error_code && !result.timed_out && before === after;
+    const after = tree();
+    const passed = result.status === 0 && !result.signal && !result.error_code && !result.timed_out
+      && !authorityError && !before.error && !after.error && before.digest === after.digest;
     const payload = {
       schema: VERIFICATION_SCHEMA, version: 1,
       run_id: prepared.identity.run_id, dispatch_id: prepared.identity.dispatch_id,
       launch_id: prepared.identity.launch_id, ticket: prepared.commit.ticket,
       command_id: command.id, command_sha256: sha256(canonical(command)), spec_sha256: verificationSpec.digest,
       plan_sha256: prepared.plan.sha256, graph_sha256: prepared.graphDigest, policy_hash: prepared.identity.policy_hash,
-      tree_before: before, tree_after: after,
+      tree_before: before.digest, tree_after: after.digest,
       status: result.status === undefined ? null : result.status, signal: result.signal || null,
-      error_code: result.error_code || null, timed_out: Boolean(result.timed_out),
-      stdout_sha256: result.stdout_sha256 || null, stderr_sha256: result.stderr_sha256 || null,
+      error_code: result.error_code || before.error || after.error || null,
+      authority_error_code: authorityError, timed_out: Boolean(result.timed_out),
+      stdout_sha256: result.stdout_sha256 || sha256(result.stdout || ''),
+      stderr_sha256: result.stderr_sha256 || sha256(result.stderr || ''),
       backend: object(result.backend) ? { kind: result.backend.kind, path: result.backend.path, digest: result.backend.digest } : null,
       profile_sha256: result.profile_sha256 || null,
       outcome: passed ? 'passed' : 'failed',
@@ -588,7 +620,8 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
     const digest = sha256(canonical(envelope));
     atomicWrite(path.join(directory, digest + '.json'), JSON.stringify(envelope) + '\n', { exclusive: true });
     records.push(Object.freeze({ id: command.id, record_sha256: digest, outcome: payload.outcome }));
-    if (!passed) failed.push(command.id + (before !== after ? ' (changed scoped tree)' : ''));
+    if (!passed) failed.push(command.id + (before.digest !== after.digest ? ' (changed scoped tree)' : ''));
+    if (authorityError) { failedCommand = command; break; }
   }
   const missing = verificationSpec.spec.required.filter((id) => !records.some((record) => record.id === id));
   if (failed.length || missing.length) {
@@ -596,6 +629,13 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
       + [...failed.map((id) => 'failed ' + id), ...missing.map((id) => 'missing ' + id)].join(', '));
     error.code = 'VERIFICATION_FAILED';
     error.gates = { pre_commit: records, downstream: pendingGates() };
+    if (authorityError) {
+      error.status = 'verification_failed';
+      error.retryable = false;
+      error.command = [failedCommand.executable, ...failedCommand.argv];
+      error.evidence_digest = hostVerification.evidence(records, { stateRoot: prepared.stateRoot,
+        ticket: prepared.commit.ticket, plan_sha256: prepared.plan.sha256, configured: true }).digest;
+    }
     throw error;
   }
   const unconfigured = hostVerification.evidence([], { stateRoot: prepared.stateRoot,
@@ -683,6 +723,7 @@ function verifySignedCommit(worktree, candidate, commit) {
 }
 
 function finalizeCandidate(candidate, stateRoot, key, options) {
+  options[REPAIR_OWNER]?.();
   const finalizeCommit = finalizer(options);
   const committed = finalizeCommit({
     ticket: candidate.ticket, worktree: candidate.worktree, expectedBranch: candidate.branch,
@@ -690,11 +731,12 @@ function finalizeCandidate(candidate, stateRoot, key, options) {
     expectedSigner: candidate.signer, files_modified: [...candidate.files_modified],
     expectedTree: candidate.scoped_tree,
     verificationEvidenceDigest: candidate.verification.evidence_digest,
-    coverage: { kind: candidate.expected_role === 'review-fix' ? 'fixer' : 'executor', repo: candidate.repo, dispatch_id: candidate.dispatch_id,
+    coverage: { kind: ['ci-fix', 'review-fix'].includes(candidate.expected_role) ? 'fixer' : 'executor', repo: candidate.repo, dispatch_id: candidate.dispatch_id,
       receipt_digest: candidate.receipt_sha256,
       verification_digest: candidate.verification.evidence_digest,
       receipt_store: options.recorder && options.recorder.storeDir },
   });
+  options[REPAIR_OWNER]?.();
   const artifact = signedArtifact(candidate.worktree, candidate, committed);
   atomicWrite(finalizationFile(stateRoot, candidate.candidate_id), JSON.stringify(seal({
     schema: FINALIZATION_SCHEMA, version: 1, candidate_id: candidate.candidate_id,
@@ -977,15 +1019,15 @@ function finishIntegrationReview(review, dispatch, recorder) {
   return Object.freeze({ ...dispatch, result: judgment, artifact });
 }
 
-function partitionedCodexResult(dispatch, recorder) {
+function partitionedCodexResult(dispatch, recorder, role = 'integrator') {
   const recorded = recorder?.getVerifiedRecord?.(dispatch?.dispatch_id);
   const receipt = recorded?.receipt;
-  if (!recorded || recorded.role !== 'integrator' || recorded.dispatch_id !== dispatch?.dispatch_id
-      || dispatch.runtime !== 'codex' || dispatch.role !== 'integrator' || receipt?.role !== 'integrator'
+  if (!recorded || recorded.role !== role || recorded.dispatch_id !== dispatch?.dispatch_id
+      || dispatch.runtime !== 'codex' || dispatch.role !== role || receipt?.role !== role
       || receipt.runtime !== 'codex' || receipt.dispatch_id !== dispatch.dispatch_id || receipt.compliance !== 'verified'
       || stableStringify(receipt) !== stableStringify(dispatch.receipt)
       || stableStringify(receipt.runtime_evidence) !== stableStringify(dispatch.application_evidence?.runtime_evidence))
-    fail('MISSING_RECEIPT', 'partition requires its original verified durable integrator receipt');
+    fail('MISSING_RECEIPT', 'partition requires its original verified durable ' + role + ' receipt');
   const pin = receipt.runtime_evidence?.transcript;
   if (!pin || !path.isAbsolute(pin.path || '') || pin.bytes < 1 || pin.bytes > 128 * 1024 * 1024)
     fail('MISSING_RECEIPT', 'partition requires its original complete native stream');
@@ -1007,147 +1049,260 @@ function partitionedCodexResult(dispatch, recorder) {
   try { return JSON.parse(text); } catch { fail('INVALID_RESULT', 'partition result must be complete JSON'); }
 }
 
+async function runSemanticReview({ prepared, recorder, launch, worktreePath } = {}) {
+  if (!prepared || prepared.schema !== roleArtifact.SEMANTIC_SNAPSHOT_V1 || typeof launch !== 'function')
+    fail('INVALID_INPUT', 'semantic coordinator requires private preparation and a native launch adapter');
+  const attempts = await Promise.allSettled(prepared.assignments.map(async assignment => {
+    try {
+      return roleArtifact.readSemanticOriginal({ worktreePath, snapshot_sha256: prepared.snapshot_sha256,
+        assignment_id: assignment.id });
+    } catch (error) { if (error.code !== 'SEMANTIC_REVIEW_MISSING_ORIGINAL') throw error; }
+    const stage = roleArtifact.prepareSemanticWorker({ prepared, assignment_id: assignment.id });
+    await launch(stage);
+    return roleArtifact.retainSemanticOriginal({ prepared: stage, recorder });
+  }));
+  const failed = attempts.find(item => item.status === 'rejected');
+  if (failed) throw failed.reason;
+  const final = roleArtifact.prepareSemanticFinal({ prepared });
+  return launch(final);
+}
+
+function recoverCodexCodeReview(scope, request, options) {
+  if (Object.keys(request.context).some(key => key !== 'repo') || Object.keys(request.signals).length
+      || request.gsd_role !== undefined) {
+    codeReviewContext.prepareSemantic(scope, request, options);
+    fail('CODE_REVIEW_CONTEXT_REQUIRED', 'semantic code-review requires host-built context and signals');
+  }
+  const pr = Number(require('./architecture-target.cjs').PHASE_SUBJECT.exec(scope.ticket)?.[4]);
+  return roleArtifact.recoverAcceptedSemanticCodeReview({ worktreePath: scope.worktree,
+    graphDir: options.graphDir, phase: scope.phase, pr, runtime: 'codex', repo: request.context.repo ?? null,
+    subject: scope.ticket, options });
+}
+
+async function runCodexSemanticReview(review, runtimeHost, scope, options) {
+  const architecture = review.architecture, codeReview = review.codeReview;
+  const prepared = roleArtifact.prepareSemanticReview(codeReview ? { codeReview } : architecture ? { architecture } : { review });
+  const role = prepared.role;
+  const evidenceName = { 'arch-review': ARCH_REVIEW_EVIDENCE_NAME, 'code-review': CODE_REVIEW_EVIDENCE_NAME }[role];
+  const protectedEvidence = evidenceName ? [path.join(scope.worktree, evidenceName)] : [];
+  const assertWorktree = codeReview ? () => codeReviewContext.recheckSemantic(prepared, options) : architecture ? () => archReviewContext.recheckPreparedSemanticArchitecture(architecture)
+    : () => require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
+    ...review.prepared, integrationReview: { archivePins: roleArtifact.authenticatedArchivePins(scope.worktree) } });
+  const launch = async stage => {
+    assertWorktree();
+    const reservation = roleArtifact.reserveSemanticLaunch({ prepared: stage, recorder: runtimeHost.recorder });
+    const recorder = reservation.recorder;
+    let dispatch;
+    if (reservation.state === 'recorded') {
+      const original = recorder.getVerifiedRecord(stage.dispatch_id);
+      dispatch = { runtime: 'codex', role, dispatch_id: stage.dispatch_id,
+        receipt: original.receipt, application_evidence: { runtime_evidence: original.receipt.runtime_evidence } };
+    } else {
+      const runId = 'semantic-' + crypto.randomUUID(), ownerId = 'semantic-owner-' + crypto.randomUUID();
+      const nativeScope = { ...scope, run_id: runId };
+      const storage = storageDirectory(options, nativeScope);
+      const controller = options.controller === false ? null : createRunController({ storeDir: path.join(storage, 'controller'), ownerId });
+      if (controller) controller.begin(createRunScope({ run_id: runId, repository_id: prepared.identity.repository,
+        phase: scope.phase, ticket: scope.ticket, worktree: scope.worktree, runtime: 'codex', owner_id: ownerId,
+        dispatch: { runtime: 'codex', role, dispatch_id: stage.dispatch_id } }));
+      const native = createCodexRuntimeHost({ scope: nativeScope, controller, recorder,
+        capabilities: runtimeHost.capabilities, agentDir: options.agentDir, agentManifest: options.agentManifest,
+        executable: options.executable, probe: options.probe, env: options.env, spawn: options.spawn,
+        ephemeral: options.ephemeral, approveForMe: options.approveForMe,
+        transcriptDir: path.join(storage, 'transcripts'),
+        additionalProtectedPaths: [hostStateRoot(options, scope), roleArtifact.archiveAuthorityDirectory(scope.worktree), ...protectedEvidence] });
+      let heartbeatError;
+      const heartbeat = controller ? setInterval(() => {
+        try { controller.heartbeat(runId); } catch (error) { heartbeatError = error; }
+      }, 60000) : null;
+      heartbeat?.unref();
+      try {
+        const installed = installedAgentOptions(options, {}, native.capabilities);
+        dispatch = await launchAgent(role, { cwd: scope.worktree, flags: new Map(),
+          signals: review.prepared.signals, dispatch_id: stage.dispatch_id, scope: native.scope,
+          host: native, recorder: native.recorder, controller, capabilities: native.capabilities,
+          agentDir: installed.agentDir, agentManifest: installed.agentManifest, env: options.env || process.env,
+          context: { ticket: scope.ticket, phase: scope.phase, worktreePath: scope.worktree,
+            ...(['arch-review', 'code-review'].includes(role) && scope.ticket.startsWith('phase=') ? { subject_kind: 'phase' } : {}),
+            ...(codeReview ? { code_review_prepared: codeReviewContext.prepareSemanticLaunch(codeReview, stage) } : {}),
+            runtime: 'codex', provider: 'openai', prompt: Buffer.from(stage.input).subarray(stage.prefix_bytes).toString('utf8') } });
+        if (heartbeatError) throw heartbeatError;
+        assertWorktree();
+        if (controller) controller.complete(runId);
+      } catch (error) {
+        if (controller) controller.fail(runId, { reason: historyReason(error.message) });
+        throw error;
+      } finally { if (heartbeat) clearInterval(heartbeat); }
+    }
+    const carrier = partitionedCodexResult(dispatch, recorder, role);
+    // @security: Previous full APIs authenticate workers on retention and finals before publication callbacks.
+    if (!roleArtifact.authenticateSemanticStageResult && (['result_format', 'reviewed_identity_sha256',
+      'coverage_indices', 'unread_indices', 'seam_rows'].some(key => Object.hasOwn(carrier, key))
+      || carrier.seams?.some(row => Object.hasOwn(row, 'index'))))
+      fail('INVALID_RESULT', 'indexed semantic result requires its authenticated decoder');
+    const result = roleArtifact.authenticateSemanticStageResult
+      ? roleArtifact.authenticateSemanticStageResult({ prepared: stage, recorder, result: carrier })
+      : stage.stage === 'worker' ? roleArtifact.retainSemanticOriginal({ prepared: stage, recorder }).result : carrier;
+    if (stage.stage === 'worker') return Object.freeze({ ...dispatch, result });
+    return roleArtifact.publishSemanticFinal({ prepared: stage, recorder, publish: () => {
+      if (codeReview) return codeReviewContext.finishSemantic(codeReview, dispatch, result, recorder);
+      if (architecture) return archReviewContext.finishSemanticArchitecture(architecture, dispatch, result, recorder);
+      const { evidence_markdown, ...judgment } = result;
+      const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
+      roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role, phase: review.prepared.phase, evidencePath });
+      fs.writeFileSync(evidencePath, evidence_markdown);
+      const input = { worktreePath: scope.worktree, role, phase: review.prepared.phase,
+        ticket: scope.ticket, base: review.prepared.base, ticketSet: review.prepared.ticketSet,
+        ticketSetDigest: review.prepared.ticketSetDigest, recorder, dispatchId: stage.dispatch_id,
+        result: judgment, evidencePath };
+      const artifact = roleArtifact.sealJudgment(input);
+      roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
+      return Object.freeze({ ...dispatch, result, artifact });
+    } });
+  };
+  return runSemanticReview({ prepared, recorder: runtimeHost.recorder, launch, worktreePath: scope.worktree });
+}
+
+function prepareCodexSemanticReview(scope, request, options) {
+  if (options.integrationCapacity !== undefined || options.readerCapacity !== undefined || options.readerProfile !== undefined)
+    fail('INVALID_INPUT', 'semantic review resources are host-owned');
+  const prepared = require('./claude-role-host.cjs').prepareNativeIntegratorContext(options, {
+    worktree: scope.worktree, phase: String(scope.phase), review_contract: roleArtifact.SEMANTIC_REVIEW_V1 });
+  const selected = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: prepared.signals });
+  const installed = installedAgentOptions(options, selected, options.host?.capabilities || options.capabilities);
+  const instructions = archReviewContext.instructionEvidence(installed.agentDir, installed.agentFile, installed.agentManifest);
+  return prepareIntegrationLineage(scope, prepared, { ...options, nativeRuntime: 'codex',
+    dispatchId: newDispatchId(), storageRoot: storageDirectory(options, scope),
+    generatedInstructionBytes: instructions.generated_instruction_bytes,
+    instructionBinding: { agent_file: selected.agent_file, agent_path: path.resolve(installed.agentDir, installed.agentFile),
+      agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
+}
+
+function prepareCodexSemanticArchitecture(scope, request, options) {
+  const architecture = options.archReviewContext || archReviewContext.prepareSemanticArchitecture(scope, request, {
+    ...options, inflightDispatchId: request.dispatch_id, storageRoot: storageDirectory(options, scope) });
+  if (!archReviewContext.isSemanticArchitecture(architecture) || architecture.prepared.ticket !== scope.ticket
+      || architecture.prepared.phaseNumber !== scope.phase || architecture.prepared.canonical.worktree !== scope.worktree)
+    fail('INVALID_INPUT', 'private semantic architecture context must match the current scope');
+  const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: architecture.prepared.signals });
+  const installed = installedAgentOptions(options, selected, options.host?.capabilities || options.capabilities);
+  archReviewContext.bindSemanticArchitecture(architecture, installed);
+  return { architecture, prepared: architecture.prepared };
+}
+
+function recordedCodexIntegrationFinal(scope, runtimeHost, options) {
+  const previous = options.integrationCapacity?.plan_sha256;
+  if (!/^[a-f0-9]{64}$/.test(previous || '')) return null;
+  const recorder = runtimeHost.recorder, dispatchId = 'integration-final-' + previous;
+  const manifestPath = path.join(scope.worktree, roleArtifact.ARTIFACT_ARCHIVE_DIR, sha256(dispatchId), '.shipyard-role-artifact.json');
+  if (!fs.existsSync(manifestPath)) return null;
+  const originalRecorder = options.integrationCapacity?.recorder || options.recorder || recorder;
+  if (!require('./dispatch-boundary.cjs').isDurableRecorder(recorder)
+      || !require('./dispatch-boundary.cjs').isDurableRecorder(originalRecorder)
+      || originalRecorder.storeDir !== recorder.storeDir)
+    fail('MISSING_RECEIPT', 'historical final requires its original durable recorder');
+  const dispatch = recorder.getVerifiedRecord(dispatchId), result = partitionedCodexResult(dispatch, recorder);
+  if (result.kind !== 'phase' || result.runtime !== 'codex' || result.review_contract !== roleArtifact.INTEGRATION_REVIEW_V3
+      || result.plan_sha256 !== previous || result.subject !== scope.ticket
+      || Number(String(result.phase).split('-')[0]) !== Number(scope.phase))
+    fail('INVALID_RESULT', 'recorded final differs from the exact historical subject and plan');
+  const pins = roleArtifact.authenticatedArchivePins(scope.worktree), pin = pins.find(item => path.resolve(scope.worktree, item.path) === manifestPath);
+  if (!pin) fail('MISSING_RECEIPT', 'historical final has no original protected archive pin');
+  roleArtifact.assertArchivePin(scope.worktree, pin);
+  roleArtifact.assertArchiveInventory(scope.worktree, pins);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const directory = options.graphDir || path.join(scope.worktree, '.planning/graph');
+  const baseName = require('./architecture-target.cjs').resolveIntegrationBranch({ projectRoot: path.resolve(directory, '../..'),
+    defaultBranch: options.defaultBranch, exec: options.execFileSync || execFileSync });
+  const current = roleArtifact.currentIntegrationVerdict({ worktreePath: scope.worktree, graphDir: directory,
+    head: git(scope.worktree, ['rev-parse', 'HEAD']), headBranch: git(scope.worktree, ['symbolic-ref', '--short', 'HEAD']),
+    baseName, baseCommit: git(scope.worktree, ['rev-parse', 'refs/remotes/origin/' + baseName]) });
+  if (!current?.authenticated || current.contract !== roleArtifact.INTEGRATION_REVIEW_V3 || current.dispatch_id !== dispatchId
+      || current.subject !== scope.ticket)
+    fail('STALE_CONTEXT', 'recorded final is not the exact authenticated current original');
+  const status = require('./conveyor-scratch.cjs').statusIgnoringScratch(scope.worktree, { untracked: 'all', forJudge: false });
+  if (!status.ok || status.entries.some(entry => entry.status !== '??'
+      || entry.path !== manifest.source_evidence_path && !pins.some(item => item.path === entry.path)))
+    fail('WORKTREE_MUTATED', 'historical consumption refuses changes outside authenticated original evidence');
+  const { evidence_markdown, ...judgment } = result;
+  if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
+    fail('INVALID_RESULT', 'historical final requires its complete original report');
+  const evidencePath = path.join(scope.worktree, manifest.source_evidence_path);
+  if (!fs.existsSync(evidencePath)) {
+    roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'integrator', phase: result.phase, evidencePath });
+    fs.writeFileSync(evidencePath, evidence_markdown);
+  }
+  const validated = roleArtifact.validateJudgmentManifest({ worktreePath: scope.worktree, role: 'integrator', phase: result.phase,
+    ticket: scope.ticket, base: result.base,
+    ticketSet: result.ticket_set.map(({ id, pr, head, base, branch }) => ({ id, pr, head, base, branch })),
+    ticketSetDigest: result.ticket_set_digest,
+    recorder, dispatchId, result: judgment, evidencePath, artifactPath: manifestPath, artifactDigest: pin.sha256 });
+  return Object.freeze({ ...dispatch, result, artifact: { artifact_path: manifestPath, artifact_digest: pin.sha256,
+    artifact_ref: validated.artifact_ref } });
+}
+
 async function runCodexIntegrationPartitions(review, runtimeHost, scope, options) {
   const execution = integrationExecutions.get(review);
   if (!execution) fail('INVALID_INPUT', 'original private partition execution is required');
-  const { partitions } = execution, resources = options.integrationCapacity || {};
-  const lazyUnits = ['shipyard.integration-partition-plan.v2', 'shipyard.integration-partition-plan.v3'].includes(partitions.plan.schema);
+  const { partitions } = execution, recorder = runtimeHost.recorder;
   recheckIntegrationReview(review, partitions);
-  if (!execution.capacityHost) execution.capacityHost = roleArtifact.createIntegrationCapacityHost({
-    ...resources, partitions, runtime: 'codex', recorder: runtimeHost.recorder });
-  if (!lazyUnits && !execution.stages.length) for (const unit of partitions.plan.units) {
-    try { roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); continue; }
-    catch (error) {
-      if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
-    }
-    execution.stages.push(roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
-      dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id }));
-  }
-  if (!lazyUnits && !execution.admitted) {
-    execution.admissions ||= new Set();
-    for (const stage of [partitions.reserved_template, ...execution.stages].filter(Boolean)) {
-      if (execution.admissions.has(stage.launch_sha256)) continue;
-      await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: execution.capacityHost });
-      execution.admissions.add(stage.launch_sha256);
-    }
-    execution.admitted = true;
-  }
-  const launch = async stage => {
-    recheckIntegrationReview(review, partitions);
-    require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
-      ...review.prepared, integrationReview: review, integrationPartitions: partitions });
-    const runId = 'integration-' + crypto.randomUUID(), ownerId = 'integration-owner-' + crypto.randomUUID();
-    const runScope = createRunScope({ run_id: runId, repository_id: review.prepared.canonical.commonPath,
-      phase: scope.phase, ticket: scope.ticket, worktree: scope.worktree, runtime: 'codex', owner_id: ownerId,
-      dispatch: { runtime: 'codex', role: 'integrator', dispatch_id: stage.dispatch_id } });
-    const storage = storageDirectory(options, { ...scope, run_id: runId });
-    const controller = options.controller === false ? null : createRunController({ storeDir: path.join(storage, 'controller'), ownerId });
-    if (controller) controller.begin(runScope);
-    const nativeScope = { ...scope, run_id: runId };
-    const native = createCodexRuntimeHost({ scope: nativeScope, controller,
-      ...(stage.mode === 'native-observed' ? { integrationIngress: request =>
-        roleArtifact.createCodexIntegrationIngress({ prepared: stage, host: execution.capacityHost, scope: nativeScope })(request) } : {}),
-      recorder: runtimeHost.recorder, capabilities: runtimeHost.capabilities,
-      agentDir: options.agentDir, agentManifest: options.agentManifest, executable: options.executable, probe: options.probe,
-      env: options.env, spawn: options.spawn, ephemeral: options.ephemeral, approveForMe: options.approveForMe,
-      transcriptDir: path.join(storage, 'transcripts'),
-      additionalProtectedPaths: [hostStateRoot(options, scope), roleArtifact.archiveAuthorityDirectory(scope.worktree)] });
-    let heartbeatError;
-    const heartbeat = controller ? setInterval(() => {
-      try { controller.heartbeat(runId); } catch (error) { heartbeatError = error; }
-    }, 60000) : null;
-    heartbeat?.unref();
-    try {
-      const installed = installedAgentOptions(options, {}, native.capabilities);
-      const pin = partitions.plan.instruction_pins.find(item => item.sha256 === stage.agent_sha256);
-      if (!pin) fail('STALE_GENERATED_AGENT', 'partition requires its original installed instruction pin');
-      const prefix = require('./codex-runtime-host.cjs').generatedInstructions(
-        fs.readFileSync(path.resolve(pin.root, pin.path), 'utf8')) + '\n\n';
-      if (!stage.input.startsWith(prefix))
-        fail('INVALID_INPUT', 'partition full native input differs from its installed static instruction prefix');
-      roleArtifact.assertIntegrationAdmission({ prepared: stage, launch: stage, host: execution.capacityHost });
-      const fileInput = stage.mode === 'native-observed' && Buffer.byteLength(stage.input) > 1048576
-        ? roleArtifact.prepareCodexIntegrationFileInput({ prepared: stage, host: execution.capacityHost,
-          scope: native.scope, storageRoot: storage, graphDir: review.prepared.graph.directory }) : null;
-      const dispatch = await launchAgent('integrator', { cwd: scope.worktree, flags: new Map(),
-        signals: review.prepared.signals, dispatch_id: stage.dispatch_id, scope: native.scope,
-        host: native, recorder: native.recorder, controller, capabilities: native.capabilities,
-        agentDir: installed.agentDir, agentManifest: installed.agentManifest, env: options.env || process.env,
-        context: { ticket: scope.ticket, phase: scope.phase, worktreePath: scope.worktree,
-          runtime: 'codex', provider: 'openai', prompt: fileInput ? fileInput.prompt : stage.input.slice(prefix.length),
-          ...(fileInput ? { input_transport: 'host-files', input_prepared: fileInput, input_bundle: fileInput.input_bundle } : {}) } });
-      if (heartbeatError) throw heartbeatError;
-      recheckIntegrationReview(review, partitions);
-      require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
-        ...review.prepared, integrationReview: review, integrationPartitions: partitions });
-      const result = partitionedCodexResult(dispatch, native.recorder);
-      let artifact;
-      if (stage.kind === 'unit') artifact = roleArtifact.sealIntegrationUnit({ prepared: stage,
-        recorder: native.recorder, dispatchId: stage.dispatch_id, result });
-      else {
-        const { evidence_markdown, ...judgment } = result;
-        if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
-          fail('INVALID_RESULT', 'final requires the complete original evidence handoff');
-        const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
-        roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase, evidencePath });
-        fs.writeFileSync(evidencePath, evidence_markdown);
-        const input = { worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase,
-          ticket: scope.ticket, base: review.prepared.base, ticketSet: review.prepared.ticketSet,
-          ticketSetDigest: review.prepared.ticketSetDigest, recorder: native.recorder, dispatchId: stage.dispatch_id,
-          result: judgment, evidencePath, integrationReview: review };
-        artifact = roleArtifact.sealJudgment(input);
-        roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
-      }
-      if (controller) controller.complete(runId);
-      return Object.freeze({ ...dispatch, result, artifact,
-        ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
-          actual_final_input_bytes: stage.kind === 'phase' ? Buffer.byteLength(stage.input) : null } } : {}) });
-    } catch (error) {
-      if (controller) controller.fail(runId, { reason: String(error.message).slice(0, 500) });
-      throw error;
-    } finally { if (heartbeat) clearInterval(heartbeat); }
+  const recorded = stage => {
+    const dispatch = recorder.getVerifiedRecord(stage.dispatch_id);
+    if (!dispatch) fail('MISSING_RECEIPT', 'historical integration requires every already recorded original native result');
+    return { dispatch, result: partitionedCodexResult(dispatch, recorder) };
   };
   for (const unit of partitions.plan.units) {
     let completed;
     try { completed = roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id }); }
     catch (error) {
       if (error.code !== 'INTEGRATION_PARTITION_INVALID' || !error.message.endsWith('unit has no original protected index entry')) throw error;
+      const stage = roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
+        dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id });
+      const { result } = recorded(stage);
+      roleArtifact.sealIntegrationUnit({ prepared: stage, recorder, dispatchId: stage.dispatch_id, result });
+      completed = roleArtifact.validateIntegrationUnit({ partitions, unit_id: unit.unit_id });
     }
-    if (!completed) {
-      let stage = execution.stages.find(stage => stage.unit_id === unit.unit_id);
-      if (lazyUnits) {
-        if (!stage) {
-          stage = roleArtifact.prepareIntegrationUnit({ partitions, unit_id: unit.unit_id,
-            dispatch_id: 'integration-unit-' + partitions.plan.plan_sha256 + '-' + unit.unit_id });
-          execution.stages.push(stage);
-        }
-        execution.admissions ||= new Set();
-        if (!execution.admissions.has(stage.launch_sha256)) {
-          await roleArtifact.admitIntegrationCapacity({ prepared: stage, host: execution.capacityHost });
-          execution.admissions.add(stage.launch_sha256);
-        }
-      }
-      completed = await launch(stage);
-    }
+    const original = recorder.getVerifiedRecord(completed.reference.dispatch_id);
+    if (!original || original.runtime !== 'codex' || original.role !== 'integrator')
+      fail('MISSING_RECEIPT', 'indexed unit requires its original same-recorder native receipt');
+    if (stableStringify(partitionedCodexResult(original, recorder)) !== stableStringify(completed.result))
+      fail('INVALID_RESULT', 'indexed unit differs from its original same-recorder native result');
     if (completed.result.completeness !== 'complete' || completed.result.outcome !== 'passed' || completed.result.required_context.length)
       fail('INTEGRATION_PARTITION_INVALID', 'incomplete, failing or context-blocked unit requires repair');
   }
   recheckIntegrationReview(review, partitions);
-  if (!execution.final) execution.final = roleArtifact.prepareIntegrationAggregate({ partitions,
+  const stage = roleArtifact.prepareIntegrationAggregate({ partitions,
     dispatch_id: 'integration-final-' + partitions.plan.plan_sha256 });
-  if (execution.recovered && !execution.finalAdmitted) {
-    try {
-      roleArtifact.assertIntegrationAdmission({ prepared: execution.final, launch: execution.final, host: execution.capacityHost });
-      execution.finalAdmitted = true;
-    } catch (error) {
-      if (error.code !== 'INTEGRATION_CAPACITY_UNPROVEN' || !error.message.endsWith('exact launch has no protected capacity admission')) throw error;
+  const { dispatch, result } = recorded(stage), { evidence_markdown, ...judgment } = result;
+  if (typeof evidence_markdown !== 'string' || !evidence_markdown.trim())
+    fail('INVALID_RESULT', 'final requires the complete original evidence handoff');
+  require('./claude-role-host.cjs').assertEvidenceOnlyChanges(options, {
+    ...review.prepared, integrationReview: review, integrationPartitions: partitions });
+  const evidencePath = path.join(scope.worktree, review.prepared.evidencePath);
+  const absent = !fs.existsSync(evidencePath);
+  try {
+    roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase, evidencePath });
+    fs.writeFileSync(evidencePath, evidence_markdown);
+    const input = { worktreePath: scope.worktree, role: 'integrator', phase: review.prepared.phase,
+      ticket: scope.ticket, base: review.prepared.base, ticketSet: review.prepared.ticketSet,
+      ticketSetDigest: review.prepared.ticketSetDigest, recorder, dispatchId: stage.dispatch_id,
+      result: judgment, evidencePath, integrationReview: review };
+    const artifact = roleArtifact.sealJudgment(input);
+    roleArtifact.validateJudgmentManifest({ ...input, artifactPath: artifact.artifact_path, artifactDigest: artifact.artifact_digest });
+    return Object.freeze({ ...dispatch, result, artifact,
+      ...(partitions.operational_diagnostic ? { operational_diagnostic: { ...partitions.operational_diagnostic,
+        actual_final_input_bytes: Buffer.byteLength(stage.input) } } : {}) });
+  } catch (error) {
+    const manifest = path.join(scope.worktree, roleArtifact.ARTIFACT_ARCHIVE_DIR, sha256(stage.dispatch_id), '.shipyard-role-artifact.json');
+    if (absent && !fs.existsSync(manifest)) {
+      try {
+        const stat = fs.lstatSync(evidencePath);
+        if (stat.isFile() && !stat.isSymbolicLink() && stat.uid === process.getuid()
+            && fs.readFileSync(evidencePath, 'utf8') === evidence_markdown) fs.unlinkSync(evidencePath);
+      } catch {}
     }
+    throw error;
   }
-  if (!execution.finalAdmitted) {
-    await roleArtifact.admitIntegrationCapacity({ prepared: execution.final, host: execution.capacityHost });
-    execution.finalAdmitted = true;
-  }
-  return launch(execution.final);
 }
 
 function recheckInlineIntegrator(scope, request) {
@@ -1175,6 +1330,13 @@ function prepareIntegratorInput(scope, request, options) {
   if (request.context.review_contract === roleArtifact.INTEGRATION_REVIEW_V3) {
     if (Object.keys(request.context).some(key => key !== 'review_contract') || Object.keys(request.signals || {}).length)
       fail('INVALID_INPUT', 'partition inputs and authority are private to the host');
+    const resources = options.integrationCapacity;
+    const recorder = resources?.recorder || options.recorder || options.host?.recorder;
+    if (!/^[a-f0-9]{64}$/.test(resources?.plan_sha256 || '')
+        || !require('./dispatch-boundary.cjs').isDurableRecorder(recorder)
+        || !require('./dispatch-boundary.cjs').isDurableRecorder(options.host?.recorder || recorder)
+        || (options.host?.recorder && options.host.recorder.storeDir !== recorder.storeDir))
+      fail('INVALID_INPUT', 'historical v3 requires its original frozen plan and durable recorded native results');
     if (options.fileInputContext) {
       const review = integrationInputs.get(options.fileInputContext);
       const execution = integrationExecutions.get(review);
@@ -1194,12 +1356,8 @@ function prepareIntegratorInput(scope, request, options) {
       generatedInstructionBytes: instructions.generated_instruction_bytes,
       instructionBinding: { agent_file: selected.agent_file, agent_path: path.resolve(installed.agentDir, installed.agentFile),
         agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
-    if (options.integrationCapacity !== undefined && (!object(options.integrationCapacity) || !options.integrationCapacity.capacity))
-      fail('INTEGRATION_CAPACITY_UNPROVEN', 'supplied strict capacity resources are malformed');
-    const previous = options.integrationCapacity?.plan_sha256;
-    const partitions = roleArtifact.prepareIntegrationPartitions({ review, capacity: options.integrationCapacity?.capacity,
-      ...(previous ? { plan_sha256: previous } : {}) });
-    integrationExecutions.set(review, { partitions, stages: [], admitted: !!previous, recovered: !!previous, final: null });
+    const partitions = roleArtifact.prepareIntegrationPartitions({ review, plan_sha256: resources.plan_sha256 });
+    integrationExecutions.set(review, { partitions });
     return review.input;
   }
   if (request.context.review_contract !== undefined
@@ -1651,12 +1809,40 @@ const MAX_REPAIR_FEEDBACK_BYTES = 512 * 1024;
 const MAX_REPAIR_PAGES = 100;
 const MAX_REPAIR_ITEMS = 4096;
 
+const REPAIR_OWNER = Symbol('repair-owner');
+
+function repairOwnerRenewal(controller, scope, writerSession) {
+  const verificationController = controller;
+  const verificationAuthority = verificationController?.authority(scope.run_id);
+  const verificationWriter = writerSession && { lease: writerSession.lease,
+    token: writerSession.handle?.token, epoch: writerSession.handle?.epoch,
+    base_revision: writerSession.base_revision };
+  return verificationController && (() => {
+    verificationController.assertOwner(scope.run_id);
+    if (!verificationAuthority || verificationController.authority(scope.run_id) !== verificationAuthority) {
+      fail('SESSION_FENCED', 'verification requires its original process-local owner');
+    }
+    if (verificationWriter) {
+      const { lease, token, epoch, base_revision: baseRevision } = verificationWriter;
+      if (lease?.schema !== 'shipyard.planning-writer-lease.v1'
+          || typeof lease.heartbeatFenced !== 'function' || typeof token !== 'string'
+          || !Number.isSafeInteger(epoch) || typeof baseRevision !== 'string') {
+        fail('WRITER_FENCED', 'verification requires its original complete writer session');
+      }
+      lease.heartbeatFenced({ token, epoch, base_revision: baseRevision });
+    }
+    verificationController.heartbeat(scope.run_id);
+  });
+}
+
 function repairCommand(options, worktree, argv, snapshot = false) {
+  options[REPAIR_OWNER]?.();
   let raw;
   try { raw = (options.execFileSync || execFileSync)('gh', argv, {
     cwd: worktree, encoding: 'utf8', timeout: 30000, maxBuffer: MAX_REPAIR_FEEDBACK_BYTES + 1,
     stdio: ['ignore', 'pipe', 'pipe'],
   }); } catch (error) { fail('REPAIR_FEEDBACK_UNAVAILABLE', 'original GitHub response failed: ' + String(error.stderr || error.message)); }
+  options[REPAIR_OWNER]?.();
   if (Buffer.byteLength(raw) > MAX_REPAIR_FEEDBACK_BYTES) fail('REPAIR_FEEDBACK_OVERFLOW', 'original GitHub response exceeds bound');
   let value;
   try { value = JSON.parse(raw); } catch { fail('REPAIR_FEEDBACK_UNAVAILABLE', 'original GitHub response is not complete JSON'); }
@@ -1866,15 +2052,17 @@ function repairHistory(prepared, pr) {
     journal = { path: journalFile, sha256: sha256(bytes), bytes: bytes.length };
     for (const line of bytes.toString('utf8').split('\n').filter(line => line.trim())) {
       let row; try { row = JSON.parse(line); } catch { fail('REPAIR_PREDECESSOR_INVALID', 'repair journal contains an incomplete original record'); }
-      if (row.ticket !== prepared.commit.ticket || !['attempt', 'fix_round', 'escalation'].includes(row.event)
-          || !['review-fix', undefined].includes(row.artifact_role || row.role)) continue;
-      if (row.pr !== undefined && row.pr !== pr) fail('REPAIR_PREDECESSOR_INVALID', 'journal predecessor belongs to a foreign PR');
+      if (row.ticket !== prepared.commit.ticket || !['attempt', 'fix_round', 'escalation'].includes(row.event)) continue;
+      const role = row.artifact_role || row.role;
+      if (role !== undefined && role !== 'review-fix' && !policy.ROLES.includes(role)) fail('REPAIR_PREDECESSOR_INVALID', 'repair journal names an unknown role');
+      if (!['review-fix', undefined].includes(role)) continue;
       const operationalDeclaration = row.event === 'escalation' && row.by === 'escalation-record'
         && Object.keys(row).sort().join(',') === 'by,event,pr,reason,ticket,ts'
-        && row.pr === pr && typeof row.reason === 'string' && row.reason.trim().length > 0
+        && (row.pr === pr || row.pr === null) && typeof row.reason === 'string' && row.reason.trim().length > 0
         && typeof row.ts === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.ts)
         && Number.isFinite(Date.parse(row.ts)) && new Date(row.ts).toISOString() === row.ts;
       if (operationalDeclaration) continue;
+      if (row.pr !== undefined && row.pr !== pr) fail('REPAIR_PREDECESSOR_INVALID', 'journal predecessor belongs to a foreign PR');
       if (!row.artifact_ref || !row.artifact_digest || !row.dispatch_id || !(row.boundary_store || row.boundary_store_path))
         fail('REPAIR_PREDECESSOR_INVALID', 'unsigned repair carry cannot authorize another attempt');
       const artifact = roleArtifact.read({ role: 'review-fix', ticket: prepared.commit.ticket, pr, base: prepared.baseRef,
@@ -1890,8 +2078,8 @@ function repairHistory(prepared, pr) {
 
 function retainRepairAttempt(prepared, sealed, output, recorder, dispatchId) {
   const history = repairPredecessors.get(prepared);
-  const original = authenticatedReceipt(recorder, dispatchId, 'review-fix');
-  const body = { schema: 'shipyard.codex-repair-attempt.v1', role: 'review-fix', ticket: prepared.commit.ticket,
+  const original = authenticatedReceipt(recorder, dispatchId, prepared.expectedRole);
+  const body = { schema: 'shipyard.codex-repair-attempt.v1', role: prepared.expectedRole, ticket: prepared.commit.ticket,
     pr: prepared.repair.pr, worktree: prepared.commit.worktree, repository: prepared.repository, base: prepared.baseRef,
     feedback_digest: prepared.repair.feedback.digest, normalized_feedback_digest: prepared.repair.actionable_feedback?.digest || prepared.repair.feedback.digest, signature: prepared.repair.signature, native_status: 'completed',
     dispatch_id: dispatchId, receipt_store: recorder.storeDir, receipt_sha256: original.digest,
@@ -1902,6 +2090,12 @@ function retainRepairAttempt(prepared, sealed, output, recorder, dispatchId) {
       plan: { path: prepared.plan.path, sha256: prepared.plan.sha256 }, baseRef: prepared.baseRef,
       repository: prepared.repository, repo: prepared.repo, verificationAllowList: prepared.verificationAllowList } };
   const hash = sha256(canonical(body));
+  if (prepared.repair.role === 'ci-fix' && history.history.some(item => item.attempt.dispatch_id === dispatchId)) {
+    const original = history.history.find(item => item.attempt.dispatch_id === dispatchId).attempt;
+    if (canonical(original.result) !== canonical(output) || original.artifact_digest !== sealed.artifact_digest)
+      fail('REPAIR_PREDECESSOR_INVALID', 'original CI attempt changed during acknowledgement recovery');
+    return;
+  }
   const lock = acquireLock(privateDirectory(prepared.stateRoot, 'repair-locks'), sha256(prepared.commit.ticket + ':' + prepared.repair.pr), { waitMs: 0 });
   if (!lock) fail('REPAIR_PREDECESSOR_INVALID', 'another original repair holds the predecessor chain');
   try {
@@ -2103,8 +2297,7 @@ function recheckHistoricalRepair(prepared, prior, originalHead, endpoint = prepa
             || canonical(checked.record.parents) !== canonical([sourceParent])
             || sha256(canonical(checked.record)) !== pin.coverage_sha256)
           throw new Error('historical action source coverage changed');
-        const original = authenticatedReceipt(createDurableRecorder(checked.record.receipt_store), checked.record.dispatch_id,
-          checked.record.kind === 'executor' ? 'executor' : 'review-fix');
+        const original = authenticatedCoveredReceipt(checked.record);
         if (original.digest !== checked.record.receipt_digest) throw new Error('historical source receipt changed');
         sourceParent = pin.commit;
       }
@@ -2228,8 +2421,7 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
           const record = checked.record;
           if (canonical(record.parents) !== canonical([sourceParent]))
             throw new Error('source transition changed its exact native producer parent');
-          const original = authenticatedReceipt(createDurableRecorder(record.receipt_store), record.dispatch_id,
-            record.kind === 'executor' ? 'executor' : 'review-fix');
+          const original = authenticatedCoveredReceipt(record);
           if (original.digest !== record.receipt_digest) throw new Error('source transition receipt changed');
           sourceParent = commit;
           return { commit, coverage_sha256: sha256(canonical(record)) };
@@ -2394,6 +2586,1155 @@ function prepareRepair(options, scope, context) {
   return result;
 }
 
+const originalCiOperations = new WeakMap();
+const preparedCiOperations = new WeakMap();
+
+function ciPhysical(file, limit = MAX_GRAPH_BYTES, privateMode = false, allowEmpty = false) {
+  if (typeof file !== 'string' || !path.isAbsolute(file) || path.normalize(file) !== file)
+    fail('CI_EVIDENCE_CHANGED', 'CI custody requires an absolute physical path');
+  const ancestors = [];
+  for (let cursor = path.dirname(file);; cursor = path.dirname(cursor)) {
+    const stat = fs.lstatSync(cursor);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(cursor) !== cursor)
+      fail('CI_EVIDENCE_CHANGED', 'CI custody ancestry is not physical');
+    ancestors.push({ path: cursor, dev: stat.dev, ino: stat.ino, mode: stat.mode });
+    if (path.dirname(cursor) === cursor) break;
+  }
+  let fd;
+  try {
+    const before = fs.lstatSync(file);
+    if (!before.isFile() || before.isSymbolicLink() || before.size < (allowEmpty ? 0 : 1) || before.size > limit
+        || (privateMode && (before.mode & 0o077))) fail('CI_EVIDENCE_CHANGED', 'CI custody file is not bounded and regular');
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const bytes = Buffer.alloc(before.size + 1);
+    let length = 0, count;
+    while (length < bytes.length && (count = fs.readSync(fd, bytes, length, bytes.length - length, null))) length += count;
+    if (length !== before.size || [fs.fstatSync(fd), fs.lstatSync(file)].some(stat =>
+      ['dev', 'ino', 'size', 'mode', 'mtimeMs', 'ctimeMs'].some(key => stat[key] !== before[key])))
+      fail('CI_EVIDENCE_CHANGED', 'CI custody changed during its physical read');
+    for (const ancestor of ancestors) {
+      const stat = fs.lstatSync(ancestor.path);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || ['dev', 'ino', 'mode'].some(key => stat[key] !== ancestor[key]))
+        fail('CI_EVIDENCE_CHANGED', 'CI custody ancestry changed during its physical read');
+    }
+    return { bytes: bytes.subarray(0, length), pin: { path: file, bytes: length,
+      sha256: sha256(bytes.subarray(0, length)), dev: before.dev, ino: before.ino, mode: before.mode, ancestors } };
+  } catch (error) {
+    if (error.code === 'CI_EVIDENCE_CHANGED') throw error;
+    fail('CI_EVIDENCE_CHANGED', 'CI custody is unavailable: ' + error.message);
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+function ciFailureSnapshot(prepared, file, digest) {
+  if (!/^[a-f0-9]{64}$/.test(digest || '')) fail('CI_SUBJECT_REQUIRED', 'CI failure requires its exact digest');
+  const original = ciPhysical(file);
+  if (original.pin.sha256 !== digest) fail('CI_EVIDENCE_CHANGED', 'original failure bytes differ from their digest');
+  const directory = privateDirectory(prepared.stateRoot, 'ci-failures', digest);
+  const destination = path.join(directory, 'failure.log');
+  atomicWrite(destination, original.bytes, { exclusive: true });
+  const copy = ciPhysical(destination, MAX_GRAPH_BYTES, true);
+  if (!copy.bytes.equals(original.bytes)) fail('CI_EVIDENCE_CHANGED', 'protected failure snapshot differs');
+  const viewDirectory = privateDirectory(path.dirname(path.dirname(prepared.stateRoot)), 'ci-input-views', sha256(prepared.repository));
+  const viewFile = path.join(viewDirectory, digest + '.log');
+  if (atomicWrite(viewFile, original.bytes, { exclusive: true })) fs.chmodSync(viewFile, 0o400);
+  const view = ciPhysical(viewFile, MAX_GRAPH_BYTES, true);
+  if ((view.pin.mode & 0o777) !== 0o400 || !view.bytes.equals(original.bytes))
+    fail('CI_EVIDENCE_CHANGED', 'read-only model failure input differs from its original');
+  return Object.freeze({ path: destination, sha256: digest, bytes: copy.pin.bytes,
+    original: original.pin, copy: copy.pin, model_input: view.pin });
+}
+
+function recheckCiFailure(evidence) {
+  for (const [kind, pin] of [['original', evidence.original], ['copy', evidence.copy],
+    ...(evidence.model_input ? [['model_input', evidence.model_input]] : [])]) {
+    if (!pin || canonical(ciPhysical(pin.path, MAX_GRAPH_BYTES, kind !== 'original').pin) !== canonical(pin))
+      fail('CI_EVIDENCE_CHANGED', 'original CI failure custody changed');
+  }
+}
+
+function collectRepairCi(options, prepared, pr, evidence) {
+  const checks = require('./check-state.cjs');
+  const subject = { pr, repo: prepared.repo, head: prepared.commit.expectedHead, pollId: crypto.randomUUID() };
+  const runner = options.execFileSync || execFileSync;
+  const observation = checks.collectCiObservation(subject, args => {
+    try {
+      const stdout = runner('gh', args, { cwd: prepared.commit.worktree, encoding: 'utf8',
+        timeout: 30000, maxBuffer: MAX_GRAPH_BYTES + 1, stdio: ['ignore', 'pipe', 'pipe'] });
+      if (Buffer.byteLength(stdout) > MAX_GRAPH_BYTES) throw new Error('CI observation exceeds custody bound');
+      return { status: 0, stdout };
+    } catch (error) { return { status: 1, error, stderr: String(error.stderr || '') }; }
+  });
+  if (!checks.compatibleCiObservation(observation, subject)) fail('CI_OBSERVATION_UNAVAILABLE', observation.note || 'CI observation is incomplete');
+  if (!observation.rows.length) fail('CI_OBSERVATION_EMPTY', 'CI has no current checks');
+  if (observation.rows.some(row => row.bucket === 'pending')) fail('CI_OBSERVATION_PENDING', 'CI still has pending checks');
+  const failures = observation.rows.filter(row => row.bucket === 'fail');
+  if (!failures.length) fail(observation.rows.some(row => row.bucket === 'cancel') ? 'CI_OBSERVATION_CANCELLED' : 'CI_NOT_FAILED', 'CI has no actual failed current job');
+  const matches = [];
+  for (const row of failures) {
+    if (row.source !== 'check-run' || !row.run_id || !row.job_id || !row.workflow_id || !row.run_attempt)
+      fail('CI_FAILURE_UNASSOCIATED', 'failed check lacks its actual workflow/run/attempt/job identity');
+    let raw;
+    try { raw = runner('gh', ['api', `repos/${observation.repository}/actions/jobs/${row.job_id}/logs`],
+      { cwd: prepared.commit.worktree, encoding: null, timeout: 30000, maxBuffer: MAX_GRAPH_BYTES + 1,
+        stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (error) { fail('CI_FAILURE_UNAVAILABLE', 'actual failed job bytes are unavailable: ' + error.message); }
+    const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+    if (!bytes.length || bytes.length > MAX_GRAPH_BYTES) fail('CI_FAILURE_OVERFLOW', 'actual failed job bytes exceed custody bounds');
+    if (bytes.length === evidence.bytes && sha256(bytes) === evidence.sha256) matches.push(row);
+  }
+  if (matches.length !== 1) fail('CI_FAILURE_UNASSOCIATED', 'failure file does not identify one actual current failed job');
+  const { poll_id: _poll, ...stable } = observation;
+  return Object.freeze({ ...stable, failure: matches[0], digest: sha256(canonical(stable)) });
+}
+
+function ciRepairHistory(prepared, pr) {
+  const directory = privateDirectory(prepared.stateRoot, 'ci-repair-attempts');
+  const tipFile = path.join(directory, sha256(prepared.commit.ticket + ':' + pr) + '.json');
+  const tip = readSealed(tipFile, prepared.key), history = [], visited = new Set();
+  for (let cursor = tip?.reference; cursor;) {
+    if (!/^[a-f0-9]{64}$/.test(cursor) || visited.has(cursor) || history.length >= 32)
+      fail('REPAIR_PREDECESSOR_INVALID', 'CI history is cyclic, missing or overflowing');
+    visited.add(cursor);
+    const attempt = readSealed(path.join(directory, cursor + '.json'), prepared.key);
+    if (!attempt || sha256(canonical(attempt)) !== cursor || attempt.role !== 'ci-fix'
+        || attempt.ticket !== prepared.commit.ticket || attempt.pr !== pr || attempt.repository !== prepared.repository
+        || attempt.worktree !== prepared.commit.worktree || attempt.base !== prepared.baseRef)
+      fail('REPAIR_PREDECESSOR_INVALID', 'CI history belongs to a different original subject');
+    const recorder = createDurableRecorder(attempt.receipt_store);
+    const original = authenticatedReceipt(recorder, attempt.dispatch_id, 'ci-fix');
+    if (original.digest !== attempt.receipt_sha256) fail('REPAIR_PREDECESSOR_INVALID', 'original CI receipt changed');
+    const artifact = roleArtifact.read({ role: 'ci-fix', ticket: attempt.ticket, pr, worktreePath: prepared.commit.worktree,
+      base: attempt.base, boundaryStore: attempt.receipt_store, dispatchId: attempt.dispatch_id,
+      artifactPath: attempt.artifact_ref, artifactDigest: attempt.artifact_digest, historical: true });
+    const pin = original.receipt.runtime_evidence.transcript;
+    const raw = ciPhysical(pin.path, 128 * 1024 * 1024).bytes.toString('utf8');
+    const final = repairStreamFinal(parseCodexStream(raw));
+    if (sha256(raw) !== pin.sha256 || Buffer.byteLength(raw) !== pin.bytes || canonical(JSON.parse(final)) !== canonical(attempt.result)
+        || artifact.findings.notes !== attempt.notes || artifact.findings.hypothesis !== attempt.hypothesis)
+      fail('REPAIR_PREDECESSOR_INVALID', 'CI predecessor result or reasoning changed');
+    authenticateRepairNative(original.receipt, attempt.native_custody, prepared.commit.worktree, final);
+    history.push({ attempt, recorder, receipt: original.receipt });
+    cursor = attempt.predecessor;
+  }
+  return { history, journal: null, tipFile, reference: tip?.reference || null };
+}
+
+function ciPredecessorHead(prepared, previous) {
+  if (previous.attempt.preparation.commit.expectedHead === prepared.commit.expectedHead) return true;
+  const directory = privateDirectory(prepared.stateRoot, 'candidates');
+  for (const name of fs.readdirSync(directory)) {
+    const candidate = readSealed(path.join(directory, name), prepared.key);
+    if (candidate?.expected_role !== 'ci-fix' || candidate.dispatch_id !== previous.attempt.dispatch_id) continue;
+    const final = readSealed(finalizationFile(prepared.stateRoot, candidate.candidate_id), prepared.key);
+    if (!final || final.commit !== prepared.commit.expectedHead || candidate.expected_head !== previous.attempt.preparation.commit.expectedHead
+        || candidate.expected_base !== prepared.commit.expectedBase || candidate.plan_sha256 !== prepared.plan.sha256) continue;
+    verifySignedCommit(prepared.commit.worktree, candidate, final.commit);
+    const proof = require('./conveyor-coverage.cjs').verify({ commit: final.commit, repo: prepared.repo, worktree: prepared.commit.worktree });
+    if (proof.covered && proof.record.kind === 'fixer' && proof.record.dispatch_id === previous.attempt.dispatch_id
+        && proof.record.receipt_digest === previous.attempt.receipt_sha256) return true;
+  }
+  return false;
+}
+
+function ciOperationFile(prepared, context) {
+  return path.join(privateDirectory(prepared.stateRoot, 'ci-originals'), sha256(canonical({ ticket: prepared.commit.ticket,
+    pr: context.pr, plan: context.plan_sha256, evidence: context.evidence_path, digest: context.evidence_sha256 })) + '.json');
+}
+
+function writeCiOperation(state) {
+  const operation = JSON.parse(JSON.stringify(state.operation));
+  if (Buffer.byteLength(canonical(operation)) > MAX_STATE_BYTES - 1024)
+    fail('CI_OPERATION_OVERFLOW', 'original CI operation exceeds private custody bound');
+  atomicWrite(state.file, JSON.stringify(seal(operation, state.prepared.key)) + '\n', { exclusive: false });
+  state.operation = operation;
+}
+
+function reconcileCiCandidate(state) {
+  const { operation: op, prepared } = state;
+  if (!op.candidate_result || op.signed_result) return;
+  const candidateId = op.candidate_result.candidate_id;
+  if (!/^[a-f0-9]{64}$/.test(candidateId || ''))
+    fail('CI_ORIGINAL_INVALID', 'original CI candidate association is malformed');
+  const finalized = readSealed(finalizationFile(prepared.stateRoot, candidateId), prepared.key);
+  if (!finalized) return;
+  const candidate = readSealed(candidateFile(prepared.stateRoot, candidateId), prepared.key);
+  if (!candidate) fail('CI_ORIGINAL_INVALID', 'original CI candidate is unavailable');
+  const artifact = { schema: 'shipyard.codex-delivery-artifact.v1', status: 'committed',
+    ticket: candidate.ticket, commit: finalized.commit, signer: finalized.signer, changed: finalized.changed,
+    candidate_id: candidateId, tree: candidate.scoped_tree,
+    gates: { pre_commit: 'passed', downstream: pendingGates() } };
+  const { candidate_id: _candidateId, ...retained } = op.candidate_result;
+  const signed = { ...retained, artifact };
+  const authenticated = { ...state, operation: { ...op, state: 'finished', signed_result: signed, result: signed } };
+  authenticateFinishedCi(authenticated, { finalizationOnly: true });
+  op.signed_result = signed;
+  writeCiOperation(state);
+}
+
+function prepareCiRepair(options, scope, context) {
+  const file = graphFile(options, scope.worktree), graph = graphSnapshot(file, scope.ticket);
+  const plan = planSnapshot(file, graph.row);
+  if (context.plan_sha256 !== plan.sha256) fail('PLAN_DIGEST_MISMATCH', 'delivered plan digest differs from canonical source PLAN');
+  if (Object.keys(context).some(key => !['plan_sha256', 'pr', 'evidence_path', 'evidence_sha256'].includes(key)))
+    fail('CI_SUBJECT_REQUIRED', 'CI accepts only canonical PR, plan and failure selectors');
+  const root = hostStateRoot(options, scope), key = hostKey(root);
+  const probe = { stateRoot: root, commit: { ticket: scope.ticket } };
+  const operationFile = ciOperationFile(probe, context);
+  let saved = readSealed(operationFile, key);
+  let prepared;
+  if (saved) {
+    if (saved.schema !== 'shipyard.original-ci-operation.v1' || saved.scope.ticket !== scope.ticket
+        || saved.scope.worktree !== scope.worktree || saved.scope.phase !== scope.phase || (saved.scope.run_id !== scope.run_id && saved.state !== 'finished')
+        || canonical(saved.selectors) !== canonical(context)) fail('CI_ORIGINAL_INVALID', 'original CI operation differs from its selectors');
+    prepared = { ...saved.preparation, stateRoot: root, key, plan, delivery: deliverPlan({ graphDir: path.dirname(file), row: graph.row, worktree: scope.worktree }) };
+  } else prepared = executorPreflight(options, scope, context.plan_sha256);
+  const board = JSON.parse(fs.readFileSync(path.join(path.dirname(file), 'delivery-state.json'), 'utf8'));
+  const pr = (board.tickets || board)[scope.ticket]?.pr;
+  if (!Number.isSafeInteger(pr) || pr < 1 || context.pr !== pr) fail('CI_SUBJECT_REQUIRED', 'CI requires the canonical recorded PR');
+  const evidence = saved ? saved.preparation.repair.evidence : ciFailureSnapshot(prepared, context.evidence_path, context.evidence_sha256);
+  recheckCiFailure(evidence);
+  let result, history;
+  if (saved) {
+    result = Object.freeze({ ...prepared, expectedRole: 'ci-fix' });
+    history = ciRepairHistory(result, pr);
+    const priorId = saved.predecessor_dispatch_id;
+    const selected = priorId ? history.history.find(item => item.attempt.dispatch_id === priorId) : null;
+    if (priorId && !selected) fail('REPAIR_PREDECESSOR_INVALID', 'original CI predecessor is unavailable');
+    repairPredecessors.set(result, { ...history, selected });
+    if (saved.native_custody) repairNativeCustody.set(result, saved.native_custody);
+  } else {
+    const live = repairLive(options, prepared, pr);
+    const feedback = collectRepairCi(options, prepared, pr, evidence);
+    if (prepared.repo && prepared.repo.toLowerCase() !== feedback.repository.toLowerCase()) fail('CI_SUBJECT_REQUIRED', 'CI repository differs from graph');
+    history = ciRepairHistory(prepared, pr);
+    const signature = sha256(canonical({ repository: feedback.repository, ticket: scope.ticket, pr,
+      failure: evidence.sha256, name: feedback.failure.name, workflow_id: feedback.failure.workflow_id }));
+    for (const [index, item] of history.history.entries()) if (item.attempt.signature === signature
+        && (canonical(item.attempt.preparation.commit.files_modified) !== canonical(prepared.commit.files_modified)
+          || item.attempt.preparation.plan.sha256 !== plan.sha256
+          || item.attempt.preparation.graphDigest !== prepared.graphDigest
+          || !ciPredecessorHead(index === 0 ? prepared : { ...prepared,
+            commit: { ...prepared.commit, expectedHead: history.history[index - 1].attempt.preparation.commit.expectedHead } }, item)))
+      fail('REPAIR_PREDECESSOR_INVALID', 'matching original CI history lacks a compatible graph, scope or covered source transition');
+    const compatible = history.history.filter(item => item.attempt.signature === signature
+      && canonical(item.attempt.preparation.commit.files_modified) === canonical(prepared.commit.files_modified)
+      && item.attempt.preparation.plan.sha256 === plan.sha256
+      && ciPredecessorHead(prepared, item));
+    const selected = compatible[0];
+    const signatureState = !selected ? 'first' : selected.receipt.applied_effort === 'low' ? 'repeat'
+      : selected.receipt.applied_effort === 'high' ? 'repeat_exhausted' : 'exhausted';
+    if (signatureState === 'exhausted') fail('REPAIR_POLICY_EXHAUSTED', 'original deepest CI repair remains unresolved');
+    const repair = Object.freeze({ schema: 'shipyard.codex-repair-subject.v1', role: 'ci-fix', pr, evidence, live, feedback,
+      signature, signature_state: signatureState, prior_attempts: history.history.map(item => ({
+        dispatch_id: item.attempt.dispatch_id, notes: item.attempt.notes, hypothesis: item.attempt.hypothesis,
+        receipt_sha256: item.attempt.receipt_sha256, artifact_ref: item.attempt.artifact_ref, artifact_digest: item.attempt.artifact_digest })), journal: null });
+    const prompt = 'Repair current CI for canonical ticket ' + scope.ticket + ' PR ' + pr + '. '
+      + 'Read the complete authenticated read-only failure input: ' + JSON.stringify(evidence.model_input.path) + '\n'
+      + 'Leave source uncommitted and pushed=false. '
+      + 'Only declared PLAN paths may change. Write complete producer evidence to .shipyard-repair-evidence.md. '
+      + 'Return only shipyard.repair-result.v1 JSON with exactly schema="shipyard.repair-result.v1", id, pr, '
+      + 'status (fixed/no-op/escalate), pushed=false, notes and hypothesis. No additional fields. '
+      + 'notes and hypothesis must be nonempty strings of at most 4096 bytes. Complete JSON must fit 128 KiB.\n'
+      + canonical({ subject: repair, files_modified: prepared.commit.files_modified })
+      + planDeliveryBlock(prepared.delivery, prepared.plan.path) + verificationAssignmentBlock(prepared.verificationAssignment);
+    if (Buffer.byteLength(prompt) > MAX_STATE_BYTES) fail('CI_OPERATION_OVERFLOW', 'complete CI prompt exceeds native input bound');
+    result = Object.freeze({ ...prepared, expectedRole: 'ci-fix', repair, prompt });
+    repairPredecessors.set(result, { ...history, selected });
+    roleArtifact.prepareRoleArtifact({ role: 'ci-fix', worktreePath: scope.worktree });
+  }
+  const handle = Object.freeze(Object.create(null));
+  const { key: _key, stateRoot: _state, delivery: _delivery, ...preparation } = result;
+  const operation = saved || { schema: 'shipyard.original-ci-operation.v1', scope, selectors: { ...context },
+    dispatch_id: newDispatchId(), preparation, predecessor_dispatch_id: repairPredecessors.get(result).selected?.attempt.dispatch_id || null,
+    state: 'prepared' };
+  const state = { prepared: result, options, file: operationFile, operation };
+  originalCiOperations.set(handle, state); preparedCiOperations.set(result, handle);
+  if (!saved) writeCiOperation(state);
+  reconcileCiCandidate(state);
+  recheckCiRepair(result, options, { signedHead: state.operation.signed_result?.artifact?.commit });
+  if (saved?.state === 'finished') {
+    authenticateFinishedCi(state);
+    if (!saved.signed_result) {
+      let current;
+      try { current = collectRepairCi(options, result, context.pr, evidence); }
+      catch (error) {
+        if (!['CI_NOT_FAILED', 'CI_OBSERVATION_PENDING'].includes(error.code)) throw error;
+        return result;
+      }
+      if (current.digest !== result.repair.feedback.digest) {
+        const archive = path.join(privateDirectory(root, 'ci-original-history'), sha256(canonical(saved)) + '.json');
+        atomicWrite(archive, JSON.stringify(seal(saved, key)) + '\n', { exclusive: true });
+        fs.unlinkSync(operationFile);
+        return prepareCiRepair(options, scope, context);
+      }
+    }
+  }
+  return result;
+}
+
+function authenticateFinishedCi(state, { finalizationOnly = false } = {}) {
+  const { operation: op, prepared, options } = state;
+  const recorder = createDurableRecorder(op.receipt_store);
+  const original = authenticatedReceipt(recorder, op.dispatch_id, 'ci-fix');
+  if (op.state !== 'finished' || !op.result || canonical(op.result.receipt) !== canonical(original.receipt)
+      || canonical(op.resolution) !== canonical(recorder.getVerifiedRecord(op.dispatch_id).resolution))
+    fail('CI_ORIGINAL_INVALID', 'finished CI operation differs from its original authenticated receipt');
+  const output = repairCompletion(op.completed, op.result, prepared, recorder);
+  const attempt = repairPredecessors.get(prepared).history.find(item => item.attempt.dispatch_id === op.dispatch_id)?.attempt;
+  if (!attempt || canonical(output) !== canonical(op.result.repair_result)
+      || canonical(output) !== canonical(attempt.result) || attempt.receipt_sha256 !== original.digest
+      || op.result.repair?.artifact_ref !== attempt.artifact_ref || op.result.repair?.artifact_digest !== attempt.artifact_digest)
+    fail('CI_ORIGINAL_INVALID', 'finished CI result or original artifact changed');
+  if (!op.signed_result) {
+    if (op.result.artifact || op.result.publication || op.output?.tree !== git(prepared.commit.worktree, ['rev-parse', 'HEAD^{tree}']))
+      fail('CI_ORIGINAL_INVALID', 'finished CI source change lacks its signed original result');
+    recheckCiRepair(prepared, options, { clean: true });
+    return;
+  }
+  const artifact = op.signed_result.artifact;
+  const candidate = readSealed(candidateFile(prepared.stateRoot, artifact.candidate_id), prepared.key);
+  const finalized = readSealed(finalizationFile(prepared.stateRoot, artifact.candidate_id), prepared.key);
+  const publication = readSealed(path.join(prepared.stateRoot, 'repair-publications', artifact.candidate_id + '.json'), prepared.key);
+  const { candidate_id: id, ...body } = candidate || {};
+  if (!candidate || id !== artifact.candidate_id || sha256(canonical(body)) !== id
+      || candidate.expected_role !== 'ci-fix' || candidate.dispatch_id !== op.dispatch_id
+      || candidate.receipt_store !== op.receipt_store || candidate.repository !== prepared.repository
+      || candidate.worktree !== prepared.commit.worktree || candidate.ticket !== prepared.commit.ticket
+      || candidate.phase !== op.scope.phase || candidate.run_id !== op.scope.run_id || candidate.branch !== prepared.commit.expectedBranch
+      || candidate.expected_head !== prepared.commit.expectedHead || candidate.expected_base !== prepared.commit.expectedBase
+      || candidate.base_ref !== prepared.baseRef || candidate.graph_sha256 !== prepared.graphDigest
+      || candidate.plan_sha256 !== prepared.plan.sha256 || candidate.plan_path !== prepared.plan.path
+      || canonical(candidate.files_modified) !== canonical(prepared.commit.files_modified)
+      || canonical(candidate.repair_subject) !== canonical(prepared.repair)
+      || canonical(op.result.artifact) !== canonical(artifact) || canonical(op.signed_result.receipt) !== canonical(original.receipt)
+      || !finalized || finalized.candidate_id !== id || finalized.commit !== artifact.commit
+      || finalized.parent !== candidate.expected_head || finalized.tree !== candidate.scoped_tree
+      || finalized.signer !== candidate.signer || artifact.tree !== candidate.scoped_tree || op.output?.tree !== candidate.scoped_tree
+      || artifact.signer !== candidate.signer || candidate.signer !== prepared.commit.expectedSigner)
+    fail('CI_ORIGINAL_INVALID', 'finished CI candidate, source or signed finalization changed');
+  candidatePolicy(candidate, original);
+  verifySignedCommit(prepared.commit.worktree, candidate, artifact.commit);
+  const transition = { candidate_id: id, from: prepared.commit.expectedHead, to: artifact.commit,
+    tree: artifact.tree, signer: artifact.signer };
+  if (!finalizationOnly && (publication?.status !== 'confirmed' || publication.candidate_id !== id || publication.commit !== artifact.commit
+      || canonical(publication.subject) !== canonical({ ...prepared.repair, live: publication.subject?.live, signed_transition: transition })
+      || canonical(op.result.publication) !== canonical({ status: 'confirmed', transition })))
+    fail('REPAIR_PUBLICATION_PENDING', 'finished CI lacks its exact confirmed signed publication');
+  if (!finalizationOnly) repairLive(options, { ...prepared, commit: { ...prepared.commit, expectedHead: artifact.commit } }, prepared.repair.pr);
+  const covered = require('./conveyor-coverage.cjs').verify({ commit: artifact.commit, repo: prepared.repo, worktree: prepared.commit.worktree });
+  if (!covered.covered || covered.record.kind !== 'fixer' || covered.record.dispatch_id !== op.dispatch_id
+      || covered.record.receipt_digest !== original.digest || covered.record.tree !== candidate.scoped_tree
+      || covered.record.verification_digest !== candidate.verification.evidence_digest)
+    fail('CI_ORIGINAL_INVALID', 'finished CI lacks its original signed fixer coverage');
+  const verification = pinnedVerification(options, prepared.commit.worktree, prepared.plan, prepared.verificationAllowList);
+  const evidence = hostVerification.readEvidence(path.join(prepared.stateRoot, 'verification', candidate.verification.evidence_digest + '.json'),
+    candidate.verification.evidence_digest);
+  if (candidate.verification.spec_sha256 !== verification.digest
+      || candidate.verification.allow_list_sha256 !== allowListDigest(prepared.verificationAllowList)
+      || canonical(candidate.verification.required) !== canonical(verification.spec.required)
+      || !evidence || evidence.ticket !== prepared.commit.ticket || evidence.plan_sha256 !== prepared.plan.sha256
+      || evidence.verification !== 'configured' || evidence.results.length !== verification.spec.commands.length
+      || evidence.results.some(row => row.outcome !== 'passed' || row.tree_after !== candidate.scoped_tree)
+      || candidate.verification.records.length !== verification.spec.commands.length
+      || candidate.verification.required.some(id => !candidate.verification.records.some(row => row.id === id
+        && row.outcome === 'passed' && row.record_sha256 === candidate.verification.evidence_digest)))
+    fail('CI_ORIGINAL_INVALID', 'finished CI HOST evidence differs from its signed scoped tree');
+  recheckCiRepair(prepared, options, { clean: true, signedHead: artifact.commit });
+}
+
+function recheckCiRepair(prepared, options, { clean = false, signedHead } = {}) {
+  const root = prepared.commit.worktree, graph = graphSnapshot(prepared.graphFile, prepared.commit.ticket);
+  if (fs.realpathSync(root) !== root || graph.sha256 !== prepared.graphDigest
+      || planSnapshot(prepared.graphFile, graph.row).sha256 !== prepared.plan.sha256
+      || canonical(graph.row.files) !== canonical(prepared.commit.files_modified)
+      || signerFingerprint(root) !== prepared.commit.expectedSigner
+      || git(root, ['symbolic-ref', '--short', 'HEAD']) !== prepared.commit.expectedBranch
+      || git(root, ['rev-parse', 'HEAD']) !== (signedHead || prepared.commit.expectedHead)
+      || effectiveBaseRef(root, prepared.graphFile, prepared.commit.ticket, graph) !== prepared.baseRef
+      || git(root, ['rev-parse', prepared.baseRef]) !== prepared.commit.expectedBase
+      || 'git-common:' + sha256(fs.realpathSync(git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']))) !== prepared.repository
+      || allowListDigest(configuredAllowList(prepared, options)) !== allowListDigest(prepared.verificationAllowList))
+    fail('CI_SUBJECT_CHANGED', 'canonical CI graph, plan, scope, source, signer or HOST assignment changed');
+  const board = JSON.parse(fs.readFileSync(path.join(path.dirname(prepared.graphFile), 'delivery-state.json'), 'utf8'));
+  if ((board.tickets || board)[prepared.commit.ticket]?.pr !== prepared.repair.pr) fail('CI_SUBJECT_CHANGED', 'canonical CI PR changed');
+  recheckCiFailure(prepared.repair.evidence);
+  let live;
+  try { live = repairLive(options, prepared, prepared.repair.pr); }
+  catch (error) {
+    const state = originalCiOperations.get(preparedCiOperations.get(prepared));
+    const artifact = state?.operation.signed_result?.artifact;
+    if (error.code !== 'REPAIR_SUBJECT_CHANGED' || !signedHead || artifact?.commit !== signedHead) throw error;
+    const candidate = readSealed(candidateFile(prepared.stateRoot, artifact.candidate_id), prepared.key);
+    const publication = readSealed(path.join(prepared.stateRoot, 'repair-publications', artifact.candidate_id + '.json'), prepared.key);
+    if (!candidate || candidate.expected_role !== 'ci-fix' || candidate.dispatch_id !== state.operation.dispatch_id
+        || canonical(candidate.repair_subject) !== canonical(prepared.repair)
+        || publication?.candidate_id !== artifact.candidate_id || publication.commit !== signedHead
+        || !['pending', 'confirmed'].includes(publication.status))
+      fail('CI_SUBJECT_CHANGED', 'moved live CI head has no original signed publication');
+    verifySignedCommit(root, candidate, signedHead);
+    const covered = require('./conveyor-coverage.cjs').verify({ commit: signedHead, repo: prepared.repo, worktree: root });
+    if (!covered.covered || covered.record.kind !== 'fixer' || covered.record.dispatch_id !== state.operation.dispatch_id)
+      fail('CI_SUBJECT_CHANGED', 'moved live CI head lacks its original fixer coverage');
+    live = repairLive(options, { ...prepared, commit: { ...prepared.commit, expectedHead: signedHead } }, prepared.repair.pr);
+  }
+  const originalHead = prepared.repair.feedback.checked_head;
+  if (live.headRefOid === originalHead
+      && originalCiOperations.get(preparedCiOperations.get(prepared))?.operation.state !== 'finished') {
+    const current = collectRepairCi(options, prepared, prepared.repair.pr, prepared.repair.evidence);
+    if (current.digest !== prepared.repair.feedback.digest) fail('CI_SUBJECT_CHANGED', 'actual CI attempt or checked job changed');
+  }
+  if (clean && git(root, ['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean)
+      .some(entry => !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false }))))
+    fail('WORKTREE_NOT_READY', 'CI launch requires its clean original baseline');
+  return prepared.repair.feedback;
+}
+
+function ciRecorderIdentity(directory) {
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory || (stat.mode & 0o077))
+    fail('CI_ORIGINAL_INVALID', 'original CI recorder is not private and physical');
+  const keyPath = path.join(path.dirname(directory), '.shipyard-dispatch-authority-' + sha256(directory) + '.key');
+  return { path: directory, dev: stat.dev, ino: stat.ino, mode: stat.mode, key: ciPhysical(keyPath, KEY_BYTES, true).pin };
+}
+
+function validateOriginalCiOperation(handle, stage, facts) {
+  const state = originalCiOperations.get(handle);
+  if (!state || !object(facts)) fail('CI_ORIGINAL_INVALID', 'original CI recovery requires a host-private operation handle');
+  const saved = readSealed(state.file, state.prepared.key);
+  if (canonical(saved) !== canonical(state.operation)) fail('CI_ORIGINAL_INVALID', 'original CI operation changed');
+  const op = state.operation, p = state.prepared;
+  if (!state.options.controller) fail('WRITER_FENCED', 'original CI mutation requires its current host controller');
+  require('./run-contract.cjs').assertHostAuthority(state.options.controller.authority(op.scope.run_id),
+    { run_id: op.scope.run_id, owner_id: state.options.controller.owner_id });
+  state.options.controller.assertOwner(op.scope.run_id);
+  recheckCiRepair(p, state.options, { signedHead: op.signed_result?.artifact?.commit });
+  if (facts.dispatch_id !== op.dispatch_id || facts.ticket !== p.commit.ticket
+      || facts.runtime !== 'codex' || facts.role !== 'ci-fix'
+      || (op.receipt_store && facts.store !== op.receipt_store))
+    fail('CI_ORIGINAL_INVALID', 'original CI runtime, role, dispatch, subject or recorder differs');
+  if (!['start', 'complete', 'pre-record', 'post-record', 'recover', 'finalize', 'ack'].includes(stage))
+    fail('CI_ORIGINAL_INVALID', 'unknown original CI transition');
+  if (facts.resolution && (facts.resolution.policy_hash !== policy.POLICY_HASH
+      || facts.resolution.dispatch_id !== op.dispatch_id || facts.resolution.role !== 'ci-fix'
+      || facts.resolution.runtime !== 'codex' || facts.resolution.signals.signatureState !== p.repair.signature_state
+      || (facts.resolution.prior_applied?.dispatch_id || null) !== op.predecessor_dispatch_id))
+    fail('CI_ORIGINAL_INVALID', 'original CI policy or genuine predecessor differs');
+  if (op.recorder_identity && canonical(ciRecorderIdentity(facts.store)) !== canonical(op.recorder_identity))
+    fail('CI_ORIGINAL_INVALID', 'original CI recorder directory or authority key changed');
+  if (stage === 'start') {
+    if (op.state !== 'prepared') fail('CI_ORIGINAL_UNKNOWN', 'original CI already started; reconcile before any launch');
+    op.recorder_identity = ciRecorderIdentity(facts.store);
+    op.receipt_store = fs.realpathSync(facts.store); op.resolution = facts.resolution; op.state = 'started';
+    writeCiOperation(state);
+  }
+  if (facts.record) {
+    const record = facts.record;
+    if (record.dispatch_id !== op.dispatch_id || record.ticket !== p.commit.ticket || record.role !== 'ci-fix'
+        || canonical(record.resolution) !== canonical(op.resolution)
+        || (record.predecessor_dispatch_id || null) !== op.predecessor_dispatch_id
+        || !op.completed || record.receipt.launch_id !== op.completed.launch_id
+        || canonical(record.receipt.runtime_evidence) !== canonical(op.completed.runtime_evidence))
+      fail('CI_ORIGINAL_INVALID', 'original CI receipt differs from authenticated completion or predecessor');
+    authenticateRepairNative(record.receipt, op.native_custody, p.commit.worktree, op.completed.last_agent_message);
+  }
+  return Object.freeze({ dispatch_id: op.dispatch_id, predecessor_dispatch_id: op.predecessor_dispatch_id,
+    state: op.state, resolution: op.resolution, completed: op.completed || null, native_custody: op.native_custody || null });
+}
+
+function generatedBaseMergeAuthority({ worktree, ticket, graphDir, requestedBase, noFetch = false }) {
+  const root = fs.realpathSync(worktree);
+  const builder = 'scripts/package-shipyard-codex.cjs', packagePrefix = 'plugins/shipyard/';
+  const sourceRoot = path.resolve(__dirname, '../../..');
+  const trustedBuilder = path.join(sourceRoot, builder);
+  if (!fs.existsSync(path.join(root, builder)) || !fs.existsSync(path.join(root, packagePrefix, 'package-build.json'))) return null;
+  const graphPath = graphFile({ graphDir }, root), graph = graphSnapshot(graphPath, ticket);
+  const declared = graph.row.files;
+  const identities = ['plugins/shipyard/.codex-plugin/plugin.json', 'plugins/shipyard/package-build.json'];
+  if (!identities.every(file => declared.includes(file))) return null;
+  if (root !== worktree || (graphDir && fs.realpathSync(graphDir) !== path.resolve(graphDir)))
+    fail('GENERATED_MERGE_INVALID', 'generated merge requires physical worktree and graph selectors');
+  const coverage = require('./conveyor-coverage.cjs');
+  const environment = () => {
+    const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' }; for (const key of GIT_SCOPE_KEYS) delete env[key]; return env;
+  };
+  let lock;
+  const run = (program, args, extra = {}) => { lock?.assertOwned(); const result = execFileSync(program, args,
+    { cwd: root, env: environment(), encoding: 'utf8', timeout: 180000, maxBuffer: MAX_GRAPH_BYTES,
+      stdio: ['ignore', 'pipe', 'pipe'], ...extra }); lock?.assertOwned(); return result; };
+  const g = args => run('git', ['-C', root, ...args]).trim();
+  const rawGit = args => run('git', ['-C', root, ...args], { encoding: null });
+  const stageRows = () => rawGit(['ls-files', '--stage', '-z']).toString('utf8').split('\0').filter(Boolean).map(row => {
+    const match = /^(\d{6}) ([a-f0-9]{40,64}) ([0-3])\t([^]+)$/.exec(row);
+    if (!match || !['100644', '100755'].includes(match[1]) || match[4].split('/').some(part => !part || part === '..')
+        || path.isAbsolute(match[4]) || match[4].includes('\\')) fail('GENERATED_MERGE_INVALID', 'unsupported staged source entry');
+    return { mode: match[1], oid: match[2], stage: Number(match[3]), path: match[4] };
+  });
+  const physicalInventory = directory => {
+    const entries = [];
+    const visit = (dir, prefix) => {
+      if (fs.realpathSync(dir) !== dir) fail('GENERATED_MERGE_INVALID', 'generated root ancestry changed');
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const file = path.join(dir, entry.name), relative = prefix + entry.name, stat = fs.lstatSync(file);
+        if (stat.isSymbolicLink()) fail('GENERATED_MERGE_INVALID', 'generated package contains a symbolic entry');
+        if (stat.isDirectory()) { entries.push({ path: relative, type: 'directory', mode: stat.mode & 0o777 }); visit(file, relative + '/'); }
+        else if (stat.isFile()) {
+          const read = ciPhysical(file, MAX_GRAPH_BYTES, false, true);
+          entries.push({ path: relative, type: 'file', mode: stat.mode & 0o777, bytes: read.bytes.length, sha256: read.pin.sha256 });
+        } else fail('GENERATED_MERGE_INVALID', 'generated package contains an unsupported entry');
+      }
+    };
+    visit(fs.realpathSync(directory), ''); return entries;
+  };
+  const eligible = new Set(identities);
+  for (const file of declared) {
+    const mirrorPrefix = packagePrefix + 'host/plugins/delivery-pipeline/';
+    if (!file.startsWith(mirrorPrefix)) continue;
+    const canonicalPath = 'plugins/delivery-pipeline/' + file.slice(mirrorPrefix.length);
+    try {
+      if (/^100(?:644|755) blob /.test(g(['ls-tree', 'HEAD', '--', canonicalPath]))) eligible.add(file);
+    } catch {}
+  }
+  const stateRoot = hostStateRoot({}, { worktree: root }), key = hostKey(stateRoot);
+  const directory = privateDirectory(stateRoot, 'generated-base-merges');
+  const privatePin = file => {
+    const stat = fs.lstatSync(file);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(file) !== file || (stat.mode & 0o077))
+      fail('GENERATED_MERGE_INVALID', 'generated merge proof directory is not private and physical');
+    return { path: file, dev: stat.dev, ino: stat.ino, mode: stat.mode };
+  };
+  lock = acquireGeneratedMergeLock(privateDirectory(stateRoot, 'generated-base-merge-locks'), sha256(root));
+  if (!lock) fail('GENERATED_MERGE_BUSY', 'another host owns this generated merge');
+  let operation, proofFile, ordinaryCandidate = null;
+  const save = () => {
+    lock.assertOwned();
+    if (Buffer.byteLength(canonical(operation)) > MAX_STATE_BYTES - 1024) fail('GENERATED_MERGE_INVALID', 'generated merge proof exceeds bound');
+    atomicWrite(proofFile, JSON.stringify(seal(operation, key)) + '\n', { exclusive: false });
+  };
+  const absent = ref => {
+    try { g(['rev-parse', '--verify', ref]); return false; } catch { return true; }
+  };
+  const pins = () => {
+    const snapshot = graphSnapshot(graphPath, ticket), plan = planSnapshot(graphPath, snapshot.row);
+    const baseRef = resolveBaseRef(root, requestedBase);
+    if (effectiveBaseRef(root, graphPath, ticket, snapshot) !== baseRef)
+      fail('GENERATED_MERGE_INVALID', 'generated merge base differs from canonical live delivery base');
+    let trusted, installedIdentity = null;
+    if (fs.existsSync(trustedBuilder)) trusted = ciPhysical(trustedBuilder).pin.sha256;
+    else {
+      const packageRoot = path.resolve(sourceRoot, '..');
+      const identity = JSON.parse(ciPhysical(path.join(packageRoot, 'package-build.json'), MAX_STATE_BYTES).bytes);
+      const inventory = physicalInventory(packageRoot), sourceHash = crypto.createHash('sha256');
+      for (const entry of inventory) if (entry.type === 'file' && !['package-build.json', '.codex-plugin/plugin.json'].includes(entry.path)) {
+        sourceHash.update(entry.path + '\0'); sourceHash.update(fs.readFileSync(path.join(packageRoot, entry.path)));
+      }
+      const sourceDigest = sourceHash.digest('hex');
+      const pluginBytes = ciPhysical(path.join(packageRoot, '.codex-plugin/plugin.json'), MAX_STATE_BYTES).bytes;
+      const plugin = JSON.parse(pluginBytes);
+      installedIdentity = { digest: identity.digest, version: identity.version, inventory: sha256(canonical(inventory)) };
+      if (identity.digest !== crypto.createHash('sha256').update(sourceDigest).update('\0').update(pluginBytes).digest('hex')
+          || identity.version !== plugin.version || !plugin.version.endsWith('+codex.' + sourceDigest.slice(0, 16)))
+        fail('GENERATED_MERGE_INVALID', 'installed generated merge has no supported package identity');
+      g(['verify-commit', baseRef]);
+      if (g(['show', '-s', '--format=%GF', baseRef]) !== signerFingerprint(root))
+        fail('GENERATED_MERGE_INVALID', 'incoming generated builder source lacks the trusted host signer');
+      trusted = sha256(rawGit(['show', `${baseRef}:${builder}`]));
+    }
+    const board = JSON.parse(ciPhysical(path.join(path.dirname(graphPath), 'delivery-state.json')).bytes);
+    const pr = (board.tickets || board)[ticket]?.pr;
+    if (!Number.isSafeInteger(pr) || pr < 1) fail('GENERATED_MERGE_INVALID', 'generated merge requires its recorded PR');
+    return { ticket, pr, no_fetch: noFetch, worktree: root, repository: coverage.repositoryIdentity(root), repo: coverage.repoSlug(root, snapshot.row.repo),
+      graph: graphPath, graph_sha256: snapshot.sha256, plan_sha256: plan.sha256, files_modified: snapshot.row.files,
+      branch: g(['symbolic-ref', '--short', 'HEAD']), base_ref: baseRef, requested_base: requestedBase,
+      base: g(['rev-parse', `${baseRef}^{commit}`]), base_tree: g(['rev-parse', `${baseRef}^{tree}`]),
+      installed_identity: installedIdentity,
+      builder: { bytes: sha256(rawGit(['show', `${baseRef}:${builder}`])),
+        entry: g(['ls-tree', baseRef, '--', builder]), trusted }, signer: signerFingerprint(root) };
+  };
+  const check = () => {
+    if (operation && canonical(privatePin(directory)) !== canonical(operation.private_root))
+      fail('GENERATED_MERGE_CHANGED', 'original generated merge private root changed');
+    if (!operation || canonical(pins()) !== canonical(operation.pins) || fs.realpathSync(root) !== root
+        || sha256(rawGit(['show', `${operation.pins.base}:${builder}`])) !== operation.pins.builder.trusted
+        || ciPhysical(path.join(root, builder)).pin.sha256 !== operation.pins.builder.trusted
+        || (fs.lstatSync(path.join(root, builder)).mode & 0o111 ? '100755' : '100644') !== operation.pins.builder.entry.split(' ')[0])
+      fail('GENERATED_MERGE_CHANGED', 'generated merge graph, source, base, branch, builder or signer changed');
+    for (const entry of operation.mechanical?.paths || []) {
+      if (entry.original_pin
+          && canonical(ciPhysical(entry.original_pin.path, MAX_GRAPH_BYTES, true, true).pin) !== canonical(entry.original_pin))
+        fail('GENERATED_MERGE_CHANGED', 'retained mechanical original changed');
+    }
+    if (operation.generation) {
+      const scratch = path.join(directory, operation.id, operation.generation.directory);
+      privatePin(scratch);
+      if (sha256(canonical(physicalInventory(path.join(scratch, 'source')))) !== operation.generation.source_inventory_sha256
+          || canonical(physicalInventory(path.join(scratch, 'package'))) !== canonical(operation.generation.inventory))
+        fail('GENERATED_MERGE_CHANGED', 'retained combined source or complete generated inventory changed');
+      for (const entry of operation.apply?.paths || []) {
+        if (canonical(ciPhysical(path.join(scratch, entry.original_file), MAX_GRAPH_BYTES, true, true).pin) !== canonical(entry.original_pin))
+          fail('GENERATED_MERGE_CHANGED', 'retained generated apply original changed');
+      }
+    }
+    const head = g(['rev-parse', 'HEAD']);
+    if (head !== operation.head && head !== operation.commit && head !== ordinaryCandidate) fail('GENERATED_MERGE_CHANGED', 'generated merge HEAD changed');
+    if (operation.staged_index && operation.phase !== 'completed'
+        && canonical(ciPhysical(path.resolve(root, g(['rev-parse', '--git-path', 'index']))).pin) !== canonical(operation.staged_index))
+      fail('GENERATED_MERGE_CHANGED', 'sealed generated merge index changed');
+    if (operation.commit && head === operation.commit) return;
+    if (operation.phase !== 'prepared') {
+      const mergeFile = path.resolve(root, g(['rev-parse', '--git-path', 'MERGE_HEAD']));
+      const current = ciPhysical(mergeFile);
+      if (current.bytes.toString() !== operation.pins.base + '\n'
+          || (operation.observed && canonical(current.pin) !== canonical(operation.observed.merge_file))
+          || (operation.observed && g(['rev-parse', 'AUTO_MERGE^{tree}']) !== operation.observed.automatic))
+        fail('GENERATED_MERGE_CHANGED', 'original MERGE_HEAD or AUTO_MERGE changed');
+    }
+  };
+  const verifyCommit = () => {
+    g(['verify-commit', operation.commit]);
+    if (g(['show', '-s', '--format=%P', operation.commit]) !== `${operation.head} ${operation.pins.base}`
+        || g(['show', '-s', '--format=%T', operation.commit]) !== operation.tree
+        || g(['show', '-s', '--format=%GF', operation.commit]) !== operation.pins.signer
+        || !['G', 'U'].includes(g(['show', '-s', '--format=%G?', operation.commit])))
+      fail('GENERATED_MERGE_CHANGED', 'original generated merge signature, parents or tree differs');
+  };
+  const stagedTree = () => {
+    check();
+    const rows = stageRows();
+    if (!operation.staged_index || !operation.tree || rows.some(row => row.stage !== 0)
+        || rawGit(['ls-tree', '-r', '-z', operation.tree]).toString('utf8')
+          !== rows.map(row => `${row.mode} blob ${row.oid}\t${row.path}\0`).join(''))
+      fail('GENERATED_MERGE_CHANGED', 'sealed generated merge tree differs from its complete staged entries');
+    check();
+    return operation.tree;
+  };
+  const observe = () => {
+    check();
+    const rows = stageRows(), unmerged = rows.filter(row => row.stage !== 0);
+    const mergeFile = g(['rev-parse', '--git-path', 'MERGE_HEAD']);
+    if (ciPhysical(path.resolve(root, mergeFile)).bytes.toString() !== operation.pins.base + '\n')
+      fail('GENERATED_MERGE_CHANGED', 'generated merge does not have its exact single original base');
+    const automatic = g(['rev-parse', 'AUTO_MERGE^{tree}']);
+    const observed = { stages: rows, automatic, merge_file: ciPhysical(path.resolve(root, mergeFile)).pin, unmerged: [...new Set(unmerged.map(row => row.path))] };
+    if (operation.observed && canonical(operation.observed) !== canonical(observed))
+      fail('GENERATED_MERGE_CHANGED', 'original conflict stages, AUTO_MERGE or combined source changed');
+    if (!operation.observed) { operation.observed = observed; operation.phase = 'conflicted'; save(); }
+    return observed;
+  };
+  const mechanicalFile = file => {
+    const target = path.join(root, file);
+    for (let cursor = path.dirname(target); cursor !== root; cursor = path.dirname(cursor)) {
+      const stat = fs.lstatSync(cursor);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(cursor) !== cursor)
+        fail('GENERATED_MERGE_CHANGED', 'mechanical path ancestry changed');
+    }
+    try {
+      const read = ciPhysical(target, MAX_GRAPH_BYTES, false, true);
+      return { type: 'file', mode: read.pin.mode & 0o777, bytes: read.pin.bytes, sha256: read.pin.sha256 };
+    } catch (error) {
+      if (!fs.existsSync(target)) {
+        try { fs.lstatSync(target); } catch (missing) { if (missing.code === 'ENOENT') return { type: 'absent' }; }
+      }
+      throw error;
+    }
+  };
+  const mechanicalState = () => {
+    check();
+    const intent = operation.mechanical, rows = stageRows(), names = new Set(intent.paths.map(entry => entry.path));
+    if (canonical(rows.filter(row => !names.has(row.path)))
+        !== canonical(operation.observed.stages.filter(row => !names.has(row.path))))
+      fail('GENERATED_MERGE_CHANGED', 'index changed outside original mechanical intent');
+    for (const entry of intent.paths) {
+      const current = rows.filter(row => row.path === entry.path), actual = mechanicalFile(entry.path);
+      if (![entry.original_stages, entry.intended_stages].some(state => canonical(state) === canonical(current))
+          || ![entry.original, entry.intended].some(state => canonical(state) === canonical(actual)))
+        fail('GENERATED_MERGE_CHANGED', 'mechanical path has third bytes, mode, type or stages');
+    }
+    const dirty = rawGit(['diff', '--name-only', '-z', operation.observed.automatic, '--']).toString('utf8').split('\0').filter(Boolean);
+    if (dirty.some(file => !names.has(file))) fail('GENERATED_MERGE_CHANGED', 'source changed outside original mechanical intent');
+  };
+  const mechanical = () => {
+    check();
+    if (operation.generation) return operation.taken;
+    const observed = operation.observed || observe();
+    if (!operation.mechanical) {
+      if (canonical(stageRows()) !== canonical(observed.stages))
+        fail('GENERATED_MERGE_CHANGED', 'mechanical resolution lacks original conflict stages');
+      const owner = require('./path-owner.cjs').owns;
+      const names = observed.unmerged.filter(file => !declared.some(pattern => owner(pattern, file)));
+      const originals = privateDirectory(directory, operation.id, 'mechanical-originals'), paths = [];
+      for (const file of names) {
+        const original = mechanicalFile(file), automatic = g(['ls-tree', observed.automatic, '--', file]);
+        const originalEntry = /^(100644|100755) blob ([a-f0-9]{40,64})\t([^]+)$/.exec(automatic);
+        if (automatic ? !originalEntry || originalEntry[3] !== file || original.type !== 'file'
+            || original.sha256 !== sha256(rawGit(['cat-file', 'blob', originalEntry[2]]))
+            || original.mode !== (originalEntry[1] === '100755' ? 0o755 : 0o644) : original.type !== 'absent')
+          fail('GENERATED_MERGE_CHANGED', 'mechanical original differs from AUTO_MERGE');
+        let originalPin = null;
+        if (original.type === 'file') {
+          const snapshot = path.join(originals, sha256(file));
+          atomicWrite(snapshot, ciPhysical(path.join(root, file), MAX_GRAPH_BYTES, false, true).bytes, { exclusive: true });
+          originalPin = ciPhysical(snapshot, MAX_GRAPH_BYTES, true, true).pin;
+          if (originalPin.sha256 !== original.sha256 || originalPin.bytes !== original.bytes)
+            fail('GENERATED_MERGE_CHANGED', 'mechanical original changed during retention');
+        }
+        const baseEntry = g(['ls-tree', operation.pins.base, '--', file]);
+        const match = /^(100644|100755) blob ([a-f0-9]{40,64})\t([^]+)$/.exec(baseEntry);
+        if (baseEntry && (!match || match[3] !== file)) fail('GENERATED_MERGE_INVALID', 'unsupported mechanical base entry');
+        const bytes = match && rawGit(['cat-file', 'blob', match[2]]);
+        if (bytes && bytes.length > MAX_GRAPH_BYTES) fail('GENERATED_MERGE_INVALID', 'mechanical base entry exceeds custody bound');
+        paths.push({ path: file, original, original_pin: originalPin,
+          original_stages: observed.stages.filter(row => row.path === file),
+          intended: match ? { type: 'file', mode: match[1] === '100755' ? 0o755 : 0o644, bytes: bytes.length, sha256: sha256(bytes) } : { type: 'absent' },
+          intended_stages: match ? [{ mode: match[1], oid: match[2], stage: 0, path: file }] : [] });
+      }
+      operation.mechanical = { paths }; mechanicalState(); save();
+    }
+    mechanicalState();
+    for (const entry of operation.mechanical.paths) {
+      mechanicalState();
+      if (canonical(mechanicalFile(entry.path)) === canonical(entry.intended)
+          && canonical(stageRows().filter(row => row.path === entry.path)) === canonical(entry.intended_stages)) continue;
+      if (entry.intended.type === 'absent') g(['rm', '-q', '--', entry.path]);
+      else g(['checkout', operation.pins.base, '--', entry.path]);
+      mechanicalState();
+    }
+    operation.taken = operation.mechanical.paths.map(entry => entry.path);
+    operation.combined_stages = stageRows(); save();
+    return operation.taken;
+  };
+  const applyState = () => {
+    check();
+    const intent = operation.apply;
+    if (!intent || intent.source_tree !== operation.generation.source_tree)
+      fail('GENERATED_MERGE_CHANGED', 'generated merge has no original bounded apply intent');
+    const current = stageRows(), combined = operation.combined_stages || operation.observed.stages;
+    const names = new Set(intent.paths.map(entry => entry.path));
+    if (canonical(current.filter(row => !names.has(row.path))) !== canonical(combined.filter(row => !names.has(row.path))))
+      fail('GENERATED_MERGE_CHANGED', 'index changed outside original generated apply intent');
+    for (const entry of intent.paths) {
+      const rows = current.filter(row => row.path === entry.path);
+      if (canonical(rows) !== canonical(entry.original_stages) && canonical(rows) !== canonical(entry.intended_stages))
+        fail('GENERATED_MERGE_CHANGED', 'generated path has a third index state');
+      const actual = ciPhysical(path.join(root, entry.path), MAX_GRAPH_BYTES, false, true);
+      if (![entry.original.sha256, entry.intended.sha256].includes(actual.pin.sha256)
+          || ![entry.original.mode, entry.intended.mode].includes(actual.pin.mode & 0o777)
+          || ![entry.original.bytes, entry.intended.bytes].includes(actual.pin.bytes))
+        fail('GENERATED_MERGE_CHANGED', 'generated path has third bytes, type or mode');
+    }
+    const dirty = rawGit(['diff', '--name-only', '-z']).toString('utf8').split('\0').filter(Boolean);
+    if (dirty.some(file => !names.has(file))) fail('GENERATED_MERGE_CHANGED', 'source changed outside original generated apply intent');
+    return intent;
+  };
+  const generate = () => {
+    check();
+    const observed = operation.observed || observe();
+    const combined = operation.combined_stages || observed.stages;
+    if (combined.some(row => row.stage !== 0 && ['plugins/delivery-pipeline/', 'capabilities/delivery-pipeline/', 'scripts/'].some(prefix => row.path.startsWith(prefix))))
+      fail('GENERATED_MERGE_INELIGIBLE', 'canonical source conflicts cannot gain generated completion authority');
+    if (!observed.unmerged.length || observed.unmerged.some(file => !eligible.has(file) && !operation.taken.includes(file)))
+      fail('GENERATED_MERGE_INELIGIBLE', 'non-generated source conflict requires semantic resolution');
+    if (operation.generation) applyState();
+    else if (canonical(stageRows()) !== canonical(combined)) fail('GENERATED_MERGE_CHANGED', 'original conflict index changed');
+    const parent = privateDirectory(directory, operation.id);
+    const generationDirectory = 'generation-' + crypto.randomUUID();
+    const scratch = privateDirectory(parent, generationDirectory);
+    const source = path.join(scratch, 'source'), destination = path.join(scratch, 'package');
+    fs.mkdirSync(source, { mode: 0o700 }); fs.mkdirSync(destination, { mode: 0o700 });
+    const sourceEntries = combined.filter(row => row.stage === 0);
+    const indexFile = path.join(scratch, 'source.index');
+    if (fs.existsSync(indexFile)) fs.unlinkSync(indexFile);
+    const env = { ...environment(), GIT_INDEX_FILE: indexFile };
+    run('git', ['-C', root, 'read-tree', '--empty'], { env });
+    const input = sourceEntries.map(row => `${row.mode} ${row.oid}\t${row.path}\0`).join('');
+    run('git', ['-C', root, 'update-index', '-z', '--index-info'], { env, input, stdio: ['pipe', 'pipe', 'pipe'] });
+    const sourceTree = run('git', ['-C', root, 'write-tree'], { env }).trim();
+    const treeEntries = run('git', ['-C', root, 'ls-tree', '-r', '-z', sourceTree], { env });
+    if (treeEntries !== sourceEntries.map(row => `${row.mode} blob ${row.oid}\t${row.path}\0`).join(''))
+      fail('GENERATED_MERGE_CHANGED', 'combined source Git tree differs from its complete staged entries');
+    const archive = path.join(scratch, 'source.tar');
+    run('git', ['-C', root, 'archive', '--format=tar', '--output=' + archive, sourceTree]);
+    run('tar', ['-xf', archive, '-C', source]);
+    const sourceInventory = physicalInventory(source);
+    const sourceFiles = sourceInventory.filter(entry => entry.type === 'file');
+    const directories = new Set();
+    for (const entry of sourceEntries) {
+      let parent = path.posix.dirname(entry.path);
+      while (parent !== '.') { directories.add(parent); parent = path.posix.dirname(parent); }
+    }
+    if (sourceFiles.length !== sourceEntries.length
+        || canonical(sourceInventory.filter(entry => entry.type === 'directory').map(entry => entry.path).sort()) !== canonical([...directories].sort()))
+      fail('GENERATED_MERGE_CHANGED', 'physical combined source inventory differs from its exact Git tree');
+    for (const entry of sourceEntries) {
+      const actual = sourceFiles.find(file => file.path === entry.path);
+      if (!actual || actual.mode !== (entry.mode === '100755' ? 0o755 : 0o644)
+          || actual.sha256 !== sha256(rawGit(['cat-file', 'blob', entry.oid])))
+        fail('GENERATED_MERGE_CHANGED', 'physical combined source bytes or modes differ from the pinned Git entry');
+    }
+    const stagedBuilder = ciPhysical(path.join(source, builder));
+    if (stagedBuilder.pin.sha256 !== operation.pins.builder.trusted
+        || sourceEntries.find(row => row.path === builder)?.mode !== operation.pins.builder.entry.split(' ')[0])
+      fail('GENERATED_MERGE_CHANGED', 'combined source generator differs from trusted delivered incoming generator');
+    run(process.execPath, [path.join(source, builder), destination]);
+    if (canonical(physicalInventory(source)) !== canonical(sourceInventory))
+      fail('GENERATED_MERGE_CHANGED', 'whole generation changed its combined source');
+    const inventory = physicalInventory(destination);
+    const proof = { source_tree: sourceTree, source_inventory_sha256: sha256(canonical(sourceInventory)),
+      inventory, inventory_sha256: sha256(canonical(inventory)) };
+    const { directory: _generationDirectory, ...retainedProof } = operation.generation || {};
+    if (operation.generation && canonical(retainedProof) !== canonical(proof))
+      fail('GENERATED_MERGE_CHANGED', 'whole regenerated package differs from original generation');
+    const files = inventory.filter(entry => entry.type === 'file');
+    const expectedFiles = combined.filter(row => row.stage === 0 && row.path.startsWith(packagePrefix));
+    const outputPaths = new Set(files.map(entry => packagePrefix + entry.path));
+    for (const entry of expectedFiles) if (!outputPaths.has(entry.path)) fail('GENERATED_MERGE_INELIGIBLE', 'whole generator removed an undeclared entry');
+    const resolutions = [];
+    for (const entry of files) {
+      const relative = packagePrefix + entry.path, staged = expectedFiles.find(row => row.path === relative);
+      const bytes = ciPhysical(path.join(destination, entry.path), MAX_GRAPH_BYTES, false, true).bytes;
+      const same = staged && staged.mode === (entry.mode & 0o111 ? '100755' : '100644')
+        && rawGit(['cat-file', 'blob', staged.oid]).equals(bytes);
+      if (!same && !eligible.has(relative)) fail('GENERATED_MERGE_INELIGIBLE', 'whole generation changed an undeclared generated path: ' + relative);
+      if (!same) resolutions.push({ relative, entry, bytes });
+    }
+    if (!identities.every(file => outputPaths.has(file))) fail('GENERATED_MERGE_INVALID', 'whole package identities are missing');
+    check();
+    if (!operation.generation) {
+      if (canonical(stageRows()) !== canonical(combined)) fail('GENERATED_MERGE_CHANGED', 'combined source moved during generation');
+      const originals = privateDirectory(scratch, 'originals'), paths = [];
+      for (const { relative, entry, bytes } of resolutions) {
+        const target = path.join(root, relative), current = ciPhysical(target, MAX_GRAPH_BYTES, false, true);
+        const originalEntry = g(['ls-tree', observed.automatic, '--', relative]);
+        const match = /^(100644|100755) blob ([a-f0-9]{40,64})\t/.exec(originalEntry);
+        if (!match || !current.bytes.equals(rawGit(['cat-file', 'blob', match[2]]))
+            || (current.pin.mode & 0o777) !== (match[1] === '100755' ? 0o755 : 0o644))
+          fail('GENERATED_MERGE_CHANGED', 'original generated bytes or mode differ from AUTO_MERGE');
+        const originalFile = path.join(originals, sha256(relative));
+        atomicWrite(originalFile, current.bytes, { exclusive: true });
+        const oid = run('git', ['-C', root, 'hash-object', '-w', '--stdin'],
+          { input: bytes, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+        paths.push({ path: relative, original_file: 'originals/' + sha256(relative),
+          original_pin: ciPhysical(originalFile, MAX_GRAPH_BYTES, true, true).pin,
+          original: { type: 'file', mode: current.pin.mode & 0o777, bytes: current.bytes.length, sha256: current.pin.sha256 },
+          intended: { type: 'file', mode: entry.mode, bytes: bytes.length, sha256: entry.sha256 },
+          original_stages: combined.filter(row => row.path === relative),
+          intended_stages: [{ mode: entry.mode & 0o111 ? '100755' : '100644', oid, stage: 0, path: relative }] });
+      }
+      const expected = [], seen = new Set();
+      for (const row of combined) {
+        const entry = paths.find(entry => entry.path === row.path);
+        if (!entry) expected.push(row);
+        else if (!seen.has(row.path)) { seen.add(row.path); expected.push(...entry.intended_stages); }
+      }
+      if (paths.some(entry => !seen.has(entry.path)) || expected.some(row => row.stage !== 0))
+        fail('GENERATED_MERGE_CHANGED', 'generated apply intent does not resolve exactly the original stages');
+      run('git', ['-C', root, 'read-tree', '--empty'], { env });
+      run('git', ['-C', root, 'update-index', '-z', '--index-info'], { env,
+        input: expected.map(row => `${row.mode} ${row.oid}\t${row.path}\0`).join(''), stdio: ['pipe', 'pipe', 'pipe'] });
+      const intendedTree = run('git', ['-C', root, 'write-tree'], { env }).trim();
+      operation.generation = { ...proof, directory: generationDirectory };
+      operation.apply = { source_tree: sourceTree, paths, intended_stages: expected, tree: intendedTree };
+      save();
+    } else {
+      if (canonical(resolutions.map(({ relative, entry }) => ({ path: relative, mode: entry.mode, bytes: entry.bytes, sha256: entry.sha256 })))
+          !== canonical(operation.apply.paths.map(entry => ({ path: entry.path, mode: entry.intended.mode, bytes: entry.intended.bytes, sha256: entry.intended.sha256 }))))
+        fail('GENERATED_MERGE_CHANGED', 'recomputed generated apply intent differs');
+      fs.rmSync(scratch, { recursive: true });
+    }
+    const intent = applyState(), retained = path.join(parent, operation.generation.directory, 'package');
+    for (const entry of intent.paths) {
+      lock.assertOwned();
+      applyState();
+      const target = path.join(root, entry.path), bytes = ciPhysical(path.join(retained, entry.path.slice(packagePrefix.length)), MAX_GRAPH_BYTES, false, true).bytes;
+      if (!ciPhysical(target, MAX_GRAPH_BYTES, false, true).bytes.equals(bytes)) fs.writeFileSync(target, bytes);
+      lock.assertOwned();
+      applyState();
+      if ((fs.lstatSync(target).mode & 0o777) !== entry.intended.mode) fs.chmodSync(target, entry.intended.mode);
+      lock.assertOwned();
+      applyState();
+      if (canonical(stageRows().filter(row => row.path === entry.path)) !== canonical(entry.intended_stages)) g(['add', '--', entry.path]);
+      lock.assertOwned();
+      applyState();
+    }
+    if (canonical(stageRows()) !== canonical(intent.intended_stages)
+        || canonical(physicalInventory(path.join(root, packagePrefix))) !== canonical(operation.generation.inventory))
+      fail('GENERATED_MERGE_CHANGED', 'complete generated apply differs from intended package or staged tree');
+    const tree = operation.staged_index ? stagedTree() : g(['write-tree']);
+    if (tree !== intent.tree || (operation.tree && operation.tree !== tree)) fail('GENERATED_MERGE_CHANGED', 'resolved generated tree changed');
+    operation.tree = tree;
+    if (!operation.staged_index) operation.staged_index = ciPhysical(path.resolve(root, g(['rev-parse', '--git-path', 'index']))).pin;
+    operation.phase = 'staged'; save();
+    return tree;
+  };
+  const ordinaryMetadata = raw => {
+    const match = /^(.*) <([^<>]+)> (\d+ [+-]\d{4})$/.exec(raw);
+    if (!match) fail('GENERATED_MERGE_INVALID', 'unsupported ordinary signing identity');
+    return { raw, name: match[1], email: match[2], date: match[3] };
+  };
+  const finishOriginalOrdinary = () => {
+    const intent = operation.ordinary_intent, head = g(['rev-parse', 'HEAD']);
+    if (!intent || !['merge', 'fast-forward'].includes(intent.kind)) fail('GENERATED_MERGE_CHANGED', 'ordinary result lacks its original pre-effect intent');
+    if (intent.kind === 'fast-forward') {
+      if (head !== operation.pins.base || g(['show', '-s', '--format=%T', head]) !== operation.pins.base_tree)
+        fail('GENERATED_MERGE_CHANGED', 'ordinary fast-forward differs from original pinned incoming commit');
+    } else {
+      const bytes = rawGit(['cat-file', 'commit', head]).toString('utf8'); let signature = false, count = 0;
+      const signatureHeader = g(['rev-parse', '--show-object-format']) === 'sha256' ? 'gpgsig-sha256 ' : 'gpgsig ';
+      const unsigned = bytes.split('\n').filter(line => {
+        if (line.startsWith(signatureHeader)) { signature = true; count++; return false; }
+        if (signature && line.startsWith(' ')) return false;
+        signature = false; return true;
+      }).join('\n');
+      if (count !== 1 || unsigned !== intent.unsigned || sha256(unsigned) !== intent.unsigned_sha256
+          || g(['show', '-s', '--format=%P', head]) !== `${operation.head} ${operation.pins.base}`
+          || g(['show', '-s', '--format=%T', head]) !== intent.tree)
+        fail('GENERATED_MERGE_CHANGED', 'ordinary result differs from exact original signed intent');
+      g(['verify-commit', head]);
+      if (g(['show', '-s', '--format=%GF', head]) !== operation.pins.signer
+          || !['G', 'U'].includes(g(['show', '-s', '--format=%G?', head])))
+        fail('GENERATED_MERGE_CHANGED', 'ordinary result differs from configured signer');
+    }
+    ordinaryCandidate = head;
+    try {
+      check();
+      if (!absent('MERGE_HEAD') || !absent('AUTO_MERGE') || g(['status', '--porcelain=v1', '--untracked-files=no']))
+        fail('GENERATED_MERGE_CHANGED', 'original ordinary result is not clean and complete');
+      let verified = null;
+      if (intent.kind === 'merge') {
+        lock.assertOwned();
+        const record = coverage.createCoverageWriter().record({ commit: head, parents: [operation.head, operation.pins.base],
+          tree: intent.tree, ticket, repo: operation.pins.repo, worktree: root, kind: 'base-merge',
+          base_merge: { base: operation.pins.base_ref, requested_base: requestedBase, taken_from_base: [] } });
+        verified = coverage.verify({ commit: head, repo: operation.pins.repo, worktree: root });
+        if (!verified.covered || canonical(verified.record) !== canonical(record))
+          fail('GENERATED_MERGE_CHANGED', 'original ordinary merge coverage did not verify');
+      }
+      operation.ordinary_head = head; operation.phase = 'ordinary'; save();
+      return { ticket, base: operation.pins.base_ref, requested_base: requestedBase, result: 'merged cleanly',
+        taken_from_base: [], unresolved: [], contested: [], commit: head, coverage: verified };
+    } finally { ordinaryCandidate = null; }
+  };
+  const mergeOrdinary = () => {
+    let env = environment(), args = ['merge', '--no-edit', operation ? operation.pins.base_ref : resolveBaseRef(root, requestedBase)];
+    if (operation) {
+      check();
+      if (!operation.ordinary_intent) {
+        let kind = 'merge', tree = null;
+        try { g(['merge-base', '--is-ancestor', operation.head, operation.pins.base]); kind = 'fast-forward'; }
+        catch (error) { if (error.status !== 1) throw error; }
+        let ff = ''; try { ff = g(['config', '--get', 'merge.ff']); } catch (error) { if (error.status !== 1) throw error; }
+        if (['false', 'no', 'off', '0'].includes(ff.toLowerCase())) kind = 'merge';
+        if (kind === 'merge') {
+          try { tree = g(['merge-tree', '--write-tree', operation.head, operation.pins.base]).split('\n')[0]; }
+          catch (error) { if (error.status !== 1) throw error; kind = 'conflict'; }
+        }
+        const author = ordinaryMetadata(g(['var', 'GIT_AUTHOR_IDENT'])), committer = ordinaryMetadata(g(['var', 'GIT_COMMITTER_IDENT']));
+        const message = `Merge ${operation.pins.base_ref} into ${operation.pins.branch}\n\nShipyard-Operation: ${crypto.randomUUID()}`;
+        const unsigned = kind === 'merge' ? `tree ${tree}\nparent ${operation.head}\nparent ${operation.pins.base}\nauthor ${author.raw}\ncommitter ${committer.raw}\n\n${message}` : null;
+        operation.ordinary_intent = { kind, tree, author, committer, message, unsigned,
+          unsigned_sha256: unsigned && sha256(unsigned) }; save();
+      }
+      const intent = operation.ordinary_intent;
+      if (intent.kind === 'merge') {
+        env = { ...env, GIT_AUTHOR_NAME: intent.author.name, GIT_AUTHOR_EMAIL: intent.author.email, GIT_AUTHOR_DATE: intent.author.date,
+          GIT_COMMITTER_NAME: intent.committer.name, GIT_COMMITTER_EMAIL: intent.committer.email, GIT_COMMITTER_DATE: intent.committer.date };
+        args = ['-c', 'commit.cleanup=verbatim', 'merge', '--no-edit', '-S' + operation.pins.signer, '-m', intent.message, operation.pins.base_ref];
+      }
+    }
+    try { const out = run('git', ['-C', root, ...args], { env }); return { status: 0, out: out.trim(), raw: Buffer.from(out) }; }
+    catch (error) { if (!Number.isInteger(error.status)) throw error; return { status: error.status, out: String(error.stdout || '') + String(error.stderr || ''), raw: error.stdout }; }
+  };
+  const originalSignedObject = () => {
+    const first = !operation.signing;
+    if (first) {
+      const parse = raw => {
+        const match = /^(.*) <([^<>]+)> (\d+ [+-]\d{4})$/.exec(raw);
+        if (!match) fail('GENERATED_MERGE_INVALID', 'unsupported original signing identity');
+        return { raw, name: match[1], email: match[2], date: match[3] };
+      };
+      const objectRoot = privateDirectory(directory, operation.id, 'signing-objects');
+      if (fs.readdirSync(objectRoot).length) fail('GENERATED_MERGE_CHANGED', 'new signing object directory is not empty');
+      const author = parse(g(['var', 'GIT_AUTHOR_IDENT'])), committer = parse(g(['var', 'GIT_COMMITTER_IDENT']));
+      const message = `Merge ${operation.pins.base_ref} into ${operation.pins.branch}\n\nShipyard-Operation: ${crypto.randomUUID()}`;
+      const unsigned = `tree ${operation.tree}\nparent ${operation.head}\nparent ${operation.pins.base}\nauthor ${author.raw}\ncommitter ${committer.raw}\n\n${message}\n`;
+      operation.signing = { root: privatePin(objectRoot), author, committer, message, unsigned,
+        unsigned_sha256: sha256(unsigned), signer: operation.pins.signer,
+        alternate_objects: fs.realpathSync(path.resolve(root, g(['rev-parse', '--git-path', 'objects']))) };
+      save();
+    }
+    check();
+    const intent = operation.signing;
+    if (canonical(privatePin(intent.root.path)) !== canonical(intent.root)
+        || intent.signer !== operation.pins.signer || sha256(intent.unsigned) !== intent.unsigned_sha256
+        || fs.realpathSync(path.resolve(root, g(['rev-parse', '--git-path', 'objects']))) !== intent.alternate_objects)
+      fail('GENERATED_MERGE_CHANGED', 'original signing directory, signer or unsigned bytes changed');
+    const env = { ...environment(), GIT_OBJECT_DIRECTORY: intent.root.path,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: intent.alternate_objects,
+      GIT_AUTHOR_NAME: intent.author.name, GIT_AUTHOR_EMAIL: intent.author.email, GIT_AUTHOR_DATE: intent.author.date,
+      GIT_COMMITTER_NAME: intent.committer.name, GIT_COMMITTER_EMAIL: intent.committer.email, GIT_COMMITTER_DATE: intent.committer.date };
+    const qg = (args, extra = {}) => run('git', ['-C', root, ...args], { env, ...extra });
+    if (first) qg(['commit-tree', '-S' + intent.signer, operation.tree, '-p', operation.head,
+      '-p', operation.pins.base, '-m', intent.message]);
+    const objects = [];
+    for (const prefix of fs.readdirSync(intent.root.path)) {
+      const folder = path.join(intent.root.path, prefix), stat = fs.lstatSync(folder);
+      if (!/^[a-f0-9]{2}$/.test(prefix) || !stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(folder) !== folder)
+        fail('GENERATED_MERGE_CHANGED', 'foreign entry in original signing object directory');
+      for (const suffix of fs.readdirSync(folder)) {
+        const object = path.join(folder, suffix), read = ciPhysical(object, MAX_GRAPH_BYTES, false, true);
+        if (!/^(?:[a-f0-9]{38}|[a-f0-9]{62})$/.test(suffix) || read.pin.bytes === 0 || objects.length)
+          fail('GENERATED_MERGE_CHANGED', 'ambiguous or invalid original signing object');
+        objects.push(prefix + suffix);
+      }
+    }
+    if (objects.length !== 1) fail('GENERATED_MERGE_CHANGED', 'original signing intent has no unique completed object; refusing signing replay');
+    const oid = objects[0];
+    if (qg(['cat-file', '-t', oid]).trim() !== 'commit') fail('GENERATED_MERGE_CHANGED', 'original signed object is not a commit');
+    const bytes = qg(['cat-file', 'commit', oid], { encoding: null }), text = bytes.toString('utf8');
+    let signature = false, signatures = 0;
+    const signatureHeader = g(['rev-parse', '--show-object-format']) === 'sha256' ? 'gpgsig-sha256 ' : 'gpgsig ';
+    const unsigned = text.split('\n').filter(line => {
+      if (line.startsWith(signatureHeader)) { signature = true; signatures++; return false; }
+      if (signature && line.startsWith(' ')) return false;
+      signature = false; return true;
+    }).join('\n');
+    if (signatures !== 1 || unsigned !== intent.unsigned || sha256(unsigned) !== intent.unsigned_sha256)
+      fail('GENERATED_MERGE_CHANGED', 'original signed object differs from its exact unsigned intent');
+    qg(['verify-commit', oid]);
+    if (qg(['show', '-s', '--format=%GF', oid]).trim() !== intent.signer
+        || !['G', 'U'].includes(qg(['show', '-s', '--format=%G?', oid]).trim()))
+      fail('GENERATED_MERGE_CHANGED', 'original signed object differs from configured signer');
+    check();
+    const imported = run('git', ['-C', root, 'hash-object', '-t', 'commit', '-w', '--stdin'],
+      { input: bytes, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    if (imported !== oid) fail('GENERATED_MERGE_CHANGED', 'imported original signed bytes changed object identity');
+    return oid;
+  };
+  const complete = () => {
+    check();
+    if (!operation.commit) {
+      if (operation.phase === 'conflicted') generate();
+      if (operation.phase !== 'staged' || stagedTree() !== operation.tree || g(['diff', '--name-only']))
+        fail('GENERATED_MERGE_CHANGED', 'generated merge has not retained its exact staged output');
+      if (!operation.signing && !operation.mechanical_completion) generate();
+      check();
+      if (stagedTree() !== operation.tree || g(['diff', '--name-only'])) fail('GENERATED_MERGE_CHANGED', 'generated output moved before signing');
+      const commit = originalSignedObject();
+      operation.commit = commit; operation.phase = 'signed'; save();
+    }
+    check(); verifyCommit();
+    if (g(['rev-parse', 'HEAD']) === operation.head) {
+      if (stagedTree() !== operation.tree || g(['diff', '--name-only'])) fail('GENERATED_MERGE_CHANGED', 'signed merge index changed');
+      g(['update-ref', 'HEAD', operation.commit, operation.head]);
+    }
+    if (!absent('MERGE_HEAD')) {
+      if (g(['rev-parse', 'MERGE_HEAD']) !== operation.pins.base || stagedTree() !== operation.tree)
+        fail('GENERATED_MERGE_CHANGED', 'original merge cleanup state differs');
+      g(['merge', '--quit']);
+    }
+    if (!absent('AUTO_MERGE')) g(['update-ref', '-d', 'AUTO_MERGE', operation.observed.automatic]);
+    if (g(['status', '--porcelain=v1', '--untracked-files=no']))
+      fail('GENERATED_MERGE_CHANGED', 'signed generated merge is not clean');
+    check(); verifyCommit();
+    lock.assertOwned();
+    const record = coverage.createCoverageWriter().record({ commit: operation.commit,
+      parents: [operation.head, operation.pins.base], tree: operation.tree, ticket,
+      repo: operation.pins.repo, worktree: root, kind: 'base-merge', base_merge: {
+        base: operation.pins.base_ref, requested_base: requestedBase, taken_from_base: operation.taken } });
+    const verified = coverage.verify({ commit: operation.commit, repo: operation.pins.repo, worktree: root });
+    if (!verified.covered || canonical(verified.record) !== canonical(record)) fail('GENERATED_MERGE_CHANGED', 'original merge coverage did not independently verify');
+    operation.phase = 'completed'; save();
+    return { ticket, base: operation.pins.base_ref, requested_base: requestedBase,
+      result: operation.mechanical_completion ? 'resolved mechanically' : 'regenerated supported package', taken_from_base: operation.taken, unresolved: [], contested: [],
+      commit: operation.commit, tree: operation.tree, parents: [operation.head, operation.pins.base], coverage: verified };
+  };
+  const completeMechanical = taken => {
+    check();
+    if (!Array.isArray(taken) || !taken.length || !operation.mechanical
+        || canonical(taken) !== canonical(operation.taken)
+        || canonical(taken) !== canonical(operation.mechanical.paths.map(entry => entry.path)))
+      fail('GENERATED_MERGE_CHANGED', 'mechanical-only completion lacks original exact taken intent');
+    mechanicalState();
+    if (stageRows().some(row => row.stage !== 0) || g(['diff', '--name-only']))
+      fail('GENERATED_MERGE_CHANGED', 'mechanical-only original has unresolved or foreign tracked state');
+    operation.tree = g(['write-tree']);
+    operation.staged_index = ciPhysical(path.resolve(root, g(['rev-parse', '--git-path', 'index']))).pin;
+    operation.mechanical_completion = true; operation.phase = 'staged'; save();
+    return complete();
+  };
+  try {
+    const files = fs.readdirSync(directory).filter(file => file.endsWith('.json'));
+    if (files.length > 32) fail('GENERATED_MERGE_INVALID', 'generated merge history exceeds bounded custody');
+    for (const name of files) {
+      const prior = readSealed(path.join(directory, name), key);
+      if (!prior || prior.pins?.ticket !== ticket) continue;
+      if (!['completed', 'ordinary', 'manual'].includes(prior.phase)
+          || (prior.phase === 'completed' && prior.commit === g(['rev-parse', 'HEAD']) && canonical(prior.pins) === canonical(pins()))) {
+        if (operation) fail('GENERATED_MERGE_INVALID', 'multiple original generated merge operations');
+        operation = prior; proofFile = path.join(directory, name);
+      }
+    }
+  } catch (error) { lock.release(); throw error; }
+  return Object.freeze({
+    recover() {
+      if (!operation) return null;
+      if (!['completed', 'ordinary', 'manual'].includes(operation.phase) && !operation.commit
+          && !operation.signing && !operation.ordinary_intent && operation.intent_protocol !== 'original-intent-v1')
+        fail('GENERATED_MERGE_CHANGED', 'legacy pending merge has no authenticated original intent; refusing replay');
+      if (!noFetch) g(['fetch', 'origin', '--prune']);
+      if (operation.phase === 'prepared' && operation.ordinary_intent
+          && operation.ordinary_intent.kind !== 'conflict' && g(['rev-parse', 'HEAD']) !== operation.head)
+        return finishOriginalOrdinary();
+      check();
+      if (operation.phase === 'prepared' && absent('MERGE_HEAD') && absent('AUTO_MERGE')) return null;
+      if (!operation.observed) observe();
+      if (!operation.generation && !operation.mechanical_completion) {
+        const taken = mechanical();
+        if (stageRows().every(row => row.stage === 0)) return completeMechanical(taken);
+      }
+      return complete();
+    },
+    prepare() {
+      if (operation) { check(); return; }
+      if (!absent('MERGE_HEAD') || !absent('AUTO_MERGE')) fail('GENERATED_MERGE_INVALID', 'foreign pending merge has no original authority');
+      const p = pins();
+      if (p.branch !== graph.row.branch || p.builder.bytes !== p.builder.trusted)
+        fail('GENERATED_MERGE_INVALID', 'generated merge branch or incoming builder is not trusted');
+      const head = g(['rev-parse', 'HEAD']);
+      const id = sha256(canonical({ pins: p, head }));
+      operation = { schema: 'shipyard.generated-base-merge.v1', intent_protocol: 'original-intent-v1', id, pins: p, head,
+        head_tree: g(['rev-parse', 'HEAD^{tree}']), private_root: privatePin(directory), phase: 'prepared', taken: [] };
+      proofFile = path.join(directory, id + '.json'); save();
+    },
+    observe() { return observe(); },
+    mechanical() { return mechanical(); },
+    completeMechanical(taken) { return completeMechanical(taken); },
+    complete(taken) {
+      const before = operation.observed.stages, current = stageRows();
+      const owner = require('./path-owner.cjs').owns;
+      for (const file of taken) {
+        if (!operation.observed.unmerged.includes(file) || declared.some(pattern => owner(pattern, file)))
+          fail('GENERATED_MERGE_INVALID', 'mechanical resolution does not belong to the original undeclared conflicts');
+        const expected = g(['ls-tree', operation.pins.base, '--', file]);
+        const rows = current.filter(row => row.path === file);
+        if (expected ? rows.length !== 1 || rows[0].stage !== 0 || expected.split(' ')[0] !== rows[0].mode
+            || expected.split(' ')[2].split('\t')[0] !== rows[0].oid : rows.length !== 0)
+          fail('GENERATED_MERGE_CHANGED', 'mechanical resolution differs from its pinned base');
+      }
+      if (canonical(before.filter(row => !taken.includes(row.path))) !== canonical(current.filter(row => !taken.includes(row.path))))
+        fail('GENERATED_MERGE_CHANGED', 'combined source changed outside original mechanical resolutions');
+      operation.taken = taken; operation.combined_stages = current; save(); return complete();
+    },
+    manual() { check(); operation.phase = 'manual'; save(); },
+    eligible(paths) { return paths.length > 0 && paths.every(file => eligible.has(file)); },
+    mergeOrdinary() { return mergeOrdinary(); },
+    ordinary() {
+      if (operation?.ordinary_intent && ['merge', 'fast-forward'].includes(operation.ordinary_intent.kind)) return finishOriginalOrdinary();
+      if (operation) { operation.phase = 'ordinary'; operation.ordinary_head = g(['rev-parse', 'HEAD']); save(); }
+    },
+    release() { lock.release(); },
+  });
+}
+
 function preparedRepairSignals(prepared) {
   const prior = repairPredecessors.get(prepared)?.selected;
   if (!repairPredecessors.has(prepared)) fail('REPAIR_SUBJECT_REQUIRED', 'repair signals require original host preparation');
@@ -2410,7 +3751,7 @@ function resolvePreparedRepair(prepared, dispatchId, options, capabilities) {
   if (loaded.valid === false) fail('INVALID_CONFIG', 'repeat repair configuration is invalid');
   const configuration = loaded.config.dispatch_context.configuration;
   const selected = require('./dispatch-boundary.cjs').createDispatchBoundary().resolve({
-    runtime: 'codex', role: 'review-fix', dispatch_id: dispatchId, signals: preparedRepairSignals(prepared),
+    runtime: 'codex', role: prepared.expectedRole, dispatch_id: dispatchId, signals: preparedRepairSignals(prepared),
     previous_dispatch_id: previous.attempt.dispatch_id, config: configuration,
   }, previous.recorder, prepared.commit.ticket);
   require('./codex-model-remap.cjs').validateCodexConfiguration(selected, configuration, capabilities);
@@ -2491,6 +3832,8 @@ function recheckRepairJournal(prepared) {
 }
 
 function recheckRepair(prepared, options, { clean = false, feedback = prepared.repair.feedback, signedHead } = {}) {
+  options[REPAIR_OWNER]?.();
+  if (prepared.repair.role === 'ci-fix') return recheckCiRepair(prepared, options, { clean, signedHead });
   const root = prepared.commit.worktree;
   const historicalEndpoint = repairHistoricalEndpoint(prepared);
   if (signerFingerprint(root) !== prepared.commit.expectedSigner)
@@ -2538,7 +3881,7 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
 }
 
 function repairCompletion(completed, result, prepared, recorder) {
-  const original = authenticatedReceipt(recorder, result.receipt?.dispatch_id, 'review-fix');
+  const original = authenticatedReceipt(recorder, result.receipt?.dispatch_id, prepared.expectedRole || prepared.repair.role);
   const native = original.receipt.runtime_evidence;
   if (canonical(original.receipt) !== canonical(result.receipt)) fail('REPAIR_COMPLETION_INVALID', 'repair substituted its application receipt');
   if (!completed || original.receipt.launch_id !== completed.launch_id || native?.session_id !== completed.session_id
@@ -2557,14 +3900,15 @@ function repairCompletion(completed, result, prepared, recorder) {
     prepared.commit.worktree, completed.last_agent_message));
   let output;
   try { output = JSON.parse(completed.last_agent_message); } catch { fail('REPAIR_COMPLETION_INVALID', 'repair completion is not complete JSON'); }
-  const inventory = prepared.repair.actionable_feedback?.inventory || prepared.repair.feedback.inventory;
-  if (!object(output) || Object.keys(output).some(key => !['schema', 'id', 'pr', 'status', 'pushed', 'notes', 'hypothesis', 'review_dispositions'].includes(key)) || output.schema !== 'shipyard.repair-result.v1' || output.id !== prepared.commit.ticket
+  const ci = prepared.repair.role === 'ci-fix';
+  const inventory = ci ? [] : prepared.repair.actionable_feedback?.inventory || prepared.repair.feedback.inventory;
+  if (!object(output) || Object.keys(output).some(key => !(ci ? ['schema', 'id', 'pr', 'status', 'pushed', 'notes', 'hypothesis'] : ['schema', 'id', 'pr', 'status', 'pushed', 'notes', 'hypothesis', 'review_dispositions']).includes(key)) || output.schema !== 'shipyard.repair-result.v1' || output.id !== prepared.commit.ticket
       || output.pr !== prepared.repair.pr || output.pushed !== false || !['fixed', 'no-op', 'escalate'].includes(output.status)
       || ['notes', 'hypothesis'].some(key => typeof output[key] !== 'string' || !output[key].trim() || Buffer.byteLength(output[key]) > 4096)
-      || !Array.isArray(output.review_dispositions) || output.review_dispositions.length !== inventory.length)
+      || (!ci && (!Array.isArray(output.review_dispositions) || output.review_dispositions.length !== inventory.length)))
     fail('REPAIR_COMPLETION_INVALID', 'repair result has incomplete identity, outcome or dispositions');
   const seen = new Set();
-  for (const item of output.review_dispositions) {
+  for (const item of output.review_dispositions || []) {
     const entry = inventory.find(value => value.id === item?.id);
     if (!object(item) || !entry || seen.has(item.id)
         || Object.keys(item).some(key => !['id', 'action', 'reply', 'evidence'].includes(key))
@@ -2581,6 +3925,7 @@ function repairCompletion(completed, result, prepared, recorder) {
 }
 
 function publishSignedRepair(prepared, signed, options) {
+  options[REPAIR_OWNER]?.();
   const lock = acquireLock(privateDirectory(prepared.stateRoot, 'repair-publication-locks'), signed.artifact.candidate_id, { waitMs: 0 });
   if (!lock) fail('REPAIR_PUBLICATION_PENDING', 'another host owns this signed publication');
   try { return performSignedRepairPublication(prepared, signed, options); }
@@ -2590,7 +3935,7 @@ function publishSignedRepair(prepared, signed, options) {
 function performSignedRepairPublication(prepared, signed, options) {
   const artifact = signed.artifact;
   const candidate = readSealed(candidateFile(prepared.stateRoot, artifact.candidate_id), prepared.key);
-  if (!candidate || candidate.expected_role !== 'review-fix' || canonical(candidate.repair_subject) !== canonical(prepared.repair))
+  if (!candidate || candidate.expected_role !== prepared.repair.role || canonical(candidate.repair_subject) !== canonical(prepared.repair))
     fail('REPAIR_SUBJECT_CHANGED', 'publication lacks its original signed fixer candidate');
   verifySignedCommit(prepared.commit.worktree, candidate, artifact.commit);
   const publicationFile = path.join(privateDirectory(prepared.stateRoot, 'repair-publications'), candidate.candidate_id + '.json');
@@ -2625,14 +3970,16 @@ function performSignedRepairPublication(prepared, signed, options) {
   }
   const transitioned = { ...prepared, commit: { ...prepared.commit, expectedHead: artifact.commit } };
   recheckRepair(prepared, options, { clean: true, signedHead: artifact.commit });
-  const feedback = completeRepairFeedback(options, prepared, prepared.repair.pr);
+  const feedback = prepared.repair.role === 'ci-fix' ? prepared.repair.feedback : completeRepairFeedback(options, prepared, prepared.repair.pr);
   if (feedback.digest !== prepared.repair.feedback.digest) fail('REPAIR_SUBJECT_CHANGED', 'feedback changed before signed publication');
   atomicWrite(publicationFile, JSON.stringify(seal({ candidate_id: candidate.candidate_id,
     commit: artifact.commit, status: 'pending', subject: prepared.repair }, prepared.key)) + String.fromCharCode(10), { exclusive: true });
   const runner = options.execFileSync || execFileSync;
+  options[REPAIR_OWNER]?.();
   try { runner('git', ['push', '--porcelain', 'origin', 'HEAD:refs/heads/' + prepared.commit.expectedBranch],
     { cwd: prepared.commit.worktree, encoding: 'utf8', timeout: 120000, maxBuffer: MAX_REPAIR_FEEDBACK_BYTES }); }
   catch (error) { fail('REPAIR_PUBLICATION_PENDING', 'signed publication requires independent recovery: ' + error.message); }
+  options[REPAIR_OWNER]?.();
   const live = repairLive(options, transitioned, prepared.repair.pr);
   const next = Object.freeze({ ...transitioned, repair: Object.freeze({ ...prepared.repair, live,
     signed_transition: { candidate_id: artifact.candidate_id, from: prepared.commit.expectedHead,
@@ -2648,27 +3995,56 @@ function finishRepairRecovery(candidate, artifact, options, stateRoot, key, reco
   const prepared = { [terminalRepairRecovery]: true, commit: candidateCommit(candidate),
     graphFile: graphFile(options, candidate.worktree), graphDigest: candidate.graph_sha256,
     plan: planSnapshot(graphFile(options, candidate.worktree), graph.row), baseRef: candidate.base_ref,
-    repair: candidate.repair_subject, repo: candidate.repo, repository: candidate.repository,
+    repair: candidate.repair_subject, expectedRole: candidate.expected_role, repo: candidate.repo, repository: candidate.repository,
     stateRoot, key, verificationAllowList: configuredAllowList({ graphFile: graphFile(options, candidate.worktree), repo: candidate.repo }, options) };
   if (prepared.plan.sha256 !== candidate.plan_sha256
       || allowListDigest(prepared.verificationAllowList) !== candidate.verification.allow_list_sha256)
     fail('REPAIR_SUBJECT_CHANGED', 'signed repair recovery changed its original PLAN or verification assignment');
-  const history = repairHistory(prepared, candidate.repair_subject.pr);
+  const history = candidate.expected_role === 'ci-fix' ? ciRepairHistory(prepared, candidate.repair_subject.pr) : repairHistory(prepared, candidate.repair_subject.pr);
   const attempt = history.history.find(item => item.attempt.dispatch_id === candidate.dispatch_id)?.attempt;
   if (!attempt?.result) fail('REPAIR_PREDECESSOR_INVALID', 'recovery lacks complete original sealed repair dispositions');
   repairNativeCustody.set(prepared, attempt.native_custody);
-  const original = authenticatedReceipt(recorder, candidate.dispatch_id, 'review-fix').receipt;
+  const original = authenticatedReceipt(recorder, candidate.dispatch_id, candidate.expected_role).receipt;
   const stream = parseCodexStream(fs.readFileSync(original.runtime_evidence.transcript.path, 'utf8'));
   const text = repairStreamFinal(stream);
   const output = repairCompletion({ launch_id: original.launch_id, session_id: original.runtime_evidence.session_id,
     runtime_evidence: original.runtime_evidence, last_agent_message: text }, { receipt: original }, prepared, recorder);
   if (canonical(output) !== canonical(attempt.result)) fail('REPAIR_PREDECESSOR_INVALID', 'recovery result differs from the original completed turn');
+  let ciSelectors, ciOperation, ciOriginalPrepared;
+  if (candidate.expected_role === 'ci-fix') {
+    ciSelectors = { pr: candidate.repair_subject.pr, plan_sha256: candidate.plan_sha256,
+      evidence_path: candidate.repair_subject.evidence.original.path, evidence_sha256: candidate.repair_subject.evidence.sha256 };
+    ciOperation = readSealed(ciOperationFile(prepared, ciSelectors), key);
+    if (!ciOperation || ciOperation.dispatch_id !== candidate.dispatch_id
+        || (ciOperation.candidate_result?.candidate_id || ciOperation.signed_result?.artifact?.candidate_id) !== candidate.candidate_id)
+      fail('CI_ORIGINAL_INVALID', 'candidate recovery lacks its authenticated original CI association');
+    if (ciOperation.candidate_result) {
+      ciOriginalPrepared = prepareCiRepair(options, ciOperation.scope, ciSelectors);
+      const state = originalCiOperations.get(preparedCiOperations.get(ciOriginalPrepared));
+      authenticateFinishedCi({ ...state, operation: { ...state.operation, state: 'finished', result: state.operation.signed_result } },
+        { finalizationOnly: true });
+    }
+  }
   const transitioned = publishSignedRepair(prepared, { artifact }, options);
-  return { repair_result: output, publication: { status: 'confirmed', transition: transitioned.repair.signed_transition },
+  const recovered = { repair_result: output, publication: { status: 'confirmed', transition: transitioned.repair.signed_transition },
     actions: applyRepairActions(transitioned, output, options, candidate.dispatch_id) };
+  if (candidate.expected_role === 'ci-fix') {
+    const operation = ciOperation;
+    if (operation.candidate_result) {
+      if (operation.candidate_result.candidate_id !== candidate.candidate_id || operation.dispatch_id !== candidate.dispatch_id)
+        fail('CI_ORIGINAL_INVALID', 'recovered candidate differs from its original CI association');
+      const state = originalCiOperations.get(preparedCiOperations.get(ciOriginalPrepared));
+      const completed = { ...state.operation.signed_result, ...recovered };
+      const finished = { ...state.operation, state: 'finished', result: completed };
+      authenticateFinishedCi({ ...state, operation: finished });
+      state.operation = finished; writeCiOperation(state);
+    }
+  }
+  return recovered;
 }
 
 function applyRepairActions(prepared, output, options, dispatchId) {
+  if (prepared.repair.role === 'ci-fix') return Object.freeze({ status: 'not-applicable', role: 'ci-fix' });
   const lock = acquireLock(privateDirectory(prepared.stateRoot, 'repair-action-locks'), sha256(dispatchId), { waitMs: 0 });
   if (!lock) fail('REPAIR_ACTION_PENDING', 'another host owns this original action group');
   try { return performRepairActions(prepared, output, options, dispatchId); }
@@ -2775,11 +4151,16 @@ function performRepairActions(prepared, output, options, dispatchId) {
       resolved: disposition.action === 'reply-and-resolve', ...(relation ? { reply_review: relation } : {}) }], pending: null };
     atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
   }
+  options[REPAIR_OWNER]?.();
   return Object.freeze({ status: output.status === 'escalate' ? 'escalated' : 'confirmed', confirmed: state.confirmed });
 }
 
 function resumeRepairActions(options, dispatchId, liveScopeInput) {
   const scope = canonicalCliScope(liveScopeInput);
+  if (options.controller) {
+    options = { ...options, [REPAIR_OWNER]: repairOwnerRenewal(options.controller, scope, options.writerSession) };
+    options[REPAIR_OWNER]();
+  }
   const root = hostStateRoot(options, scope), key = hostKey(root);
   const graphPath = graphFile(options, scope.worktree), graph = graphSnapshot(graphPath, scope.ticket);
   const locator = { stateRoot: root, key, graphFile: graphPath, commit: { worktree: scope.worktree, ticket: scope.ticket },
@@ -2788,6 +4169,25 @@ function resumeRepairActions(options, dispatchId, liveScopeInput) {
   const previous = history.history.find(item => item.attempt.dispatch_id === dispatchId);
   if (!previous?.attempt.preparation || !previous.attempt.result || !previous.receipt)
     fail('REPAIR_PREDECESSOR_INVALID', 'action recovery lacks original protected completion and preparation');
+  if (!options.controller) {
+    const controller = createRunController({ storeDir: path.join(storageDirectory(options, scope), 'runs') });
+    const receipt = previous.receipt;
+    const original = authenticatedReceipt(previous.recorder, dispatchId, 'review-fix');
+    const policyVersion = original.policy_version;
+    const recoveryScope = { ...scope, run_id: 'action-recovery-' + crypto.randomUUID() };
+    controller.begin(createRunScope({ ...recoveryScope, repository: { repository_id: previous.attempt.preparation.repository, worktree: scope.worktree },
+      owner_id: controller.owner_id, dispatch: { dispatch_id: 'action-recovery-' + crypto.randomUUID(),
+        role: 'review-fix', model: receipt.model, effort: receipt.effort,
+        policy_version: policyVersion, policy_hash: receipt.policy_hash } }));
+    try {
+      const result = resumeRepairActions({ ...options, controller }, dispatchId, recoveryScope);
+      controller.complete(recoveryScope.run_id, { reason: 'reconciled original repair actions ' + dispatchId });
+      return result;
+    } catch (error) {
+      try { controller.fail(recoveryScope.run_id, { reason: historyReason(error.message) }); } catch {}
+      throw error;
+    }
+  }
   const selected = previous.attempt.preparation;
   if (previous.receipt.runtime_evidence.phase !== scope.phase || selected.commit.worktree !== scope.worktree
       || selected.commit.ticket !== scope.ticket || selected.graphFile !== graphPath)
@@ -2823,7 +4223,7 @@ function verificationAssignmentBlock(assignment) {
     + 'Historical GPG cause remains unknown. Actual assertion failures block; denial, missing evidence and unknown or unapproved commands remain HOLD.';
 }
 
-function finalizedArtifact(result, prepared, options) {
+function finalizedArtifact(result, prepared, options, renewOwner) {
   if (!object(result) || !object(result.receipt) || result.receipt.compliance !== 'verified') {
     fail('MISSING_RECEIPT', 'executor has no verified dispatch receipt');
   }
@@ -2858,16 +4258,24 @@ function finalizedArtifact(result, prepared, options) {
   });
   const staged = { ...prepared, identity };
   let records;
-  try { records = collectVerificationEvidence(staged, prepared.verification, options); }
+  try { records = collectVerificationEvidence(staged, prepared.verification, options, renewOwner); }
   catch (error) {
     if (error.status !== 'verification_failed') throw error;
     return Object.freeze({ ...result, status: 'verification_failed', command: error.command,
       evidence_digest: error.evidence_digest, retryable: error.retryable === true,
-      summary: error.message.slice(0, 500) });
+      summary: error.message.slice(0, 500), ...(error.gates ? { gates: error.gates } : {}) });
   }
   if (prepared.repair) recheckRepair(prepared, options);
   const candidate = admitCandidate(staged, prepared.verification, records, tree);
   options.controller?.assertOwner(options.scope.run_id);
+  if (prepared.expectedRole === 'ci-fix') {
+    const state = originalCiOperations.get(preparedCiOperations.get(prepared));
+    if (!state || state.operation.dispatch_id !== candidate.dispatch_id)
+      fail('CI_ORIGINAL_INVALID', 'CI candidate has no matching original operation');
+    state.operation.candidate_result = { ...result, candidate_id: candidate.candidate_id,
+      repair: options.ciRepairSeal, repair_result: options.ciRepairResult };
+    writeCiOperation(state);
+  }
   let artifact;
   try {
     artifact = finalizeCandidate(candidate, prepared.stateRoot, prepared.key, options);
@@ -2994,6 +4402,8 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     fail('INVALID_INPUT', 'candidate id must be a 64-character hex digest');
   }
   const liveScope = normalizeScope({ ...liveScopeInput, runtime: 'codex', provider: 'openai' });
+  options = { ...options, [REPAIR_OWNER]: repairOwnerRenewal(options.controller, liveScope, options.writerSession) };
+  options[REPAIR_OWNER]?.();
   const worktree = fs.realpathSync(liveScope.worktree);
   const stateRoot = hostStateRoot(options, { worktree });
   const key = hostKey(stateRoot);
@@ -3044,7 +4454,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
         candidate_id: candidateId, tree: candidate.scoped_tree,
         gates: Object.freeze({ pre_commit: 'passed', downstream: Object.freeze(pendingGates()) }) });
       return Object.freeze({ schema: SCHEMA, status: 'committed', resumed: true, idempotent: true,
-        candidate_id: candidateId, artifact, ...(candidate.expected_role === 'review-fix'
+        candidate_id: candidateId, artifact, ...(['ci-fix', 'review-fix'].includes(candidate.expected_role)
           ? finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder) : {}) });
     }
 
@@ -3069,7 +4479,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
         && git(worktree, ['rev-parse', '--verify', `${baseRef}^{commit}`]) === candidate.expected_base;
     });
     check('graph', () => graph && graph.snapshot.sha256 === candidate.graph_sha256);
-    if (candidate.expected_role === 'review-fix') check('repair-subject', () => {
+    if (['ci-fix', 'review-fix'].includes(candidate.expected_role)) check('repair-subject', () => {
       recheckRepair({ commit: candidateCommit(candidate), stateRoot, key, graphFile: graph.file,
         graphDigest: candidate.graph_sha256, plan: planSnapshot(graph.file, graph.snapshot.row),
         baseRef: candidate.base_ref, repair: candidate.repair_subject, repo: candidate.repo, repository: candidate.repository,
@@ -3123,7 +4533,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     options.controller?.assertOwner(liveScope.run_id);
     const artifact = finalizeCandidate(candidate, stateRoot, key, { ...options, recorder });
     return Object.freeze({ schema: SCHEMA, status: 'committed', resumed: true, idempotent: false,
-      candidate_id: candidateId, artifact, ...(candidate.expected_role === 'review-fix'
+      candidate_id: candidateId, artifact, ...(['ci-fix', 'review-fix'].includes(candidate.expected_role)
         ? finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder) : {}) });
   } finally {
     lock.release();
@@ -3150,7 +4560,7 @@ function createCodexDeliveryHost(options = {}) {
   if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
   const storage = storageDirectory(options, scope);
   const stateRoot = hostStateRoot(options, scope);
-  const runtimeHost = options.host || createCodexRuntimeHost({
+  const runtimeHost = options.host || createCodexRuntimeHost(handoffLaunchPreparation(options, {
     scope,
     agentDir: options.agentDir, agentManifest: options.agentManifest,
     controller: options.controller,
@@ -3158,7 +4568,7 @@ function createCodexDeliveryHost(options = {}) {
     capabilitiesFile: options.capabilitiesFile,
     executable: options.executable,
     probe: options.probe,
-    recorder: options.recorder,
+    recorder: options.recorder || options.integrationCapacity?.recorder,
     recorderDir: options.recorderDir || path.join(storage, 'receipts'),
     transcriptDir: options.transcriptDir || path.join(storage, 'transcripts'),
     env: options.env,
@@ -3166,7 +4576,7 @@ function createCodexDeliveryHost(options = {}) {
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
     additionalProtectedPaths: [stateRoot, roleArtifact.archiveAuthorityDirectory(scope.worktree)],
-  });
+  }));
   const writerSession = options.writerSession;
   if (writerSession && (typeof writerSession.lease?.snapshotTree !== 'function'
       || writerSession.snapshot?.schema !== 'shipyard.planning-writer-lease.snapshot.v1'
@@ -3184,6 +4594,8 @@ function createCodexDeliveryHost(options = {}) {
       fail('WRITER_FENCED', 'host writer lease is not bound to the scoped phase');
     }
   }
+  const renewVerificationOwner = repairOwnerRenewal(options.controller, scope, writerSession);
+  options = { ...options, [REPAIR_OWNER]: renewVerificationOwner };
   const completedTyped = new Map();
   const preRecordValidation = writerSession && function validateHostWriter({ dispatch_id: dispatchId, gsd_role: gsdRole, receipt }) {
     const { lease, handle, base_revision: baseRevision, snapshot, phaseDir } = writerSession;
@@ -3252,10 +4664,53 @@ function createCodexDeliveryHost(options = {}) {
     resumeRepairActions: (dispatchId, liveScope) => resumeRepairActions(options, dispatchId, liveScope),
     async run(rawRequest) {
       const request = requestValue(rawRequest);
+      if (request.role === 'code-review') {
+        if (options.codeReviewContext && !codeReviewContext.isSemanticContext(options.codeReviewContext))
+          fail('CODE_REVIEW_CONTEXT_REQUIRED', 'ordinary code-review requires semantic preparation; original-version evidence is read through its original finalizer');
+        if (partitionRunning) fail('INVALID_INPUT', 'semantic code-review execution is already active');
+        partitionRunning = true;
+        try {
+          if (!options.codeReviewContext) {
+            const accepted = recoverCodexCodeReview(scope, request, options);
+            if (accepted) return accepted;
+          }
+          const codeReview = options.codeReviewContext || codeReviewContext.prepareSemantic(scope, request, {
+            ...options, inflightDispatchId: request.dispatch_id, storageRoot: storageDirectory(options, scope) });
+          codeReviewContext.assertSemanticRequest(codeReview, scope, request);
+          if (codeReview.prepared.ticket !== scope.ticket || codeReview.prepared.phaseNumber !== scope.phase
+              || codeReview.prepared.canonical.worktree !== scope.worktree
+              || codeReview.prepared.binding.repo !== (request.context.repo ?? null))
+            fail('CODE_REVIEW_CONTEXT_REQUIRED', 'private semantic code-review context must match the current scope');
+          const selected = policy.resolveDispatch({ runtime: 'codex', role: 'code-review', signals: codeReview.prepared.signals });
+          codeReviewContext.bindSemantic(codeReview, installedAgentOptions({ ...options, host: runtimeHost }, selected, runtimeHost.capabilities));
+          return await runCodexSemanticReview({ codeReview, prepared: codeReview.prepared }, runtimeHost, scope, options);
+        } finally { partitionRunning = false; }
+      }
+      if (request.role === 'arch-review' && (!options.archReviewContext
+          || archReviewContext.isSemanticArchitecture(options.archReviewContext))) {
+        if (partitionRunning) fail('INVALID_INPUT', 'semantic architecture execution is already active');
+        partitionRunning = true;
+        try {
+          const review = prepareCodexSemanticArchitecture(scope, request, { ...options, host: runtimeHost });
+          return await runCodexSemanticReview(review, runtimeHost, scope, options);
+        } finally { partitionRunning = false; }
+      }
+      if (request.context.review_contract === roleArtifact.SEMANTIC_REVIEW_V1) {
+        if (partitionRunning) fail('INVALID_INPUT', 'semantic execution is already active');
+        partitionRunning = true;
+        try {
+          const review = prepareCodexSemanticReview(scope, request, { ...options, host: runtimeHost });
+          return await runCodexSemanticReview(review, runtimeHost, scope, options);
+        } finally { partitionRunning = false; }
+      }
       if (request.context.review_contract === roleArtifact.INTEGRATION_REVIEW_V3) {
         if (partitionRunning) fail('INVALID_INPUT', 'partition execution is already active');
         partitionRunning = true;
         try {
+          if (Object.keys(request.context).some(key => key !== 'review_contract') || Object.keys(request.signals || {}).length)
+            fail('INVALID_INPUT', 'partition inputs and authority are private to the host');
+          const completed = recordedCodexIntegrationFinal(scope, runtimeHost, options);
+          if (completed) return completed;
           partitionInput = prepareIntegratorInput(scope, { ...request, dispatch_id: newDispatchId() }, {
             ...options, host: runtimeHost, fileInputContext: partitionInput || options.fileInputContext });
           return await runCodexIntegrationPartitions(integrationInputs.get(partitionInput), runtimeHost, scope, options);
@@ -3266,18 +4721,56 @@ function createCodexDeliveryHost(options = {}) {
       }
       options.controller?.assertOwner(scope.run_id);
       request.dispatch_id = request.dispatch_id || newDispatchId();
-      let repairPrepared = request.role === 'review-fix' ? options.repairContext || prepareRepair(options, scope, request.context) : null;
+      let repairPrepared = ['ci-fix', 'review-fix'].includes(request.role) ? options.repairContext
+        || (request.role === 'ci-fix' ? prepareCiRepair(options, scope, request.context) : prepareRepair(options, scope, request.context)) : null;
       if (repairPrepared) {
         if (!repairPredecessors.has(repairPrepared) || repairPrepared.commit.worktree !== scope.worktree
             || repairPrepared.commit.ticket !== scope.ticket || repairPrepared.repair.pr !== request.context.pr
-            || repairPrepared.repair.evidence.path !== request.context.evidence_path
+            || (repairPrepared.repair.evidence.original?.path || repairPrepared.repair.evidence.path) !== request.context.evidence_path
             || repairPrepared.repair.evidence.sha256 !== request.context.evidence_sha256
             || repairPrepared.plan.sha256 !== request.context.plan_sha256)
           fail('REPAIR_SUBJECT_REQUIRED', 'reused repair preparation differs from canonical selectors');
+        if (request.role === 'ci-fix') {
+          const state = originalCiOperations.get(preparedCiOperations.get(repairPrepared));
+          state.options = options;
+          request.dispatch_id = state.operation.dispatch_id;
+        }
         request.context = { prompt: repairPrepared.prompt, plan_sha256: repairPrepared.plan.sha256 };
         request.signals = preparedRepairSignals(repairPrepared);
       }
-      let repairCompleted;
+      if (request.role === 'ci-fix') {
+        const state = originalCiOperations.get(preparedCiOperations.get(repairPrepared));
+        if (state.operation.candidate_result && !state.operation.signed_result) {
+          const resumed = await resumeFinalization(options, state.operation.candidate_result.candidate_id, scope);
+          const saved = readSealed(state.file, repairPrepared.key);
+          if (saved?.state !== 'finished' || saved.dispatch_id !== state.operation.dispatch_id
+              || saved.result?.artifact?.commit !== resumed.artifact.commit)
+            fail('CI_ORIGINAL_INVALID', 'candidate recovery did not finish its original CI operation');
+          state.operation = saved;
+          authenticateFinishedCi(state);
+          return Object.freeze(saved.result);
+        }
+        if (state.operation.signed_result && state.operation.state !== 'finished') {
+          const retained = state.operation.signed_result;
+          const recorder = createDurableRecorder(state.operation.receipt_store);
+          require('./dispatch-boundary.cjs').createDispatchBoundary({ recorder, originalCiOperation: preparedCiOperations.get(repairPrepared) })
+            .reconcileOriginal(state.operation.dispatch_id, { ticket: scope.ticket });
+          const candidate = readSealed(candidateFile(repairPrepared.stateRoot, retained.artifact.candidate_id), repairPrepared.key);
+          const resumed = { ...retained, ...finishRepairRecovery(candidate, retained.artifact, options,
+            repairPrepared.stateRoot, repairPrepared.key, recorder) };
+          state.operation.state = 'finished'; state.operation.result = resumed; writeCiOperation(state);
+          return Object.freeze(resumed);
+        }
+        if (state.operation.state === 'finished') {
+          authenticateFinishedCi(state);
+          const recorder = createDurableRecorder(state.operation.receipt_store);
+          require('./dispatch-boundary.cjs').createDispatchBoundary({ recorder, originalCiOperation: preparedCiOperations.get(repairPrepared) })
+            .reconcileOriginal(state.operation.dispatch_id, { ticket: scope.ticket });
+          return Object.freeze(state.operation.result);
+        }
+      }
+      let repairCompleted = request.role === 'ci-fix'
+        ? originalCiOperations.get(preparedCiOperations.get(repairPrepared)).operation.completed : null;
       let fileInput;
       if (['arch-review', 'integrator'].includes(request.role)
           && runtimeHost.recorder.getVerifiedRecord(request.dispatch_id)?.receipt.runtime_evidence?.completed_source) {
@@ -3435,6 +4928,13 @@ function createCodexDeliveryHost(options = {}) {
               const boundContext = { ...launchContext, onCompleted(completed) {
                 if (repairCompleted) fail('REPAIR_COMPLETION_INVALID', 'repair completed more than once');
                 repairCompleted = completed;
+                if (request.role === 'ci-fix') {
+                  const state = originalCiOperations.get(preparedCiOperations.get(repairPrepared));
+                  state.operation.completed = completed;
+                  state.operation.native_custody = repairNativeCustody.get(repairPrepared);
+                  try { state.operation.output = scopedTreeOf(repairPrepared, options); }
+                  finally { writeCiOperation(state); }
+                }
               } };
               if (boundContext.prompt !== repairPrepared.prompt || typeof selection.agent_file_content !== 'string')
                 fail('REPAIR_SUBJECT_CHANGED', 'static fixer launch changed its canonical host prompt or instructions');
@@ -3467,11 +4967,12 @@ function createCodexDeliveryHost(options = {}) {
         }
       }
       const dispatchAgent = (dispatchId, taskContext) => {
-        if (completedSourceReference || (repairPrepared && request.signals.signatureState !== 'first')) {
-          const selection = repairPrepared
+        if (completedSourceReference || request.role === 'ci-fix' || (repairPrepared && request.signals.signatureState !== 'first')) {
+          const originalCi = request.role === 'ci-fix' ? originalCiOperations.get(preparedCiOperations.get(repairPrepared)).operation : null;
+          const selection = originalCi?.resolution || (repairPrepared && request.signals.signatureState !== 'first'
             ? resolvePreparedRepair(repairPrepared, dispatchId, options, runtimeHost.capabilities)
             : require('./codex-agent.cjs').selectAgent(request.role, { cwd: scope.worktree, flags: new Map(),
-              signals: request.signals, dispatch_id: dispatchId, capabilities: runtimeHost.capabilities, agentDir, agentManifest, env });
+              signals: request.signals, dispatch_id: dispatchId, capabilities: runtimeHost.capabilities, agentDir, agentManifest, env }));
           if (completedSourceReference && runtimeHost.recorder.getReservation(dispatchId)?.recorded) {
             if (typeof runtimeHost.recoverCompletedSourceRecording !== 'function')
               fail('REVIEW_SOURCE_INVALID', 'original recorded source recovery is unavailable');
@@ -3491,6 +4992,21 @@ function createCodexDeliveryHost(options = {}) {
           }
           const adapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({ agentsDir: agentDir, agentManifest,
             capabilities: runtimeHost.capabilities, host: reviewHost });
+          if (request.role === 'ci-fix') {
+            const handle = preparedCiOperations.get(repairPrepared), state = originalCiOperations.get(handle);
+            const previous = repairPredecessors.get(repairPrepared).selected;
+            const recorder = previous?.recorder || runtimeHost.recorder;
+            const boundary = require('./dispatch-boundary.cjs').createDispatchBoundary({ adapters: { codex: adapter },
+              recorder, originalCiOperation: handle });
+            if (state.operation.state !== 'prepared') {
+              if (!state.operation.completed) fail('CI_ORIGINAL_UNKNOWN', 'started original lacks authentic completion; no relaunch');
+              if (canonical(scopedTreeOf(repairPrepared, options)) !== canonical(state.operation.output))
+                fail('CI_ORIGINAL_INVALID', 'original completed native output changed before recording recovery');
+              return boundary.reconcileOriginal(dispatchId, taskContext).record;
+            }
+            return boundary.dispatch({ runtime: 'codex', role: 'ci-fix', signals: request.signals, dispatch_id: dispatchId,
+              ...(previous ? { previous_dispatch_id: previous.attempt.dispatch_id } : {}) }, taskContext);
+          }
           return require('./dispatch-boundary.cjs').createDispatchBoundary({ adapters: { codex: adapter },
             recorder: repairPrepared ? repairPredecessors.get(repairPrepared).selected.recorder : runtimeHost.recorder, recoverReserved: !!completedSourceReference }).dispatch({ runtime: 'codex', role: request.role,
               signals: request.signals, dispatch_id: dispatchId, model: selection.model, effort: selection.effort,
@@ -3609,9 +5125,15 @@ function createCodexDeliveryHost(options = {}) {
       if (completedSourceReference) runtimeHost.completeCompletedSourceDelivery(completedSourceReference);
       if (repairPrepared) {
         const repairRecorder = request.signals.signatureState === 'first' ? runtimeHost.recorder : repairPredecessors.get(repairPrepared).selected.recorder;
+        if (request.role === 'ci-fix') {
+          const handle = preparedCiOperations.get(repairPrepared), state = originalCiOperations.get(handle);
+          require('./dispatch-boundary.cjs').createDispatchBoundary({ recorder: repairRecorder, originalCiOperation: handle })
+            .reconcileOriginal(result.dispatch_id, context);
+          state.operation.state = 'acknowledged'; writeCiOperation(state);
+        }
         recheckRepair(repairPrepared, options);
         const output = repairCompletion(repairCompleted, result, repairPrepared, repairRecorder);
-        const sealInput = { role: 'review-fix', runtime: 'codex', ticket: scope.ticket, pr: repairPrepared.repair.pr,
+        const sealInput = { role: repairPrepared.expectedRole, runtime: 'codex', ticket: scope.ticket, pr: repairPrepared.repair.pr,
           worktreePath: scope.worktree, base: repairPrepared.baseRef, branch: repairPrepared.commit.expectedBranch,
           planPath: repairPrepared.plan.path, boundaryStore: repairRecorder.storeDir,
           dispatch_id: result.receipt.dispatch_id, result: output };
@@ -3622,15 +5144,26 @@ function createCodexDeliveryHost(options = {}) {
         if (delta.length && output.status !== 'fixed') fail('REPAIR_COMPLETION_INVALID', 'only fixed repairs may change source');
         recheckRepair(repairPrepared, options);
         retainRepairAttempt(repairPrepared, sealed, output, repairRecorder, result.receipt.dispatch_id);
-        const signed = delta.length ? finalizedArtifact(result, repairPrepared, { ...options, scope, recorder: repairRecorder }) : result;
+        const signed = delta.length ? finalizedArtifact(result, repairPrepared,
+          { ...options, scope, recorder: repairRecorder, ciRepairSeal: sealed, ciRepairResult: output }, renewVerificationOwner) : result;
         if (signed.status === 'verification_failed') return signed;
+        if (request.role === 'ci-fix' && delta.length) {
+          const state = originalCiOperations.get(preparedCiOperations.get(repairPrepared));
+          state.operation.signed_result = { ...signed, repair: sealed, repair_result: output }; writeCiOperation(state);
+        }
         const actionSubject = delta.length ? publishSignedRepair(repairPrepared, signed, options) : repairPrepared;
         const actions = applyRepairActions(actionSubject, output, options, result.receipt.dispatch_id);
-        return Object.freeze({ ...signed, repair: sealed, repair_result: output, actions,
+        const completedRepair = Object.freeze({ ...signed, repair: sealed, repair_result: output, actions,
           ...(delta.length ? { publication: { status: 'confirmed', transition: actionSubject.repair.signed_transition } } : {}) });
+        if (request.role === 'ci-fix') {
+          const state = originalCiOperations.get(preparedCiOperations.get(repairPrepared));
+          state.operation.state = 'finished'; state.operation.result = completedRepair; writeCiOperation(state);
+        }
+        return completedRepair;
       }
       if (!committing) return result;
-      let artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
+      let artifact = finalizedArtifact(result, prepared,
+        { ...options, scope, recorder: runtimeHost.recorder }, renewVerificationOwner);
       if (retryableVerificationFailure(artifact)) {
         const failure = verificationFailureContext(artifact);
         if (scheduleVerificationRetry(options.controller, scope.run_id, failure)) {
@@ -3649,7 +5182,8 @@ function createCodexDeliveryHost(options = {}) {
           if (prepared.verificationAssignment) retryContext.verification_assignment = prepared.verificationAssignment;
           result = await dispatchAgent(newDispatchId(), retryContext);
           options.controller?.assertOwner(scope.run_id);
-          artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
+          artifact = finalizedArtifact(result, prepared,
+            { ...options, scope, recorder: runtimeHost.recorder }, renewVerificationOwner);
         }
       }
       return artifact;
@@ -3686,7 +5220,7 @@ function readRequestFile(file) {
   }
   const { scope, graph_dir: graphDir, ...rawLaunch } = request;
   const launch = requestValue(rawLaunch);
-  if (graphDir !== undefined && (!['arch-review', 'code-review', 'review-fix'].includes(launch.role)
+  if (graphDir !== undefined && (!['arch-review', 'code-review', 'ci-fix', 'review-fix'].includes(launch.role)
       || typeof graphDir !== 'string' || !path.isAbsolute(graphDir)))
     fail('INVALID_INPUT', 'graph_dir requires an absolute architecture graph selector');
   return { scope, launch, ...(graphDir ? { graphDir } : {}) };
@@ -3740,18 +5274,20 @@ function parsePreflightArguments(argv) {
 function hostProbe(options) {
   if (!options.probe && options.host) return undefined;
   return () => (typeof options.probe === 'function' ? options.probe() : options.probe || probeCodexRuntime({
-    executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile }));
+    executable: options.executable, capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile,
+    env: options.env }));
 }
 
 function runHostPreflight(options, scope, { report = false, ...extra } = {}) {
   const result = preflight({ host: 'codex-delivery-host.cjs', runtime: 'codex', scriptDir: __dirname,
-    worktree: scope.worktree, env: options.env || process.env, ...extra });
+    worktree: scope.worktree, env: options.env || process.env, launchOptions: report ? undefined : options, ...extra });
   const stderr = options.preflightStderr || process.stderr;
   if (report) {
     const code = emitPreflight(result, { stdout: options.preflightStdout || process.stdout, stderr });
     return { result, code };
   }
   if (result.ok) {
+    handoffLaunchPreparation(result, options);
     if (result.warnings.length) {
       stderr.write(result.warnings.map((warning) =>
         `preflight: warning[${stripControl(warning.code)}] ${stripControl(warning.detail)}\n`).join(''));
@@ -3796,7 +5332,7 @@ async function runResumeCli(argv, stdout, options) {
   let result;
   try {
     const host = createFinalizationRecoveryHost({
-      controller, graphDir: options.graphDir, storageRoot: options.storageRoot,
+      controller, writerSession: options.writerSession, graphDir: options.graphDir, storageRoot: options.storageRoot,
       recoveryGraphSnapshot: parsed.recoveryGraphSnapshot,
       finalizeCommit: options.finalizeCommit, verification: options.verification,
       verificationAllowList: options.verificationAllowList,
@@ -3850,6 +5386,7 @@ function finishDeliveryRun(controller, runId, failure) {
 
 async function runCli(argv = process.argv.slice(2), stdout = process.stdout, options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
+  options = { ...options };
   if (Array.isArray(argv) && argv[0] === '--resume-finalization') return runResumeCli(argv, stdout, options);
   if (Array.isArray(argv) && argv[0] === '--resume-repair-actions') {
     const parsed = parseRepairActionResumeArguments(argv);
@@ -3901,9 +5438,24 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     graphDir: inflightGraphDir(options, scope.worktree),
     ...stateInputs() });
   if (checkOnly || gate.code !== 0) return gate.result;
-  const archDispatchId = parsed.launch.role === 'arch-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
+  if (parsed.launch.role === 'code-review' && !options.codeReviewContext) {
+    const accepted = recoverCodexCodeReview(scope, parsed.launch, options);
+    if (accepted) { stdout.write(JSON.stringify(accepted) + '\n'); return accepted; }
+  }
+  if (parsed.launch.role === 'arch-review' && !options.archReviewContext && options.dispatchId) {
+    const original = archReviewContext.restoreAdmittedArchitecture(options.dispatchId, scope);
+    if (original) options = handoffLaunchPreparation(options, { ...options, archReviewContext: original });
+  }
+  if (options.archReviewContext && (!archReviewContext.isPreparedContext(options.archReviewContext)
+      || options.archReviewContext.prepared.ticket !== scope.ticket
+      || options.archReviewContext.prepared.phaseNumber !== scope.phase
+      || options.archReviewContext.prepared.canonical.worktree !== scope.worktree))
+    fail('INVALID_INPUT', 'restored architecture preparation differs from the original scope');
+  const archDispatchId = parsed.launch.role === 'arch-review'
+    ? (options.archReviewContext ? archReviewContext.preparedArchitectureDispatch(options.archReviewContext) : null)
+      || parsed.launch.dispatch_id || newDispatchId() : null;
   const preparedArchReview = parsed.launch.role === 'arch-review'
-    ? archReviewContext.prepare(scope, parsed.launch, {
+    ? options.archReviewContext || archReviewContext.prepareSemanticArchitecture(scope, parsed.launch, {
       graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
       execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
       refreshGit: options.refreshGit,
@@ -3911,8 +5463,8 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     }) : null;
   const codeDispatchId = parsed.launch.role === 'code-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
   const preparedCodeReview = parsed.launch.role === 'code-review'
-    ? codeReviewContext.prepare(scope, parsed.launch, {
-      graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
+    ? codeReviewContext.prepareSemantic(scope, parsed.launch, {
+      defaultBranch: options.defaultBranch, graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
       execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
       refreshGit: options.refreshGit,
       inflightDispatchId: codeDispatchId, storageRoot: storageDirectory(options, scope),
@@ -3921,12 +5473,46 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   const request = preparedReview ? { ...preparedReview.launch, signals: { ...preparedReview.launch.signals },
     context: { ...preparedReview.launch.context }, dispatch_id: archDispatchId || codeDispatchId } : parsed.launch;
   request.dispatch_id = request.dispatch_id || newDispatchId();
-  const preparedRepair = request.role === 'review-fix' ? prepareRepair(options, scope, request.context) : null;
+  const preparedRepair = request.role === 'ci-fix' ? prepareCiRepair(options, scope, request.context)
+    : request.role === 'review-fix' ? prepareRepair(options, scope, request.context) : null;
+  if (request.role === 'ci-fix') request.dispatch_id = originalCiOperations.get(preparedCiOperations.get(preparedRepair)).operation.dispatch_id;
+  if (request.role === 'ci-fix') {
+    const state = originalCiOperations.get(preparedCiOperations.get(preparedRepair));
+    if (state.operation.state === 'finished') {
+      authenticateFinishedCi(state);
+      stdout.write(JSON.stringify(state.operation.result) + '\n');
+      return state.operation.result;
+    }
+    if (state.operation.candidate_result) {
+      const candidateId = state.operation.candidate_result.candidate_id;
+      const candidate = readSealed(candidateFile(preparedRepair.stateRoot, candidateId), preparedRepair.key);
+      if (!candidate || candidate.dispatch_id !== state.operation.dispatch_id || candidate.expected_role !== 'ci-fix')
+        fail('CI_ORIGINAL_INVALID', 'CLI recovery requires its original admitted CI candidate');
+      const original = authenticatedReceipt(createDurableRecorder(state.operation.receipt_store), candidate.dispatch_id, 'ci-fix');
+      const policyVersion = candidatePolicy(candidate, original);
+      const recoveryScope = { ...scope, run_id: 'ci-candidate-recovery-' + crypto.randomUUID() };
+      const controller = createRunController({ storeDir: path.join(storageDirectory(options, scope), 'runs') });
+      controller.begin(createRunScope({ ...recoveryScope, repository: { repository_id: preparedRepair.repository, worktree: scope.worktree }, owner_id: controller.owner_id,
+        dispatch: { dispatch_id: 'recovery-' + candidateId.slice(0, 32), role: 'ci-fix', model: candidate.model,
+          effort: candidate.effort, policy_version: policyVersion, policy_hash: candidate.policy_hash } }));
+      try {
+        await resumeFinalization({ ...options, controller }, candidateId, recoveryScope);
+        state.operation = readSealed(state.file, preparedRepair.key);
+        authenticateFinishedCi(state);
+        controller.complete(recoveryScope.run_id, { reason: 'recovered original CI candidate ' + candidateId });
+        stdout.write(JSON.stringify(state.operation.result) + '\n');
+        return state.operation.result;
+      } catch (error) {
+        try { controller.fail(recoveryScope.run_id, { reason: historyReason(error.message) }); } catch {}
+        throw error;
+      }
+    }
+  }
   const fileInputContext = preparedReview ? null : prepareIntegratorInput(scope, request, { ...options, automaticReader: !options.readerCapacity });
-  const archReviewSignals = preparedArchReview ? admitArchitectureInput(preparedArchReview, request, { ...options, automaticReader: !options.readerCapacity },
+  const archReviewSignals = preparedArchReview && !archReviewContext.isSemanticArchitecture(preparedArchReview) ? admitArchitectureInput(preparedArchReview, request, { ...options, automaticReader: !options.readerCapacity },
     options.host?.capabilities || options.capabilities || {}) : null;
   if (archReviewSignals) request.signals = archReviewSignals;
-  const codeReviewSignals = preparedCodeReview ? admitCodeReviewInput(preparedCodeReview, options,
+  const codeReviewSignals = preparedCodeReview && !codeReviewContext.isSemanticContext(preparedCodeReview) ? admitCodeReviewInput(preparedCodeReview, options,
     options.host?.capabilities || options.capabilities || {}) : null;
   if (codeReviewSignals) request.signals = codeReviewSignals;
 
@@ -3934,10 +5520,11 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
   }
   const dispatchId = archDispatchId || codeDispatchId || request.dispatch_id || newDispatchId();
-  const resolution = preparedRepair && preparedRepair.repair.signature_state !== 'first'
+  const resolution = (request.role === 'ci-fix' && originalCiOperations.get(preparedCiOperations.get(preparedRepair)).operation.resolution)
+    || (preparedRepair && preparedRepair.repair.signature_state !== 'first'
     ? resolvePreparedRepair(preparedRepair, dispatchId, options, options.host?.capabilities || options.capabilities || {})
     : policy.resolveDispatch({ runtime: 'codex', role: request.role,
-      signals: preparedRepair ? preparedRepairSignals(preparedRepair) : request.signals, dispatch_id: dispatchId });
+      signals: preparedRepair ? preparedRepairSignals(preparedRepair) : request.signals, dispatch_id: dispatchId }));
   let writerLease;
   let writerHandle;
   let writerSession;
@@ -4002,7 +5589,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       if (preparedArchReview) archReviewContext.admitBookkeeping(preparedArchReview);
       if (preparedCodeReview) codeReviewContext.admitBookkeeping(preparedCodeReview);
     }
-    const host = createCodexDeliveryHost({
+    const host = createCodexDeliveryHost(handoffLaunchPreparation(options, {
       scope,
       controller,
       capabilities: options.capabilities,
@@ -4019,6 +5606,8 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       agentDir: options.agentDir,
       agentManifest: options.agentManifest,
       graphDir: options.graphDir,
+      refreshGit: options.refreshGit,
+      defaultBranch: options.defaultBranch,
       storageRoot: options.storageRoot,
       finalizeCommit: options.finalizeCommit,
       verification: options.verification,
@@ -4031,7 +5620,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       archReviewContext: preparedArchReview, archReviewSignals, fileInputContext,
       codeReviewContext: preparedCodeReview, codeReviewSignals,
       repairContext: preparedRepair, getPullRequest: options.getPullRequest, execFileSync: options.execFileSync,
-    });
+    }));
     result = await host.run({ ...request, dispatch_id: dispatchId });
     clearInterval(heartbeat);
     if (result.status === 'blocked') {
@@ -4085,6 +5674,9 @@ module.exports = Object.freeze({
   MAX_ARGS_BYTES,
   requestValue,
   prepareRepair,
+  prepareCiRepair,
+  generatedBaseMergeAuthority,
+  validateOriginalCiOperation,
   shareRepairTransitions,
   repairCoverageTransition,
   recheckHistoricalRepair,
@@ -4092,6 +5684,7 @@ module.exports = Object.freeze({
   recheckRepair,
   prepareIntegratorInput,
   prepareIntegrationLineage,
+  runSemanticReview,
   recheckIntegrationReview,
   validateIntegrationCoverage,
   finishIntegrationReview,

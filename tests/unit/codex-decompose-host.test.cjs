@@ -945,7 +945,6 @@ test(`detached ${includeDispatchId ? 'explicit' : 'omitted'} dispatch ID reaches
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
       testStateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
-      leaseTtlMs: 1000,
       probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
       spawn,
     });

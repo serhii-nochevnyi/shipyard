@@ -62,39 +62,33 @@ function realStateSyncFixture() {
   fs.writeFileSync(modeFile, 'pending');
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  const pendingPr = {
-    number: 101, state: 'OPEN', isDraft: false, headRefName: 'ticket/T-33-01',
-    headRefOid: 'head-a', baseRefName: 'epic/33', baseRefOid: 'b'.repeat(40), mergedAt: null,
-    createdAt: '2026-09-16T00:00:00Z', url: 'https://example.test/pr/101', title: 'T-33-01',
-    reviewDecision: 'APPROVED', body: '', mergeStateStatus: 'CLEAN',
-  };
-  const greenPr = { ...pendingPr, headRefOid: 'head-b' };
-  const reviewPr = { ...pendingPr, reviewDecision: 'CHANGES_REQUESTED' };
-  fs.writeFileSync(path.join(bin, 'gh'),
-    '#!/bin/sh\n' +
-    `mode=$(cat ${JSON.stringify(modeFile)})\n` +
-    'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then\n' +
-    `  if [ "$mode" = "pending" ]; then cat <<'JSON'\n${JSON.stringify([pendingPr])}\nJSON\n` +
-    `  elif [ "$mode" = "review" ]; then cat <<'JSON'\n${JSON.stringify([reviewPr])}\nJSON\n` +
-    `  else cat <<'JSON'\n${JSON.stringify([greenPr])}\nJSON\n` +
-    '  fi\n' +
-    '  exit 0\n' +
-    'fi\n' +
-    'if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then\n' +
-    `  if [ "$mode" != "green" ]; then cat <<'JSON'\n${JSON.stringify([{ name: 'build', state: 'IN_PROGRESS', bucket: 'pending' }])}\nJSON\n    exit 8\n` +
-    `  else cat <<'JSON'\n${JSON.stringify([{ name: 'build', state: 'SUCCESS', bucket: 'pass' }])}\nJSON\n    exit 0\n` +
-    '  fi\n' +
-    'fi\n' +
-    'if [ "$1" = "api" ]; then\n' +
-    '  case "$2" in\n' +
-    '    */branches) printf "main\\nepic/33\\nticket/T-33-01\\n" ;;\n' +
-    '    */compare/*) printf "0\\n" ;;\n' +
-    '    *) printf "main\\n" ;;\n' +
-    '  esac\n' +
-    '  exit 0\n' +
-    'fi\n' +
-    'echo "unhandled gh fixture: $*" >&2\n' +
-    'exit 1\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env node
+const fs = require('fs');
+const mode = fs.readFileSync(${JSON.stringify(modeFile)}, 'utf8');
+const a = process.argv.slice(2);
+const head = (mode === 'green' ? 'b' : 'a').repeat(40);
+const emit = value => process.stdout.write(JSON.stringify(value));
+const pr = {
+  number: 101, state: 'OPEN', isDraft: false, headRefName: 'ticket/T-33-01',
+  headRefOid: head, baseRefName: 'epic/33', baseRefOid: 'c'.repeat(40), mergedAt: null,
+  createdAt: '2026-09-16T00:00:00Z', url: 'https://example.test/pr/101', title: 'T-33-01',
+  reviewDecision: mode === 'review' ? 'CHANGES_REQUESTED' : 'APPROVED', body: '', mergeStateStatus: 'CLEAN',
+};
+if (a[0] === 'repo') emit({ owner: { login: 'acme' }, name: 'widgets' });
+else if (a[0] === 'pr' && a[1] === 'list') emit([pr]);
+else if (a[0] === 'pr' && a[1] === 'checks') emit([{ name: 'build', state: mode === 'green' ? 'SUCCESS' : 'IN_PROGRESS', bucket: mode === 'green' ? 'pass' : 'pending' }]);
+else if (a[0] === 'api') {
+  const endpoint = a[1];
+  if (endpoint.endsWith('/branches')) process.stdout.write('main\\nepic/33\\nticket/T-33-01\\n');
+  else if (endpoint.includes('/compare/')) process.stdout.write('0');
+  else if (endpoint.includes('/check-runs?')) emit([{ total_count: 1, check_runs: [{ id: 1, name: 'build', head_sha: head,
+    status: mode === 'green' ? 'completed' : 'in_progress', conclusion: mode === 'green' ? 'success' : null }] }]);
+  else if (endpoint.includes('/status?')) emit([{ sha: head, total_count: 0, statuses: [] }]);
+  else if (endpoint.endsWith('/pulls/101')) emit({ number: 101, state: 'open', head: { sha: head }, base: { repo: { full_name: 'acme/widgets' } } });
+  else if (endpoint.endsWith('/reviews')) emit([]);
+  else process.stdout.write('main');
+} else process.exit(1);
+`, { mode: 0o755 });
   return { root, graphDir, modeFile, bin };
 }
 
@@ -572,15 +566,15 @@ test('the real waiter refreshes the bound publisher before comparing live CI and
     ticket: 'T-33-01',
     repository: null,
     pr: 101,
-    head: 'head-a',
+    head: 'a'.repeat(40),
   };
   assert.equal(runStateSync(fixture).status, 0, 'the publisher establishes the initial bound snapshot');
   const baseline = waitEvents.observe({
     ...ctx,
     observation: {
-      checks: [{ name: 'build', state: 'IN_PROGRESS', bucket: 'pending' }],
+      checks: waitEvents.readPublished({ graphDir: fixture.graphDir }).ci_observations['T-33-01'].rows,
       review_decision: 'APPROVED',
-      head: 'head-a',
+      head: 'a'.repeat(40),
     },
   }, { now: Date.now() });
   assert.equal(baseline.action, null, 'the seeded live facts establish only a baseline');
@@ -603,15 +597,15 @@ test('the real waiter wakes on a review transition while CI remains pending', ()
     ticket: 'T-33-01',
     repository: null,
     pr: 101,
-    head: 'head-a',
+    head: 'a'.repeat(40),
   };
   assert.equal(runStateSync(fixture).status, 0, 'the publisher establishes the pending baseline');
   const baseline = waitEvents.observe({
     ...ctx,
     observation: {
-      checks: [{ name: 'build', state: 'IN_PROGRESS', bucket: 'pending' }],
+      checks: waitEvents.readPublished({ graphDir: fixture.graphDir }).ci_observations['T-33-01'].rows,
       review_decision: 'APPROVED',
-      head: 'head-a',
+      head: 'a'.repeat(40),
     },
   }, { now: Date.now() });
   assert.equal(baseline.action, null, 'the pending review facts establish only a baseline');
@@ -693,6 +687,21 @@ test('newer published metadata refuses work even when its nested binding looks v
   assert.equal(result.action, null);
   assert.equal(fs.existsSync(path.join(graphDir, 'wait-events.json')), false,
     'refusal does not create an event store');
+});
+
+test('named row identity includes state, bucket, workflow, start and run evidence', () => {
+  const waitEvents = loadWaitEvents();
+  const base = { name: 'build', state: 'QUEUED', bucket: 'pending',
+    workflow: 'CI', startedAt: '2026-10-01T00:00:00Z', run_id: '123', run_attempt: 1,
+    link: 'https://github.com/acme/widgets/actions/runs/123/job/1' };
+  for (const patch of [{ state: 'IN_PROGRESS' }, { bucket: 'future' }, { workflow: 'release' },
+    { startedAt: '2026-10-02T00:00:00Z' }, { run_id: '456' }, { run_attempt: 2 }]) {
+    const graphDir = graph();
+    const ctx = context(graphDir);
+    waitEvents.observe({ ...ctx, observation: { checks: [base] } });
+    const changed = waitEvents.observe({ ...ctx, observation: { checks: [{ ...base, ...patch }] } });
+    assert.equal(changed.changed, true, JSON.stringify(patch));
+  }
 });
 
 done();

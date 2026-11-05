@@ -133,11 +133,12 @@ function keyDigest(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
-function readJsonFile(file) {
+function readJsonFile(file, malformedIsMissing = false) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
     if (error && error.code === 'ENOENT') return null;
+    if (malformedIsMissing && error instanceof SyntaxError) return null;
     refuse('RECORD_FAILED', `durable dispatch store could not be read: ${error.message}`, { file });
   }
 }
@@ -198,6 +199,7 @@ function atomicReplaceJson(file, value) {
     fs.writeFileSync(fd, JSON.stringify(value) + '\n', 'utf8');
     fs.fsyncSync(fd);
     fs.closeSync(fd);
+    fd = undefined;
     fs.renameSync(temp, file);
     fsyncDirectory(path.dirname(file));
   } finally {
@@ -254,8 +256,8 @@ function durablePayload(raw, key) {
   return crypto.timingSafeEqual(expectedBytes, actualBytes) ? raw.payload : null;
 }
 
-function readDurableFile(file, key) {
-  const raw = readJsonFile(file);
+function readDurableFile(file, key, malformedIsMissing = false) {
+  const raw = readJsonFile(file, malformedIsMissing);
   if (!raw) return null;
   if (isObject(raw) && raw.format === DURABLE_ENVELOPE_FORMAT) {
     const payload = durablePayload(raw, key);
@@ -618,6 +620,15 @@ function createDurableRecorder(storeDir) {
     if (!validRepairCommit(commit, predecessorDispatchId)) {
       throw boundaryError('RECORD_FAILED', 'durable repair commit is malformed', { dispatch_id: predecessorDispatchId });
     }
+    if (commit.original_kind === 'ci-fix') return commit;
+    const ciReceipt = commit.record_input.receipt?.role === 'ci-fix';
+    const reservation = readDurableFile(reservationFile(commit.successor_dispatch_id), authorityKey, ciReceipt);
+    const genericReservation = reservation?.legacy && reservation.payload.dispatch_id === commit.successor_dispatch_id
+      && typeof reservation.payload.reserved_at === 'string'
+      && Number.isFinite(Date.parse(reservation.payload.reserved_at || ''))
+      && Object.keys(reservation.payload).every(key => ['dispatch_id', 'reserved_at'].includes(key));
+    if ((reservation?.authenticated && reservation.payload.original_kind === 'ci-fix')
+        || (ciReceipt && !genericReservation)) return commit;
     const successorRecord = recordFile(commit.successor_dispatch_id);
     const existingStored = readStored(successorRecord);
     const existing = existingStored && existingStored.payload;
@@ -653,6 +664,7 @@ function createDurableRecorder(storeDir) {
       atomicReplaceJson(successorRecord, durableRecord);
     }
     const receipt = commit.record_input.receipt;
+
     if (isObject(receipt) && typeof receipt.runtime === 'string' && typeof receipt.role === 'string') {
       atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
     }
@@ -676,7 +688,157 @@ function createDurableRecorder(storeDir) {
         throw boundaryError('RECORD_FAILED', `durable dispatch reservation failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
-    record(recordInput, authority, claimAuthority) {
+    markOriginalStarted(dispatchId, authority, ciHandle, facts) {
+      if (authority !== RECORDER_AUTHORITY) return { started: false };
+      return withReceiptMutationLock(() => {
+        const stored = readStored(reservationFile(dispatchId));
+        if (!stored?.payload || stored.payload.dispatch_id !== dispatchId) return { started: false };
+        if (stored.payload.original_stage) return { started: false };
+        const latest = ciHandle ? readStored(latestFile('codex', 'ci-fix')) : null;
+        if (ciHandle && latest && !latest.authenticated) return { started: false };
+        const previous = latest?.payload.dispatch_id || null;
+        if (ciHandle && facts.resolution.prior_applied && previous !== facts.resolution.prior_applied.dispatch_id)
+          return { started: false };
+        if (ciHandle) require('./codex-delivery-host.cjs').validateOriginalCiOperation(ciHandle, 'start', facts);
+        atomicReplaceJson(reservationFile(dispatchId), seal({ ...stored.payload, original_stage: 'started',
+          ...(ciHandle ? { original_kind: 'ci-fix', original_subject: facts, original_previous_dispatch_id: previous } : {}) }));
+        return { started: true };
+      });
+    },
+    retainOriginalCompletion(recordInput, authority, claimAuthority, ciHandle) {
+      if (authority !== RECORDER_AUTHORITY) return { retained: false };
+      return withReceiptMutationLock(() => {
+        const dispatchId = recordInput.dispatch_id;
+        const stored = readStored(reservationFile(dispatchId));
+        if (!stored?.authenticated || stored.payload.dispatch_id !== dispatchId
+            || !['started', 'native-completed'].includes(stored.payload.original_stage)
+            || (recordInput.predecessor_dispatch_id !== undefined && !ciHandle)) return { retained: false };
+        if (ciHandle) {
+          if (stored.payload.original_kind !== 'ci-fix') return { retained: false };
+          require('./codex-delivery-host.cjs').validateOriginalCiOperation(ciHandle, 'complete',
+            { ...recordInput, store: root, record: recordInput });
+          const prior = recordInput.predecessor_dispatch_id;
+          if (prior !== undefined) {
+            const owner = acquireClaimLock(prior, 'commit');
+            if (!owner) return { retained: false };
+            try {
+              const claim = readJsonFile(claimFile(prior));
+              if (!sameClaimFence(claim, claimAuthority) || claimIsStale(claim)) return { retained: false };
+              const marker = { original_kind: 'ci-fix', predecessor_dispatch_id: prior, successor_dispatch_id: dispatchId,
+                consumer_id: dispatchId, claim_generation: claim.generation, claim_token: claim.claim_token, record_input: recordInput };
+              if (!atomicCreateJson(repairCommitFile(prior), seal(marker))
+                  && !sameRecord(readAuthenticated(repairCommitFile(prior)), marker)) return { retained: false };
+            } finally { releaseClaimLock(prior, owner); }
+          }
+        }
+        if (stored.payload.original_record && !sameRecord(stored.payload.original_record, recordInput))
+          return { retained: false };
+        atomicReplaceJson(reservationFile(dispatchId), seal({ ...stored.payload,
+          original_stage: 'native-completed', original_record: recordInput }));
+        return { retained: true };
+      });
+    },
+    getOriginalDispatch(dispatchId) {
+      const stored = readStored(reservationFile(dispatchId));
+      if (!stored?.payload || stored.payload.dispatch_id !== dispatchId)
+        return Object.freeze({ state: 'missing', reason: 'ORIGINAL_RESERVATION_MISSING' });
+      if (stored.authenticated && stored.payload.original_kind === 'ci-fix') {
+        const record = stored.payload.original_record;
+        const prior = stored.payload.original_subject?.resolution?.prior_applied?.dispatch_id;
+        const marker = prior ? readAuthenticated(repairCommitFile(prior)) : null;
+        const original = record || (marker?.successor_dispatch_id === dispatchId ? marker.record_input : null);
+        if (original) return deepFreeze(snapshot({ state: 'native-completed', reason: 'ORIGINAL_NATIVE_COMPLETED', record: original }));
+      }
+      const record = readAuthenticated(recordFile(dispatchId));
+      if (record?.trace?.some(item => item.stage === 'receipt' && item.status === 'passed'))
+        return deepFreeze(snapshot({ state: 'recorded', reason: 'ORIGINAL_RECORDED', record }));
+      if (stored.authenticated && stored.payload.original_stage === 'native-completed'
+          && stored.payload.original_record?.dispatch_id === dispatchId)
+        return deepFreeze(snapshot({ state: 'native-completed', reason: 'ORIGINAL_NATIVE_COMPLETED',
+          record: stored.payload.original_record }));
+      return Object.freeze({ state: stored.authenticated && stored.payload.original_stage === 'started'
+        ? 'started' : 'reserved', reason: 'ORIGINAL_OUTCOME_UNKNOWN' });
+    },
+    recoverOriginalCi(dispatchId, authority, ciHandle, restoredRecord) {
+      if (authority !== RECORDER_AUTHORITY) return { recovered: false };
+      return withReceiptMutationLock(() => {
+        const reservation = readAuthenticated(reservationFile(dispatchId));
+        if (reservation?.original_kind !== 'ci-fix') return { recovered: false };
+        const prior = reservation.original_subject?.resolution?.prior_applied?.dispatch_id;
+        let marker = prior ? readAuthenticated(repairCommitFile(prior)) : null;
+        const original = reservation.original_record || (marker?.successor_dispatch_id === dispatchId ? marker.record_input : null) || restoredRecord;
+        if (!original) return { recovered: false };
+        const facts = { ...original, store: root, record: original };
+        require('./codex-delivery-host.cjs').validateOriginalCiOperation(ciHandle, 'recover', facts);
+        if (prior && !marker) {
+          if (fs.existsSync(repairCommitFile(prior))) return { recovered: false };
+          const fence = reservation.original_subject.claim;
+          const claim = readJsonFile(claimFile(prior));
+          if (!sameClaimFence(claim, fence) || claim.consumer_id !== dispatchId) return { recovered: false };
+          marker = { original_kind: 'ci-fix', predecessor_dispatch_id: prior, successor_dispatch_id: dispatchId, consumer_id: dispatchId,
+            claim_generation: fence.generation, claim_token: fence.claim_token, record_input: original };
+        }
+        const finalized = deepFreeze(snapshot({ ...original, trace: [...original.trace,
+          { stage: 'record', status: 'passed' }, { stage: 'receipt', status: 'passed', launch_id: original.receipt.launch_id }] }));
+        if (prior && (!validRepairCommit(marker, prior) || marker.successor_dispatch_id !== dispatchId
+            || marker.consumer_id !== dispatchId
+            || (!sameRecord(marker.record_input, original) && !sameRecord(marker.record_input, finalized))))
+          return { recovered: false };
+        const owner = prior ? acquireClaimLock(prior, 'commit') : null;
+        if (prior && !owner) return { recovered: false };
+        try {
+          if (prior) {
+            const consumed = readStored(consumedFile(prior));
+            const fence = { dispatch_id: prior, consumer_id: dispatchId, generation: marker.claim_generation, claim_token: marker.claim_token };
+            const claim = readJsonFile(claimFile(prior));
+            if (consumed) {
+              if (!consumed.authenticated || consumed.payload.consumer_id !== dispatchId
+                  || consumed.payload.claim_generation !== fence.generation || consumed.payload.claim_token !== fence.claim_token)
+                return { recovered: false };
+            } else if (!sameClaimFence(claim, fence)) return { recovered: false };
+          }
+          const existingStored = readStored(recordFile(dispatchId));
+          if (existingStored && !existingStored.authenticated) return { recovered: false };
+          const existing = existingStored?.payload;
+          const latest = readStored(latestFile('codex', 'ci-fix'));
+          const historyStored = readStored(rollbackHistoryFile(dispatchId));
+          if (historyStored && (!historyStored.authenticated || historyStored.payload.dispatch_id !== dispatchId
+              || historyStored.payload.runtime !== 'codex' || historyStored.payload.role !== 'ci-fix'
+              || historyStored.payload.previous_dispatch_id !== reservation.original_previous_dispatch_id)) return { recovered: false };
+          const history = historyStored?.payload;
+          if (existing && !sameRecord(existing, original) && !sameRecord(existing, finalized)) return { recovered: false };
+          if (latest && (!latest.authenticated || (latest.payload.dispatch_id !== dispatchId
+              && latest.payload.dispatch_id !== (history?.previous_dispatch_id ?? reservation.original_previous_dispatch_id)))) return { recovered: false };
+          if (!history) {
+            if (existing) return { recovered: false };
+            const rollback = { dispatch_id: dispatchId, runtime: 'codex', role: 'ci-fix',
+              previous_dispatch_id: latest?.payload.dispatch_id || null };
+            if (!atomicCreateJson(rollbackHistoryFile(dispatchId), seal(rollback))) return { recovered: false };
+          }
+          require('./codex-delivery-host.cjs').validateOriginalCiOperation(ciHandle, 'pre-record', facts);
+          if (prior && !fs.existsSync(repairCommitFile(prior))) {
+            if (!atomicCreateJson(repairCommitFile(prior), seal(marker))) return { recovered: false };
+          }
+          if (!reservation.original_record) atomicReplaceJson(reservationFile(dispatchId), seal({ ...reservation,
+            original_stage: 'native-completed', original_record: original }));
+          if (!existing) atomicCreateJson(recordFile(dispatchId), seal(original));
+          require('./codex-delivery-host.cjs').validateOriginalCiOperation(ciHandle, 'post-record', facts);
+          if (prior) atomicReplaceJson(repairCommitFile(prior), seal({ ...marker, record_input: finalized }));
+          atomicReplaceJson(recordFile(dispatchId), seal(finalized));
+          atomicReplaceJson(latestFile('codex', 'ci-fix'), seal(finalized));
+          require('./codex-delivery-host.cjs').validateOriginalCiOperation(ciHandle, 'finalize', facts);
+          if (prior) {
+            const consumed = { dispatch_id: prior, consumer_id: dispatchId, claim_generation: marker.claim_generation,
+              claim_token: marker.claim_token, consumed_at: new Date().toISOString() };
+            if (!fs.existsSync(consumedFile(prior))) atomicCreateJson(consumedFile(prior), seal(consumed));
+            removeClaimIfFence(prior, { dispatch_id: prior, consumer_id: dispatchId,
+              generation: marker.claim_generation, claim_token: marker.claim_token });
+          }
+          return { recovered: true, record: finalized };
+        } finally { if (owner) releaseClaimLock(prior, owner); }
+      });
+    },
+    record(recordInput, authority, claimAuthority, originalRecovery = false) {
       if (authority !== RECORDER_AUTHORITY) return { recorded: false };
       const receipt = recordInput && recordInput.receipt;
       const dispatchId = recordInput && recordInput.dispatch_id;
@@ -686,9 +848,18 @@ function createDurableRecorder(storeDir) {
       if (!fs.existsSync(reservationFile(dispatchId))) return { recorded: false };
       const predecessorDispatchId = recordInput.predecessor_dispatch_id;
       const predecessorConsumerId = recordInput.predecessor_consumer_id;
+      const completion = originalRecovery ? readAuthenticated(reservationFile(dispatchId)) : null;
+      const recoveringOriginal = originalRecovery && predecessorDispatchId === undefined
+        && completion?.original_stage === 'native-completed' && sameRecord(completion.original_record, recordInput);
+      if (originalRecovery && !recoveringOriginal) return { recorded: false };
       try {
         return withReceiptMutationLock(() => {
           const priorLatest = readStored(latestFile(receipt.runtime, receipt.role));
+          const originalCi = receipt.runtime === 'codex' && receipt.role === 'ci-fix'
+            ? readAuthenticated(reservationFile(dispatchId)) : null;
+          if (originalCi?.original_kind === 'ci-fix' && priorLatest
+              && (!priorLatest.authenticated || (priorLatest.payload.dispatch_id !== dispatchId
+                && priorLatest.payload.dispatch_id !== originalCi.original_previous_dispatch_id))) return { recorded: false };
           const history = { dispatch_id: dispatchId, runtime: receipt.runtime, role: receipt.role,
             previous_dispatch_id: priorLatest && priorLatest.authenticated ? priorLatest.payload.dispatch_id : null };
           if (!atomicCreateJson(rollbackHistoryFile(dispatchId), seal(history))) {
@@ -700,7 +871,7 @@ function createDurableRecorder(storeDir) {
                 || (existingHistory.previous_dispatch_id !== null
                   && (typeof existingHistory.previous_dispatch_id !== 'string'
                     || existingHistory.previous_dispatch_id === dispatchId))
-                || (!ownsLatest && !sameRecord(existingHistory, history))) return { recorded: false };
+                || (!ownsLatest && !recoveringOriginal && !sameRecord(existingHistory, history))) return { recorded: false };
           }
           if (predecessorDispatchId !== undefined || predecessorConsumerId !== undefined) {
             if (typeof predecessorDispatchId !== 'string' || typeof predecessorConsumerId !== 'string') return { recorded: false };
@@ -710,6 +881,7 @@ function createDurableRecorder(storeDir) {
               const claim = readJsonFile(claimFile(predecessorDispatchId));
               if (!sameClaimFence(claim, claimAuthority) || claimIsStale(claim)) return { recorded: false };
               const repairCommit = {
+                ...(originalCi?.original_kind === 'ci-fix' ? { original_kind: 'ci-fix' } : {}),
                 predecessor_dispatch_id: predecessorDispatchId,
                 successor_dispatch_id: dispatchId,
                 consumer_id: predecessorConsumerId,
@@ -820,7 +992,7 @@ function createDurableRecorder(storeDir) {
     },
     getReservation(dispatchId) {
       if (typeof dispatchId !== 'string' || dispatchId.trim() === '') return null;
-      const stored = readJsonFile(reservationFile(dispatchId));
+      const stored = readStored(reservationFile(dispatchId))?.payload;
       if (!isObject(stored) || stored.dispatch_id !== dispatchId) return null;
       return Object.freeze({
         dispatch_id: dispatchId,
@@ -2390,6 +2562,80 @@ function createDispatchBoundary(options = {}) {
     }));
   }
 
+  function reconcileOriginal(dispatchId, context = {}) {
+    const recorder = options.recorder;
+    if (!DURABLE_RECORDERS.has(recorder)) refuse('RECORD_UNAVAILABLE', 'original recovery requires a durable recorder');
+    const original = recorder.getOriginalDispatch(dispatchId);
+    if (options.originalCiOperation) {
+      let restoredRecord;
+      if (!original.record) {
+        const retained = require('./codex-delivery-host.cjs').validateOriginalCiOperation(options.originalCiOperation, 'recover',
+          { dispatch_id: dispatchId, ticket: ticketFromContext(context), runtime: 'codex', role: 'ci-fix', store: recorder.storeDir });
+        if (!retained.completed || !retained.resolution) refuse('UNVERIFIED_RECEIPT', 'original CI native completion is unavailable');
+        const resolution = retained.resolution, completed = retained.completed;
+        if (retained.predecessor_dispatch_id) {
+          verifyPriorReceipt({ ...resolution, previous_dispatch_id: retained.predecessor_dispatch_id }, recorder, ticketFromContext(context));
+          markBoundaryVerifiedReceipt(resolution.signals.priorApplied);
+        }
+        const adapter = adapterFor(adapters, 'codex');
+        const validated = validateWithAdapter(resolution, adapter);
+        if (canonicalStableStringify(validated) !== canonicalStableStringify(resolution))
+          refuse('UNVERIFIED_RECEIPT', 'original CI generated policy changed');
+        const raw = { receipt_type: 'adr-014.application', runtime: resolution.runtime, role: resolution.role,
+          dispatch_id: dispatchId, launch_id: completed.launch_id,
+          requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+          policy_hash: resolution.policy_hash, backend: resolution.backend, mechanism: resolution.mechanism,
+          applied_model: completed.runtime_evidence.applied_model, applied_effort: completed.runtime_evidence.applied_effort,
+          observed_model: completed.runtime_evidence.observed_model, observed_effort: completed.runtime_evidence.observed_effort,
+          runtime_evidence: completed.runtime_evidence, agent_file: resolution.agent_file,
+          agent_file_digest: retained.native_custody?.agent_file_digest };
+        const observationCapabilities = adapterObservationCapabilities(adapter);
+        const evidence = verifyApplicationReceiptInternal(resolution, raw, { adapter, observationCapabilities, requireComplianceProof: false });
+        const receipt = finalizeApplicationReceipt(resolution, evidence, adapter, observationCapabilities);
+        restoredRecord = { ...resolution, dispatch_id: dispatchId, ticket: ticketFromContext(context), resolution,
+          requested: { model: resolution.requested_model, effort: resolution.requested_effort },
+          applied: { model: receipt.applied_model, effort: receipt.applied_effort },
+          observed: { model: receipt.observed_model, effort: receipt.observed_effort },
+          requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+          applied_model: receipt.applied_model, applied_effort: receipt.applied_effort,
+          observed_model: receipt.observed_model, observed_effort: receipt.observed_effort,
+          launch_id: receipt.launch_id, observation_unavailable: observationCapabilities,
+          application_evidence: withoutBoundaryClaims(evidence), receipt,
+          trace: [{ stage: 'resolve', status: 'passed', policy_version: resolution.policy_version, policy_hash: resolution.policy_hash },
+            { stage: 'validate', status: 'passed' }, { stage: 'launch', status: 'passed', launch_id: receipt.launch_id }],
+          ...(retained.predecessor_dispatch_id ? { predecessor_dispatch_id: retained.predecessor_dispatch_id,
+            predecessor_consumer_id: dispatchId } : {}) };
+      }
+      const outcome = recorder.recoverOriginalCi(dispatchId, RECORDER_AUTHORITY, options.originalCiOperation, restoredRecord);
+      if (!outcome.recovered) refuse('RECORD_FAILED', 'original CI record, index or predecessor could not reconcile');
+      reconcile(dispatchId, context);
+      require('./codex-delivery-host.cjs').validateOriginalCiOperation(options.originalCiOperation, 'ack',
+        { ...outcome.record, store: recorder.storeDir, record: outcome.record });
+      return deepFreeze(snapshot({ state: 'recorded', record: outcome.record }));
+    }
+    if (!['native-completed', 'recorded'].includes(original.state)) return original;
+    const record = original.record;
+    if (record.ticket !== ticketFromContext(context)
+        || (record.subject_kind || 'ticket') !== subjectKindFromContext(context, record.role, record.ticket)
+        || !['integrator', 'arch-review', 'code-review'].includes(record.role)
+        || !dispatchId.startsWith('semantic-') || record.predecessor_dispatch_id !== undefined)
+      refuse('NONCOMPLIANT_RECEIPT', 'original recovery subject or role differs');
+    if (original.state === 'native-completed') {
+      const finalized = deepFreeze(snapshot({ ...record, trace: [...record.trace,
+        { stage: 'record', status: 'passed' },
+        { stage: 'receipt', status: 'passed', launch_id: record.receipt.launch_id }] }));
+      const existing = recorder.getVerifiedRecord(dispatchId);
+      if (existing && canonicalStableStringify(existing) !== canonicalStableStringify(record)
+          && canonicalStableStringify(existing) !== canonicalStableStringify(finalized))
+        refuse('RECORD_FAILED', 'original recovery conflicts with its durable record');
+      if (!existing && !affirmative(recorder.record(record, RECORDER_AUTHORITY, undefined, true), 'recorded'))
+        refuse('RECORD_FAILED', 'original recording was not acknowledged');
+      recorderFinalize(recorder, finalized);
+    }
+    reconcile(dispatchId, context);
+    return recorder.getOriginalDispatch(dispatchId);
+  }
+
   function dispatch(input, context = {}) {
     if (!isObject(input)) refuse('INVALID_INPUT', 'dispatch input must be an object');
     for (const source of [context, context && context.launch_arguments, context && context.selection, context && context.session]) {
@@ -2565,6 +2811,8 @@ function createDispatchBoundary(options = {}) {
         trace: [...stages],
       }));
       const validateBeforeMutation = () => {
+        if (options.originalCiOperation) require('./codex-delivery-host.cjs').validateOriginalCiOperation(
+          options.originalCiOperation, 'pre-record', { ...recordInput, store: record.storeDir, record: recordInput });
         if (validatedResolution.gsd_role === undefined) return null;
         if (typeof context.preRecordValidation !== 'function') {
           refuse('WRITER_FENCED', 'typed judgment dispatch has no host-owned writer validation');
@@ -2576,6 +2824,16 @@ function createDispatchBoundary(options = {}) {
         });
       };
       const finishRecord = () => {
+        if (options.originalCiOperation) {
+          const recovered = record.recoverOriginalCi(validatedResolution.dispatch_id, RECORDER_AUTHORITY, options.originalCiOperation);
+          if (!recovered.recovered) refuse('RECORD_FAILED', 'original CI finalization or consumption was not acknowledged');
+          registerReceipt(applicationReceipt, validatedResolution, record, recovered.record);
+          if (handoffReservation) handoffController.completeLaunch(handoffReservation, { recorded: true, receipt: applicationReceipt });
+          if (priorLease) priorLease.stop();
+          if (capacityHeartbeat) capacityHeartbeat.stop();
+          releaseCapacityBestEffort(capacityLease);
+          return recovered.record;
+        }
         recorderFinalize(record, finalizedRecord);
         consumePriorReceipt(prior, record, claimConsumerId, priorClaim);
         registerReceipt(applicationReceipt, validatedResolution, record, finalizedRecord);
@@ -2587,6 +2845,13 @@ function createDispatchBoundary(options = {}) {
       };
       let finalizedRecord;
       const recordAfterValidation = () => {
+        if (options.originalCiOperation && (!DURABLE_RECORDERS.has(record)
+            || !affirmative(record.retainOriginalCompletion(recordInput, RECORDER_AUTHORITY, priorClaim, options.originalCiOperation), 'retained')))
+          refuse('RECORD_FAILED', 'original CI completion could not be retained');
+        if (DURABLE_RECORDERS.has(record) && validatedResolution.dispatch_id.startsWith('semantic-')
+            && ['integrator', 'arch-review', 'code-review'].includes(validatedResolution.role) && !prior
+            && !affirmative(record.retainOriginalCompletion(recordInput, RECORDER_AUTHORITY), 'retained'))
+          refuse('RECORD_FAILED', 'original native completion could not be retained');
         const recordResult = recorderRecord(record, recordInput, priorClaim);
         if (!affirmative(recordResult, 'recorded')) {
           refuse('RECORD_FAILED', 'durable dispatch recording did not return affirmative acknowledgement; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
@@ -2625,7 +2890,7 @@ function createDispatchBoundary(options = {}) {
         } catch (_) { /* @invariant: retain the durable ambiguous marker rather than retrying. */ }
       }
       if (priorLease) priorLease.stop();
-      if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
+      if (priorClaim && !options.originalCiOperation) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
       if (capacityHeartbeat) capacityHeartbeat.stop();
       releaseCapacityBestEffort(capacityLease);
       throw error;
@@ -2640,6 +2905,15 @@ function createDispatchBoundary(options = {}) {
         handoffController.markLaunchStarted(handoffReservation);
         launchStarted = true;
       }
+      if (options.originalCiOperation && (!DURABLE_RECORDERS.has(record)
+          || !affirmative(record.markOriginalStarted(validatedResolution.dispatch_id, RECORDER_AUTHORITY, options.originalCiOperation,
+            { dispatch_id: validatedResolution.dispatch_id, runtime: validatedResolution.runtime, role: validatedResolution.role,
+              ticket, store: record.storeDir, resolution: validatedResolution, claim: priorClaim }), 'started')))
+        refuse('DUPLICATE_DISPATCH_ID', 'original CI already started; reconcile its original outcome');
+      if (DURABLE_RECORDERS.has(record) && validatedResolution.dispatch_id.startsWith('semantic-')
+          && ['integrator', 'arch-review', 'code-review'].includes(validatedResolution.role) && !prior
+          && !affirmative(record.markOriginalStarted(validatedResolution.dispatch_id, RECORDER_AUTHORITY), 'started'))
+        refuse('DUPLICATE_DISPATCH_ID', 'original dispatch was already started; reconcile its outcome');
       const launchResult = invokeLaunch(
         fn,
         adapter,
@@ -2661,14 +2935,14 @@ function createDispatchBoundary(options = {}) {
         } catch (_) { /* retain the safest durable state available */ }
       }
       if (priorLease) priorLease.stop();
-      if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
+      if (priorClaim && !options.originalCiOperation) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
       if (capacityHeartbeat) capacityHeartbeat.stop();
       releaseCapacityBestEffort(capacityLease);
       throw error;
     }
   }
 
-  return Object.freeze({ resolve, validate, receipt, reconcile, dispatch });
+  return Object.freeze({ resolve, validate, receipt, reconcile, reconcileOriginal, dispatch });
 }
 
 function resolveDispatch(input) {

@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { compatibleCiObservation, classify } = require('./check-state.cjs');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
 const { normalizeTreatment, recordMeasurement } = require(path.join(__dirname, 'orchestration-overhead.cjs'));
 
@@ -176,7 +177,18 @@ function canonicalChecks(value) {
     const item = row && typeof row === 'object' ? row : {};
     return {
       identity: checkIdentity(item, index),
-      state: checkState(item),
+      state: text(item.state, 'unknown').toUpperCase(),
+      bucket: checkState(item),
+      // @contract: Start and run identity determine cancellation supersession and rerun actions.
+      ...(item.startedAt === undefined ? {} : { startedAt: item.startedAt }),
+      ...(item.link === undefined ? {} : { link: item.link }),
+      ...(item.workflow === undefined ? {} : { workflow: item.workflow }),
+      ...(item.run_id === undefined ? {} : { run_id: item.run_id }),
+      ...(item.run_attempt === undefined ? {} : { run_attempt: item.run_attempt }),
+      ...(item.id === undefined ? {} : { id: item.id }),
+      ...(item.source === undefined ? {} : { source: item.source }),
+      ...(item.head_sha === undefined ? {} : { head_sha: item.head_sha }),
+      ...(item.event === undefined ? {} : { event: item.event }),
     };
   }).sort((a, b) => stable(a).localeCompare(stable(b)));
   return { availability: 'available', rows: normalized };
@@ -270,7 +282,13 @@ function canonicalObservation(input = {}) {
     if (['observation', 'checks', 'ci', 'reviews', 'review', 'review_decision', 'reviewDecision',
       'unresolved_count', 'unresolvedCount', 'eligibility', 'front', 'actionable', 'now'].includes(key)) continue;
     if (TIME_KEYS.has(key) || /(?:^|_)(?:at|time|timestamp|date)$/i.test(key)) continue;
-    if (out[key] === undefined && value !== undefined && typeof value !== 'function') out[key] = stripTimes(value);
+    if (key === 'ci_observation' && value && typeof value === 'object') {
+      // @contract: Poll freshness alone does not warrant model work.
+      const { poll_id: _poll, ...semanticCi } = value;
+      out[key] = { ...stripTimes(semanticCi),
+        ...(Array.isArray(value.rows) ? { rows: canonicalChecks(value.rows).rows } : {}),
+      };
+    } else if (out[key] === undefined && value !== undefined && typeof value !== 'function') out[key] = stripTimes(value);
   }
   if (out.reviews === undefined && (observation.review_decision !== undefined || observation.reviewDecision !== undefined)) {
     out.reviews = canonicalReviews(undefined, observation);
@@ -819,6 +837,34 @@ function readPublishedUnlocked(graphDir) {
       || Number(metadata.observation_generation) !== metadata.generation) {
     return refusal('RESYNC_REQUIRED', 'published observation binding is incomplete or inconsistent; no work was scheduled');
   }
+  // @security: Reusable rows and summaries must agree across the bound state and projection.
+  const ciObservations = {};
+  for (const id of new Set([...Object.keys(state.value), ...Object.keys(projection.tickets)])) {
+    const entry = state.value[id];
+    const projected = projection.tickets[id];
+    const ci = entry && entry.ci_observation;
+    const projectedCi = projected && projected.ci_observation;
+    if (ci === undefined && projectedCi === undefined) continue;
+    if (!entry || !ci || !projected || stable(ci) !== stable(projectedCi)
+        || projected.head !== entry.head_sha || projected.pr !== entry.pr
+        || projected.repository !== (entry.repo || null)
+        || stable(projected.checks) !== stable({
+          total: Number(entry.checks?.total || 0), pending: Number(entry.checks?.pending || 0),
+          failing: Number(entry.checks?.failing || 0), none_reported: entry.checks?.none_reported === true,
+          unavailable: entry.checks?.unavailable === true,
+        })) {
+      return refusal('RESYNC_REQUIRED', 'published CI rows, identity or summary disagree with state');
+    }
+    if (ci.complete === true) {
+      if (!compatibleCiObservation(ci, { pr: entry.pr, repo: entry.repo, head: entry.head_sha }))
+        return refusal('RESYNC_REQUIRED', 'published CI association or coverage is incomplete');
+      const summary = classify(ci.rows);
+      if (!entry.checks || ['total', 'pending', 'failing', 'none_reported', 'unavailable']
+        .some(key => entry.checks[key] !== summary[key]))
+        return refusal('RESYNC_REQUIRED', 'published CI summary does not classify the bound rows');
+      ciObservations[id] = clone(ci);
+    }
+  }
   const frontDigest = digest(front.raw);
   return {
     ok: true,
@@ -826,6 +872,7 @@ function readPublishedUnlocked(graphDir) {
     state: state.value,
     front: front.value,
     observation: projection,
+    ci_observations: ciObservations,
     overlay_changed: !!binding.front_digest && binding.front_digest !== frontDigest,
   };
 }

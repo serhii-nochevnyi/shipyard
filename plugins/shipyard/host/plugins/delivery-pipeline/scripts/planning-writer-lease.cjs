@@ -305,6 +305,33 @@ function createPlanningWriterLease(options = {}) {
     return result;
   }
 
+  function heartbeatFenced(input = {}) {
+    if (!object(input)) fail('INVALID_INPUT', 'heartbeatFenced input must be an object');
+    const token = safeString(input.token, 'token');
+    const epoch = nonNegativeInteger(input.epoch, 'epoch');
+    const baseRevision = safeString(input.base_revision, 'base_revision');
+    ensureDir();
+    let result;
+    withLock(lockDir, 'writer', () => {
+      const now = nowValue(clock);
+      const record = readRecord();
+      assertMatch(record, token, epoch);
+      if (record.expires_at <= now) {
+        fail('LEASE_EXPIRED', `the planning writer lease expired at ${new Date(record.expires_at).toISOString()}`,
+          { expires_at: record.expires_at });
+      }
+      if (record.base_revision !== baseRevision) {
+        fail('BASE_MOVED', `the base revision moved from ${record.base_revision} to ${baseRevision}`,
+          { from: record.base_revision, to: baseRevision });
+      }
+      record.heartbeat_at = now;
+      record.expires_at = now + ttlMs;
+      writeRecord(record);
+      result = { renewed: true, epoch: record.epoch, expires_at: record.expires_at };
+    }, { label: 'planning-writer-lease' });
+    return result;
+  }
+
   function assertFence(input = {}) {
     if (!object(input)) fail('INVALID_INPUT', 'assertFence input must be an object');
     const token = safeString(input.token, 'token');
@@ -384,7 +411,7 @@ function createPlanningWriterLease(options = {}) {
 
   return Object.freeze({
     schema: SCHEMA, version: 1, ttl_ms: ttlMs, key, file,
-    acquire, heartbeat, assertFence, release, recover, snapshotTree, changedSince,
+    acquire, heartbeat, heartbeatFenced, assertFence, release, recover, snapshotTree, changedSince,
   });
 }
 
