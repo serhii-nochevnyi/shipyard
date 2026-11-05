@@ -605,6 +605,13 @@ function readLog(flags) {
   }
 }
 
+module.exports = {
+  computeSignature, computeVerdict, normalize, relativize,
+  isUnknownSignature, UNKNOWN_PREFIX, VERDICTS, DEFAULT_K,
+  EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORT, UNMEASURED_EFFORTS,
+  resourceState,
+};
+
 if (require.main === module) {
   const { flags, positional } = parseArgs(ARGV);
   const [cmd, ticket] = positional;
@@ -699,10 +706,3 @@ if (require.main === module) {
 
   usage('usage: failure-signature.cjs <compute|verdict|rerun|lift> … [--graph <dir>]');
 }
-
-module.exports = {
-  computeSignature, computeVerdict, normalize, relativize,
-  isUnknownSignature, UNKNOWN_PREFIX, VERDICTS, DEFAULT_K,
-  EXHAUSTED_PRIOR_REPEATS, UNMEASURED_EFFORT, UNMEASURED_EFFORTS,
-  resourceState,
-};

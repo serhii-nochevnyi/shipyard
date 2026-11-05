@@ -459,7 +459,7 @@ async function genuineGenerationContinuation(mixed = false) {
     assert.equal(fixtureGit(f.worktree, 'show', '-s', '--format=%P', currentHead).split(' ').length, 2);
     assert.equal(fs.readFileSync(path.join(f.worktree, 'src/additional.txt'), 'utf8'), 'actual incoming base bytes\n');
     const beforeBridgeLaunches = f.launches;
-    f.control.runAttempt = 5;
+    failure('gamma', 5);
     const continued = await runCurrent(); assert.equal(continued.receipt.applied_effort, 'high');
     assert.equal(f.launches, beforeBridgeLaunches + 1);
     const currentEvents = [...events];
