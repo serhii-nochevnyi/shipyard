@@ -591,3 +591,17 @@ docs/                            Pipeline protocol and measurement reference
 
 The detailed protocol is in
 [`docs/gsd_multilevel_delivery_pipeline.md`](docs/gsd_multilevel_delivery_pipeline.md).
+
+### Bound CI repair requests
+
+Build a CI repair from the ticket worktree with
+`node "$SHIPYARD_ROOT/scripts/deliver-dispatch.cjs" build ci-fix T-01-01 --runtime codex --pr 123 --failure-file "$PWD/dist/.shipyard-ci-failure.log" --graph /path/to/project/.planning/graph`.
+Use `--runtime claude` for Claude Code. Save the resulting JSON outside the worktree.
+Launch Codex with `codex-delivery-host.cjs --args-file <request.json>` or Claude
+with `claude-delivery-host.cjs --workflow fix-round --request-file <request.json>`.
+The request carries the canonical graph selector, PR, HEAD, PLAN digest, and
+CI evidence path and digest. Both hosts recheck the live open PR and original
+inputs immediately before launch. CI repair and base reconciliation run in
+separate rounds: after a base merge, capture current CI evidence and build a new
+request. Agent output cannot substitute an application receipt; the host verifies
+PLAN checks before signing a repair commit.

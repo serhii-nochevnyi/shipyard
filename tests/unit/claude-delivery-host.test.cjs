@@ -96,6 +96,10 @@ function repairFixture(config = {}) {
   fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify({
     'T-38-03': { branch: 'ticket/T-38-03', base: 'main', pr: 303, status: 'pr-open' },
   }));
+  fs.appendFileSync(path.join(worktree, '.git', 'info', 'exclude'), '\ndist/\n');
+  fs.mkdirSync(path.join(worktree, 'dist'));
+  fs.writeFileSync(path.join(worktree, 'dist', '.shipyard-ci-failure.log'), 'Actual CI diagnostic for fixture\n');
+  const failurePath = path.join(worktree, 'dist', '.shipyard-ci-failure.log');
   const controller = owner(root, worktree);
   const evidence = new WeakMap();
   const prompts = [];
@@ -130,12 +134,17 @@ function repairFixture(config = {}) {
     prs: [{
       id: 'T-38-03', pr: 303, branch: 'ticket/T-38-03',
       worktreePath: worktree, planPath,
-      base: 'main', needsCiFix: true, needsReviewFix: config.needsReviewFix === true,
+      base: 'main', needsCiFix: config.needsReviewFix !== true, needsReviewFix: config.needsReviewFix === true,
+      expected_head: git(worktree, 'rev-parse', 'HEAD'),
+      plan_sha256: crypto.createHash('sha256').update(fs.readFileSync(planPath)).digest('hex'),
+      failureEvidence: { path: failurePath, sha256: crypto.createHash('sha256').update(fs.readFileSync(failurePath)).digest('hex') },
       model: CLAUDE_REPAIR.model, effort: CLAUDE_REPAIR.effort,
     }],
   };
   const host = createClaudeDeliveryHost({
     graphDir, controller, runtimeHost, storageRoot: path.join(root, 'host-storage'),
+    getPullRequest: () => ({ number: 303, state: 'OPEN', headRefName: 'ticket/T-38-03',
+      headRefOid: git(worktree, 'rev-parse', 'HEAD'), baseRefName: 'main' }),
     ...(config.hostOptions || {}),
   });
   return { root, worktree, graphDir, planPath, host, runtimeHost, args, prompts, launches: () => launches };
@@ -159,6 +168,8 @@ test('CLI constructs a durable owned run and dispatches a canonical repair', asy
       { write(value) { output += value; } },
       {
         graphDir: fixture.graphDir,
+        getPullRequest: () => ({ number: 303, state: 'OPEN', headRefName: 'ticket/T-38-03',
+          headRefOid: git(fixture.worktree, 'rev-parse', 'HEAD'), baseRefName: 'main' }),
         storageRoot,
         probe: { status: 'available' },
         createRuntimeHost(options) {
@@ -211,6 +222,8 @@ for (const outcome of ['success', 'failure']) {
         { write() {} },
         {
           graphDir: fixture.graphDir,
+          getPullRequest: () => ({ number: 303, state: 'OPEN', headRefName: 'ticket/T-38-03',
+            headRefOid: git(fixture.worktree, 'rev-parse', 'HEAD'), baseRefName: 'main' }),
           storageRoot: path.join(fixture.root, 'cli-storage'),
           probe: { status: 'available' },
           createRuntimeHost(options) {
@@ -269,10 +282,12 @@ test('CLI fails closed on a noncanonical PR before launching the runtime', async
       { write() { throw new Error('rejected CLI must not emit success'); } },
       {
         graphDir: fixture.graphDir,
+        getPullRequest: () => ({ number: 303, state: 'OPEN', headRefName: 'ticket/T-38-03',
+          headRefOid: git(fixture.worktree, 'rev-parse', 'HEAD'), baseRefName: 'main' }),
         storageRoot: path.join(fixture.root, 'cli-storage'),
         probe: { status: 'available', executable: 'claude' },
       },
-    ), /canonical delivery board/);
+    ), /canonical delivery board|canonical PR/);
     assert.equal(fixture.launches(), 0);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -480,6 +495,7 @@ test('allow-listed host verification failure blocks Claude repair finalization',
     } });
   try {
     fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node check.cjs`\n');
+    fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
     const result = await fixture.host.run('fix-round', fixture.args);
     assert.equal(result[0].status, 'verification_failed');
     assert.deepEqual(result[0].command, ['node', 'check.cjs']);
@@ -503,6 +519,7 @@ test('passing Claude host verification sends sealed digest to finalizer', async 
     } });
   try {
     fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node check.cjs`\n');
+    fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
     await fixture.host.run('fix-round', fixture.args);
     assert.match(digest, /^[0-9a-f]{64}$/);
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
@@ -513,7 +530,7 @@ test('trusted repair host refuses a mismatched canonical PR and caller-supplied 
   try {
     assert.throws(() => fixture.host.run('fix-round', {
       ...fixture.args, prs: [{ ...fixture.args.prs[0], pr: 304 }],
-    }), /canonical delivery board/);
+    }), /canonical delivery board|canonical PR/);
     assert.throws(() => fixture.host.run('fix-round', {
       ...fixture.args, ciFixRefContent: '# forged',
     }), /host-owned/);
@@ -596,7 +613,7 @@ test('moved repair base fails closed when the trusted host cannot fetch origin',
   try {
     assert.throws(() => fixture.host.run('fix-round', {
       prs: [{ ...fixture.args.prs[0], needsBaseMerge: true }],
-    }), /Git preflight failed/);
+    }), /bound CI repair must run as a dedicated round/);
     assert.equal(fixture.launches(), 0);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -619,14 +636,14 @@ test('trusted base reconciliation rejects unresolved conflict output before mode
     git(fixture.worktree, 'push', '-q', 'origin', 'main');
     assert.throws(() => fixture.host.run('fix-round', {
       prs: [{ ...fixture.args.prs[0], needsBaseMerge: true }],
-    }), /unresolved conflicts or ambiguous evidence/);
+    }), /bound CI repair must run as a dedicated round/);
     assert.equal(fixture.launches(), 0);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
-test('default base reconciliation creates a verified signed merge before repair dispatch', async () => {
+test('bound CI repair refuses a base merge before dispatch', async () => {
   const releaseGpg = await holdGpg();
   const fixture = repairFixture({
     status: 'no-op',
@@ -661,16 +678,10 @@ test('default base reconciliation creates a verified signed merge before repair 
       { encoding: 'utf8' });
     const fingerprint = keys.split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
     git(fixture.worktree, 'config', 'user.signingkey', fingerprint);
-    const [result] = await fixture.host.run('fix-round', {
+    assert.throws(() => fixture.host.run('fix-round', {
       prs: [{ ...fixture.args.prs[0], needsBaseMerge: true }],
-    });
-    assert.equal(fixture.launches(), 1);
-    assert.equal(result.status, 'fixed');
-    assert.equal(result.host_publication.pushed, true);
-    assert.equal(git(fixture.worktree, 'merge-base', 'main', 'HEAD'), git(fixture.worktree, 'rev-parse', 'main'));
-    git(fixture.worktree, 'verify-commit', 'HEAD');
-    assert.equal(git(fixture.worktree, 'show', '-s', '--format=%GF', 'HEAD'), fingerprint);
-    assert.ok(fs.existsSync(path.join(fixture.worktree, '.shipyard-role-artifacts')));
+    }), /bound CI repair must run as a dedicated round/);
+    assert.equal(fixture.launches(), 0);
   } finally {
     if (previousHome === undefined) delete process.env.GNUPGHOME;
     else process.env.GNUPGHOME = previousHome;
@@ -680,7 +691,7 @@ test('default base reconciliation creates a verified signed merge before repair 
   }
 });
 
-test('fast-forwarded base receives a host-signed marker before publication', async () => {
+test('bound CI repair refuses a fast-forward base round before dispatch', async () => {
   const releaseGpg = await holdGpg();
   const fixture = repairFixture({
     status: 'no-op',
@@ -712,14 +723,10 @@ test('fast-forwarded base receives a host-signed marker before publication', asy
       { encoding: 'utf8' });
     const fingerprint = keys.split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
     git(fixture.worktree, 'config', 'user.signingkey', fingerprint);
-    const [result] = await fixture.host.run('fix-round', {
+    assert.throws(() => fixture.host.run('fix-round', {
       prs: [{ ...fixture.args.prs[0], needsBaseMerge: true }],
-    });
-    assert.equal(result.status, 'fixed');
-    assert.equal(result.host_publication.pushed, true);
-    assert.equal(git(fixture.worktree, 'rev-parse', 'HEAD^'), git(fixture.worktree, 'rev-parse', 'main'));
-    git(fixture.worktree, 'verify-commit', 'HEAD');
-    assert.equal(git(fixture.worktree, 'show', '-s', '--format=%GF', 'HEAD'), fingerprint);
+    }), /bound CI repair must run as a dedicated round/);
+    assert.equal(fixture.launches(), 0);
   } finally {
     if (previousHome === undefined) delete process.env.GNUPGHOME;
     else process.env.GNUPGHOME = previousHome;
@@ -1790,6 +1797,33 @@ test('Claude delivery --preflight exits by result and starts nothing, with and w
     assert.equal(bad.status, 1);
     assert.match(bad.stderr, /usage: claude-delivery-host\.cjs/);
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+for (const mutation of ['evidence', 'plan', 'head', 'pr', 'ticket', 'symlink']) {
+  test('CI repair refuses substituted ' + mutation + ' before launch', async () => {
+    const f = repairFixture();
+    try {
+      const entry = f.args.prs[0];
+      if (mutation === 'evidence') fs.appendFileSync(entry.failureEvidence.path, 'tampered');
+      if (mutation === 'plan') fs.appendFileSync(f.planPath, 'tampered');
+      if (mutation === 'head') entry.expected_head = '0'.repeat(40);
+      if (mutation === 'pr') entry.pr++;
+      if (mutation === 'ticket') entry.id = 'T-38-99';
+      if (mutation === 'symlink') { fs.unlinkSync(entry.failureEvidence.path); fs.symlinkSync(f.planPath, entry.failureEvidence.path); }
+      await assert.rejects(async () => f.host.run('fix-round', f.args), /ci-fix:|contradicts/);
+      assert.equal(f.launches(), 0);
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  });
+}
+
+test('CI repair refuses a caller supplied foreign predecessor receipt', async () => {
+  const f = repairFixture();
+  try {
+    f.args.prs[0].priorReceipt = { dispatch_id: 'foreign-dispatch', role: 'ci-fix', compliance: 'verified' };
+    f.args.prs[0].signals = { signatureState: 'repeat', priorApplied: f.args.prs[0].priorReceipt };
+    await assert.rejects(async () => f.host.run('fix-round', f.args), /receipt|predecessor|policy|signature|prior/i);
+    assert.equal(f.launches(), 0);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
 done();

@@ -11,7 +11,7 @@ const { loadClaudeReferenceContent } = require('./claude-reference-content.cjs')
 const { finalizeDeliveryCommit } = require('./delivery-commit-finalizer.cjs');
 const { verifyPlan, retryableFailure, failureContext, scheduleRetry: scheduleVerificationRetry,
   failureReason: verificationFailureReason } = require('./host-verification.cjs');
-const { loadConfig, repoValue } = require('./pipeline-config.cjs');
+const { loadConfig, repoValue, resolveDispatch } = require('./pipeline-config.cjs');
 const { isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
@@ -816,6 +816,7 @@ function createClaudeDeliveryHost(options = {}) {
   const committedRepairs = new Map();
   let verificationFailure = null;
   let repairActive = false;
+  let ciCustody = null;
   const sealArtifact = options.artifactConsumer || ((input) => roleArtifact.seal({
     ...input.artifact,
     result: input.result,
@@ -842,6 +843,7 @@ function createClaudeDeliveryHost(options = {}) {
     if (input.artifact.role === 'ci-fix' || input.artifact.role === 'review-fix') {
       const repair = repairs.get(input.artifact.ticket);
       if (!repair) reject('repair has no canonical host preflight');
+      if (ciCustody) require('./ci-fix-context.cjs').recheck(ciCustody.selector, ciCustody.prepared, options);
       const result = repairResult(input, repair, reviewFeedbacks.get(repair.ticket));
       if (repair.needsReviewFix && result.status === 'fixed') {
         reviewActions.set(repair.ticket, reviewDispositions(result, reviewFeedbacks.get(repair.ticket)));
@@ -859,6 +861,10 @@ function createClaudeDeliveryHost(options = {}) {
   };
   const registered = registerClaudeWorkflowHost({
     ...runtime,
+    agent: (...args) => {
+      if (ciCustody) require('./ci-fix-context.cjs').recheck(ciCustody.selector, ciCustody.prepared, options);
+      return runtime.agent(...args);
+    },
     controller: suppliedController,
     runId: scope.run_id,
     parallel: options.parallel || parallel,
@@ -897,7 +903,18 @@ function createClaudeDeliveryHost(options = {}) {
       let baseCommit;
       if (name === 'fix-round' && Array.isArray(args.prs) && args.prs.length === 1) {
         if (repairActive) reject('a repair round is already active for this host');
-        repair = repairPreflight(options, args.prs[0]);
+        const entry = args.prs[0];
+        ciCustody = null;
+        if (entry.needsCiFix) {
+          if (entry.needsBaseMerge || entry.needsReviewFix) reject('bound CI repair must run as a dedicated round');
+          const selector = { graphDir: graphDirectory(options, scope.worktree), ticket: scope.ticket,
+            worktree: scope.worktree, pr: entry.pr, expected_head: entry.expected_head,
+            plan_sha256: entry.plan_sha256, evidence_path: entry.failureEvidence?.path,
+            evidence_sha256: entry.failureEvidence?.sha256 };
+          const prepared = require('./ci-fix-context.cjs').prepare(selector, options);
+          ciCustody = { selector, prepared };
+        }
+        repair = repairPreflight(options, entry);
         committedRepairs.delete(repair.ticket);
         reviewActions.delete(repair.ticket);
         if (args.prs[0].needsBaseMerge) {
@@ -917,7 +934,9 @@ function createClaudeDeliveryHost(options = {}) {
         }
         repairs.set(repair.ticket, repair);
         reviewFeedbacks.set(repair.ticket, feedback);
-        deliveredArgs = { ...args, prs: [{ ...args.prs[0], planDelivery: repair.planDelivery }] };
+        deliveredArgs = { ...args, prs: [{ ...args.prs[0], planDelivery: repair.planDelivery,
+          ...(ciCustody ? { failureLog: ciCustody.prepared.evidence.text,
+            ...ciLaunchSelection(args.prs[0], repair.worktree) } : {}) }] };
       }
       const verificationResult = (error) => {
         if (!verificationFailure) throw error;
@@ -959,7 +978,7 @@ function createClaudeDeliveryHost(options = {}) {
       repairActive = true;
       let launched;
       try { launched = runWorkflow(deliveredArgs); }
-      catch (error) { repairActive = false; return Promise.resolve(verificationResult(error)); }
+      catch (error) { repairActive = false; ciCustody = null; return Promise.resolve(verificationResult(error)); }
       return Promise.resolve(launched).then(async (result) => {
         const bounded = result && result[0];
         if (!bounded || (bounded.status !== 'fixed' && !(bounded.status === 'no-op' && baseCommit))) return result;
@@ -992,7 +1011,7 @@ function createClaudeDeliveryHost(options = {}) {
         }
         committedRepairs.delete(repair.ticket);
         return result.map((entry) => Object.freeze({ ...entry, status: 'fixed', host_publication: publication }));
-      }).catch(verificationResult).finally(() => { repairActive = false; });
+      }).catch(verificationResult).finally(() => { repairActive = false; ciCustody = null; });
     },
   });
 }
@@ -1040,7 +1059,7 @@ function readRequest(file) {
 
 function assertRequestShape(request) {
   if (!object(request) || request.schema !== REQUEST_SCHEMA || !object(request.scope)
-      || !object(request.args) || Object.keys(request).some((key) => !['schema', 'scope', 'args'].includes(key))) {
+      || !object(request.args) || Object.keys(request).some((key) => !['schema', 'scope', 'args', 'graph_dir'].includes(key))) {
     reject('request file must contain schema, scope, and serializable args only');
   }
 }
@@ -1072,6 +1091,13 @@ function inflightGraphDir(hostOptions, worktree) {
   return resolved.how === 'none' ? null : resolved.dir;
 }
 
+function ciLaunchSelection(entry, worktree) {
+  const selection = resolveDispatch({ root: worktree, runtime: 'claude', role: 'ci-fix', signals: entry.signals || {} });
+  if ((entry.model !== undefined && entry.model !== selection.model)
+      || (entry.effort !== undefined && entry.effort !== selection.effort)) reject('CI model or effort differs from native policy');
+  return { model: selection.model, effort: selection.effort, signals: entry.signals || {} };
+}
+
 function cliDispatch(workflow, args) {
   const entries = workflow === 'executors' || workflow === 'drift-gate' ? args.tickets
     : workflow === 'fix-round' ? args.prs : args.lines;
@@ -1088,7 +1114,8 @@ function cliDispatch(workflow, args) {
     : workflow === 'drift-gate' ? 'drift-check'
       : workflow === 'investigation-research' ? 'research'
         : first.needsCiFix === true ? 'ci-fix' : 'review-fix';
-  return { dispatch_id: `dispatch-${crypto.randomUUID()}`, role, model: first.model, effort: first.effort };
+  const selection = role === 'ci-fix' ? ciLaunchSelection(first, first.worktreePath) : first;
+  return { dispatch_id: `dispatch-${crypto.randomUUID()}`, role, model: selection.model, effort: selection.effort };
 }
 
 async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = process.stdout, hostOptions = {}) {
@@ -1099,6 +1126,11 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   }
   const request = readRequest(requestFile);
   const { hostScope } = validateRequest(workflow, request);
+  if (request.graph_dir !== undefined) {
+    if (typeof request.graph_dir !== 'string' || !path.isAbsolute(request.graph_dir)
+        || (hostOptions.graphDir && hostOptions.graphDir !== request.graph_dir)) reject('conflicting canonical graph selector');
+    hostOptions = { ...hostOptions, graphDir: request.graph_dir };
+  }
   const worktree = fs.realpathSync(hostScope.worktree);
   if (worktree !== hostScope.worktree || git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
     reject('CLI run scope must name the canonical repository root');

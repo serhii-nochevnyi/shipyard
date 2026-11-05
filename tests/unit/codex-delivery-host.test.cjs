@@ -11,6 +11,7 @@ let entrySelected = 0, entryVariants = 0;
 function test(name, callback) {
   if (/^(?:code review |padded code review )/.test(name)) entrySelected++;
   if (name.startsWith('code review CLI seals one static phase verdict: ')) entryVariants++;
+  if (process.argv.includes('--ci-fix-only') && !name.startsWith('bound CI native launch:')) return;
   return runTest(name, callback);
 }
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -1709,7 +1710,7 @@ function agentManifestFor(agentDir, role) {
     'name = "' + file.replace(/\.toml$/, '') + '"',
     'model = "' + resolution.model + '"',
     'model_reasoning_effort = "' + resolution.effort + '"',
-    'sandbox_mode = "' + (role === 'review-fix' ? 'workspace-write' : 'read-only') + '"',
+    'sandbox_mode = "' + (['review-fix', 'ci-fix'].includes(role) ? 'workspace-write' : 'read-only') + '"',
     "developer_instructions = '''",
     'Follow the scoped role.',
     "'''",
@@ -1791,14 +1792,14 @@ test('review-fix caller prompts cannot acquire canonical host repair authority',
   } finally { clean(f); }
 });
 
-test('a wrong context.plan_sha256 refuses PLAN_DIGEST_MISMATCH for a ticket-delivery role', async () => {
+test('CI repair refuses caller prompt authority before PLAN admission', async () => {
   const f = fixture();
   const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
   const agentManifest = agentManifestFor(agentDir, 'ci-fix');
   try {
     await assert.rejects(() => delivery(f, { agentDir, agentManifest }).run({
       role: 'ci-fix', context: { prompt: 'Fix CI.', plan_sha256: '0'.repeat(64) },
-    }), (error) => error.code === 'PLAN_DIGEST_MISMATCH');
+    }), (error) => error.code === 'INVALID_INPUT');
     assert.equal(f.calls.length, 0);
   } finally { clean(f); }
 });
@@ -2073,6 +2074,8 @@ test('serialized full paged feedback selects global Node IDs across Actor varian
 
 async function originalFixerFixture(outcome, mutation, evolution = null, historicalRecovery = null) {
   const f = fixture({ physicalPaths: true });
+  const ci = mutation?.startsWith('ci-');
+  const fixerRole = ci ? 'ci-fix' : 'review-fix';
   if (['pending', 'action'].includes(historicalRecovery)) fs.writeFileSync(path.join(f.graphDir, 'delivery-log.jsonl'),
     JSON.stringify({ ts: '2026-10-19T07:31:21.739Z', event: 'status_change', ticket: 'T-999-98',
       from: null, to: 'pending', pr: null }) + '\n');
@@ -2092,7 +2095,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   f.base = git(f.root, 'rev-parse', 'HEAD'); git(f.root, 'update-ref', 'refs/heads/main', f.base);
   approvedPlan(f, ['node check.cjs']);
   const verificationAllowList = [{ argv: ['node', 'check.cjs'], profile: 'host', timeout_s: 600 }];
-  const agentManifest = agentManifestFor(f.agentDir, 'review-fix');
+  const agentManifest = agentManifestFor(f.agentDir, fixerRole);
   const evidenceFile = path.join(f.root, '.shipyard-evidence.md');
   fs.writeFileSync(evidenceFile, 'Complete original review evidence.');
   const boardFile = path.join(f.graphDir, 'delivery-state.json');
@@ -2104,8 +2107,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   const journalFile = path.join(f.graphDir, 'delivery-log.jsonl');
   if (mutation === 'stale-read-exhausted') fs.writeFileSync(journalFile, JSON.stringify({ ts: '2026-11-03T10:00:00.000Z',
     event: 'status_change', ticket: 'T-38-01', from: null, to: 'pending', pr: null }) + '\n');
-  const built = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').build(['review-fix', f.scope.ticket,
-    '--runtime', 'codex', '--pr', '501', '--review-file', evidenceFile, '--graph', f.graphDir], { cwd: f.root });
+  const built = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').build([fixerRole, f.scope.ticket,
+    '--runtime', 'codex', '--pr', '501', ci ? '--failure-file' : '--review-file', evidenceFile, '--graph', f.graphDir], { cwd: f.root });
   f.scope = { ...f.scope, ...built.scope };
   const { scope: _scope, graph_dir: _graph, ...nativeRequest } = built;
   const legacyActions = mutation?.startsWith('companion-cli-legacy-');
@@ -2153,6 +2156,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   const live = () => {
     reads++;
     onRead?.(reads);
+    if (mutation === 'ci-before-launch' && reads === 2) fs.appendFileSync(evidenceFile, 'tampered at launch');
     const afterPush = pushes > 0 ? ++postPushReads : 0;
     const stale = pushes > 0 && (readScript ? readScript(reads) : stalePostPush[mutation] ? stalePostPush[mutation](afterPush)
       : staleReads > 0 && (staleReads--, true));
@@ -2286,7 +2290,14 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
     if (mutation === 'caller-rung') nativeRequest.signals = { signatureState: 'repeat_exhausted' };
     if (mutation === 'caller-first') nativeRequest.signals = { signatureState: 'first' };
     if (mutation === 'caller-new') nativeRequest.signals = { signatureState: 'new' };
-    const selected = policy.resolveDispatch({ runtime: 'codex', role: 'review-fix' });
+    if (ci) {
+      delete output.schema; delete output.review_dispositions;
+      if (mutation === 'ci-evidence') fs.appendFileSync(evidenceFile, 'tampered');
+      if (mutation === 'ci-pr') nativeRequest.context.pr++;
+      if (mutation === 'ci-plan') fs.appendFileSync(f.plan, 'tampered');
+      if (mutation === 'ci-head') nativeRequest.context.expected_head = '0'.repeat(40);
+    }
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: fixerRole });
     const run = (request = nativeRequest) => {
       const executing = request.role === 'executor';
       const launchRole = executing ? policy.resolveDispatch({ runtime: 'codex', role: 'executor' }) : selected;
@@ -2391,6 +2402,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
         child.stdin = { write(prompt) {
           if (executing) assert.ok(String(prompt).includes('executor already dispatched'));
+          else if (ci) assert.ok(String(prompt).includes('authenticated log'));
           else {
           assert.ok(String(prompt).includes('full feedback') || String(prompt).includes('complete feedback'));
           const required = String(prompt).split('exactly these required fields: ')[1]?.split('. ')[0];
@@ -2427,6 +2439,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         });
         hostOptions.host = { ...actualRuntime, launchStatic(selection, context) {
           return actualRuntime.launchStatic(selection, { ...context, onCompleted(completed) {
+            if (mutation === 'ci-foreign-callback') { context.onCompleted({ ...completed, launch_id: 'foreign-original-launch' }); return; }
             if (mutation === 'missing-callback') return;
             if (mutation === 'foreign-callback') context.onCompleted({ ...completed, session_id: crypto.randomUUID() });
             else if (mutation === 'mismatched-callback') context.onCompleted({ ...completed, last_agent_message: 'foreign result' });
@@ -2443,6 +2456,20 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       }
       return createCodexDeliveryHost(hostOptions).run(request);
     };
+    if (ci) {
+      if (mutation !== 'ci-source') {
+        await assert.rejects(run, { code: mutation === 'ci-foreign-callback' ? 'MISSING_RECEIPT' : 'CI_FIX_SUBJECT_CHANGED' });
+        assert.equal(launches, mutation === 'ci-foreign-callback' ? 1 : 0);
+      } else {
+        const repaired = await run();
+        assert.equal(repaired.receipt.role, 'ci-fix');
+        assert.equal(repaired.receipt.compliance, 'verified');
+        assert.equal(repaired.artifact.gates.pre_commit, 'passed');
+        assert.equal(repaired.repair_result.status, 'fixed');
+        git(f.root, 'verify-commit', 'HEAD');
+      }
+      return;
+    }
     if (['thread-response-loss', 'thread-response-loss-foreign-publication', 'comment-response-loss', 'resolve-response-loss', 'companion-cli-response-loss',
       'companion-cli-pending-id', 'companion-cli-reuse-response-loss', 'companion-cli-legacy-id', 'companion-cli-legacy-absent'].includes(mutation)
         || mutation?.startsWith('pending-') || mutation?.startsWith('companion-cli-refuse-')) {
@@ -3839,7 +3866,7 @@ test('a refused launch keeps stdout free of preflight JSON, throws the first fin
   const out = [];
   const err = [];
   let refusal;
-  await assert.rejects(runCli(['--args-file', requestFor(f)], { write() {} }, {
+  await assert.rejects(require(f.host).runCli(['--args-file', requestFor(f)], { write() {} }, {
     env: f.env, preflightStdout: { write: (text) => out.push(text) }, preflightStderr: { write: (text) => err.push(text) },
   }), (error) => { refusal = error; return error.hintPrinted === true && /^preflight found/.test(error.message); });
   assert.deepEqual(out, []);
@@ -4299,4 +4326,9 @@ test('recovery source opening refuses real FIFOs and replacement races within a 
 
 assert.equal(entrySelected, 43, 'exact code-review entry registration');
 assert.equal(entryVariants, 7, 'all original CLI variants');
+
+
+for (const mutation of ['ci-source', 'ci-evidence', 'ci-pr', 'ci-plan', 'ci-head', 'ci-before-launch', 'ci-foreign-callback'])
+  test('bound CI native launch: ' + mutation, () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
+
 done();

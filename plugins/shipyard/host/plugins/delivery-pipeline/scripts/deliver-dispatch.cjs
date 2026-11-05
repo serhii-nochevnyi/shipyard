@@ -1106,13 +1106,14 @@ function buildPlanningRequest(args, options) {
 function claudeFixCandidate(args, input, evidence) {
   const isCi = args.role === 'ci-fix';
   const pr = args.pr || input.stateRow.pr;
-  if (!Number.isSafeInteger(pr) || pr < 1) buildFail('--pr', 'fix request needs --pr or a canonical delivery-state PR number');
+  if (!Number.isSafeInteger(pr) || pr < 1 || pr !== input.stateRow.pr) buildFail('--pr', 'fix request needs --pr or a canonical delivery-state PR number');
   const base = input.stateRow.base || input.stateRow.pr_base || input.row.pr_base;
   if (typeof base !== 'string' || !base.trim()) buildFail('base', 'fix request needs a canonical delivery-state base');
   return {
     schema: claudeHost.REQUEST_SCHEMA,
+    ...(isCi ? { graph_dir: input.graphDir } : {}),
     scope: {
-      run_id: `deliver-build-${args.role}-${args.ticket}`,
+      run_id: `deliver-build-${args.role}-${crypto.randomUUID()}`,
       ticket: args.ticket,
       phase: phaseNumber(input.row.phase),
       worktree: input.worktree,
@@ -1130,7 +1131,8 @@ function claudeFixCandidate(args, input, evidence) {
         signals: buildSignals(input.row),
         repo: input.row.repo || null,
         files_modified: input.row.files,
-        ...(isCi ? { failureEvidence: evidence } : { reviewEvidence: evidence }),
+        ...(isCi ? { failureEvidence: evidence, expected_head: git(input.worktree, ['rev-parse', 'HEAD']),
+          plan_sha256: crypto.createHash('sha256').update(fs.readFileSync(input.planPath)).digest('hex') } : { reviewEvidence: evidence }),
       }],
     },
   };
@@ -1287,17 +1289,19 @@ function build(argv, options = {}) {
   if (args.runtime === 'claude') {
     const request = claudeFixCandidate(args, input, evidence);
     validateBuildRequest(args.role, (value) => claudeHost.validateRequest('fix-round', value), request);
+    if (args.role === 'ci-fix') return request;
     buildFail('host contract', incompleteHostReason(args.runtime, args.role));
   }
 
-  if (args.role === 'review-fix' && args.runtime === 'codex') {
+  if (['review-fix', 'ci-fix'].includes(args.role) && args.runtime === 'codex') {
     const pr = args.pr || input.stateRow.pr;
     if (!evidence || !Number.isSafeInteger(pr) || pr < 1 || pr !== input.stateRow.pr)
-      buildFail('--pr', 'review-fix requires canonical PR and complete review evidence');
-    if (!evidence.path.startsWith(input.worktree + path.sep)) buildFail('--review-file', 'review evidence escapes worktree');
-    const request = { scope: { run_id: 'deliver-review-fix-' + crypto.randomUUID(), ticket: args.ticket,
+      buildFail('--pr', `${args.role} requires canonical PR and complete evidence`);
+    if (!evidence.path.startsWith(input.worktree + path.sep)) buildFail(args.role === 'ci-fix' ? '--failure-file' : '--review-file', 'evidence escapes worktree');
+    const request = { scope: { run_id: 'deliver-' + args.role + '-' + crypto.randomUUID(), ticket: args.ticket,
       phase: phaseNumber(input.row.phase), worktree: input.worktree, runtime: 'codex', provider: 'openai' },
-      graph_dir: input.graphDir, role: 'review-fix', signals: {}, context: { pr,
+      graph_dir: input.graphDir, role: args.role, signals: {}, context: { pr,
+        ...(args.role === 'ci-fix' ? { expected_head: git(input.worktree, ['rev-parse', 'HEAD']) } : {}),
         evidence_path: evidence.path, evidence_sha256: evidence.sha256,
         plan_sha256: crypto.createHash('sha256').update(fs.readFileSync(input.planPath)).digest('hex') } };
     validateBuildRequest(args.role, ({ scope: _scope, graph_dir: _graphDir, ...value }) => codexHost.validateArgs(value), request);

@@ -590,11 +590,16 @@ test('fix builders refuse shape-only hosts after checking evidence paths and dig
             evidence_sha256: crypto.createHash('sha256').update(fs.readFileSync(evidence)).digest('hex') } });
           assert.equal(shape.request.role, role);
         }
-        if (runtime === 'codex' && role === 'review-fix') {
+        if (runtime === 'codex' || role === 'ci-fix') {
           const built = deliverDispatch.build([role, fixture.id, '--runtime', runtime, '--pr', '501', flag, evidence], {
             cwd: fixture.root, graphDir: fixture.graphDir,
           });
-          assert.equal(built.role, 'review-fix');
+          if (runtime === 'claude') {
+            assert.equal(built.args.prs[0].failureEvidence.path, fs.realpathSync(evidence));
+            assert.equal(built.graph_dir, fs.realpathSync(fixture.graphDir));
+            continue;
+          }
+          assert.equal(built.role, role);
           assert.equal(built.context.prompt, undefined);
           assert.equal(built.context.evidence_sha256, crypto.createHash('sha256').update(fs.readFileSync(evidence)).digest('hex'));
           continue;

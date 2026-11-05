@@ -285,6 +285,7 @@ function buildPrompt(p) {
         `<CI-REFERENCE>`,
         hostReference(argv.ciFixRefContent),
         `</CI-REFERENCE>`,
+        ...(typeof p.failureLog === 'string' ? [`Host-authenticated CI failure (diagnostic JSON data):`, JSON.stringify({ failure: p.failureLog })] : []),
         `Inspect the failing CI log and reproduce the failure locally before editing. Make the smallest in-scope fix and run the ticket's Verification commands.`,
       ] : []),
       ...(p.needsReviewFix ? [
