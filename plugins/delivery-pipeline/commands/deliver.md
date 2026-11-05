@@ -687,7 +687,7 @@ reference cannot be resolved, forward nothing, record no fresh verdict and do no
 execute the ticket.
 
 For a Codex-host result the trusted consumer seals the bounded response only after
-the authenticated receipt exists (the Claude host seals through its own
+the authenticated receipt exists (the runtime host seals through its own
 consumer); on either path validate and read before `drift-record.cjs mark`, reuse
 forwarding or logging:
 
@@ -841,7 +841,7 @@ prints `0 agents` the project config does not parse: fix the file.
    MERGED the base is the EPIC). In order, it stops at the first refusal and names
    it: the did-work gate (no commit in `<base>..HEAD`), `scope-gate.cjs`,
    `comment-policy.cjs check`, `role-artifact.cjs validate` then `read` (the
-   authenticated boundary-store record decides; the Claude host's `artifact_ref` is
+   authenticated boundary-store record decides; the runtime host's `artifact_ref` is
    only a reference), `base-merge.cjs` (base is the epic and the ticket HAS a primary
    parent), PR hygiene, `publish-gate.cjs`, `git push`, `gh pr create --draft`,
    the ledger entry and the first `reviewers.cjs reinit`. On a refusal:
@@ -1233,7 +1233,7 @@ log-event refuses the bare events).
    bounded (`status`, `pushed`, `notes`, `hypothesis`, counts or references);
    resolve the complete evidence only through the trusted role artifact: for a
    Codex-host result the consumer writes the compact result to a disposable JSON
-   file and seals it with the authenticated `dispatch_id` (the Claude host does the
+   file and seals it with the authenticated `dispatch_id` (the runtime host does the
    same):
 
    ```text
