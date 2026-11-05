@@ -445,6 +445,8 @@ function ciGenerationAccepted(checker, planPins, planTexts) {
   const result = checker.result;
   if (!['VERIFICATION_PASSED', 'ISSUES_FOUND'].includes(result.verdict) || !Array.isArray(result.issues)
       || result.artifact_paths.length) fail('CI_GENERATION_UNAVAILABLE', 'checker has no supported complete issues result');
+  if (result.verdict === 'ISSUES_FOUND' && !result.issues.length)
+    fail('CI_GENERATION_UNAVAILABLE', 'checker ISSUES_FOUND has no understood findings');
   const ids = new Set();
   for (const issue of result.issues) {
     if (!object(issue) || typeof issue.id !== 'string' || !issue.id || ids.has(issue.id)
@@ -465,11 +467,33 @@ function ciGenerationAccepted(checker, planPins, planTexts) {
         fail('CI_GENERATION_UNAVAILABLE', 'warning explanation is not bound to every exact current checked plan: ' + issue.id);
     }
   }
-  const prose = JSON.stringify(Object.fromEntries(Object.entries(result).filter(([key]) => key !== 'issues')));
+  if (object(result.summary)) for (const [key, severity] of [['blockers', 'blocker'], ['warnings', 'warning'], ['info', 'info']]) {
+    if (Object.hasOwn(result.summary, key) && (!Number.isSafeInteger(result.summary[key])
+        || result.summary[key] !== result.issues.filter(issue => issue.severity === severity).length))
+      fail('CI_GENERATION_UNAVAILABLE', 'checker summary conflicts with complete findings: ' + key);
+  }
+  const checkStatus = value => {
+    if (!object(value) && !Array.isArray(value)) return;
+    for (const [key, field] of Object.entries(value)) {
+      if ((['passed', 'ok', 'success', 'accepted'].includes(key) && field === false)
+          || (key === 'additional_plan_revision_required' && field === true)
+          || (['status', 'verdict', 'outcome', 'result'].includes(key) && typeof field === 'string'
+            && /^(?:fail(?:ed|ure)?|blocked|blocker|rejected|invalid|incomplete|issues_found)$/i.test(field)))
+        fail('CI_GENERATION_UNAVAILABLE', 'checker retains an unsuccessful check: ' + key);
+      checkStatus(field);
+    }
+  };
+  checkStatus(result.summary); checkStatus(result.checks);
+  const prose = JSON.stringify(result);
   for (const match of prose.matchAll(/\b(BLOCKER|WARNING|WARN|INFO)(?:\s*[:—-]\s*|\s+)([A-Z][A-Z0-9_-]*\d+)/g)) {
     const issue = result.issues.find(issue => issue.id === match[2]);
     const severity = match[1] === 'BLOCKER' ? 'blocker' : match[1] === 'INFO' ? 'info' : 'warning';
     if (!issue || issue.severity !== severity) fail('CI_GENERATION_UNAVAILABLE', 'unaccounted prose finding ' + match[2]);
+  }
+  for (const match of prose.matchAll(/\b(BLOCKER|WARNING|WARN)\s*[:—]\s*([^"\\\n]*)/g)) {
+    if (!result.issues.some(issue => match[2].startsWith(issue.id)
+        && issue.severity === (match[1] === 'BLOCKER' ? 'blocker' : 'warning')))
+      fail('CI_GENERATION_UNAVAILABLE', 'unidentified prose finding: ' + match[1]);
   }
   return { verdict: result.verdict, issues: result.issues };
 }
@@ -498,7 +522,6 @@ function readAdmittedCiPlanGeneration({ worktree, graphDir, ticket, head, events
   if (head !== canonicalHead) fail('CI_GENERATION_UNAVAILABLE', 'requested CI head is not the current worktree');
   const directory = path.dirname(require('./codex-decompose-host.cjs').defaultRunStoreDir({ worktree: association.root }));
   const launchDir = path.join(directory, 'launches'), names = fs.readdirSync(launchDir).filter(name => /^[a-f0-9]{64}\.launch\.json$/.test(name));
-  if (names.length > 4096) fail('CI_GENERATION_UNAVAILABLE', 'typed launch discovery exceeds its bound');
   const candidates = [], refused = [];
   for (const name of names) {
     try {
@@ -541,7 +564,6 @@ function readAdmittedCiPlanGeneration({ worktree, graphDir, ticket, head, events
         if (!object(outputs) || !Object.values(outputs).some(pin => pin.sha256 === planPin.sha256)) continue;
         const indexDir = path.join(directory, 'sealed/decomposition-index');
         const indices = fs.readdirSync(indexDir).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
-        if (indices.length > 4096) fail('CI_GENERATION_UNAVAILABLE', 'sealed index discovery exceeds its bound');
         for (const name of indices) {
           const raw = ciGenerationFile(path.join(indexDir, name));
           if (digest(raw) + '.json' !== name) continue;
@@ -552,7 +574,7 @@ function readAdmittedCiPlanGeneration({ worktree, graphDir, ticket, head, events
           const index = JSON.parse(raw);
           if (!index.entries?.some(entry => entry.sha256 === planPin.sha256)) continue;
           if (index.schema !== 'shipyard.decomposition-index.v1' || !Array.isArray(index.entries)
-              || !index.entries.length || index.entries.length > 256) continue;
+              || !index.entries.length) continue;
           const paths = new Set(), phaseDir = path.dirname(planPath), entries = [];
           for (const entry of index.entries) {
             const relative = path.relative(association.root, entry.path).split(path.sep).join('/');

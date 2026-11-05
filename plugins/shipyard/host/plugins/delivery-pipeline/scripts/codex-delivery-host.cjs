@@ -2767,12 +2767,11 @@ function ciGenerationTransition(prepared, item, generation, events) {
     const baseFrom = old.commit.expectedBase, baseTo = prepared.commit.expectedBase;
     git(root, ['merge-base', '--is-ancestor', baseFrom, baseTo]);
     git(root, ['merge-base', '--is-ancestor', old.commit.expectedHead, prepared.commit.expectedHead]);
-    const imported = new Set(git(root, ['rev-list', '--max-count=501', baseFrom + '..' + baseTo]).split('\n').filter(Boolean));
-    if (imported.size > 500) return false;
+    const imported = new Set(git(root, ['rev-list', baseFrom + '..' + baseTo]).split('\n').filter(Boolean));
     for (const commit of imported) repairRevisionSigner(root, commit);
-    const commits = git(root, ['rev-list', '--first-parent', '--reverse', '--max-count=501',
+    const commits = git(root, ['rev-list', '--first-parent', '--reverse',
       old.commit.expectedHead + '..' + prepared.commit.expectedHead]).split('\n').filter(Boolean);
-    if (commits.length > 500 || (baseFrom !== baseTo && !commits.length)) return false;
+    if (baseFrom !== baseTo && !commits.length) return false;
     let parent = old.commit.expectedHead, mergedBase = baseFrom;
     const coveredPaths = new Set();
     for (const commit of commits) {

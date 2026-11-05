@@ -101,7 +101,7 @@ function fixtureGit(root, ...args) {
   return result.stdout.trim();
 }
 
-async function typedGenerationFixture(directory, { verdict = 'VERIFICATION_PASSED', issues = [], existing = null } = {}) {
+async function typedGenerationFixture(directory, { verdict = 'VERIFICATION_PASSED', issues = [], checkerFields = {}, baselinePlans = 0, existing = null } = {}) {
   const root = existing?.root || path.join(directory, 'canonical'), home = existing?.home || path.join(directory, 'home'), codexHome = path.join(home, '.codex');
   const phase = existing?.phase || 38, ticket = existing?.ticket || 'T-38-01';
   const planRelative = existing?.planRelative || '.planning/phases/38-codex-decompose/38-01-PLAN.md';
@@ -116,6 +116,13 @@ async function typedGenerationFixture(directory, { verdict = 'VERIFICATION_PASSE
   const plan = existing?.plan || '---\nphase: 38\nplan: "01"\ntitle: Checked generation\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: [source.cjs]\nrequirements: [F53-01]\ndelivery:\n  ticket: T-38-01\n  branch: feat/checked-generation\n  risk: high\n  human_checkpoint: merge\n---\n\n' + issues.map(issue => issue.id + ': Concrete bounded stage and complete acceptance explanation.\n').join('')
     + '\n## Verification commands\n\n- `node source.cjs`\n';
   fs.writeFileSync(planPath, plan);
+  for (let n = 2; n < baselinePlans + 2; n++) {
+    const relative = planRelative.replace(/\d+-PLAN\.md$/, String(n).padStart(2, '0') + '-PLAN.md');
+    fs.writeFileSync(path.join(root, relative), plan.replace(/plan: "\d+"/, 'plan: "' + String(n).padStart(2, '0') + '"')
+      .replace(/ticket: T-\d+-\d+/, 'ticket: T-' + phase + '-' + String(n).padStart(2, '0'))
+      .replace('files_modified: [source.cjs]', 'files_modified: [baseline-' + n + '.cjs]')
+      .replace(/branch: [^\n]+/, 'branch: feat/baseline-' + n));
+  }
   if (!existing) { fixtureGit(root, 'init', '-q', '-b', 'feat/checked-generation'); fixtureGit(root, 'add', '.'); fixtureGit(root, 'commit', '-qm', 'initial planning input'); }
   const originalHomedir = os.homedir, oldCodexHome = process.env.CODEX_HOME;
   os.homedir = () => home; process.env.CODEX_HOME = codexHome;
@@ -127,7 +134,10 @@ async function typedGenerationFixture(directory, { verdict = 'VERIFICATION_PASSE
     const data = helpers.buildNativeChildFixture(role, role === 'gsd-planner' ? [planRelative] : []);
     const parent = crypto.randomUUID(), child = crypto.randomUUID();
     const final = { schema: 'shipyard.codex-decompose-output.v1', artifact_paths: role === 'gsd-planner' ? [planRelative] : [],
-      ...(role === 'gsd-plan-checker' ? { verdict, issues: issues.map(issue => issue.disposition?.checked_plan_sha256 === 'current'
+      ...(role === 'gsd-plan-checker' ? { verdict, ...checkerFields,
+        ...(baselinePlans ? { planner_provenance: { dispatch_id: planner.receipt.dispatch_id,
+          artifact_index: { ...planner.artifact_index, entries: baselinePlans + 2 } } } : {}),
+        issues: issues.map(issue => issue.disposition?.checked_plan_sha256 === 'current'
         ? { ...issue, disposition: { ...issue.disposition, checked_plan_sha256: { [ticket.slice(2)]: hash(fs.readFileSync(planPath)) } } } : issue) } : {}) };
     const replace = raw => data.transform(raw).replaceAll(data.parent, parent).replaceAll(data.childId, child)
       .split('\n').filter(Boolean).map(line => {
@@ -141,7 +151,8 @@ async function typedGenerationFixture(directory, { verdict = 'VERIFICATION_PASSE
     fs.writeFileSync(path.join(codexHome, 'agents', role + '.toml'), helpers.gsdAgentToml(role, data.instructions.trimEnd()));
     const packet = context.buildContextPacket({ root, role: 'decomposition', subject: 'phase=' + phase + ';input=fixture',
       sourceRevision: fixtureGit(root, 'rev-parse', 'HEAD'), policy: policy.POLICY, policyHash: policy.POLICY_HASH,
-      scope: { files_modified: [planRelative] }, requiredRefs: [planRelative, path.dirname(planRelative) + '/CONTEXT.md', '.planning/architecture/ADR-TEST.md'],
+      scope: { files_modified: [planRelative] }, requiredRefs: [planRelative,
+        ...(baselinePlans && role === 'gsd-plan-checker' ? [] : [path.dirname(planRelative) + '/CONTEXT.md']), '.planning/architecture/ADR-TEST.md'],
       roleContext: { adr_refs: [{ path: '.planning/architecture/ADR-TEST.md' }], requirements: [], research_refs: [], context: { phase } } });
     const dispatchId = 'dispatch-' + crypto.randomUUID();
     const prompt = ['Check the complete current generation.', '',
@@ -166,8 +177,9 @@ async function typedGenerationFixture(directory, { verdict = 'VERIFICATION_PASSE
     assert.equal(result.receipt.gsd_role, role);
     return result;
   }
+  let planner;
   try {
-    const planner = await callback('gsd-planner');
+    planner = await callback('gsd-planner');
     const checker = await callback('gsd-plan-checker');
     fixtureGit(root, 'add', '.'); fixtureGit(root, 'commit', '-qm', 'Root post-callback planning commit');
     const gate = spawnSync(process.execPath, [path.join(scripts, 'validate-graph.cjs')], { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -206,6 +218,17 @@ for (const specimen of [
   { name: 'BLOCKER', verdict: 'VERIFICATION_PASSED', issues: [{ id: 'B-1', severity: 'blocker' }], accepted: false },
   { name: 'unknown severity', verdict: 'VERIFICATION_PASSED', issues: [{ id: 'U-1', severity: 'unknown' }], accepted: false },
   { name: 'conflicting duplicate issue', verdict: 'VERIFICATION_PASSED', issues: [{ id: 'I-1', severity: 'info' }, { id: 'I-1', severity: 'warning' }], accepted: false },
+  { name: 'contradictory blocker summary', verdict: 'VERIFICATION_PASSED', issues: [], checkerFields: { summary: { blockers: 1 } }, accepted: false },
+  { name: 'unexplained empty ISSUES_FOUND', verdict: 'ISSUES_FOUND', issues: [], accepted: false },
+  { name: 'failed structured check', verdict: 'VERIFICATION_PASSED', issues: [], checkerFields: { checks: { coverage: { status: 'failed' } } }, accepted: false },
+  { name: 'unaccounted summary finding', verdict: 'VERIFICATION_PASSED', issues: [], checkerFields: { summary: 'BLOCKER: MISSING-7 incomplete coverage' }, accepted: false },
+  { name: 'unidentified blocker', verdict: 'VERIFICATION_PASSED', issues: [], checkerFields: { checks: { coverage: 'BLOCKER: incomplete coverage' } }, accepted: false },
+  { name: 'unaccounted finding inside issue prose', verdict: 'ISSUES_FOUND', issues: [{ id: 'ADVISORY-1', severity: 'info', description: 'BLOCKER: MISSING-7 incomplete coverage' }], accepted: false },
+  { name: 'zero blocker summary with two independently disposed WARNs', verdict: 'ISSUES_FOUND',
+    checkerFields: { summary: { blockers: 0, warnings: 2, info: 0, additional_plan_revision_required: false } },
+    issues: ['PC53-02', 'PC53-03'].map(id => ({ id, plan: '38-01', severity: 'warning',
+      disposition: { status: 'accepted_with_explanation', checked_plan_sha256: 'current',
+        checked_explanation: 'Concrete bounded stage and complete acceptance explanation.', independent_assessment: 'The exact checked plan preserves required complete acceptance and bounded editing feedback.', additional_plan_revision_required: false } })), accepted: true },
 ]) test('T37-checker ' + specimen.name + ' preserves native findings and never substitutes a missing original', async () => {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't37-checker-')));
   let f;
@@ -215,19 +238,82 @@ for (const specimen of [
     assert.throws(() => artifacts.readAdmittedCiPlanGeneration({ worktree: f.root, graphDir: f.graphDir,
       ticket: f.scope.ticket, head: f.head, events: f.events }), error => {
       if (specimen.accepted) assert.match(error.message, /original Source/);
-      else { assert.equal(error.code, 'CI_GENERATION_UNAVAILABLE'); assert.ok(error.details.refused.length > 0); }
+      else { assert.equal(error.code, 'CI_GENERATION_UNAVAILABLE'); assert.ok(error.details?.refused?.length > 0, error.message); }
       return true;
     });
     assert.equal(JSON.stringify(f.checker.receipt), receipt);
   } finally { f?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('T37-tracer genuine new generation agrees in pure/public/actual Source without resetting three charged attempts', async () => {
-  const { signingFixture, ciFixture } = require('./phase53-z29x-native-ci-fix-contract.test.cjs');
+test('T37-index coupled unchanged baseline and changed checked plan bind the full native index with a checker refs subset', async () => {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't37-index-')));
+  let f;
+  try {
+    f = await typedGenerationFixture(directory, { baselinePlans: 6 });
+    const launchRoot = path.dirname(require(path.join(scripts, 'codex-decompose-host.cjs')).defaultRunStoreDir({ worktree: f.root }));
+    const launch = JSON.parse(fs.readFileSync(path.join(launchRoot, 'launches', hash(f.planner.receipt.dispatch_id) + '.launch.json')));
+    const manifest = launch.completed.full_output_manifest;
+    assert.equal(Object.keys(manifest).length, 8);
+    assert.equal(Object.values(manifest).filter(pin => pin.origin === 'child-change').length, 1);
+    assert.equal(Object.values(manifest).filter(pin => pin.origin === 'unchanged-baseline').length, 7);
+    assert.equal(manifest['CONTEXT.md'].origin, 'unchanged-baseline');
+    const indexBytes = fs.readFileSync(f.planner.artifact_index.path), index = JSON.parse(indexBytes);
+    assert.equal(index.entries.length, 8);
+    const argsFile = path.join(require(path.join(scripts, 'deliver-dispatch.cjs')).dispatchStateDir(), f.checker.receipt.dispatch_id, 'args.json');
+    const task = JSON.parse(fs.readFileSync(argsFile)).prompt;
+    const packet = JSON.parse(task.match(/```json\n([^\n]+)\n```/)[1]);
+    assert.equal(packet.required_refs.length, 2);
+    assert.equal(packet.required_refs.filter(ref => /-PLAN\.md$/.test(ref.path)).length, 1);
+    assert.equal(packet.required_refs.some(ref => ref.path.endsWith('/CONTEXT.md')), false);
+    const read = () => artifacts.readAdmittedCiPlanGeneration({ worktree: f.root, graphDir: f.graphDir,
+      ticket: f.scope.ticket, head: f.head, events: f.events });
+    assert.throws(read, /original Source/);
+    for (const entry of index.entries) {
+      const before = fs.readFileSync(entry.path); fs.appendFileSync(entry.path, '\nchanged\n');
+      try {
+        assert.throws(read, error => {
+          assert.equal(/original Source/.test(error.message), false, entry.path);
+          return true;
+        });
+      } finally { fs.writeFileSync(entry.path, before); }
+    }
+    assert.deepEqual(fs.readFileSync(f.planner.artifact_index.path), indexBytes);
+    assert.throws(read, /original Source/);
+  } finally { f?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('T37-public canonical Gate2 branch selects the actual worktree and reports the authentic missing prerequisite', async () => {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't37-public-')));
+  let f;
+  try {
+    f = await typedGenerationFixture(directory);
+    const command = [path.join(scripts, 'failure-signature.cjs'), 'verdict', f.scope.ticket,
+      '--signature', 'b', '--head', f.head, '--graph', f.graphDir, '--json'];
+    f.events.unshift(...['a', 'b', 'c'].map(signature => ({ event: 'attempt', ticket: f.scope.ticket, signature, head: 'old' })));
+    fs.writeFileSync(path.join(f.graphDir, 'delivery-log.jsonl'), f.events.map(JSON.stringify).join('\n') + '\n');
+    const run = () => spawnSync(process.execPath, command, { cwd: f.root, encoding: 'utf8',
+      env: { ...process.env, HOME: f.home, CODEX_HOME: f.codexHome }, maxBuffer: 8 * 1024 * 1024 });
+    const selected = run();
+    assert.equal(selected.status, 0, selected.stderr);
+    assert.equal(JSON.parse(selected.stdout).verdict, 'plan_defect');
+    assert.match(selected.stderr, /original Source finalization authority is unavailable/);
+    const graphFile = path.join(f.graphDir, 'tickets.json'), graph = JSON.parse(fs.readFileSync(graphFile));
+    assert.equal(graph.tickets[f.scope.ticket].branch, fixtureGit(f.root, 'symbolic-ref', '--short', 'HEAD'));
+    graph.tickets[f.scope.ticket].branch = 'ticket/nonexistent-fixture';
+    fs.writeFileSync(graphFile, JSON.stringify(graph));
+    const mismatched = run();
+    assert.equal(mismatched.status, 0, mismatched.stderr);
+    assert.equal(JSON.parse(mismatched.stdout).verdict, 'plan_defect');
+    assert.match(mismatched.stderr, /current ticket worktree is missing or ambiguous/);
+  } finally { f?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+async function genuineGenerationContinuation(mixed = false) {
+  const { signingFixture, ciFixture, historicalCiScripts, fixtureController } = require('./phase53-z29x-native-ci-fix-contract.test.cjs');
   const signing = signingFixture();
   let admitted;
   try {
-    const f = ciFixture(signing);
+    const f = ciFixture(signing, mixed ? { producerScripts: historicalCiScripts(path.join(signing.directory, 'historical-source')) } : {});
     let currentHead = f.originalHead;
     const canonical = path.resolve(f.graphDir, '../..'), retained = canonical + '-original';
     fs.renameSync(canonical, retained);
@@ -236,7 +322,8 @@ test('T37-tracer genuine new generation agrees in pure/public/actual Source with
     fs.rmSync(retained, { recursive: true, force: true });
     const planRelative = '.planning/phases/53-codex-decompose/53-31-PLAN.md';
     fs.mkdirSync(path.dirname(path.join(canonical, planRelative)), { recursive: true });
-    const oldPlan = fs.readFileSync(f.plan); fs.writeFileSync(path.join(canonical, planRelative), oldPlan);
+    const firstPlan = fs.readFileSync(f.plan); let oldPlan = firstPlan;
+    fs.writeFileSync(path.join(canonical, planRelative), oldPlan);
     fs.unlinkSync(f.plan); f.plan = path.join(canonical, planRelative);
     const base = 'epic/53-codex-decompose'; fixtureGit(f.worktree, 'branch', base, 'main');
     const originalLive = f.options.getPullRequest;
@@ -259,6 +346,14 @@ test('T37-tracer genuine new generation agrees in pure/public/actual Source with
       return signatures.computeSignature(f.failureBytes.toString('utf8'), 'unit').signature;
     }
     for (let n = 1; n <= 3; n++) {
+      if (mixed && n === 2) {
+        oldPlan = Buffer.concat([firstPlan, Buffer.from('\nSecond legitimate historical plan and expanded scope.\n')]);
+        fs.writeFileSync(f.plan, oldPlan);
+        graph.tickets[f.scope.ticket].files.push('src/additional.txt');
+        fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), JSON.stringify(graph));
+        fixtureGit(canonical, 'add', '.planning'); fixtureGit(canonical, 'commit', '-qm', 'second historical planning generation');
+        f.request.context.plan_sha256 = hash(oldPlan);
+      }
       f.control.source = n === 1; f.output.status = n === 1 ? 'fixed' : 'no-op';
       const signature = failure(n === 1 ? 'alpha' : 'bravo', n);
       if (n === 3) { events.push({ event: 'flake_rerun', ticket: f.scope.ticket, signature, head: currentHead, outcome: 'red' }); writeJournal(); }
@@ -273,18 +368,28 @@ test('T37-tracer genuine new generation agrees in pure/public/actual Source with
         artifact_ref: result.repair.artifact_ref, artifact_digest: result.repair.artifact_digest,
         artifact_worktree: f.worktree, boundary_store: original.receipt_store, base }); writeJournal();
     }
+    if (mixed) {
+      f.options.controller.release(f.scope.run_id); delete f.options.controller;
+      f.scope.run_id = 'current-source-' + crypto.randomUUID();
+    }
+    const currentHost = require(path.join(scripts, 'codex-delivery-host.cjs'));
+    const runCurrent = () => {
+      currentHost.prepareCiRepair(f.options, f.scope, f.request.context);
+      if (!f.options.controller) fixtureController(f.options);
+      return currentHost.createCodexDeliveryHost(f.options).run({ role: 'ci-fix', context: f.request.context });
+    };
     const signature = failure('gamma', 4);
     events.push({ event: 'plan_defect', ticket: f.scope.ticket, pr: 501, plan_hash: hash(oldPlan).slice(0, 16),
       signatures: [events[0].signature, events[1].signature, signature] }); writeJournal();
     assert.equal(signatures.computeVerdict(events, { signature, head: currentHead }).verdict, 'plan_defect');
-    await assert.rejects(f.run, { code: 'CI_PLAN_DEFECT' }); assert.equal(f.launches, 3);
+    await assert.rejects(async () => runCurrent(), { code: 'CI_PLAN_DEFECT' }); assert.equal(f.launches, 3);
     fs.appendFileSync(f.plan, '\nArbitrary unadmitted changed bytes.\n'); f.request.context.plan_sha256 = hash(fs.readFileSync(f.plan));
-    await assert.rejects(f.run, { code: 'CI_PLAN_DEFECT' }); assert.equal(f.launches, 3);
+    await assert.rejects(async () => runCurrent(), { code: 'CI_PLAN_DEFECT' }); assert.equal(f.launches, 3);
     fs.writeFileSync(f.plan, oldPlan);
     for (const name of fs.readdirSync(path.join(f.stateRoot, 'ci-repair-attempts'))) {
       const file = path.join(f.stateRoot, 'ci-repair-attempts', name); originalBytes.set(file, fs.readFileSync(file));
     }
-    const newPlan = '---\nphase: 53\nplan: "31"\ntitle: Checked generation\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: [src/owned.txt, src/additional.txt]\nrequirements: [F53-01]\ndelivery:\n  ticket: T-53-31\n  repo: fixture/repository\n  risk: high\n  human_checkpoint: merge\n---\n\n## Verification commands\n\n- `node check.cjs`\n';
+    const newPlan = '---\nphase: 53\nplan: "31"\ntitle: Checked generation\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: [src/owned.txt, src/additional.txt]\nrequirements: [F53-01]\ndelivery:\n  ticket: T-53-31\n  branch: ticket/T-53-31\n  repo: fixture/repository\n  risk: high\n  human_checkpoint: merge\n---\n\n## Verification commands\n\n- `node check.cjs`\n';
     admitted = await typedGenerationFixture(signing.directory, { existing: { root: canonical, home: signing.directory,
       phase: 53, ticket: f.scope.ticket, planRelative, plan: newPlan, events, worktree: f.worktree } });
     f.request.context.plan_sha256 = admitted.planSha;
@@ -292,13 +397,30 @@ test('T37-tracer genuine new generation agrees in pure/public/actual Source with
       ticket: f.scope.ticket, head: currentHead, events });
     const handle = read(), facts = artifacts.admittedCiPlanGenerationFacts(handle, events, { ticket: f.scope.ticket, head: currentHead });
     assert.equal(facts.old_plan_sha256, hash(oldPlan)); assert.equal(facts.plan_sha256, admitted.planSha);
+    const authenticated = currentHost.readCiPlanGenerationHistory({ worktree: f.worktree, graphDir: f.graphDir, ticket: f.scope.ticket, pr: 501 });
+    assert.equal(authenticated.length, 3);
+    assert.deepEqual(authenticated.map(item => item.applied_effort), ['high', 'low', 'low']);
+    assert.deepEqual(authenticated.map(item => item.plan_sha256), [hash(oldPlan), hash(oldPlan), hash(firstPlan)]);
+    assert.deepEqual(authenticated.map(item => item.preparation.commit.files_modified.length), mixed ? [3, 3, 2] : [2, 2, 2]);
+    assert.deepEqual(new Set(facts.old_attempts.map(item => item.dispatch_id)), new Set(receipts.map(receipt => receipt.dispatch_id)));
     assert.equal(Object.isFrozen(facts), true);
     assert.equal(signatures.computeVerdict(events, { signature, head: currentHead, generation: handle }).verdict, 'progress');
     assert.equal(signatures.computeVerdict(events, { signature, head: currentHead, generation: JSON.parse(JSON.stringify(handle)) }).verdict, 'plan_defect');
+    const recurrence = signatures.computeVerdict(events, { signature: events.find(row => row.event === 'attempt' && row.n === 2).signature,
+      head: currentHead, generation: handle });
+    assert.equal(recurrence.seen, 2); assert.equal(recurrence.depth_spent, true);
+    const cold = spawnSync(process.execPath, ['-e',
+      'const a=require(process.argv[1]),s=require(process.argv[2]),input=JSON.parse(process.argv[3]);const generation=a.readAdmittedCiPlanGeneration(input),facts=a.admittedCiPlanGenerationFacts(generation,input.events,input);console.log(JSON.stringify({verdict:s.computeVerdict(input.events,{signature:process.argv[4],head:input.head,generation}).verdict,old_attempts:facts.old_attempts,plan_sha256:facts.plan_sha256}))',
+      path.resolve(scripts, '../../shipyard/host/plugins/delivery-pipeline/scripts/role-artifact.cjs'),
+      path.resolve(scripts, '../../shipyard/host/plugins/delivery-pipeline/scripts/failure-signature.cjs'),
+      JSON.stringify({ worktree: f.worktree, graphDir: f.graphDir, ticket: f.scope.ticket, head: currentHead, events }), signature],
+      { cwd: f.worktree, encoding: 'utf8', env: { ...process.env, HOME: signing.directory, CODEX_HOME: admitted.codexHome }, maxBuffer: 8 * 1024 * 1024 });
+    assert.equal(cold.status, 0, cold.stderr + cold.stdout);
+    assert.deepEqual(JSON.parse(cold.stdout), { verdict: 'progress', old_attempts: facts.old_attempts, plan_sha256: admitted.planSha });
     const cli = spawnSync(process.execPath, [path.join(scripts, 'failure-signature.cjs'), 'verdict', f.scope.ticket,
       '--signature', signature, '--head', currentHead, '--graph', f.graphDir, '--json'], {
       cwd: f.worktree, encoding: 'utf8', env: { ...process.env, HOME: signing.directory, CODEX_HOME: admitted.codexHome }, maxBuffer: 8 * 1024 * 1024 });
-    assert.equal(cli.status, 0, cli.stderr); assert.equal(JSON.parse(cli.stdout).verdict, 'progress');
+    assert.equal(cli.status, 0, cli.stderr); assert.equal(JSON.parse(cli.stdout).verdict, 'progress', cli.stderr + '\n' + cli.stdout);
     assert.equal(events.filter(row => row.event === 'attempt').length, 3);
     const accounting = spawnSync(process.execPath, [path.join(scripts, 'attempt-history.cjs'), f.scope.ticket, '--graph', f.graphDir, '--json'],
       { cwd: f.worktree, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -306,7 +428,10 @@ test('T37-tracer genuine new generation agrees in pure/public/actual Source with
     assert.equal(JSON.parse(accounting.stdout).attempts, 3); assert.equal(JSON.parse(accounting.stdout).next_n, 4);
 
     const journalBefore = fs.readFileSync(path.join(f.graphDir, 'delivery-log.jsonl'));
-    const result = await f.run(); assert.equal(result.receipt.applied_effort, 'low'); assert.equal(f.launches, 4);
+    f.control.inspectInput = prompt => {
+      for (const receipt of receipts) assert.ok(prompt.includes(receipt.dispatch_id), 'every authentic excluded predecessor remains input');
+    };
+    const result = await runCurrent(); assert.equal(result.receipt.applied_effort, 'low'); assert.equal(f.launches, 4);
     assert.deepEqual(fs.readFileSync(path.join(f.graphDir, 'delivery-log.jsonl')), journalBefore);
     events.push({ event: 'attempt', ticket: f.scope.ticket, pr: 501, n: 4, role: 'ci-fix', signature,
       head: currentHead, effort_applied: result.receipt.applied_effort, dispatch_id: result.receipt.dispatch_id }); writeJournal();
@@ -335,7 +460,7 @@ test('T37-tracer genuine new generation agrees in pure/public/actual Source with
     assert.equal(fs.readFileSync(path.join(f.worktree, 'src/additional.txt'), 'utf8'), 'actual incoming base bytes\n');
     const beforeBridgeLaunches = f.launches;
     f.control.runAttempt = 5;
-    const continued = await f.run(); assert.equal(continued.receipt.applied_effort, 'high');
+    const continued = await runCurrent(); assert.equal(continued.receipt.applied_effort, 'high');
     assert.equal(f.launches, beforeBridgeLaunches + 1);
     const currentEvents = [...events];
     for (const next of ['delta', 'epsilon']) currentEvents.push({ event: 'attempt', ticket: f.scope.ticket, signature: next, head: 'later' });
@@ -345,7 +470,10 @@ test('T37-tracer genuine new generation agrees in pure/public/actual Source with
     assert.equal(signatures.computeVerdict(currentEvents, { signature, head: currentHead, generation: current }).verdict, 'plan_defect');
     assert.deepEqual(receipts.map(receipt => receipt.applied_effort), ['low', 'low', 'high']);
   } finally { admitted?.close(); signing.close(); }
-});
+}
+
+test('T37-tracer genuine new generation agrees in pure/public/actual Source without resetting three charged attempts', () => genuineGenerationContinuation());
+test('T37-tracer mixed authentic historical plan and scope generations preserve all charged attempts and real depth through public and Source continuation', () => genuineGenerationContinuation(true));
 
 test('T37-custody fresh typed evidence rejects native/request/index/receipt/key/plan/graph/journal substitutions without writes', async () => {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 't37-custody-')));
