@@ -992,6 +992,22 @@ rejects verifrepo 'pipeline.verification_commands.acme/web' "a ticket with deliv
 echo '{"pipeline":{"verification_commands":{"default":[{"argv":["make","check"]}],"acme/web":[{"argv":["node","--test"]}]}}}' > "$WORK/verifrepo/.planning/config.json"
 if out="$(run_validator verifrepo)"; then ok "the repository's own allow-list entry admits the command"; else bad "the repository's own allow-list entry admits the command" "$out"; fi
 
+mkproj casetwin
+plan casetwin "01-x/01-PLAN.md" T-01-01 "" "tests/main_unit/package/**" "R1"
+git -C "$WORK/casetwin" init -q
+twin_blob="$(echo a | git -C "$WORK/casetwin" hash-object -w --stdin)"
+git -C "$WORK/casetwin" update-index --add --cacheinfo "100644,$twin_blob,tests/main_unit/Package/a.ts"
+git -C "$WORK/casetwin" update-index --add --cacheinfo "100644,$twin_blob,tests/main_unit/package/b.ts"
+out="$(run_validator casetwin)" || true
+grep -q 'tests/main_unit/Package and tests/main_unit/package, tracked side by side' <<<"$out" \
+  && ok "two tracked directories that differ only in case are warned about when a plan touches them" \
+  || bad "two tracked directories that differ only in case are warned about when a plan touches them" "$out"
+plan casetwin "01-x/01-PLAN.md" T-01-01 "" "src/other.ts" "R1"
+out="$(run_validator casetwin)" || true
+grep -q 'differing only in letter case' <<<"$out" \
+  && bad "a plan that does not touch the twins gets no case warning" "$out" \
+  || ok "a plan that does not touch the twins gets no case warning"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]] || exit 1

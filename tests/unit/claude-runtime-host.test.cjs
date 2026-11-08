@@ -9,6 +9,7 @@ const {
   EFFORTS,
   createClaudeCliLauncher,
   createClaudeRuntimeHost,
+  launchSummary,
   observedSelection,
   parseClaudeStream,
   probeClaudeRuntime,
@@ -824,6 +825,18 @@ test('config roots come from resolveClaudeHome, never a private expression, and 
   assert.equal(resolveClaudeHome({ env: { HOME: '/fixture/home', CLAUDE_CONFIG_DIR: '/fixture/cfg' } }), '/fixture/cfg');
   assert.equal(resolveClaudeHome({ env: { HOME: '/fixture/home', CLAUDE_HOME: '/fixture/other' } }),
     path.join('/fixture/home', '.claude'));
+});
+
+test('a long launch summary is cut on code points, ends with an ellipsis and never exceeds the shared 500-character bound', () => {
+  const cyrillic = launchSummary('я'.repeat(600));
+  assert.equal(Array.from(cyrillic).length, 500);
+  assert.equal(cyrillic.endsWith('\u2026'), true);
+  const emoji = launchSummary('\u{1F600}'.repeat(600));
+  assert.equal(Array.from(emoji).length, 500);
+  assert.equal(/[\ud800-\udbff](?![\udc00-\udfff])/.test(emoji), false);
+  assert.equal(launchSummary('exactly\nshort'), 'exactly short');
+  assert.equal(launchSummary('x'.repeat(500)), 'x'.repeat(500));
+  assert.equal(launchSummary(''), '');
 });
 
 done();

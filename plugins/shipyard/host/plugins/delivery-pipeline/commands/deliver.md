@@ -646,6 +646,13 @@ usage, 2 no ticket graph) is a failure to ANSWER. Carry its `reason` into your
 progress note for the tickets it skips. It measures the ticket's OWN base (the epic
 for a root, the primary parent's branch for a cascade child), never `main` by name.
 
+Build the request, do not write it by hand: from the ticket worktree run
+`node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build drift-check <T> --runtime <codex|claude>
+[--graph <project-root>/.planning/graph]`. It reads the phase, plan, branch and the
+ticket's own base (the merged parent's destination once the primary parent merged)
+from the canonical graph, resolves the model and effort, and prints a request the
+host accepts as is; `scope.phase` is no longer yours to supply.
+
 The host (Parallel work, above) takes a request with the scoped ticket, worktree,
 plan, base and drift reference; Codex runs role `drift-check` (generated
 `shipyard-drift-check.toml`). `drift-check` is fixed (Codex Sol/low, Claude
@@ -990,10 +997,8 @@ loop:
          model and effort and returns a concrete application receipt. Otherwise
          hard-refuse
          before constructing a prompt, spawning, or recording. Absent,
-         `unsupported`, or `unknown` evidence cannot authorize ci-fix. The released
-         Claude fix-round and Codex delivery paths do not authenticate the
-         builder's failure-file digest, so they return the named refusal until that
-         host contract exists. On rethink, re-read the plan and use a different
+         `unsupported`, or `unknown` evidence cannot authorize ci-fix. Both
+         native hosts authenticate the builder's failure-file digest at launch. On rethink, re-read the plan and use a different
          hypothesis; give the fixer references/ci-fix.md and the full ticket
          contract. Read the full hypothesis, notes and command evidence from the
          validated repair artifact before `log-event.cjs attempt`; missing or stale
@@ -1028,8 +1033,15 @@ loop:
        fallback is refused. Require a typed boundary adapter that
        explicitly applies the resolved model and effort and returns a concrete
        application receipt. Otherwise hard-refuse
-       before constructing a prompt, spawning, or recording. The released Claude
-       fix-round retains its named host-contract refusal. The Codex review-fix host
+       before constructing a prompt, spawning, or recording. The Claude host binds the
+       builder's review file the way it binds CI evidence: the request carries
+       `reviewEvidence` (path and SHA-256), `expected_head` and `plan_sha256`; the host
+       authenticates the ticket, the recorded and live OPEN PR, the PLAN and the evidence
+       file before launch and again before the agent starts and before the result is
+       sealed, takes model and effort from the native policy (a different value is
+       refused), and runs a bound review repair as a dedicated round (no base merge, no CI
+       fix beside it). It still fetches the complete review feedback itself; the file is
+       delivered to the fixer as diagnostic data. The Codex review-fix host
        builds its prompt from the canonical graph, PLAN, ownership, live OPEN PR and complete paginated feedback,
        and authenticates the review evidence file by its original path and SHA-256
        immediately before static launch; the producer leaves source uncommitted

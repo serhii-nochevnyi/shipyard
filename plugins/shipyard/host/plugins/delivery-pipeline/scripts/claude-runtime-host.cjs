@@ -81,6 +81,13 @@ function bounded(value, max = 4096) {
   return result.length > max ? result.slice(0, max) : result;
 }
 
+function launchSummary(text, max = 500) {
+  const clean = String(text || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  const points = Array.from(clean);
+  if (points.length <= max) return clean;
+  return points.slice(0, max - 1).join('').trimEnd() + '\u2026';
+}
+
 function claudeEnvironment(source = process.env) {
   const environment = { ...source, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1', SHIPYARD_ROLE_CHILD: '1' };
   for (const name of CROSS_PROVIDER_CREDENTIAL_ENV) delete environment[name];
@@ -651,7 +658,7 @@ async function verifyCompletedClaudeLaunch({ session_id: sessionId, start_eviden
   }
   const result = {
     status: 'completed',
-    summary: bounded(streamText(parsed), 500) || 'Claude Code completed the scoped launch',
+    summary: launchSummary(streamText(parsed)) || 'Claude Code completed the scoped launch',
     output: parsed.result.structured_output !== undefined ? parsed.result.structured_output : streamText(parsed),
   };
   return Object.freeze({ result, applicationEvidence: Object.freeze({
@@ -865,7 +872,7 @@ function createClaudeCliLauncher(options = {}) {
       const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
       const result = {
         status: 'completed',
-        summary: bounded(streamText(parsed), 500) || 'Claude Code completed the scoped launch',
+        summary: launchSummary(streamText(parsed)) || 'Claude Code completed the scoped launch',
         output: parsed.result && parsed.result.structured_output !== undefined
           ? parsed.result.structured_output : streamText(parsed),
       };
@@ -1039,6 +1046,7 @@ if (require.main === module) {
 }
 
 module.exports = Object.freeze({
+  launchSummary,
   SCHEMA,
   VERSION,
   STREAM_FORMAT,

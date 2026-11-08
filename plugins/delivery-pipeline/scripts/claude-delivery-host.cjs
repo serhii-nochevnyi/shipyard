@@ -905,14 +905,18 @@ function createClaudeDeliveryHost(options = {}) {
         if (repairActive) reject('a repair round is already active for this host');
         const entry = args.prs[0];
         ciCustody = null;
-        if (entry.needsCiFix) {
-          if (entry.needsBaseMerge || entry.needsReviewFix) reject('bound CI repair must run as a dedicated round');
+        const boundRole = entry.needsCiFix ? 'ci-fix' : entry.needsReviewFix && entry.reviewEvidence !== undefined ? 'review-fix' : null;
+        if (boundRole) {
+          if (entry.needsBaseMerge || (boundRole === 'ci-fix' ? entry.needsReviewFix : entry.needsCiFix)) {
+            reject(`bound ${boundRole === 'ci-fix' ? 'CI' : 'review'} repair must run as a dedicated round`);
+          }
+          const evidence = boundRole === 'ci-fix' ? entry.failureEvidence : entry.reviewEvidence;
           const selector = { graphDir: graphDirectory(options, scope.worktree), ticket: scope.ticket,
             worktree: scope.worktree, pr: entry.pr, expected_head: entry.expected_head,
-            plan_sha256: entry.plan_sha256, evidence_path: entry.failureEvidence?.path,
-            evidence_sha256: entry.failureEvidence?.sha256 };
+            plan_sha256: entry.plan_sha256, evidence_path: evidence?.path,
+            evidence_sha256: evidence?.sha256, role: boundRole };
           const prepared = require('./ci-fix-context.cjs').prepare(selector, options);
-          ciCustody = { selector, prepared };
+          ciCustody = { selector, prepared, role: boundRole };
         }
         repair = repairPreflight(options, entry);
         committedRepairs.delete(repair.ticket);
@@ -935,8 +939,8 @@ function createClaudeDeliveryHost(options = {}) {
         repairs.set(repair.ticket, repair);
         reviewFeedbacks.set(repair.ticket, feedback);
         deliveredArgs = { ...args, prs: [{ ...args.prs[0], planDelivery: repair.planDelivery,
-          ...(ciCustody ? { failureLog: ciCustody.prepared.evidence.text,
-            ...ciLaunchSelection(args.prs[0], repair.worktree) } : {}) }] };
+          ...(ciCustody ? { [ciCustody.role === 'ci-fix' ? 'failureLog' : 'reviewLog']: ciCustody.prepared.evidence.text,
+            ...ciLaunchSelection(args.prs[0], repair.worktree, ciCustody.role) } : {}) }] };
       }
       const verificationResult = (error) => {
         if (!verificationFailure) throw error;
@@ -1091,10 +1095,12 @@ function inflightGraphDir(hostOptions, worktree) {
   return resolved.how === 'none' ? null : resolved.dir;
 }
 
-function ciLaunchSelection(entry, worktree) {
-  const selection = resolveDispatch({ root: worktree, runtime: 'claude', role: 'ci-fix', signals: entry.signals || {} });
+function ciLaunchSelection(entry, worktree, role = 'ci-fix') {
+  const selection = resolveDispatch({ root: worktree, runtime: 'claude', role, signals: entry.signals || {} });
   if ((entry.model !== undefined && entry.model !== selection.model)
-      || (entry.effort !== undefined && entry.effort !== selection.effort)) reject('CI model or effort differs from native policy');
+      || (entry.effort !== undefined && entry.effort !== selection.effort)) {
+    reject(`${role === 'ci-fix' ? 'CI' : 'review'} model or effort differs from native policy`);
+  }
   return { model: selection.model, effort: selection.effort, signals: entry.signals || {} };
 }
 
@@ -1114,7 +1120,8 @@ function cliDispatch(workflow, args) {
     : workflow === 'drift-gate' ? 'drift-check'
       : workflow === 'investigation-research' ? 'research'
         : first.needsCiFix === true ? 'ci-fix' : 'review-fix';
-  const selection = role === 'ci-fix' ? ciLaunchSelection(first, first.worktreePath) : first;
+  const bound = role === 'ci-fix' || (role === 'review-fix' && first.reviewEvidence !== undefined);
+  const selection = bound ? ciLaunchSelection(first, first.worktreePath, role) : first;
   return { dispatch_id: `dispatch-${crypto.randomUUID()}`, role, model: selection.model, effort: selection.effort };
 }
 

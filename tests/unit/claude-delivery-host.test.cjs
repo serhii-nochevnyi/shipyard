@@ -1816,6 +1816,65 @@ for (const mutation of ['evidence', 'plan', 'head', 'pr', 'ticket', 'symlink']) 
   });
 }
 
+function boundReviewFixture(config = {}) {
+  const fixture = repairFixture({
+    needsReviewFix: true,
+    status: 'escalate',
+    hostOptions: {
+      fetchReviewFeedback() { return { pr: 303, threads: [{ id: 'thread-1', comments: ['Fix the guard.'] }] }; },
+      applyReviewActions() { return { applied: true }; },
+    },
+    ...config,
+  });
+  const reviewPath = path.join(fixture.worktree, 'dist', '.shipyard-review.md');
+  fs.writeFileSync(reviewPath, 'Reviewer asks for a guard in owned.txt\n');
+  const entry = fixture.args.prs[0];
+  delete entry.failureEvidence;
+  entry.reviewEvidence = { path: reviewPath, sha256: crypto.createHash('sha256').update(fs.readFileSync(reviewPath)).digest('hex') };
+  return { ...fixture, reviewPath };
+}
+
+test('bound review repair delivers the authenticated evidence and the host-fetched threads to the fixer', async () => {
+  const f = boundReviewFixture();
+  try {
+    const [result] = await f.host.run('fix-round', f.args);
+    assert.equal(result.status, 'escalate');
+    assert.equal(f.launches(), 1);
+    assert.match(f.prompts[0], /Host-authenticated review evidence/);
+    assert.match(f.prompts[0], /Reviewer asks for a guard in owned\.txt/);
+    assert.match(f.prompts[0], /thread-1/);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+for (const mutation of ['evidence', 'plan', 'head', 'pr', 'symlink']) {
+  test('bound review repair refuses substituted ' + mutation + ' before launch', async () => {
+    const f = boundReviewFixture();
+    try {
+      const entry = f.args.prs[0];
+      if (mutation === 'evidence') fs.appendFileSync(entry.reviewEvidence.path, 'tampered');
+      if (mutation === 'plan') fs.appendFileSync(f.planPath, 'tampered');
+      if (mutation === 'head') entry.expected_head = '0'.repeat(40);
+      if (mutation === 'pr') entry.pr++;
+      if (mutation === 'symlink') { fs.unlinkSync(entry.reviewEvidence.path); fs.symlinkSync(f.planPath, entry.reviewEvidence.path); }
+      await assert.rejects(async () => f.host.run('fix-round', f.args), /review-fix:|contradicts|differs/);
+      assert.equal(f.launches(), 0);
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  });
+}
+
+test('bound review repair must run as a dedicated round and takes its model from the native policy', async () => {
+  const f = boundReviewFixture();
+  try {
+    await assert.rejects(async () => f.host.run('fix-round', { prs: [{ ...f.args.prs[0], needsBaseMerge: true }] }),
+      /bound review repair must run as a dedicated round/);
+    await assert.rejects(async () => f.host.run('fix-round', { prs: [{ ...f.args.prs[0], needsCiFix: true }] }),
+      /must run as a dedicated round/);
+    await assert.rejects(async () => f.host.run('fix-round', { prs: [{ ...f.args.prs[0], model: 'claude-opus-5-5' }] }),
+      /review model or effort differs from native policy/);
+    assert.equal(f.launches(), 0);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test('CI repair refuses a caller supplied foreign predecessor receipt', async () => {
   const f = repairFixture();
   try {

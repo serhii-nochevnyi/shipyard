@@ -427,6 +427,36 @@ for (const file of planFiles.sort()) {
   }
 }
 
+{
+  let tracked = [];
+  try {
+    tracked = execFileSync('git', ['-C', ROOT, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'] }).split('\0').filter(Boolean);
+  } catch { tracked = []; }
+  const spellings = new Map();
+  for (const file of tracked) {
+    const parts = file.split('/');
+    for (let length = 1; length < parts.length; length += 1) {
+      const prefix = parts.slice(0, length).join('/');
+      const key = prefix.toLowerCase();
+      if (!spellings.has(key)) spellings.set(key, new Set());
+      spellings.get(key).add(prefix);
+    }
+  }
+  const twins = [...spellings].filter(([, names]) => names.size > 1);
+  if (twins.length) {
+    for (const t of Object.values(tickets)) {
+      if ((deliveryStateRows[t.id] || {}).status === 'merged') continue;
+      const declared = t.files.map((file) => file.toLowerCase());
+      for (const [key, names] of twins) {
+        if (declared.some((file) => file === key || file.startsWith(key + '/'))) {
+          warnings.push(`${t.id}: files_modified touches ${[...names].sort().join(' and ')}, tracked side by side and differing only in letter case — a case-insensitive checkout holds one of them; check the paths the executor really changes`);
+        }
+      }
+    }
+  }
+}
+
 // --- referential integrity ---
 for (const t of Object.values(tickets)) {
   for (const d of t.depends_on) {

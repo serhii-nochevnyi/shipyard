@@ -573,44 +573,40 @@ test('Codex arch-review builder delegates context and signals to its trusted hos
   }
 });
 
-test('fix builders refuse shape-only hosts after checking evidence paths and digests', () => {
+test('fix builders emit host-bound requests after checking evidence paths and digests', () => {
   const fixture = builderFixture('T-13-13');
   const failureFile = path.join(fixture.root, 'failure.log');
   const reviewFile = path.join(fixture.root, 'review.md');
   fs.writeFileSync(failureFile, 'failing test output\n');
   fs.writeFileSync(reviewFile, 'review thread evidence\n');
+  const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   try {
     for (const runtime of ['claude', 'codex']) {
-      for (const [role, flag, evidence, hostName] of [
-        ['ci-fix', '--failure-file', failureFile, 'failure evidence'],
-        ['review-fix', '--review-file', reviewFile, 'review evidence'],
+      for (const [role, flag, evidence, key] of [
+        ['ci-fix', '--failure-file', failureFile, 'failureEvidence'],
+        ['review-fix', '--review-file', reviewFile, 'reviewEvidence'],
       ]) {
         if (runtime === 'codex') {
-          const shape = validateArgs({ role, signals: {}, context: { evidence_path: evidence,
-            evidence_sha256: crypto.createHash('sha256').update(fs.readFileSync(evidence)).digest('hex') } });
+          const shape = validateArgs({ role, signals: {}, context: { evidence_path: evidence, evidence_sha256: digest(evidence) } });
           assert.equal(shape.request.role, role);
         }
-        if (runtime === 'codex' || role === 'ci-fix') {
-          const built = deliverDispatch.build([role, fixture.id, '--runtime', runtime, '--pr', '501', flag, evidence], {
-            cwd: fixture.root, graphDir: fixture.graphDir,
-          });
-          if (runtime === 'claude') {
-            assert.equal(built.args.prs[0].failureEvidence.path, fs.realpathSync(evidence));
-            assert.equal(built.graph_dir, fs.realpathSync(fixture.graphDir));
-            continue;
-          }
-          assert.equal(built.role, role);
-          assert.equal(built.context.prompt, undefined);
-          assert.equal(built.context.evidence_sha256, crypto.createHash('sha256').update(fs.readFileSync(evidence)).digest('hex'));
+        const built = deliverDispatch.build([role, fixture.id, '--runtime', runtime, '--pr', '501', flag, evidence], {
+          cwd: fixture.root, graphDir: fixture.graphDir,
+        });
+        if (runtime === 'claude') {
+          const entry = built.args.prs[0];
+          assert.equal(entry[key].path, fs.realpathSync(evidence));
+          assert.equal(entry[key].sha256, digest(evidence));
+          assert.equal(built.graph_dir, fs.realpathSync(fixture.graphDir));
+          assert.equal(entry.expected_head, git(fixture.root, 'rev-parse', 'HEAD'));
+          assert.equal(entry.plan_sha256, crypto.createHash('sha256').update(PLAN_TEXT).digest('hex'));
+          assert.equal(entry.needsReviewFix, role === 'review-fix');
+          assert.equal(entry.needsCiFix, role === 'ci-fix');
           continue;
         }
-        assert.throws(
-          () => deliverDispatch.build([role, fixture.id, '--runtime', runtime, '--pr', '501', flag, evidence], {
-            cwd: fixture.root, graphDir: fixture.graphDir,
-          }),
-          (error) => error.exitCode === 2 && new RegExp(`${runtime} ${role} host contract missing`).test(error.message)
-            && new RegExp(hostName).test(error.message),
-        );
+        assert.equal(built.role, role);
+        assert.equal(built.context.prompt, undefined);
+        assert.equal(built.context.evidence_sha256, digest(evidence));
       }
     }
   } finally {
@@ -813,6 +809,46 @@ test('a --graph-dir naming nothing refuses GRAPH_UNRESOLVED', async () => {
     );
   } finally {
     cleanup(fixture.projectRoot, fixture.ticketWorktree, emptyGraphDir);
+  }
+});
+
+test('build drift-check derives the whole drift request from the ticket row for both runtimes', () => {
+  const fixture = builderFixture('T-12-12');
+  try {
+    const claude = deliverDispatch.build(['drift-check', fixture.id, '--runtime', 'claude'], { cwd: fixture.root });
+    const accepted = validateRequest('drift-gate', claude);
+    assert.equal(accepted.workflow, 'drift-gate');
+    assert.equal(claude.scope.ticket, fixture.id);
+    assert.equal(claude.scope.phase, 1);
+    assert.equal(claude.args.tickets[0].baseRef, 'main');
+    assert.equal(claude.args.baseRef, 'main');
+    assert.equal(claude.args.graphDir, fs.realpathSync(fixture.graphDir));
+    assert.equal(claude.args.tickets[0].worktreePath, fs.realpathSync(fixture.root));
+    assert.ok(claude.args.tickets[0].model && claude.args.tickets[0].effort);
+    const codex = deliverDispatch.build(['drift-check', fixture.id, '--runtime', 'codex'], { cwd: fixture.root });
+    assert.equal(codex.role, 'drift-check');
+    assert.equal(codex.scope.phase, 1);
+    assert.equal(codex.context.plan_sha256, crypto.createHash('sha256').update(PLAN_TEXT).digest('hex'));
+    assert.throws(() => deliverDispatch.build(['drift-check', fixture.id, '--pr', '5'], { cwd: fixture.root }),
+      (error) => error.code === 'BUILD_REFUSED' && error.field === '--pr');
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('build drift-check measures a dependent ticket against its merged parent destination', () => {
+  const fixture = builderFixture('T-12-13');
+  try {
+    writeJson(path.join(fixture.graphDir, 'tickets.json'), { tickets: {
+      [fixture.id]: ticketRow({ primary_parent: 'T-12-12', pr_base: 'ticket/T-12-12-parent' }) } });
+    writeJson(path.join(fixture.graphDir, 'delivery-state.json'), {
+      'T-12-12': { status: 'merged', branch: 'ticket/T-12-12-parent', merged_into: 'epic/12-demo' },
+      [fixture.id]: { ready: true, status: 'pr-open', pr: 502, branch: ticketRow().branch, base: 'main' },
+    });
+    const request = deliverDispatch.build(['drift-check', fixture.id, '--runtime', 'claude'], { cwd: fixture.root });
+    assert.equal(request.args.tickets[0].baseRef, 'epic/12-demo');
+  } finally {
+    cleanup(fixture.root);
   }
 });
 

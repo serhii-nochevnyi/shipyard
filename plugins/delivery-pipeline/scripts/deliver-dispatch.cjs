@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const { spawn, execFileSync } = require('node:child_process');
 
 const { computeFront } = require('./front.cjs');
-const { resolveGraphDir } = require('./graph-dir.cjs');
+const { resolveGraphDir, resolveBaseRef } = require('./graph-dir.cjs');
 const { ensureDependencies } = require('./worktree-deps.cjs');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const claudeHost = require('./claude-delivery-host.cjs');
@@ -557,8 +557,8 @@ function buildFail(field, message, hintCode) {
 function parseBuildArgs(argv) {
   const role = argv[0];
   const ticket = argv[1];
-  if (!['arch-review', 'code-review', 'ci-fix', 'review-fix', 'research', 'decomposition'].includes(role)) {
-    buildFail('--role', 'build role must be arch-review, code-review, ci-fix, review-fix, research, or decomposition');
+  if (!['arch-review', 'code-review', 'ci-fix', 'review-fix', 'drift-check', 'research', 'decomposition'].includes(role)) {
+    buildFail('--role', 'build role must be arch-review, code-review, ci-fix, review-fix, drift-check, research, or decomposition');
   }
   if (typeof ticket !== 'string' || !ticket.trim()) buildFail('<ticket>', 'build ticket or planning input is required');
   const args = { role, ticket, runtime: 'claude' };
@@ -676,7 +676,7 @@ function buildTicketContext(args, options) {
   const rawState = readJsonBounded(path.join(graphDir, 'delivery-state.json')) || {};
   const state = object(rawState) && object(rawState.tickets) ? rawState.tickets : rawState;
   const stateRow = object(state) && object(state[args.ticket]) ? state[args.ticket] : {};
-  return { worktree, graphDir, graph, row, projectRoot, planPath, stateRow, branch };
+  return { worktree, graphDir, graph, row, projectRoot, planPath, stateRow, state, branch };
 }
 
 function evidenceInput(worktree, value, field) {
@@ -1108,6 +1108,51 @@ function buildPlanningRequest(args, options) {
   return request;
 }
 
+function driftBase(input) {
+  const { row, state } = input;
+  const parent = row.primary_parent && object(state) ? state[row.primary_parent] : null;
+  if (row.primary_parent && object(parent) && parent.branch === row.pr_base && parent.status === 'merged') {
+    if (typeof parent.merged_into !== 'string' || !parent.merged_into.trim()) {
+      buildFail('base', `primary parent ${row.primary_parent} is merged without a destination`);
+    }
+    return parent.merged_into;
+  }
+  if (typeof row.pr_base !== 'string' || !row.pr_base.trim()) buildFail('base', 'drift-check needs a canonical graph pr_base');
+  return row.pr_base;
+}
+
+function buildDriftCheckRequest(args, input, signals) {
+  if (args.pr !== undefined) buildFail('--pr', '--pr is not valid for drift-check');
+  const expectedBase = driftBase(input);
+  const base = resolveBaseRef(input.worktree, expectedBase);
+  const scope = { run_id: `deliver-drift-${crypto.randomUUID()}`, ticket: args.ticket,
+    phase: phaseNumber(input.row.phase), worktree: input.worktree };
+  if (args.runtime === 'codex') {
+    const request = { scope: { ...scope, runtime: 'codex', provider: 'openai' }, graph_dir: input.graphDir,
+      role: 'drift-check', signals,
+      context: { prompt: `Judge whether ticket ${args.ticket}${input.row.title ? ` (${input.row.title})` : ''} still matches the codebase `
+        + `before an executor implements its delivered PLAN; its base is ${base}. Read only; change no source file.`,
+      plan_sha256: crypto.createHash('sha256').update(fs.readFileSync(input.planPath)).digest('hex') } };
+    validateBuildRequest(args.role, ({ scope: _scope, graph_dir: _graphDir, ...value }) => codexHost.validateArgs(value), request);
+    return request;
+  }
+  const selection = pipelineConfig.resolveDispatch({ root: input.projectRoot, runtime: 'claude', role: 'drift-check', signals });
+  const request = {
+    schema: claudeHost.REQUEST_SCHEMA,
+    scope,
+    args: {
+      tickets: [{ id: args.ticket, planPath: input.planPath, baseRef: base, worktreePath: input.worktree,
+        model: selection.model, effort: selection.effort, signals }],
+      driftRefPath: 'drift-check',
+      baseRef: base,
+      recordCmd: `node ${path.join(__dirname, 'drift-record.cjs')}`,
+      graphDir: input.graphDir,
+    },
+  };
+  validateBuildRequest(args.role, (value) => claudeHost.validateRequest('drift-gate', value), request);
+  return request;
+}
+
 function claudeFixCandidate(args, input, evidence) {
   const isCi = args.role === 'ci-fix';
   const pr = args.pr || input.stateRow.pr;
@@ -1116,7 +1161,7 @@ function claudeFixCandidate(args, input, evidence) {
   if (typeof base !== 'string' || !base.trim()) buildFail('base', 'fix request needs a canonical delivery-state base');
   return {
     schema: claudeHost.REQUEST_SCHEMA,
-    ...(isCi ? { graph_dir: input.graphDir } : {}),
+    graph_dir: input.graphDir,
     scope: {
       run_id: `deliver-build-${args.role}-${crypto.randomUUID()}`,
       ticket: args.ticket,
@@ -1136,8 +1181,9 @@ function claudeFixCandidate(args, input, evidence) {
         signals: buildSignals(input.row),
         repo: input.row.repo || null,
         files_modified: input.row.files,
-        ...(isCi ? { failureEvidence: evidence, expected_head: git(input.worktree, ['rev-parse', 'HEAD']),
-          plan_sha256: crypto.createHash('sha256').update(fs.readFileSync(input.planPath)).digest('hex') } : { reviewEvidence: evidence }),
+        ...(isCi ? { failureEvidence: evidence } : { reviewEvidence: evidence }),
+        expected_head: git(input.worktree, ['rev-parse', 'HEAD']),
+        plan_sha256: crypto.createHash('sha256').update(fs.readFileSync(input.planPath)).digest('hex'),
       }],
     },
   };
@@ -1256,6 +1302,7 @@ function build(argv, options = {}) {
   const input = buildTicketContext(args, options);
   if (args.role === 'arch-review') requireArchitectureTarget(input, args, options);
   const signals = buildSignals(input.row);
+  if (args.role === 'drift-check') return buildDriftCheckRequest(args, input, signals);
   const evidence = args.failureFile
     ? evidenceInput(input.worktree, args.failureFile, '--failure-file')
     : args.reviewFile ? evidenceInput(input.worktree, args.reviewFile, '--review-file') : null;
@@ -1294,8 +1341,7 @@ function build(argv, options = {}) {
   if (args.runtime === 'claude') {
     const request = claudeFixCandidate(args, input, evidence);
     validateBuildRequest(args.role, (value) => claudeHost.validateRequest('fix-round', value), request);
-    if (args.role === 'ci-fix') return request;
-    buildFail('host contract', incompleteHostReason(args.runtime, args.role));
+    return request;
   }
 
   if (['review-fix', 'ci-fix'].includes(args.role) && args.runtime === 'codex') {
