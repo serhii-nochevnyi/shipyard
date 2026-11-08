@@ -175,7 +175,14 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    handing the executor something it cannot run. Each command starts with
    `node`, `bash` or `make` (or an absolute executable path): trusted host
    verification runs PLAN commands through a fixed allowlist and refuses
-   anything else, such as `git`, `npm` or a shell pipeline.
+   anything else, such as `git`, `npm` or a shell pipeline. A command is plain
+   argv, never shell text: none of `| ; & < > $`, a backtick or a backslash may
+   appear anywhere in it, even inside quotes, so `node -e "…;…"` and `\x3c` are
+   refused — put inline logic in a committed script and run `node path/to/it.cjs`.
+   Only the bullets under `## Verification commands` run; `<verify><automated>`
+   blocks are never executed. Every distinct command also needs an approved entry
+   in `pipeline.verification_commands` of `.planning/config.json`. You never write
+   that file: Gate 2 lists the exact missing entries and a person adds them.
 7. **`depends_on` drives the cascade, not just ordering.** Under epic-stacked
    delivery (the default), a root ticket (empty `depends_on`) PRs into the
    phase epic branch; a dependent ticket cascades — it PRs into its primary
@@ -234,6 +241,11 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    every other executor sharing the machine. If the plan's commands are broken
    or plainly do not cover the change, fix or narrow them in the plan and say so
    in your evidence; substituting `npm test` silently is not a fix.
+   Create new files with the exact letter case of the directories already in
+   the repository (check `git ls-files`): a path that differs only in case from a
+   tracked one is refused at commit, because macOS and Windows checkouts cannot
+   hold both. The conveyor installs locked dependencies into the worktree before
+   you start; if `node_modules` is missing, report that instead of working around it.
 5. Worktree and branch come from the conveyor (`tickets.json`) — do not
    create branches or worktrees ad hoc. Your PR base is likewise resolved by
    the conveyor (`delivery-state.json` → `base`: the epic branch for a root

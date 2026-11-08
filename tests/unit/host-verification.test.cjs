@@ -5,7 +5,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { planCommands, admit, assignPlan, run, evidence, readEvidence, verifyPlan } = require('../../plugins/delivery-pipeline/scripts/host-verification.cjs');
+const { planCommands, inspectPlan, admit, assignPlan, run, evidence, readEvidence, verifyPlan } = require('../../plugins/delivery-pipeline/scripts/host-verification.cjs');
 
 test('PLAN bullets tokenize quoted arguments and reject shell operators', () => {
   assert.deepEqual(planCommands('# Plan\n## Verification commands\n- `node --test "a b.cjs"`\n- `make check`\n## Next\n- `ignored`'),
@@ -260,4 +260,27 @@ test('both delivery hosts share the bounded verification-retry rules', () => {
     assert.equal(host.scheduleVerificationRetry(controller({ attempts: 1, max_attempts: 2 }, woken), 'run', failure), false);
     assert.equal(host.scheduleVerificationRetry(controller({ exhausted: true }, woken), 'run', failure), false);
   }
+});
+
+test('inspectPlan reports every command the delivery host would refuse, with the reason and a ready entry', () => {
+  const plan = ['## Verification commands', '- `node -e "const c=1;process.exit(0)"`', '- `node -e "a\\x3cb"`',
+    '- `node --test tests/unit/a.test.cjs`', '- `make check`', '## Next', '- `ignored $(x)`'].join('\n');
+  const problems = inspectPlan(plan, [{ argv: ['make', 'check'] }]);
+  assert.deepEqual(problems.map((problem) => problem.kind), ['unrunnable', 'unrunnable', 'not_allowed']);
+  assert.match(problems[0].reason, /";" is not allowed anywhere in the command, even inside quotes/);
+  assert.match(problems[1].reason, /"\\" is not allowed/);
+  assert.deepEqual(problems[2].entry, { argv: ['node', '--test', 'tests/unit/a.test.cjs'] });
+  assert.throws(() => planCommands(plan), /unrunnable shell operator in PLAN command: ";"/);
+});
+
+test('inspectPlan agrees with assignPlan on absent allow-lists, empty plans and approved plans', () => {
+  const plan = '## Verification commands\n- `make check`\n';
+  assert.equal(inspectPlan(plan, [{ argv: ['make', 'check'] }]).length, 0);
+  assert.ok(assignPlan(plan, [{ argv: ['make', 'check'] }]));
+  assert.deepEqual(inspectPlan(plan, null).map((problem) => problem.kind), ['allow_list_absent']);
+  assert.throws(() => assignPlan(plan, null), (error) => error.status === 'hold');
+  assert.equal(inspectPlan('# Plan\n', null).length, 0);
+  assert.equal(assignPlan('# Plan\n', null), null);
+  assert.deepEqual(inspectPlan('# Plan\n', [{ argv: ['make'] }]).map((problem) => problem.kind), ['no_commands']);
+  assert.throws(() => assignPlan('# Plan\n', [{ argv: ['make'] }]), (error) => error.status === 'hold');
 });

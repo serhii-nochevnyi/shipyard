@@ -167,6 +167,27 @@ function diamondTree(root, base, expectedBranch, env) {
   return measured.kind === 'tree' ? measured.tree : null;
 }
 
+function caseCollisions(tracked, added) {
+  const known = new Map();
+  for (const file of tracked) {
+    const parts = file.split('/');
+    for (let length = 1; length <= parts.length; length += 1) {
+      const prefix = parts.slice(0, length).join('/');
+      if (!known.has(prefix.toLowerCase())) known.set(prefix.toLowerCase(), prefix);
+    }
+  }
+  const collisions = [];
+  for (const file of added) {
+    const parts = file.split('/');
+    for (let length = 1; length <= parts.length; length += 1) {
+      const prefix = parts.slice(0, length).join('/');
+      const existing = known.get(prefix.toLowerCase());
+      if (existing && existing !== prefix) { collisions.push({ path: file, existing }); break; }
+    }
+  }
+  return collisions;
+}
+
 function finalizeDeliveryCommit(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) fail('trusted host options are required');
   const { ticket, worktree, expectedBranch, expectedBase, expectedHead, expectedSigner } = options;
@@ -230,6 +251,13 @@ function finalizeDeliveryCommit(options) {
     git(root, ['add', '--all', '--', ...status.map((file) => `:(literal)${file}`)], privateEnv);
     const staged = nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', head], privateEnv, { binary: true }));
     if (!staged.length) fail('no staged changes to commit');
+    const collisions = caseCollisions(
+      nulPaths(git(root, ['ls-tree', '-r', '-z', '--name-only', head], env, { binary: true })),
+      nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', '--diff-filter=A', head], privateEnv, { binary: true })));
+    if (collisions.length) {
+      fail('case-colliding paths: ' + collisions.map((entry) => `${entry.path} differs only in letter case from tracked ${entry.existing}`).join('; ')
+        + '; reuse the tracked spelling (macOS and Windows checkouts cannot hold both)');
+    }
     const stagedOutside = staged.filter((file) => !covered(file));
     if (stagedOutside.length) fail(`out-of-scope staged paths: ${stagedOutside.join(', ')}`);
     if (status.some((file) => !staged.includes(file))) fail('worktree changes could not all be staged');
@@ -344,4 +372,4 @@ function scopedTree(options) {
   }
 }
 
-module.exports = Object.freeze({ finalizeDeliveryCommit, scopedTree, verificationEvidenceDigestFromMessage });
+module.exports = Object.freeze({ finalizeDeliveryCommit, caseCollisions, scopedTree, verificationEvidenceDigestFromMessage });

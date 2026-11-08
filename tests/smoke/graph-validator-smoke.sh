@@ -959,6 +959,43 @@ run_gate optout >/dev/null 2>&1 \
   && bad "delivery_pipeline.graph_gate:true overrides the legacy opt-out" \
   || ok "delivery_pipeline.graph_gate:true overrides the legacy opt-out"
 
+# ── verification admission: Gate 2 applies the delivery host's own rules ─────
+mkproj verif
+plan verif "01-x/01-PLAN.md" T-01-01 "" "a.txt" "R1"
+cat >> "$WORK/verif/.planning/phases/01-x/01-PLAN.md" <<'PLANBODY'
+## Verification commands
+- `node -e "const c=1;process.exit(0)"`
+- `node --test tests/unit/a.test.cjs`
+PLANBODY
+rejects verif 'unrunnable shell operator in PLAN command: ";"' "a shell operator inside quotes is refused with the character named"
+rejects verif 'verification allow-list is not configured' "commands with no allow-list are refused, not silently skipped"
+rejects verif 'pipeline.verification_commands.default' "the missing entries are printed for a person to add"
+out="$(run_gate verif || true)"
+grep -q 'unrunnable shell operator' <<<"$out" \
+  && ok "the staged plan:post gate reports the same refusal" \
+  || bad "the staged plan:post gate reports the same refusal" "$out"
+printf '%s\n' '- `node -e "x\\x3cy"`' >> "$WORK/verif/.planning/phases/01-x/01-PLAN.md"
+rejects verif 'is not allowed anywhere in the command' "a backslash escape is refused"
+python3 - "$WORK/verif/.planning/phases/01-x/01-PLAN.md" <<'PYFIX'
+import re, sys
+path = sys.argv[1]
+text = open(path).read()
+text = re.sub(r'(?m)^- `node -e.*\n', '', text)
+open(path, 'w').write(text)
+PYFIX
+echo '{"pipeline":{"verification_commands":{"default":[{"argv":["node","--test"]}]}}}' > "$WORK/verif/.planning/config.json"
+if out="$(run_validator verif)"; then ok "an approved command passes Gate 2"; else bad "an approved command passes Gate 2" "$out"; fi
+echo '{"pipeline":{"verification_commands":{"default":[{"argv":["make","check"]}]}}}' > "$WORK/verif/.planning/config.json"
+rejects verif 'has no approved allow-list entry' "a command outside the allow-list is refused"
+
+mkproj verifrepo
+plan verifrepo "01-x/01-PLAN.md" T-01-01 "" "a.txt" "R1" low false "" "repo: acme/web"
+printf '%s\n' '## Verification commands' '- `node --test tests/unit/a.test.cjs`' >> "$WORK/verifrepo/.planning/phases/01-x/01-PLAN.md"
+echo '{"pipeline":{"verification_commands":{"default":[{"argv":["node","--test"]}],"acme/web":[{"argv":["make","check"]}]}}}' > "$WORK/verifrepo/.planning/config.json"
+rejects verifrepo 'pipeline.verification_commands.acme/web' "a ticket with delivery.repo is checked against that repository's allow-list, not default"
+echo '{"pipeline":{"verification_commands":{"default":[{"argv":["make","check"]}],"acme/web":[{"argv":["node","--test"]}]}}}' > "$WORK/verifrepo/.planning/config.json"
+if out="$(run_validator verifrepo)"; then ok "the repository's own allow-list entry admits the command"; else bad "the repository's own allow-list entry admits the command" "$out"; fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]] || exit 1

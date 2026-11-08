@@ -52,8 +52,18 @@ function refusal(message) {
   return error;
 }
 
+const SHELL_OPERATOR = /[|;&<>`$\\\r\n]/;
+
+function operatorDetail(command) {
+  const found = SHELL_OPERATOR.exec(command || '');
+  if (!found) return 'unrunnable shell operator in PLAN command';
+  const shown = found[0] === '\n' ? 'a line break' : found[0] === '\r' ? 'a carriage return' : `"${found[0]}"`;
+  return `unrunnable shell operator in PLAN command: ${shown} is not allowed anywhere in the command, even inside quotes`
+    + ' (commands run as plain argv, never through a shell); put the logic in a committed script and run it with node, bash or make';
+}
+
 function tokenize(command) {
-  if (!command || /[|;&<>`$\\\r\n]/.test(command)) throw refusal('unrunnable shell operator in PLAN command');
+  if (!command || SHELL_OPERATOR.test(command)) throw refusal(operatorDetail(command));
   const argv = [];
   let token = '';
   let quote = null;
@@ -82,18 +92,22 @@ function tokenize(command) {
   return argv;
 }
 
-function planCommands(pinnedPlanText) {
+function verificationBullets(pinnedPlanText) {
   if (typeof pinnedPlanText !== 'string') throw refusal('pinned PLAN text is required');
   const lines = pinnedPlanText.split(/\r?\n/);
   const heading = lines.findIndex((line) => /^##\s+Verification commands\s*$/.test(line));
   if (heading < 0) return [];
-  const commands = [];
+  const bullets = [];
   for (const line of lines.slice(heading + 1)) {
     if (/^#{1,2}\s/.test(line)) break;
     const bullet = /^\s*[-*]\s+`(.*)`\s*$/.exec(line);
-    if (bullet) commands.push(tokenize(bullet[1]));
+    if (bullet) bullets.push(bullet[1]);
   }
-  return commands;
+  return bullets;
+}
+
+function planCommands(pinnedPlanText) {
+  return verificationBullets(pinnedPlanText).map(tokenize);
 }
 
 function admit(commands, allowList) {
@@ -138,6 +152,36 @@ function assignPlan(planText, allowList) {
   }
   return Object.freeze(admitted.commands.map((command) => Object.freeze({ ...command,
     argv: Object.freeze([...command.argv]) })));
+}
+
+function inspectPlan(planText, allowList) {
+  const problems = [];
+  const argvs = [];
+  for (const bullet of verificationBullets(planText)) {
+    try { argvs.push({ bullet, argv: tokenize(bullet) }); }
+    catch (error) {
+      problems.push({ kind: 'unrunnable', command: bullet, reason: error.message.replace(/^host-verification: /, '') });
+    }
+  }
+  for (const { bullet, argv } of argvs) {
+    if (!Array.isArray(allowList)) {
+      problems.push({ kind: 'allow_list_absent', command: bullet, entry: { argv },
+        reason: 'verification allow-list is not configured for this repository' });
+    } else if (admit([argv], allowList).not_allowed.length) {
+      problems.push({ kind: 'not_allowed', command: bullet, entry: { argv },
+        reason: 'PLAN command has no approved allow-list entry' });
+    }
+  }
+  if (Array.isArray(allowList) && !argvs.length && !problems.length) {
+    problems.push({ kind: 'no_commands', command: null, reason: 'PLAN has no verification commands but an allow-list is configured' });
+  }
+  if (!problems.length) {
+    try { assignPlan(planText, allowList); }
+    catch (error) {
+      problems.push({ kind: 'hold', command: null, reason: error.message.replace(/^host-verification: /, '') });
+    }
+  }
+  return Object.freeze(problems);
 }
 
 function executable(program, worktree) {
@@ -349,6 +393,6 @@ function failureReason(failure) {
   return `host verification failed (${command}): ${summary}`.slice(0, 400);
 }
 
-module.exports = Object.freeze({ planCommands, admit, assignPlan, run, evidence, readEvidence,
+module.exports = Object.freeze({ planCommands, inspectPlan, admit, assignPlan, run, evidence, readEvidence,
   collectVerificationEvidence: verifyPlan, verifyPlan,
   retryableFailure, failureContext, scheduleRetry, failureReason });

@@ -816,6 +816,45 @@ test('a --graph-dir naming nothing refuses GRAPH_UNRESOLVED', async () => {
   }
 });
 
+test('an unknown ticket names the --graph-dir remedy for a foreign repository', async () => {
+  const fixture = shipyardFixture('T-05-06');
+  try {
+    await assert.rejects(
+      () => deliverDispatch.launch(['--runtime', 'claude', '--ticket', 'T-99-99', '--role', 'executor'], {
+        cwd: fixture.root,
+        stateDir: sharedStateDir,
+      }),
+      (error) => error.code === 'UNKNOWN_TICKET' && /--graph-dir <project>\/\.planning\/graph/.test(error.message),
+    );
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('an executor launch installs worktree dependencies first and refuses before spawning when that fails', async () => {
+  const fixture = shipyardFixture('T-05-07');
+  try {
+    const order = [];
+    const spawn = () => { order.push('spawn'); return { pid: 999999, unref() {}, on() {} }; };
+    await deliverDispatch.launch(['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: fixture.root, stateDir: sharedStateDir, spawn,
+      ensureDependencies(worktree) { order.push(['deps', worktree]); },
+    });
+    assert.deepEqual(order, [['deps', fs.realpathSync(fixture.root)], 'spawn']);
+    const refused = [];
+    await assert.rejects(
+      () => deliverDispatch.launch(['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'], {
+        cwd: fixture.root, stateDir: sharedStateDir, spawn: () => refused.push('spawn'),
+        ensureDependencies() { const error = new Error('worktree-deps: pnpm is not on the host PATH'); error.code = 'DEPENDENCIES_UNAVAILABLE'; throw error; },
+      }),
+      (error) => error.code === 'DEPENDENCIES_UNAVAILABLE' && /pnpm is not on the host PATH/.test(error.message),
+    );
+    assert.deepEqual(refused, []);
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
 test('a non-actionable ticket refuses', async () => {
   const fixture = shipyardFixture('T-05-05');
   writeJson(path.join(fixture.graphDir, 'tickets.json'), { tickets: { [fixture.id]: ticketRow() } });

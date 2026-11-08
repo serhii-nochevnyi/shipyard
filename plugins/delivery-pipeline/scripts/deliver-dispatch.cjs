@@ -9,6 +9,7 @@ const { spawn, execFileSync } = require('node:child_process');
 
 const { computeFront } = require('./front.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
+const { ensureDependencies } = require('./worktree-deps.cjs');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const claudeHost = require('./claude-delivery-host.cjs');
 const claudeDecomposeHost = require('./claude-decompose-host.cjs');
@@ -301,7 +302,8 @@ function launchPrSentinel({ args, row, projectRoot, graphDir, dispatchId, dir, o
 function loadTicket(graphDir, ticket) {
   const graph = readJsonBounded(path.join(graphDir, 'tickets.json'));
   const row = graph && object(graph.tickets) ? graph.tickets[ticket] : undefined;
-  if (!object(row)) fail('UNKNOWN_TICKET', `ticket ${ticket} has no canonical graph entry in ${graphDir}`);
+  if (!object(row)) fail('UNKNOWN_TICKET', `ticket ${ticket} has no canonical graph entry in ${graphDir}; `
+    + 'for a ticket that belongs to another repository, pass --graph-dir <project>/.planning/graph of the project that owns it');
   const rawState = readJsonBounded(path.join(graphDir, 'delivery-state.json')) || {};
   return { graph, row, state: object(rawState) && object(rawState.tickets) ? rawState.tickets : rawState };
 }
@@ -349,6 +351,9 @@ async function launch(argv, options = {}) {
     });
     return launchPrSentinel({ args, row, projectRoot, graphDir, dispatchId, dir, options });
   }
+
+  try { (options.ensureDependencies || ensureDependencies)(worktreePath); }
+  catch (error) { fail(error.code || 'DEPENDENCIES_UNAVAILABLE', error.message.replace(/^worktree-deps: /, '')); }
 
   const planPath = path.resolve(projectRoot, row.plan);
   let planBytes;

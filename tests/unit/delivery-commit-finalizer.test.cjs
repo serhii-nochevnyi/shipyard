@@ -6,7 +6,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { before, after, test } = require('node:test');
 const os = require('node:os');
-const { finalizeDeliveryCommit, scopedTree } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
+const { finalizeDeliveryCommit, scopedTree, caseCollisions } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
 const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 let temporary;
@@ -388,4 +388,21 @@ test('a target project refuses a graph title that leaks the ticket id into the s
   assert.throws(() => finalizeDeliveryCommit(options), (error) => error.code === 'COMMIT_SUBJECT_LEAK'
     && /finalized commit subject failed pr-hygiene/.test(error.message));
   assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+});
+
+test('caseCollisions names a new path that differs only in letter case from a tracked directory or file', () => {
+  assert.deepEqual(caseCollisions(['tests/main_unit/package/a.ts', 'x/y.ts'], ['tests/main_unit/Package/b.ts', 'x/z.ts', 'New/q.ts']),
+    [{ path: 'tests/main_unit/Package/b.ts', existing: 'tests/main_unit/package' }]);
+  assert.deepEqual(caseCollisions(['x/Y.ts'], ['x/y.ts']), [{ path: 'x/y.ts', existing: 'x/Y.ts' }]);
+  assert.deepEqual(caseCollisions(['x/y.ts'], ['x/y.ts', 'x/other.ts']), []);
+});
+
+test('finalization refuses a new directory that differs only in case from a tracked one before signing', (t) => {
+  const { repo, options } = makeRepo();
+  if (fs.existsSync(path.join(repo, 'SRC'))) { t.skip('the filesystem is case-insensitive, so the collision cannot be staged here'); return; }
+  fs.mkdirSync(path.join(repo, 'SRC'));
+  fs.writeFileSync(path.join(repo, 'SRC', 'new.txt'), 'new\n');
+  assert.throws(() => finalizeDeliveryCommit({ ...options, files_modified: ['src/*.txt', 'SRC/*.txt'] }),
+    /case-colliding paths: SRC\/new\.txt differs only in letter case from tracked SRC?/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), options.expectedHead);
 });

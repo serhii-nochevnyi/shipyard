@@ -588,7 +588,15 @@ freshly written. Do not report decomposition success without this.
 2. Errors (cycle, file conflict, empty files_modified/requirements,
    high-risk without checkpoint) → fix the frontmatter/slicing and retry. A file
    conflict is more honestly resolved by a dependency or re-slicing than by extending
-   files_modified.
+   files_modified. Gate 2 also applies the delivery host's own verification
+   admission to every PLAN not yet merged: a `## Verification commands` bullet
+   with a shell operator, or without an approved `pipeline.verification_commands`
+   entry, fails here with the command and the reason, because the executor would
+   otherwise stop at `verification_failed` or HOLD after the PR work is done. Fix a
+   runnable-shape error in the PLAN. For a missing entry, show the user the exact
+   JSON entries Gate 2 prints and let them add the entries to `.planning/config.json`
+   — do not write the allow-list yourself, and do not export to Jira until Gate 2
+   passes.
 3. OK → show the user a summary for approval:
    - the phase epic branch (`tickets.json.epics`) — where the whole phase integrates;
    - a table of tickets: id / title / wave / depends_on / pr_base (epic or parent

@@ -34,6 +34,8 @@ const { parseFrontmatter } = require(path.join(__dirname, 'frontmatter.cjs'));
 // answer exactly — see path-owner.cjs for what the old prefix stump got wrong.
 const { parse: parseDecl, mayIntersect, literalPrefix, GRAMMAR } = require(path.join(__dirname, 'path-owner.cjs'));
 const { applies, conventionalType, CONVENTIONAL_TYPES } = require(path.join(__dirname, 'pr-hygiene.cjs'));
+const { inspectPlan } = require(path.join(__dirname, 'host-verification.cjs'));
+const { loadConfig, repoValue } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 const ROOT = process.cwd();
 const PHASES_DIR = path.join(ROOT, '.planning', 'phases');
@@ -392,6 +394,37 @@ for (const file of planFiles.sort()) {
     if (ids.length > 1) {
       errors.push(`DUPLICATE_BRANCH: ${ids.sort().join(', ')} all resolve to branch "${branch}" — rename or re-slice so each ticket's branch is unique`);
     }
+  }
+}
+
+// --- verification commands: the same admission the delivery hosts apply ---
+{
+  const config = loadConfig(ROOT);
+  const suggestions = new Map();
+  let configReported = false;
+  for (const t of Object.values(tickets)) {
+    if ((deliveryStateRows[t.id] || {}).status === 'merged') continue;
+    const allowList = config.valid === false ? null : repoValue(config, 'verification_commands', t.repo);
+    let problems;
+    try { problems = inspectPlan(fs.readFileSync(path.join(ROOT, t.file), 'utf8'), allowList); }
+    catch (error) { errors.push(`${t.id}: ${t.file}: ${error.message}`); continue; }
+    if (config.valid === false && problems.length && !configReported) {
+      configReported = true;
+      errors.push('.planning/config.json is invalid, so no verification allow-list can be read — fix the file first');
+    }
+    for (const problem of problems) {
+      errors.push(`${t.id}: ${t.file}: verification command ${problem.command === null ? '' : '`' + problem.command + '` '}`
+        + `would be refused by the delivery host — ${problem.reason}`);
+      if (problem.entry) {
+        const key = t.repo || 'default';
+        if (!suggestions.has(key)) suggestions.set(key, new Set());
+        suggestions.get(key).add(JSON.stringify(problem.entry));
+      }
+    }
+  }
+  for (const [key, entries] of suggestions) {
+    errors.push(`add these entries to .planning/config.json under pipeline.verification_commands.${key} (a person must approve them; `
+      + `the planner never does): [${[...entries].join(', ')}]`);
   }
 }
 
