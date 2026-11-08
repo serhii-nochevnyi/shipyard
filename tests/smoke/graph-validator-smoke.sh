@@ -959,14 +959,10 @@ run_gate optout >/dev/null 2>&1 \
   && bad "delivery_pipeline.graph_gate:true overrides the legacy opt-out" \
   || ok "delivery_pipeline.graph_gate:true overrides the legacy opt-out"
 
-# ── verification admission: Gate 2 applies the delivery host's own rules ─────
 mkproj verif
 plan verif "01-x/01-PLAN.md" T-01-01 "" "a.txt" "R1"
-cat >> "$WORK/verif/.planning/phases/01-x/01-PLAN.md" <<'PLANBODY'
-## Verification commands
-- `node -e "const c=1;process.exit(0)"`
-- `node --test tests/unit/a.test.cjs`
-PLANBODY
+printf '%s\n' '## Verification commands' '- `node -e "const c=1;process.exit(0)"`' \
+  '- `node --test tests/unit/a.test.cjs`' >> "$WORK/verif/.planning/phases/01-x/01-PLAN.md"
 rejects verif 'unrunnable shell operator in PLAN command: ";"' "a shell operator inside quotes is refused with the character named"
 rejects verif 'verification allow-list is not configured' "commands with no allow-list are refused, not silently skipped"
 rejects verif 'pipeline.verification_commands.default' "the missing entries are printed for a person to add"

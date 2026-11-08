@@ -397,7 +397,6 @@ for (const file of planFiles.sort()) {
   }
 }
 
-// --- verification commands: the same admission the delivery hosts apply ---
 {
   const config = loadConfig(ROOT);
   const suggestions = new Map();
