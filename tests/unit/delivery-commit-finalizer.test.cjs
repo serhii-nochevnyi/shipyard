@@ -6,7 +6,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { before, after, test } = require('node:test');
 const os = require('node:os');
-const { finalizeDeliveryCommit, scopedTree, caseCollisions } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
+const { finalizeDeliveryCommit, scopedTree, caseCollisions, scopeMatcher } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
 const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 let temporary;
@@ -405,4 +405,31 @@ test('finalization refuses a new directory that differs only in case from a trac
   assert.throws(() => finalizeDeliveryCommit({ ...options, files_modified: ['src/*.txt', 'SRC/*.txt'] }),
     /case-colliding paths: SRC\/new\.txt differs only in letter case from tracked SRC?/);
   assert.equal(git(repo, 'rev-parse', 'HEAD'), options.expectedHead);
+});
+
+test('caseCollisions does not refuse a spelling that is itself tracked beside its case twin', () => {
+  assert.deepEqual(caseCollisions(['t/Package/a.ts', 't/package/b.ts'], ['t/Package/x.ts', 't/package/y.ts']), []);
+  assert.deepEqual(caseCollisions(['t/package/b.ts'], ['t/Package/x.ts']), [{ path: 't/Package/x.ts', existing: 't/package' }]);
+});
+
+test('scopeMatcher compares without letter case only when the repository ignores case', () => {
+  assert.equal(scopeMatcher(['tests/main_unit/Package/**'], true).covered('tests/main_unit/package/a.ts'), true);
+  assert.equal(scopeMatcher(['tests/main_unit/Package/**'], false).covered('tests/main_unit/package/a.ts'), false);
+  assert.equal(scopeMatcher(['tests/*.ts'], true).covered('other/a.ts'), false);
+});
+
+test('on a case-insensitive checkout one spelling in files_modified covers both the status and the index path', (t) => {
+  const { repo, options } = makeRepo();
+  fs.renameSync(path.join(repo, 'src'), path.join(repo, 'Src'));
+  if (!fs.existsSync(path.join(repo, 'src'))) {
+    fs.renameSync(path.join(repo, 'Src'), path.join(repo, 'src'));
+    t.skip('the filesystem is case-sensitive, so the disk and index spellings cannot diverge here');
+    return;
+  }
+  git(repo, 'config', 'core.ignorecase', 'true');
+  fs.writeFileSync(path.join(repo, 'Src', 'new.txt'), 'new\n');
+  const scoped = { ...options, files_modified: ['Src/*.txt'] };
+  assert.ok(scopedTree(scoped).tree);
+  const result = finalizeDeliveryCommit(scoped);
+  assert.ok(result);
 });

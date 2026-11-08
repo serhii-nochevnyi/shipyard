@@ -173,7 +173,9 @@ function caseCollisions(tracked, added) {
     const parts = file.split('/');
     for (let length = 1; length <= parts.length; length += 1) {
       const prefix = parts.slice(0, length).join('/');
-      if (!known.has(prefix.toLowerCase())) known.set(prefix.toLowerCase(), prefix);
+      const key = prefix.toLowerCase();
+      if (!known.has(key)) known.set(key, new Set());
+      known.get(key).add(prefix);
     }
   }
   const collisions = [];
@@ -181,11 +183,27 @@ function caseCollisions(tracked, added) {
     const parts = file.split('/');
     for (let length = 1; length <= parts.length; length += 1) {
       const prefix = parts.slice(0, length).join('/');
-      const existing = known.get(prefix.toLowerCase());
-      if (existing && existing !== prefix) { collisions.push({ path: file, existing }); break; }
+      const spellings = known.get(prefix.toLowerCase());
+      if (spellings && !spellings.has(prefix)) { collisions.push({ path: file, existing: [...spellings][0] }); break; }
     }
   }
   return collisions;
+}
+
+function ignoresCase(root, env) {
+  try {
+    return execFileSync('git', ['-C', root, 'config', '--get', '--type=bool', 'core.ignorecase'],
+      { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'true';
+  } catch { return false; }
+}
+
+function scopeMatcher(declared, ignoreCase) {
+  const fold = ignoreCase ? (value) => value.toLowerCase() : (value) => value;
+  const folded = declared.map(fold);
+  return Object.freeze({
+    covered: (file) => folded.some((entry) => owns(entry, fold(file))),
+    fold,
+  });
 }
 
 function finalizeDeliveryCommit(options) {
@@ -226,7 +244,8 @@ function finalizeDeliveryCommit(options) {
   if (ancestor !== base) fail('expectedBase is not an ancestor of HEAD');
   const subject = finalizedSubject(ticket, root, base);
 
-  const covered = (file) => declared.some((entry) => owns(entry, file));
+  const matcher = scopeMatcher(declared, ignoresCase(root, env));
+  const covered = matcher.covered;
   const from = diamondTree(root, base, expectedBranch, env) || base;
   const committed = nulPaths(git(root, ['diff', '--name-only', '-z', '--no-renames', from, head], env, { binary: true }));
   const status = scopedStatus(root, env);
@@ -260,7 +279,8 @@ function finalizeDeliveryCommit(options) {
     }
     const stagedOutside = staged.filter((file) => !covered(file));
     if (stagedOutside.length) fail(`out-of-scope staged paths: ${stagedOutside.join(', ')}`);
-    if (status.some((file) => !staged.includes(file))) fail('worktree changes could not all be staged');
+    const stagedFolded = new Set(staged.map(matcher.fold));
+    if (status.some((file) => !stagedFolded.has(matcher.fold(file)))) fail('worktree changes could not all be staged');
     const originalEntries = indexEntries(root, env);
     const privateEntries = indexEntries(root, privateEnv);
     const originallyStaged = nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', head], env, { binary: true }));
@@ -358,7 +378,8 @@ function scopedTree(options) {
     fail('HEAD differs from expectedHead');
   }
   const status = scopedStatus(root, env);
-  const outside = status.filter((file) => !declared.some((entry) => owns(entry, file)));
+  const { covered } = scopeMatcher(declared, ignoresCase(root, env));
+  const outside = status.filter((file) => !covered(file));
   if (outside.length) fail(`out-of-scope paths: ${outside.join(', ')}`);
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scoped-tree-'));
   const privateEnv = { ...env, GIT_INDEX_FILE: path.join(temporary, 'index') };
@@ -372,4 +393,4 @@ function scopedTree(options) {
   }
 }
 
-module.exports = Object.freeze({ finalizeDeliveryCommit, caseCollisions, scopedTree, verificationEvidenceDigestFromMessage });
+module.exports = Object.freeze({ finalizeDeliveryCommit, caseCollisions, scopeMatcher, scopedTree, verificationEvidenceDigestFromMessage });
