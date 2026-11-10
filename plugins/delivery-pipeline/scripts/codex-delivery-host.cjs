@@ -516,7 +516,7 @@ function scopedTreeOf(prepared, options) {
     : require('./delivery-commit-finalizer.cjs');
   try {
     return scopedTree({ worktree: prepared.commit.worktree, expectedHead: prepared.commit.expectedHead,
-      files_modified: prepared.commit.files_modified });
+      files_modified: prepared.commit.files_modified, caseOnlyRenames: prepared.commit.caseOnlyRenames });
   } catch (error) {
     fail('SCOPED_TREE_UNAVAILABLE', error.message);
   }
@@ -528,7 +528,7 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
     const verified = hostVerification.collectVerificationEvidence({ planText: prepared.plan.text, allowList,
       worktree: prepared.commit.worktree, stateRoot: prepared.stateRoot, ticket: prepared.commit.ticket,
       planSha256: prepared.plan.sha256, expectedHead: prepared.commit.expectedHead,
-      files_modified: prepared.commit.files_modified, sandboxRunner: options.verificationRunner,
+      files_modified: prepared.commit.files_modified, caseOnlyRenames: prepared.commit.caseOnlyRenames, sandboxRunner: options.verificationRunner,
       hostRunner: options.hostVerificationRunner,
       treeDigest: options.scopedTree ? () => scopedTreeOf(prepared, options).tree : undefined });
     return Object.freeze(Object.assign(verificationSpec.spec.commands.map((command) => Object.freeze({
@@ -612,6 +612,9 @@ function admitCandidate(prepared, verification, records, tree) {
     policy_version: prepared.identity.policy_version, policy_hash: prepared.identity.policy_hash, model: prepared.identity.model, effort: prepared.identity.effort,
     signer: prepared.commit.expectedSigner, expected_head: prepared.commit.expectedHead,
     expected_base: prepared.commit.expectedBase, base_ref: prepared.baseRef,
+    ...(prepared.commit.resumeCommitted ? { resume_committed: true, resume_diff_base: prepared.commit.resumeDiffBase } : {}),
+    graph_dir: path.dirname(prepared.graphFile),
+    ...(prepared.commit.caseOnlyRenames?.length ? { case_only_renames: prepared.commit.caseOnlyRenames } : {}),
     scoped_tree: tree.tree, changed: [...tree.changed],
     verification: { spec_sha256: verification.digest, required: [...verification.spec.required],
       allow_list_sha256: allowListDigest(prepared.verificationAllowList),
@@ -672,6 +675,9 @@ function finalizeCandidate(candidate, stateRoot, key, options) {
     expectedBase: candidate.expected_base, expectedHead: candidate.expected_head,
     expectedSigner: candidate.signer, files_modified: [...candidate.files_modified],
     expectedTree: candidate.scoped_tree,
+    resumeCommitted: candidate.resume_committed === true,
+    caseOnlyRenames: candidate.case_only_renames || [],
+    graphDir: candidate.graph_dir || options.graphDir,
     verificationEvidenceDigest: candidate.verification.evidence_digest,
   });
   const artifact = signedArtifact(candidate.worktree, candidate, committed);
@@ -735,13 +741,22 @@ function admitCodeReviewInput(prepared, options, capabilities) {
   return signals;
 }
 
-function storageDirectory(options, scope) {
+function storagePath(options, scope) {
   const identity = crypto.createHash('sha256').update(`${scope.run_id}\0${scope.worktree}`).digest('hex');
   const root = stateRootOutsideWorktree(scope, options.storageRoot
     || path.join(os.homedir(), '.local', 'state', 'shipyard', 'codex'));
-  const directory = path.join(root, identity);
+  return path.join(root, identity);
+}
+
+function storageDirectory(options, scope) {
+  const directory = storagePath(options, scope);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   return directory;
+}
+
+function boundaryStoreFor(scope, options = {}) {
+  if (options.recorder) return options.recorder.storeDir ? path.resolve(options.recorder.storeDir) : null;
+  return path.resolve(options.recorderDir || path.join(storagePath(options, scope), 'receipts'));
 }
 
 function researchArtifactPath(worktree, invId, lineId) {
@@ -1053,11 +1068,13 @@ function executorPreflight(options, scope, expectedPlanSha256) {
   const commit = Object.freeze({
     ticket: scope.ticket,
     worktree,
+    graphDir: path.dirname(file),
     expectedBranch: snapshot.row.branch,
     expectedBase: git(worktree, ['rev-parse', '--verify', `${baseRef}^{commit}`]),
     expectedHead: git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
     expectedSigner: signerFingerprint(worktree),
     files_modified: Object.freeze([...snapshot.row.files]),
+    caseOnlyRenames: require('./delivery-commit-finalizer.cjs').caseOnlyRenamesFromPlan(plan.text, snapshot.row.files),
   });
   const stateRoot = hostStateRoot(options, scope);
   const commonDir = fs.realpathSync(git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
@@ -1529,10 +1546,11 @@ function repairScopeIdentity(value) {
     allow_list: value.verificationAllowList };
 }
 
-function candidateCommit(candidate) {
+function candidateCommit(candidate, fallbackGraphDir) {
   return { worktree: candidate.worktree, ticket: candidate.ticket, expectedHead: candidate.expected_head,
     expectedBase: candidate.expected_base, expectedBranch: candidate.branch,
-    files_modified: [...candidate.files_modified], expectedSigner: candidate.signer };
+    files_modified: [...candidate.files_modified], expectedSigner: candidate.signer,
+    graphDir: candidate.graph_dir || fallbackGraphDir, caseOnlyRenames: candidate.case_only_renames || [] };
 }
 
 function repairHistoricalEndpoint(prepared) {
@@ -1553,7 +1571,7 @@ function repairHistoricalEndpoint(prepared) {
       || finalized.schema !== FINALIZATION_SCHEMA || finalized.candidate_id !== id || finalized.parent !== candidate.expected_head
       || finalized.tree !== candidate.scoped_tree || finalized.signer !== candidate.signer
       || canonical(prepared.repair) !== canonical(expectedSubject)
-      || canonical(candidateCommit(candidate)) !== canonical({ ...prepared.commit, expectedHead: candidate.expected_head })
+      || canonical(candidateCommit(candidate, prepared.commit.graphDir)) !== canonical({ ...prepared.commit, expectedHead: candidate.expected_head })
       || candidate.repository !== prepared.repository || candidate.repo !== prepared.repo
       || candidate.graph_sha256 !== prepared.graphDigest || candidate.plan_path !== prepared.plan.path
       || candidate.plan_sha256 !== prepared.plan.sha256 || candidate.base_ref !== prepared.baseRef
@@ -2532,11 +2550,23 @@ function finalizedArtifact(result, prepared, options) {
     error.retryable = false;
     throw error;
   }
-  const delta = git(prepared.commit.worktree, ['status', '--porcelain=v1', '--untracked-files=all'])
-    .split('\n').filter(Boolean).filter((entry) =>
-      !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
-  if (!delta.length) fail('NO_PUBLISHABLE_DELTA', 'executor produced no worktree changes to finalize');
-  const tree = scopedTreeOf(prepared, options);
+  if ((prepared.expectedRole || 'executor') === 'executor') {
+    let commit;
+    try { commit = require('./delivery-commit-finalizer.cjs').executorCandidate(prepared.commit); }
+    catch (error) {
+      if (/no committed changes or worktree changes/.test(error.message)) fail('NO_PUBLISHABLE_DELTA', 'executor produced no worktree changes to finalize');
+      fail('SCOPED_TREE_UNAVAILABLE', error.message);
+    }
+    prepared = { ...prepared, commit };
+  } else {
+    const delta = git(prepared.commit.worktree, ['status', '--porcelain=v1', '--untracked-files=all'])
+      .split('\n').filter(Boolean).filter(entry => !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
+    if (!delta.length) fail('NO_PUBLISHABLE_DELTA', 'executor produced no worktree changes to finalize');
+  }
+  let tree = scopedTreeOf(prepared, options);
+  if (prepared.commit.resumeCommitted) {
+    tree = { ...tree, changed: prepared.commit.committedPaths };
+  }
   const identity = Object.freeze({
     run_id: options.scope.run_id, phase: options.scope.phase,
     dispatch_id: original.receipt.dispatch_id, launch_id: original.receipt.launch_id,
@@ -2637,7 +2667,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     options.controller?.assertOwner(liveScope.run_id);
     const finalized = readSealed(finalizationFile(stateRoot, candidateId), key);
     if (finalized) {
-      const changed = git(worktree, ['diff', '--name-only', '--no-renames', candidate.expected_head, finalized.commit])
+      const changed = git(worktree, ['diff', '--name-only', '--no-renames', candidate.resume_committed ? candidate.resume_diff_base || candidate.expected_base : candidate.expected_head, finalized.commit])
         .split('\n').filter(Boolean);
       if (finalized.candidate_id !== candidateId || git(worktree, ['rev-parse', 'HEAD']) !== finalized.commit
           || finalized.parent !== candidate.expected_head || finalized.tree !== candidate.scoped_tree
@@ -2694,7 +2724,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
       .policy_hash === candidate.policy_hash);
     check('signer', () => signerFingerprint(worktree) === candidate.signer);
     check('tree', () => scopedTreeOf({ commit: { worktree, expectedHead: candidate.expected_head,
-      files_modified: candidate.files_modified } }, options).tree === candidate.scoped_tree);
+      files_modified: candidate.files_modified, caseOnlyRenames: candidate.case_only_renames || [] } }, options).tree === candidate.scoped_tree);
     check('verification-allow-list', () => candidate.verification.allow_list_sha256 === allowListDigest(currentAllowList));
     check('verification-spec', () => pinnedVerification(options, worktree, planSnapshot(graph.file, graph.snapshot.row),
       currentAllowList)
@@ -2774,7 +2804,7 @@ function createCodexDeliveryHost(options = {}) {
     executable: options.executable,
     probe: options.probe,
     recorder: options.recorder,
-    recorderDir: options.recorderDir || path.join(storage, 'receipts'),
+    recorderDir: boundaryStoreFor(scope, options),
     transcriptDir: options.transcriptDir || path.join(storage, 'transcripts'),
     env: options.env,
     spawn: options.spawn,
@@ -2933,6 +2963,7 @@ function createCodexDeliveryHost(options = {}) {
       }
       const committing = ['executor', 'ci-fix'].includes(request.role);
       const preparedBase = repairPrepared || (committing ? executorPreflight(options, scope, context.plan_sha256) : null);
+      if (request.role === 'executor') roleArtifact.prepareRoleArtifact({ role: 'executor', worktreePath: preparedBase.commit.worktree, newAttempt: true });
       const prepared = ciPrepared ? Object.freeze({ ...preparedBase, expectedRole: 'ci-fix', ciSubject: { selector: ciSelector, prepared: ciPrepared } }) : preparedBase;
       if (committing) {
         context.prompt = originalPrompt + '\n\nYou are an executor already dispatched inside the active coordinator-owned Shipyard delivery loop. The coordinator owns setup and dispatch. Do not restart shipyard-route, bootstrap, marketplace installation, investigate, decomposition, or a second delivery orchestrator. Implement the delivered PLAN within files_modified and the existing sandbox boundaries. Leave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
@@ -3455,6 +3486,7 @@ async function launchRole(parsed, scope, options, stdout, codeReview = {}) {
   const run = createRunScope({
     run_id: scope.run_id,
     repository_id: scope.repository,
+    graph_dir: path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR || defaultGraphDir(scope.worktree)),
     phase: scope.phase,
     ticket: scope.ticket,
     worktree: scope.worktree,
@@ -3500,7 +3532,7 @@ async function launchRole(parsed, scope, options, stdout, codeReview = {}) {
       executable: options.executable,
       probe: options.probe,
       recorder: options.recorder,
-      recorderDir: options.recorderDir || path.join(stateDir, 'receipts'),
+      recorderDir: boundaryStoreFor(scope, options),
       transcriptDir: options.transcriptDir || path.join(stateDir, 'transcripts'),
       env: options.env,
       spawn: options.spawn,
@@ -3554,6 +3586,12 @@ async function launchRole(parsed, scope, options, stdout, codeReview = {}) {
       try { clearInflight(inflight); } catch {}
     }
   }
+  const location = boundaryStoreFor(scope, options);
+  if (request.role !== 'research') {
+    if (Array.isArray(result)) result = result.map(entry => object(entry) ? { ...entry, boundary_store: location } : entry);
+    else if (object(result)) result = { ...result, boundary_store: location, boundary_dispatch_id: dispatchId,
+      run_id: scope.run_id, run_store: path.join(stateDir, 'runs') };
+  }
   stdout?.write(JSON.stringify(result) + '\n');
   return result;
   } catch (error) {
@@ -3574,6 +3612,7 @@ module.exports = Object.freeze({
   SCHEMA,
   MAX_ARGS_BYTES,
   requestValue,
+  boundaryStoreFor,
   prepareRepair,
   shareRepairTransitions,
   repairCoverageTransition,

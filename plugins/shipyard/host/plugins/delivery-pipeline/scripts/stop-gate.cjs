@@ -304,7 +304,7 @@ const JOURNAL_TAIL_BYTES = 64 * 1024;
 
 // Did the run move the world after this board was computed? Returns the newest
 // such event, or null. See the header for why each event is in or out.
-function movedSince(graphDir, generatedAt) {
+function movedSince(graphDir, generatedAt, scopeTickets = null) {
   if (generatedAt === null) return null;
   const file = path.join(graphDir, 'delivery-log.jsonl');
   let text;
@@ -336,6 +336,7 @@ function movedSince(graphDir, generatedAt) {
     let e;
     try { e = JSON.parse(t); } catch { continue; }
     if (!e || typeof e !== 'object') continue;
+    if (scopeTickets && !scopeTickets.includes(e.ticket)) continue;
     const at = Date.parse(e.ts || '');
     if (Number.isNaN(at) || at <= generatedAt) continue;
     // Newer than the board, AND young enough to belong to a run that is still
@@ -360,9 +361,15 @@ function movedSince(graphDir, generatedAt) {
 // that is resolved further down; they are only ever called from `verdict()`,
 // which runs after all of it exists.
 
+function ledgerFile() {
+  if (!scopedMode) return path.join(graphDir, LEDGER_NAME);
+  const key = require('node:crypto').createHash('sha256').update(requestedRunId + '\0' + (sessionId || '')).digest('hex');
+  return path.join(scopedRunInfo.store_dir, 'stop-gate-ledgers', key + '.json');
+}
+
 function readLedger() {
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(graphDir, LEDGER_NAME), 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(ledgerFile(), 'utf8'));
     return raw && typeof raw === 'object' ? raw : null;
   } catch {
     return null; // absent, corrupt, or a directory some accident left behind
@@ -374,11 +381,13 @@ function readLedger() {
 // dir, a ledger left as a DIRECTORY (measured on ci-waits.json), a rename that
 // loses a race — say one line and let the verdict stand. This hook always exits 0.
 function recordBlock(blocks) {
-  const file = path.join(graphDir, LEDGER_NAME);
+  const file = ledgerFile();
   const tmp = `${file}.${process.pid}.tmp`;
   try {
+    if (scopedMode) fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     fs.writeFileSync(tmp, JSON.stringify({
       session_id: sessionId,
+      ...(scopedMode ? { run_id: requestedRunId, scope_fingerprint: front.scope_fingerprint } : {}),
       blocks,
       last_generated_at: generated === null ? null : new Date(generated).toISOString(),
       last_moved_at: movedAny ? new Date(movedAny.at).toISOString() : null,
@@ -404,7 +413,9 @@ function recordBlock(blocks) {
 // mark rewrites the file without re-deriving anything from GitHub.
 function advancedSince(rec) {
   const lastGen = Date.parse(rec.last_generated_at || '');
-  if (generated !== null && (!Number.isFinite(lastGen) || generated > lastGen)) return true;
+  if (scopedMode) {
+    if (rec.run_id !== requestedRunId || rec.scope_fingerprint !== front.scope_fingerprint) return true;
+  } else if (generated !== null && (!Number.isFinite(lastGen) || generated > lastGen)) return true;
   if (movedAny) {
     const lastMoved = Date.parse(rec.last_moved_at || '');
     if (!Number.isFinite(lastMoved) || movedAny.at > lastMoved) return true;
@@ -493,11 +504,13 @@ function readFront(file) {
 }
 
 const cwd = process.cwd();
+const scopedMarker = sessionId ? readMarker(cwd, sessionId) : null;
 const requestedRunId = typeof payload.run_id === 'string' && payload.run_id.trim()
-  ? payload.run_id.trim() : (process.env.SHIPYARD_RUN_ID || null);
+  ? payload.run_id.trim() : (process.env.SHIPYARD_RUN_ID || scopedMarker?.run_id || null);
 const scopedMode = Boolean(requestedRunId || String(process.env.SHIPYARD_RUN_CONTROL || '').toLowerCase() === 'scoped'
   || process.env.SHIPYARD_RUN_STORE_DIR);
 let candidates = [];
+let scopedRunInfo = null;
 let legacyMarker = false;
 if (scopedMode) {
   if (!requestedRunId) pendingScope('run_id is missing from the stop payload');
@@ -505,18 +518,28 @@ if (scopedMode) {
   try {
     scoped = runWaker.readRun({
       run_id: requestedRunId,
-      store_dir: process.env.SHIPYARD_RUN_STORE_DIR,
-      graph_dir: process.env.SHIPYARD_GRAPH_DIR,
-      worktree: payload.worktree || process.env.SHIPYARD_RUN_WORKTREE,
+      store_dir: process.env.SHIPYARD_RUN_STORE_DIR || scopedMarker?.store_dir,
+      graph_dir: process.env.SHIPYARD_GRAPH_DIR || scopedMarker?.board,
+      worktree: payload.worktree || process.env.SHIPYARD_RUN_WORKTREE || scopedMarker?.worktree,
     });
   } catch (cause) {
     pendingScope(`${cause.code || 'scope_error'}: ${cause.message}`);
   }
-  const scopedFront = readFront(frontFileIn(scoped.worktree));
-  if (!scopedFront) pendingScope(`the scoped front is missing or unreadable at ${frontFileIn(scoped.worktree)}`);
-  if (scopedFront.front.run_id && scopedFront.front.run_id !== requestedRunId) {
-    pendingScope(`front ${scopedFront.file} belongs to ${scopedFront.front.run_id}, not ${requestedRunId}`);
-  }
+  scopedRunInfo = scoped;
+  const frontFile = path.join(scoped.graph_dir, 'delivery-front.json');
+  const refreshed = spawnSync(process.execPath, [path.join(__dirname, 'front.cjs'), '--run-id', requestedRunId,
+    '--store-dir', scoped.store_dir, '--graph', scoped.graph_dir, '--json'],
+  { cwd: scoped.worktree, encoding: 'utf8', timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
+  if (refreshed.status !== 0) pendingScope('cannot compute the authenticated scoped front: ' + String(refreshed.stderr || '').slice(0, 500));
+  let view;
+  try { view = JSON.parse(refreshed.stdout); } catch { pendingScope('scoped front output is invalid'); }
+  if (view.run_id !== requestedRunId || view.scope_ticket !== scoped.run.ticket.ticket
+      || view.graph_dir !== scoped.graph_dir || view.worktree !== scoped.worktree) pendingScope('front identity differs from the authenticated run');
+  const { behind: _behind, source_generated_at: sourceAt, ...semantic } = view;
+  const fingerprint = require('node:crypto').createHash('sha256').update(JSON.stringify(semantic)).digest('hex');
+  const parsedAt = Date.parse(sourceAt || '');
+  const scopedFront = { file: frontFile, front: { ...view, generated_at: sourceAt, scope_fingerprint: fingerprint },
+    at: Number.isFinite(parsedAt) ? parsedAt : null };
   candidates = [scopedFront];
 } else {
   if (!sessionId) allow();
@@ -614,7 +637,7 @@ const mins = age === null ? null : Math.round(age / 60000);
 // the board is behind reality, whatever the clock says — and this is the branch
 // that catches a run which resumed on yesterday's board, which the age bands
 // below cannot see by construction.
-const movedAny = movedSince(graphDir, generated);
+const movedAny = movedSince(graphDir, generated, scopedMode ? front.scope_tickets : null);
 if (movedAny) {
   const e = movedAny.event;
   const what = e.event === 'attempt' || e.event === 'fix_round'

@@ -36,7 +36,8 @@ const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
 const selectionArgs = require.main === module ? process.argv.slice(2) : [];
 const d37Only = selectionArgs.includes('--code-review-d37-only');
 const reuseOnly = selectionArgs.includes('--code-review-reuse-only');
-if (selectionArgs.some(value => !['--code-review-d37-only', '--code-review-reuse-only'].includes(value)) || selectionArgs.length > 1)
+const historyOnly = selectionArgs.includes('--rc55-history-only');
+if (selectionArgs.some(value => !['--code-review-d37-only', '--code-review-reuse-only', '--rc55-history-only'].includes(value)) || selectionArgs.length > 1)
   throw new Error('Unknown code-review D37 selection');
 let d37Selected = 0, reuseSelected = 0;
 const d37Case = name => [
@@ -55,6 +56,7 @@ function test(name, callback) {
   if (d37Case(name)) d37Selected++;
   if (name === 'code-review reuse refuses a moved base or reference contract and ticket-form subject') reuseSelected++;
   if (d37Only && !d37Case(name) || reuseOnly && name !== 'code-review reuse refuses a moved base or reference contract and ticket-form subject') return;
+  if (historyOnly && !name.startsWith('rc55 executor history')) return;
   runTest(name, () => {
     const current = pendingCase.then(callback);
     pendingCase = current.catch(() => {});
@@ -352,6 +354,46 @@ for (const size of [96 * 1024, 96 * 1024 + 1, 4 * 1024 * 1024, 4 * 1024 * 1024 +
 }
 
 suite('role-artifact — bounded executor evidence');
+
+test('rc55 executor history migrates a legacy manifest only with original digest and authenticated receipt', async () => {
+  const value = await runFixture();
+  try {
+    const current = path.join(value.root, '.shipyard-role-artifact.json');
+    const original = fs.readFileSync(current);
+    const digest = require('node:crypto').createHash('sha256').update(original).digest('hex');
+    fs.rmSync(roleArtifact.archiveAuthorityDirectory(value.root), { recursive: true, force: true });
+    fs.rmSync(path.join(value.root, '.shipyard-role-artifacts'), { recursive: true, force: true });
+    assert.throws(() => roleArtifact.prepareRoleArtifact({ role: 'executor', worktreePath: value.root }), /authenticated retention/);
+    fs.writeFileSync(path.join(value.root, 'implemented.txt'), 'next revision\n');
+    git(value.root, ['add', 'implemented.txt']); git(value.root, ['commit', '-qm', 'next']);
+    const result = roleArtifact.prepareRoleArtifact({ role: 'executor', worktreePath: value.root,
+      artifactDigest: digest, recorder: value.recorder });
+    assert.equal(result.cleared, true);
+    assert.deepEqual(fs.readFileSync(result.archive_path), original);
+  } finally { clean(value); }
+});
+
+test('rc55 executor history prepare retains authenticated original bytes and refuses tampering', async () => {
+  const value = await runFixture();
+  try {
+    const current = path.join(value.root, '.shipyard-role-artifact.json');
+    const original = fs.readFileSync(current);
+    const same = roleArtifact.prepareRoleArtifact({ role: 'executor', worktreePath: value.root });
+    assert.equal(same.cleared, false);
+    fs.writeFileSync(path.join(value.root, 'implemented.txt'), 'next revision\n');
+    git(value.root, ['add', 'implemented.txt']);
+    git(value.root, ['commit', '-qm', 'next revision']);
+    const result = roleArtifact.prepareRoleArtifact({ role: 'executor', worktreePath: value.root });
+    assert.equal(result.cleared, true);
+    assert.deepEqual(fs.readFileSync(result.archive_path), original);
+    assert.equal(fs.existsSync(current), false);
+    assert.equal(roleArtifact.prepareRoleArtifact({ role: 'executor', worktreePath: value.root }).cleared, false);
+    fs.writeFileSync(current, Buffer.concat([original, Buffer.from(' ')]));
+    assert.throws(() => roleArtifact.prepareRoleArtifact({ role: 'executor', worktreePath: value.root }), /authenticated|digest|archive/);
+    assert.deepEqual(fs.readFileSync(current), Buffer.concat([original, Buffer.from(' ')]));
+    assert.deepEqual(fs.readFileSync(result.archive_path), original);
+  } finally { clean(value); }
+});
 
 test('exposes the trusted seal, validate, and read boundary', () => {
   // Keep the first RED assertion about the intended behavior. A missing module

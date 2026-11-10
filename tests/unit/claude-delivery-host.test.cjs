@@ -5,7 +5,11 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { suite, test: runTest, done, assert } = require('./assert-harness.cjs');
+const test = (name, callback) => {
+  if (process.argv.includes('--rc55-resume-only') && !name.startsWith('rc55 executor')) return;
+  runTest(name, callback);
+};
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createClaudeDeliveryHost, runClaudeDeliveryCli, validateRequest, REQUEST_SCHEMA,
   verificationFailureContext, verificationFailureReason } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
@@ -522,6 +526,30 @@ test('passing Claude host verification sends sealed digest to finalizer', async 
     fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
     await fixture.host.run('fix-round', fixture.args);
     assert.match(digest, /^[0-9a-f]{64}$/);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test('rc55 executor repair forwards pinned reviewed rename intent to finalizer', async () => {
+  let observed;
+  const fixture = repairFixture({ status: 'fixed', changeCode: true, hostOptions: {
+    verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+    verificationTreeDigest() { return 'same'; },
+    hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '' }; } },
+    signingFingerprint() { return 'A'.repeat(40); },
+    finalizeCommit(input) { observed = input; return { commit: 'signed', verificationEvidenceDigest: input.verificationEvidenceDigest }; },
+    publishRepair() { return { pushed: true }; },
+  } });
+  try {
+    const pair = { from: 'src/owned.txt', to: 'src/Owned.txt' };
+    const graphPath = path.join(fixture.graphDir, 'tickets.json');
+    const graph = JSON.parse(fs.readFileSync(graphPath));
+    graph.tickets['T-38-03'].files = [pair.from, pair.to];
+    fs.writeFileSync(graphPath, JSON.stringify(graph));
+    fs.writeFileSync(fixture.planPath, '---\nfiles_modified: [src/owned.txt, src/Owned.txt]\ncase_only_renames:\n  - from: src/owned.txt\n    to: src/Owned.txt\ndelivery:\n  human_checkpoint: review\n---\n## Verification commands\n- `node check.cjs`\n');
+    fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
+    await fixture.host.run('fix-round', fixture.args);
+    assert.deepEqual(observed.caseOnlyRenames, [pair]);
+    assert.equal(observed.graphDir, fs.realpathSync(fixture.graphDir));
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
@@ -1453,6 +1481,75 @@ test('executor and drift-check prompts carry the delivered plan contract; a call
     });
     assert.match(prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
     assert.match(prompts[0], /# Repair plan/);
+    assert.match(prompts[0], /CUSTOM RULES HINT FROM THE CALLER/);
+  } finally {
+    if (previousHome === undefined) delete process.env.GNUPGHOME;
+    else process.env.GNUPGHOME = previousHome;
+    fs.rmSync(gnupgHome, { recursive: true, force: true });
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    releaseGpg();
+  }
+});
+
+test('rc55 executor attests its committed result after fresh approved verification', async () => {
+  const releaseGpg = await holdGpg();
+  const fixture = repairFixture();
+  const prompts = [];
+  let originalHead;
+  fs.writeFileSync(fixture.planPath, '# Repair plan\n\n## Verification commands\n\n- `node check.cjs`\n');
+  const evidence = new WeakMap();
+  const host = createClaudeDeliveryHost({
+    verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+    hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '' }; } },
+    graphDir: fixture.graphDir,
+    controller: owner(fixture.root, fixture.worktree, 'T-38-03', 'run-executor-delivery'),
+    runtimeHost: {
+      ...fixture.runtimeHost,
+      scope: { run_id: 'run-executor-delivery', ticket: 'T-38-03', worktree: fixture.worktree },
+      async agent(prompt, launchOptions) {
+        prompts.push(prompt);
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-pr-body.md'), 'Ticket: T-38-03\n\nDone.\n');
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-evidence.md'), 'complete evidence\n');
+        fs.writeFileSync(path.join(fixture.worktree, 'src', 'owned.txt'), 'after\n');
+        git(fixture.worktree, 'add', 'src/owned.txt');
+        git(fixture.worktree, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'executor committed work');
+        originalHead = git(fixture.worktree, 'rev-parse', 'HEAD');
+        const result = { id: 'T-38-03', status: 'committed', summary: 'done', blocking_count: 0 };
+        evidence.set(result, transcriptEvidence({
+          launch_id: `executor-${crypto.randomUUID()}`, applied_model: launchOptions.model,
+          applied_effort: launchOptions.effort, observed_model: launchOptions.model,
+          observed_effort: launchOptions.effort,
+        }));
+        return result;
+      },
+      applicationEvidence: ({ result }) => evidence.get(result),
+      capabilities: CLAUDE_CAPABILITIES,
+    },
+  });
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g6-'));
+  fs.chmodSync(gnupgHome, 0o700);
+  const previousHome = process.env.GNUPGHOME;
+  try {
+    process.env.GNUPGHOME = gnupgHome;
+    execFileSync('gpg', ['--batch', '--pinentry-mode', 'loopback', '--passphrase', '',
+      '--quick-generate-key', 'Repair Host Test <repair@example.test>', 'ed25519', 'sign', '0'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+    const keys = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys'], { encoding: 'utf8' });
+    const fingerprint = keys.split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
+    git(fixture.worktree, 'config', 'user.signingkey', fingerprint);
+    await host.run('executors', {
+      tickets: [{
+        id: 'T-38-03', branch: 'ticket/T-38-03', prBase: 'main',
+        worktreePath: fixture.worktree, planPath: fixture.planPath,
+        model: CLAUDE_EXECUTOR.model, effort: CLAUDE_EXECUTOR.effort,
+      }],
+      deliveryRulesHint: 'CUSTOM RULES HINT FROM THE CALLER',
+    });
+    assert.match(prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
+    assert.match(prompts[0], /# Repair plan/);
+    assert.equal(git(fixture.worktree, 'rev-parse', 'HEAD^'), originalHead);
+    assert.equal(git(fixture.worktree, 'rev-parse', 'HEAD^{tree}'), git(fixture.worktree, 'rev-parse', originalHead + '^{tree}'));
+    git(fixture.worktree, 'verify-commit', 'HEAD');
     assert.match(prompts[0], /CUSTOM RULES HINT FROM THE CALLER/);
   } finally {
     if (previousHome === undefined) delete process.env.GNUPGHOME;

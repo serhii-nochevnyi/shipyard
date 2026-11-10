@@ -404,7 +404,7 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   };
   const artifactPreparer = configuredArtifactPreparer || function trustedArtifactPreparer(input = {}) {
     if (!object(input.artifact)) reject('workflow artifact preparation requires artifact metadata');
-    if (['ci-fix', 'review-fix', 'drift-check'].includes(input.artifact.role)) {
+    if (['executor', 'ci-fix', 'review-fix', 'drift-check'].includes(input.artifact.role)) {
       return roleArtifact.prepareRoleArtifact(input.artifact);
     }
     return null;

@@ -433,6 +433,38 @@ for (const file of planFiles.sort()) {
     tracked = execFileSync('git', ['-C', ROOT, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'ignore'] }).split('\0').filter(Boolean);
   } catch { tracked = []; }
+  const { caseCollisions } = require('./delivery-commit-finalizer.cjs');
+  const pathConfig = loadConfig(ROOT);
+  const { repositorySlug } = require('./comment-policy.cjs');
+  const ownRepository = repositorySlug(ROOT);
+  const indices = new Map([[ROOT, tracked]]);
+  for (const t of Object.values(tickets)) {
+    if ((deliveryStateRows[t.id] || {}).status === 'merged') continue;
+    let targetTracked = tracked;
+    if (t.repo && t.repo.toLowerCase() !== ownRepository?.toLowerCase()) {
+      const target = pathConfig.valid && pathConfig.config.repos[t.repo];
+      if (!target || repositorySlug(target)?.toLowerCase() !== t.repo.toLowerCase()) {
+        warnings.push(`${t.id}: exact tracked spelling cannot be checked until pipeline.repos maps ${t.repo} to its matching checkout`);
+        continue;
+      }
+      if (!indices.has(target)) {
+        try { indices.set(target, execFileSync('git', ['-C', target, 'ls-files', '-z'],
+          { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).split('\0').filter(Boolean)); }
+        catch { errors.push(`${t.id}: cannot read target repository index at ${target}`); continue; }
+      }
+      targetTracked = indices.get(target);
+    }
+    let renames = [];
+    try { renames = require('./delivery-commit-finalizer.cjs').caseOnlyRenamesFromPlan(fs.readFileSync(path.join(ROOT, t.file), 'utf8'), t.files); }
+    catch (error) { errors.push(`${t.id}: ${error.message}`); }
+    for (const pair of renames) {
+      if (!targetTracked.includes(pair.from) || targetTracked.includes(pair.to)) errors.push(`${t.id}: case_only_renames must remove an exactly tracked old path and add an untracked spelling`);
+    }
+    const literal = t.files.map(literalPrefix).filter(Boolean);
+    for (const mismatch of caseCollisions(targetTracked.filter(file => !renames.some(pair => pair.from === file)), literal.filter(file => !renames.some(pair => pair.from === file || pair.to === file)))) {
+      errors.push(`${t.id}: files_modified path "${mismatch.path}" differs from tracked spelling "${mismatch.existing}"; use git ls-files spelling exactly`);
+    }
+  }
   const spellings = new Map();
   for (const file of tracked) {
     const parts = file.split('/');

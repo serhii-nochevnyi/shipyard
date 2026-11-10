@@ -559,6 +559,7 @@ function computeFront(tickets, state, opts = {}) {
   };
 
   for (const id of Object.keys(state)) {
+    if (opts.ownedTickets && !opts.ownedTickets.includes(id)) continue;
     const s = state[id] || {};
     const t = (tickets && tickets[id]) || {};
 
@@ -1711,12 +1712,21 @@ module.exports = {
 if (require.main === module) {
   const fs = require('fs');
   const path = require('path');
-  const dir = require(path.join(__dirname, 'graph-dir.cjs')).resolveGraphDir().dir;
+  const dir = require(path.join(__dirname, 'graph-dir.cjs')).resolveGraphDir(process.argv.slice(2)).dir;
   const root = path.resolve(dir, '..', '..');
   const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
   const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
   const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
   const argv = process.argv.slice(2);
+  const value = name => { const at = argv.indexOf(name); return at < 0 ? undefined : argv[at + 1]; };
+  let runInfo = null;
+  const runId = value('--run-id') || process.env.SHIPYARD_RUN_ID;
+  if (runId) {
+    try {
+      runInfo = require('./run-waker.cjs').readRun({ run_id: runId, store_dir: value('--store-dir'), graph_dir: dir });
+      if (!/^T-\d{2}-\d{2}$/.test(runInfo.run.ticket.ticket)) throw new Error('scoped front requires an authenticated ticket run');
+    } catch (error) { process.stderr.write(error.message + '\n'); process.exit(1); }
+  }
   const pIdx = argv.indexOf('--parked');
   const parked = pIdx === -1 ? [] : String(argv[pIdx + 1] || '').split(',').map((s) => s.trim()).filter(Boolean);
   // auto_merge decides whether an unmerged green PR is the sentinel's work or a
@@ -1781,9 +1791,21 @@ if (require.main === module) {
       () => {
         const tickets = (read('tickets.json') || {}).tickets || {};
         const state = read('delivery-state.json');
+        if (runInfo) {
+          const id = runInfo.run.ticket.ticket;
+          if (!tickets[id] || typeof tickets[id] !== 'object' || Array.isArray(tickets[id])
+              || !state || typeof state !== 'object' || !state[id] || typeof state[id] !== 'object'
+              || Array.isArray(state[id]) || !['pending', 'branched', 'pr-open', 'merged'].includes(state[id].status)) {
+            throw new Error('owned ticket ' + id + ' is missing or invalid in the canonical graph/state scope');
+          }
+          if (tickets[id].branch && state[id].branch && tickets[id].branch !== state[id].branch) {
+            throw new Error('owned ticket ' + id + ' has conflicting graph/state branch identity');
+          }
+        }
         const trackerRecords = valid ? activeTrackerSnapshotLocked(dir, trackerStatuses) : {};
-        return computeFront(tickets, state, {
+        const computed = computeFront(tickets, state, {
           parked, autoMerge, mergeWithoutCi, maxConcurrentAgents,
+          ...(runInfo ? { ownedTickets: [runInfo.run.ticket.ticket] } : {}),
           configInvalid: !valid,
           drifted: activeDrift(root), escalated: activeParks(root, state),
           trackerStatuses,
@@ -1791,6 +1813,22 @@ if (require.main === module) {
           dispatched: activeDispatches(root, state),
           ci_estimates: ciEstimates(dir, tickets),
         });
+        if (runInfo) {
+          const seen = new Set();
+          const pending = [runInfo.run.ticket.ticket];
+          while (pending.length) {
+            const id = pending.pop();
+            if (seen.has(id) || !tickets[id]) continue;
+            seen.add(id);
+            pending.push(...(tickets[id].depends_on || []));
+            if (tickets[id].primary_parent) pending.push(tickets[id].primary_parent);
+          }
+          computed.scope_tickets = [...seen].sort();
+          const derived = stateDerivedAt(dir);
+          computed.source_generated_at = derived === null ? null : new Date(derived).toISOString();
+        }
+        return computed;
+
       },
       { label: 'front state' },
     ), { label: 'front tracker snapshot' });
@@ -1806,6 +1844,8 @@ if (require.main === module) {
   // HERE rather than in computeFront, which is a pure function of what it is
   // handed and must stay one. `--json` carries the same finding as a field, so a
   // machine reader cannot miss what a human is shown.
+  if (runInfo) Object.assign(front, { run_id: runInfo.run_id, scope_ticket: runInfo.run.ticket.ticket,
+    graph_dir: runInfo.graph_dir, worktree: runInfo.worktree });
   const behind = behindWarning(dir);
   if (behind) front.behind = behind;
   // Carried on EVERY result rather than only where it came due — ci-wait.cjs's

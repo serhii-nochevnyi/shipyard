@@ -596,7 +596,9 @@ The detailed protocol is in
 
 Build a CI repair from the ticket worktree with
 `node "$SHIPYARD_ROOT/scripts/deliver-dispatch.cjs" build ci-fix T-01-01 --runtime codex --pr 123 --failure-file "$PWD/dist/.shipyard-ci-failure.log" --graph /path/to/project/.planning/graph`.
-Use `--runtime claude` for Claude Code. Save the resulting JSON outside the worktree.
+Use `--runtime claude` for Claude Code. The evidence must be a nonempty regular
+file inside the canonical ticket worktree; copy external logs there first. Both
+builder and host refuse symlinks and external paths. Save the resulting JSON outside the worktree.
 Launch Codex with `codex-delivery-host.cjs --args-file <request.json>` or Claude
 with `claude-delivery-host.cjs --workflow fix-round --request-file <request.json>`.
 The request carries the canonical graph selector, PR, HEAD, PLAN digest, and
@@ -605,3 +607,122 @@ inputs immediately before launch. CI repair and base reconciliation run in
 separate rounds: after a base merge, capture current CI evidence and build a new
 request. Agent output cannot substitute an application receipt; the host verifies
 PLAN checks before signing a repair commit.
+
+### Native push checks and review bases
+
+Managed publication installs a real Git `pre-push` hook before pushing. For manual
+pushes, install it once in the target checkout:
+
+```bash
+node "$SHIPYARD_SCRIPTS/install-shipyard-git-hook.cjs" install \
+  --worktree /path/to/checkout --project-root /path/to/planning-project \
+  --graph /path/to/planning-project/.planning/graph
+```
+
+From this source checkout, `make install-shipyard-git-hook WORKTREE=/path/to/checkout`
+installs the same hook. Uninstall with the script's `uninstall --worktree PATH`
+command. Installation preserves existing hooks, `core.hooksPath`, argv and stdin;
+uninstall restores the previous configuration. Conflicting higher-priority Git
+configuration or altered managed files cause a refusal.
+
+The hook checks the actual commit IDs supplied by Git, including non-HEAD and
+multiple branch updates. Deletions have no content to check. Tags and other
+non-branch refs are reported as unmanaged. Working-tree edits do not affect a
+push check. The review base comes from the branch's open PR, then an explicit
+base, a repository-qualified graph/board branch match, or project `git.base_branch`.
+A conflicting recorded or explicit base is refused with a diagnostic. A source
+branch's own upstream is insufficient. Refusals name `base`, `base_source` and
+`file:line` findings. The old Bash tool hook no longer infers pushes from command
+text; manual pushes require the native Git hook.
+
+Use `comment-policy.cjs check T-01-01 --worktree PATH --base BASE --head COMMIT`
+for a committed snapshot, or `--working-tree` for a consistent disk snapshot.
+These flags are mutually exclusive. Functional repository annotations can be
+preserved with an exact repository rule in `.planning/config.json`:
+
+```json
+{
+  "pipeline": {
+    "comment_docblocks": {
+      "acme/app": {
+        "tags": ["@ai-generated", "@dataProvider", "@var", "@param", "@return", "@throws"],
+        "public_methods": true
+      }
+    }
+  }
+}
+```
+
+Rules are opt-in per repository. They permit bounded functional annotations and,
+with `public_methods`, PHPDoc immediately before public methods. Unknown tags,
+history prose and malformed annotations remain findings; cleanup preserves
+accepted annotations.
+
+### Executor recovery and retained scripts
+
+A trusted executor host can finish clean committed work ahead of the ticket base.
+It authenticates the dispatch and pinned plan, checks scope and ancestry, verifies
+the exact tree again, then adds a signed attestation commit. The original commit
+is retained. HEAD, tree, index or verification changes invalidate finalization.
+An empty base-to-HEAD delta still cannot be published as work.
+
+New executor manifests retain immutable dispatch history and authenticated receipt
+references. The host prepares a successor without deleting the old history. For a
+legacy manifest that predates authenticated history, provide its original digest
+and receipt store before preparing a successor:
+
+```bash
+node "$SHIPYARD_SCRIPTS/role-artifact.cjs" prepare --role executor \
+  --worktree /path/to/checkout --boundary-store /path/to/original/receipts \
+  --artifact-digest ORIGINAL_MANIFEST_SHA256
+```
+
+The digest and original receipt must authenticate the manifest and complete evidence;
+changed or missing historical bytes are refused. Dispatch `launch`, `wait` and
+`status` return `boundary_store`; a pending launch can report its locator before
+an authenticated host dispatch ID is available.
+
+Claude installation retains a content-addressed plugin bundle outside its prunable
+version cache and sets `SHIPYARD_SCRIPTS` in Claude settings. Old bundles are retained
+for running sessions. Claude commands honor an explicit `SHIPYARD_SCRIPTS` override. Codex
+installation keeps its existing stable `$CODEX_HOME/shipyard/scripts` bundle.
+Native Git hooks retain their own immutable payload under the repository's common
+Git directory and survive removal of the original plugin cache.
+
+### Session scope and Jira configuration
+
+Use `front.cjs --run-id RUN --store-dir STORE --graph GRAPH --json` and
+`stop-gate-arm.cjs arm --session-id SESSION --run-id RUN --store-dir STORE --graph-dir GRAPH`
+to bind a session to an authenticated run. Host results expose `run_id` and
+`run_store` for these selectors. The run records its canonical graph,
+which can live outside the target checkout. Its front counts owned ticket work
+while retaining global dependencies and capacity facts. The stop gate recomputes
+that scoped front; unrelated sessions do not hold it open or change its board.
+Scoped stop ledgers are stored per run and session; an unchanged repeated stop
+does not wake the model or overwrite another session's ledger. Disarm an existing
+marker before binding the session to a different run.
+
+`jira-export.cjs plan --ticket T-01-01 --repo acme/app --project APP --json`
+exports that ticket, its transitive dependencies and required epics/links. Omitting
+`--ticket` retains full-graph export. Descriptions are bounded to 12 KB and retain
+the complete source-plan pointer.
+
+Jira transitions are configured by target status **names**, rather than workflow
+transition IDs. Projection remains disabled until a map is configured; its local
+plan prints a configuration hint when the map is empty. For example:
+
+```json
+{
+  "pipeline": {
+    "jira_transitions": {
+      "branched": "In progress",
+      "pr-open": "On review",
+      "merged": "Done"
+    }
+  }
+}
+```
+
+Use names available in the project's Jira workflow and review
+`jira-project.cjs plan --json` before applying a projection. No tracker update is
+performed by planning or exporting.

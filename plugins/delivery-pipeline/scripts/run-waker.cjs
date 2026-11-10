@@ -65,7 +65,7 @@ function readRun(input = {}) {
   const now = Number.isSafeInteger(input.now) ? input.now : Date.now();
   const status = statusFor(record, now);
   const worktree = record.run.worktree.path;
-  const graphDir = graphDirOf(worktree);
+  const graphDir = record.run.repository.graph_dir || graphDirOf(worktree);
   const requestedGraph = input.graph_dir || input.graphDir;
   if (requestedGraph && !samePath(graphDir, requestedGraph)) {
     throw error('SCOPE_MISMATCH', `graph ${path.resolve(String(requestedGraph))} does not belong to run ${runId}`, {

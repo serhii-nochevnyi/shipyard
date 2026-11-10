@@ -42,7 +42,7 @@ test('these role instructions no longer hand-build boundary requests', () => {
 
 const step5 = deliver.slice(deliver.indexOf('## Step 5'), deliver.indexOf('## Rules'));
 const pipelineDocs = fs.readFileSync(path.join(repositoryRoot, 'docs/gsd_multilevel_delivery_pipeline.md'), 'utf8');
-const phaseBuilderArgv = source => [...source.replace(/\\\n\s*/g, ' ').matchAll(
+const phaseBuilderArgv = source => [...source.replaceAll('${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}', '${CLAUDE_PLUGIN_ROOT}/scripts').replace(/\\\n\s*/g, ' ').matchAll(
   /^\s*node \$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/deliver-dispatch\.cjs build ((?:code-review|arch-review) <phase-directory>[^\n]*)/gm
 )].map(([, argv]) => argv.replace(/\s+\[--repo owner\/name\]$/, '').trim().split(/\s+/));
 

@@ -28,12 +28,12 @@ no dependency on session memory. There may be gaps of weeks between sessions.
 
 ## Runtime and host selection
 
-Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve --json` and
+Run `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/pipeline-config.cjs resolve --json` and
 take the active runtime from `config.gsd.runtime`; it must be exactly `claude`
 or `codex`. Keep that runtime fixed for the investigation. Claude routes through
-`${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs --request-file
+`${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/claude-investigation-host.cjs --request-file
 <json>`. Codex routes each research line through
-`${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs --args-file <json>` with
+`${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/codex-delivery-host.cjs --args-file <json>` with
 `role: research`. Claude's request carries the four canonical line selections;
 Codex's builder request carries the investigation packet and four canonical
 lines, and its host resolves each line's selection. Each host builds `createDispatchBoundary`,
@@ -107,7 +107,7 @@ Read `.planning/investigations/` (may not exist):
    never chooses a model or effort. Pass the active runtime explicitly:
 
    ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs \
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs \
      build research "$invId" --runtime "$runtime" > "$requestFile"
    ```
 
@@ -206,7 +206,7 @@ For Claude, invoke the same entry point again with a request file whose
 three sealed sibling references:
 
 ```text
-node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/claude-investigation-host.cjs \
   --request-file /absolute/path/investigation-request.json
 ```
 
@@ -216,7 +216,7 @@ For Codex, invoke the same delivery host again with an args file whose
 references:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/codex-delivery-host.cjs \
   --args-file /absolute/path/research-line-request.json
 ```
 
@@ -253,7 +253,7 @@ The goal of each session: close OPEN-QUESTIONS and lock down positions.
 
 When no `- [ ]` remains in OPEN-QUESTIONS.md — propose closing yourself:
 
-1. `node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-inv.cjs <INV-dir>` — must be OK.
+1. `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/validate-inv.cjs <INV-dir>` — must be OK.
 2. Generate the ADR package in `.planning/architecture/`:
    - `ADR-NNN-<slug>.md` — from DECISIONS.md, using
      `${CLAUDE_PLUGIN_ROOT}/templates/adr/ADR.md` as the template, in a format that
@@ -262,7 +262,7 @@ When no `- [ ]` remains in OPEN-QUESTIONS.md — propose closing yourself:
      `## Out of scope`; do not use nested `###` headings for machine-read sections);
    - if there is material: INTERFACES.md, DATA-MODEL.md, ROLLOUT.md.
 3. Check the ADR before closing:
-   `node ${CLAUDE_PLUGIN_ROOT}/scripts/adr-ingest.cjs --check --input <ADR path>`
+   `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/adr-ingest.cjs --check --input <ADR path>`
    must exit 0; on exit 1, fix the ADR and re-run. The INV does not close until
    this check passes.
 4. Update the PROBLEM.md frontmatter (the template ships it pre-stubbed):

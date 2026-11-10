@@ -185,6 +185,33 @@ function resolveLookup(step, hits) {
   return { action: 'create' };
 }
 
+function truncateUtf8(text, budget) {
+  let result = '';
+  let size = 0;
+  for (const character of text) {
+    const bytes = Buffer.byteLength(character, 'utf8');
+    if (size + bytes > budget) break;
+    result += character; size += bytes;
+  }
+  return result.trimEnd();
+}
+
+function compactDescription(sections, pointer) {
+  const goal = sections.Goal || '';
+  const scope = sections.Scope || '';
+  const criteria = sections['Acceptance criteria'] || '';
+  const render = (g, s, ac) => ['Goal:', g, '', 'Scope:', s, '', 'Acceptance criteria:', ac, '', pointer].join('\n');
+  const complete = render(goal, scope, criteria);
+  if (Buffer.byteLength(complete, 'utf8') <= 12000) return complete;
+  const note = '\n\n[Details truncated; open the source plan.]';
+  const budget = 12000 - Buffer.byteLength(render('', '', '') + note, 'utf8');
+  const criteriaBudget = Math.min(Buffer.byteLength(criteria), Math.floor(budget * 0.6));
+  const goalBudget = Math.min(Buffer.byteLength(goal), 2000);
+  const scopeBudget = budget - criteriaBudget - goalBudget;
+  return render(truncateUtf8(goal, goalBudget), truncateUtf8(scope, scopeBudget),
+    truncateUtf8(criteria, criteriaBudget)) + note;
+}
+
 function planExport(graphDir, opts = {}) {
   if (!REPO_RE.test(String(opts.repo || ''))) {
     throw new Error(`--repo "${opts.repo}" is not an owner/name slug (e.g. acme/demo)`);
@@ -207,7 +234,17 @@ function planExport(graphDir, opts = {}) {
   const raw = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json'), 'utf8'));
   const tickets = raw.tickets || {};
   const root = path.resolve(graphDir, '..', '..');
-  const order = topoOrder(tickets);
+  let order = topoOrder(tickets);
+  if (opts.ticket) {
+    if (!TICKET_ID_RE.test(opts.ticket) || !tickets[opts.ticket]) throw new Error('unknown ticket: ' + opts.ticket);
+    const selected = new Set();
+    const visit = id => { if (selected.has(id)) return; selected.add(id); for (const dep of tickets[id].depends_on || []) {
+      if (!tickets[dep]) throw new Error('unknown ticket dependency: ' + dep);
+      visit(dep);
+    } };
+    visit(opts.ticket);
+    order = order.filter(id => selected.has(id));
+  }
 
   const steps = [];
 
@@ -255,12 +292,7 @@ function planExport(graphDir, opts = {}) {
     const secs = sectionsOf(body);
     const labels = issueLabels(owner, repo, id);
     const pointer = `Source of truth: ${owner}/${repo}:${t.plan} (this issue is a generated projection)`;
-    const description = [
-      'Goal:', secs.Goal || '', '',
-      'Scope:', secs.Scope || '', '',
-      'Acceptance criteria:', secs['Acceptance criteria'] || '', '',
-      pointer,
-    ].join('\n');
+    const description = compactDescription(secs, pointer);
     const hasRecordedKey = t.jira !== null && t.jira !== undefined && t.jira !== '';
     if (hasRecordedKey && (typeof t.jira !== 'string' || !JIRA_KEY_RE.test(t.jira))) {
       throw new Error(`${id} has invalid recorded Jira key "${String(t.jira)}" — refusing Jira export`);
@@ -399,7 +431,7 @@ function stripFlag(argv, name) {
 }
 
 function parsePlanArgs(argv) {
-  const VALUED = ['--repo', '--project', '--issue-type', '--epic-issue-type'];
+  const VALUED = ['--repo', '--project', '--issue-type', '--epic-issue-type', '--ticket'];
   const BOOLEAN = ['--json'];
   const flags = {};
   for (let i = 0; i < argv.length; i++) {
@@ -429,6 +461,7 @@ function cli() {
     try {
       const out = planExport(graphDir, {
         repo: flags['--repo'],
+        ticket: flags['--ticket'],
         project: flags['--project'],
         issueType: flags['--issue-type'],
         epicIssueType: flags['--epic-issue-type'],
@@ -451,7 +484,7 @@ function cli() {
       console.log('Re-run validate-graph.cjs so tickets.json picks up the change.');
     } catch (e) { fail(e.message); }
   } else {
-    fail('usage: jira-export.cjs plan --repo <owner/repo> --project <KEY> [--issue-type <t>] [--epic-issue-type <t|none>] [--graph <dir>] [--json]\n' +
+    fail('usage: jira-export.cjs plan --repo <owner/repo> --project <KEY> [--ticket <T-NN-MM>] [--issue-type <t>] [--epic-issue-type <t|none>] [--graph <dir>] [--json]\n' +
       '  jira-export.cjs record <T-NN-MM> <KEY> [--graph <dir>]');
   }
 }

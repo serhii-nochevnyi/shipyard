@@ -67,6 +67,7 @@ function createRunScope(input = {}) {
   const repository = createRepositoryIdentity(input.repository || {
     repository_id: required(input.repository_id, 'repository_id'),
     worktree: required(input.worktree, 'worktree'),
+    ...(input.graph_dir ? { graph_dir: input.graph_dir } : {}),
   });
   const phase = createPhaseIdentity(required(input.phase, 'phase'));
   const worktree = createWorktreeIdentity(required(input.worktree || repository.worktree, 'worktree'));

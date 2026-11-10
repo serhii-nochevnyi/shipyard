@@ -147,8 +147,8 @@ function indexEntries(worktree, env) {
   return entries;
 }
 
-function diamondTree(root, base, expectedBranch, env) {
-  const { dir, how } = resolveGraphDir([], root);
+function diamondTree(root, base, expectedBranch, env, graphDir) {
+  const { dir, how } = resolveGraphDir(graphDir ? ['--graph', graphDir] : [], root);
   if (how === 'none') return null;
   let tickets;
   try {
@@ -246,12 +246,15 @@ function finalizeDeliveryCommit(options) {
 
   const matcher = scopeMatcher(declared, ignoresCase(root, env));
   const covered = matcher.covered;
-  const from = diamondTree(root, base, expectedBranch, env) || base;
+  const from = diamondTree(root, base, expectedBranch, env, options.graphDir) || base;
   const committed = nulPaths(git(root, ['diff', '--name-only', '-z', '--no-renames', from, head], env, { binary: true }));
   const status = scopedStatus(root, env);
   const outside = [...new Set([...committed, ...status].filter((file) => !covered(file)))];
   if (outside.length) fail(`out-of-scope paths: ${outside.join(', ')}`);
-  if (!status.length) fail('no worktree changes to commit');
+  const resume = !status.length && options.resumeCommitted === true;
+  if (!status.length && !resume) fail('no worktree changes to commit');
+  if (resume && !committed.length) fail('no committed changes to resume');
+  if (resume && options.expectedTree === undefined) fail('resume requires expectedTree from fresh verification');
 
   if (typeof verificationEvidenceDigest !== 'string' || !/^[0-9a-f]{64}$/.test(verificationEvidenceDigest)) {
     fail('trusted finalization requires the signed verification evidence digest (SHA-256)');
@@ -267,16 +270,10 @@ function finalizeDeliveryCommit(options) {
   const privateEnv = { ...env, GIT_INDEX_FILE: path.join(temporary, 'index') };
   try {
     git(root, ['read-tree', head], privateEnv);
-    git(root, ['add', '--all', '--', ...status.map((file) => `:(literal)${file}`)], privateEnv);
+    if (status.length) stageStatus(root, privateEnv, status, options.caseOnlyRenames);
     const staged = nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', head], privateEnv, { binary: true }));
-    if (!staged.length) fail('no staged changes to commit');
-    const collisions = caseCollisions(
-      nulPaths(git(root, ['ls-tree', '-r', '-z', '--name-only', head], env, { binary: true })),
-      nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', '--diff-filter=A', head], privateEnv, { binary: true })));
-    if (collisions.length) {
-      fail('case-colliding paths: ' + collisions.map((entry) => `${entry.path} differs only in letter case from tracked ${entry.existing}`).join('; ')
-        + '; reuse the tracked spelling (macOS and Windows checkouts cannot hold both)');
-    }
+    if (!staged.length && !resume) fail('no staged changes to commit');
+    validateCaseTransition(root, from, privateEnv, options.caseOnlyRenames || []);
     const stagedOutside = staged.filter((file) => !covered(file));
     if (stagedOutside.length) fail(`out-of-scope staged paths: ${stagedOutside.join(', ')}`);
     const stagedFolded = new Set(staged.map(matcher.fold));
@@ -348,11 +345,91 @@ function finalizeDeliveryCommit(options) {
       if (lockFd !== undefined) fs.closeSync(lockFd);
       if (ownsLock) fs.rmSync(lockPath, { force: true });
     }
-    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: staged,
+    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: resume ? committed : staged,
       verificationEvidenceDigest });
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
+}
+
+function validateCaseTransition(root, from, env, pairs) {
+  const tracked = nulPaths(git(root, ['ls-tree', '-r', '-z', '--name-only', from], env, { binary: true }));
+  const added = nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', '--diff-filter=A', from], env, { binary: true }));
+  const removed = nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', '--diff-filter=D', from], env, { binary: true }));
+  const seen = new Set();
+  for (const pair of pairs) {
+    if (!pair || typeof pair.from !== 'string' || typeof pair.to !== 'string' || pair.from === pair.to
+        || pair.from.toLowerCase() !== pair.to.toLowerCase() || seen.has(pair.from.toLowerCase())
+        || !tracked.includes(pair.from) || tracked.includes(pair.to) || !removed.includes(pair.from) || !added.includes(pair.to)) {
+      fail('case-only rename differs from the exact tracked removal and addition');
+    }
+    seen.add(pair.from.toLowerCase());
+  }
+  const collisions = caseCollisions(tracked.filter(file => !pairs.some(pair => pair.from === file)), added);
+  if (collisions.length) fail('case-colliding paths: ' + collisions.map(pair => pair.path + ' differs only in letter case from tracked ' + pair.existing).join('; '));
+}
+
+function caseOnlyRenamesFromPlan(text, declarations) {
+  const { data, errors } = require('./frontmatter.cjs').parseFrontmatter(text);
+  const pairs = data?.case_only_renames;
+  if (pairs === undefined) return [];
+  if (errors.length || !Array.isArray(pairs) || pairs.length > 32
+      || !['review', 'merge', true].includes(data?.delivery?.human_checkpoint)) fail('case_only_renames requires a reviewed plan checkpoint');
+  const seen = new Set();
+  for (const pair of pairs) {
+    if (!pair || Object.keys(pair).sort().join(',') !== 'from,to'
+        || !validDeclaration(pair.from) || !validDeclaration(pair.to)
+        || /[?*[]/.test(pair.from + pair.to) || pair.from === pair.to
+        || pair.from.toLowerCase() !== pair.to.toLowerCase()
+        || !declarations.includes(pair.from) || !declarations.includes(pair.to)
+        || seen.has(pair.from.toLowerCase())) fail('invalid or undeclared case_only_renames pair');
+    seen.add(pair.from.toLowerCase());
+  }
+  return pairs.map(pair => Object.freeze({ ...pair }));
+}
+
+function stageStatus(root, env, status, pairs = []) {
+  if (!pairs.length) {
+    if (status.length) git(root, ['add', '--all', '--', ...status.map(file => `:(literal)${file}`)], env);
+    return;
+  }
+  const tracked = nulPaths(git(root, ['ls-files', '-z'], env, { binary: true }));
+  pairs = pairs.filter(pair => tracked.includes(pair.from));
+  const allowed = pairs.map(pair => pair.from);
+  const collisions = caseCollisions(tracked.filter(file => !allowed.includes(file)), status.filter(file => !allowed.includes(file)));
+  if (collisions.length) fail('case-colliding paths: ' + collisions.map(pair => pair.path + ' differs only in letter case from tracked ' + pair.existing).join('; '));
+  for (const pair of pairs) {
+    if (!tracked.includes(pair.from) || tracked.includes(pair.to) || !status.includes(pair.from) || !status.includes(pair.to)) {
+      fail('case-only rename no longer matches the admitted tracked removal and addition');
+    }
+    git(root, ['update-index', '--force-remove', '--', pair.from], env);
+  }
+  const paths = status.filter(file => !allowed.includes(file));
+  if (paths.length) git(root, ['-c', 'core.ignorecase=false', 'add', '--all', '--', ...paths.map(file => `:(literal)${file}`)], env);
+}
+
+function executorCandidate(options) {
+  const root = fs.realpathSync(options.worktree);
+  const env = { ...process.env };
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete env[key];
+  const head = git(root, ['rev-parse', '--verify', 'HEAD^{commit}'], env).trim();
+  if (git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], env).trim() !== options.expectedBranch) {
+    fail('executor branch changed during dispatch');
+  }
+  if (git(root, ['merge-base', options.expectedHead, head], env).trim() !== options.expectedHead) {
+    fail('executor HEAD is not a descendant of its admitted HEAD');
+  }
+  if (git(root, ['merge-base', options.expectedBase, head], env).trim() !== options.expectedBase) {
+    fail('executor base is not an ancestor of HEAD');
+  }
+  const from = diamondTree(root, options.expectedBase, options.expectedBranch, env, options.graphDir) || options.expectedBase;
+  const changed = nulPaths(git(root, ['diff', '--name-only', '-z', '--no-renames', from, head], env, { binary: true }));
+  const status = scopedStatus(root, env);
+  if (head !== options.expectedHead && status.length) fail('executor HEAD moved and the worktree is not clean for resume');
+  const { covered } = scopeMatcher(options.files_modified, ignoresCase(root, env));
+  if ([...changed, ...status].some(file => !covered(file))) fail('executor candidate has out-of-scope paths');
+  if (!status.length && !changed.length) fail('no committed changes or worktree changes to finalize');
+  return Object.freeze({ ...options, expectedHead: head, resumeCommitted: status.length === 0, resumeDiffBase: from, committedPaths: changed });
 }
 
 function verificationEvidenceDigestFromMessage(message) {
@@ -385,7 +462,7 @@ function scopedTree(options) {
   const privateEnv = { ...env, GIT_INDEX_FILE: path.join(temporary, 'index') };
   try {
     git(root, ['read-tree', head], privateEnv);
-    if (status.length) git(root, ['add', '--all', '--', ...status.map((file) => `:(literal)${file}`)], privateEnv);
+    if (status.length) if (status.length) stageStatus(root, privateEnv, status, options.caseOnlyRenames);
     const changed = nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', head], privateEnv, { binary: true }));
     return Object.freeze({ head, tree: git(root, ['write-tree'], privateEnv).trim(), changed: Object.freeze(changed) });
   } finally {
@@ -393,4 +470,4 @@ function scopedTree(options) {
   }
 }
 
-module.exports = Object.freeze({ finalizeDeliveryCommit, caseCollisions, scopeMatcher, scopedTree, verificationEvidenceDigestFromMessage });
+module.exports = Object.freeze({ finalizeDeliveryCommit, executorCandidate, caseOnlyRenamesFromPlan, caseCollisions, scopeMatcher, scopedTree, verificationEvidenceDigestFromMessage });

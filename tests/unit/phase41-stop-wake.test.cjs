@@ -84,6 +84,9 @@ test('six repeated observations of another run\'s live board cost zero model tur
       generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {}, fixpoint: true,
     });
     const { storeDir } = beginRun(root, 'p41-owner-run', 'T-41-03', ownerWt);
+    const board = path.join(ownerWt, '.planning', 'graph');
+    fs.writeFileSync(path.join(board, 'tickets.json'), JSON.stringify({ tickets: { 'T-41-03': { files: ['owned.js'] } } }));
+    fs.writeFileSync(path.join(board, 'delivery-state.json'), JSON.stringify({ 'T-41-03': { status: 'pending', ready: false } }));
     const counters = newCounters();
 
     for (let i = 0; i < 6; i++) {
@@ -101,6 +104,7 @@ test('six repeated observations of another run\'s live board cost zero model tur
       generated_at: fresh(), actionable_count: 1, left_behind_count: 0,
       actionable: { execute: ['T-41-03'], publish: [], fix: [], finalize: [], merge: [] },
     });
+    fs.writeFileSync(path.join(board, 'delivery-state.json'), JSON.stringify({ 'T-41-03': { status: 'pending', ready: true } }));
     const woken = callStopGate(counters, ownerWt, { run_id: 'p41-owner-run', session_id: 'p41-foreign-session' }, scopedEnv(storeDir));
     assert.ok(woken && woken.decision === 'block', 'a relevant owner (dependency) transition must wake the run');
     assert.match(woken.reason, /T-41-03/, 'the wake names the ticket that became actionable');

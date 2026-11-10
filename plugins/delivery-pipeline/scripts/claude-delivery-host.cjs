@@ -131,16 +131,25 @@ function signingFreeEnvironment() {
   ].map((name) => [name, undefined]));
 }
 
-function storageDirectory(options) {
+function storagePath(options) {
   const scope = options.scope;
   if (!object(scope) || typeof scope.run_id !== 'string' || !scope.run_id.trim()
       || typeof scope.worktree !== 'string' || !scope.worktree.trim()) {
     reject('scope requires run_id and worktree');
   }
   const identity = crypto.createHash('sha256').update(`${scope.run_id}\0${path.resolve(scope.worktree)}`).digest('hex');
-  const storage = path.join(options.storageRoot || path.join(os.homedir(), '.local', 'state', 'shipyard', 'claude'), identity);
+  return path.join(options.storageRoot || path.join(os.homedir(), '.local', 'state', 'shipyard', 'claude'), identity);
+}
+
+function storageDirectory(options) {
+  const storage = storagePath(options);
   fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
   return storage;
+}
+
+function boundaryStoreFor(scope, options = {}) {
+  if (options.recorder) return options.recorder.storeDir ? path.resolve(options.recorder.storeDir) : null;
+  return path.resolve(options.recorderDir || path.join(storagePath({ ...options, scope }), 'receipts'));
 }
 
 function runtimeOptions(options) {
@@ -152,7 +161,7 @@ function runtimeOptions(options) {
     ...options,
     env,
     probe,
-    recorderDir: options.recorderDir || path.join(storage, 'receipts'),
+    recorderDir: boundaryStoreFor(options.scope, options),
     transcriptDir: options.transcriptDir || path.join(storage, 'transcripts'),
   };
 }
@@ -298,6 +307,7 @@ function repairPreflight(options, entry) {
     expectedBase: git(worktree, ['rev-parse', '--verify', `${baseRef}^{commit}`]),
     expectedHead: git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
     files_modified: row.files,
+    caseOnlyRenames: require('./delivery-commit-finalizer.cjs').caseOnlyRenamesFromPlan(verification.planText, row.files),
     repo: row.repo || null,
     ...verification,
     needsReviewFix: entry.needsReviewFix === true,
@@ -597,12 +607,14 @@ function executorCommitInput(options, entry) {
   return Object.freeze({
     ticket: entry.id,
     worktree,
+    graphDir: graphDirectory(options, worktree),
     baseRef,
     expectedBranch: row.branch,
     expectedBase: git(worktree, ['rev-parse', '--verify', `${baseRef}^{commit}`]),
     expectedHead: git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
     expectedSigner: signingFingerprint(worktree),
     files_modified: row.files,
+    caseOnlyRenames: require('./delivery-commit-finalizer.cjs').caseOnlyRenamesFromPlan(verification.planText, row.files),
     repo: row.repo || null,
     ...verification,
     planDelivery: deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree }),
@@ -632,7 +644,7 @@ function verifyCommit(options, commit) {
   return verifyPlan({ planText: commit.planText, allowList: commit.verificationAllowList,
     worktree: commit.worktree, stateRoot: storageDirectory({ ...options, scope: options.scope }),
     ticket: commit.ticket, planSha256: commit.planSha256,
-    expectedHead: commit.expectedHead, files_modified: commit.files_modified,
+    expectedHead: commit.expectedHead, files_modified: commit.files_modified, caseOnlyRenames: commit.caseOnlyRenames,
     sandboxRunner: options.verificationRunner, hostRunner: options.hostVerificationRunner,
     treeDigest: options.verificationTreeDigest });
 }
@@ -714,6 +726,8 @@ function finalizedRepair(options, repair) {
       expectedHead: repair.expectedHead,
       expectedSigner,
       files_modified: repair.files_modified,
+      caseOnlyRenames: repair.caseOnlyRenames,
+      graphDir: graphDirectory(options, repair.worktree),
       verificationEvidenceDigest: verified.digest,
     });
     return commitVerificationMatches(finalized, verified.digest);
@@ -828,15 +842,21 @@ function createClaudeDeliveryHost(options = {}) {
         || !object(input.record.receipt)) reject('artifact consumer requires a finalized dispatch record');
     if (input.artifact.role === 'research') return sealPlanningResearch(input, options, scope);
     if (input.artifact.role === 'executor' && input.result && input.result.status === 'committed') {
-      const commit = prepared.get(input.artifact.ticket);
+      let commit = prepared.get(input.artifact.ticket);
       if (!commit) reject('executor has no trusted commit preflight');
+      commit = require('./delivery-commit-finalizer.cjs').executorCandidate(commit);
+      const expectedTree = require('./delivery-commit-finalizer.cjs').scopedTree(commit).tree;
       let verified;
-      try { verified = verifyCommit({ ...options, scope }, commit); }
+      try {
+        verified = verifyCommit({ ...options, scope }, commit);
+        if (commit.resumeCommitted && verified.outcome !== 'passed') reject('clean executor resume requires fresh approved verification commands');
+      }
       catch (error) {
         if (error.code === 'VERIFICATION_FAILED') verificationFailure = { error, receipt: input.record.receipt };
         throw error;
       }
       const finalized = (options.finalizeCommit || finalizeDeliveryCommit)({ ...commit,
+        expectedTree,
         verificationEvidenceDigest: verified.digest });
       commitVerificationMatches(finalized, verified.digest);
     }
@@ -884,6 +904,7 @@ function createClaudeDeliveryHost(options = {}) {
       let deliveredArgs = args;
       if (name === 'executors' && Array.isArray(args.tickets) && args.tickets.length === 1) {
         const commit = executorCommitInput(options, args.tickets[0]);
+        roleArtifact.prepareRoleArtifact({ role: 'executor', worktreePath: commit.worktree, newAttempt: true });
         prepared.set(args.tickets[0].id, commit);
         deliveredArgs = { ...args, tickets: [{ ...args.tickets[0], prBase: commit.baseRef,
           planDelivery: commit.planDelivery }] };
@@ -1156,6 +1177,7 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   const scope = createRunScope({
     run_id: hostScope.run_id,
     repository_id: worktree,
+    graph_dir: graphDirectory(hostOptions, worktree),
     phase: hostScope.phase,
     ticket: hostScope.ticket,
     worktree,
@@ -1179,7 +1201,7 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
     if (inflight) {
       recordInflight({ ...inflight, ticket: hostScope.ticket, role: dispatch.role, host: 'claude' });
     }
-    const result = await createClaudeDeliveryHost({
+    let result = await createClaudeDeliveryHost({
       ...hostOptions, scope: hostScope, controller,
     }).run(workflow, request.args);
     if (heartbeatError) throw heartbeatError;
@@ -1188,6 +1210,13 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
     if (verificationFailed) {
       controller.fail(scope.run_id, { reason: verificationFailureReason(verificationFailed) });
     } else controller.complete(scope.run_id);
+    const location = boundaryStoreFor(hostScope, hostOptions);
+    if (workflow !== 'investigation-research') {
+      if (Array.isArray(result)) result = result.map(entry => object(entry) ? { ...entry, boundary_store: location, run_id: scope.run_id,
+        run_store: path.join(storageDirectory({ ...hostOptions, scope: hostScope }), 'controller') } : entry);
+      else if (object(result)) result = { ...result, boundary_store: location, run_id: scope.run_id,
+        run_store: path.join(storageDirectory({ ...hostOptions, scope: hostScope }), 'controller') };
+    }
     output.write(`${JSON.stringify(result)}\n`);
     return result;
   } catch (error) {
@@ -1202,7 +1231,7 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
 }
 
 module.exports = Object.freeze({
-  WORKFLOWS, REQUEST_SCHEMA, createClaudeDeliveryHost, runClaudeDeliveryCli, validateRequest,
+  WORKFLOWS, REQUEST_SCHEMA, createClaudeDeliveryHost, runClaudeDeliveryCli, validateRequest, boundaryStoreFor,
   retryableVerificationFailure, verificationFailureContext, verificationFailureReason, scheduleVerificationRetry,
 });
 

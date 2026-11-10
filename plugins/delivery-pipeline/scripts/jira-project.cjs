@@ -514,6 +514,9 @@ function planItems(dir = GRAPH_DIR) {
   if (!Object.keys(map).length) {
     out.enabled = false;
     out.reason = 'pipeline.jira_transitions is empty, which is the projection switched off (the default)';
+    out.configuration_hint = { file: '.planning/config.json', pipeline: { jira_transitions: {
+      branched: 'In progress', 'pr-open': 'On review', merged: 'Done',
+    } }, note: 'Use status names available in your Jira workflow. Review the local projection plan before applying it.' };
     return out;
   }
 

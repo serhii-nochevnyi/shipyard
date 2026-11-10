@@ -636,6 +636,24 @@ test('build exits 2 and names --failure-file when CI evidence is missing', () =>
   }
 });
 
+test('both CI builders refuse outside-worktree and empty evidence before emitting a request', () => {
+  const fixture = builderFixture('T-14-15');
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-outside-evidence-'));
+  const outside = path.join(outsideDir, 'failure.log');
+  const empty = path.join(fixture.root, 'empty.log');
+  fs.writeFileSync(outside, 'failure\n');
+  fs.writeFileSync(empty, '');
+  try {
+    for (const runtime of ['claude', 'codex']) {
+      for (const file of [outside, empty]) {
+        assert.throws(() => deliverDispatch.build(['ci-fix', fixture.id, '--runtime', runtime,
+          '--pr', '501', '--failure-file', file], { cwd: fixture.root, graphDir: fixture.graphDir }),
+        /failure-file.*(?:inside.*worktree|nonempty)/);
+      }
+    }
+  } finally { cleanup(fixture.root, outsideDir); }
+});
+
 test('Pitfall 2: planPath satisfies the canonical-plan formula regardless of process.cwd()', async () => {
   const fixture = shipyardFixture();
   try {
@@ -935,7 +953,7 @@ test('the detached child pid is the host process; status/wait report exit and re
   detachedChildRun = (async () => {
     const fixture = shipyardFixture('T-07-07');
     const stub = path.join(fixture.root, 'stub-host.cjs');
-    fs.writeFileSync(stub, "process.stdout.write(JSON.stringify({pid: process.pid}) + '\\n');\n");
+    fs.writeFileSync(stub, "process.stdout.write(JSON.stringify({pid: process.pid, boundary_store: '/actual/receipts', dispatch_id: 'host-record-7'}) + '\\n');\n");
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-state-'));
     try {
       const launched = await deliverDispatch.launch(
@@ -946,8 +964,12 @@ test('the detached child pid is the host process; status/wait report exit and re
       assert.equal(waited.status, 'exited-ok');
       assert.equal(typeof waited.result.pid, 'number');
       assert.notEqual(waited.result.pid, process.pid);
+      assert.equal(typeof launched.boundary_store, 'string');
+      assert.equal(waited.boundary_store, '/actual/receipts');
+      assert.equal(waited.boundary_dispatch_id, 'host-record-7');
       const status = deliverDispatch.statusOnce(launched.dispatch_id, { stateDir });
       assert.equal(status.status, 'exited-ok');
+      assert.equal(status.boundary_store, waited.boundary_store);
       const events = fs.readFileSync(path.join(fixture.graphDir, 'runs', 'wake-events.jsonl'), 'utf8')
         .split('\n').filter(Boolean).map((line) => JSON.parse(line));
       assert.ok(events.some((event) => event.kind === 'dispatch' && event.run_id === launched.dispatch_id));
@@ -1351,7 +1373,7 @@ function publishFixture({ row = {}, board = {}, manifestName = 'shipyard' } = {}
 }
 
 const PUBLISH_HEAD = ['git symbolic-ref', 'git log', 'scope-gate T-01-01', 'comment-policy check', 'role-artifact validate', 'role-artifact read'];
-const PUBLISH_TAIL = ['publish-gate --worktree', 'git push', 'gh pr', 'reviewers reinit'];
+const PUBLISH_TAIL = ['publish-gate --worktree', 'install-shipyard-git-hook --worktree', 'git push', 'gh pr', 'reviewers reinit'];
 
 test('publish runs gates, validation, push, PR, ledger and reinit in order and records the match', () => {
   const p = publishFixture();
@@ -1362,7 +1384,11 @@ test('publish runs gates, validation, push, PR, ledger and reinit in order and r
     assert.equal(p.arg('gh pr', '--base'), 'main');
     assert.equal(p.args('gh pr').includes('--draft'), true);
     assert.equal(p.arg('publish-gate --worktree', '--base'), 'main');
-    assert.equal(p.args('publish-gate --worktree').includes('--working-tree'), true);
+    assert.equal(p.arg('scope-gate T-01-01', '--graph'), fs.realpathSync(p.f.graphDir));
+    assert.equal(p.arg('comment-policy check', '--project-root'), fs.realpathSync(p.f.root));
+    assert.equal(p.args('publish-gate --worktree').includes('--working-tree'), false);
+    assert.equal(p.arg('publish-gate --worktree', '--head'), 'HEAD');
+    assert.equal(p.arg('install-shipyard-git-hook --worktree', '--graph'), fs.realpathSync(p.f.graphDir));
     assert.equal(p.args('reviewers reinit')[2], '77');
     assert.equal(p.ledger()[p.f.id].number, 77);
   } finally { cleanup(p.f.root); }
@@ -1373,7 +1399,9 @@ test('publish stops at the first refusal, names it, and runs nothing after it', 
     [{ head: 'other\n' }, /branch check refused: the worktree is on other/, 1], [{ empty: true }, /did-work gate refused/, 2],
     [{ 'scope-gate T-01-01': 'out of scope' }, /scope-gate refused: out of scope/, 3], [{ 'comment-policy check': 'bad' }, /comment-policy refused/, 4],
     [{ 'role-artifact validate': 'stale head' }, /role-artifact refused: stale head/, 5], [{ body: 'no marker\n' }, /marker "Ticket: T-01-01"/, 6],
-    [{ 'publish-gate --worktree': 'blocked' }, /publish-gate refused/, 7], [{ 'git push': 'rejected' }, /push refused/, 8], [{ url: 'no url\n' }, /no pull request number/, 9],
+    [{ 'publish-gate --worktree': 'blocked' }, /publish-gate refused/, 7],
+    [{ 'install-shipyard-git-hook --worktree': 'unavailable' }, /install-shipyard-git-hook refused/, 8],
+    [{ 'git push': 'rejected' }, /push refused/, 9], [{ url: 'no url\n' }, /no pull request number/, 10],
   ];
   for (const [refusing, message, ran] of cases) {
     const p = publishFixture();
@@ -1413,7 +1441,7 @@ test('publish merges the base in only for a primary parent on the epic, and rend
     assert.equal(p.arg('pr-hygiene check', '--jira'), 'PRJ-7');
     assert.equal([p.arg('pr-hygiene check', '--title'), p.arg('gh pr', '--title')].join(), 'feat: Demo ticket,feat: Demo ticket');
     assert.equal(p.ledger()[p.f.id].repo, 'o/r');
-    assert.equal([p.arg('pr-hygiene check', '--project-root'), p.arg('publish-gate --worktree', '--project-root')].join(), `${p.f.root}-checkout,${p.f.root}-checkout`);
+    assert.equal([p.arg('pr-hygiene check', '--project-root'), p.arg('publish-gate --worktree', '--project-root')].join(), `${p.f.root}-checkout,${fs.realpathSync(p.f.root)}`);
   } finally { cleanup(p.f.root); }
   const keyless = publishFixture({ manifestName: 'target' });
   try {

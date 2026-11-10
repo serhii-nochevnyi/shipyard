@@ -1021,6 +1021,13 @@ test('owned tuner cleans native fixture helpers before parent continuation and r
     const cliDir = path.join(f.candidate, 'native-bin'); fs.mkdirSync(cliDir, { recursive: true });
     const cli = path.join(cliDir, 'codex');
     fs.copyFileSync(executable, cli); fs.chmodSync(cli, 0o755);
+    const nodeLibrary = path.resolve(path.dirname(executable), `../lib/libnode.${process.versions.modules}.dylib`);
+    if (process.platform === 'darwin' && fs.existsSync(nodeLibrary)) {
+      const libraryDir = path.join(f.candidate, 'lib');
+      fs.mkdirSync(libraryDir, { recursive: true });
+      fs.copyFileSync(nodeLibrary, path.join(libraryDir, path.basename(nodeLibrary)), fs.constants.COPYFILE_FICLONE);
+    }
+
     const probe = path.join(f.dir, 'probe.cjs');
     const mutation = hazard === 'unknown' ? "fs.symlinkSync(cli,path.join(dir,'unknown-helper'));"
       : hazard === 'repointed' ? "fs.unlinkSync(path.join(dir,'apply_patch'));fs.symlinkSync(process.env.HOME,path.join(dir,'apply_patch'));"

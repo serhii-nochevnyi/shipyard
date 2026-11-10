@@ -433,3 +433,48 @@ test('on a case-insensitive checkout one spelling in files_modified covers both 
   const result = finalizeDeliveryCommit(scoped);
   assert.ok(result);
 });
+
+
+test('rc55 clean committed candidate is attested without rewriting its original commit', () => {
+  const { repo, options } = makeRepo();
+  fs.writeFileSync(path.join(repo, 'src/owned.txt'), 'already committed\n');
+  git(repo, 'add', '.');
+  git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'executor work');
+  const original = git(repo, 'rev-parse', 'HEAD');
+  const tree = git(repo, 'rev-parse', 'HEAD^{tree}');
+  const result = finalizeDeliveryCommit({ ...options, expectedHead: original,
+    expectedTree: tree, resumeCommitted: true });
+  assert.equal(git(repo, 'rev-parse', 'HEAD^'), original);
+  assert.equal(result.tree, tree);
+  assert.deepEqual(result.changed, ['src/owned.txt']);
+  assert.equal(git(repo, 'status', '--porcelain'), '');
+  git(repo, 'verify-commit', result.commit);
+});
+
+test('rc55 clean resume refuses absent work or absent exact verified tree', () => {
+  const { repo, options } = makeRepo();
+  assert.throws(() => finalizeDeliveryCommit({ ...options, resumeCommitted: true }), /no worktree changes|no committed changes|expectedTree/);
+  fs.writeFileSync(path.join(repo, 'src/owned.txt'), 'committed\n');
+  git(repo, 'add', '.');
+  git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'executor work');
+  const head = git(repo, 'rev-parse', 'HEAD');
+  const index = indexBytes(repo);
+  assert.throws(() => finalizeDeliveryCommit({ ...options, expectedHead: head, resumeCommitted: true }), /expectedTree/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+  assert.deepEqual(indexBytes(repo), index);
+});
+
+
+test('rc55 reviewed exact case-only rename finalizes and an unapproved pair preserves HEAD', () => {
+  const { repo, options, head } = makeRepo();
+  git(repo, 'mv', 'src/owned.txt', 'src/temporary.txt');
+  git(repo, 'mv', 'src/temporary.txt', 'src/Owned.txt');
+  const index = indexBytes(repo);
+  assert.throws(() => finalizeDeliveryCommit(options), /case-colliding|no staged changes/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+  assert.deepEqual(indexBytes(repo), index);
+  const result = finalizeDeliveryCommit({ ...options, caseOnlyRenames: [{ from: 'src/owned.txt', to: 'src/Owned.txt' }] });
+  assert.equal(git(repo, 'ls-tree', '--name-only', 'HEAD', 'src/owned.txt'), '');
+  assert.equal(git(repo, 'ls-tree', '--name-only', 'HEAD', 'src/Owned.txt'), 'src/Owned.txt');
+  assert.equal(result.previousHead, head);
+});

@@ -222,7 +222,7 @@ function run(admitted, options = {}) {
   if (!admitted.configured) return [];
   const worktree = fs.realpathSync(options.worktree);
   const treeDigest = options.treeDigest || (() => scopedTree({ worktree,
-    expectedHead: options.expectedHead, files_modified: options.files_modified }).tree);
+    expectedHead: options.expectedHead, files_modified: options.files_modified, caseOnlyRenames: options.caseOnlyRenames }).tree);
   const tree = () => {
     try { return { digest: treeDigest(), error: null }; }
     catch (error) { return { digest: null, error: error.code || 'TREE_UNAVAILABLE' }; }
@@ -324,9 +324,9 @@ function readEvidence(file, digest) {
 }
 
 function verifyPlan({ planText, allowList, worktree, stateRoot, ticket, planSha256,
-  expectedHead, files_modified, sandboxRunner, hostRunner, treeDigest }) {
+  expectedHead, files_modified, caseOnlyRenames, sandboxRunner, hostRunner, treeDigest }) {
   const admitted = Array.isArray(allowList) ? admit(planCommands(planText), allowList) : admit([], null);
-  const results = run(admitted, { worktree, stateRoot, expectedHead, files_modified,
+  const results = run(admitted, { worktree, stateRoot, expectedHead, files_modified, caseOnlyRenames,
     sandboxRunner, hostRunner, treeDigest });
   const sealed = evidence(results, { stateRoot, ticket, plan_sha256: planSha256,
     configured: admitted.configured });

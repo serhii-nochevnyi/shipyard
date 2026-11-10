@@ -79,8 +79,22 @@ function resolveBoard(cwd, graphDir) {
 
 function arm(cwd, sessionId, opts = {}) {
   const file = markerPath(cwd, sessionId);
-  const resolved = resolveBoard(cwd, opts.graphDir);
+  const runId = opts.runId || process.env.SHIPYARD_RUN_ID;
+  let resolved;
   const body = { session_id: sessionId, armed_at: new Date().toISOString(), cwd: path.resolve(cwd) };
+  if (runId) {
+    const info = require('./run-waker.cjs').readRun({ run_id: runId, store_dir: opts.storeDir,
+      graph_dir: opts.graphDir, worktree: cwd });
+    const previous = readMarker(cwd, sessionId);
+    if (previous?.run_id && previous.run_id !== info.run_id) throw new Error('stop marker belongs to another run; disarm it before binding a different run');
+    const board = boardOf(info.graph_dir);
+    if (!board) throw new Error('authenticated run board is missing');
+    resolved = { board, competitors: [] };
+    body.run_id = info.run_id;
+    body.store_dir = info.store_dir;
+    body.ticket = info.run.ticket.ticket;
+    body.worktree = info.worktree;
+  } else resolved = resolveBoard(cwd, opts.graphDir);
   if (resolved.board) body.board = resolved.board;
   writeAtomic(file, JSON.stringify(body, null, 2) + '\n');
   return { file, board: resolved.board, competitors: resolved.competitors, refused: resolved.refused || null };
@@ -146,7 +160,7 @@ if (require.main === module) {
     process.exit(0);
   }
   try {
-    const r = arm(process.cwd(), sessionId, { graphDir: flag('--graph-dir') });
+    const r = arm(process.cwd(), sessionId, { graphDir: flag('--graph-dir'), runId: flag('--run-id'), storeDir: flag('--store-dir') });
     process.stdout.write(`stop-gate armed: ${r.file}\n`);
     if (r.board) {
       process.stdout.write(`  bound to board ${r.board}\n`);

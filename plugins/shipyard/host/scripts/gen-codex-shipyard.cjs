@@ -186,6 +186,9 @@ function readShipyardVersion(pluginDir) {
 function shipyardRewrites(text, scriptsRoot) {
   const converted = (
     text
+      .replaceAll('${process.env.SHIPYARD_SCRIPTS || `${CLAUDE_PLUGIN_ROOT}/scripts`}', path.join(scriptsRoot, 'scripts'))
+      .replace(/\$\{SHIPYARD_SCRIPTS:-\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\}/g,
+        path.join(scriptsRoot, 'scripts'))
       // our own command self-references: /shipyard:deliver → $shipyard-deliver
       .replace(/\/shipyard:([a-z-]+)/g, '$shipyard-$1')
       // plugin-root token → installed bundle root (gsd-core leaves this untouched)

@@ -147,3 +147,7 @@ ifeq ($(CONFIRM),untrack-planning)
 else
 	node plugins/delivery-pipeline/scripts/planning-untrack.cjs --project-root "$(CURDIR)"
 endif
+
+.PHONY: install-shipyard-git-hook
+install-shipyard-git-hook:
+	node plugins/delivery-pipeline/scripts/install-shipyard-git-hook.cjs install --worktree "$(or $(WORKTREE),$(CURDIR))"

@@ -72,7 +72,55 @@ function markerComment(text, extraMarkers = []) {
   );
 }
 
-function scanText(text, language, extraMarkers = []) {
+function annotationComment(body, rule, docblock = false) {
+  if (!rule || body.length > 160) return false;
+  const match = /^(@[A-Za-z][A-Za-z0-9_-]*)(?:\s+(.*))?$/.exec(body);
+  if (!match || !rule.tags.includes(match[1])) return false;
+  const payload = match[2] || '';
+  if (HISTORY_PATTERN.test(payload)) return false;
+  if (match[1] === '@ai-generated') return !payload || /^[A-Za-z0-9_.:=/-]+(?:\s+[A-Za-z0-9_.:=/-]+)*$/.test(payload);
+  if (match[1] === '@dataProvider') return docblock && /^[A-Za-z_\\][A-Za-z0-9_\\]*(?:::[A-Za-z_]\w*)?(?:\(\))?$/.test(payload);
+  if (['@var', '@return', '@throws', '@param'].includes(match[1])) {
+    if (!docblock) return false;
+    const type = /^[?\\A-Za-z_$][A-Za-z0-9_\\$<>\[\]{},:|&?().'"-]*(?:\s|$)/.exec(payload);
+    if (!type) return false;
+    if (match[1] === '@param') return /^\$[A-Za-z_]\w*(?:\s|$)/.test(payload.slice(type[0].length).trimStart());
+    return true;
+  }
+  return Boolean(payload);
+
+}
+
+function protectDocblocks(scanned, rule) {
+  if (!rule) return scanned;
+  for (let i = 0; i < scanned.length; i++) {
+    if (scanned[i].code || !scanned[i].fragments.some(fragment => fragment.block && fragment.openedHere
+      && fragment.text.startsWith('/**'))) continue;
+    let end = i;
+    while (end < scanned.length && end - i < 32
+      && !scanned[end].fragments.some(fragment => fragment.block && fragment.closedHere)) end++;
+    if (end >= scanned.length || end - i >= 32 || scanned.slice(i, end + 1).some(row => row.code)) continue;
+    const body = scanned.slice(i, end + 1).map(row => row.text).join('\n')
+      .replace(/^\s*\/\*\*/, '').replace(/\*\/\s*$/, '').split('\n')
+      .map(line => line.replace(/^\s*\*\s?/, '').trim());
+    const next = scanned.slice(end + 1, end + 9).map(row => row.text).join('\n')
+      .replace(/^(?:\s*#\[[^\n]*\]\s*)*/, '');
+    const declaration = /^\s*((?:(?:public|static|final|abstract)\s+)+)function\b/i.exec(next);
+    const publicMethod = rule.public_methods && declaration && /\bpublic\b/i.test(declaration[1]);
+    if (!body.some(Boolean) || !body.every(line => line.length <= 160 && (!line
+      || (line.startsWith('@') ? annotationComment(line, rule, true) : publicMethod && !HISTORY_PATTERN.test(line))))) continue;
+    for (const row of scanned.slice(i, end + 1)) {
+      row.comment = false;
+      row.protected = true;
+      row.cleanable = false;
+      for (const fragment of row.fragments) fragment.protected = true;
+    }
+    i = end;
+  }
+  return scanned;
+}
+
+function scanText(text, language, extraMarkers = [], docblocks = null) {
   const spec = SPECS[language];
   if (!spec) throw new Error(`unsupported language: ${language}`);
   const lines = text.split('\n');
@@ -130,7 +178,7 @@ function scanText(text, language, extraMarkers = []) {
           protected:
             line.trimStart().startsWith('#!') ||
             protectedComment(fragment) ||
-            markerComment(fragment, extraMarkers),
+            markerComment(fragment, extraMarkers) || annotationComment(commentBody(fragment), docblocks, fragment.trim().startsWith('/**')),
           block: false,
           openedHere: true,
           closedHere: true,
@@ -144,7 +192,8 @@ function scanText(text, language, extraMarkers = []) {
         const end = close === -1 ? line.length : close + spec.block[1].length;
         const fragment = line.slice(i, end);
         const isProtected =
-          protectedComment(fragment) || (close !== -1 && markerComment(fragment, extraMarkers));
+          protectedComment(fragment) || (close !== -1
+            && (markerComment(fragment, extraMarkers) || annotationComment(commentBody(fragment), docblocks, fragment.trim().startsWith('/**'))));
         fragments.push({
           text: fragment,
           protected: isProtected,
@@ -203,7 +252,7 @@ function scanText(text, language, extraMarkers = []) {
       fragments,
     });
   }
-  return scanned;
+  return protectDocblocks(scanned, language === 'c-like' ? docblocks : null);
 }
 
 function parseQuotedPath(value) {
@@ -289,8 +338,11 @@ function parseDiff(diff) {
 
 function git(worktree, args) {
   try {
+    const env = { ...process.env };
+    for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
+      'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) delete env[key];
     return execFileSync('git', ['-C', worktree, ...args], {
-      encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+      env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
@@ -334,6 +386,12 @@ function extraMarkers({ projectRoot, repo }) {
   }
 }
 
+function docblockRules({ projectRoot, repo }) {
+  if (!projectRoot || !repo) return null;
+  const config = loadConfig(projectRoot);
+  return config.valid ? repoValue(config, 'comment_docblocks', repo) : null;
+}
+
 function resolveBase(worktree, requested) {
   const candidates = requested.startsWith('refs/')
     ? [requested]
@@ -361,8 +419,8 @@ function contained(worktree, relative) {
   return candidate;
 }
 
-function diffFor(worktree, base, workingTree) {
-  const revision = workingTree ? base : `${base}...HEAD`;
+function diffFor(worktree, base, workingTree, head = 'HEAD') {
+  const revision = workingTree ? base : `${base}...${head}`;
   return git(worktree, [
     'diff', '--unified=0', '--no-color', '--no-ext-diff', '--find-renames',
     '--diff-filter=ACMR', revision, '--',
@@ -378,14 +436,18 @@ function ratioFor(comments, code) {
 function analyze(worktree, base, options = {}) {
   const resolvedBase = resolveBase(worktree, base);
   const workingTree = Boolean(options.workingTree);
-  const diff = diffFor(worktree, resolvedBase, workingTree);
+  if (workingTree && options.head) throw new Error('a pinned commit cannot be checked in working-tree mode');
+  const baseRevision = git(worktree, ['rev-parse', '--verify', `${resolvedBase}^{commit}`]).trim();
+  const head = workingTree ? null : git(worktree, ['rev-parse', '--verify', `${options.head || 'HEAD'}^{commit}`]).trim();
+  const diff = diffFor(worktree, baseRevision, workingTree, head);
   const preimage = workingTree
-    ? resolvedBase
-    : git(worktree, ['merge-base', resolvedBase, 'HEAD']).trim();
+    ? baseRevision
+    : git(worktree, ['merge-base', baseRevision, head]).trim();
   const changes = parseDiff(diff);
   const projectRoot = options.projectRoot || null;
   const repo = options.repo || repositorySlug(worktree);
   const configuredMarkers = extraMarkers({ projectRoot, repo });
+  const configuredDocblocks = docblockRules({ projectRoot, repo });
   const allowedMarkers = [...new Set([...BUILTIN_MARKERS, ...configuredMarkers])];
   const files = [];
   const skipped = [];
@@ -409,11 +471,17 @@ function analyze(worktree, base, options = {}) {
       continue;
     }
     const file = contained(worktree, relative);
-    let stat;
-    try { stat = fs.lstatSync(file); } catch (error) { throw new Error(`changed file cannot be read: ${relative}: ${error.message}`); }
-    if (stat.isSymbolicLink()) throw new Error(`changed file is a symlink: ${relative}`);
-    if (!stat.isFile()) throw new Error(`changed path is not a regular file: ${relative}`);
-    const content = fs.readFileSync(file);
+    if (workingTree || !options.head) {
+      let stat;
+      try { stat = fs.lstatSync(file); } catch (error) { throw new Error(`changed file cannot be read: ${relative}: ${error.message}`); }
+      if (stat.isSymbolicLink()) throw new Error(`changed file is a symlink: ${relative}`);
+      if (!stat.isFile()) throw new Error(`changed path is not a regular file: ${relative}`);
+    }
+    if (!workingTree) {
+      const mode = git(worktree, ['ls-tree', head, '--', relative]);
+      if (!/^100(?:644|755) blob /.test(mode)) throw new Error(`changed path is not a regular committed file: ${relative}`);
+    }
+    const content = workingTree ? fs.readFileSync(file) : Buffer.from(git(worktree, ['show', `${head}:${relative}`]));
     const generatedPrefix = 'plugins/shipyard/host/';
     if (relative.startsWith(generatedPrefix)) {
       const source = relative.slice(generatedPrefix.length);
@@ -422,8 +490,10 @@ function analyze(worktree, base, options = {}) {
         throw new Error(`unrecognized generated Shipyard path: ${relative}`);
       }
       const canonical = contained(worktree, source);
-      if (!fs.existsSync(canonical) || fs.lstatSync(canonical).isSymbolicLink()
-        || !content.equals(fs.readFileSync(canonical))) {
+      const canonicalContent = workingTree
+        ? (fs.existsSync(canonical) && !fs.lstatSync(canonical).isSymbolicLink() ? fs.readFileSync(canonical) : null)
+        : Buffer.from(git(worktree, ['show', `${head}:${source}`]));
+      if (!canonicalContent || !content.equals(canonicalContent)) {
         throw new Error(`generated Shipyard package differs from canonical source: ${relative}`);
       }
       skipped.push({ path: relative, reason: 'verified-generated-copy' });
@@ -433,12 +503,12 @@ function analyze(worktree, base, options = {}) {
       skipped.push({ path: relative, reason: 'binary-file' });
       continue;
     }
-    const scanned = scanText(content.toString('utf8'), language, configuredMarkers);
+    const scanned = scanText(content.toString('utf8'), language, configuredMarkers, configuredDocblocks);
     let baseScanned = [];
     if (change.edited.size) {
       try {
         const baseContent = git(worktree, ['show', `${preimage}:${change.preimagePath}`]);
-        baseScanned = scanText(baseContent, languageFor(change.preimagePath), configuredMarkers);
+        baseScanned = scanText(baseContent, languageFor(change.preimagePath), configuredMarkers, configuredDocblocks);
       } catch {}
     }
     const findings = [];
@@ -496,6 +566,9 @@ function analyze(worktree, base, options = {}) {
   }
 
   const violations = files.filter((file) => file.violation);
+  if (workingTree && diffFor(worktree, baseRevision, true, head) !== diff) {
+    throw new Error('working tree changed during comment analysis; retry the check');
+  }
   return {
     base: resolvedBase,
     requested_base: base,
@@ -528,16 +601,16 @@ function flag(argv, name) {
 }
 
 function argumentsFor(argv) {
-  const valueFlags = new Set(['--worktree', '--base', '--project-root']);
+  const valueFlags = new Set(['--worktree', '--base', '--project-root', '--head']);
   const positionals = argv.filter((value, index) => !value.startsWith('--') && !valueFlags.has(argv[index - 1]));
   const command = positionals[0];
   const ticket = positionals[1];
   if (!['check', 'clean'].includes(command) || !ticket) {
-    throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--project-root <path>] [--json] [--apply]');
+    throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--project-root <path>] [--head <commit>|--working-tree] [--json] [--apply]');
   }
   const worktree = flag(argv, 'worktree');
   const base = flag(argv, 'base');
-  if (!worktree || !base) throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--project-root <path>] [--json] [--apply]');
+  if (!worktree || !base) throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--project-root <path>] [--head <commit>|--working-tree] [--json] [--apply]');
   return {
     command,
     ticket,
@@ -545,6 +618,8 @@ function argumentsFor(argv) {
     base,
     json: argv.includes('--json'),
     apply: argv.includes('--apply'),
+    workingTree: argv.includes('--working-tree'),
+    head: flag(argv, 'head'),
   };
 }
 
@@ -622,7 +697,10 @@ function main(argv = process.argv.slice(2)) {
   const options = {
     projectRoot: resolveProjectRoot(argv),
     repo: repositorySlug(input.worktree),
+    workingTree: input.workingTree,
+    head: input.head,
   };
+  if (input.command === 'clean' && input.head) throw new Error('clean does not accept --head; check a pinned commit without changing disk');
   if (input.command === 'clean' && input.apply && options.projectRoot) {
     const config = loadConfig(options.projectRoot);
     if (!config.valid) {

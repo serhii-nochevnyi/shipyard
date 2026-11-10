@@ -11,6 +11,8 @@ let entrySelected = 0, entryVariants = 0;
 function test(name, callback) {
   if (/^(?:code review |padded code review )/.test(name)) entrySelected++;
   if (name.startsWith('code review CLI seals one static phase verdict: ')) entryVariants++;
+  if (process.argv.includes('--rc55-resume-only') && !name.startsWith('rc55 executor') && name !== 'executor leaves every shared scratch file outside the signed tree') return;
+  if (process.argv.includes('--rc55-repair-regression-only') && !['canonical builder through original static fixer seals source', 'signed fixer publication ', 'authenticated confirmed replies retain repeat policy through the original signed fixer source transition', 'historical signed source publication preserves original custody through'].some(prefix => name.startsWith(prefix))) return;
   if (process.argv.includes('--ci-fix-only') && !name.startsWith('bound CI native launch:')) return;
   return runTest(name, callback);
 }
@@ -297,12 +299,75 @@ suite('codex-delivery-host — scoped production dispatch');
 test('executor leaves every shared scratch file outside the signed tree', async () => {
   const f = fixture();
   try {
-    for (const name of SCRATCH_FILES) fs.writeFileSync(path.join(f.root, name), 'scratch\n');
+    const originalLaunch = f.host.launch;
+    f.host.launch = (...args) => {
+      for (const name of SCRATCH_FILES) fs.writeFileSync(path.join(f.root, name), 'scratch\n');
+      return originalLaunch(...args);
+    };
     const result = await delivery(f).run({ role: 'executor', dispatch_id: 'all-scratch',
       context: { prompt: 'Implement the scoped ticket.' } });
     assert.equal(result.artifact.status, 'committed');
     assert.deepEqual(result.artifact.changed, ['src/owned.txt']);
     assert.equal(git(f.root, 'ls-tree', '--name-only', 'HEAD', ...SCRATCH_FILES), '');
+  } finally { clean(f); }
+});
+
+for (const committedDuringLaunch of [false, true]) {
+  test('rc55 executor attests clean committed work: during launch=' + committedDuringLaunch, async () => {
+    const f = fixture();
+    let original;
+    const commitWork = () => {
+      fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'previous attempt\n');
+      git(f.root, 'add', 'src/owned.txt');
+      git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'existing executor work');
+      original = git(f.root, 'rev-parse', 'HEAD');
+    };
+    try {
+      if (!committedDuringLaunch) commitWork();
+      f.host.launch = (selection, context) => {
+        if (committedDuringLaunch) commitWork();
+        f.calls.push({ method: 'dynamic', selection, context });
+        return application(selection, context);
+      };
+      const result = await delivery(f).run({ role: 'executor', dispatch_id: 'resume-committed',
+        context: { prompt: 'Verify and finish the scoped work.' } });
+      assert.equal(result.artifact.status, 'committed');
+      assert.equal(git(f.root, 'rev-parse', 'HEAD^'), original);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD^{tree}'), git(f.root, 'rev-parse', original + '^{tree}'));
+      assert.deepEqual(result.artifact.changed, ['src/owned.txt']);
+    } finally { clean(f); }
+  });
+}
+
+test('rc55 executor consumes the exact reviewed case-only rename from its pinned plan', async () => {
+  const f = fixture();
+  try {
+    const graphFile = path.join(f.graphDir, 'tickets.json');
+    const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+    graph.tickets['T-38-04'].files = ['src/owned.txt', 'src/Owned.txt'];
+    fs.writeFileSync(graphFile, JSON.stringify(graph));
+    fs.writeFileSync(f.plan, '---\nfiles_modified: [src/owned.txt, src/Owned.txt]\ncase_only_renames:\n  - from: src/owned.txt\n    to: src/Owned.txt\ndelivery:\n  human_checkpoint: review\n---\n# approved rename plan\n');
+    f.host.launch = (selection, context) => {
+      git(f.root, 'mv', 'src/owned.txt', 'src/temporary.txt');
+      git(f.root, 'mv', 'src/temporary.txt', 'src/Owned.txt');
+      return application(selection, context);
+    };
+    const result = await delivery(f).run({ role: 'executor', dispatch_id: 'reviewed-rename',
+      context: { prompt: 'Apply the approved exact rename.' } });
+    assert.equal(result.artifact.status, 'committed');
+    assert.equal(git(f.root, 'ls-tree', '--name-only', 'HEAD', 'src/Owned.txt'), 'src/Owned.txt');
+    assert.equal(git(f.root, 'ls-tree', '--name-only', 'HEAD', 'src/owned.txt'), '');
+  } finally { clean(f); }
+});
+
+test('rc55 executor refuses an unauthenticated pre-existing manifest without moving HEAD', async () => {
+  const f = fixture();
+  try {
+    const head = git(f.root, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(f.root, '.shipyard-role-artifact.json'), 'scratch\n');
+    await assert.rejects(() => delivery(f).run({ role: 'executor', context: { prompt: 'Finish work.' } }), /executor artifact is not valid JSON/);
+    assert.equal(git(f.root, 'rev-parse', 'HEAD'), head);
+    assert.equal(f.calls.length, 0);
   } finally { clean(f); }
 });
 

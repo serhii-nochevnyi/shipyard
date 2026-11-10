@@ -593,6 +593,12 @@ function normalizeCall(value, options) {
 
 function sealExecutor(value, options) {
   const input = normalizeCall(value, options);
+  const worktree = safeRealpath(ioFor(input).fs, input.worktreePath, 'worktree');
+  return withArchivePublication(worktree, () => sealExecutorUnlocked(input));
+}
+
+function sealExecutorUnlocked(value, options) {
+  const input = normalizeCall(value, options);
   const fsApi = ioFor(input).fs;
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const trusted = trustedRecord(input);
@@ -621,6 +627,7 @@ function sealExecutor(value, options) {
   const manifest = manifestFor(metadata, trusted, envelope, files);
   const manifestPath = fixedPath(worktree, MANIFEST_NAME, 'artifact manifest');
   const manifestBytes = writeManifest(fsApi, manifestPath, manifest);
+  retainExecutorHistory(worktree, trusted, manifest, manifestBytes, files);
   const artifactDigest = digest(manifestBytes);
   return Object.freeze({
     schema: ROLE_ARTIFACT_SCHEMA,
@@ -2334,11 +2341,76 @@ function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest)
   });
 }
 
+function retainExecutorHistory(worktree, trusted, manifest, manifestBytes, files) {
+  const fsApi = fs;
+  ensureArchiveDirectory(fsApi, worktree, trusted.dispatchId);
+  const members = [[MANIFEST_NAME, manifestBytes], [PR_BODY_NAME, files.pr_body.content], [EVIDENCE_NAME, files.evidence.content]];
+  const pins = members.map(([name, content]) => {
+    const file = archivePath(worktree, trusted.dispatchId, name, 'executor history');
+    writeImmutableArtifactFile(fsApi, file, content, 'executor history', ARCHIVE_MAX_BYTES);
+    return { path: path.relative(worktree, file), bytes: content.length, sha256: digest(content) };
+  });
+  const state = authorityState(worktree, true);
+  const record = { dispatch_id: trusted.dispatchId, receipt: trusted.receipt, pins, bookkeeping: [],
+    executor_head: manifest.head, receipt_store: trusted.recorder.storeDir || null };
+  const previous = state.payload.records[trusted.dispatchId];
+  if (previous && stable(previous) !== stable(record)) fail('ARCHIVE_AUTHORITY_INVALID', 'executor history already has different authenticated bytes');
+  state.payload.records[trusted.dispatchId] = record;
+  assertArchiveLock(worktree);
+  writeArchiveCatalogue(state);
+}
+
+function prepareExecutorArtifact(input, worktree, fsApi) {
+  const file = fixedPath(worktree, MANIFEST_NAME, 'executor artifact');
+  if (!fsApi.existsSync(file)) return Object.freeze({ path: file, cleared: false });
+  return withArchiveAuthorityLock(worktree, () => {
+    if (!fsApi.existsSync(file)) return Object.freeze({ path: file, cleared: false });
+    const current = readImmutableFile(fsApi, file, 'executor artifact');
+    let manifest;
+    try { manifest = JSON.parse(current); } catch { fail('INVALID_ARTIFACT', 'executor artifact is not valid JSON'); }
+    let state = authorityState(worktree, true);
+    if (!state.payload.records[manifest.producer_dispatch] && input.artifactDigest) {
+      if (input.artifactDigest !== digest(current)) fail('ARTIFACT_DIGEST_MISMATCH', 'legacy executor manifest differs from its supplied original digest');
+      const trusted = trustedRecord({ ...input, dispatchId: manifest.producer_dispatch });
+      const identity = gitIdentity({ ...input, base: manifest.base_commit }, worktree);
+      identity.head = git(input, worktree, ['rev-parse', '--verify', manifest.head + '^{commit}'], 'historical executor HEAD');
+      identity.head_tree = git(input, worktree, ['rev-parse', '--verify', manifest.head + '^{tree}'], 'historical executor tree');
+      identity.base = manifest.base;
+      expectedManifest({ ...input, manifest, base: manifest.base, ticket: manifest.ticket }, trusted, identity);
+      const prBody = verifyFileReference(fsApi, worktree, manifest.files.pr_body, PR_BODY_NAME);
+      const evidence = verifyFileReference(fsApi, worktree, manifest.files.evidence, EVIDENCE_NAME);
+      retainExecutorHistory(worktree, trusted, manifest, current, { pr_body: prBody, evidence });
+      state = authorityState(worktree);
+    }
+    const record = state.payload.records[manifest.producer_dispatch];
+    if (!record || record.receipt?.role !== 'executor' || record.executor_head !== manifest.head) {
+      fail('ARCHIVE_AUTHORITY_REQUIRED', 'executor history lacks authenticated retention; retain the original artifact with its boundary receipt before preparing a successor');
+    }
+    const retained = record.pins.find(pin => pin.path === archiveRelative(record.dispatch_id, MANIFEST_NAME));
+    if (!retained || !readPinnedArchiveFile(worktree, retained, 'authenticated executor history').equals(current)) {
+      fail('ARTIFACT_DIGEST_MISMATCH', 'current executor manifest differs from authenticated history');
+    }
+    for (const pin of record.pins) readPinnedArchiveFile(worktree, pin, 'authenticated executor history');
+    const live = git(input, worktree, ['rev-parse', '--verify', 'HEAD^{commit}'], 'executor HEAD');
+    if (manifest.worktree_realpath !== worktree) fail('STALE_ARTIFACT', 'executor history belongs to another worktree');
+    if (manifest.head === live && input.newAttempt !== true) return Object.freeze({ path: file, cleared: false });
+    if (git(input, worktree, ['merge-base', manifest.head, live], 'executor ancestor') !== manifest.head) {
+      fail('STALE_ARTIFACT', 'executor history is not an ancestor of current HEAD');
+    }
+    assertArchiveLock(worktree);
+    if (!readImmutableFile(fsApi, file, 'executor artifact').equals(current)) fail('ARTIFACT_WRITE', 'executor artifact changed during preparation');
+    fsApi.unlinkSync(file);
+    return Object.freeze({ path: file, cleared: true, archive_path: path.join(worktree, retained.path),
+      archive_digest: retained.sha256, previous_head: manifest.head });
+  });
+}
+
 function prepareRoleArtifact(value, options) {
   const input = normalizeCall(value, options);
   const fsApi = ioFor(input).fs;
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const role = input.role;
+  if (role === 'executor') return prepareExecutorArtifact(input, worktree, fsApi);
   if (!REPAIR_ROLES.has(role) && role !== 'drift-check' && !JUDGMENT_ROLES.has(role)) {
     fail('INVALID_ARTIFACT', `role artifact preparation does not support ${role}`);
   }
@@ -4915,6 +4987,8 @@ function cli(argv) {
     const prepared = prepareRoleArtifact({
       worktreePath: required(values, 'worktree'),
       role: required(values, 'role'),
+      ...(values.boundaryStore ? { boundaryStore: values.boundaryStore } : {}),
+      ...(values.artifactDigest ? { artifactDigest: values.artifactDigest } : {}),
       ...(values.phase ? { phase: values.phase } : {}),
       ...(values.evidencePath ? { evidencePath: values.evidencePath } : {}),
     });

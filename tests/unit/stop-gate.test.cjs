@@ -329,6 +329,12 @@ function runIn(cwd, payload = {}, env = {}, doArm = true) {
 }
 
 function scopedRun(root, worktree, runId = 'stop-gate-run') {
+  const board = path.join(worktree, '.planning', 'graph');
+  const cached = JSON.parse(fs.readFileSync(path.join(board, 'delivery-front.json'), 'utf8'));
+  fs.writeFileSync(path.join(board, 'tickets.json'), JSON.stringify({ tickets: { 'T-37-06': { files: ['src/file.js'] } } }));
+  fs.writeFileSync(path.join(board, 'delivery-state.json'), JSON.stringify({ 'T-37-06': {
+    status: cached.fixpoint ? 'merged' : 'pending', ready: true,
+  } }));
   const storeDir = path.join(root, 'runs');
   const controller = createRunController({ storeDir, ownerId: 'stop-gate-owner', now: () => Date.now() });
   const run = scope.createRunScope({

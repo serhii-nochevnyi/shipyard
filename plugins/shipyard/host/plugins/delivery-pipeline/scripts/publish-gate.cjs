@@ -51,7 +51,11 @@ function resolveOriginHead(worktree) {
   return ref.startsWith(prefix) ? `origin/${ref.slice(prefix.length)}` : null;
 }
 
-function baseFor(worktree, requested, { ticket = null, projectRoot = null } = {}) {
+function baseFor(worktree, requested, options = {}) {
+  const { ticket = null, projectRoot = null } = options;
+  if (options.managed || options.branch || options.graphDir) {
+    return require('./review-context.cjs').resolveReviewContext({ ...options, worktree, requestedBase: requested });
+  }
   const seen = new Set();
   const tried = [];
   function attempt(candidate, base_source) {
@@ -90,16 +94,20 @@ function main(argv = process.argv.slice(2)) {
   if (!fs.existsSync(path.join(worktree, '.git'))) throw new Error(`not a git worktree: ${worktree}`);
   const ticket = value(argv, 'ticket');
   const projectRoot = resolveProjectRoot(argv);
-  const { base, base_source } = baseFor(worktree, value(argv, 'base'), { ticket, projectRoot });
+  const context = baseFor(worktree, value(argv, 'base'), { ticket, projectRoot,
+    branch: value(argv, 'branch'), graphDir: value(argv, 'graph'), managed: argv.includes('--managed'),
+    configuredBase: value(argv, 'fallback-base') });
+  const { base, base_source } = context;
   const repo = commentPolicy.repositorySlug(worktree);
   const result = commentPolicy.analyze(worktree, base, {
     workingTree: argv.includes('--working-tree'),
-    projectRoot,
+    head: value(argv, 'head'),
+    projectRoot: context.projectRoot || projectRoot,
     repo,
   });
   const output = {
     gate: 'publish',
-    ticket: ticket || null,
+    ticket: context.ticket || ticket || null,
     base,
     base_source,
     worktree,
@@ -111,7 +119,14 @@ function main(argv = process.argv.slice(2)) {
   };
   if (argv.includes('--json')) console.log(JSON.stringify(output, null, 2));
   else if (result.ok) console.log(`publish-gate: OK — ${result.totals.comment_lines} non-allowed comment line(s)`);
-  else console.error(`publish-gate: BLOCKED — ${result.violations.length} file(s) contain non-allowed added comments`);
+  else {
+    console.error(`publish-gate: BLOCKED — base=${base} base_source=${base_source}`);
+    for (const file of result.files.filter(entry => entry.violation)) {
+      for (const finding of file.findings.filter(entry => entry.kind !== 'edited_comment')) {
+        console.error(`${file.path}:${finding.line}: non-allowed added comment (${finding.kind})`);
+      }
+    }
+  }
   return result.ok ? 0 : 1;
 }
 

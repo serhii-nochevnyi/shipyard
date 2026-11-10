@@ -135,6 +135,7 @@ test('the EMPTY MAP is the default, and the default is off', () => {
   const out = plan(p);
   assert.deepEqual(out.items, []);
   assert.deepEqual(out.warnings, [], 'an unconfigured project must not be warned at, once a round, forever');
+  assert.deepEqual(out.configuration_hint.pipeline.jira_transitions, { branched: 'In progress', 'pr-open': 'On review', merged: 'Done' });
   const cli = run(graphOf(p), ['plan', '--json']);
   assert.equal(cli.status, 0);
   assert.equal(cli.stderr, '');

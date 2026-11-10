@@ -170,6 +170,17 @@ if [[ "$REMOVE" == 1 ]]; then
   drop_hook Stop "$SESSION_CMD"
   drop_hook Stop "$OLD_STOP_CMD"
   drop_hook Stop "node \"$STOP_DIR/stop-gate.cjs\""
+  SETTINGS="$SETTINGS" BUNDLES="$CLAUDE_HOME/shipyard/bundles" node - <<'NODE'
+const fs = require('node:fs'), path = require('node:path');
+const file = process.env.SETTINGS;
+if (fs.existsSync(file)) {
+  const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (typeof value.env?.SHIPYARD_SCRIPTS === 'string' && value.env.SHIPYARD_SCRIPTS.startsWith(process.env.BUNDLES + path.sep)) {
+    delete value.env.SHIPYARD_SCRIPTS;
+    fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
+  }
+}
+NODE
   rm -f "$ROUTE_HOOK" "$ROUTE_CJS" "$PRE_PUSH_HOOK" "$STOP_HOOK"
   rm -rf "$STOP_DIR" "$OLD_STOP_HOOK"
   echo "✓ removed shipyard auto-route and stop-gate hooks from Claude"
@@ -284,6 +295,8 @@ if [[ ! -f "$PUBLISH_SRC" ]]; then
 fi
 [[ -f "$PUBLISH_SRC" ]] || { echo "error: publish-gate.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
 COPIED_PUBLISH="$(copy_stop_bundle "$PUBLISH_SRC" "$STOP_TMP")"
+COPIED_NATIVE="$(copy_stop_bundle "$(dirname "$PUBLISH_SRC")/native-pre-push.cjs" "$STOP_TMP")"
+copy_stop_bundle "$(dirname "$PUBLISH_SRC")/install-shipyard-git-hook.cjs" "$STOP_TMP" >/dev/null
 SESSION_SRC="$(dirname "$STOP_SRC")/session-observer.cjs"
 if [[ ! -f "$SESSION_SRC" ]]; then
   SESSION_SRC="$ROOT/plugins/delivery-pipeline/scripts/session-observer.cjs"
@@ -330,7 +343,20 @@ PRE_PUSH_SRC="$ROOT/scripts/shipyard-pre-push-gate.sh"
 cp "$PRE_PUSH_SRC" "$PRE_PUSH_HOOK"
 chmod +x "$PRE_PUSH_HOOK"
 echo "→ wrote $PRE_PUSH_HOOK ($COPIED_PUBLISH publish-gate modules)"
+echo "→ bundled native Git hook installer ($COPIED_NATIVE modules)"
 echo "→ bundled session observer ($COPIED_SESSION modules)"
+PINNED_ROOT="$(node "$ROOT/plugins/delivery-pipeline/scripts/pin-script-bundle.cjs" "$STOP_PLUGIN_ROOT" "$CLAUDE_HOME/shipyard/bundles")"
+SETTINGS="$SETTINGS" SCRIPTS="$PINNED_ROOT/scripts" BUNDLES="$CLAUDE_HOME/shipyard/bundles" node - <<'NODE'
+const fs = require('node:fs'), path = require('node:path');
+const file = process.env.SETTINGS;
+const value = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+value.env ||= {};
+if (!value.env.SHIPYARD_SCRIPTS || value.env.SHIPYARD_SCRIPTS.startsWith(process.env.BUNDLES + path.sep)) {
+  value.env.SHIPYARD_SCRIPTS = process.env.SCRIPTS;
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
+}
+NODE
+
 
 add_hook UserPromptSubmit "$ROUTE_CMD"
 drop_hook Stop "$OLD_STOP_CMD"

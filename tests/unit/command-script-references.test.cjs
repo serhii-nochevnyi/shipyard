@@ -9,6 +9,7 @@ const COMMANDS = path.join(PLUGIN, 'commands');
 const SCRIPTS = path.join(PLUGIN, 'scripts');
 
 function namedScripts(text) {
+  text = text.replaceAll('${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}', '${CLAUDE_PLUGIN_ROOT}/scripts');
   const names = new Set();
   for (const match of text.matchAll(/\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([A-Za-z0-9_-]+\.cjs)/g)) names.add(match[1]);
   for (const match of text.matchAll(/plugins\/delivery-pipeline\/scripts\/([A-Za-z0-9_-]+\.cjs)/g)) names.add(match[1]);

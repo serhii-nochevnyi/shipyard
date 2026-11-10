@@ -179,3 +179,5 @@ digest, or complete evidence contents. A missing or malformed evidence file is
 an explicit failed result, never `no-op` or a blind redispatch. The trusted host
 seals `shipyard.repair-result.v1` with the complete file before the attempt is
 logged.
+
+The `deliver-dispatch.cjs build ci-fix --failure-file` evidence must be a nonempty regular file inside the canonical ticket worktree. Copy external logs into that worktree before building the request. A symlink or external path is refused by both builder and host.

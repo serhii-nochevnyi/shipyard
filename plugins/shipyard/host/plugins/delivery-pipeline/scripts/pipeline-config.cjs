@@ -406,6 +406,26 @@ function normalizeCommentMarkers(value, warnings) {
   });
 }
 
+function normalizeCommentDocblocks(value, warnings) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    warnings.push('pipeline.comment_docblocks must map repository slugs to tag/public-method rules — ignored');
+    return null;
+  }
+  const out = {};
+  for (const [repo, rule] of Object.entries(value)) {
+    if (!REPOSITORY_CONFIG_SLUG_RE.test(repo) || !rule || typeof rule !== 'object' || Array.isArray(rule)
+      || Object.keys(rule).some(key => !['tags', 'public_methods'].includes(key))
+      || !Array.isArray(rule.tags) || rule.tags.length > 32
+      || rule.tags.some(tag => typeof tag !== 'string' || !/^@[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(tag))
+      || (rule.public_methods !== undefined && typeof rule.public_methods !== 'boolean')) {
+      warnings.push(`pipeline.comment_docblocks.${repo} requires exact @tags and a boolean public_methods — ignored`);
+      continue;
+    }
+    out[repo] = { tags: [...new Set(rule.tags)], public_methods: rule.public_methods === true };
+  }
+  return out;
+}
+
 function normalizeReviewerBots(value, warnings) {
   return normalizeRepositoryArrayMap(value, warnings, 'reviewer_bots', true, (login) => {
     const wildcard = typeof login === 'string' && login.endsWith('*');
@@ -605,6 +625,7 @@ const DEFAULTS = {
   repos_root: null,
   pr_title_format: null,
   comment_markers: null,
+  comment_docblocks: null,
   reviewer_bots: null,
   repo_remedies: null,
   verification_commands: null,
@@ -994,6 +1015,18 @@ function loadConfig(root, options = {}) {
         // GSD's project-root resolution changed under us. Keep this warning on
         // the shared helper so resolver adoption and config loading cannot
         // disagree about the same physical path.
+        if (policyPath(local) === policyPath(base)) {
+          let actual = null;
+          try {
+            const env = { ...process.env };
+            for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete env[name];
+            const remote = require('node:child_process').execFileSync('git', ['-C', base, 'remote', 'get-url', 'origin'],
+              { env, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+            const match = remote.match(/(?:github\.com[/:])([^/]+\/[^/]+?)(?:\.git)?$/i);
+            actual = match && match[1];
+          } catch {}
+          if (actual && actual.toLowerCase() === slug.toLowerCase()) continue;
+        }
         const destination = validateRepositoryDestination(local, {
           projectRoot: base,
           subRepos,
@@ -1032,6 +1065,11 @@ function loadConfig(root, options = {}) {
     if (key === 'comment_markers') {
       const markers = normalizeCommentMarkers(value, warnings);
       if (markers !== null) cfg.comment_markers = markers;
+      continue;
+    }
+    if (key === 'comment_docblocks') {
+      const rules = normalizeCommentDocblocks(value, warnings);
+      if (rules !== null) cfg.comment_docblocks = rules;
       continue;
     }
     if (key === 'reviewer_bots') {

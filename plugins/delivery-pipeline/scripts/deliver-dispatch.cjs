@@ -234,6 +234,10 @@ function writeRequestFile(dir, name, value) {
 
 // @invariant: no intermediate shell — process.execPath is invoked directly (Pitfall 3).
 function spawnDetached({ dir, dispatchId, hostScript, hostArgs, worktreePath, graphDir, ticket, role, runtime, options }) {
+  const inputFlag = hostArgs.includes('--request-file') ? '--request-file' : '--args-file';
+  const request = readJsonBounded(hostArgs[hostArgs.indexOf(inputFlag) + 1]);
+  const boundaryStore = request?.scope
+    ? (runtime === 'claude' ? claudeHost : codexHost).boundaryStoreFor(request.scope) : null;
   const resultFile = path.join(dir, 'result.jsonl');
   const logFile = path.join(dir, 'host.log');
   const outFd = fs.openSync(resultFile, 'a');
@@ -256,11 +260,12 @@ function spawnDetached({ dir, dispatchId, hostScript, hostArgs, worktreePath, gr
   });
   child.unref();
   const record = {
-    dispatch_id: dispatchId, ticket, role, runtime, graph_dir: graphDir,
+    dispatch_id: dispatchId, ticket, role, runtime, graph_dir: graphDir, boundary_store: boundaryStore,
     pid: child.pid, result: resultFile, log: logFile, started_at: new Date().toISOString(),
   };
   fs.writeFileSync(path.join(dir, 'record.json'), JSON.stringify(record));
-  return Object.freeze({ dispatch_id: dispatchId, ticket, role, runtime, log: logFile, result: resultFile });
+  return Object.freeze({ dispatch_id: dispatchId, ticket, role, runtime, log: logFile, result: resultFile,
+    boundary_store: boundaryStore, boundary_store_status: 'pending', boundary_dispatch_id: null });
 }
 
 function launchPrSentinel({ args, row, projectRoot, graphDir, dispatchId, dir, options }) {
@@ -420,15 +425,23 @@ function statusOnce(dispatchId, options = {}) {
   if (isLive) {
     return Object.freeze({
       dispatch_id: dispatchId, status: 'running', ticket: record.ticket, role: record.role, runtime: record.runtime,
+      boundary_store: record.boundary_store || null, boundary_store_status: 'pending', boundary_dispatch_id: null,
     });
   }
   const result = readResult(record.result);
+  const locations = (Array.isArray(result) ? result : [result]).filter(entry => typeof entry?.boundary_store === 'string'
+    && path.isAbsolute(entry.boundary_store));
+  const location = new Set(locations.map(entry => entry.boundary_store)).size === 1 ? locations[0] : null;
   return Object.freeze({
     dispatch_id: dispatchId,
     status: result ? 'exited-ok' : 'exited-failed',
     ticket: record.ticket,
     role: record.role,
     runtime: record.runtime,
+    boundary_store: location?.boundary_store || record.boundary_store || null,
+    boundary_store_status: location ? 'available' : 'pending',
+    run_id: location?.run_id || null, run_store: location?.run_store || null,
+    boundary_dispatch_id: location?.boundary_dispatch_id || location?.dispatch_id || location?.receipt?.dispatch_id || null,
     ...(result ? { result } : {}),
   });
 }
@@ -484,6 +497,7 @@ function publish(argv, options = {}) {
   const checkout = object(board.repo_resolution) && board.repo_resolution.repository_root;
   if (board.repo && !checkout) fail('PUBLISH_REFUSED', `ticket ${ticket} belongs to ${board.repo} but no checkout of it is resolved`);
   const root = checkout || path.resolve(graphDir, '..', '..');
+  const projectRoot = path.resolve(graphDir, '..', '..');
   const step = (name, file, args) => {
     try { return (options.run || execStep)(file, args, worktree); } catch (error) {
       return fail('PUBLISH_REFUSED', `${name} refused: ${`${error.stderr || ''}${error.stdout || ''}`.trim() || error.message}`);
@@ -492,19 +506,20 @@ function publish(argv, options = {}) {
   const script = (name, args) => step(name, process.execPath, [path.join(__dirname, `${name}.cjs`), ...args]);
   const gate = ['--worktree', worktree, '--base', base];
   const artifact = ['--role', 'executor', '--ticket', ticket, ...gate, ...boundary.flatMap((name) => [name, flagValue(argv, name)])];
+  if (row.plan || row.file) artifact.push('--plan-path', path.resolve(projectRoot, row.plan || row.file));
 
   const head = step('branch check', 'git', ['symbolic-ref', '--short', 'HEAD']).trim();
   if (head !== branch) fail('PUBLISH_REFUSED', `branch check refused: the worktree is on ${head || 'a detached HEAD'}, the ticket branch is ${branch}`);
   if (!step('did-work gate', 'git', ['log', '--oneline', `${base}..HEAD`]).trim()) fail('PUBLISH_REFUSED', `did-work gate refused: ${branch} has no commits beyond ${base}`);
-  script('scope-gate', [ticket, ...gate]);
-  script('comment-policy', ['check', ticket, ...gate, '--json']);
+  script('scope-gate', [ticket, ...gate, '--graph', graphDir]);
+  script('comment-policy', ['check', ticket, ...gate, '--project-root', projectRoot, '--json']);
   script('role-artifact', ['validate', ...artifact]);
   fs.mkdirSync(dispatchStateDir(options), { recursive: true });
   const outDir = fs.mkdtempSync(path.join(dispatchStateDir(options), `publish-${ticket}-`));
   const bodyFile = path.join(outDir, 'pr-body.md');
   const evidenceFile = path.join(outDir, 'evidence.md');
   script('role-artifact', ['read', ...artifact, '--pr-body-out', bodyFile, '--evidence-out', evidenceFile]);
-  if (row.primary_parent && base === row.epic) script('base-merge', [ticket, ...gate]);
+  if (row.primary_parent && base === row.epic) script('base-merge', [ticket, ...gate, '--graph', graphDir]);
 
   let title = `${ticket}: ${row.title}`;
   if (prHygiene.applies({ root })) {
@@ -515,7 +530,9 @@ function publish(argv, options = {}) {
   } else if (fs.readFileSync(bodyFile, 'utf8').split('\n', 1)[0] !== `Ticket: ${ticket}`) {
     fail('PUBLISH_REFUSED', `the validated PR body does not start with the marker "Ticket: ${ticket}"`);
   }
-  script('publish-gate', ['--worktree', worktree, '--working-tree', '--ticket', ticket, '--base', base, '--project-root', root]);
+  script('publish-gate', ['--worktree', worktree, '--head', 'HEAD', '--managed', '--branch', branch,
+    '--ticket', ticket, '--base', base, '--project-root', projectRoot, '--graph', graphDir]);
+  script('install-shipyard-git-hook', ['--worktree', worktree, '--project-root', projectRoot, '--graph', graphDir]);
   step('push', 'git', ['push', '-u', 'origin', branch]);
   const url = step('gh pr create', 'gh', ['pr', 'create', '--base', base, '--head', branch, '--draft', '--title', title, '--body-file', bodyFile, ...repoArgs]).trim();
   const number = Number((/\/pull\/(\d+)\s*$/.exec(url) || [])[1]);
@@ -687,10 +704,18 @@ function evidenceInput(worktree, value, field) {
   let stat;
   try { stat = fs.lstatSync(candidate); } catch { buildFail(field, `${field} file is unavailable: ${candidate}`); }
   if (!stat.isFile() || stat.isSymbolicLink()) buildFail(field, `${field} must be a regular non-symlink file`);
+  if (!realPath.startsWith(fs.realpathSync(worktree) + path.sep)) {
+    buildFail(field, `${field} must be inside the ticket worktree; copy the evidence there and rebuild the request`);
+  }
+  if (!stat.size) buildFail(field, `${field} must be nonempty`);
   if (stat.size > 8 * 1024 * 1024) buildFail(field, `${field} exceeds the 8388608-byte limit`);
   let bytes;
   try { bytes = fs.readFileSync(candidate); } catch { buildFail(field, `${field} file cannot be read: ${candidate}`); }
-  if (bytes.length !== stat.size) buildFail(field, `${field} changed while its digest was computed`);
+  const after = fs.lstatSync(candidate);
+  if (bytes.length !== stat.size || after.isSymbolicLink() || after.ino !== stat.ino || after.dev !== stat.dev
+    || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) {
+    buildFail(field, `${field} changed while its digest was computed`);
+  }
   return Object.freeze({ path: realPath, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
 }
 

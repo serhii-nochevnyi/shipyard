@@ -36,12 +36,12 @@ exit 0 from validate-graph.cjs.
 
 ## Runtime and host selection
 
-Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve --json` and
+Run `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/pipeline-config.cjs resolve --json` and
 take the active runtime from `config.gsd.runtime`; it must be exactly `claude`
 or `codex`. Keep it fixed for the complete GSD chain. Claude uses
-`${CLAUDE_PLUGIN_ROOT}/scripts/claude-decompose-host.cjs --request-file
+`${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/claude-decompose-host.cjs --request-file
 <json>`. Codex uses
-`${CLAUDE_PLUGIN_ROOT}/scripts/codex-planning-context-host.cjs --args-file <json>`;
+`${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/codex-planning-context-host.cjs --args-file <json>`;
 that adapter verifies the structured packet against the live worktree, then
 delegates the typed launch and durable receipt to `codex-decompose-host.cjs`.
 Each host request carries one exact typed role (`gsd-phase-researcher`,
@@ -80,7 +80,7 @@ to clean.
 5. Bootstrap a missing GSD project from the accepted ADR: when
    `.planning/config.json`, `.planning/ROADMAP.md` or
    `.planning/REQUIREMENTS.md` is missing, run `node
-   ${CLAUDE_PLUGIN_ROOT}/scripts/adr-bootstrap.cjs --adr <accepted ADR>
+   ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/adr-bootstrap.cjs --adr <accepted ADR>
    [--phase <N>] --json` from the project root; it creates only missing
    files. Exit 1 means the ADR has no decisions — relay the message to the
    user and stop. Requirements come from the bootstrap report, never
@@ -105,8 +105,8 @@ is explicit and confirmed, never automatic — the conveyor never writes
 `.gitignore` on its own:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/planning-untrack.cjs --project-root <repo-root>
-node ${CLAUDE_PLUGIN_ROOT}/scripts/planning-untrack.cjs --project-root <repo-root> \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/planning-untrack.cjs --project-root <repo-root>
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/planning-untrack.cjs --project-root <repo-root> \
   --apply --confirm untrack-planning
 ```
 
@@ -136,7 +136,7 @@ boundary contract describes what the host enforces.
    and host selection. A project preference, an installed integration, or an
    ambiguous host is not runtime selection.
 2. With `runtime` fixed, preflight the project-relative delivery contract. Run
-   `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-tune.cjs --check --runtime "$runtime"`
+   `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/gsd-tune.cjs --check --runtime "$runtime"`
    and inspect the report by category. Tuning drift is harmless and MUST NOT
    block decomposition; required delivery-contract or projection failures and
    every entry in the report's `blockers` array do block. A required failure
@@ -372,7 +372,7 @@ context first, then one callback set, then materialization verification.
    <INV-id|ADR-id> --phase <N>`. Pass the active runtime explicitly:
 
    ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs \
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs \
      build decomposition "$planningInput" --phase "$phase" --runtime "$runtime"
    ```
 
@@ -393,7 +393,7 @@ context first, then one callback set, then materialization verification.
    packet as structured JSON data in the typed planner prompt and delegates
    runtime selection and receipt creation to `codex-decompose-host.cjs`.
 2. Normalize every selected ADR before invoking GSD:
-   `mkdir -p .planning/.adr-ingest && node ${CLAUDE_PLUGIN_ROOT}/scripts/adr-ingest.cjs
+   `mkdir -p .planning/.adr-ingest && node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/adr-ingest.cjs
    --input <adr-path> [--input <another-adr-path>] --output-dir .planning/.adr-ingest --json`.
    Repeat `--input` in the same invocation for multiple ADRs; the staging directory
    is refreshed before the command writes its outputs. The command converts nested
@@ -412,7 +412,7 @@ context first, then one callback set, then materialization verification.
    any callback; do not prompt the user to run an external command and do not
    run the Skill opaquely.
    Build the callback context with
-   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs` before the first typed
+   `${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/context-packet.cjs` before the first typed
    launch. The decomposition packet uses the resolved project root and source
    revision, role `decomposition`, subject
    `phase=<N>;input=<INV-id|ADR-id>;repository=<repo>`, the ADR-014 policy object and
@@ -584,7 +584,7 @@ Gate 2 is a MECHANICAL check, not a judgment. It passes if and only if
 `validate-graph.cjs` finished with exit 0 and `.planning/graph/tickets.json` is
 freshly written. Do not report decomposition success without this.
 
-1. `node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs`
+1. `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/validate-graph.cjs`
 2. Errors (cycle, file conflict, empty files_modified/requirements,
    high-risk without checkpoint) → fix the frontmatter/slicing and retry. A file
    conflict is more honestly resolved by a dependency or re-slicing than by extending
@@ -661,7 +661,7 @@ artifact, per delivery-rules).
 The ticket → existing Jira issue mapping proposed at Gate 2 comes from Jira keys
 named in the investigation's `PROBLEM.md` or intake material. After the user
 approves the mapping, record each approved key with
-`node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs record <T-NN-MM> <KEY>`.
+`node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/jira-export.cjs record <T-NN-MM> <KEY>`.
 Then re-run `validate-graph.cjs` so `tickets.json` carries those authoritative
 keys before planning the export.
 
@@ -722,7 +722,7 @@ export content, the repo-namespaced labels, and the `is blocked by` link
 direction are computed once by a script instead of being worked out ad hoc
 per run:
 
-1. Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs plan --repo
+1. Run `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/jira-export.cjs plan --repo
    <owner>/<repo> --project <KEY> [--issue-type <t>] [--epic-issue-type
    <t|none>] --json` (it reads `tickets.json` for the validated graph and
    returns the ordered steps — parents before their links — with content,
@@ -752,7 +752,7 @@ per run:
    says `on_no_match: create`. Stop and report to the user when one entry's
    `jql` returns more than one issue.
 3. For each issue the plan created or found, run `node
-   ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs record <T-NN-MM> <KEY>` —
+   ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/jira-export.cjs record <T-NN-MM> <KEY>` —
    this writes `delivery.jira: <KEY>` back into that ticket's plan
    frontmatter.
 4. Re-run `validate-graph.cjs` so `tickets.json` carries the `jira` field.

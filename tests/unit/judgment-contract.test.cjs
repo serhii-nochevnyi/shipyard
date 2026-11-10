@@ -502,7 +502,7 @@ for (const row of WIRED.filter((r) => r.kind === 'wired')) {
         : fs.readFileSync(home.doc, 'utf8');
       for (const c of home.caller) {
         assert.ok(
-          c.test(text),
+          c.test(text.replaceAll('${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}', '${CLAUDE_PLUGIN_ROOT}/scripts')),
           `${row.mechanism} is read by ${row.reader}, and ${where} — ${scope} — `
           + `contains no match for ${c}. WHY IT MATTERS: ${row.why}. A mechanism nobody connected is not a mechanism.`
         );
@@ -548,7 +548,7 @@ test('deleting an event\'s schema documentation, caller in place, does not fire 
       const text = section({ doc: home.doc, ...home.slice }, stripped).text;
       for (const c of home.caller) {
         assert.ok(
-          c.test(text),
+          c.test(text.replaceAll('${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}', '${CLAUDE_PLUGIN_ROOT}/scripts')),
           'with deliver.md\'s event-schema documentation removed and every caller left in place, '
           + `${home.slice.name} no longer matches ${c} for ${row.mechanism} — this row is matching the `
           + 'DOCUMENTATION and not the caller, which is how four of these six rows became unfailable'

@@ -210,7 +210,8 @@ function normalizeRepositoryIdentity(input) {
   rejectSerializedAuthority(input, 'repository');
   const repository_id = safeString(input.repository_id || input.id, 'repository_id', { whitespace: true });
   const worktree = normalizeWorktreeIdentity(input.worktree || input.path);
-  return deepFreeze({ schema: ID_SCHEMAS.repository, version: VERSION, repository_id, worktree: worktree.path });
+  return deepFreeze({ schema: ID_SCHEMAS.repository, version: VERSION, repository_id, worktree: worktree.path,
+    ...(input.graph_dir === undefined ? {} : { graph_dir: normalizeWorktreeIdentity(input.graph_dir).path }) });
 }
 
 function normalizePhaseIdentity(input) {

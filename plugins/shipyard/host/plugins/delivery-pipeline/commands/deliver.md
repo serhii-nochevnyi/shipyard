@@ -31,8 +31,8 @@ review. For the phase epic PR, explicitly select the canonical phase directory a
 actual integration PR from the epic worktree:
 
 ```sh
-node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph [--repo owner/name]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph [--repo owner/name]
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph [--repo owner/name]
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph [--repo owner/name]
 ```
 
 For the phase epic PR run the phase code review first, then the integrator,
@@ -197,9 +197,9 @@ mechanical; every ci-fix, review-fix or arch-review still goes through the runti
 host and its boundary. Announce it: `⚠ no typed background host → sentinel duty runs each round`.
 
 ```text
-node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs duty   [--json] [--parked T,T] [--scope T,T]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs merge  <ticket|--all> [--dry-run] [--json]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs report [--json] [--since <iso>]
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/sentinel.cjs duty   [--json] [--parked T,T] [--scope T,T]
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/sentinel.cjs merge  <ticket|--all> [--dry-run] [--json]
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/sentinel.cjs report [--json] [--since <iso>]
 ```
 
 `merge` squashes a ticket PR into **its own base** (the phase epic or the parent
@@ -264,7 +264,7 @@ CLAUDE.md): Codex Sol is `gpt-6.1-sol` and Luna `gpt-6-luna`; Claude Sonnet is
 other or restate it in a launch. The host (not the caller) runs the selector:
 
 ```text
-node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-agent.cjs select <role> --json --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json" [--project-dir <project>]
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/codex-agent.cjs select <role> --json --capabilities-file "${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json" [--project-dir <project>]
 ```
 
 It returns the canonical `route`, `model`, `effort` and, for static roles,
@@ -323,18 +323,18 @@ whose `files_modified` uses `../other-repo/...` is broken (re-decompose).
   {"pdffiller/jsfiller": "/abs/path/to/jsfiller"}`; otherwise state-sync prints
   `⚠ repo … is track-only — <reason>`: say so — those tickets are tracked, not driven.
 - **Cold-start resolution**, for every foreign ticket before preparing its worktree:
-  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs resolve <owner/name> \
+  `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/repo-resolve.cjs resolve <owner/name> \
   --ticket <T-id> --project-dir <project-root> --json`. `resolution: "configured"`
   or `resolution: "discovered"` with `executable: true` supplies `repository_root`
   (use it for all git/gh calls); `track-only`/`undiscovered` supply a reason;
   `ambiguous` lists candidates for the operator (never pick by basename).
 - **`undiscovered`/`ambiguous`:** ask one question naming the slug — clone to the
   validated default destination, an existing checkout path, or skip — then
-  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs choose <owner/name> \
+  `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/repo-resolve.cjs choose <owner/name> \
   --ticket <T-id> --project-dir <project-root> --choice <clone|existing|skip> \
   [--path <existing-checkout>] --json` (records intent and a safe `clone_url`
   only). After a clone choice:
-  `node ${CLAUDE_PLUGIN_ROOT}/scripts/repo-resolve.cjs clone <owner/name> \
+  `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/repo-resolve.cjs clone <owner/name> \
   --ticket <T-id> --project-dir <project-root> --destination <validated-destination> \
   --base <state[T-id].base> --clone-url <safe-clone-url> --json` — a full clone that
   verifies `refs/remotes/origin/<base>` and writes the checkout path back to
@@ -344,7 +344,7 @@ whose `files_modified` uses `../other-repo/...` is broken (re-decompose).
 - **Silence selects skip.** Unattended, pass `--non-interactive` (`resolution:
   "track-only"`, `decision: "skip"`, a `park_reason`) and make the park durable
   from the project directory:
-  `node ${CLAUDE_PLUGIN_ROOT}/scripts/escalation-record.cjs mark <T-id> \
+  `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/escalation-record.cjs mark <T-id> \
   <park_reason> --graph <project-root>/.planning/graph` — not only `--parked`.
 
 ## Telemetry (pipeline log)
@@ -403,7 +403,7 @@ A checkpoint is evidence, not launch authority. The ownership store lives at
 fence. Inspect it before starting work:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs inspect --cwd <project> --json
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/session-handoff.cjs inspect --cwd <project> --json
 ```
 
 `automatic_transfer.allowed` stays false: never infer automatic context transfer
@@ -414,11 +414,11 @@ is fenced and carries references and digests, never prompts, transcripts or
 credentials:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs checkpoint \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/session-handoff.cjs checkpoint \
   --cwd <project> --scope-id <scope> --token <owner-token> --checkpoint-file <checkpoint.json>
-node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs resume \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/session-handoff.cjs resume \
   --cwd <project> --scope-id <scope> --run-id <successor-run> --session-id <successor-session>
-node ${CLAUDE_PLUGIN_ROOT}/scripts/session-handoff.cjs acknowledge \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/session-handoff.cjs acknowledge \
   --cwd <project> --scope-id <scope> --candidate-id <candidate> \
   --token <successor-token> --validation-file <live-validation.json>
 ```
@@ -444,7 +444,7 @@ tick rate). Name the project's graph explicitly — a bare invocation resolves
 `<cwd>/.planning/graph`, which from a ticket worktree is someone else's or nothing:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-project.cjs plan --json --graph <project>/.planning/graph
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/jira-project.cjs plan --json --graph <project>/.planning/graph
 ```
 
 `enabled: false`, or an empty `items` — the ordinary outcome — is ONE line and
@@ -512,7 +512,7 @@ Rules:
   `refused`, and neither permits a launch through the other provider.
 
 **Runtime path selection.** Resolve the active runtime with
-`node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve --json`, accept
+`node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/pipeline-config.cjs resolve --json`, accept
 only `config.gsd.runtime` equal to `claude` or `codex`, and keep it fixed for the
 run. Mechanical duty work may continue when a model launch is refused.
 
@@ -535,11 +535,16 @@ blocked` before prompt construction, spawning or recording.
 ## Step 0 — Cold start (MANDATORY on EVERY run)
 
 - **Arm the stop gate (Claude only).** Run
-  `node ${CLAUDE_PLUGIN_ROOT}/scripts/stop-gate-arm.cjs arm`. It reads the session
+  `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/stop-gate-arm.cjs arm`. It reads the session
   id from `CLAUDE_CODE_SESSION_ID`; the stop hook enforces the front only in a
   session armed this way. A non-zero exit means the gate is NOT armed — report it,
   do not continue silently. Codex has no stop hook and skips this. A session
-  resumed with `--fork-session` has a new id and must re-arm.
+  resumed with `--fork-session` has a new id and must re-arm. When working an
+  authenticated ticket run, use `arm --run-id <run_id> --store-dir <run_store>
+  --graph-dir <canonical graph>` and read `front.cjs` with the same selectors.
+  Host results and dispatch status expose `run_id` and `run_store`. This binding
+  keeps other sessions' tickets out of this session's fixpoint. Disarm before
+  switching to another run; never infer a run ID from a branch name.
 0. `gsd-tune.cjs` — the GSD settings this project needs on THIS runtime. Report
    only (exit 1 on drift; writes nothing without `--apply`).
    - REQUIRED drift (`git.branching_strategy`) means the conveyor is INCORRECT here
@@ -636,7 +641,7 @@ never a reason to stop other tickets.
 **Who gets a judge is COMPUTED, not decided — ask the script, per ticket:**
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-needed.cjs <T> --json   # → {needed, reason, ...}
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/drift-needed.cjs <T> --json   # → {needed, reason, ...}
 ```
 
 Run it for every ticket in scope and dispatch a drift-check judge only for
@@ -647,7 +652,7 @@ progress note for the tickets it skips. It measures the ticket's OWN base (the e
 for a root, the primary parent's branch for a cascade child), never `main` by name.
 
 Build the request, do not write it by hand: from the ticket worktree run
-`node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build drift-check <T> --runtime <codex|claude>
+`node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs build drift-check <T> --runtime <codex|claude>
 [--graph <project-root>/.planning/graph]`. It reads the phase, plan, branch and the
 ticket's own base (the merged parent's destination once the primary parent merged)
 from the canonical graph, resolves the model and effort, and prints a request the
@@ -673,7 +678,7 @@ artifact-bound drift execution additionally requires the per-ticket `worktreePat
 summary plus a route to /shipyard:decompose:
 
 ```
-node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs mark <T> <plan-path> "<what moved>"
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/drift-record.cjs mark <T> <plan-path> "<what moved>"
 ```
 
 The judge never persists a verdict from its own reply: first seal and read the
@@ -699,17 +704,17 @@ consumer); on either path validate and read before `drift-record.cjs mark`, reus
 forwarding or logging:
 
 ```text
-node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs prepare \
   --worktree <worktree> --role drift-check
-node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs seal \
   --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
   --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
   --result-file <trusted-result.json>
-node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs validate \
   --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
   --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
   --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
-node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs read \
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs read \
   --worktree <worktree> --role drift-check --ticket <T> --base origin/<state[T].base> \
   --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
   --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest>
@@ -766,7 +771,7 @@ prints `0 agents` the project config does not parse: fix the file.
    ticket's own worktree:
 
    ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role executor [--graph-dir <project>/.planning/graph]
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role executor [--graph-dir <project>/.planning/graph]
    ```
 
    `launch` reads the board and the dispatch and escalation records from the main
@@ -785,7 +790,7 @@ prints `0 agents` the project config does not parse: fix the file.
    the host runs DETACHED, never in the foreground. Collect the result with:
 
    ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs wait --dispatch <dispatch_id> [--timeout-ms <ms>]
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs wait --dispatch <dispatch_id> [--timeout-ms <ms>]
    ```
 
    which blocks inside the script — never a hand-written `sleep` loop — until the
@@ -802,7 +807,7 @@ prints `0 agents` the project config does not parse: fix the file.
      consumer writes that result to a disposable JSON file and runs:
 
      ```text
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs seal \
        --worktree <worktree> --role executor --ticket <T> --base <state[T].base> \
        --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
        --result-file <trusted-result.json>
@@ -836,7 +841,7 @@ prints `0 agents` the project config does not parse: fix the file.
    seal a Codex-host result as above and, standing in the ticket's worktree:
 
    ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs publish <T> \
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs publish <T> \
      --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
      --artifact <result.artifact_ref> --artifact-digest <result.artifact_digest> \
      [--graph-dir <project>/.planning/graph]
@@ -879,7 +884,7 @@ point, standing in the project's own clean phase worktree (never a ticket
 worktree), and return to Step 3 for the cascade:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role pr-sentinel
+node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role pr-sentinel
 ```
 
 `<T>` is any one ticket the front lists under `fix`/`finalize`/`merge`; the entry
@@ -975,12 +980,14 @@ loop:
          from the canonical ticket graph and failure evidence file:
 
          ```text
-         node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build ci-fix <T> \
+         node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs build ci-fix <T> \
            --runtime <r> --pr <p.pr> --failure-file <failure-evidence-path>
          ```
 
-         The builder takes the evidence path, computes its SHA-256 and prints a
-         request only when the selected host authenticates that evidence at launch.
+         The evidence must be a nonempty regular file inside the canonical ticket
+         worktree; copy external logs there first. The builder rejects an external
+         path or symlink immediately, computes SHA-256, and the host authenticates
+         the same path and bytes again at launch.
          Exit 2 prints a named host-contract refusal and no request: preserve it,
          never hand-build a boundary input.
          `failure-signature.cjs verdict` supplies only verdict/history facts.
@@ -1018,7 +1025,7 @@ loop:
        the canonical ticket graph and review evidence file:
 
        ```text
-       node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build review-fix <T> \
+       node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs build review-fix <T> \
          --runtime <r> --pr <p.pr> --review-file <review-evidence-path>
        ```
 
@@ -1070,12 +1077,12 @@ loop:
      scratch file in the reviewed worktree:
 
      ```text
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs prepare \
        --worktree <worktree> --role arch-review
      ```
 
      ```text
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <T> \
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs build arch-review <T> \
        --runtime <r> --pr <N> --graph <project-root>/.planning/graph
      ```
 
@@ -1099,11 +1106,11 @@ loop:
      worktree:
 
      ```text
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal --role arch-review --ticket <T> --pr <N>
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs seal --role arch-review --ticket <T> --pr <N>
        --worktree <worktree> --base <base-ref> --boundary-store <receipt-store>
        --dispatch-id <dispatch-id> --result-file <result.json>
        --evidence-path .shipyard-arch-review-evidence.md
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate --role arch-review --ticket <T> --pr <N>
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs validate --role arch-review --ticket <T> --pr <N>
        --worktree <worktree> --base <base-ref> --boundary-store <receipt-store>
        --dispatch-id <dispatch-id> --artifact <artifact-ref>
        --artifact-digest <artifact-digest>
@@ -1129,7 +1136,7 @@ loop:
      conform      → check the green criteria:
        all checks passed ∧ unresolved=0 ∧ arch conform
        → record the verdicts in the PR body as a trailer (survives squash-merge):
-         node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped> --base-tree <base_tree>
+         node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/gate-trailer.cjs write <pr> [--repo owner/name] --arch-review conform --drift-check <fresh|skipped> --degenerate-green <clean|N|skipped> --base-tree <base_tree>
          `<base_tree>` is arch-review's own `base_tree:` output field, copied
          verbatim: all forty hex characters of the merge-base TREE the judge
          measured (references/arch-review.md). Never a branch name and never an
@@ -1156,7 +1163,7 @@ loop:
              owns the merge), notify, and CONTINUE the front — do NOT block the
              cycle while waiting
            human_checkpoint: false → status green → LAND IT:
-             node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs merge <T>
+             node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/sentinel.cjs merge <T>
                merged  → the ticket is IN THE EPIC; the script retargets cascade
                          children onto the epic and journals the `merge` event.
                          Next state-sync shows it `merged`; the reaper cleans up
@@ -1249,9 +1256,9 @@ log-event refuses the bare events).
    same):
 
    ```text
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs prepare \
      --worktree <worktree> --role <ci-fix|review-fix>
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal \
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs seal \
      --worktree <worktree> --role <ci-fix|review-fix> --ticket <T> --pr <p.pr> --base origin/<state[T].base> \
      --boundary-store <receipt-store> --dispatch-id <receipt.dispatch_id> \
      --result-file <trusted-result.json>
@@ -1303,8 +1310,8 @@ the front below.
 
    ```sh
    GRAPH="<project>/.planning/graph"; RUN_ID="${SHIPYARD_RUN_ID:-ci-wait:$GRAPH}"
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/ci-wait.cjs --graph "$GRAPH" --run-id "$RUN_ID" --json
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/state-sync.cjs
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/ci-wait.cjs --graph "$GRAPH" --run-id "$RUN_ID" --json
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/state-sync.cjs
    ```
 
    It persists a compact durable `wait_event` before returning. When the result
@@ -1312,9 +1319,9 @@ the front below.
    never a stale caller-side one:
 
    ```sh
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/wait-events.cjs pending --graph "$GRAPH" --run-id "$RUN_ID" \
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/wait-events.cjs pending --graph "$GRAPH" --run-id "$RUN_ID" \
      --ticket <T> --repository <repo> --pr <N> --json     # → {action_id, dispatch_id}
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/wait-events.cjs acknowledge --graph "$GRAPH" --run-id "$RUN_ID" \
+   node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/wait-events.cjs acknowledge --graph "$GRAPH" --run-id "$RUN_ID" \
      --ticket <T> --repository <repo> --pr <N> --action-id <id> --dispatch-id <id> --decision reserved --json
    ```
 
@@ -1388,7 +1395,7 @@ driving PRs hands the user a half-truth.
    State explicitly that autonomous motion is exhausted and why each blocker
    remained. Fold in the guard's report verbatim where it is more specific than
    your own view (`sentinel.cjs report`). Add a metrics summary:
-   `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-stats.cjs` — time to merge,
+   `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/pipeline-stats.cjs` — time to merge,
    babysit attempts, no-op rounds, escalations. Name anomalies (many no-ops,
    escalations on low-risk) explicitly — that's the input for tuning the model ladder.
 2. If these were the LAST tickets of the phase (all phase tickets flowed into the epic) →
@@ -1404,7 +1411,7 @@ driving PRs hands the user a half-truth.
 
      ```sh
      git -C <epic-worktree> status --porcelain --untracked-files=all
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/conveyor-scratch.cjs list
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/conveyor-scratch.cjs list
      ```
 
      An entry for `.planning/phases/<phase-directory-name>/INTEGRATION.md`
@@ -1417,8 +1424,8 @@ driving PRs hands the user a half-truth.
      consistently for a foreign repository):
 
      ```sh
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-code-review.cjs status <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build code-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/phase-code-review.cjs status <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs build code-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
      ```
 
      When status prints `unmatched`, stop in both modes and print its reason:
@@ -1435,7 +1442,7 @@ driving PRs hands the user a half-truth.
      worktree:
 
      ```sh
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs --args-file <request.json>
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/codex-delivery-host.cjs --args-file <request.json>
      ```
 
      Remove the private request directory after consuming the result. This CLI
@@ -1454,8 +1461,8 @@ driving PRs hands the user a half-truth.
      After the launch (or reuse), publish through the trusted host and re-read:
 
      ```sh
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-code-review.cjs publish <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-code-review.cjs status <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/phase-code-review.cjs publish <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/phase-code-review.cjs status <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
      ```
 
      Publish only a sealed exact-head verdict, an incomplete retry, or `limit`
@@ -1486,7 +1493,7 @@ driving PRs hands the user a half-truth.
      on either runtime (the integrator has no builder), run:
 
      ```sh
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-code-review.cjs gate <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/phase-code-review.cjs gate <phase-directory> --phase <N> --pr <integration-pr> --graph <project-root>/.planning/graph
      ```
 
      A non-zero exit parks the phase with the refusal verbatim and does not fall
@@ -1513,8 +1520,8 @@ driving PRs hands the user a half-truth.
      result.
 
      ```javascript
-     const { prepareIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
-     const { createCodexDeliveryHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs`);
+     const { prepareIntegratorContext, createClaudeRoleHost } = require(`${process.env.SHIPYARD_SCRIPTS || `${CLAUDE_PLUGIN_ROOT}/scripts`}/claude-role-host.cjs`);
+     const { createCodexDeliveryHost } = require(`${process.env.SHIPYARD_SCRIPTS || `${CLAUDE_PLUGIN_ROOT}/scripts`}/codex-delivery-host.cjs`);
      const current = prepareIntegratorContext(options, { worktree, phase: String(phase) });
      const phaseSubject = current.ticket;
      const result = runtime === 'codex'
@@ -1563,7 +1570,7 @@ driving PRs hands the user a half-truth.
      route grants no inherited authority:
 
      ```text
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare \
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs prepare \
        --worktree <worktree> --role integrator --phase <phase>
      ```
 
@@ -1598,12 +1605,12 @@ driving PRs hands the user a half-truth.
      branch:
 
      ```text
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs seal --role integrator --ticket <phase-subject>
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs seal --role integrator --ticket <phase-subject>
        --worktree <worktree> --phase <phase> --base <default-branch>
        --boundary-store <receipt-store> --dispatch-id <dispatch-id>
        --ticket-set-file <ticket-set.json> --result-file <result.json>
        --evidence-path .planning/phases/<phase>/INTEGRATION.md
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs validate --role integrator --ticket <phase-subject>
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs validate --role integrator --ticket <phase-subject>
        --worktree <worktree> --phase <phase> --base <default-branch>
        --boundary-store <receipt-store> --dispatch-id <dispatch-id>
        --ticket-set-file <ticket-set.json> --artifact <artifact-ref>
@@ -1615,12 +1622,12 @@ driving PRs hands the user a half-truth.
      stale, or contradictory integration evidence refuses both projection and
      phase completion; `human-review-required` remains a human decision.
    - After the integration verdict is written, publish the native GSD projection:
-     `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-sync.cjs`.
+     `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/gsd-sync.cjs`.
      This creates or refreshes `STATE.md`, `REQUIREMENTS.md`, plan `SUMMARY`
      files, phase UAT/VERIFICATION projections, and the marked roadmap status
      block. A `needs-fix` or missing integration verdict stays non-green; do not
      edit the projection by hand to make the phase pass. Before handing the
-     phase to a human, run `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-sync.cjs
+     phase to a human, run `node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/gsd-sync.cjs
      --check` and show any blockers.
    - **Restore the epic worktree (every integrator outcome).** Treat this as a
      finally step: run it once whenever the integrator step ends, before acting
@@ -1635,7 +1642,7 @@ driving PRs hands the user a half-truth.
      not the live file. Then clear exactly the role-owned live file:
 
      ```sh
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/role-artifact.cjs prepare --worktree <epic-worktree> --role integrator --phase <phase-directory-name>
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs prepare --worktree <epic-worktree> --role integrator --phase <phase-directory-name>
      ```
 
      The command reports `cleared: false` without failing when no file was
@@ -1647,7 +1654,7 @@ driving PRs hands the user a half-truth.
      ```sh
      git -C <epic-worktree> checkout -- .planning/phases/<phase-directory-name>/INTEGRATION.md
      git -C <epic-worktree> status --porcelain --untracked-files=all
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/conveyor-scratch.cjs list
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/conveyor-scratch.cjs list
      ```
 
      Run the status listing for untracked-copy phases too. Require that its only
@@ -1672,8 +1679,8 @@ driving PRs hands the user a half-truth.
      above, then run the live verifier, in that order:
 
      ```sh
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> --graph <project-root>/.planning/graph
+     node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph
      ```
 
      Add `--repo owner/name` to both commands for a foreign repository. The

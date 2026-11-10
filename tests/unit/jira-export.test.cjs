@@ -472,4 +472,38 @@ test('no client, no socket, no subprocess anywhere in jira-export.cjs', () => {
   }
 });
 
+test('rc55 ticket projection includes only its transitive dependencies and required epics', () => {
+  const p = diamondAndChain();
+  try {
+    const out = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD', ticket: 'T-01-04' });
+    assert.deepStrictEqual(out.steps.filter(x => x.step === 'issue').map(x => x.ticket),
+      ['T-01-01', 'T-01-02', 'T-01-03', 'T-01-04']);
+    assert.strictEqual(out.steps.filter(x => x.step === 'epic').length, 1);
+    const cli = run(p.graph, ['plan', '--repo', 'acme/demo', '--project', 'MYD', '--ticket', 'T-01-04', '--json']);
+    assert.strictEqual(cli.status, 0, cli.stderr);
+    assert.deepStrictEqual(cli.json, out);
+    assert.throws(() => mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD', ticket: 'T-99-99' }), /unknown ticket/);
+  } finally { fs.rmSync(p.dir, { recursive: true, force: true }); }
+});
+
+test('rc55 description remains bounded with a complete source pointer', () => {
+  const p = project({ 'T-01-01': { phase: 1, goal: 'Goal. ' + 'Long details. '.repeat(3000) } });
+  try {
+    const out = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD', ticket: 'T-01-01' });
+    const description = out.steps.find(x => x.step === 'issue').description;
+    assert.ok(Buffer.byteLength(description) <= 12000);
+    assert.ok(description.includes('Source of truth: acme/demo:.planning/phases/'));
+    assert.ok(description.includes('Goal.'));
+  } finally { fs.rmSync(p.dir, { recursive: true, force: true }); }
+});
+
+test('long Jira scope preserves complete short acceptance criteria', () => {
+  const p = project({ 'T-01-01': { phase: 1, goal: 'Repair.', scope: 'Long scope. '.repeat(2000), ac: 'MUST_RETAIN_ACCEPTANCE: all regressions pass.' } });
+  try {
+    const issue = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD', ticket: 'T-01-01' }).steps.find(x => x.step === 'issue');
+    assert.ok(issue.description.includes('MUST_RETAIN_ACCEPTANCE: all regressions pass.'));
+    assert.ok(Buffer.byteLength(issue.description) <= 12000);
+  } finally { fs.rmSync(p.dir, { recursive: true, force: true }); }
+});
+
 done();
