@@ -94,13 +94,23 @@ function main(argv = process.argv.slice(2)) {
   if (!fs.existsSync(path.join(worktree, '.git'))) throw new Error(`not a git worktree: ${worktree}`);
   const ticket = value(argv, 'ticket');
   const projectRoot = resolveProjectRoot(argv);
-  const context = baseFor(worktree, value(argv, 'base'), { ticket, projectRoot,
+  const pushBase = value(argv, 'push-base');
+  if (pushBase) {
+    if (!argv.includes('--managed') || !value(argv, 'head') || argv.includes('--working-tree')
+      || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(pushBase) || /^0+$/.test(pushBase)) {
+      throw new Error('--push-base requires a nonzero Git commit OID and a managed pinned-head check');
+    }
+    try { git(worktree, ['rev-parse', '--verify', pushBase + '^{commit}']); }
+    catch { throw new Error('remote push base ' + pushBase + ' is not available locally; fetch the destination branch before retrying'); }
+  }
+  const context = baseFor(worktree, value(argv, 'base'), { ticket, projectRoot, pushBase,
     branch: value(argv, 'branch'), graphDir: value(argv, 'graph'), managed: argv.includes('--managed'),
     configuredBase: value(argv, 'fallback-base') });
   const { base, base_source } = context;
   const repo = commentPolicy.repositorySlug(worktree);
   const result = commentPolicy.analyze(worktree, base, {
     workingTree: argv.includes('--working-tree'),
+    directRange: Boolean(pushBase),
     head: value(argv, 'head'),
     projectRoot: context.projectRoot || projectRoot,
     repo,

@@ -57,6 +57,7 @@ function run(input, args, config = {}) {
     }
     if (git(['cat-file', '-t', update.oid]) !== 'commit') throw new Error('branch update must name a commit');
     const argv = ['--managed', '--worktree', worktree, '--branch', update.remoteRef.slice('refs/heads/'.length), '--head', update.oid];
+    if (!/^0+$/.test(update.remoteOid)) argv.push('--push-base', update.remoteOid);
     for (const [name, value] of [['project-root', config.projectRoot || process.env.SHIPYARD_PROJECT_ROOT],
       ['graph', config.graphDir || process.env.SHIPYARD_GRAPH_DIR], ['fallback-base', config.base]]) {
       if (value) argv.push('--' + name, value);

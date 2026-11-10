@@ -48,3 +48,75 @@ test('a real push checks a non-HEAD ref and ignores dirty disk commentary', (t) 
   const result = f.push('push', 'origin', 'feature:feature');
   assert.equal(result.status, 0, result.stdout + result.stderr);
 });
+
+test('a subsequent push without a base override ignores already published epic comments', (t) => {
+  const f = pushFixture(t);
+  f.write('app.js', 'const value = 1;\n// accepted epic history\n');
+  f.commit('published epic history');
+  f.git('push', '--no-verify', '-q', 'origin', 'feature');
+  delete f.env.SHIPYARD_COMMENT_BASE;
+  f.write('app.js', 'const value = 2;\n// accepted epic history\n');
+  f.commit('new code only');
+  const result = f.push('push', 'origin', 'feature');
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test('a subsequent push still rejects comments added beyond the remote commit', (t) => {
+  const f = pushFixture(t);
+  f.write('app.js', 'const value = 1;\n// accepted epic history\n');
+  const remoteHead = f.commit('published epic history');
+  f.git('push', '--no-verify', '-q', 'origin', 'feature');
+  delete f.env.SHIPYARD_COMMENT_BASE;
+  f.write('app.js', 'const value = 2;\n// accepted epic history\n// new forbidden comment\n');
+  f.commit('new comment');
+  const result = f.push('push', 'origin', 'feature');
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stderr, /app\.js:3/);
+  assert.ok(result.stderr.includes('base=' + remoteHead + ' base_source=remote-oid'), result.stderr);
+});
+
+test('a force push compares the destination tree directly rather than its merge base', (t) => {
+  const f = pushFixture(t);
+  f.write('app.js', 'const value = 1;\n// accepted epic history\n');
+  f.commit('published epic history');
+  f.git('push', '--no-verify', '-q', 'origin', 'feature');
+  f.git('reset', '--hard', f.base);
+  delete f.env.SHIPYARD_COMMENT_BASE;
+  f.write('app.js', 'const value = 2;\n// accepted epic history\n');
+  f.commit('rewritten code only');
+  const result = f.push('push', '--force', 'origin', 'feature');
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test('an unavailable remote object refuses with fetch guidance instead of falling back to main', (t) => {
+  const f = pushFixture(t);
+  const oid = f.git('rev-parse', 'HEAD');
+  const result = spawnSync(process.execPath, [path.join(root, 'plugins/delivery-pipeline/scripts/native-pre-push.cjs')], {
+    cwd: f.root, env: f.env, encoding: 'utf8',
+    input: 'refs/heads/feature ' + oid + ' refs/heads/feature ' + 'a'.repeat(40) + '\n',
+  });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stderr, /remote push base.*not available locally.*fetch/i);
+});
+
+test('each ref in a multi-branch push uses its own remote commit', (t) => {
+  const f = pushFixture(t);
+  f.write('app.js', 'const value = 1;\n// first published history\n');
+  f.commit('first history');
+  f.git('checkout', '-qb', 'other', f.base);
+  f.write('app.js', 'const other = 1;\n// second published history\n');
+  const otherHead = f.commit('second history');
+  f.git('push', '--no-verify', '-q', 'origin', 'feature', 'other');
+  delete f.env.SHIPYARD_COMMENT_BASE;
+  f.git('checkout', '-q', 'feature');
+  f.write('app.js', 'const value = 2;\n// first published history\n');
+  f.commit('valid first update');
+  f.git('checkout', '-q', 'other');
+  f.write('app.js', 'const other = 2;\n// second published history\n// forbidden second update\n');
+  f.commit('invalid second update');
+  const result = f.push('push', 'origin', 'feature', 'other');
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.ok(result.stderr.includes('base=' + otherHead + ' base_source=remote-oid'), result.stderr);
+  assert.match(result.stderr, /app\.js:3/);
+  assert.doesNotMatch(result.stderr, /app\.js:2/);
+});

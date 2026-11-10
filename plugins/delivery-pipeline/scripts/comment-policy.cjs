@@ -419,8 +419,8 @@ function contained(worktree, relative) {
   return candidate;
 }
 
-function diffFor(worktree, base, workingTree, head = 'HEAD') {
-  const revision = workingTree ? base : `${base}...${head}`;
+function diffFor(worktree, base, workingTree, head = 'HEAD', directRange = false) {
+  const revision = workingTree ? base : directRange ? `${base}..${head}` : `${base}...${head}`;
   return git(worktree, [
     'diff', '--unified=0', '--no-color', '--no-ext-diff', '--find-renames',
     '--diff-filter=ACMR', revision, '--',
@@ -439,8 +439,8 @@ function analyze(worktree, base, options = {}) {
   if (workingTree && options.head) throw new Error('a pinned commit cannot be checked in working-tree mode');
   const baseRevision = git(worktree, ['rev-parse', '--verify', `${resolvedBase}^{commit}`]).trim();
   const head = workingTree ? null : git(worktree, ['rev-parse', '--verify', `${options.head || 'HEAD'}^{commit}`]).trim();
-  const diff = diffFor(worktree, baseRevision, workingTree, head);
-  const preimage = workingTree
+  const diff = diffFor(worktree, baseRevision, workingTree, head, options.directRange);
+  const preimage = workingTree || options.directRange
     ? baseRevision
     : git(worktree, ['merge-base', baseRevision, head]).trim();
   const changes = parseDiff(diff);

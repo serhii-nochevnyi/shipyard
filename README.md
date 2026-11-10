@@ -628,7 +628,11 @@ configuration or altered managed files cause a refusal.
 The hook checks the actual commit IDs supplied by Git, including non-HEAD and
 multiple branch updates. Deletions have no content to check. Tags and other
 non-branch refs are reported as unmanaged. Working-tree edits do not affect a
-push check. The review base comes from the branch's open PR, then an explicit
+push check. For an existing destination branch, the check compares the remote
+commit supplied by Git directly with the pushed commit (`remoteOid..localOid`),
+including force pushes; already published comments are not checked again. If the
+remote commit is unavailable locally, fetch the destination branch and retry.
+For a new destination branch, the review base comes from its open PR, then an explicit
 base, a repository-qualified graph/board branch match, or project `git.base_branch`.
 A conflicting recorded or explicit base is refused with a diagnostic. A source
 branch's own upstream is insufficient. Refusals name `base`, `base_source` and

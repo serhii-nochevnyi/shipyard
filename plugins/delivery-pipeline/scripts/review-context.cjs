@@ -51,7 +51,7 @@ function lookupPullRequest({ worktree, branch, repo }) {
 }
 
 function resolveReviewContext({ worktree, branch, ticket, projectRoot, graphDir, requestedBase,
-  configuredBase, lookupPr = lookupPullRequest } = {}) {
+  configuredBase, pushBase, lookupPr = lookupPullRequest } = {}) {
   if (!branch) branch = git(worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   branch = String(branch);
   if (branch.startsWith('refs/heads/')) branch = branch.slice('refs/heads/'.length);
@@ -75,6 +75,8 @@ function resolveReviewContext({ worktree, branch, ticket, projectRoot, graphDir,
   const rows = state?.tickets || state;
   const board = ticket && rows?.[ticket];
   if (board?.branch && board.branch !== branch) throw new Error('delivery board branch differs for ' + ticket);
+  if (pushBase) return { base: pushBase, base_source: 'remote-oid', ticket: ticket || null, branch,
+    projectRoot: projectRoot || null, graphDir: graph ? graphDir : null };
   let recorded = board?.base || match?.[1].pr_base || null;
   if (match?.[1].pr_base && board) recorded = resolveTicketBase({ ticket, requestedBase: recorded, graph, state });
   const pr = lookupPr({ worktree, branch, repo });

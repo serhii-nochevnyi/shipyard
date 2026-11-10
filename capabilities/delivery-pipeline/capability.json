@@ -1,7 +1,7 @@
 {
   "id": "delivery-pipeline",
   "role": "feature",
-  "version": "1.0.0-rc.5.6",
+  "version": "1.0.0-rc.5.7",
   "title": "Delivery pipeline loop gates",
   "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: Gate 2 validates the ticket graph and a deterministic local projection keeps native GSD state synchronized through planning, delivery, verification, and ship.",
   "tier": "full",
@@ -41,7 +41,7 @@
     "delivery_pipeline.gsd_sync": {
       "type": "boolean",
       "default": true,
-      "description": "Run the local Shipyard→GSD projection at lifecycle boundaries and block ship when the native projection is stale."
+      "description": "Run the local Shipyard\u2192GSD projection at lifecycle boundaries and block ship when the native projection is stale."
     },
     "delivery_pipeline.arch_verdict": {
       "type": "boolean",
@@ -194,7 +194,7 @@
       "point": "ship:pre",
       "check": {
         "agentVerdict": {
-          "prompt": "Architecture conformance (advisory). If .planning/architecture/ contains no ADR-*.md, verdict: pass. Otherwise: extract locked decisions and scope fences from every ADR (plus INTERFACES.md/DATA-MODEL.md when present), diff the phase's implemented changes (merge-base..HEAD), and judge conformance only against recorded decisions — style and bugs belong to other reviewers. Report each violation as file:line + the violated ADR section + minimal remediation direction. If the code is right and a decision no longer fits reality, say adr-outdated and name the decision — changing it is the human's call. Never block; this verdict is advisory context for the ship decision."
+          "prompt": "Architecture conformance (advisory). If .planning/architecture/ contains no ADR-*.md, verdict: pass. Otherwise: extract locked decisions and scope fences from every ADR (plus INTERFACES.md/DATA-MODEL.md when present), diff the phase's implemented changes (merge-base..HEAD), and judge conformance only against recorded decisions \u2014 style and bugs belong to other reviewers. Report each violation as file:line + the violated ADR section + minimal remediation direction. If the code is right and a decision no longer fits reality, say adr-outdated and name the decision \u2014 changing it is the human's call. Never block; this verdict is advisory context for the ship decision."
         }
       },
       "blocking": false,
