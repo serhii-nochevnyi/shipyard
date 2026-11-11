@@ -276,7 +276,7 @@ function liveBoundary(options = {}) {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
-for (const command of ['## Other section\n- `node --test tests/greeting.test.cjs`\n', '- `node --test tests/greeting.test.cjs` trailing explanation\n', '', '- `npm test`\n']) {
+for (const command of ['## Other section\n- `node --test tests/greeting.test.cjs`\n', '- `node --test tests/greeting.test.cjs` trailing explanation\n', '']) {
   test('refuses generated command before executor: ' + JSON.stringify(command), () => {
     const result = liveBoundary({ command });
     assert.notStrictEqual(result.status, 0, result.stderr);
@@ -284,12 +284,20 @@ for (const command of ['## Other section\n- `node --test tests/greeting.test.cjs
     assert.ok(result.stages.some(stage => stage.stage === 'executor' && !stage.ok));
   });
 }
-for (const config of ['{broken', 'null', '{}', '{"delivery_pipeline":{"verification_commands":{"default":[{"argv":["node"],"profile":"invalid"}]}}}']) {
-  test('refuses invalid or absent approval: ' + config, () => {
+for (const config of ['{broken', 'null']) {
+  test('refuses invalid verification configuration: ' + config, () => {
     const result = liveBoundary({ config });
     assert.notStrictEqual(result.status, 0, result.stderr);
     assert.deepStrictEqual(result.calls, []);
     assert.ok(result.stages.some(stage => stage.stage === 'executor' && !stage.ok));
+  });
+}
+for (const options of [{ config: '{}' }, { command: '- `npm test`\n', config: '{}' }]) {
+  test('sandbox commands need no live preflight approval: ' + JSON.stringify(options), () => {
+    const result = liveBoundary(options);
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.ok(result.calls.includes('launch'));
+    assert.ok(result.calls.includes('push'));
   });
 }
 for (const runtime of ['claude', 'codex']) {

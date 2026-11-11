@@ -9,7 +9,7 @@ const { execFileSync } = require('node:child_process');
 const pipeline = require('../../plugins/delivery-pipeline/scripts/pipeline-config.cjs');
 const { assignPlan } = require('../../plugins/delivery-pipeline/scripts/host-verification.cjs');
 
-test('live bootstrap preserves approved sandbox verification and refuses other programs', () => {
+test('live bootstrap preserves sandbox configuration and assigns new commands without approval', () => {
   const root = path.resolve(__dirname, '../..');
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-live-fixture-'));
   try {
@@ -26,8 +26,8 @@ test('live bootstrap preserves approved sandbox verification and refuses other p
     assert.deepEqual(assigned.map(({ argv, profile }) => ({ argv, profile })),
       [{ argv: ['node', '--test', 'tests/greeting.test.cjs'], profile: 'sandbox' }]);
     assert.equal(assignPlan('## Verification commands\n- `node -e "require(\'node:assert\').ok(true)"`', allowList)[0].profile, 'sandbox');
-    assert.throws(() => assignPlan('## Verification commands\n- `bash deploy.sh`', allowList), /no approved profile/);
-    assert.throws(() => assignPlan('## Verification commands\n- `node unapproved.cjs`', allowList), /no approved profile/);
+    assert.equal(assignPlan('## Verification commands\n- `bash check.sh`', allowList)[0].profile, 'sandbox');
+    assert.equal(assignPlan('## Verification commands\n- `node new-test.cjs`', allowList)[0].profile, 'sandbox');
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
   }

@@ -510,47 +510,54 @@ test('allow-listed host verification failure blocks Claude repair finalization',
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
-test('passing Claude host verification sends sealed digest to finalizer', async () => {
-  let digest;
-  const fixture = repairFixture({ status: 'fixed', changeCode: true,
-    hostOptions: { verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
-      verificationTreeDigest() { return 'same'; },
-      hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '' }; } },
-      signingFingerprint() { return 'A'.repeat(40); },
-      finalizeCommit(input) { digest = input.verificationEvidenceDigest;
-        return { commit: 'signed', verificationEvidenceDigest: digest }; },
-      publishRepair() { return { pushed: true }; },
-    } });
-  try {
-    fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node check.cjs`\n');
-    fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
-    await fixture.host.run('fix-round', fixture.args);
-    assert.match(digest, /^[0-9a-f]{64}$/);
-  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+test('new Claude PLAN verification runs in sandbox without approval and blocks failed repair finalization', async () => {
+  for (const verificationAllowList of [null, []]) {
+    let finalized = 0;
+    let checks = 0;
+    const fixture = repairFixture({ status: 'fixed', changeCode: true,
+      hostOptions: { verificationAllowList,
+        verificationTreeDigest() { return 'same'; },
+        verificationRunner: { run(spec) {
+          checks++;
+          assert.deepEqual(spec.argv, ['new-check.cjs']);
+          return { status: 7, stdout: '', stderr: 'failed' };
+        } },
+        hostVerificationRunner: { run() { assert.fail('sandbox failure must never fall back to host'); } },
+        signingFingerprint() { return 'A'.repeat(40); },
+        finalizeCommit() { finalized++; },
+      } });
+    try {
+      fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node new-check.cjs`\n');
+      fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
+    const result = await fixture.host.run('fix-round', fixture.args);
+      assert.equal(result[0].status, 'verification_failed');
+      assert.match(result[0].evidence_digest, /^[0-9a-f]{64}$/);
+      assert.equal(checks, 1);
+      assert.equal(finalized, 0);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  }
 });
 
-test('rc55 executor repair forwards pinned reviewed rename intent to finalizer', async () => {
-  let observed;
-  const fixture = repairFixture({ status: 'fixed', changeCode: true, hostOptions: {
-    verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
-    verificationTreeDigest() { return 'same'; },
-    hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '' }; } },
-    signingFingerprint() { return 'A'.repeat(40); },
-    finalizeCommit(input) { observed = input; return { commit: 'signed', verificationEvidenceDigest: input.verificationEvidenceDigest }; },
-    publishRepair() { return { pushed: true }; },
-  } });
-  try {
-    const pair = { from: 'src/owned.txt', to: 'src/Owned.txt' };
-    const graphPath = path.join(fixture.graphDir, 'tickets.json');
-    const graph = JSON.parse(fs.readFileSync(graphPath));
-    graph.tickets['T-38-03'].files = [pair.from, pair.to];
-    fs.writeFileSync(graphPath, JSON.stringify(graph));
-    fs.writeFileSync(fixture.planPath, '---\nfiles_modified: [src/owned.txt, src/Owned.txt]\ncase_only_renames:\n  - from: src/owned.txt\n    to: src/Owned.txt\ndelivery:\n  human_checkpoint: review\n---\n## Verification commands\n- `node check.cjs`\n');
-    fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
-    await fixture.host.run('fix-round', fixture.args);
-    assert.deepEqual(observed.caseOnlyRenames, [pair]);
-    assert.equal(observed.graphDir, fs.realpathSync(fixture.graphDir));
-  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+test('passing Claude verification seals finalization evidence with host approval or automatic sandbox admission', async () => {
+  for (const verificationAllowList of [[{ argv: ['node', 'check.cjs'], profile: 'host' }], null, []]) {
+    let digest;
+    const fixture = repairFixture({ status: 'fixed', changeCode: true,
+      hostOptions: { verificationAllowList,
+        verificationTreeDigest() { return 'same'; },
+        verificationRunner: { run() { assert.ok(!verificationAllowList?.length); return { status: 0, stdout: '', stderr: '' }; } },
+        hostVerificationRunner: { run() { assert.ok(verificationAllowList?.length); return { status: 0, stdout: '', stderr: '' }; } },
+        signingFingerprint() { return 'A'.repeat(40); },
+        finalizeCommit(input) { digest = input.verificationEvidenceDigest;
+          return { commit: 'signed', verificationEvidenceDigest: digest }; },
+        publishRepair() { return { pushed: true }; },
+      } });
+    try {
+      fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node check.cjs`\n');
+      fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
+      await fixture.host.run('fix-round', fixture.args);
+      assert.match(digest, /^[0-9a-f]{64}$/);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  }
 });
 
 test('trusted repair host refuses a mismatched canonical PR and caller-supplied reference data', () => {

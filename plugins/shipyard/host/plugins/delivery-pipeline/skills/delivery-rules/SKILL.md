@@ -172,17 +172,15 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    mistakes. A command that cannot be scoped (a suite that needs a live
    database, a browser, a deployed environment) is a CI-only check — say so
    under Test strategy and leave it out of Verification commands rather than
-   handing the executor something it cannot run. Each command starts with
-   `node`, `bash` or `make` (or an absolute executable path): trusted host
-   verification runs PLAN commands through a fixed allowlist and refuses
-   anything else, such as `git`, `npm` or a shell pipeline. A command is plain
-   argv, never shell text: none of `| ; & < > $`, a backtick or a backslash may
-   appear anywhere in it, even inside quotes, so `node -e "…;…"` and `\x3c` are
-   refused — put inline logic in a committed script and run `node path/to/it.cjs`.
-   Only the bullets under `## Verification commands` run; `<verify><automated>`
-   blocks are never executed. Every distinct command also needs an approved entry
-   in `pipeline.verification_commands` of `.planning/config.json`. You never write
-   that file: Gate 2 lists the exact missing entries and a person adds them.
+   handing the executor something it cannot run. Commands are parsed as argument
+   arrays, never shell pipelines. The trusted verifier runs PLAN commands in the OS sandbox by default, without per-ticket
+   allowlist approval. Repository `verification_commands` entries can set sandbox
+   timeouts or explicitly select `host` execution for an exact argv. A sandbox
+   failure never falls back to host execution or requests blanket approval.
+   Only bullets under `## Verification commands` run; `<verify><automated>`
+   blocks are never executed. Put inline logic in committed scripts: shell
+   operators remain refused even inside quotes. Gate 2 uses the same admission
+   rules and never asks a person to approve ordinary sandbox commands.
 7. **`depends_on` drives the cascade, not just ordering.** Under epic-stacked
    delivery (the default), a root ticket (empty `depends_on`) PRs into the
    phase epic branch; a dependent ticket cascades — it PRs into its primary

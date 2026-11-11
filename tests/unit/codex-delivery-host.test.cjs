@@ -1453,24 +1453,29 @@ test('CLI pins verification from the approved PLAN when no spec is injected', as
   } finally { clean(f); }
 });
 
-test('CLI holds an unmatched PLAN command before executor launch and does not retry it', async () => {
-  const f = fixture();
-  const requestFile = path.join(f.graphDir, 'request-empty-allow-list.json');
-  const output = [];
-  try {
-    approvedPlan(f, ['node check.cjs']);
-    fs.writeFileSync(requestFile, JSON.stringify({
-      scope: f.scope, role: 'executor', context: { prompt: 'Implement scoped work.' },
-    }));
-    await assert.rejects(() => runCli(['--args-file', requestFile], { write(chunk) { output.push(chunk); } }, {
-      ...cliOptions(f), verification: undefined, verificationAllowList: [],
-      hostVerificationRunner: { run() { assert.fail('an empty allow-list must not launch a command'); } },
-    }), (error) => error.code === 'VERIFICATION_FAILED' && error.status === 'hold'
-      && error.command.join(' ') === 'node check.cjs' && error.retryable === false);
-    assert.equal(runStatus(f).state, 'failed');
-    assert.equal(f.calls.length, 0);
-    assert.deepEqual(output, [], 'a pre-dispatch HOLD must not fabricate executor or assertion evidence');
-  } finally { clean(f); }
+test('CLI verifies a new PLAN command in sandbox without an allowlist, including finalization evidence', async () => {
+  for (const verificationAllowList of [null, []]) {
+    const f = fixture();
+    const spy = [];
+    const requestFile = path.join(f.graphDir, 'request-default-sandbox.json');
+    try {
+      approvedPlan(f, ['node --version']);
+      fs.writeFileSync(requestFile, JSON.stringify({
+        scope: f.scope, role: 'executor', context: { prompt: 'Implement scoped work.' },
+      }));
+      const result = await runCli(['--args-file', requestFile], { write() {} }, {
+        ...cliOptions(f), verification: undefined, verificationAllowList,
+        verificationRunner: hostRunner(spy),
+        hostVerificationRunner: { run() { assert.fail('unconfigured command must not execute on host'); } },
+      });
+      assert.equal(result.artifact.status, 'committed');
+      assert.equal(spy.length, 1);
+      assert.deepEqual(spy[0].argv, ['--version']);
+      const candidate = JSON.parse(fs.readFileSync(candidatePath(f, result.artifact.candidate_id), 'utf8')).payload;
+      assert.match(candidate.verification.evidence_digest, /^[0-9a-f]{64}$/);
+      assert.equal(candidate.verification.records[0].host_evidence_digest, candidate.verification.evidence_digest);
+    } finally { clean(f); }
+  }
 });
 
 test('verification failure reason safely handles an absent command', () => {
@@ -1508,16 +1513,14 @@ test('recovery-only CLI reuses the PLAN-pinned verification spec without an inje
   } finally { clean(f); }
 });
 
-test('PLAN verification with shell syntax or a non-allowlisted bare program refuses before launch', async () => {
-  for (const command of ['node a.cjs && rm -rf x', 'sh test.sh', 'npm test', 'bash -c "true"']) {
+test('PLAN verification with shell syntax refuses before launch', async () => {
+  for (const command of ['node a.cjs && rm -rf x', 'bash -c "true"']) {
     const f = fixture();
     try {
       approvedPlan(f, [command]);
       await assert.rejects(() => delivery(f, { verification: undefined }).run({
         role: 'executor', context: { prompt: 'Implement.' } }),
-      (error) => /^(sh|npm)\s/.test(command)
-        ? error.code === 'VERIFICATION_FAILED' && error.status === 'hold'
-        : error.code === 'VERIFICATION_SPEC_UNSUPPORTED');
+      (error) => error.code === 'VERIFICATION_SPEC_UNSUPPORTED');
       assert.equal(f.calls.length, 0);
     } finally { clean(f); }
   }

@@ -112,19 +112,21 @@ function planCommands(pinnedPlanText) {
 
 function admit(commands, allowList) {
   if (!Array.isArray(commands)) throw refusal('PLAN commands must be an array');
-  if (!Array.isArray(allowList)) return Object.freeze({ commands: [], not_allowed: [], configured: false });
+  const entries = Array.isArray(allowList) ? allowList : [];
   const approved = [];
   const notAllowed = [];
   for (const argv of commands) {
-    const entry = [...allowList].sort((left, right) => (right.argv?.length || 0) - (left.argv?.length || 0))
+    const entry = [...entries].sort((left, right) => (right.argv?.length || 0) - (left.argv?.length || 0))
       .find((item) => Array.isArray(item.argv) && item.argv.length
       && item.argv.every((part, index) => part === argv[index])
       && (item.profile !== 'host' || item.argv.length === argv.length));
-    if (!entry || !['host', 'sandbox'].includes(entry.profile === undefined ? 'sandbox' : entry.profile)) {
+    // PLAN commands need no approval to run in the OS sandbox. Explicit host
+    // entries never grant authority to appended arguments or unknown profiles.
+    if (entry && !['host', 'sandbox'].includes(entry.profile === undefined ? 'sandbox' : entry.profile)) {
       notAllowed.push(argv); continue;
     }
-    approved.push(Object.freeze({ argv: [...argv], profile: entry.profile || 'sandbox',
-      timeout_ms: (entry.timeout_s || DEFAULT_TIMEOUT_MS / 1000) * 1000 }));
+    approved.push(Object.freeze({ argv: [...argv], profile: entry?.profile || 'sandbox',
+      timeout_ms: (entry?.timeout_s || DEFAULT_TIMEOUT_MS / 1000) * 1000 }));
   }
   return Object.freeze({ commands: approved, not_allowed: notAllowed, configured: true });
 }
@@ -132,13 +134,12 @@ function admit(commands, allowList) {
 function assignPlan(planText, allowList) {
   const commands = planCommands(planText);
   // Preserve legacy explicit verification specs with no PLAN commands. A PLAN
-  // that names assertions requires current configuration before dispatch.
+  // that names assertions is assigned a runner before dispatch.
   if (!commands.length && !Array.isArray(allowList)) return null;
   const admitted = admit(commands, allowList);
-  if (!admitted.configured || admitted.not_allowed.length || !admitted.commands.length) {
-    const error = refusal(!admitted.configured ? 'HOLD: verification allow-list is absent'
-      : admitted.not_allowed.length ? 'HOLD: PLAN command has no approved profile or exact host argv'
-        : 'HOLD: PLAN has no verification commands');
+  if (admitted.not_allowed.length || !admitted.commands.length) {
+    const error = refusal(admitted.not_allowed.length ? 'HOLD: PLAN command has an invalid verification profile'
+      : 'HOLD: PLAN has no verification commands');
     error.status = 'hold';
     error.command = admitted.not_allowed[0] || commands[0] || null;
     error.retryable = false;
@@ -164,12 +165,9 @@ function inspectPlan(planText, allowList) {
     }
   }
   for (const { bullet, argv } of argvs) {
-    if (!Array.isArray(allowList)) {
-      problems.push({ kind: 'allow_list_absent', command: bullet, entry: { argv },
-        reason: 'verification allow-list is not configured for this repository' });
-    } else if (admit([argv], allowList).not_allowed.length) {
-      problems.push({ kind: 'not_allowed', command: bullet, entry: { argv },
-        reason: 'PLAN command has no approved allow-list entry' });
+    if (admit([argv], allowList).not_allowed.length) {
+      problems.push({ kind: 'invalid_profile', command: bullet,
+        reason: 'PLAN command has an invalid verification profile' });
     }
   }
   if (Array.isArray(allowList) && !argvs.length && !problems.length) {
@@ -325,7 +323,9 @@ function readEvidence(file, digest) {
 
 function verifyPlan({ planText, allowList, worktree, stateRoot, ticket, planSha256,
   expectedHead, files_modified, caseOnlyRenames, sandboxRunner, hostRunner, treeDigest }) {
-  const admitted = Array.isArray(allowList) ? admit(planCommands(planText), allowList) : admit([], null);
+  const commands = planCommands(planText);
+  const admitted = !commands.length && !Array.isArray(allowList)
+    ? { commands: [], not_allowed: [], configured: false } : admit(commands, allowList);
   const results = run(admitted, { worktree, stateRoot, expectedHead, files_modified, caseOnlyRenames,
     sandboxRunner, hostRunner, treeDigest });
   const sealed = evidence(results, { stateRoot, ticket, plan_sha256: planSha256,

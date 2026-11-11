@@ -420,7 +420,7 @@ function resolveVerificationExecutable(program, allowList) {
   if (program === 'node') return process.execPath;
   const candidates = PLAN_EXECUTABLE_ALLOWLIST[program];
   if (!candidates) {
-    if (!Array.isArray(allowList) || path.isAbsolute(program)) return program;
+    if (path.isAbsolute(program)) return program;
     const found = (process.env.PATH || '').split(path.delimiter).map((directory) => path.join(directory, program))
       .find((candidate) => {
         try { const stat = fs.statSync(candidate); return stat.isFile() && (stat.mode & 0o111) !== 0; }
@@ -524,7 +524,7 @@ function scopedTreeOf(prepared, options) {
 
 function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
   const allowList = prepared.verificationAllowList;
-  if (Array.isArray(allowList)) {
+  if (prepared.verificationAssignment || Array.isArray(allowList)) {
     const verified = hostVerification.collectVerificationEvidence({ planText: prepared.plan.text, allowList,
       worktree: prepared.commit.worktree, stateRoot: prepared.stateRoot, ticket: prepared.commit.ticket,
       planSha256: prepared.plan.sha256, expectedHead: prepared.commit.expectedHead,

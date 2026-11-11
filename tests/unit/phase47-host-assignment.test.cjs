@@ -114,16 +114,12 @@ test('real native executor prompt assigns pinned exact host argv before launch w
   assert.equal(f.git('status', '--porcelain'), '');
 });
 
-test('altered argv, unknown profile and absent exact admission refuse before native dispatch', async (t) => {
+test('unknown profiles refuse before native dispatch', async (t) => {
   const f = fixture(t);
-  for (const entries of [null, [], [{ argv: hostArgv.slice(0, -1), profile: 'host' }],
-    allowList.map((entry) => ({ ...entry, profile: 'unknown' }))]) {
+  for (const entries of [allowList.map((entry) => ({ ...entry, profile: 'unknown' }))]) {
     await assert.rejects(() => f.run({}, { verificationAllowList: entries }),
       (error) => error.code === 'VERIFICATION_FAILED' && error.status === 'hold');
   }
-  fs.appendFileSync(f.plan, '- `node unapproved.cjs`\n');
-  await assert.rejects(() => f.run({ plan_sha256: digest(fs.readFileSync(f.plan)) }),
-    (error) => error.code === 'VERIFICATION_FAILED' && error.status === 'hold');
   assert.equal(f.calls.length, 0);
 });
 
@@ -168,5 +164,20 @@ test('PLAN, approval or candidate changes after assignment refuse before host as
     assert.equal(captured.length, 1);
     assert.equal(captured[0].verification_assignment.plan_sha256, digest(planText));
     assert.deepEqual(captured[0].verification_assignment.commands[1].argv, hostArgv);
+  }
+});
+
+test('new PLAN commands are assigned to sandbox before native dispatch without allowlist approval', async (t) => {
+  for (const entries of [null, [], [{ argv: ['node'], profile: 'host' }]]) {
+    const f = fixture(t);
+    fs.appendFileSync(f.plan, '- `node new-test.cjs`\n- `sh check.sh`\n');
+    await assert.rejects(() => f.run({ plan_sha256: digest(fs.readFileSync(f.plan)) },
+      { verificationAllowList: entries }), { code: 'RUNTIME_UNAVAILABLE' });
+    assert.equal(f.calls.length, 1);
+    const assignment = JSON.parse(/<HOST-VERIFICATION-ASSIGNMENT>\n(.*?)\n<\/HOST-VERIFICATION-ASSIGNMENT>/s.exec(f.calls[0].prompt)[1]);
+    assert.equal(assignment.commands.length, 4);
+    assert.ok(assignment.commands.every((command) => command.profile === 'sandbox'));
+    assert.deepEqual(assignment.commands[2].argv, ['node', 'new-test.cjs']);
+    assert.deepEqual(assignment.commands[3].argv, ['sh', 'check.sh']);
   }
 });

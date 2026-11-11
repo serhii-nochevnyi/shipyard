@@ -399,31 +399,17 @@ for (const file of planFiles.sort()) {
 
 {
   const config = loadConfig(ROOT);
-  const suggestions = new Map();
-  let configReported = false;
+  if (config.valid === false) errors.push('.planning/config.json is invalid — fix the file before delivery');
   for (const t of Object.values(tickets)) {
-    if ((deliveryStateRows[t.id] || {}).status === 'merged') continue;
-    const allowList = config.valid === false ? null : repoValue(config, 'verification_commands', t.repo);
+    if (config.valid === false || (deliveryStateRows[t.id] || {}).status === 'merged') continue;
+    const allowList = repoValue(config, 'verification_commands', t.repo);
     let problems;
     try { problems = inspectPlan(fs.readFileSync(path.join(ROOT, t.file), 'utf8'), allowList); }
     catch (error) { errors.push(`${t.id}: ${t.file}: ${error.message}`); continue; }
-    if (config.valid === false && problems.length && !configReported) {
-      configReported = true;
-      errors.push('.planning/config.json is invalid, so no verification allow-list can be read — fix the file first');
-    }
     for (const problem of problems) {
       errors.push(`${t.id}: ${t.file}: verification command ${problem.command === null ? '' : '`' + problem.command + '` '}`
         + `would be refused by the delivery host — ${problem.reason}`);
-      if (problem.entry) {
-        const key = t.repo || 'default';
-        if (!suggestions.has(key)) suggestions.set(key, new Set());
-        suggestions.get(key).add(JSON.stringify(problem.entry));
-      }
     }
-  }
-  for (const [key, entries] of suggestions) {
-    errors.push(`add these entries to .planning/config.json under pipeline.verification_commands.${key} (a person must approve them; `
-      + `the planner never does): [${[...entries].join(', ')}]`);
   }
 }
 

@@ -22,15 +22,15 @@ test('sandbox admission is prefix based; host admission is exact; denied command
     { argv: ['make', 'check'], profile: 'host', timeout_s: 2 },
     { argv: ['node', '--test'] },
   ]);
-  assert.deepEqual(admitted.commands.map((item) => item.profile), ['host', 'sandbox']);
-  assert.deepEqual(admitted.not_allowed, [['make', 'deploy']]);
-  assert.deepEqual(admit([['make', 'deploy']], [{ argv: ['make'], profile: 'host' }]).not_allowed,
-    [['make', 'deploy']]);
+  assert.deepEqual(admitted.commands.map((item) => item.profile), ['host', 'sandbox', 'sandbox']);
+  assert.deepEqual(admitted.not_allowed, []);
+  assert.equal(admit([['make', 'deploy']], [{ argv: ['make'], profile: 'host' }]).commands[0].profile, 'sandbox');
   const calls = [];
   const options = { worktree: os.tmpdir(), treeDigest: () => 'same',
     hostRunner: { run(spec) { calls.push(['host', spec]); return { status: 0, stdout: '', stderr: '' }; } },
     sandboxRunner: { run(spec) { calls.push(['sandbox', spec]); return { status: 0, stdout: '', stderr: '' }; } } };
-  assert.equal(run(admitted, options)[0].outcome, 'not_allowed');
+  const denied = admit([['make', 'deploy']], [{ argv: ['make'], profile: 'unknown' }]);
+  assert.equal(run(denied, options)[0].outcome, 'not_allowed');
   assert.deepEqual(calls, []);
   const results = run(admit([commands[0], commands[2]], [
     { argv: ['make', 'check'], profile: 'host', timeout_s: 2 }, { argv: ['node', '--test'] },
@@ -40,7 +40,7 @@ test('sandbox admission is prefix based; host admission is exact; denied command
   assert.equal(results.find((result) => result.profile === 'sandbox').outcome, 'passed');
 });
 
-test('agent output cannot add a command and an absent allow-list records not-configured', () => {
+test('agent output cannot add commands; absent allow-list still parses PLAN commands', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-verification-output-'));
   const worktree = path.join(root, 'worktree');
   fs.mkdirSync(worktree);
@@ -52,9 +52,8 @@ test('agent output cannot add a command and an absent allow-list records not-con
       hostRunner: { run(spec) { calls.push(spec); return { status: 0 }; } } }),
     (error) => error.status === 'verification_failed');
     assert.deepEqual(calls, []);
-    const result = verifyPlan({ planText: '## Verification commands\n- `node a && b`',
-      allowList: null, worktree, stateRoot: path.join(root, 'state'), ticket: 'T-43-16' });
-    assert.equal(result.outcome, 'not-configured');
+    assert.throws(() => verifyPlan({ planText: '## Verification commands\n- `node a && b`',
+      allowList: null, worktree, stateRoot: path.join(root, 'state'), ticket: 'T-43-16' }), /shell operator/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -62,7 +61,7 @@ test('only pinned PLAN text is parsed; changed scoped tree fails; sealed digest 
   const commands = planCommands('## Verification commands\n- `node check.cjs`');
   assert.deepEqual(commands, [['node', 'check.cjs']]);
   const admitted = admit(commands, [{ argv: ['node'], profile: 'host' }]);
-  assert.deepEqual(admitted.not_allowed, [commands[0]]);
+  assert.equal(admitted.commands[0].profile, 'sandbox');
   let tree = 0;
   const changed = run(admit(commands, [{ argv: ['node'] }]), { worktree: os.tmpdir(),
     treeDigest: () => String(tree++), sandboxRunner: { run() { return { status: 0, stdout: '', stderr: '' }; } } });
@@ -88,9 +87,9 @@ test('only an admitted command with a clean, completed nonzero exit is retryable
   const base = { planText, worktree: root, stateRoot: path.join(root, 'state'),
     ticket: 'T-43-16', treeDigest: () => 'stable' };
   try {
-    assert.throws(() => verifyPlan({ ...base, allowList: [], hostRunner: { run() {
-      assert.fail('an unmatched PLAN command must not run');
-    } } }), (error) => error.retryable === false && error.command?.join(' ') === 'node check.cjs');
+    assert.throws(() => verifyPlan({ ...base, allowList: [], sandboxRunner: { run() {
+      throw Object.assign(new Error('sandbox unavailable'), { code: 'SANDBOX_UNAVAILABLE' });
+    } }, hostRunner: { run() { assert.fail('sandbox refusal must never fall back to host'); } } }), (error) => error.retryable === false && error.command?.join(' ') === 'node check.cjs');
     assert.throws(() => verifyPlan({ ...base,
       allowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
       hostRunner: { run() { return { status: 4, stdout: '', stderr: 'failed' }; } },
@@ -104,7 +103,7 @@ test('only an admitted command with a clean, completed nonzero exit is retryable
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('pre-dispatch assignment reuses exact admission and refuses missing or unknown approval', () => {
+test('pre-dispatch assignment defaults to sandbox and refuses unknown profiles', () => {
   const plan = '## Verification commands\n- `node check.cjs`';
   const entries = [{ argv: ['node', 'check.cjs'], profile: 'host', timeout_s: 5 }];
   const assigned = assignPlan(plan, entries);
@@ -114,9 +113,9 @@ test('pre-dispatch assignment reuses exact admission and refuses missing or unkn
   assert.throws(() => assigned[0].argv.push('extra'), TypeError);
   entries[0].argv.push('changed');
   assert.deepEqual(assigned[0].argv, ['node', 'check.cjs']);
-  for (const allowList of [null, [], entries, [{ argv: ['node'], profile: 'host' }],
-    [{ argv: ['node', 'check.cjs'], profile: 'other' }],
+  for (const allowList of [[{ argv: ['node', 'check.cjs'], profile: 'other' }],
     [{ argv: ['node', 'check.cjs'], profile: '' }]]) {
+    assert.deepEqual(inspectPlan(plan, allowList).map((problem) => problem.kind), ['invalid_profile']);
     assert.throws(() => assignPlan(plan, allowList),
       (error) => error.code === 'VERIFICATION_FAILED' && error.status === 'hold' && error.retryable === false);
   }
@@ -231,10 +230,10 @@ test('every configured verification command has a known shape and names only fil
   }
 });
 
-test('the configured allow-list refuses wrappers, npm, git and a bare node --test', () => {
+test('unconfigured programs default to sandbox without host authority', () => {
   for (const refused of [['node', '-e', 'process.exit(0)'], ['bash', '-c', 'true'], ['npm', 'test'],
     ['make', 'test'], ['git', 'status'], ['node', '--test']]) {
-    assert.deepEqual(admit([refused], configured).not_allowed, [refused], refused.join(' '));
+    assert.equal(admit([refused], configured).commands[0].profile, 'sandbox', refused.join(' '));
   }
 });
 
@@ -262,14 +261,13 @@ test('both delivery hosts share the bounded verification-retry rules', () => {
   }
 });
 
-test('inspectPlan reports every command the delivery host would refuse, with the reason and a ready entry', () => {
+test('inspectPlan reports unrunnable commands without requesting sandbox approval', () => {
   const plan = ['## Verification commands', '- `node -e "const c=1;process.exit(0)"`', '- `node -e "a\\x3cb"`',
     '- `node --test tests/unit/a.test.cjs`', '- `make check`', '## Next', '- `ignored $(x)`'].join('\n');
   const problems = inspectPlan(plan, [{ argv: ['make', 'check'] }]);
-  assert.deepEqual(problems.map((problem) => problem.kind), ['unrunnable', 'unrunnable', 'not_allowed']);
+  assert.deepEqual(problems.map((problem) => problem.kind), ['unrunnable', 'unrunnable']);
   assert.match(problems[0].reason, /";" is not allowed anywhere in the command, even inside quotes/);
   assert.match(problems[1].reason, /"\\" is not allowed/);
-  assert.deepEqual(problems[2].entry, { argv: ['node', '--test', 'tests/unit/a.test.cjs'] });
   assert.throws(() => planCommands(plan), /unrunnable shell operator in PLAN command: ";"/);
 });
 
@@ -277,10 +275,69 @@ test('inspectPlan agrees with assignPlan on absent allow-lists, empty plans and 
   const plan = '## Verification commands\n- `make check`\n';
   assert.equal(inspectPlan(plan, [{ argv: ['make', 'check'] }]).length, 0);
   assert.ok(assignPlan(plan, [{ argv: ['make', 'check'] }]));
-  assert.deepEqual(inspectPlan(plan, null).map((problem) => problem.kind), ['allow_list_absent']);
-  assert.throws(() => assignPlan(plan, null), (error) => error.status === 'hold');
+  for (const entries of [null, []]) {
+    assert.deepEqual(inspectPlan(plan, entries), []);
+    assert.equal(assignPlan(plan, entries)[0].profile, 'sandbox');
+  }
   assert.equal(inspectPlan('# Plan\n', null).length, 0);
   assert.equal(assignPlan('# Plan\n', null), null);
   assert.deepEqual(inspectPlan('# Plan\n', [{ argv: ['make'] }]).map((problem) => problem.kind), ['no_commands']);
   assert.throws(() => assignPlan('# Plan\n', [{ argv: ['make'] }]), (error) => error.status === 'hold');
+});
+
+test('new PLAN commands default to sandbox without approval and still require passing evidence', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'verification-default-sandbox-'));
+  const planText = '## Verification commands\n- `node --test new.test.cjs`';
+  try {
+    for (const allowList of [undefined, null, [], [{ argv: ['node', '--test', 'old.test.cjs'], profile: 'host' }],
+      [{ argv: ['node', '--test'], profile: 'host' }]]) {
+      assert.deepEqual(inspectPlan(planText, allowList), []);
+      const assigned = assignPlan(planText, allowList);
+      assert.equal(assigned[0].profile, 'sandbox');
+      assert.equal(assigned[0].timeout_ms, 600000);
+      for (const status of [0, 1]) {
+        let calls = 0;
+        const verify = () => verifyPlan({ planText, allowList, worktree: root, stateRoot: path.join(root, 'state'),
+          ticket: 'T-default', treeDigest: () => 'stable',
+          sandboxRunner: { run(spec) {
+            calls++;
+            assert.deepEqual(spec.argv, ['--test', 'new.test.cjs']);
+            return { status, stdout: '', stderr: '' };
+          } }, hostRunner: { run() { assert.fail('unconfigured commands must never execute on host'); } } });
+        if (status === 0) assert.equal(verify().outcome, 'passed');
+        else assert.throws(verify, (error) => error.status === 'verification_failed' && error.retryable === true);
+        assert.equal(calls, 1);
+      }
+    }
+    assert.equal(assignPlan('## Verification commands\n- `node check.cjs`',
+      [{ argv: ['node'], profile: 'sandbox', timeout_s: 7 }])[0].timeout_ms, 7000);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('default admission executes a real OS-sandboxed PLAN without approval and denies worktree writes', (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'verification-real-sandbox-')));
+  try {
+    try {
+      require('../../plugins/delivery-pipeline/scripts/command-runner.cjs').createVerificationRunner({
+        readOnlyPaths: [root, path.dirname(process.execPath)], deniedPaths: [path.join(root, 'state')],
+      });
+    } catch (error) {
+      if (error.code !== 'SANDBOX_UNAVAILABLE' || process.env.SHIPYARD_REQUIRE_OS_SANDBOX === '1') throw error;
+      t.skip(error.message); return;
+    }
+    require('node:child_process').execFileSync('git', ['init', '-q', root]);
+    fs.writeFileSync(path.join(root, 'check.cjs'),
+      "const fs = require('node:fs'); try { fs.writeFileSync('forbidden.txt', 'bad'); process.exit(9); } catch (e) { if (!['EPERM', 'EACCES', 'EROFS'].includes(e.code)) throw e; }");
+    const base = { worktree: root, stateRoot: path.join(root, 'state'), ticket: 'T-real-sandbox',
+      allowList: null, treeDigest: () => 'stable',
+      hostRunner: { run() { assert.fail('default verification must never use the host profile'); } } };
+    const sealed = verifyPlan({ ...base, planText: '## Verification commands\n- `node check.cjs`' });
+    assert.equal(sealed.outcome, 'passed');
+    const record = readEvidence(sealed.path, sealed.digest);
+    assert.equal(record.results[0].profile, 'sandbox');
+    assert.equal(fs.existsSync(path.join(root, 'forbidden.txt')), false);
+    assert.throws(() => verifyPlan({ ...base,
+      planText: '## Verification commands\n- `node -e "process.exit(3)"`' }),
+    (error) => error.status === 'verification_failed' && error.retryable === true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
