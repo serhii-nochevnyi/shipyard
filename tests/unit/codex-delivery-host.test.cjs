@@ -87,7 +87,6 @@ const signer = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-k
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
 }).split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
 
-// Native fixtures temporarily replace os.homedir; keep their authority namespaces isolated.
 const graphEnvContext = new (require('node:async_hooks').AsyncLocalStorage)();
 let graphEnvQueue = Promise.resolve();
 function withGraphDirEnv(value, action) {

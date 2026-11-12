@@ -591,7 +591,6 @@ function normalizeCall(value, options) {
   return { ...value, ...(object(options) ? options : {}) };
 }
 
-// Validate and pin producer files before signing; this snapshot is not a publishable artifact.
 function inspectExecutorOutput(value, options) {
   const input = normalizeCall(value, options);
   const fsApi = ioFor(input).fs;

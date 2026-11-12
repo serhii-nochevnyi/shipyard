@@ -124,8 +124,6 @@ function admit(commands, allowList) {
       .find((item) => Array.isArray(item.argv) && item.argv.length
       && item.argv.every((part, index) => part === argv[index])
       && (item.profile !== 'host' || item.argv.length === argv.length));
-    // PLAN commands need no approval to run in the OS sandbox. Explicit host
-    // entries never grant authority to appended arguments or unknown profiles.
     if (entry && !['host', 'sandbox'].includes(entry.profile === undefined ? 'sandbox' : entry.profile)) {
       notAllowed.push(argv); continue;
     }
@@ -137,8 +135,6 @@ function admit(commands, allowList) {
 
 function assignPlan(planText, allowList) {
   const commands = planCommands(planText);
-  // Preserve legacy explicit verification specs with no PLAN commands. A PLAN
-  // that names assertions is assigned a runner before dispatch.
   if (!commands.length && !Array.isArray(allowList)) return null;
   const admitted = admit(commands, allowList);
   if (admitted.not_allowed.length || !admitted.commands.length) {

@@ -1203,7 +1203,6 @@ test('a malformed wait store fails closed without rerun or destructive rewrite',
   const malformed = '{"tickets":{},"reruns":{"T-01-01:';
   fs.writeFileSync(waitFile, malformed);
 
-  // Leave time for the first stub poll under parallel suite load.
   const pollWindow = ['--timeout', '3', '--interval', '1'];
   for (let attempt = 0; attempt < 2; attempt++) {
     const { json } = asJson(null, null, pollWindow, { dir, bin: gh.bin });
