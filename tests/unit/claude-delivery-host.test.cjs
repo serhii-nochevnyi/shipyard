@@ -1498,7 +1498,7 @@ test('executor and drift-check prompts carry the delivered plan contract; a call
   }
 });
 
-for (const variant of ['success', 'missing-body', 'missing-evidence', 'wrong-ticket']) {
+for (const variant of ['success', 'missing-body', 'missing-evidence', 'wrong-ticket', 'files-after-signing', 'head-before-sealing']) {
 test('Claude executor publication contract: ' + variant, async () => {
   const releaseGpg = await holdGpg();
   const fixture = repairFixture();
@@ -1508,6 +1508,12 @@ test('Claude executor publication contract: ' + variant, async () => {
   const evidence = new WeakMap();
   const host = createClaudeDeliveryHost({
     verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+    finalizeCommit(input) {
+      const result = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs').finalizeDeliveryCommit(input);
+      if (variant === 'files-after-signing') fs.appendFileSync(path.join(fixture.worktree, '.shipyard-evidence.md'), 'Substituted evidence.\n');
+      if (variant === 'head-before-sealing') git(fixture.worktree, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'Concurrent unverified HEAD');
+      return result;
+    },
     hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '' }; } },
     graphDir: fixture.graphDir,
     controller: owner(fixture.root, fixture.worktree, 'T-38-03', 'run-executor-delivery'),

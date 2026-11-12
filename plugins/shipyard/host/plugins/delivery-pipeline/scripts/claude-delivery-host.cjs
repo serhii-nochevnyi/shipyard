@@ -844,6 +844,8 @@ function createClaudeDeliveryHost(options = {}) {
     if (input.artifact.role === 'executor' && input.result && input.result.status === 'committed') {
       let commit = prepared.get(input.artifact.ticket);
       if (!commit) reject('executor has no trusted commit preflight');
+      const files = roleArtifact.inspectExecutorOutput({ ...input.artifact, result: input.result,
+        recorder: runtime.recorder, dispatchId: input.record.receipt.dispatch_id });
       commit = require('./delivery-commit-finalizer.cjs').executorCandidate(commit);
       const expectedTree = require('./delivery-commit-finalizer.cjs').scopedTree(commit).tree;
       let verified;
@@ -859,6 +861,8 @@ function createClaudeDeliveryHost(options = {}) {
         expectedTree,
         verificationEvidenceDigest: verified.digest });
       commitVerificationMatches(finalized, verified.digest);
+      input = { ...input, artifact: { ...input.artifact, expectedHead: finalized.commit,
+        expectedTree, expectedFiles: files } };
     }
     if (input.artifact.role === 'ci-fix' || input.artifact.role === 'review-fix') {
       const repair = repairs.get(input.artifact.ticket);
