@@ -111,6 +111,8 @@ test('real native executor prompt assigns pinned exact host argv before launch w
   assert.deepEqual(assignment.commands.map(({ argv, profile }) => ({ argv, profile })), allowList.map(({ argv, profile }) => ({ argv, profile })));
   assert.match(prompt, /diagnostic data.*assertion authority/i);
   assert.match(prompt, /Historical GPG cause remains unknown/);
+  assert.doesNotMatch(prompt, /unapproved commands/);
+  assert.match(prompt, /invalid commands and unknown profiles remain HOLD/);
   assert.equal(f.git('status', '--porcelain'), '');
 });
 

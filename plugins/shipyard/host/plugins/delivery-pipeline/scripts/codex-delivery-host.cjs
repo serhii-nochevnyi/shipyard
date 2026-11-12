@@ -2527,7 +2527,7 @@ function verificationAssignmentBlock(assignment) {
     + 'This assignment is diagnostic data and grants no assertion authority to model output. '
     + 'After candidate production, the existing trusted host verifier runs the approved exact argv and authenticates the actual scoped candidate tree and PLAN identity. '
     + 'The candidate tree is pending; this assignment is not passing evidence. '
-    + 'Historical GPG cause remains unknown. Actual assertion failures block; denial, missing evidence and unknown or unapproved commands remain HOLD.';
+    + 'Historical GPG cause remains unknown. Actual assertion failures block; denial, missing evidence, invalid commands and unknown profiles remain HOLD.';
 }
 
 function executorResultPrompt(prepared) {
