@@ -4452,7 +4452,7 @@ for (const mutation of ['ci-source', 'ci-evidence', 'ci-pr', 'ci-plan', 'ci-head
   test('bound CI native launch: ' + mutation, () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
 
 
-for (const variant of ['success', 'missing-body', 'missing-evidence', 'malformed', 'wrong-ticket', 'forged-receipt', 'unearned-committed', 'unresolved-ready', 'blocked', 'receipt-swap', 'files-after-signing']) {
+for (const variant of ['success', 'missing-body', 'missing-evidence', 'malformed', 'wrong-ticket', 'forged-receipt', 'unearned-committed', 'unresolved-ready', 'blocked', 'receipt-swap', 'files-after-signing', 'head-before-sealing']) {
   test('native executor publication contract: ' + variant, async () => {
     const f = fixture({ physicalPaths: true });
     fs.cpSync(path.join(f.project, '.planning'), path.join(f.root, '.planning'), { recursive: true });
@@ -4477,6 +4477,13 @@ for (const variant of ['success', 'missing-body', 'missing-evidence', 'malformed
       return applied;
     };
     let signed = 0;
+    const link = fs.linkSync;
+    if (variant === 'head-before-sealing') fs.linkSync = (from, to, ...args) => {
+      const result = link(from, to, ...args);
+      if (path.basename(path.dirname(to)) === 'finalized')
+        git(f.root, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'Concurrent unverified HEAD');
+      return result;
+    };
     try {
       const action = () => delivery(f, { finalizeCommit(input) {
         signed++;
@@ -4484,9 +4491,9 @@ for (const variant of ['success', 'missing-body', 'missing-evidence', 'malformed
         if (variant === 'files-after-signing') fs.appendFileSync(path.join(f.root, '.shipyard-evidence.md'), 'Substituted evidence.\n');
         return result;
       } }).run({ role: 'executor', context: { prompt: 'Implement the scoped ticket.' } });
-      if (['missing-body', 'missing-evidence', 'malformed', 'wrong-ticket', 'forged-receipt', 'unearned-committed', 'unresolved-ready', 'files-after-signing'].includes(variant)) {
-        await assert.rejects(action, error => ['MISSING_ARTIFACT', 'EXECUTOR_RESULT_INVALID', 'ARTIFACT_MUTATED'].includes(error.code));
-        assert.equal(signed, variant === 'files-after-signing' ? 1 : 0);
+      if (['missing-body', 'missing-evidence', 'malformed', 'wrong-ticket', 'forged-receipt', 'unearned-committed', 'unresolved-ready', 'files-after-signing', 'head-before-sealing'].includes(variant)) {
+        await assert.rejects(action, error => ['MISSING_ARTIFACT', 'EXECUTOR_RESULT_INVALID', 'ARTIFACT_MUTATED', 'ARTIFACT_IDENTITY_MISMATCH'].includes(error.code));
+        assert.equal(signed, ['files-after-signing', 'head-before-sealing'].includes(variant) ? 1 : 0);
         assert.equal(fs.existsSync(path.join(f.root, '.shipyard-role-artifact.json')), false);
         return;
       }
@@ -4534,7 +4541,7 @@ for (const variant of ['success', 'missing-body', 'missing-evidence', 'malformed
         assert.equal(publish().pr, 77);
         assert.ok(calls.some(([program]) => program === 'gh'));
       }
-    } finally { clean(f); }
+    } finally { fs.linkSync = link; clean(f); }
   });
 }
 

@@ -621,6 +621,9 @@ function sealExecutorUnlocked(value, options) {
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const trusted = trustedRecord(input);
   const identity = gitIdentity(input, worktree);
+  if ((input.expectedHead !== undefined && input.expectedHead !== identity.head)
+      || (input.expectedTree !== undefined && input.expectedTree !== identity.head_tree))
+    fail('ARTIFACT_IDENTITY_MISMATCH', 'executor artifact differs from the verified signed commit');
   const hygiene = prHygiene.applies({ root: identity.repository.root, ref: identity.base_commit });
   const metadata = trustedMetadata(input, trusted, identity);
   metadata.trusted = trusted;

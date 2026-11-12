@@ -2583,7 +2583,8 @@ function sealExecutorPublication(candidate, artifact, recorder) {
   const input = { role: 'executor', runtime: 'codex', ticket: candidate.ticket,
     worktreePath: candidate.worktree, base: candidate.base_ref, branch: candidate.branch,
     planPath: candidate.plan_path, recorder, dispatchId: candidate.dispatch_id,
-    result: candidate.executor_output.result, expectedFiles: candidate.executor_output.files };
+    result: candidate.executor_output.result, expectedFiles: candidate.executor_output.files,
+    expectedHead: artifact.commit, expectedTree: artifact.tree };
   let sealed;
   try {
     sealed = roleArtifact.seal(input);
