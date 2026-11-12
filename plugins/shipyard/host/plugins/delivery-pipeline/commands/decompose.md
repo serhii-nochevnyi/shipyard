@@ -591,8 +591,9 @@ freshly written. Do not report decomposition success without this.
    files_modified. Gate 2 also applies the delivery host's own verification
    admission to every PLAN not yet merged. Ordinary verification commands run in
    the OS sandbox without allowlist approval. Explicit repository entries may
-   select host execution only for exact argv. Shell operators and invalid profiles
-   fail Gate 2 with the command and reason; fix those errors and retry. Do not ask
+   select host execution only for exact argv. Quoted inline code and explicit
+   `bash -c` / `sh -c` are supported. Unquoted shell operators fail Gate 2: put
+   pipelines and compound commands inside an explicit shell command. Do not ask
    the user to approve new sandbox commands or widen host permissions to make a
    failing check pass. Do not export to Jira until Gate 2 passes.
 3. OK → show the user a summary for approval:

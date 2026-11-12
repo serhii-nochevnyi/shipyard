@@ -52,29 +52,37 @@ function refusal(message) {
   return error;
 }
 
-const SHELL_OPERATOR = /[|;&<>`$\\\r\n]/;
+const SHELL_OPERATOR = /[|;&<>`$]/;
 
-function operatorDetail(command) {
-  const found = SHELL_OPERATOR.exec(command || '');
-  if (!found) return 'unrunnable shell operator in PLAN command';
-  const shown = found[0] === '\n' ? 'a line break' : found[0] === '\r' ? 'a carriage return' : `"${found[0]}"`;
-  return `unrunnable shell operator in PLAN command: ${shown} is not allowed anywhere in the command, even inside quotes`
-    + ' (commands run as plain argv, never through a shell); put the logic in a committed script and run it with node, bash or make';
+function operatorDetail(char) {
+  return `unrunnable shell operator in PLAN command: ${JSON.stringify(char)} is unquoted`
+    + ' (commands run as plain argv); quote literal arguments or use an explicit bash -c or sh -c command';
 }
 
 function tokenize(command) {
-  if (!command || SHELL_OPERATOR.test(command)) throw refusal(operatorDetail(command));
+  if (!command) throw refusal('unrunnable empty PLAN command');
+  const lineBreak = /[\r\n]/.exec(command);
+  if (lineBreak) throw refusal('unrunnable line break in PLAN command');
   const argv = [];
   let token = '';
   let quote = null;
   let active = false;
-  for (const char of command) {
+  for (let index = 0; index < command.length; index++) {
+    const char = command[index];
     if (quote) {
       if (char === quote) quote = null;
-      else token += char;
+      else if (quote === '"' && char === '\\' && /["\\$`]/.test(command[index + 1] || '')) {
+        token += command[++index];
+      } else token += char;
     } else if (char === '"' || char === "'") {
       quote = char;
       active = true;
+    } else if (char === '\\') {
+      if (index + 1 === command.length) throw refusal('unrunnable trailing escape in PLAN command');
+      token += command[++index];
+      active = true;
+    } else if (SHELL_OPERATOR.test(char)) {
+      throw refusal(operatorDetail(char));
     } else if (/\s/.test(char)) {
       if (active) { argv.push(token); token = ''; active = false; }
     } else {
@@ -85,10 +93,6 @@ function tokenize(command) {
   if (quote || !argv.length && !active) throw refusal('unrunnable quoted PLAN command');
   if (active) argv.push(token);
   if (argv.some((part) => !part || part.includes('\0'))) throw refusal('unrunnable empty PLAN argument');
-  if ((argv[0] === 'bash' || argv[0] === '/bin/bash' || argv[0] === 'sh')
-      && argv.slice(1).some((part) => /^-[A-Za-z]*c[A-Za-z]*$/.test(part))) {
-    throw refusal('unrunnable shell command launcher in PLAN command');
-  }
   return argv;
 }
 

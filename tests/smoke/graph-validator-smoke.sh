@@ -963,23 +963,18 @@ mkproj verif
 plan verif "01-x/01-PLAN.md" T-01-01 "" "a.txt" "R1"
 printf '%s\n' '## Verification commands' '- `node -e "const c=1;process.exit(0)"`' \
   '- `node --test tests/unit/a.test.cjs`' >> "$WORK/verif/.planning/phases/01-x/01-PLAN.md"
-rejects verif 'unrunnable shell operator in PLAN command: ";"' "a shell operator inside quotes is refused with the character named"
-out="$(run_validator verif || true)"
-if grep -q 'person must approve\|allow-list is not configured' <<<"$out"; then bad "no per-command approval request" "$out"; else ok "no per-command approval request"; fi
-out="$(run_gate verif || true)"
-grep -q 'unrunnable shell operator' <<<"$out" \
-  && ok "the staged plan:post gate reports the same refusal" \
-  || bad "the staged plan:post gate reports the same refusal" "$out"
-printf '%s\n' '- `node -e "x\\x3cy"`' >> "$WORK/verif/.planning/phases/01-x/01-PLAN.md"
-rejects verif 'is not allowed anywhere in the command' "a backslash escape is refused"
+if out="$(run_validator verif)"; then ok "quoted inline JavaScript passes Gate 2 without approval"; else bad "quoted inline JavaScript passes Gate 2 without approval" "$out"; fi
+if out="$(run_gate verif)"; then ok "the staged plan:post gate admits quoted inline code"; else bad "the staged plan:post gate admits quoted inline code" "$out"; fi
+printf '%s\n' '- `node --test a.cjs && node --test b.cjs`' >> "$WORK/verif/.planning/phases/01-x/01-PLAN.md"
+rejects verif '"&" is unquoted' "implicit shell composition fails instead of silently skipping the second check"
 python3 - "$WORK/verif/.planning/phases/01-x/01-PLAN.md" <<'PYFIX'
-import re, sys
+import sys
 path = sys.argv[1]
-text = open(path).read()
-text = re.sub(r'(?m)^- `node -e.*\n', '', text)
+text = open(path).read().replace('- `node --test a.cjs && node --test b.cjs`\n', '')
+text += '- `bash -c "true && false"`\n'
 open(path, 'w').write(text)
 PYFIX
-if out="$(run_validator verif)"; then ok "new commands pass without an allow-list"; else bad "new commands pass without an allow-list" "$out"; fi
+if out="$(run_validator verif)"; then ok "an explicit shell is admitted without host authority"; else bad "an explicit shell is admitted without host authority" "$out"; fi
 echo '{"pipeline":{"verification_commands":{"default":[{"argv":["node","--test"]}]}}}' > "$WORK/verif/.planning/config.json"
 if out="$(run_validator verif)"; then ok "an approved command passes Gate 2"; else bad "an approved command passes Gate 2" "$out"; fi
 echo '{"pipeline":{"verification_commands":{"default":[{"argv":["make","check"]}]}}}' > "$WORK/verif/.planning/config.json"

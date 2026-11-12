@@ -138,10 +138,15 @@ test('PLAN, approval or candidate changes after assignment refuse before host as
   for (const mutation of ['plan', 'approval', 'head', 'scope']) {
     const f = fixture(t);
     const captured = [];
+    fs.appendFileSync(path.join(f.root, '.git', 'info', 'exclude'), '\n.shipyard-pr-body.md\n.shipyard-evidence.md\n');
     const host = { scope: f.options.scope, capabilities: f.options.probe.capabilities,
       recorder: createDurableRecorder(path.join(f.temp, 'controlled-receipts')),
       launch(selection, context) {
         captured.push(context);
+        fs.writeFileSync(path.join(f.root, '.shipyard-pr-body.md'), 'Assignment test.\n');
+        fs.writeFileSync(path.join(f.root, '.shipyard-evidence.md'), 'Host verification pending.\n');
+        context.onCompleted({ launch_id: 'controlled-assignment-launch',
+          last_agent_message: JSON.stringify({ id: 'T-47-04', status: 'ready', summary: 'Assignment test', blocking_count: 0 }) });
         fs.writeFileSync(path.join(f.root, 'owned.txt'), 'changed\n');
         if (mutation === 'plan') fs.appendFileSync(f.plan, '# changed after assignment\n');
         if (mutation === 'approval') fs.writeFileSync(path.join(f.project, '.planning', 'config.json'), '{}');

@@ -14,7 +14,7 @@ function test(name, callback) {
   if (process.argv.includes('--rc55-resume-only') && !name.startsWith('rc55 executor') && name !== 'executor leaves every shared scratch file outside the signed tree') return;
   if (process.argv.includes('--rc55-repair-regression-only') && !['canonical builder through original static fixer seals source', 'signed fixer publication ', 'authenticated confirmed replies retain repeat policy through the original signed fixer source transition', 'historical signed source publication preserves original custody through'].some(prefix => name.startsWith(prefix))) return;
   if (process.argv.includes('--ci-fix-only') && !name.startsWith('bound CI native launch:')) return;
-  return runTest(name, callback);
+  return runTest(name, () => withGraphDirEnv(undefined, callback));
 }
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -87,19 +87,22 @@ const signer = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-k
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
 }).split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
 
+// Native fixtures temporarily replace os.homedir; keep their authority namespaces isolated.
+const graphEnvContext = new (require('node:async_hooks').AsyncLocalStorage)();
 let graphEnvQueue = Promise.resolve();
 function withGraphDirEnv(value, action) {
-  const run = graphEnvQueue.then(async () => {
+  const invoke = async () => {
     const previous = process.env.SHIPYARD_GRAPH_DIR;
     if (value === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
     else process.env.SHIPYARD_GRAPH_DIR = value;
-    try {
-      return await action();
-    } finally {
+    try { return await action(); }
+    finally {
       if (previous === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
       else process.env.SHIPYARD_GRAPH_DIR = previous;
     }
-  });
+  };
+  if (graphEnvContext.getStore()) return invoke();
+  const run = graphEnvQueue.then(() => graphEnvContext.run(true, invoke));
   graphEnvQueue = run.catch(() => {});
   return run;
 }
@@ -134,6 +137,7 @@ function fixture(config = {}) {
   fs.writeFileSync(plan, '# approved plan\n');
   if (config.target !== true) writeShipyardManifest(root);
   git(root, 'init', '-q', '-b', 'main');
+  fs.appendFileSync(path.join(root, '.git/info/exclude'), '\n.shipyard-pr-body.md\n.shipyard-evidence.md\n.shipyard-role-artifact.json\n.shipyard-role-artifacts/\n');
   git(root, 'config', 'user.name', 'Delivery Test');
   git(root, 'config', 'user.email', 'delivery@example.test');
   git(root, 'config', 'user.signingkey', signer);
@@ -234,6 +238,14 @@ function hostRunner(spy = []) {
 }
 
 function application(selection, context) {
+  if (context.prompt?.includes('<EXECUTOR-RESULT-CONTRACT>')) {
+    const root = context.worktreePath;
+    const target = require('../../plugins/delivery-pipeline/scripts/pr-hygiene.cjs').applies({ root });
+    fs.writeFileSync(path.join(root, '.shipyard-pr-body.md'), (target ? '' : 'Ticket: ' + context.ticket + '\n\n') + 'Implement scoped behavior.\n\nValidation is performed by the trusted host.\n');
+    fs.writeFileSync(path.join(root, '.shipyard-evidence.md'), 'Fixture implementation complete; host-assigned verification is pending.\n');
+    context.onCompleted({ launch_id: 'codex-delivery-test',
+      last_agent_message: JSON.stringify({ id: context.ticket, status: 'ready', summary: 'Implemented scoped behavior.', blocking_count: 0 }) });
+  }
   return {
     launch_id: 'codex-delivery-test',
     applied_model: selection.model,
@@ -301,7 +313,7 @@ test('executor leaves every shared scratch file outside the signed tree', async 
   try {
     const originalLaunch = f.host.launch;
     f.host.launch = (...args) => {
-      for (const name of SCRATCH_FILES) fs.writeFileSync(path.join(f.root, name), 'scratch\n');
+      for (const name of SCRATCH_FILES.filter(name => name !== '.shipyard-role-artifact.json')) fs.writeFileSync(path.join(f.root, name), 'scratch\n');
       return originalLaunch(...args);
     };
     const result = await delivery(f).run({ role: 'executor', dispatch_id: 'all-scratch',
@@ -449,18 +461,23 @@ test('production runtime host receives the scoped prompt and records native mode
   const f = fixture();
   const codeHome = path.join(temporary, 'codex-home-' + path.basename(f.root));
   const session = '44444444-4444-4444-8444-444444444444';
+  const final = JSON.stringify({ id: f.scope.ticket, status: 'ready', summary: 'Implemented scoped behavior.', blocking_count: 0 });
   const received = [];
   let capturedArgs;
   const transcript = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
     .split('\n').filter(Boolean).map((line) => {
       const record = JSON.parse(line);
       if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6.1-sol', effort: 'low' });
-      if (record.payload?.type === 'task_complete') record.payload.last_agent_message = 'OK';
+      if (record.payload?.type === 'task_complete') record.payload.last_agent_message = final;
       if (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
-        record.payload.content.forEach(block => { block.text = 'OK'; });
+        record.payload.content.forEach(block => { block.text = final; });
       return JSON.stringify(record);
     }).join('\n') + '\n';
-  const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session });
+  const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session }).split('\n').filter(Boolean).map(line => {
+    const record = JSON.parse(line);
+    if (record.type === 'item.completed' && record.item?.type === 'agent_message') record.item.text = final;
+    return JSON.stringify(record);
+  }).join('\n') + '\n';
   try {
     const result = await createCodexDeliveryHost({
       scope: f.scope,
@@ -482,6 +499,8 @@ test('production runtime host receives the scoped prompt and records native mode
         assert.equal(options.env.GNUPGHOME, undefined);
         assert.equal(options.env.SSH_AUTH_SOCK, undefined);
         fs.writeFileSync(path.join(f.root, 'src', 'owned.txt'), 'changed\n');
+        fs.writeFileSync(path.join(f.root, '.shipyard-pr-body.md'), 'Ticket: T-38-04\n\nScoped implementation.\n');
+        fs.writeFileSync(path.join(f.root, '.shipyard-evidence.md'), 'Complete fixture evidence.\n');
         const date = new Date();
         const directory = path.join(options.env.CODEX_HOME, 'sessions', String(date.getFullYear()),
           String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
@@ -1196,7 +1215,13 @@ test('Codex retries one failed plan command with sealed diagnostics and binds th
   try {
     approvedPlan(f, ['node check.cjs']);
     const launch = f.host.launch.bind(f.host);
-    f.host.launch = (selection, context) => ({ ...launch(selection, context), launch_id: `codex-delivery-${f.calls.length}` });
+    f.host.launch = (selection, context) => {
+      const launchId = `codex-delivery-${f.calls.length + 1}`;
+      const applied = launch(selection, { ...context, onCompleted(completed) {
+        context.onCompleted({ ...completed, launch_id: launchId });
+      } });
+      return { ...applied, launch_id: launchId };
+    };
     const result = await delivery(f, {
       controller,
       verification: undefined,
@@ -1514,7 +1539,7 @@ test('recovery-only CLI reuses the PLAN-pinned verification spec without an inje
 });
 
 test('PLAN verification with shell syntax refuses before launch', async () => {
-  for (const command of ['node a.cjs && rm -rf x', 'bash -c "true"']) {
+  for (const command of ['node a.cjs && rm -rf x', 'node a.cjs | cat']) {
     const f = fixture();
     try {
       approvedPlan(f, [command]);
@@ -2164,7 +2189,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   approvedPlan(f, ['node check.cjs']);
   const verificationAllowList = [{ argv: ['node', 'check.cjs'], profile: 'host', timeout_s: 600 }];
   const agentManifest = agentManifestFor(f.agentDir, fixerRole);
-  const evidenceFile = path.join(f.root, '.shipyard-evidence.md');
+  const evidenceFile = path.join(f.root, '.shipyard-review-input.md');
+  fs.appendFileSync(path.join(f.root, '.git/info/exclude'), '\n.shipyard-review-input.md\n');
   fs.writeFileSync(evidenceFile, 'Complete original review evidence.');
   const boardFile = path.join(f.graphDir, 'delivery-state.json');
   const board = JSON.parse(fs.readFileSync(boardFile)); board['T-38-04'].pr = 501;
@@ -2388,7 +2414,12 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
           agent_file: !launchRole.agent_file || effort === 'low' ? launchRole.agent_file
             : launchRole.agent_file.replace('.toml', effort === 'high' ? '-repeat.toml' : '-deep.toml') };
         if (executing) assert.equal(applied.agent_file, null, 'executor uses the original dynamic native launch');
-        const final = JSON.stringify(output);
+        const final = JSON.stringify(executing
+          ? { id: f.scope.ticket, status: 'ready', summary: 'Implemented the covered source correction.', blocking_count: 0 } : output);
+        if (executing) {
+          fs.writeFileSync(path.join(f.root, '.shipyard-pr-body.md'), 'Ticket: ' + f.scope.ticket + '\n\nCovered source correction.\n');
+          fs.writeFileSync(path.join(f.root, '.shipyard-evidence.md'), 'Native executor implementation; trusted verification follows.\n');
+        }
         if (historicalRecovery && !executing && launches > 1) fs.writeFileSync(path.join(f.root, 'outside.txt'), 'Subsequent native source correction.\n');
         if (outcome === 'source' || executing || (historicalRecovery && launches > 1)) fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
         if (mutation === 'ci-verification-failed') fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'still broken\n');
@@ -4420,5 +4451,92 @@ assert.equal(entryVariants, 7, 'all original CLI variants');
 
 for (const mutation of ['ci-source', 'ci-evidence', 'ci-pr', 'ci-plan', 'ci-head', 'ci-before-launch', 'ci-foreign-callback', 'ci-push-response-loss', 'ci-pending-publication', 'ci-foreign-publication', 'ci-verification-failed'])
   test('bound CI native launch: ' + mutation, () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
+
+
+for (const variant of ['success', 'missing-body', 'missing-evidence', 'malformed', 'wrong-ticket', 'forged-receipt', 'unearned-committed', 'unresolved-ready', 'blocked', 'receipt-swap', 'files-after-signing']) {
+  test('native executor publication contract: ' + variant, async () => {
+    const f = fixture({ physicalPaths: true });
+    fs.cpSync(path.join(f.project, '.planning'), path.join(f.root, '.planning'), { recursive: true });
+    fs.appendFileSync(path.join(f.root, '.git/info/exclude'), '\n.planning/\n');
+    f.graphDir = path.join(f.root, '.planning', 'graph');
+    f.plan = path.join(f.root, '.planning', 'PLAN.md');
+    const launch = f.host.launch.bind(f.host);
+    f.host.launch = (selection, context) => {
+      const applied = launch(selection, { ...context, onCompleted(completed) {
+        const edited = JSON.parse(completed.last_agent_message);
+        if (variant === 'wrong-ticket') edited.id = 'T-99-99';
+        if (variant === 'forged-receipt') edited.receipt = { dispatch_id: 'substituted' };
+        if (variant === 'unearned-committed') edited.status = 'committed';
+        if (variant === 'unresolved-ready') edited.blocking_count = 1;
+        const message = variant === 'malformed' ? 'Implemented the files.'
+          : variant === 'blocked' ? JSON.stringify({ id: f.scope.ticket, status: 'blocked', summary: 'Missing required input.', blocking_count: 1 })
+            : JSON.stringify(edited);
+        context.onCompleted({ ...completed, last_agent_message: message });
+      } });
+      if (variant === 'missing-body') fs.rmSync(path.join(f.root, '.shipyard-pr-body.md'));
+      if (variant === 'missing-evidence') fs.rmSync(path.join(f.root, '.shipyard-evidence.md'));
+      return applied;
+    };
+    let signed = 0;
+    try {
+      const action = () => delivery(f, { finalizeCommit(input) {
+        signed++;
+        const result = finalizeCommit(input);
+        if (variant === 'files-after-signing') fs.appendFileSync(path.join(f.root, '.shipyard-evidence.md'), 'Substituted evidence.\n');
+        return result;
+      } }).run({ role: 'executor', context: { prompt: 'Implement the scoped ticket.' } });
+      if (['missing-body', 'missing-evidence', 'malformed', 'wrong-ticket', 'forged-receipt', 'unearned-committed', 'unresolved-ready', 'files-after-signing'].includes(variant)) {
+        await assert.rejects(action, error => ['MISSING_ARTIFACT', 'EXECUTOR_RESULT_INVALID', 'ARTIFACT_MUTATED'].includes(error.code));
+        assert.equal(signed, variant === 'files-after-signing' ? 1 : 0);
+        assert.equal(fs.existsSync(path.join(f.root, '.shipyard-role-artifact.json')), false);
+        return;
+      }
+      const result = await action();
+      if (variant === 'blocked') {
+        assert.equal(result.status, 'blocked');
+        assert.equal(result.blocking_count, 1);
+        assert.equal(result.artifact, undefined);
+        assert.equal(signed, 0);
+        return;
+      }
+      assert.equal(result.status, 'committed');
+      assert.equal(result.result.id, f.scope.ticket);
+      assert.equal(result.result.status, 'committed');
+      assert.equal(result.result.blocking_count, 0);
+      assert.equal(result.artifact.envelope.outcome, 'committed');
+      assert.equal(result.artifact.schema, 'shipyard.codex-delivery-artifact.v1');
+      const manifest = JSON.parse(fs.readFileSync(result.artifact_ref, 'utf8'));
+      assert.equal(manifest.head, result.artifact.commit);
+      assert.equal(manifest.producer_dispatch, result.receipt.dispatch_id);
+      assert.equal(manifest.producer_launch, result.receipt.launch_id);
+      assert.match(f.calls[0].context.prompt, /\.shipyard-pr-body\.md.*\.shipyard-evidence\.md/);
+      const calls = [];
+      const publish = () => require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').publish([
+        f.scope.ticket, '--graph-dir', f.graphDir, '--boundary-store', result.boundary_store,
+        '--dispatch-id', result.dispatch_id, '--artifact', result.artifact_ref, '--artifact-digest', result.artifact_digest,
+      ], { cwd: f.root, stateDir: path.join(f.storageRoot, 'publisher'), run(program, argv, cwd) {
+        calls.push([program, argv]);
+        if (program === 'git' && argv[0] === 'push') return '';
+        if (program === 'gh') {
+          const body = fs.readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
+          assert.match(body, /^Ticket: T-38-04/);
+          return 'https://github.com/fixture/repo/pull/77\n';
+        }
+        if (program === process.execPath && path.basename(argv[0]) === 'reviewers.cjs') return '{}';
+        return execFileSync(program, argv, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      } });
+      if (variant === 'receipt-swap') {
+        const original = f.host.recorder.getVerifiedRecord(result.dispatch_id);
+        fs.writeFileSync(path.join(f.host.recorder.storeDir, 'record-' + crypto.createHash('sha256').update(result.dispatch_id).digest('hex') + '.json'), JSON.stringify({ ...original,
+          receipt: { ...original.receipt, launch_id: 'substituted' } }));
+        await assert.rejects(async () => publish(), error => error.code === 'PUBLISH_REFUSED' && /role-artifact refused/.test(error.message));
+        assert.ok(!calls.some(([program, argv]) => program === 'gh' || (program === 'git' && argv[0] === 'push')));
+      } else {
+        assert.equal(publish().pr, 77);
+        assert.ok(calls.some(([program]) => program === 'gh'));
+      }
+    } finally { clean(f); }
+  });
+}
 
 done();

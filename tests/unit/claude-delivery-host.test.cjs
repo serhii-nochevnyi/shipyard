@@ -529,7 +529,7 @@ test('new Claude PLAN verification runs in sandbox without approval and blocks f
     try {
       fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node new-check.cjs`\n');
       fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
-    const result = await fixture.host.run('fix-round', fixture.args);
+      const result = await fixture.host.run('fix-round', fixture.args);
       assert.equal(result[0].status, 'verification_failed');
       assert.match(result[0].evidence_digest, /^[0-9a-f]{64}$/);
       assert.equal(checks, 1);
@@ -1498,7 +1498,8 @@ test('executor and drift-check prompts carry the delivered plan contract; a call
   }
 });
 
-test('rc55 executor attests its committed result after fresh approved verification', async () => {
+for (const variant of ['success', 'missing-body', 'missing-evidence', 'wrong-ticket']) {
+test('Claude executor publication contract: ' + variant, async () => {
   const releaseGpg = await holdGpg();
   const fixture = repairFixture();
   const prompts = [];
@@ -1515,13 +1516,13 @@ test('rc55 executor attests its committed result after fresh approved verificati
       scope: { run_id: 'run-executor-delivery', ticket: 'T-38-03', worktree: fixture.worktree },
       async agent(prompt, launchOptions) {
         prompts.push(prompt);
-        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-pr-body.md'), 'Ticket: T-38-03\n\nDone.\n');
-        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-evidence.md'), 'complete evidence\n');
+        if (variant !== 'missing-body') fs.writeFileSync(path.join(fixture.worktree, '.shipyard-pr-body.md'), 'Ticket: T-38-03\n\nDone.\n');
+        if (variant !== 'missing-evidence') fs.writeFileSync(path.join(fixture.worktree, '.shipyard-evidence.md'), 'complete evidence\n');
         fs.writeFileSync(path.join(fixture.worktree, 'src', 'owned.txt'), 'after\n');
         git(fixture.worktree, 'add', 'src/owned.txt');
         git(fixture.worktree, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'executor committed work');
         originalHead = git(fixture.worktree, 'rev-parse', 'HEAD');
-        const result = { id: 'T-38-03', status: 'committed', summary: 'done', blocking_count: 0 };
+        const result = { id: variant === 'wrong-ticket' ? 'T-99-99' : 'T-38-03', status: 'committed', summary: 'done', blocking_count: 0 };
         evidence.set(result, transcriptEvidence({
           launch_id: `executor-${crypto.randomUUID()}`, applied_model: launchOptions.model,
           applied_effort: launchOptions.effort, observed_model: launchOptions.model,
@@ -1544,7 +1545,7 @@ test('rc55 executor attests its committed result after fresh approved verificati
     const keys = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys'], { encoding: 'utf8' });
     const fingerprint = keys.split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
     git(fixture.worktree, 'config', 'user.signingkey', fingerprint);
-    await host.run('executors', {
+    const action = () => host.run('executors', {
       tickets: [{
         id: 'T-38-03', branch: 'ticket/T-38-03', prBase: 'main',
         worktreePath: fixture.worktree, planPath: fixture.planPath,
@@ -1552,6 +1553,20 @@ test('rc55 executor attests its committed result after fresh approved verificati
       }],
       deliveryRulesHint: 'CUSTOM RULES HINT FROM THE CALLER',
     });
+    if (variant !== 'success') {
+      await assert.rejects(action, /artifact|identity|ticket|PR body|evidence/i);
+      assert.equal(fs.existsSync(path.join(fixture.worktree, '.shipyard-role-artifact.json')), false);
+      return;
+    }
+    const completion = await action();
+    const produced = completion[0];
+    assert.equal(produced.status, 'committed');
+    assert.ok(produced.artifact_ref);
+    assert.equal(produced.artifact.envelope.blocking_count, 0);
+    const manifest = JSON.parse(fs.readFileSync(produced.artifact_ref, 'utf8'));
+    assert.equal(manifest.head, git(fixture.worktree, 'rev-parse', 'HEAD'));
+    assert.equal(manifest.producer_dispatch, produced.receipt.dispatch_id);
+    assert.equal(manifest.producer_launch, produced.receipt.launch_id);
     assert.match(prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
     assert.match(prompts[0], /# Repair plan/);
     assert.equal(git(fixture.worktree, 'rev-parse', 'HEAD^'), originalHead);
@@ -1566,6 +1581,8 @@ test('rc55 executor attests its committed result after fresh approved verificati
     releaseGpg();
   }
 });
+
+}
 
 test('executor retries one failed host verification with its sealed diagnostic', async () => {
   const releaseGpg = await holdGpg();
@@ -1988,5 +2005,41 @@ test('CI repair refuses a caller supplied foreign predecessor receipt', async ()
     assert.equal(f.launches(), 0);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
+
+for (const [program, script, status] of [
+  ['node', 'const value = 0; process.exit(value)', 0],
+  ['node', 'const value = 7; process.exit(value)', 7],
+  ['bash', 'true && exit 0', 0], ['bash', 'true && exit 7', 7],
+  ['sh', 'true && exit 0', 0], ['sh', 'true && exit 7', 7],
+]) {
+  test('Claude inline and explicit-shell verification preserves real exit status: ' + program + '/' + status, async () => {
+    let finalized = 0, published = 0, checked = 0;
+    const fixture = repairFixture({ status: 'fixed', changeCode: true, hostOptions: {
+      verificationAllowList: null, verificationTreeDigest() { return 'stable'; },
+      verificationRunner: { run(spec) {
+        checked++;
+        assert.deepEqual(spec.argv, [program === 'node' ? '-e' : '-c', script]);
+        const run = require('../../plugins/delivery-pipeline/scripts/command-runner.cjs').runBounded;
+        const result = run(spec.executable, spec.argv, { cwd: spec.cwd, timeoutMs: 10000, env: {} });
+        assert.equal(result.status, status);
+        return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+      } },
+      hostVerificationRunner: { run() { assert.fail('default inline commands must never receive host authority'); } },
+      signingFingerprint() { return 'A'.repeat(40); },
+      finalizeCommit(input) { finalized++; return { commit: 'signed', verificationEvidenceDigest: input.verificationEvidenceDigest }; },
+      publishRepair() { published++; return { pushed: true }; },
+    } });
+    try {
+      fs.writeFileSync(fixture.planPath, '## Verification commands\n- `' + program + ' '
+        + (program === 'node' ? '-e ' : '-c ') + JSON.stringify(script) + '`\n');
+      fixture.args.prs[0].plan_sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixture.planPath)).digest('hex');
+      const result = await fixture.host.run('fix-round', fixture.args);
+      assert.equal(checked, 1);
+      assert.equal(finalized, status === 0 ? 1 : 0);
+      assert.equal(published, status === 0 ? 1 : 0);
+      if (status) assert.equal(result[0].status, 'verification_failed');
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+}
 
 done();

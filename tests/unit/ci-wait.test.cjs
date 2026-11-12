@@ -1203,8 +1203,10 @@ test('a malformed wait store fails closed without rerun or destructive rewrite',
   const malformed = '{"tickets":{},"reruns":{"T-01-01:';
   fs.writeFileSync(waitFile, malformed);
 
+  // Leave time for the first stub poll under parallel suite load.
+  const pollWindow = ['--timeout', '3', '--interval', '1'];
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { json } = asJson(null, null, shortWait, { dir, bin: gh.bin });
+    const { json } = asJson(null, null, pollWindow, { dir, bin: gh.bin });
     assert.equal(json.watched[0].checks.pending, 1, 'corrupt state cannot authorize a rerun');
     assert.deepStrictEqual(gh.reruns(), [], 'uncertain state never retries an external action');
     assert.equal(fs.readFileSync(waitFile, 'utf8'), malformed, 'the corrupt claim is preserved byte for byte');

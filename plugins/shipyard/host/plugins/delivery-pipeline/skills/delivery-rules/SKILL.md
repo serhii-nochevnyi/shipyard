@@ -178,9 +178,10 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    timeouts or explicitly select `host` execution for an exact argv. A sandbox
    failure never falls back to host execution or requests blanket approval.
    Only bullets under `## Verification commands` run; `<verify><automated>`
-   blocks are never executed. Put inline logic in committed scripts: shell
-   operators remain refused even inside quotes. Gate 2 uses the same admission
-   rules and never asks a person to approve ordinary sandbox commands.
+   blocks are never executed. Quoted inline code and explicit `bash -c` / `sh -c`
+   commands are allowed in the sandbox. An unquoted pipeline or command separator
+   needs an explicit shell; argv commands perform no shell expansion. Gate 2 uses
+   the same admission rules without per-command approval.
 7. **`depends_on` drives the cascade, not just ordering.** Under epic-stacked
    delivery (the default), a root ticket (empty `depends_on`) PRs into the
    phase epic branch; a dependent ticket cascades — it PRs into its primary

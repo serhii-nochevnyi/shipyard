@@ -604,6 +604,7 @@ function admitCandidate(prepared, verification, records, tree) {
     files_modified: [...prepared.commit.files_modified],
     expected_role: prepared.expectedRole || 'executor',
     ...(prepared.ciSubject ? { ci_subject: prepared.ciSubject } : {}),
+    ...(prepared.executorOutput ? { executor_output: prepared.executorOutput } : {}),
     receipt_store: prepared.identity.receipt_store,
     ...(prepared.repair ? { repair_subject: prepared.repair } : {}),
     run_id: prepared.identity.run_id, dispatch_id: prepared.identity.dispatch_id, launch_id: prepared.identity.launch_id,
@@ -2529,6 +2530,75 @@ function verificationAssignmentBlock(assignment) {
     + 'Historical GPG cause remains unknown. Actual assertion failures block; denial, missing evidence and unknown or unapproved commands remain HOLD.';
 }
 
+function executorResultPrompt(prepared) {
+  const ticket = prepared.commit.ticket;
+  const target = require('./pr-hygiene.cjs').applies({ root: prepared.commit.worktree, ref: prepared.commit.expectedBase });
+  return '\n\n<EXECUTOR-RESULT-CONTRACT>\n'
+    + 'Before returning, write .shipyard-pr-body.md and .shipyard-evidence.md in the worktree. '
+    + 'The PR body must describe the problem, changes and validation. '
+    + (target ? 'This is a target project: use a neutral body without internal ticket IDs or Shipyard markers. '
+      : 'This is Shipyard itself: the first PR body line must be exactly Ticket: ' + ticket + '. ')
+    + 'The evidence report must distinguish checks you ran from host-assigned checks still pending. '
+    + 'Do not write .shipyard-role-artifact.json; the host owns its authenticated manifest. '
+    + 'Do not stage, commit, sign, push, or claim that the host verification has passed. '
+    + 'Your final answer must be a single JSON object, without Markdown: '
+    + JSON.stringify({ id: ticket, status: 'ready', summary: 'Describe the completed implementation.', blocking_count: 0 })
+    + '. Return status blocked and a positive blocking_count if work cannot finish. '
+    + 'Only the trusted host can change ready to committed after verification and signing.\n</EXECUTOR-RESULT-CONTRACT>';
+}
+
+function executorCompletion(completed, result, prepared, recorder) {
+  const original = authenticatedReceipt(recorder, result.receipt?.dispatch_id, 'executor');
+  const native = original.receipt.runtime_evidence;
+  if (canonical(original.receipt) !== canonical(result.receipt) || !completed
+      || completed.launch_id !== original.receipt.launch_id
+      || canonical(completed.runtime_evidence) !== canonical(native)
+      || (native && completed.session_id !== native.session_id)
+      || typeof completed.last_agent_message !== 'string' || Buffer.byteLength(completed.last_agent_message) > 128 * 1024)
+    fail('EXECUTOR_RESULT_INVALID', 'executor lacks one matching authenticated native completion');
+  if (native) {
+    const transcript = native.transcript;
+    if (!transcript) fail('EXECUTOR_RESULT_INVALID', 'executor has no authenticated final transcript');
+    const raw = fs.readFileSync(transcript.path, 'utf8');
+    const stream = parseCodexStream(raw);
+    if (Buffer.byteLength(raw) !== transcript.bytes || sha256(raw) !== transcript.sha256
+        || stream.session_id !== completed.session_id
+        || repairStreamFinal(stream, 'EXECUTOR_RESULT_INVALID', true) !== completed.last_agent_message)
+      fail('EXECUTOR_RESULT_INVALID', 'executor result differs from its authenticated native transcript');
+  }
+  let output;
+  try { output = JSON.parse(completed.last_agent_message); }
+  catch { fail('EXECUTOR_RESULT_INVALID', 'executor final answer must be a complete JSON result'); }
+  if (!object(output) || Object.keys(output).some(key => !['id', 'status', 'summary', 'blocking_count'].includes(key))
+      || output.id !== prepared.commit.ticket || !['ready', 'blocked'].includes(output.status)
+      || typeof output.summary !== 'string' || !output.summary.trim() || output.summary.length > 4096
+      || !Number.isSafeInteger(output.blocking_count) || output.blocking_count < 0
+      || (output.status === 'ready' ? output.blocking_count !== 0 : output.blocking_count === 0))
+    fail('EXECUTOR_RESULT_INVALID', 'executor JSON has invalid identity, status, summary or blockers');
+  return Object.freeze({ ...output, status: output.status === 'blocked' ? 'blocked' : 'committed' });
+}
+
+function sealExecutorPublication(candidate, artifact, recorder) {
+  if (!candidate.executor_output) return {};
+  const input = { role: 'executor', runtime: 'codex', ticket: candidate.ticket,
+    worktreePath: candidate.worktree, base: candidate.base_ref, branch: candidate.branch,
+    planPath: candidate.plan_path, recorder, dispatchId: candidate.dispatch_id,
+    result: candidate.executor_output.result, expectedFiles: candidate.executor_output.files };
+  let sealed;
+  try {
+    sealed = roleArtifact.seal(input);
+    roleArtifact.validate({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+  } catch (error) {
+    error.candidate_id = candidate.candidate_id;
+    throw error;
+  }
+  return { id: candidate.ticket, status: 'committed', result: candidate.executor_output.result,
+    summary: candidate.executor_output.result.summary, blocking_count: 0,
+    artifact: Object.freeze({ ...sealed, ...artifact }),
+    artifact_ref: sealed.artifact_ref, artifact_digest: sealed.artifact_digest,
+    boundary_store: recorder.storeDir, dispatch_id: candidate.dispatch_id };
+}
+
 function finalizedArtifact(result, prepared, options) {
   if (!object(result) || !object(result.receipt) || result.receipt.compliance !== 'verified') {
     fail('MISSING_RECEIPT', 'executor has no verified dispatch receipt');
@@ -2551,6 +2621,12 @@ function finalizedArtifact(result, prepared, options) {
     throw error;
   }
   if ((prepared.expectedRole || 'executor') === 'executor') {
+    const output = executorCompletion(options.executorCompleted, result, prepared, options.recorder);
+    if (output.status === 'blocked') return Object.freeze({ ...result, ...output, result: output });
+    const files = roleArtifact.inspectExecutorOutput({ role: 'executor', ticket: prepared.commit.ticket,
+      worktreePath: prepared.commit.worktree, base: prepared.baseRef, branch: prepared.commit.expectedBranch,
+      planPath: prepared.plan.path, recorder: options.recorder, dispatchId: result.receipt.dispatch_id, result: output });
+    prepared = { ...prepared, executorOutput: { result: output, files } };
     let commit;
     try { commit = require('./delivery-commit-finalizer.cjs').executorCandidate(prepared.commit); }
     catch (error) {
@@ -2596,7 +2672,7 @@ function finalizedArtifact(result, prepared, options) {
         + String(error.message).replace(/^codex-delivery-host: /, ''), candidate);
     throw refusal;
   }
-  return Object.freeze({ ...result, artifact });
+  return Object.freeze({ ...result, artifact, ...sealExecutorPublication(candidate, artifact, options.recorder) });
 }
 
 const verificationFailureContext = (result) => failureContext(result, (message) => fail('INVALID_INPUT', message));
@@ -2681,7 +2757,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
         candidate_id: candidateId, tree: candidate.scoped_tree,
         gates: Object.freeze({ pre_commit: 'passed', downstream: Object.freeze(pendingGates()) }) });
       return Object.freeze({ schema: SCHEMA, status: 'committed', resumed: true, idempotent: true,
-        candidate_id: candidateId, artifact, ...(candidate.expected_role === 'review-fix'
+        candidate_id: candidateId, artifact, ...sealExecutorPublication(candidate, artifact, recorder), ...(candidate.expected_role === 'review-fix'
           ? finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder)
           : candidate.expected_role === 'ci-fix' ? { publication: publishSignedCiRepair(candidateId, artifact,
             { ...options, recorder }, stateRoot, key) } : {}) });
@@ -2766,7 +2842,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     options.controller?.assertOwner(liveScope.run_id);
     const artifact = finalizeCandidate(candidate, stateRoot, key, { ...options, recorder });
     return Object.freeze({ schema: SCHEMA, status: 'committed', resumed: true, idempotent: false,
-      candidate_id: candidateId, artifact, ...(candidate.expected_role === 'review-fix'
+      candidate_id: candidateId, artifact, ...sealExecutorPublication(candidate, artifact, recorder), ...(candidate.expected_role === 'review-fix'
         ? finishRepairRecovery(candidate, artifact, options, stateRoot, key, recorder)
           : candidate.expected_role === 'ci-fix' ? { publication: publishSignedCiRepair(candidateId, artifact,
             { ...options, recorder }, stateRoot, key) } : {}) });
@@ -2830,6 +2906,7 @@ function createCodexDeliveryHost(options = {}) {
     }
   }
   const completedTyped = new Map();
+  const completedExecutors = new Map();
   const preRecordValidation = writerSession && function validateHostWriter({ dispatch_id: dispatchId, gsd_role: gsdRole, receipt }) {
     const { lease, handle, base_revision: baseRevision, snapshot, phaseDir } = writerSession;
     if (!lease || lease.schema !== 'shipyard.planning-writer-lease.v1'
@@ -2968,14 +3045,15 @@ function createCodexDeliveryHost(options = {}) {
       if (committing) {
         context.prompt = originalPrompt + '\n\nYou are an executor already dispatched inside the active coordinator-owned Shipyard delivery loop. The coordinator owns setup and dispatch. Do not restart shipyard-route, bootstrap, marketplace installation, investigate, decomposition, or a second delivery orchestrator. Implement the delivered PLAN within files_modified and the existing sandbox boundaries. Leave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
           + planDeliveryBlock(prepared.delivery, prepared.plan.path)
-          + verificationAssignmentBlock(prepared.verificationAssignment);
+          + verificationAssignmentBlock(prepared.verificationAssignment)
+          + (request.role === 'executor' ? executorResultPrompt(prepared) : '');
         if (prepared.verificationAssignment) context.verification_assignment = prepared.verificationAssignment;
       } else if (!repairPrepared && TICKET_DELIVERY_ROLES.has(request.role)) {
         const delivery = ticketDelivery(options, fs.realpathSync(scope.worktree), scope.ticket, context.plan_sha256);
         const block = planDeliveryBlock(delivery, undefined);
         if (block) context.prompt = originalPrompt + block;
       }
-      const reviewHost = ciPrepared || repairPrepared || request.role === 'arch-review' || request.role === 'code-review' || request.role === 'integrator'
+      const reviewHost = committing || repairPrepared || request.role === 'arch-review' || request.role === 'code-review' || request.role === 'integrator'
         ? { ...runtimeHost } : runtimeHost;
       if (reviewHost !== runtimeHost) {
         for (const method of ['launch', 'launchStatic']) {
@@ -3012,6 +3090,13 @@ function createCodexDeliveryHost(options = {}) {
                 native_home: path.resolve(resolveCodexHome({ scriptDir: __dirname, env: options.env || process.env })) }));
               recheckRepair(repairPrepared, options, { clean: true });
               return runtimeHost.launchStatic(selection, boundContext);
+            }
+            if (request.role === 'executor') {
+              const [selection, launchContext] = args;
+              return runtimeHost[method](selection, { ...launchContext, onCompleted(completed) {
+                if (completedExecutors.has(launchContext.dispatch_id)) fail('EXECUTOR_RESULT_INVALID', 'executor completed more than once');
+                completedExecutors.set(launchContext.dispatch_id, completed);
+              } });
             }
             if (request.role === 'code-review' || request.role === 'integrator') codeReviewContext.recheckInstalledLaunch(options.codeReviewContext);
             if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
@@ -3141,7 +3226,8 @@ function createCodexDeliveryHost(options = {}) {
         return Object.freeze({ ...artifact, repair_result: output, publication });
       }
       if (!committing) return result;
-      let artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
+      let artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder,
+        executorCompleted: completedExecutors.get(result.receipt?.dispatch_id) });
       if (retryableVerificationFailure(artifact)) {
         const failure = verificationFailureContext(artifact);
         if (scheduleVerificationRetry(options.controller, scope.run_id, failure)) {
@@ -3156,11 +3242,13 @@ function createCodexDeliveryHost(options = {}) {
           retryContext.prompt = verificationRepairPrompt(originalPrompt, failure)
             + '\n\nYou are an executor already dispatched inside the active coordinator-owned Shipyard delivery loop. The coordinator owns setup and dispatch. Do not restart shipyard-route, bootstrap, marketplace installation, investigate, decomposition, or a second delivery orchestrator. Implement the delivered PLAN within files_modified and the existing sandbox boundaries. Leave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
             + planDeliveryBlock(prepared.delivery, prepared.plan.path)
-            + verificationAssignmentBlock(prepared.verificationAssignment);
+            + verificationAssignmentBlock(prepared.verificationAssignment)
+            + (request.role === 'executor' ? executorResultPrompt(prepared) : '');
           if (prepared.verificationAssignment) retryContext.verification_assignment = prepared.verificationAssignment;
           result = await dispatchAgent(newDispatchId(), retryContext);
           options.controller?.assertOwner(scope.run_id);
-          artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
+          artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder,
+            executorCompleted: completedExecutors.get(result.receipt?.dispatch_id) });
         }
       }
       return artifact;

@@ -261,14 +261,13 @@ test('both delivery hosts share the bounded verification-retry rules', () => {
   }
 });
 
-test('inspectPlan reports unrunnable commands without requesting sandbox approval', () => {
-  const plan = ['## Verification commands', '- `node -e "const c=1;process.exit(0)"`', '- `node -e "a\\x3cb"`',
-    '- `node --test tests/unit/a.test.cjs`', '- `make check`', '## Next', '- `ignored $(x)`'].join('\n');
-  const problems = inspectPlan(plan, [{ argv: ['make', 'check'] }]);
-  assert.deepEqual(problems.map((problem) => problem.kind), ['unrunnable', 'unrunnable']);
-  assert.match(problems[0].reason, /";" is not allowed anywhere in the command, even inside quotes/);
-  assert.match(problems[1].reason, /"\\" is not allowed/);
-  assert.throws(() => planCommands(plan), /unrunnable shell operator in PLAN command: ";"/);
+test('inspectPlan accepts quoted inline code but reports unquoted shell composition', () => {
+  const plan = ['## Verification commands', '- `node -e "const c=1;process.exit(0)"`',
+    '- `node --test a.cjs && node --test b.cjs`', '- `bash -c "true && false"`'].join('\n');
+  const problems = inspectPlan(plan, null);
+  assert.deepEqual(problems.map((problem) => problem.kind), ['unrunnable']);
+  assert.match(problems[0].reason, /"&" is unquoted/);
+  assert.throws(() => planCommands(plan), /unrunnable shell operator in PLAN command/);
 });
 
 test('inspectPlan agrees with assignPlan on absent allow-lists, empty plans and approved plans', () => {
@@ -336,8 +335,51 @@ test('default admission executes a real OS-sandboxed PLAN without approval and d
     const record = readEvidence(sealed.path, sealed.digest);
     assert.equal(record.results[0].profile, 'sandbox');
     assert.equal(fs.existsSync(path.join(root, 'forbidden.txt')), false);
+    for (const shell of ['bash', 'sh']) {
+      const passed = verifyPlan({ ...base,
+        planText: '## Verification commands\n- `' + shell + ' -c "test 1 = 1 && exit 0"`' });
+      assert.equal(passed.outcome, 'passed');
+      assert.throws(() => verifyPlan({ ...base,
+        planText: '## Verification commands\n- `' + shell + ' -c "true && false"`' }),
+      (error) => error.status === 'verification_failed' && error.retryable === true);
+    }
+    const inline = verifyPlan({ ...base,
+      planText: '## Verification commands\n- `node -e "const fs = require(\'node:fs\'); try { fs.writeFileSync(\'forbidden.txt\', \'x\'); process.exit(9); } catch (e) { if (e.code !== \'EPERM\' && e.code !== \'EACCES\' && e.code !== \'EROFS\') throw e; }"`' });
+    assert.equal(inline.outcome, 'passed');
+    assert.equal(fs.existsSync(path.join(root, 'forbidden.txt')), false);
     assert.throws(() => verifyPlan({ ...base,
       planText: '## Verification commands\n- `node -e "process.exit(3)"`' }),
     (error) => error.status === 'verification_failed' && error.retryable === true);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('quoted inline scripts preserve operators, escaped quotes, regexes and literal substitutions', () => {
+  const scripts = [
+    String.raw`const fs = require('node:fs'); const text = fs.readFileSync('README.md', 'utf8'); ['options.style', 'greet(\'Ada\')'].forEach(value => { if (!text.includes(value)) throw new Error(value); });`,
+    String.raw`const text = "a;b|c&d<e>f$g"; if (!/\w+\x3b/.test(text)) process.exit(1);`,
+    'console.log(`literal $(touch forbidden) ${1 + 2}`)',
+  ];
+  for (const script of scripts) {
+    const command = 'node -e ' + JSON.stringify(script);
+    const plan = '## Verification commands\n- `' + command + '`';
+    const [argv] = planCommands(plan);
+    assert.deepEqual(argv, ['node', '-e', script]);
+    assert.deepEqual(inspectPlan(plan, null), []);
+    assert.equal(assignPlan(plan, null)[0].profile, 'sandbox');
+    new (require('node:vm').Script)(argv[2]);
+  }
+  assert.deepEqual(planCommands('## Verification commands\n- `node "a b.cjs"`'), [['node', 'a b.cjs']]);
+  assert.throws(() => planCommands('## Verification commands\n- `node "unterminated`'), /quoted/);
+  assert.throws(() => planCommands('## Verification commands\n- `node trailing' + String.fromCharCode(92) + '`'), /escape/);
+});
+
+test('explicit shells are sandboxed by default and retain exact host admission', () => {
+  const plan = '## Verification commands\n- `bash -c "true && false"`';
+  const argv = ['bash', '-c', 'true && false'];
+  assert.deepEqual(planCommands(plan), [argv]);
+  assert.equal(assignPlan(plan, null)[0].profile, 'sandbox');
+  assert.equal(assignPlan(plan, [{ argv: ['bash'], profile: 'host' }])[0].profile, 'sandbox');
+  assert.equal(assignPlan(plan, [{ argv, profile: 'host' }])[0].profile, 'host');
+  assert.equal(assignPlan(plan, [{ argv: ['bash', '-c', 'true'], profile: 'host' }])[0].profile, 'sandbox');
 });

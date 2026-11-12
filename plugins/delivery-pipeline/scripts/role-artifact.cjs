@@ -591,6 +591,25 @@ function normalizeCall(value, options) {
   return { ...value, ...(object(options) ? options : {}) };
 }
 
+// Validate and pin producer files before signing; this snapshot is not a publishable artifact.
+function inspectExecutorOutput(value, options) {
+  const input = normalizeCall(value, options);
+  const fsApi = ioFor(input).fs;
+  const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
+  const trusted = trustedRecord(input);
+  const identity = gitIdentity(input, worktree);
+  const metadata = trustedMetadata(input, trusted, identity);
+  metadata.trusted = trusted;
+  const data = verifyResult(input.result, metadata);
+  if (data.outcome !== 'committed' || data.blocking_count !== 0)
+    fail('BLOCKED_RESULT', 'executor output has unresolved blockers');
+  const body = readImmutableFile(fsApi, fixedPath(worktree, PR_BODY_NAME, 'PR body'), 'PR body', ARCHIVE_MAX_BYTES);
+  const evidence = readImmutableFile(fsApi, fixedPath(worktree, EVIDENCE_NAME, 'evidence'), 'evidence', ARCHIVE_MAX_BYTES);
+  if (!body.length || !evidence.length) fail('MISSING_ARTIFACT', 'executor PR body and evidence must be non-empty');
+  assertPrBody(body, metadata.ticket, prHygiene.applies({ root: identity.repository.root, ref: identity.base_commit }));
+  return { pr_body: fileReference(PR_BODY_NAME, body), evidence: fileReference(EVIDENCE_NAME, evidence) };
+}
+
 function sealExecutor(value, options) {
   const input = normalizeCall(value, options);
   const worktree = safeRealpath(ioFor(input).fs, input.worktreePath, 'worktree');
@@ -608,6 +627,9 @@ function sealExecutorUnlocked(value, options) {
   metadata.trusted = trusted;
   const result = input.result;
   const resultData = verifyResult(result, metadata);
+  if (input.expectedFiles !== undefined && (!object(input.expectedFiles)
+      || !object(input.expectedFiles.pr_body) || !object(input.expectedFiles.evidence)))
+    fail('INVALID_ARTIFACT', 'executor file snapshot is malformed');
   if (resultData.outcome !== 'committed') {
     fail('BLOCKED_RESULT', 'blocked executor results cannot be sealed as publishable artifacts', { ticket: metadata.ticket });
   }
@@ -615,14 +637,22 @@ function sealExecutorUnlocked(value, options) {
   const files = {
     pr_body: {
       relative: PR_BODY_NAME,
-      content: readImmutableFile(fsApi, fixedPath(worktree, PR_BODY_NAME, 'PR body'), 'PR body'),
+      content: readImmutableFile(fsApi, fixedPath(worktree, PR_BODY_NAME, 'PR body'), 'PR body',
+        input.expectedFiles ? ARCHIVE_MAX_BYTES : undefined, input.expectedFiles?.pr_body?.bytes),
     },
     evidence: {
       relative: EVIDENCE_NAME,
-      content: readImmutableFile(fsApi, fixedPath(worktree, EVIDENCE_NAME, 'evidence'), 'evidence'),
+      content: readImmutableFile(fsApi, fixedPath(worktree, EVIDENCE_NAME, 'evidence'), 'evidence',
+        input.expectedFiles ? ARCHIVE_MAX_BYTES : undefined, input.expectedFiles?.evidence?.bytes),
     },
   };
   assertPrBody(files.pr_body.content, metadata.ticket, hygiene);
+  if (input.expectedFiles !== undefined) {
+    for (const name of ['pr_body', 'evidence']) {
+      if (stable(input.expectedFiles[name]) !== stable(fileReference(files[name].relative, files[name].content)))
+        fail('ARTIFACT_MUTATED', 'executor ' + name + ' differs from its pre-signing snapshot');
+    }
+  }
   const envelope = envelopeFor(metadata, resultData, files);
   const manifest = manifestFor(metadata, trusted, envelope, files);
   const manifestPath = fixedPath(worktree, MANIFEST_NAME, 'artifact manifest');
@@ -5096,6 +5126,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   provenanceInert,
   trustedBookkeepingMutation,
   prepareRoleArtifact,
+  inspectExecutorOutput,
   sealRole,
   sealJudgment,
   validateJudgmentManifest,
