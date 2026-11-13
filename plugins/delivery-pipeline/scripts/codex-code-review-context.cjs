@@ -59,7 +59,7 @@ function run(options, executable, args, cwd, maxBuffer = FILE_LIMITS.material) {
 const git = (options, root, args, maxBuffer) => run(options, 'git', ['-C', root, ...args], root, maxBuffer);
 const revision = (options, root, args) => git(options, root, args, INPUT_MAX_BYTES).trim();
 
-function assertGraph(directory, options) {
+function assertGraph(directory, options, requester = null) {
   const project = fs.realpathSync(revision(options, directory, ['rev-parse', '--show-toplevel']));
   const worktrees = git(options, directory, ['worktree', 'list', '--porcelain']).split('\n')
     .filter(line => line.startsWith('worktree ')).map(line => path.resolve(line.slice(9)));
@@ -67,7 +67,10 @@ function assertGraph(directory, options) {
   if (project !== path.resolve(directory, '../..')) fail('canonical graph layout is required', 'GRAPH_NOT_CANONICAL');
   if (project !== worktrees[0]) {
     try { git(options, project, ['cat-file', '-e', 'HEAD:.planning/graph/tickets.json']); }
-    catch { fail('untracked graph copy inside a non-main worktree', 'GRAPH_NOT_CANONICAL'); }
+    catch {
+      if (!require('./graph-dir.cjs').projectWorktree(project, { graphDir: directory, requester }))
+        fail('untracked graph copy inside a non-main worktree', 'GRAPH_NOT_CANONICAL');
+    }
   }
   return project;
 }
@@ -87,7 +90,7 @@ function collect(scope, options) {
   const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR || path.join(worktree, '.planning/graph'));
   if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning'
       || fs.realpathSync(directory) !== directory) fail('canonical graph layout is required');
-  const project = assertGraph(directory, options);
+  const project = assertGraph(directory, options, worktree);
   const repository = repositoryIdentity(worktree, { execFileSync: options.execFileSync || execFileSync });
   const branch = revision(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   const planning = roleArtifact.codeReviewPlanningReference({ worktree, graphDir: directory,
@@ -489,4 +492,4 @@ function finish(value, dispatch, recorder) {
 }
 
 module.exports = Object.freeze({ prepare, isPreparedContext, admitInstalledLaunch, recheckInstalledLaunch,
-  admittedPrompt, authenticateLaunch, launchDigest, finish });
+  admittedPrompt, authenticateLaunch, launchDigest, finish, assertGraph });

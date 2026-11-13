@@ -72,6 +72,25 @@ test('a linked project worktree resolves its own untracked graph, from the workt
   }
 });
 
+test('Codex review contexts accept a project-worktree graph and still refuse a ticket-worktree copy', () => {
+  const { assertGraph } = require('../../plugins/delivery-pipeline/scripts/codex-code-review-context.cjs');
+  const { assertAggregateGraph } = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const f = fixture();
+  try {
+    const project = f.worktree('project', 'project/next');
+    const graphDir = writeGraph(project, ownTickets);
+    const reviewer = f.worktree('review', 'epic/02-new');
+    assert.equal(assertGraph(graphDir, {}, reviewer), project);
+    assert.equal(assertAggregateGraph(graphDir, {}, reviewer), undefined);
+    const ticket = f.worktree('ticket', 'ticket/T-02-01-new');
+    const copy = writeGraph(ticket, ownTickets);
+    assert.throws(() => assertGraph(copy, {}, ticket), (error) => error.code === 'GRAPH_NOT_CANONICAL');
+    assert.throws(() => assertAggregateGraph(copy, {}, ticket), (error) => error.code === 'GRAPH_NOT_CANONICAL');
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test('the main checkout keeps its own graph', () => {
   const f = fixture();
   try {
