@@ -11,7 +11,7 @@
 // the one place those files put the agent, and it said "run validate-graph first",
 // sending it to a command that cannot help and naming the wrong cause.
 //
-// @invariant: an explicit graph wins, then the main checkout's graph, then cwd's; nothing is guessed past that.
+// @invariant: explicit graph, then a linked project worktree's untracked graph, then the main checkout's, then cwd's.
 //
 // Nothing is guessed past that: a caller who lands here with no graph gets told
 // the actual cause and the flag that fixes it, because a misdirecting error costs
@@ -22,19 +22,137 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const hasGraph = (dir) => !!dir && fs.existsSync(path.join(dir, 'tickets.json'));
+const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
+const isDeliveryBranch = (name) => name.startsWith('ticket/') || name.startsWith('epic/');
+
+function gitOut(cwd, args) {
+  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 10000 });
+  return r.status === 0 ? (r.stdout || '').trim() : null;
+}
 
 function repoRootOf(worktree) {
-  const r = spawnSync('git', ['-C', worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-    { encoding: 'utf8' });
-  if (r.status !== 0) return null;
-  const common = (r.stdout || '').trim();
+  const common = gitOut(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   return common ? path.dirname(common) : null;
+}
+
+function realOrNull(target) {
+  try { return fs.realpathSync(target); } catch { return null; }
+}
+
+function parseWorktreeRows(output) {
+  const rows = [];
+  let row = null;
+  for (const line of output.split('\n')) {
+    if (!line) { if (row) rows.push(row); row = null; continue; }
+    if (!row) row = {};
+    const at = line.indexOf(' ');
+    if (at === -1) row[line] = true;
+    else row[line.slice(0, at)] = line.slice(at + 1);
+  }
+  if (row) rows.push(row);
+  return rows;
+}
+
+function containingRow(rows, dir) {
+  let best = null;
+  for (const row of rows) {
+    if (typeof row.worktree !== 'string') continue;
+    const wt = realOrNull(row.worktree);
+    if (!wt) continue;
+    const rel = path.relative(wt, dir);
+    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+      if (!best || wt.length > best.wt.length) best = { ...row, wt };
+    }
+  }
+  return best;
+}
+
+function readGraphFile(file) {
+  let stat;
+  try { stat = fs.lstatSync(file); } catch { return undefined; }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_GRAPH_BYTES) return null;
+  try {
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch { return null; }
+}
+
+function graphTickets(graph) {
+  const tickets = graph && graph.tickets;
+  return tickets !== null && typeof tickets === 'object' && !Array.isArray(tickets) ? tickets : {};
+}
+
+function deliveryBranches(graph) {
+  const names = new Set();
+  for (const row of Object.values(graphTickets(graph))) {
+    if (row && typeof row.branch === 'string') names.add(row.branch);
+    if (row && typeof row.epic === 'string') names.add(row.epic);
+  }
+  const epics = graph && graph.epics;
+  if (epics !== null && typeof epics === 'object') {
+    for (const epic of Object.values(epics)) {
+      if (epic && typeof epic.branch === 'string') names.add(epic.branch);
+    }
+  }
+  return names;
+}
+
+function trackedAtHead(worktree, relative) {
+  return gitOut(worktree, ['cat-file', '-e', `HEAD:${relative.split(path.sep).join('/')}`]) !== null;
+}
+
+// @contract: a project worktree is linked, on a named non-delivery branch no graph names, holding rows main lacks.
+function projectWorktree(dir, { graphDir = null, requester = null } = {}) {
+  const real = realOrNull(dir);
+  if (!real) return null;
+  const list = gitOut(real, ['worktree', 'list', '--porcelain']);
+  if (!list) return null;
+  const rows = parseWorktreeRows(list);
+  const main = rows.length ? realOrNull(rows[0].worktree) : null;
+  const own = main && containingRow(rows, real);
+  if (!own || own.wt === main) return null;
+  if (typeof own.branch !== 'string' || !own.branch.startsWith('refs/heads/')) return null;
+  const branch = own.branch.slice('refs/heads/'.length);
+  if (isDeliveryBranch(branch)) return null;
+  const localDir = realOrNull(graphDir || path.join(own.wt, '.planning', 'graph'))
+    || path.resolve(graphDir || path.join(own.wt, '.planning', 'graph'));
+  const relative = path.relative(own.wt, localDir);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  const local = readGraphFile(path.join(localDir, 'tickets.json'));
+  const mainGraph = readGraphFile(path.join(main, relative, 'tickets.json'));
+  if (local === null || mainGraph === null) return null;
+  if (deliveryBranches(local).has(branch) || deliveryBranches(mainGraph).has(branch)) return null;
+  if (local && mainGraph) {
+    const mainIds = graphTickets(mainGraph);
+    if (Object.keys(graphTickets(local)).every((id) => Object.hasOwn(mainIds, id))) return null;
+  }
+  if (requester) {
+    const requesterRepo = repoRootOf(requester);
+    const ownRepo = repoRootOf(own.wt);
+    if (!requesterRepo || !ownRepo || realOrNull(requesterRepo) !== realOrNull(ownRepo)) return null;
+  }
+  return { worktree: own.wt, branch, main };
+}
+
+function ownProjectGraph(origin) {
+  const facts = gitOut(origin, ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir', '--show-toplevel']);
+  if (!facts) return null;
+  const [gitDir, commonDir, top] = facts.split('\n');
+  if (!top || realOrNull(gitDir) === realOrNull(commonDir)) return null;
+  const toplevel = realOrNull(top);
+  if (!toplevel || !fs.existsSync(path.join(toplevel, '.planning'))) return null;
+  const dir = path.join(toplevel, '.planning', 'graph');
+  if (hasGraph(dir)) {
+    if (trackedAtHead(toplevel, '.planning/graph/tickets.json')) return null;
+  } else if (trackedAtHead(toplevel, '.planning')) return null;
+  if (!projectWorktree(toplevel, { graphDir: dir })) return null;
+  return { dir, graph: hasGraph(dir) };
 }
 
 /**
  * @param {string[]} argv   process.argv.slice(2) — read for `--graph <dir>`
  * @param {string|null} worktree  the resolved --worktree path, when the caller has one
- * @returns {{dir: string|null, how: 'flag'|'env'|'cwd'|'worktree-repo'|'none'}}
+ * @returns {{dir: string|null, how: 'flag'|'env'|'cwd'|'project-worktree'|'worktree-repo'|'none'}}
  */
 function resolveGraphDir(argv = [], worktree = null) {
   const at = argv.indexOf('--graph');
@@ -43,6 +161,8 @@ function resolveGraphDir(argv = [], worktree = null) {
 
   const fromCwd = path.join(process.cwd(), '.planning', 'graph');
   for (const origin of [worktree, process.cwd()]) {
+    const own = origin && ownProjectGraph(origin);
+    if (own) return { dir: own.dir, how: own.graph ? 'project-worktree' : 'none' };
     const root = origin && repoRootOf(origin);
     const fromRepo = root && path.join(root, '.planning', 'graph');
     if (hasGraph(fromRepo)) return { dir: fromRepo, how: 'worktree-repo' };
@@ -65,7 +185,8 @@ function loadTickets(argv, worktree, label) {
       '  This is usually a working-directory problem, not a missing graph: a ticket worktree has\n' +
       '  no .planning/ of its own when the project keeps it untracked. Pass\n' +
       '  --graph <project>/.planning/graph (or set SHIPYARD_GRAPH_DIR) — required for a\n' +
-      '  cross-repo ticket, whose worktree sits in a different repository from its graph.\n'
+      '  cross-repo ticket, whose worktree sits in a different repository from its graph, and\n' +
+      '  for a ticket of a graph kept in a linked project worktree (<that worktree>/.planning/graph).\n'
     );
     process.exit(2);
   }
@@ -181,6 +302,9 @@ module.exports = {
   resolveGraphDir,
   loadTickets,
   repoRootOf,
+  parseWorktreeRows,
+  containingRow,
+  projectWorktree,
   originRefName,
   originBaseLabel,
   resolveOriginRef,

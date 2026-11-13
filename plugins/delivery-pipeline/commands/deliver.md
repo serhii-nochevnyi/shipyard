@@ -776,8 +776,10 @@ prints `0 agents` the project config does not parse: fix the file.
 
    `launch` reads the board and the dispatch and escalation records from the main
    checkout's `.planning/graph` of this worktree's repository, never from the
-   worktree's own copy; pass `--graph-dir` only for a graph outside that
-   repository (a cross-repo ticket). It derives the signals (`risk`, `checkpoint`,
+   worktree's own copy. Pass `--graph-dir` for a graph outside that
+   repository (a cross-repo ticket), or for a graph kept untracked in a linked
+   project worktree: `--graph-dir <project worktree>/.planning/graph`. A project
+   worktree is on its own named branch, not a ticket or epic branch. It derives the signals (`risk`, `checkpoint`,
    `critical`; never the ticket's `type`) and the fenced context packet from the
    canonical graph itself and submits one scoped request to the selected host. The
    executor's `<TICKET-CONTRACT>` says: work ONLY within `files_modified`, commit
