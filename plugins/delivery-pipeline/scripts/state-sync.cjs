@@ -71,6 +71,7 @@ const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resol
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { readGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
 const { nonPrimaryParents, landedInEpic } = require(path.join(__dirname, 'diamond-parents.cjs'));
+const { retiredEpicProof, retiredEpicBase } = require(path.join(__dirname, 'ticket-base.cjs'));
 const { readCapacitySnapshot } = require(path.join(__dirname, 'capacity-lease.cjs'));
 
 function currentReviewAdmission(input) {
@@ -706,12 +707,14 @@ function verifiesPriorLandedPr(before, candidate) {
 function previousEpicProof(phase, repo, branch) {
   const candidates = Object.entries(tickets)
     .filter(([, ticket]) => String(ticket.phase) === String(phase) && repoOf(ticket) === repo && ticket.epic === branch)
-    .map(([id]) => prev[id] && prev[id].epic_pr)
+    .flatMap(([id]) => (prev[id] ? [prev[id].epic_pr, prev[id].epic_retired] : []))
     .filter((proof) => proof && Number.isSafeInteger(proof.number) && proof.branch === branch);
-  const rowProof = candidates.find((proof) => proof.state === 'MERGED') || candidates[0];
+  const rowProof = candidates.find((proof) => proof.state === 'MERGED' && validMergeSha(proof.merge_sha))
+    || candidates.find((proof) => proof.state === 'MERGED') || candidates[0];
   if (rowProof) return rowProof;
   const front = previousFront.epics && previousFront.epics[epicKey(phase, repo)];
   const pr = front && front.pr;
+  const frontMergeSha = mergeShaOf(pr);
   return pr && Number.isSafeInteger(pr.number) && front.branch === branch
     ? {
       number: pr.number,
@@ -719,6 +722,7 @@ function previousEpicProof(phase, repo, branch) {
       state: pr.state,
       base: pr.baseRefName || front.base,
       landed: front.landed === true,
+      ...(frontMergeSha ? { merge_sha: frontMergeSha } : {}),
     }
     : null;
 }
@@ -956,6 +960,7 @@ for (const [id, t] of Object.entries(tickets)) {
 // Keyed per phase AND repo: one epic NAME per phase, but a separate branch (and
 // integration PR) in every repository the phase touches. `epicKey` comes from
 const epicInfo = {};
+const retiredEpics = new Map();
 if (mode === 'epic-stacked') {
   for (const [phase, e] of Object.entries(epics)) {
     const phaseRepos = Array.isArray(e.repos) && e.repos.length
@@ -1014,11 +1019,17 @@ if (mode === 'epic-stacked') {
               state: candidate.state,
               base: candidate.baseRefName,
               landed: false,
+              ...(mergeShaOf(candidate) ? { merge_sha: mergeShaOf(candidate) } : {}),
             }))[0] || null;
         }
       }
-      if (!observedPr && proof && proof.state === 'MERGED' && proof.base === base) {
-        previousPr = { number: proof.number, state: 'MERGED', headRefName: e.branch, baseRefName: base };
+      const retargetedToBase = Object.entries(tickets).some(([id, ticket]) => String(ticket.phase) === String(phase)
+        && repoOf(ticket) === repo && ticket.epic === e.branch
+        && state[id] && state[id].status === 'pr-open' && state[id].pr_base === base);
+      if (!observedPr && proof && proof.state === 'MERGED' && proof.base === base
+          && (validMergeSha(proof.merge_sha) || !retargetedToBase || !rd.available)) {
+        previousPr = { number: proof.number, state: 'MERGED', headRefName: e.branch, baseRefName: base,
+          ...(validMergeSha(proof.merge_sha) ? { mergeCommit: { oid: proof.merge_sha } } : {}) };
       } else if (!observedPr && proof && rd.available && !FULL_SYNC) {
         listingStats.lookedUp += 1;
         const refreshed = prForNumber(repo, proof.number);
@@ -1037,6 +1048,11 @@ if (mode === 'epic-stacked') {
       epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed, landed_reason: landedReason,
         architecture: architectureTarget({ base: pr?.baseRefName || base, integrationBranch: base }),
         authenticated_architecture: admitted?.architecture.verdict || null };
+      const retirement = pr && pr.headRefName === e.branch && pr.baseRefName === base
+        && !rd.prs.some((candidate) => candidate.state === 'OPEN' && candidate.headRefName === e.branch)
+        ? { number: pr.number, branch: e.branch, state: pr.state, base, merge_sha: mergeShaOf(pr) }
+        : null;
+      if (retiredEpicProof(retirement, e.branch)) retiredEpics.set(epicKey(phase, repo), retirement);
     }
   }
 }
@@ -1059,6 +1075,7 @@ for (const [id, ticket] of Object.entries(tickets)) {
       base: info.base,
       landed: info.landed === true,
     };
+    if (pr.state === 'MERGED' && mergeShaOf(pr)) entry.epic_pr.merge_sha = mergeShaOf(pr);
   } else {
     delete entry.epic_pr;
   }
@@ -1225,6 +1242,20 @@ for (const [id, t] of Object.entries(tickets)) {
       s.base_reason = `${pp} is ${ppState.status} — cascade off ${ppBranch}; the sentinel retargets this PR onto ${t.epic} when ${pp} lands`;
     }
     s.epic = t.epic;
+    const retirement = retiredEpics.get(epicKey(t.phase, repoOf(t)));
+    const retiredArm = !pp || (ppState && ppState.status === 'merged');
+    if (retirement && retiredArm && s.base === t.epic) {
+      const integ = (repoData.get(repoOf(t)) || {}).defaultBranch || DEFAULT_BRANCH;
+      const candidate = { ...s, integration_branch: integ, epic_retired: retirement };
+      const retiredBase = retiredEpicBase(t, candidate, pp ? ppState : null);
+      if (retiredBase) {
+        s.base = retiredBase;
+        s.epic_retired = retirement;
+        s.base_reason = `${t.epic} landed on ${retiredBase} via PR #${retirement.number} (merge ${retirement.merge_sha})`
+          + ` and PR #${s.pr} already targets ${retiredBase} — the base is ${retiredBase}`
+          + (pp ? `; ${pp} stays merged into ${ppState.merged_into}` : '');
+      }
+    }
     if (diamond.length && blockers.length === 0) {
       s.base_merge = t.epic;
       s.base_reason += `; ticket-worktree.sh create merges ${t.epic} in for non-primary parent(s) ${diamond.join(', ')}`;

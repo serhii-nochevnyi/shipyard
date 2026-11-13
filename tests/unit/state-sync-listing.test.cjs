@@ -108,7 +108,7 @@ function fixture(options = {}) {
   }));
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({
     epics: { '43': { branch: EPIC, base: 'main', repos: [null] } },
-    tickets: { [TICKET]: ticket(options.ticket) },
+    tickets: options.tickets || { [TICKET]: ticket(options.ticket) },
   }));
   if (options.previousState) {
     fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify(options.previousState));
@@ -483,7 +483,7 @@ test('--full records the merge proof that a later normal sync can reuse', () => 
   assert.equal(full.status, 0, full.stderr);
   assert.equal(state(f)[TICKET].merge_sha, MERGE_SHA);
   assert.deepEqual(state(f)[TICKET].epic_pr, {
-    number: 399, branch: EPIC, state: 'MERGED', base: 'main', landed: true,
+    number: 399, branch: EPIC, state: 'MERGED', base: 'main', landed: true, merge_sha: MERGE_SHA,
   });
 
   fs.writeFileSync(f.callsFile, '');
@@ -735,5 +735,171 @@ require.cache[require.resolve(frontTarget)].exports={...front,computeFront:(...a
     fs.rmSync(f.root,{recursive:true,force:true});
   }
 });
+
+suite('state-sync — base after the phase epic lands on the integration branch');
+
+const CHILD = 'T-43-02';
+const CHILD_BRANCH = `ticket/${CHILD}-child`;
+const EPIC_MERGE_SHA = 'e'.repeat(40);
+
+function stackedTickets() {
+  return {
+    [TICKET]: ticket(),
+    [CHILD]: ticket({ branch: CHILD_BRANCH, title: 'child', depends_on: [TICKET], primary_parent: TICKET, pr_base: BRANCH }),
+  };
+}
+
+function childPr(base) {
+  return { ...pr(402, 'OPEN', CHILD_BRANCH, base), title: `${CHILD}: child`, baseRefOid: 'c'.repeat(40) };
+}
+
+function epicPr(state, base = 'main', mergeCommit = state === 'MERGED' ? { oid: EPIC_MERGE_SHA } : null) {
+  return { ...pr(399, state, EPIC, base), title: 'phase 43 epic', mergeCommit };
+}
+
+function retiredEpicFixture({ epic = epicPr('MERGED'), childBase = 'main', openEpic = false } = {}) {
+  const child = childPr(childBase);
+  const open = openEpic ? [child, epic] : [child];
+  return fixture({
+    tickets: stackedTickets(),
+    ledger: 301,
+    previousState: { [TICKET]: priorMergedRow(301, 'OPEN', false) },
+    responses: {
+      open, review: open,
+      view: { 301: pr(301, 'MERGED'), 399: epic },
+      branches: ['main', EPIC, BRANCH, CHILD_BRANCH],
+      comparisons: { [`main...${EPIC}`]: 3 },
+    },
+  });
+}
+
+function reviewBase(f, prBase) {
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete gitEnv[key];
+  const git = (...args) => spawnSync('git', ['-C', f.root, ...args], { env: gitEnv, encoding: 'utf8' });
+  if (!fs.existsSync(path.join(f.root, '.git'))) {
+    git('init', '-q', '-b', CHILD_BRANCH);
+    git('config', 'user.email', 'a@b.c'); git('config', 'user.name', 'n'); git('config', 'commit.gpgsign', 'false');
+    git('remote', 'add', 'origin', 'git@github.com:acme/demo.git');
+    fs.writeFileSync(path.join(f.root, 'app.js'), 'const value = 1;\n');
+    git('add', 'app.js'); git('commit', '-qm', 'seed');
+    for (const ref of ['main', EPIC]) git('update-ref', `refs/remotes/origin/${ref}`, 'HEAD');
+  }
+  const gate = require('../../plugins/delivery-pipeline/scripts/publish-gate.cjs');
+  return gate.baseFor(f.root, 'origin/main', { managed: true, branch: CHILD_BRANCH, projectRoot: f.root,
+    graphDir: f.graphDir, lookupPr: () => ({ headRefName: CHILD_BRANCH, baseRefName: prBase }) });
+}
+
+function boardBase(f, requestedBase = BRANCH) {
+  const { resolveTicketBase } = require('../../plugins/delivery-pipeline/scripts/ticket-base.cjs');
+  const graph = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'tickets.json'), 'utf8'));
+  return resolveTicketBase({ ticket: CHILD, requestedBase, graph, state: state(f) });
+}
+
+test('a merged parent inside a still-open epic keeps its child on the epic', () => {
+  const f = retiredEpicFixture({ epic: epicPr('OPEN'), childBase: EPIC, openEpic: true });
+  try {
+    const result = run(f);
+    assert.equal(result.status, 0, result.stderr);
+    const child = state(f)[CHILD];
+    assert.equal(child.base, EPIC);
+    assert.equal(child.epic_retired, undefined);
+    assert.match(child.base_reason, /is MERGED/);
+    assert.equal(boardBase(f), EPIC);
+    assert.equal(reviewBase(f, EPIC).base, `origin/${EPIC}`);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('a verified merged epic moves the retargeted child to main for every consumer, and repeated syncs keep it', () => {
+  const f = retiredEpicFixture();
+  try {
+    const result = run(f);
+    assert.equal(result.status, 0, result.stderr);
+    const board = state(f);
+    const child = board[CHILD];
+    assert.equal(child.base, 'main');
+    assert.equal(child.pr_base, 'main');
+    assert.deepEqual(child.epic_retired, { number: 399, branch: EPIC, state: 'MERGED', base: 'main', merge_sha: EPIC_MERGE_SHA });
+    assert.match(child.base_reason, new RegExp(`landed on main via PR #399 \\(merge ${EPIC_MERGE_SHA}\\)`));
+    assert.match(child.base_reason, new RegExp(`${TICKET} stays merged into ${EPIC}`));
+    assert.equal(board[TICKET].merged_into, EPIC);
+    assert.equal(board[TICKET].epic_pr.merge_sha, EPIC_MERGE_SHA);
+    assert.equal(child.architecture.required, true);
+    assert.equal(child.merge_scope, 'integration');
+    assert.equal(boardBase(f), 'main');
+    assert.equal(boardBase(f, 'main'), 'main');
+    const context = reviewBase(f, 'main');
+    assert.equal(context.base, 'origin/main');
+    assert.equal(context.base_source, 'pull-request');
+    assert.equal(context.ticket, CHILD);
+
+    for (let round = 0; round < 2; round++) {
+      fs.writeFileSync(f.callsFile, '');
+      const repeated = run(f);
+      assert.equal(repeated.status, 0, repeated.stderr);
+      assert.equal(calls(f).some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '399'), false);
+      assert.equal(state(f)[CHILD].base, 'main');
+      assert.deepEqual(state(f)[CHILD].epic_retired, child.epic_retired);
+      assert.equal(state(f)[TICKET].merged_into, EPIC);
+      assert.equal(boardBase(f), 'main');
+      assert.equal(reviewBase(f, 'main').base, 'origin/main');
+    }
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('a legacy merged-epic proof without its merge commit is re-verified before the child leaves the epic', () => {
+  const f = retiredEpicFixture();
+  try {
+    const previous = priorMergedRow(301, 'MERGED', false);
+    fs.writeFileSync(path.join(f.graphDir, 'delivery-state.json'), JSON.stringify({ [TICKET]: previous }));
+    const result = run(f);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(calls(f).some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '399'));
+    assert.equal(state(f)[CHILD].base, 'main');
+    assert.equal(state(f)[CHILD].epic_retired.merge_sha, EPIC_MERGE_SHA);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('an unverified epic or an arbitrary retarget to main stays fail closed', () => {
+  const cases = {
+    'closed-unmerged epic PR': { epic: epicPr('CLOSED') },
+    'epic merged into another branch': { epic: epicPr('MERGED', 'release') },
+    'merged epic without a merge commit': { epic: epicPr('MERGED', 'main', null) },
+    'open epic, ticket PR retargeted to main': { epic: epicPr('OPEN'), openEpic: true },
+  };
+  for (const [name, options] of Object.entries(cases)) {
+    const f = retiredEpicFixture(options);
+    try {
+      const result = run(f);
+      assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+      const child = state(f)[CHILD];
+      assert.equal(child.base, EPIC, name);
+      assert.equal(child.pr_base, 'main', name);
+      assert.equal(child.epic_retired, undefined, name);
+      assert.throws(() => reviewBase(f, 'main'), /PR base main conflicts with recorded base/, name);
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  }
+});
+
+test('architecture evidence bound to the retired epic base is not accepted for the main base', () => {
+  const { computeFront } = require('../../plugins/delivery-pipeline/scripts/front.cjs');
+  const epicSha = 'd'.repeat(40);
+  const row = {
+    status: 'pr-open', pr: 402, draft: false, pr_base: 'main', base: 'main', epic: EPIC,
+    integration_branch: 'main', merge_scope: 'integration', review_decision: 'APPROVED',
+    head_sha: 'b'.repeat(40), pr_base_sha: 'c'.repeat(40),
+    checks: { total: 1, failing: 0, pending: 0, none_reported: false, unavailable: false },
+  };
+  const verdict = { authenticated: true, verdict: 'conform', pr: 402, head: 'b'.repeat(40) };
+  const epicBound = computeFront({ [CHILD]: {} }, { [CHILD]: { ...row,
+    authenticated_architecture: { ...verdict, base: EPIC, base_commit: epicSha } } });
+  assert.deepEqual(epicBound.actionable.finalize, [CHILD]);
+  assert.match(epicBound.why[CHILD], /fresh authenticated architecture verdict/);
+  const mainBound = computeFront({ [CHILD]: {} }, { [CHILD]: { ...row,
+    authenticated_architecture: { ...verdict, base: 'main', base_commit: 'c'.repeat(40) } } });
+  assert.deepEqual(mainBound.actionable.finalize, []);
+  assert.deepEqual(mainBound.waiting.merge_human, [CHILD]);
+});
+
 
 done();

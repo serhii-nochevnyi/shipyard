@@ -19,6 +19,7 @@ const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { resolveBaseRef, resolveGraphDir } = require('./graph-dir.cjs');
+const { mergedParentBase, rootTicketBase } = require('./ticket-base.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
 const { preflight, emitPreflight } = require('./runtime-context.cjs');
@@ -288,16 +289,20 @@ function canonicalBase(worktree, value, expected) {
   return resolved;
 }
 
-// @contract: once a primary parent is merged its merge destination is the canonical base; otherwise pr_base.
-function canonicalTicketBase(options, row, worktree) {
-  if (!row.primary_parent) return row.pr_base;
+// @contract: a merged primary parent's destination, or its proven retired epic's target, is the base; else pr_base.
+function canonicalTicketBase(options, ticket, row, worktree) {
+  if (!row.primary_parent) {
+    if (!fs.existsSync(path.join(graphDirectory(options, worktree), 'delivery-state.json'))) return row.pr_base;
+    const board = readGraphFile(options, 'delivery-state.json', worktree);
+    return rootTicketBase(row, object(board) ? board[ticket] : null);
+  }
   const state = readGraphFile(options, 'delivery-state.json', worktree);
   const parent = state && state[row.primary_parent];
   if (!object(parent) || parent.branch !== row.pr_base || parent.status !== 'merged') return row.pr_base;
   if (typeof parent.merged_into !== 'string' || !parent.merged_into.trim()) {
     reject(`primary parent ${row.primary_parent} is merged without a destination`);
   }
-  return parent.merged_into;
+  return mergedParentBase(row, state[ticket], parent);
 }
 
 function boardTicket(options, entry, row, worktree) {
@@ -403,7 +408,7 @@ function driftPreflight(options, entry, args) {
   const row = graphTicket(options, entry.id, worktree);
   canonicalPlan(options, row, entry);
   const base = entry.baseRef || args.baseRef;
-  canonicalBase(worktree, base, canonicalTicketBase(options, row, worktree));
+  canonicalBase(worktree, base, canonicalTicketBase(options, entry.id, row, worktree));
   return deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree });
 }
 
@@ -597,15 +602,17 @@ function executorBaseRef(options, entry, row, worktree) {
     }
     if (parentState.status === 'merged') {
       if (typeof parentState.merged_into !== 'string' || !parentState.merged_into.trim()
-          || live.base !== parentState.merged_into) {
+          || live.base !== mergedParentBase(row, live, parentState)) {
         reject(`ticket ${entry.id} live base does not match its merged primary parent`);
       }
-      base = parentState.merged_into;
+      base = live.base;
     } else if (live.base !== row.pr_base) {
       reject(`ticket ${entry.id} live base is neither its open primary parent nor its merged destination`);
     }
-  } else if (live.base !== row.pr_base) {
+  } else if (live.base !== rootTicketBase(row, live)) {
     reject(`ticket ${entry.id} live base differs from its canonical plan base`);
+  } else {
+    base = live.base;
   }
   return resolveBaseRef(worktree, base);
 }

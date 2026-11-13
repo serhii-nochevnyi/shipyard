@@ -20,6 +20,44 @@ function repoOf(row) {
   return typeof row.repo === 'string' && row.repo.trim() ? row.repo.trim() : null;
 }
 
+const MERGE_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+// @contract: only the epic's own MERGED PR into its integration branch, with a merge sha, retires it.
+function retiredEpicProof(proof, epic) {
+  return object(proof) && nonEmpty(epic) && Number.isSafeInteger(proof.number) && proof.number > 0
+    && proof.state === 'MERGED' && proof.branch === epic && nonEmpty(proof.base) && proof.base !== epic
+    && typeof proof.merge_sha === 'string' && MERGE_SHA.test(proof.merge_sha);
+}
+
+// @contract: leave the epic only for a proven retired epic and a PR already on its integration branch.
+function retiredEpicBase(row, board, parentState = null) {
+  if (!object(row) || !object(board)) return null;
+  const proof = board.epic_retired;
+  if (!retiredEpicProof(proof, row.epic)) return null;
+  if (board.status !== 'pr-open' || board.pr_base !== proof.base || board.integration_branch !== proof.base) return null;
+  if (parentState === null) return row.pr_base === row.epic ? proof.base : null;
+  if (!object(parentState) || parentState.status !== 'merged') return null;
+  if (parentState.merged_into === proof.base) return proof.base;
+  if (parentState.merged_into !== row.epic) return null;
+  const parentProof = parentState.epic_pr;
+  if (!object(parentProof) || parentProof.number !== proof.number || parentProof.state !== 'MERGED'
+      || parentProof.branch !== row.epic || parentProof.base !== proof.base
+      || (parentProof.merge_sha !== undefined && parentProof.merge_sha !== proof.merge_sha)) return null;
+  return proof.base;
+}
+
+function mergedParentBase(row, board, parentState) {
+  return retiredEpicBase(row, board, parentState) || parentState.merged_into;
+}
+
+function rootTicketBase(row, board) {
+  return retiredEpicBase(row, board) || row.pr_base;
+}
+
 function resolveTicketBase({ ticket, requestedBase, graph, state }) {
   if (typeof ticket !== 'string' || !ticket.trim()) {
     throw refusal('TICKET_REQUIRED', 'ticket id is required');
@@ -55,7 +93,7 @@ function resolveTicketBase({ ticket, requestedBase, graph, state }) {
     }
     if (parentState.status === 'merged') {
       if (typeof parentState.merged_into !== 'string' || !parentState.merged_into.trim()
-          || board.base !== parentState.merged_into) {
+          || board.base !== mergedParentBase(row, board, parentState)) {
         throw refusal('BOARD_MISMATCH', `ticket ${ticket} live base does not match its merged primary parent`);
       }
     } else if (parentState.status === 'branched' || parentState.status === 'pr-open') {
@@ -130,4 +168,4 @@ function cli() {
 
 if (require.main === module) cli();
 
-module.exports = { resolveTicketBase, MAX_BYTES };
+module.exports = { resolveTicketBase, retiredEpicProof, retiredEpicBase, mergedParentBase, rootTicketBase, MAX_BYTES };
