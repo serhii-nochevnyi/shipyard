@@ -24,7 +24,7 @@ const { hintForError } = require('./refusal-hints.cjs');
 const { sealDecomposition, assertContained, captureContainmentBaseline,
   persistContainmentBaseline, restoreContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest, pidAlive,
-  phaseDirectory: sharedPhaseDirectory, writeDurableFile } = require('./planning-writer-lease.cjs');
+  phaseDirectory: sharedPhaseDirectory, writeDurableFile, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const LAUNCH_SCHEMA = 'shipyard.codex-decompose-launch.v1';
@@ -120,7 +120,11 @@ const phaseDirectory = (worktree, phase) => sharedPhaseDirectory(fs.realpathSync
 
 function researchArtifact(worktree, phase) {
   const directory = phaseDirectory(worktree, phase);
-  return path.join(directory, path.basename(directory).split('-')[0] + '-RESEARCH.md');
+  let name;
+  try { name = resolvePhaseArtifact(directory, 'RESEARCH'); }
+  catch (error) { fail(error.code || 'AMBIGUOUS_ARTIFACT', error.message.replace(/^planning-writer-lease: /, '')); }
+  if (!name) fail('MISSING_ARTIFACT', 'phase research artifact is missing in ' + directory);
+  return path.join(directory, name);
 }
 
 function sourceRevision(worktree) {
@@ -193,8 +197,10 @@ function sealPlans(scope, root, output, leaseCtx, adr) {
   const directory = phaseDirectory(scope.worktree, scope.phase);
   const names = fs.readdirSync(directory).filter((name) => new RegExp(`^0*${scope.phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!names.length) fail('MISSING_ARTIFACT', 'no materialized PLAN.md files were found in ' + directory);
-  const plans = [...(fs.existsSync(path.join(directory, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...names]
-    .map((name) => path.join(directory, name));
+  let context;
+  try { context = resolvePhaseArtifact(directory, 'CONTEXT'); }
+  catch (error) { fail(error.code || 'AMBIGUOUS_ARTIFACT', error.message.replace(/^planning-writer-lease: /, '')); }
+  const plans = [...(context ? [context] : []), ...names].map((name) => path.join(directory, name));
   assertContained({ worktree: scope.worktree,
     allowed: leaseCtx?.containmentBaseline === undefined ? [path.relative(scope.worktree, directory)]
       : plans.map((file) => path.relative(scope.worktree, file)),
@@ -1255,6 +1261,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   const leaseHandle = writerLease.acquire({
     owner: JSON.stringify({ run_id: scope.run_id, owner_id: controller.owner_id }),
     base_revision: sourceRevision(scope.worktree),
+    launch_dir: options.launchDir || path.join(hostStateDir, 'launches'),
   });
   let result;
   let resolution;

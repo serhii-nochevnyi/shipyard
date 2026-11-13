@@ -34,7 +34,8 @@ const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cj
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 const { isScratch } = require('./conveyor-scratch.cjs');
 const commitSigner = require('./commit-signer.cjs');
-const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
+const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest,
+  phaseDirectoryNames } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
@@ -67,9 +68,8 @@ function typedPhaseDirectory(worktree, phase) {
   let entries;
   try { entries = fs.readdirSync(root); }
   catch { fail('WRITER_FENCED', 'scoped phase directory is unavailable'); }
-  const names = entries.filter((name) => /^\d+-/.test(name)
-    && Number(name.split('-')[0]) === Number(phase)
-    && fs.lstatSync(path.join(root, name)).isDirectory());
+  const names = phaseDirectoryNames(fs.realpathSync(worktree), entries, phase)
+    .filter((name) => fs.lstatSync(path.join(root, name)).isDirectory());
   if (names.length !== 1) fail('WRITER_FENCED', 'scoped phase directory is unavailable or ambiguous');
   const directory = path.join(root, names[0]);
   const real = fs.realpathSync(directory);

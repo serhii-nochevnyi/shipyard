@@ -48,27 +48,92 @@ function pidAlive(pid) {
   catch (error) { return !error || error.code !== 'ESRCH'; }
 }
 
+const PHASE_DIRECTORY_NAME = /^((?:[A-Za-z][A-Za-z0-9_.-]*?-)?(\d+))-/;
+
+function parsePhaseDirectoryName(name) {
+  const match = PHASE_DIRECTORY_NAME.exec(typeof name === 'string' ? name : '');
+  return match ? { token: match[1], number: Number(match[2]) } : null;
+}
+
+function configuredProjectCode(worktree) {
+  try {
+    const code = JSON.parse(fs.readFileSync(path.join(worktree, '.planning', 'config.json'), 'utf8')).project_code;
+    return typeof code === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,31}$/.test(code) ? code : null;
+  } catch { return null; }
+}
+
+// @contract: a phase directory is <NN>-<slug> or, only for the configured project_code, <code>-<NN>-<slug>.
+function phaseDirectoryNames(worktree, names, phase) {
+  const code = configuredProjectCode(worktree);
+  return names.filter((name) => {
+    const rest = code && name.startsWith(`${code}-`) ? name.slice(code.length + 1) : name;
+    const match = /^(\d+)-/.exec(rest);
+    return Boolean(match) && Number(match[1]) === Number(phase);
+  });
+}
+
 function phaseDirectory(worktree, phase, refuse) {
   const phasesRoot = path.join(worktree, '.planning', 'phases');
+  const padded = String(Number(phase)).padStart(2, '0');
+  const remedy = `expected .planning/phases/${padded}-<slug>/ (or <project_code>-${padded}-<slug>/ when project_code is set in .planning/config.json) under ${phasesRoot}; `
+    + `make sure phase ${Number(phase)} is in ROADMAP.md, then run the decompose GSD chain `
+    + `(/gsd-plan-phase ${Number(phase)} --ingest ...) so GSD creates the phase directory and CONTEXT before the researcher launch`;
   let names;
   try {
     names = fs.readdirSync(phasesRoot);
   } catch (error) {
-    refuse('PHASE_DIRECTORY_MISSING', `phase directory root is unavailable: ${error.message}`);
+    refuse('PHASE_DIRECTORY_MISSING', `phase directory root is unavailable (${error.message}); ${remedy}`);
   }
   if (fs.realpathSync(phasesRoot) !== phasesRoot) {
     refuse('PHASE_DIRECTORY_MISSING', 'phase directory root is not canonical');
   }
-  const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === Number(phase)
-    && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
+  const matches = phaseDirectoryNames(worktree, names, phase)
+    .filter((name) => fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
   if (matches.length !== 1) {
-    refuse('PHASE_DIRECTORY_MISSING', `expected exactly one phase directory for phase ${phase}, found ${matches.length}`);
+    refuse('PHASE_DIRECTORY_MISSING', `expected exactly one phase directory for phase ${phase}, found ${matches.length}; ${remedy}`);
   }
   const directory = path.join(phasesRoot, matches[0]);
   if (fs.realpathSync(directory) !== directory) {
     refuse('PHASE_DIRECTORY_MISSING', 'phase directory is not canonical');
   }
   return directory;
+}
+
+function phaseArtifactNames(phaseDir, kind) {
+  const parsed = parsePhaseDirectoryName(path.basename(phaseDir));
+  if (!parsed || !/^[A-Z]+$/.test(kind)) fail('INVALID_INPUT', 'invalid canonical phase directory');
+  const stems = new Set([String(parsed.number), String(parsed.number).padStart(2, '0'), parsed.token]);
+  return [...(kind === 'CONTEXT' ? [`${kind}.md`] : []), ...[...stems].map((stem) => `${stem}-${kind}.md`)];
+}
+
+// @contract: a phase artifact has one padded, unpadded, directory-token or bare name; more than one is refused.
+function resolvePhaseArtifact(phaseDir, kind) {
+  const accepted = phaseArtifactNames(phaseDir, kind);
+  const present = accepted.filter((name) => {
+    try { return !fs.lstatSync(path.join(phaseDir, name)).isDirectory(); }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  });
+  if (present.length > 1) {
+    fail('AMBIGUOUS_ARTIFACT', `phase ${kind} is ambiguous: ${present.join(', ')} all exist in ${phaseDir}; keep exactly one`,
+      { kind, present });
+  }
+  return present.length ? present[0] : null;
+}
+
+function liveLaunchChild(launchDir, epoch, leaseFile) {
+  let names;
+  try { names = fs.readdirSync(launchDir); }
+  catch (error) { if (error.code === 'ENOENT') return null; return { unreadable: launchDir }; }
+  for (const name of names.filter((entry) => entry.endsWith('.launch.json')).sort()) {
+    let launch;
+    try { launch = JSON.parse(fs.readFileSync(path.join(launchDir, name), 'utf8')); }
+    catch { return { unreadable: name }; }
+    if (!object(launch)) return { unreadable: name };
+    if (launch.lease_epoch !== epoch || launch.writer_lease_file !== leaseFile) continue;
+    const pid = Number.isSafeInteger(launch.child_pid) ? launch.child_pid : launch.process_spawned?.pid;
+    if (Number.isSafeInteger(pid) && pid > 0 && pidAlive(pid)) return { pid };
+  }
+  return null;
 }
 
 function writeDurableFile(file, raw) {
@@ -122,22 +187,31 @@ function sharedPlanningWriterRoot(testWriterStateRoot) {
 }
 
 function sealOutputPaths(role, phaseDir) {
-  const phase = Number(path.basename(phaseDir).split('-')[0]);
+  const parsed = parsePhaseDirectoryName(path.basename(phaseDir));
+  const phase = parsed ? parsed.number : NaN;
   if (!Number.isSafeInteger(phase) || phase <= 0) fail('INVALID_INPUT', 'invalid canonical phase directory');
   if (role === 'gsd-plan-checker') return [];
-  if (role === 'gsd-phase-researcher') return [`${phase}-RESEARCH.md`];
+  if (role === 'gsd-phase-researcher') {
+    const research = resolvePhaseArtifact(phaseDir, 'RESEARCH');
+    if (!research) {
+      fail('MISSING_ARTIFACT', `sealed output is missing: the researcher produced none of ${phaseArtifactNames(phaseDir, 'RESEARCH').join(', ')}`);
+    }
+    return [research];
+  }
   if (role !== 'gsd-planner') fail('INVALID_INPUT', 'invalid typed GSD role');
   const plans = fs.readdirSync(phaseDir).filter((name) => new RegExp(`^0*${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!plans.length) fail('MISSING_ARTIFACT', 'planner has no phase PLAN.md output');
-  return [...(fs.existsSync(path.join(phaseDir, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...plans].sort();
+  const context = resolvePhaseArtifact(phaseDir, 'CONTEXT');
+  return [...(context ? [context] : []), ...plans].sort();
 }
 
 function captureSealManifest({ role, phaseDir, snapshot, changed }) {
   const paths = sealOutputPaths(role, phaseDir);
   const sortedChanged = [...changed].sort();
-  // @invariant: the planner may not change an existing CONTEXT.md (locked decisions); creating one is allowed.
-  if (role === 'gsd-planner' && Object.hasOwn(snapshot.digests, 'CONTEXT.md') && sortedChanged.includes('CONTEXT.md')) {
-    fail('FOREIGN_EDIT', 'phase delta modifies the frozen planner CONTEXT.md input');
+  // @invariant: the planner may not change an existing CONTEXT file (locked decisions); creating one is allowed.
+  const context = role === 'gsd-planner' ? paths.find((rel) => /(^|-)CONTEXT\.md$/.test(rel)) : undefined;
+  if (context && Object.hasOwn(snapshot.digests, context) && sortedChanged.includes(context)) {
+    fail('FOREIGN_EDIT', `phase delta modifies the frozen planner ${context} input`);
   }
   const outputs = {};
   for (const rel of paths) {
@@ -155,14 +229,25 @@ function captureSealManifest({ role, phaseDir, snapshot, changed }) {
     }
     outputs[rel] = { sha256, origin: changedOutput ? 'child-change' : 'unchanged-baseline' };
   }
-  if (sortedChanged.some((rel) => !Object.hasOwn(outputs, rel))) {
-    fail('FOREIGN_EDIT', 'phase change is outside the role seal outputs');
+  const outside = sortedChanged.filter((rel) => !Object.hasOwn(outputs, rel));
+  if (outside.length) {
+    fail('FOREIGN_EDIT', role === 'gsd-plan-checker'
+      ? `the plan checker is read-only but changed phase file(s): ${outside.join(', ')}; PLAN revisions go through a planner re-dispatch followed by a fresh checker`
+      : `phase change is outside the role seal outputs: ${outside.join(', ')}`, { outside });
   }
   return outputs;
 }
 
 function assertSealManifest({ role, phaseDir, snapshot, changed, outputs, lease }) {
-  if (!object(outputs) || JSON.stringify(Object.keys(outputs).sort()) !== JSON.stringify(sealOutputPaths(role, phaseDir))) {
+  let expected;
+  try { expected = sealOutputPaths(role, phaseDir); }
+  catch (error) {
+    if (error.code === 'MISSING_ARTIFACT' || error.code === 'AMBIGUOUS_ARTIFACT') {
+      fail('RECOVERY_ARTIFACT_ALTERED', 'current seal outputs differ from original completion');
+    }
+    throw error;
+  }
+  if (!object(outputs) || JSON.stringify(Object.keys(outputs).sort()) !== JSON.stringify(expected)) {
     fail('RECOVERY_EVIDENCE_INCOMPLETE', 'original full seal-output manifest is missing or incomplete');
   }
   const current = lease.changedSince(snapshot).changed;
@@ -235,28 +320,47 @@ function createPlanningWriterLease(options = {}) {
     }
   }
 
+  // @invariant: a dead holder is fenced only when its recorded launch directory proves no child of that epoch is alive.
   function acquire(input = {}) {
     if (!object(input)) fail('INVALID_INPUT', 'acquire input must be an object');
     const owner = safeString(input.owner, 'owner');
     const baseRevision = safeString(input.base_revision, 'base_revision');
+    const launchDir = input.launch_dir === undefined ? null : safeString(input.launch_dir, 'launch_dir');
+    if (launchDir !== null && !path.isAbsolute(launchDir)) fail('INVALID_INPUT', 'launch_dir must be an absolute path');
     ensureDir();
     let result;
     withLock(lockDir, 'writer', () => {
       const now = nowValue(clock);
       const record = readRecord();
+      let takeover = null;
       if (liveActiveOwner(record, now) && record.owner !== owner) {
-        fail('WRITER_LEASED', `the planning writer lease is held by ${record.owner} until ${new Date(record.expires_at).toISOString()}`,
-          { owner: record.owner, expires_at: record.expires_at });
+        const holderStopped = typeof record.launch_dir === 'string' && !pidAlive(record.pid);
+        if (!holderStopped) {
+          fail('WRITER_LEASED', `the planning writer lease is held by ${record.owner} until ${new Date(record.expires_at).toISOString()}`,
+            { owner: record.owner, expires_at: record.expires_at });
+        }
+        const child = liveLaunchChild(record.launch_dir, record.epoch, file);
+        if (child && child.unreadable) {
+          fail('WRITER_LEASED', `the planning writer lease holder (pid ${record.pid}) is dead but ${child.unreadable} is unreadable, `
+            + 'so its launched child cannot be proven stopped; remove or repair that launch record',
+          { owner: record.owner, pid: record.pid, unreadable: child.unreadable, expires_at: record.expires_at });
+        }
+        if (child) {
+          fail('WRITER_LEASED', `the planning writer lease holder (pid ${record.pid}) is dead but its launched child pid ${child.pid} is still alive; `
+            + 'wait for that process to exit or stop it, then retry',
+          { owner: record.owner, pid: record.pid, child_pid: child.pid, expires_at: record.expires_at });
+        }
+        takeover = { recovered_reason: `holder pid ${record.pid} is dead`, recovered_from_epoch: record.epoch };
       }
       const epoch = record ? record.epoch + 1 : 0;
       const next = {
         schema: SCHEMA, version: 1, owner, pid: process.pid,
         token: crypto.randomBytes(TOKEN_BYTES).toString('hex'), epoch,
         base_revision: baseRevision, acquired_at: now, heartbeat_at: now,
-        expires_at: now + ttlMs, status: 'active',
+        expires_at: now + ttlMs, status: 'active', ...(launchDir ? { launch_dir: launchDir } : {}), ...(takeover || {}),
       };
       writeRecord(next);
-      result = { token: next.token, epoch: next.epoch, expires_at: next.expires_at };
+      result = { token: next.token, epoch: next.epoch, expires_at: next.expires_at, ...(takeover ? { recovered: true } : {}) };
     }, { label: 'planning-writer-lease' });
     return result;
   }
@@ -363,6 +467,7 @@ function createPlanningWriterLease(options = {}) {
 }
 
 module.exports = Object.freeze({ SCHEMA, DEFAULT_TTL_MS, createPlanningWriterLease, pidAlive, phaseDirectory,
+  parsePhaseDirectoryName, phaseDirectoryNames, resolvePhaseArtifact, liveLaunchChild,
   writeDurableFile,
   sharedPlanningWriterRoot,
   sealOutputPaths, captureSealManifest, assertSealManifest });

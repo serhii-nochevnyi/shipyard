@@ -24,6 +24,7 @@ const { runDecomposition: runClaudeDecomposition } = require('../../plugins/deli
 const { repositoryIdentity } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 const {
   createCodexDecomposeHost, defaultRunStoreDir, parseCliArguments, parseRecoverArguments, readRequestFile, requestValue, runCli,
+  researchArtifact,
 } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
 
 for (const first of ['deliver-dispatch', 'codex-decompose-host']) {
@@ -346,6 +347,22 @@ test('the researcher artifact path is computed by the host and a missing artifac
     await assert.rejects(() => f.create().run({ gsd_role: 'gsd-phase-researcher', prompt: 'Research.' }),
       (error) => error.code === 'MISSING_ARTIFACT');
   } finally { f.clean(); }
+});
+
+test('the researcher artifact is the RESEARCH file GSD wrote, padded or not, and a duplicate refuses', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-research-name-')));
+  try {
+    const phaseDir = path.join(root, '.planning', 'phases', '01-demo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    assert.throws(() => researchArtifact(root, 1), { code: 'MISSING_ARTIFACT' });
+    fs.writeFileSync(path.join(phaseDir, '01-RESEARCH.md'), '# Research\n');
+    assert.equal(researchArtifact(root, 1), path.join(phaseDir, '01-RESEARCH.md'));
+    fs.rmSync(path.join(phaseDir, '01-RESEARCH.md'));
+    fs.writeFileSync(path.join(phaseDir, '1-RESEARCH.md'), '# Research\n');
+    assert.equal(researchArtifact(root, 1), path.join(phaseDir, '1-RESEARCH.md'));
+    fs.writeFileSync(path.join(phaseDir, '01-RESEARCH.md'), '# Research\n');
+    assert.throws(() => researchArtifact(root, 1), { code: 'AMBIGUOUS_ARTIFACT' });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('a callback cannot replace the original lease containment token with a refreshed baseline', async () => {

@@ -13,6 +13,7 @@ const { ensureDependencies } = require('./worktree-deps.cjs');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const claudeHost = require('./claude-delivery-host.cjs');
 const claudeDecomposeHost = require('./claude-decompose-host.cjs');
+const { phaseDirectoryNames, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
 const codexHost = require('./codex-delivery-host.cjs');
 const claudeRoleHost = require('./claude-role-host.cjs');
 const sentinelPreflight = require('./sentinel-preflight.cjs');
@@ -831,7 +832,7 @@ function phasePlanningInputs(projectRoot, phase) {
   let names;
   try { names = fs.readdirSync(phaseRoot); }
   catch { return { requiredRefs: [], optionalRefs: [] }; }
-  const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === phase);
+  const matches = phaseDirectoryNames(projectRoot, names, phase);
   if (matches.length > 1) buildFail('--phase', `phase ${phase} has more than one planning directory`);
   if (!matches.length) return { requiredRefs: [], optionalRefs: [] };
   const directory = path.join(phaseRoot, matches[0]);
@@ -840,10 +841,13 @@ function phasePlanningInputs(projectRoot, phase) {
     buildFail('--phase', `phase ${phase} planning directory must be a regular directory`);
   }
   const phaseRelative = path.relative(projectRoot, directory);
-  return {
-    requiredRefs: optionalPlanningSources(projectRoot, [path.join(phaseRelative, `${phase}-CONTEXT.md`)]),
-    optionalRefs: optionalPlanningSources(projectRoot, [path.join(phaseRelative, `${phase}-RESEARCH.md`)]),
+  const refs = (kind) => {
+    let name;
+    try { name = resolvePhaseArtifact(directory, kind); }
+    catch (error) { buildFail('--phase', error.message.replace(/^planning-writer-lease: /, '')); }
+    return optionalPlanningSources(projectRoot, name ? [path.join(phaseRelative, name)] : []);
   };
+  return { requiredRefs: refs('CONTEXT'), optionalRefs: refs('RESEARCH') };
 }
 
 function decompositionPlanningInputs(projectRoot, inputId, phase, { graphless = false } = {}) {

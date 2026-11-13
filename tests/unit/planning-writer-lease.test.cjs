@@ -7,7 +7,8 @@ const path = require('node:path');
 const test = require('node:test');
 const { spawn, spawnSync } = require('node:child_process');
 const { createPlanningWriterLease, sharedPlanningWriterRoot,
-  captureSealManifest, assertSealManifest, pidAlive, phaseDirectory } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
+  captureSealManifest, assertSealManifest, pidAlive, phaseDirectory, sealOutputPaths, resolvePhaseArtifact,
+  parsePhaseDirectoryName, phaseDirectoryNames, liveLaunchChild } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 
 const MODULE_PATH = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'planning-writer-lease.cjs');
 
@@ -437,4 +438,208 @@ test('phaseDirectory resolves one canonical phase directory and refuses anything
   fs.renameSync(phases, `${phases}-real`);
   fs.symlinkSync(`${phases}-real`, phases);
   assert.throws(() => phaseDirectory(path.dirname(path.dirname(phases)), 1, refuse), /root is not canonical/);
+}));
+
+function researcherSeal(phaseDirName, files) {
+  return fixture(({ stateRoot, worktree }) => {
+    const phaseDir = path.join(worktree, phaseDirName);
+    fs.mkdirSync(phaseDir);
+    const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir });
+    const snapshot = lease.snapshotTree();
+    for (const name of files) fs.writeFileSync(path.join(phaseDir, name), '# Research\n');
+    const changed = lease.changedSince(snapshot).changed;
+    return captureSealManifest({ role: 'gsd-phase-researcher', phaseDir, snapshot, changed });
+  });
+}
+
+test('the researcher seal is the RESEARCH file GSD wrote, padded or not', () => {
+  assert.deepEqual(Object.keys(researcherSeal('01-phase', ['01-RESEARCH.md'])), ['01-RESEARCH.md']);
+  assert.deepEqual(Object.keys(researcherSeal('01-phase', ['1-RESEARCH.md'])), ['1-RESEARCH.md']);
+  assert.deepEqual(Object.keys(researcherSeal('12-phase', ['12-RESEARCH.md'])), ['12-RESEARCH.md']);
+  assert.deepEqual(Object.keys(researcherSeal('ABC-01-phase', ['01-RESEARCH.md'])), ['01-RESEARCH.md']);
+  assert.deepEqual(Object.keys(researcherSeal('ABC-01-phase', ['ABC-01-RESEARCH.md'])), ['ABC-01-RESEARCH.md']);
+  assert.equal(researcherSeal('01-phase', ['01-RESEARCH.md'])['01-RESEARCH.md'].origin, 'child-change');
+});
+
+test('a phase with both padded and unpadded RESEARCH files is refused as ambiguous, and a missing one is named', () => {
+  assert.throws(() => researcherSeal('01-phase', ['01-RESEARCH.md', '1-RESEARCH.md']), { code: 'AMBIGUOUS_ARTIFACT' });
+  assert.throws(() => researcherSeal('01-phase', []), (error) => error.code === 'MISSING_ARTIFACT'
+    && /01-RESEARCH\.md/.test(error.message) && /1-RESEARCH\.md/.test(error.message));
+});
+
+test('CONTEXT resolves bare or padded, is refused when both exist, and a changed padded CONTEXT stays frozen for the planner', () => fixture(({ stateRoot, worktree }) => {
+  const phaseDir = path.join(worktree, '01-phase');
+  fs.mkdirSync(phaseDir);
+  assert.equal(resolvePhaseArtifact(phaseDir, 'CONTEXT'), null);
+  fs.writeFileSync(path.join(phaseDir, '01-CONTEXT.md'), '# Context\n');
+  fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+  assert.equal(resolvePhaseArtifact(phaseDir, 'CONTEXT'), '01-CONTEXT.md');
+  assert.deepEqual(sealOutputPaths('gsd-planner', phaseDir), ['01-01-PLAN.md', '01-CONTEXT.md']);
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir });
+  const snapshot = lease.snapshotTree();
+  fs.appendFileSync(path.join(phaseDir, '01-CONTEXT.md'), 'rewritten\n');
+  assert.throws(() => captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
+    changed: lease.changedSince(snapshot).changed }), { code: 'FOREIGN_EDIT' });
+  fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Bare\n');
+  assert.throws(() => resolvePhaseArtifact(phaseDir, 'CONTEXT'), { code: 'AMBIGUOUS_ARTIFACT' });
+}));
+
+test('phase directories carry a project_code prefix only when .planning/config.json configures it', () => fixture(({ worktree }) => {
+  const refuse = (code, message) => { throw Object.assign(new Error(message), { code }); };
+  const root = fs.realpathSync(worktree);
+  const phases = path.join(root, '.planning', 'phases');
+  fs.mkdirSync(path.join(phases, 'ABC-01-setup'), { recursive: true });
+  fs.mkdirSync(path.join(phases, 'backup-2-old'));
+  fs.mkdirSync(path.join(phases, '02-real'));
+  assert.throws(() => phaseDirectory(root, 1, refuse), { code: 'PHASE_DIRECTORY_MISSING' });
+  fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ project_code: 'ABC' }));
+  assert.equal(phaseDirectory(root, 1, refuse), path.join(phases, 'ABC-01-setup'));
+  assert.equal(phaseDirectory(root, 2, refuse), path.join(phases, '02-real'));
+  assert.deepEqual(phaseDirectoryNames(root, ['ABC-01-x', '01-y', 'XYZ-01-z', 'ABC-ABC-01-w'], 1), ['ABC-01-x', '01-y']);
+  fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ project_code: 'AUTH-X' }));
+  fs.mkdirSync(path.join(phases, 'AUTH-X-03-login'));
+  assert.equal(phaseDirectory(root, 3, refuse), path.join(phases, 'AUTH-X-03-login'));
+  assert.deepEqual(parsePhaseDirectoryName('ABC-01-setup'), { token: 'ABC-01', number: 1 });
+  assert.deepEqual(parsePhaseDirectoryName('07-plain'), { token: '07', number: 7 });
+  assert.equal(parsePhaseDirectoryName('notes'), null);
+  fs.mkdirSync(path.join(phases, '03-also'));
+  assert.throws(() => phaseDirectory(root, 3, refuse), /found 2/);
+}));
+
+test('a missing phase directory names the searched root, the expected pattern and the remedy', () => fixture(({ worktree }) => {
+  const refuse = (code, message) => { throw Object.assign(new Error(message), { code }); };
+  const root = fs.realpathSync(worktree);
+  for (const make of [false, true]) {
+    if (make) fs.mkdirSync(path.join(root, '.planning', 'phases'), { recursive: true });
+    assert.throws(() => phaseDirectory(root, 1, refuse), (error) => error.code === 'PHASE_DIRECTORY_MISSING'
+      && error.message.includes(path.join(root, '.planning', 'phases'))
+      && error.message.includes('.planning/phases/01-<slug>/')
+      && error.message.includes('/gsd-plan-phase 1 --ingest')
+      && error.message.includes('ROADMAP.md'));
+  }
+}));
+
+test('a checker that edits phase files is refused as read-only, pointing at a planner re-dispatch', () => fixture(({ stateRoot, worktree }) => {
+  const phaseDir = path.join(worktree, '38-phase');
+  fs.mkdirSync(phaseDir);
+  fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# First\n');
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir });
+  const snapshot = lease.snapshotTree();
+  fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Revised by the checker\n');
+  assert.throws(() => captureSealManifest({ role: 'gsd-plan-checker', phaseDir, snapshot,
+    changed: lease.changedSince(snapshot).changed }), (error) => error.code === 'FOREIGN_EDIT'
+    && /read-only/.test(error.message) && /planner re-dispatch/.test(error.message) && /38-01-PLAN\.md/.test(error.message));
+}));
+
+test('a planner revision over existing PLAN files seals the new bytes and leaves the prior seal untouched', () => fixture(({ stateRoot, worktree }) => {
+  const phaseDir = path.join(worktree, '01-phase');
+  fs.mkdirSync(phaseDir);
+  fs.writeFileSync(path.join(phaseDir, '01-CONTEXT.md'), '# Context\n');
+  fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# One\n');
+  fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Two\n');
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir });
+  const first = lease.snapshotTree();
+  fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# One, revised once\n');
+  const sealOne = captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot: first,
+    changed: lease.changedSince(first).changed });
+  const second = lease.snapshotTree();
+  fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Two, revised\n');
+  const sealTwo = captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot: second,
+    changed: lease.changedSince(second).changed });
+  assert.deepEqual(Object.keys(sealTwo), Object.keys(sealOne));
+  assert.equal(sealOne['01-01-PLAN.md'].origin, 'child-change');
+  assert.equal(sealTwo['01-01-PLAN.md'].origin, 'unchanged-baseline');
+  assert.equal(sealTwo['01-02-PLAN.md'].origin, 'child-change');
+  assert.equal(sealTwo['01-01-PLAN.md'].sha256, sealOne['01-01-PLAN.md'].sha256);
+  assert.notEqual(sealTwo['01-02-PLAN.md'].sha256, sealOne['01-02-PLAN.md'].sha256);
+  assert.equal(sealTwo['01-CONTEXT.md'].origin, 'unchanged-baseline');
+}));
+
+function deadHolderLease({ stateRoot, worktree, launchDir }) {
+  const script = [
+    'const mod = require(process.argv[1]);',
+    'const lease = mod.createPlanningWriterLease({ stateRoot: process.argv[2], worktree: process.argv[3], phaseDir: "phase", ttlMs: 100000 });',
+    'const input = { owner: "owner-a", base_revision: "rev-1" };',
+    'if (process.argv[4]) input.launch_dir = process.argv[4];',
+    'process.stdout.write(JSON.stringify(lease.acquire(input)));',
+  ].join('\n');
+  const child = spawnSync(process.execPath, ['-e', script, MODULE_PATH, stateRoot, worktree, launchDir || ''], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  return JSON.parse(child.stdout);
+}
+
+function launchRecords(stateRoot, epoch, leaseFile, records) {
+  const launches = path.join(stateRoot, 'launches');
+  fs.mkdirSync(launches, { recursive: true });
+  records.forEach((record, index) => fs.writeFileSync(path.join(launches, `${index}.launch.json`),
+    typeof record === 'string' ? record : JSON.stringify({ lease_epoch: epoch, writer_lease_file: leaseFile, ...record })));
+  return launches;
+}
+
+test('acquire takes over an active lease whose holder pid is dead, bumping the epoch and recording why', () => fixture(({ stateRoot, worktree }) => {
+  const launches = path.join(stateRoot, 'launches');
+  const first = deadHolderLease({ stateRoot, worktree, launchDir: launches });
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir: 'phase', ttlMs: 100_000 });
+  const taken = lease.acquire({ owner: 'owner-b', base_revision: 'rev-2', launch_dir: launches });
+  assert.equal(taken.recovered, true);
+  assert.equal(taken.epoch, first.epoch + 1);
+  const record = JSON.parse(fs.readFileSync(lease.file, 'utf8'));
+  assert.equal(record.recovered_from_epoch, first.epoch);
+  assert.match(record.recovered_reason, /dead/);
+  assert.equal(record.owner, 'owner-b');
+  assert.equal(record.launch_dir, launches);
+  assert.throws(() => lease.assertFence({ token: first.token, epoch: first.epoch, base_revision: 'rev-1' }),
+    { code: 'WRITER_FENCED' });
+}));
+
+test('acquire never takes over a live holder, or a dead holder that recorded no launch directory', () => fixture(({ stateRoot, worktree }) => {
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir: 'phase', ttlMs: 100_000 });
+  lease.acquire({ owner: 'owner-a', base_revision: 'rev-1', launch_dir: path.join(stateRoot, 'launches') });
+  assert.throws(() => lease.acquire({ owner: 'owner-b', base_revision: 'rev-1' }), { code: 'WRITER_LEASED' });
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-lease-dead-'));
+  try {
+    const legacy = createPlanningWriterLease({ stateRoot: other, worktree, phaseDir: 'phase', ttlMs: 100_000 });
+    deadHolderLease({ stateRoot: other, worktree });
+    assert.throws(() => legacy.acquire({ owner: 'owner-b', base_revision: 'rev-1' }), { code: 'WRITER_LEASED' });
+  } finally { fs.rmSync(other, { recursive: true, force: true }); }
+}));
+
+test('acquire refuses a dead holder whose launched child is alive, whichever host wrote the record, and names the pid', async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-lease-state-'));
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-lease-worktree-'));
+  const launches = path.join(stateRoot, 'launches');
+  const first = deadHolderLease({ stateRoot, worktree, launchDir: launches });
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir: 'phase', ttlMs: 100_000 });
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  const attempt = () => lease.acquire({ owner: 'owner-b', base_revision: 'rev-2', launch_dir: launches });
+  try {
+    for (const shape of [{ child_pid: child.pid }, { process_spawned: { pid: child.pid } }]) {
+      fs.rmSync(launches, { recursive: true, force: true });
+      launchRecords(stateRoot, first.epoch, lease.file, [
+        { child_pid: 999999999 }, { lease_epoch: first.epoch + 7, child_pid: child.pid },
+        { writer_lease_file: path.join(stateRoot, 'other-phase', 'lease.json'), child_pid: child.pid }, shape]);
+      let caught;
+      try { attempt(); } catch (error) { caught = error; }
+      assert.equal(caught.code, 'WRITER_LEASED');
+      assert.equal(caught.details.child_pid, child.pid);
+      assert.match(caught.message, new RegExp(`child pid ${child.pid}`));
+    }
+    child.kill('SIGKILL');
+    await new Promise((resolve) => child.once('exit', resolve));
+    assert.equal(attempt().epoch, first.epoch + 1);
+  } finally {
+    child.kill('SIGKILL');
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+    fs.rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
+test('an unreadable launch record is unknown process state and keeps the lease', () => fixture(({ stateRoot, worktree }) => {
+  const launches = path.join(stateRoot, 'launches');
+  const first = deadHolderLease({ stateRoot, worktree, launchDir: launches });
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir: 'phase', ttlMs: 100_000 });
+  launchRecords(stateRoot, first.epoch, lease.file, ['{', { child_pid: 999999999 }]);
+  assert.throws(() => lease.acquire({ owner: 'owner-b', base_revision: 'rev-2', launch_dir: launches }),
+    (error) => error.code === 'WRITER_LEASED' && /unreadable/.test(error.message));
+  assert.deepEqual(liveLaunchChild(path.join(stateRoot, 'absent'), first.epoch, lease.file), null);
 }));
