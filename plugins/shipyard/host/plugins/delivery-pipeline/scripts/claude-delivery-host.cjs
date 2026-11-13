@@ -9,14 +9,17 @@ const { createClaudeRuntimeHost, probeClaudeRuntime } = require('./claude-runtim
 const { registerClaudeWorkflowHost } = require('./claude-workflow-host.cjs');
 const { loadClaudeReferenceContent } = require('./claude-reference-content.cjs');
 const { finalizeDeliveryCommit } = require('./delivery-commit-finalizer.cjs');
+const commitSigner = require('./commit-signer.cjs');
 const { verifyPlan, retryableFailure, failureContext, scheduleRetry: scheduleVerificationRetry,
   failureReason: verificationFailureReason } = require('./host-verification.cjs');
 const { loadConfig, repoValue, resolveDispatch } = require('./pipeline-config.cjs');
+const { resolveExecutorSandbox } = require('./executor-sandbox.cjs');
 const { isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { resolveBaseRef, resolveGraphDir } = require('./graph-dir.cjs');
+const { mergedParentBase, rootTicketBase } = require('./ticket-base.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
 const { preflight, emitPreflight } = require('./runtime-context.cjs');
@@ -157,13 +160,34 @@ function runtimeOptions(options) {
   const scrub = signingFreeEnvironment();
   const env = { ...(options.env || {}), ...scrub };
   const probe = options.probe || probeClaudeRuntime({ env: { ...process.env, ...env } });
+  const recorderDir = boundaryStoreFor(options.scope, options);
   return {
     ...options,
     env,
     probe,
-    recorderDir: boundaryStoreFor(options.scope, options),
+    recorderDir,
     transcriptDir: options.transcriptDir || path.join(storage, 'transcripts'),
+    sandboxExtensions: options.sandboxExtensions !== undefined ? options.sandboxExtensions
+      : executorSandboxExtensions(options, [storage, recorderDir]),
   };
+}
+
+function executorSandboxExtensions(options, hostPaths) {
+  const worktree = options.scope && options.scope.worktree;
+  if (!worktree) return undefined;
+  let project;
+  try { project = path.resolve(graphDirectory(options, worktree), '..', '..'); }
+  catch { return undefined; }
+  const config = loadConfig(project);
+  try {
+    return resolveExecutorSandbox(config.config ? config.config.executor_sandbox : config.executor_sandbox, {
+      worktree, protectedPaths: [...hostPaths.filter(Boolean),
+        require('./role-artifact.cjs').archiveAuthorityNamespace(true),
+        require('./phase-code-review.cjs').publicationsRoot()],
+    });
+  } catch (error) {
+    reject(error.message.replace(/^executor-sandbox: /, ''));
+  }
 }
 
 function git(worktree, args) {
@@ -217,23 +241,21 @@ function readGraphFile(options, name, worktree) {
 }
 
 function signingFingerprint(worktree) {
-  const key = git(worktree, ['config', '--get', 'user.signingkey']);
-  if (!key) reject('host Git signer is unavailable');
-  let output;
   try {
-    output = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys', key], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
-    });
+    return commitSigner.signerFingerprint(worktree);
   } catch (error) {
-    reject(`host signing key cannot be resolved: ${String(error.stderr || error.message).trim()}`);
+    if (error instanceof commitSigner.SignerError) reject(error.message);
+    throw error;
   }
-  const lines = output.split(/\r?\n/);
-  const secretKeys = lines.filter((line) => line.startsWith('sec:'));
-  const fingerprint = lines.find((line) => line.startsWith('fpr:'))?.split(':')[9];
-  if (secretKeys.length !== 1 || !/^[0-9A-F]{40}$/i.test(fingerprint || '')) {
-    reject('host signing key has no unique full fingerprint');
+}
+
+function verifiedSignature(worktree, commit) {
+  try {
+    return commitSigner.verifyCommitSignature(worktree, commit);
+  } catch (error) {
+    if (error instanceof commitSigner.SignerError) reject(`Git preflight failed: ${error.message}`);
+    throw error;
   }
-  return fingerprint;
 }
 
 function graphTicket(options, ticket, worktree) {
@@ -267,16 +289,20 @@ function canonicalBase(worktree, value, expected) {
   return resolved;
 }
 
-// @contract: once a primary parent is merged its merge destination is the canonical base; otherwise pr_base.
-function canonicalTicketBase(options, row, worktree) {
-  if (!row.primary_parent) return row.pr_base;
+// @contract: a merged primary parent's destination, or its proven retired epic's target, is the base; else pr_base.
+function canonicalTicketBase(options, ticket, row, worktree) {
+  if (!row.primary_parent) {
+    if (!fs.existsSync(path.join(graphDirectory(options, worktree), 'delivery-state.json'))) return row.pr_base;
+    const board = readGraphFile(options, 'delivery-state.json', worktree);
+    return rootTicketBase(row, object(board) ? board[ticket] : null);
+  }
   const state = readGraphFile(options, 'delivery-state.json', worktree);
   const parent = state && state[row.primary_parent];
   if (!object(parent) || parent.branch !== row.pr_base || parent.status !== 'merged') return row.pr_base;
   if (typeof parent.merged_into !== 'string' || !parent.merged_into.trim()) {
     reject(`primary parent ${row.primary_parent} is merged without a destination`);
   }
-  return parent.merged_into;
+  return mergedParentBase(row, state[ticket], parent);
 }
 
 function boardTicket(options, entry, row, worktree) {
@@ -327,9 +353,8 @@ function reconcileRepairBase(options, entry, repair) {
     reject('trusted base reconciliation did not incorporate the canonical base');
   }
   if (refreshed.expectedHead !== repair.expectedHead) {
-    git(refreshed.worktree, ['verify-commit', refreshed.expectedHead]);
-    const signature = git(refreshed.worktree, ['show', '-s', '--format=%G?%x00%GF', refreshed.expectedHead]).split('\0');
-    if (!['G', 'U'].includes(signature[0]) || signature[1] !== signingFingerprint(refreshed.worktree)) {
+    const signature = verifiedSignature(refreshed.worktree, refreshed.expectedHead);
+    if (!['G', 'U'].includes(signature.code) || signature.signer !== signingFingerprint(refreshed.worktree)) {
       reject('base reconciliation commit is not signed by the trusted host');
     }
   }
@@ -361,12 +386,7 @@ function reconcileBaseWithScript(options, repair) {
       '--no-fetch', '--json'], {
       cwd: repair.worktree, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 120000, maxBuffer: 65536,
-      env: {
-        ...process.env,
-        GIT_CONFIG_COUNT: '2',
-        GIT_CONFIG_KEY_0: 'commit.gpgsign', GIT_CONFIG_VALUE_0: 'true',
-        GIT_CONFIG_KEY_1: 'merge.gpgSign', GIT_CONFIG_VALUE_1: 'true',
-      },
+      env: { ...process.env, ...commitSigner.forcedSigningConfig(process.env) },
     });
   } catch (error) {
     reject(`trusted base reconciliation failed: ${String(error.stdout || error.stderr || error.message).trim().slice(0, 1000)}`);
@@ -388,7 +408,7 @@ function driftPreflight(options, entry, args) {
   const row = graphTicket(options, entry.id, worktree);
   canonicalPlan(options, row, entry);
   const base = entry.baseRef || args.baseRef;
-  canonicalBase(worktree, base, canonicalTicketBase(options, row, worktree));
+  canonicalBase(worktree, base, canonicalTicketBase(options, entry.id, row, worktree));
   return deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree });
 }
 
@@ -582,15 +602,17 @@ function executorBaseRef(options, entry, row, worktree) {
     }
     if (parentState.status === 'merged') {
       if (typeof parentState.merged_into !== 'string' || !parentState.merged_into.trim()
-          || live.base !== parentState.merged_into) {
+          || live.base !== mergedParentBase(row, live, parentState)) {
         reject(`ticket ${entry.id} live base does not match its merged primary parent`);
       }
-      base = parentState.merged_into;
+      base = live.base;
     } else if (live.base !== row.pr_base) {
       reject(`ticket ${entry.id} live base is neither its open primary parent nor its merged destination`);
     }
-  } else if (live.base !== row.pr_base) {
+  } else if (live.base !== rootTicketBase(row, live)) {
     reject(`ticket ${entry.id} live base differs from its canonical plan base`);
+  } else {
+    base = live.base;
   }
   return resolveBaseRef(worktree, base);
 }

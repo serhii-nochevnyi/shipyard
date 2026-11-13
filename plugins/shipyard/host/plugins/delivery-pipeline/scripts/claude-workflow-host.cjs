@@ -11,6 +11,7 @@ const { createClaudeWorkflowDispatch } = require('./claude-dispatch-adapter.cjs'
 const { GSD_LAUNCH_MECHANISM, isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { isOwnerCapability, withSessionHandoff } = require('./session-handoff.cjs');
 const roleArtifact = require('./role-artifact.cjs');
+const { phaseDirectoryNames } = require('./planning-writer-lease.cjs');
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const WORKFLOW_PARAMETERS = ['agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch'];
@@ -298,9 +299,8 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
     let names;
     try { names = fs.readdirSync(phasesRoot); }
     catch (_) { reject('scoped phase directory is unavailable'); }
-    const matches = names.filter((name) => /^\d+-/.test(name)
-      && Number(name.split('-')[0]) === Number(scopedPhase)
-      && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
+    const matches = phaseDirectoryNames(worktree, names, scopedPhase)
+      .filter((name) => fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
     if (matches.length !== 1) reject('scoped phase directory is unavailable or ambiguous');
     const expectedPhase = fs.realpathSync(path.join(phasesRoot, matches[0]));
     if (fs.realpathSync(phaseDir) !== expectedPhase

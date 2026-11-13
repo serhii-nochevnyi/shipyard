@@ -20,7 +20,7 @@ const { resolveClaudeHome, preflight, emitPreflight } = require('./runtime-conte
 const { repositoryIdentity } = require('./architecture-target.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest, pidAlive,
-  phaseDirectory: sharedPhaseDirectory, writeDurableFile } = require('./planning-writer-lease.cjs');
+  phaseDirectory: sharedPhaseDirectory, writeDurableFile, parsePhaseDirectoryName, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
 
 const { decompositionAdr } = require('./planning-result-sealer.cjs');
 
@@ -144,12 +144,14 @@ function canonicalRequest(input) {
 const phaseDirectory = (worktree, phase) => sharedPhaseDirectory(worktree, phase, refuse);
 
 function decompositionPlans(directory) {
-  const contextPath = path.join(directory, 'CONTEXT.md');
-  if (!fs.existsSync(contextPath)) refuse('MISSING_ARTIFACT', `phase CONTEXT.md is missing: ${contextPath}`);
-  const phase = Number(path.basename(directory).split('-')[0]);
+  let context;
+  try { context = resolvePhaseArtifact(directory, 'CONTEXT'); }
+  catch (error) { refuse(error.code || 'AMBIGUOUS_ARTIFACT', error.message.replace(/^planning-writer-lease: /, '')); }
+  if (!context) refuse('MISSING_ARTIFACT', `phase CONTEXT.md (or <NN>-CONTEXT.md) is missing in ${directory}`);
+  const phase = parsePhaseDirectoryName(path.basename(directory))?.number;
   const planNames = fs.readdirSync(directory).filter((name) => new RegExp(`^0*${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!planNames.length) refuse('MISSING_ARTIFACT', `no materialized PLAN.md files were found in ${directory}`);
-  return [contextPath, ...planNames.map((name) => path.join(directory, name))];
+  return [path.join(directory, context), ...planNames.map((name) => path.join(directory, name))];
 }
 
 function decompositionEnvelope(scope, store, output) {
@@ -312,6 +314,7 @@ async function runDecomposition(request, dependencies = {}) {
     leaseHandle = writerLease.acquire({
       owner: JSON.stringify({ run_id: runId, owner_id: controller.owner_id }),
       base_revision: git(scope.worktree, 'rev-parse', 'HEAD'),
+      launch_dir: path.join(store, 'launches'),
     });
     const preLaunchSnapshot = writerLease.snapshotTree();
     const resolution = (dependencies.resolveDispatch || pipelineConfig.resolveDispatch)({

@@ -205,7 +205,7 @@ function preflightReviewMaterial(material, expected = {}) {
     semantic_credit: false });
 }
 
-function assertAggregateGraph(directory, options) {
+function assertAggregateGraph(directory, options, requester = null) {
   const project = fs.realpathSync(git(options, directory, ['rev-parse', '--show-toplevel']));
   const worktrees = git(options, directory, ['worktree', 'list', '--porcelain']).split('\n')
     .filter(line => line.startsWith('worktree ')).map(line => path.resolve(line.slice(9)));
@@ -215,7 +215,10 @@ function assertAggregateGraph(directory, options) {
     fail('canonical graph is outside its repository root', 'GRAPH_NOT_CANONICAL');
   if (project === worktrees[0]) return;
   try { git(options, project, ['cat-file', '-e', 'HEAD:' + relative + '/tickets.json']); }
-  catch { fail('untracked graph copy inside a non-main worktree', 'GRAPH_NOT_CANONICAL'); }
+  catch {
+    if (!require('./graph-dir.cjs').projectWorktree(project, { graphDir: directory, requester }))
+      fail('untracked graph copy inside a non-main worktree', 'GRAPH_NOT_CANONICAL');
+  }
 }
 
 function collect(scope, options) {
@@ -228,7 +231,7 @@ function collect(scope, options) {
   if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning')
     fail('canonical graph layout is required');
   if (fs.realpathSync(directory) !== directory) fail('graph contains a symlink');
-  if (PHASE_SUBJECT.test(scope.ticket)) assertAggregateGraph(directory, options);
+  if (PHASE_SUBJECT.test(scope.ticket)) assertAggregateGraph(directory, options, worktree);
   else assertCanonicalGraph({ graphDir: directory, worktree, source: 'flag' });
   const project = path.resolve(directory, '../..');
   const status = statusIgnoringScratch(worktree, { untracked: 'all', forJudge: true });
@@ -947,6 +950,6 @@ function validateSealedContext(input, options = {}) {
 module.exports = Object.freeze({
   FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, codexResultText, boundedBytes, file,
   focusedProducerFiles, focusedChangeInventory, selectFocusedArchitecture, validateFocusedResult, authenticateFocusedLaunch,
-  SCHEMA, FILE_LIMITS, preflightReviewMaterial, recheckInstalledLaunch,
+  SCHEMA, FILE_LIMITS, preflightReviewMaterial, recheckInstalledLaunch, assertAggregateGraph,
   prepare, finish, isPreparedContext, admitInstalledLaunch, admitBookkeeping, admittedPrompt,
   validateHistoricalContext, validateSealedContext });

@@ -1067,7 +1067,7 @@ function signerProtectionPaths(env, worktree) {
   catch (_) { key = ''; }
   if (key && (path.isAbsolute(key) || key.startsWith('~/'))) {
     const file = path.resolve(key.startsWith('~/') ? path.join(os.homedir(), key.slice(2)) : key);
-    paths.push(file);
+    paths.push(file, file.endsWith('.pub') ? file.slice(0, -4) : `${file}.pub`);
   }
   return normalizeProtectedPaths(paths);
 }
@@ -1085,7 +1085,7 @@ function staticEvidenceWritePath(worktree, launchOptions, sandbox) {
   return file;
 }
 
-function signerPermissionProfileArgs(protectedPaths, sandbox, evidenceWritePath = null) {
+function signerPermissionProfileArgs(protectedPaths, sandbox, evidenceWritePath = null, extraWritePaths = []) {
   if (!['read-only', 'workspace-write'].includes(sandbox)) {
     fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write permission profile');
   }
@@ -1093,6 +1093,15 @@ function signerPermissionProfileArgs(protectedPaths, sandbox, evidenceWritePath 
   if (!paths.length) fail('SIGNER_ISOLATION_UNAVAILABLE', 'Codex signer paths could not be determined');
   const rules = paths.map((entry) => JSON.stringify(entry) + '="deny"');
   if (evidenceWritePath) rules.push(JSON.stringify(evidenceWritePath) + '="write"');
+  if (sandbox === 'workspace-write') {
+    for (const entry of extraWritePaths) {
+      if (typeof entry !== 'string' || !path.isAbsolute(entry)) fail('INVALID_INPUT', 'sandbox write extensions must be absolute paths');
+      if (paths.some((denied) => denied === entry || denied.startsWith(entry + path.sep) || entry.startsWith(denied + path.sep))) {
+        fail('INVALID_INPUT', 'sandbox write extension overlaps a protected signer path: ' + entry);
+      }
+      rules.push(JSON.stringify(entry) + '="write"');
+    }
+  }
   const filesystem = '{' + rules.join(',') + '}';
   const parent = sandbox === 'read-only' ? ':read-only' : ':workspace';
   return [
@@ -1117,6 +1126,8 @@ function createCodexCliLauncher(options = {}) {
   const installedHost = resolveHostEnvironment({ scriptDir: __dirname, runtime: 'codex', env: { ...process.env, ...environment } });
   const archiveAuthority = require('./role-artifact.cjs').archiveAuthorityNamespace(true);
   const hostProtectedPaths = normalizeProtectedPaths([archiveAuthority, ...(options.additionalProtectedPaths || [])]);
+  const extensionWritePaths = options.sandboxExtensions && Array.isArray(options.sandboxExtensions.allowWrite)
+    ? options.sandboxExtensions.allowWrite.slice() : [];
   const taskDir = taskStateDir(options, scope);
 
   return async function launch(prompt, launchOptions = {}) {
@@ -1196,7 +1207,7 @@ function createCodexCliLauncher(options = {}) {
       '--config', 'forced_login_method="chatgpt"',
       '--cd', scope.worktree, '--ignore-user-config',
     ];
-    args.push(...signerPermissionProfileArgs(protectedPaths, sandbox, evidenceWritePath));
+    args.push(...signerPermissionProfileArgs(protectedPaths, sandbox, evidenceWritePath, extensionWritePaths));
     if (agent) {
       args.push('--config', 'features.multi_agent=true');
       args.push('--config', 'features.multi_agent_v2=false');
@@ -1545,6 +1556,7 @@ function createCodexRuntimeHost(options = {}) {
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
     additionalProtectedPaths: options.additionalProtectedPaths,
+    sandboxExtensions: options.sandboxExtensions,
     taskDir: options.taskDir,
   });
   const assertOwner = () => {

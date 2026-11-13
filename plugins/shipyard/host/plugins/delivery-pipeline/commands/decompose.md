@@ -174,7 +174,7 @@ boundary contract describes what the host enforces.
    The boundary resolves and validates the canonical policy, invokes the
    runtime adapter, verifies application evidence, and records the receipt.
    Do not resolve a model and then launch it through another path.
-6. On a non-zero exit from any of these three host launches, read its
+6. On a non-zero exit from any of these host launches, read its
    `hint[<CODE>]` stderr line and explain the hint and its remedy to the
    user in the user's language; never propose bypassing the host or
    switching runtime because of it.
@@ -306,6 +306,8 @@ proves the launch, not a positive checker conclusion. Only `verdict: pass` with
 `status: completed` may advance to Gate 2. Missing/invalid semantic output refuses
 with `CHECKER_VERDICT_UNVERIFIED`; retain negative results and retry only the
 failed checker, preserving accepted researcher/planner output and PLAN bytes.
+An `issues_found` verdict is not a retry: it starts a revision cycle (Step 2,
+item 6).
 
 Codex relay proof must be the first standalone `TASK_SHA256=<computed digest>`
 forwarded text item of the first tool call after reading the exact TASK_FILE.
@@ -407,7 +409,11 @@ context first, then one callback set, then materialization verification.
    selected ADR lacks that line, invoke exactly as before, with no
    `--skip-ui`. The Skill must first establish one explicit context carrying phase
    `<N>`, the ADR path(s), mode, granularity, and relevant reads; no callback is
-   eligible before that context is fixed. If GSD, the Skill, callback wiring,
+   eligible before that context is fixed. The phase must already be in
+   `ROADMAP.md`: `/gsd-plan-phase` creates `.planning/phases/<NN>-<slug>/` and
+   its `CONTEXT` before the researcher callback, and the host never invents a
+   directory or slug. A `PHASE_DIRECTORY_MISSING` refusal means this step has not
+   run for `<N>`; add the phase to `ROADMAP.md` if needed and run the chain again. If GSD, the Skill, callback wiring,
    or the durable recorder is unavailable, refuse before launching or making
    any callback; do not prompt the user to run an external command and do not
    run the Skill opaquely.
@@ -426,8 +432,8 @@ context first, then one callback set, then materialization verification.
    refuses the callback before reservation. The packet keeps the full ADR,
    requirements and mandatory GSD policy even when the estimated UTF-8/4 size
    exceeds 12,000 tokens, recording overflow and indexed optional references.
-4. With that context fixed, invoke the selected host exactly three times, once
-   for each typed GSD role, in this order:
+4. With that context fixed, invoke the selected host once for each typed GSD
+   role, in this order (the first pass):
    - `gsd-phase-researcher` → `role: research`, with only the declared research
      signals.
    - `gsd-planner` → `role: decomposition`, with only the declared
@@ -439,13 +445,15 @@ context first, then one callback set, then materialization verification.
    declared signals, and the planning artifact contract above. The host resolves
    the model and effort and binds them to its dispatch id. Each call must return
    one acknowledged, verified durable receipt and one bounded, receipt-bound
-   artifact reference. The set is exactly three host dispatches and three
-   verified receipts, one per typed role. Never collapse these roles into one
-   inline prompt or launch a generic agent when a host refuses.
+   artifact reference. The first pass is one host dispatch and one verified
+   receipt per typed role; any later dispatch (the revision loop in item 6) is
+   a new host dispatch with its own verified receipt. Never collapse these roles
+   into one inline prompt or launch a generic agent when a host refuses.
 5. **Verify materialization**: inspect the trusted artifact index, then run
    `ls .planning/phases/<N>-*/*-PLAN.md` and verify the listed `CONTEXT.md` plus
-   every `PLAN.md` still matches its sealed digest. The files MUST exist, and
-   the three receipts from item 3 must be present and verified. If the GSD
+   every `PLAN.md` still matches its sealed digest from the latest planner seal.
+   The files MUST exist, and the receipts from item 4 (the researcher, the
+   latest planner and the latest checker) must be present and verified. If the GSD
    chain is unavailable, any receipt is missing or failed, the phase/ADR
    identity is wrong, or the files were not created or were altered — stop with
    a BLOCK. Do NOT substitute Jira tickets for them and do NOT create PLAN.md
@@ -488,16 +496,19 @@ context first, then one callback set, then materialization verification.
    `files_modified`/`requirements` is rejected by Gate 2: it is almost always a
    comment that leaked into the value, and a corrupted path silently disables the
    file-overlap guarantee for that entry.
-5. Convergence belongs to the single checker path from item 3. That callback
-   may perform `/gsd-plan-review-convergence <N> --all --max-cycles 3` as
-   internal work, and its result must be covered by the same checker receipt;
-   it MUST NOT dispatch or record a second `gsd-plan-checker`. If the callback
-   cannot own convergence, use a deterministic local check that launches no
-   agent and creates no receipt. Either path leaves exactly three typed
-   callbacks, exactly three verified receipts, and the materialized PLAN set
-   above. If neither path is available, stop with a BLOCK. Never invoke an
-   opaque Skill, skip convergence as a tuning choice, or synthesize a
-   convergence result without evidence.
+6. Revision loop. The checker is read-only, like GSD's own `gsd-plan-checker`:
+   it never edits `CONTEXT.md` or any `PLAN.md`, and a checker that changes a
+   phase file is refused with `FOREIGN_EDIT`. On `verdict: issues_found`,
+   re-dispatch `gsd-planner` through the host as a revision (same context and
+   signals, the checker findings in its prompt, a new dispatch and receipt) so
+   the planner re-seals `CONTEXT.md` and every `PLAN.md`, then dispatch a fresh
+   `gsd-plan-checker` against the revised files. Item 5's digest verification
+   and Gate 2 bind to the latest planner seal and the latest checker result.
+   Run at most 3 revision cycles; if the checker still returns `issues_found`,
+   or returns `blocked` at any point, stop with a BLOCK for a human. Never run
+   `/gsd-plan-review-convergence` inside the checker callback, never open an
+   opaque Skill, never skip the loop as a tuning choice, and never synthesize a
+   convergence result without a verified checker receipt.
 
 ## Step 3 — Delivery frontmatter extension
 
@@ -702,6 +713,15 @@ The `pipeline.jira` block, once persisted, looks like:
 }
 ```
 
+**Epic key (optional).** By default an epic's Jira key is the first ticket's key
+(`delivery.jira`) and an epic branch carries it as `feat/<KEY>-<slug>`. To give an
+epic its own Jira issue, map the phase in `.planning/config.json`:
+`"delivery_pipeline": { "epic_jira": { "1": "MYD-100", "02-billing": "MYD-200" } }`
+(keys are a phase number, `1` and `01` alike, or the phase directory name; invalid
+entries warn and are skipped). A configured key sets the epic's `jira` in
+`tickets.json`, its branch name and the epic PR title, and the export looks the
+epic up by that key and never creates it. Unset phases keep the default.
+
 **Tooling.** Use whatever Jira/Atlassian MCP is connected at runtime (e.g.
 Atlassian Rovo: `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`,
 `searchJiraIssuesUsingJql`, `createJiraIssue`, `editJiraIssue`, `createIssueLink`,
@@ -741,8 +761,19 @@ per run:
      `labelled_only_fields` (`summary` and `description`).
    - If the issue is unlabelled, only transition and comment; leave its summary
      and description unchanged.
+   An epic step whose lookup has `kind: key` follows the same rules; its key comes
+   from `delivery_pipeline.epic_jira` (below), never from a ticket.
    For steps without a recorded key, run each `lookup` entry's `jql` in order.
-   Apply an entry's `on_match` only when the hit's `Source of truth` line names
+   On a `primary` hit, update only when its `Source of truth` line equals
+   `requires_source_of_truth` exactly (same repository, same path;
+   `accepts_unprefixed` is the bare-path spelling). When it names a different path
+   or repository (`on_foreign: refuse`), the issue belongs to another graph: refuse
+   that step — never update it and never create a duplicate — and report both
+   pointers with the remedy (record the intended key with `jira-export.cjs record`,
+   or set `delivery_pipeline.epic_jira` for an epic, or export the other graph
+   separately). A hit with no `Source of truth` line at all is updated
+   (`on_absent: update`), and the report notes it. On a fallback entry, apply
+   `on_match` only when the hit's `Source of truth` line names
    this repository (matching `requires_source_of_truth`) or carries no prefix
    (matching `accepts_unprefixed`). On a `migrate` match, add `add_label`, replace
    the pointer line with `pointer`, and post the comment `label migrated`. Never
@@ -750,7 +781,7 @@ per run:
    none — skip it and move to the next entry. Create an issue only when the step
    says `on_no_match: create`. Stop and report to the user when one entry's
    `jql` returns more than one issue.
-3. For each issue the plan created or found, run `node
+3. For each issue the plan created or found (not a refused step), run `node
    ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/jira-export.cjs record <T-NN-MM> <KEY>` —
    this writes `delivery.jira: <KEY>` back into that ticket's plan
    frontmatter.

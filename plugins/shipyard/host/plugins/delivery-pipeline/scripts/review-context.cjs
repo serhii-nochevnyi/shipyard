@@ -8,12 +8,16 @@ const { repositorySlug } = require('./comment-policy.cjs');
 const { loadConfig } = require('./pipeline-config.cjs');
 const { resolveTicketBase } = require('./ticket-base.cjs');
 
-function git(root, args) {
+function gitEnv() {
   const env = { ...process.env };
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
     'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) delete env[key];
+  return env;
+}
+
+function git(root, args) {
   return execFileSync('git', ['-C', root, ...args], {
-    env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
+    env: gitEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
   }).trim();
 }
 
@@ -51,7 +55,7 @@ function lookupPullRequest({ worktree, branch, repo }) {
 }
 
 function resolveReviewContext({ worktree, branch, ticket, projectRoot, graphDir, requestedBase,
-  configuredBase, pushBase, lookupPr = lookupPullRequest } = {}) {
+  configuredBase, pushBase, head, lookupPr = lookupPullRequest } = {}) {
   if (!branch) branch = git(worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   branch = String(branch);
   if (branch.startsWith('refs/heads/')) branch = branch.slice('refs/heads/'.length);
@@ -75,8 +79,19 @@ function resolveReviewContext({ worktree, branch, ticket, projectRoot, graphDir,
   const rows = state?.tickets || state;
   const board = ticket && rows?.[ticket];
   if (board?.branch && board.branch !== branch) throw new Error('delivery board branch differs for ' + ticket);
-  if (pushBase) return { base: pushBase, base_source: 'remote-oid', ticket: ticket || null, branch,
-    projectRoot: projectRoot || null, graphDir: graph ? graphDir : null };
+  const scope = { worktree, branch, ticket: ticket || null, repo, ownRepo, projectRoot, graph, state, match, board,
+    requestedBase, configuredBase, lookupPr };
+  const identity = { ticket: ticket || null, branch, projectRoot: projectRoot || null, graphDir: graph ? graphDir : null };
+  if (!pushBase) return { ...resolveNamedBase(scope, false), ...identity };
+  const transport = { base: pushBase, base_source: 'remote-oid', push_base: pushBase, ...identity };
+  let named;
+  try { named = resolveNamedBase(scope, true); } catch { return transport; }
+  const base_commit = verifiedReviewBase(worktree, named.base, head, pushBase);
+  return base_commit ? { ...named, base_commit, push_base: pushBase, ...identity } : transport;
+}
+
+function resolveNamedBase({ worktree, branch, ticket, repo, ownRepo, projectRoot, graph, state, match, board,
+  requestedBase, configuredBase, lookupPr }, trusted) {
   let recorded = board?.base || match?.[1].pr_base || null;
   if (match?.[1].pr_base && board) recorded = resolveTicketBase({ ticket, requestedBase: recorded, graph, state });
   const pr = lookupPr({ worktree, branch, repo });
@@ -94,6 +109,13 @@ function resolveReviewContext({ worktree, branch, ticket, projectRoot, graphDir,
     try { same = git(worktree, ['rev-parse', '--verify', explicit + '^{commit}']) === git(worktree, ['rev-parse', '--verify', actual + '^{commit}']); } catch {}
     if (!same) throw new Error('explicit base ' + explicit + ' conflicts with open PR base ' + pr.baseRefName);
   }
+  if (trusted) {
+    const candidate = pr?.baseRefName || recorded;
+    if (!candidate || branchName(candidate) === branch) throw new Error('no trusted review base for ' + branch);
+    const base = resolveOriginRef(worktree, candidate);
+    if (!base) throw new Error('trusted review base is not an origin branch: ' + candidate);
+    return { base, base_source: pr ? 'pull-request' : 'recorded' };
+  }
   let configured = configuredBase || null;
   if (projectRoot) {
     const config = loadConfig(projectRoot);
@@ -106,8 +128,25 @@ function resolveReviewContext({ worktree, branch, ticket, projectRoot, graphDir,
   const base = resolveOriginRef(worktree, candidate) || candidate;
   git(worktree, ['rev-parse', '--verify', base + '^{commit}']);
   return { base, base_source: pr ? 'pull-request' : explicit ? (requestedBase ? 'flag' : 'env')
-    : recorded ? 'recorded' : 'configured', ticket: ticket || null, branch,
-  projectRoot: projectRoot || null, graphDir: graph ? graphDir : null };
+    : recorded ? 'recorded' : 'configured' };
+}
+
+function ancestor(worktree, older, newer) {
+  const result = spawnSync('git', ['-C', worktree, 'merge-base', '--is-ancestor', older, newer], {
+    env: gitEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
+  if (result.error || (result.status !== 0 && result.status !== 1)) throw new Error('cannot compare commits ' + older + ' and ' + newer);
+  return result.status === 0;
+}
+
+function verifiedReviewBase(worktree, base, head, pushBase) {
+  // @security: narrow the remote range only for a fast-forward whose head is absent from the trusted base.
+  try {
+    const baseOid = git(worktree, ['rev-parse', '--verify', base + '^{commit}']);
+    const headOid = git(worktree, ['rev-parse', '--verify', String(head || '') + '^{commit}']);
+    const pushOid = git(worktree, ['rev-parse', '--verify', pushBase + '^{commit}']);
+    git(worktree, ['merge-base', baseOid, headOid]);
+    return !ancestor(worktree, headOid, baseOid) && ancestor(worktree, pushOid, headOid) ? baseOid : null;
+  } catch { return null; }
 }
 
 module.exports = { resolveReviewContext, lookupPullRequest };

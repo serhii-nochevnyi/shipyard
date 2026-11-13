@@ -8,6 +8,7 @@ const { execFileSync } = require('node:child_process');
 const { createCodexRuntimeHost, normalizeScope, parseCodexStream, probeCodexRuntime } = require('./codex-runtime-host.cjs');
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
+const { mergedParentBase, rootTicketBase } = require('./ticket-base.cjs');
 const policy = require('./model-policy.cjs');
 const archReviewContext = require('./codex-arch-review-context.cjs');
 const codeReviewContext = require('./codex-code-review-context.cjs');
@@ -23,6 +24,7 @@ const hostVerification = require('./host-verification.cjs');
 const { retryableFailure: retryableVerificationFailure, failureContext, scheduleRetry: scheduleVerificationRetry,
   failureReason: verificationFailureReason } = hostVerification;
 const { loadConfig, repoValue } = require('./pipeline-config.cjs');
+const { resolveExecutorSandbox } = require('./executor-sandbox.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { hintForError, stripControl } = require('./refusal-hints.cjs');
@@ -32,7 +34,9 @@ const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 const { isScratch } = require('./conveyor-scratch.cjs');
-const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
+const commitSigner = require('./commit-signer.cjs');
+const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest,
+  phaseDirectoryNames } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
@@ -65,9 +69,8 @@ function typedPhaseDirectory(worktree, phase) {
   let entries;
   try { entries = fs.readdirSync(root); }
   catch { fail('WRITER_FENCED', 'scoped phase directory is unavailable'); }
-  const names = entries.filter((name) => /^\d+-/.test(name)
-    && Number(name.split('-')[0]) === Number(phase)
-    && fs.lstatSync(path.join(root, name)).isDirectory());
+  const names = phaseDirectoryNames(fs.realpathSync(worktree), entries, phase)
+    .filter((name) => fs.lstatSync(path.join(root, name)).isDirectory());
   if (names.length !== 1) fail('WRITER_FENCED', 'scoped phase directory is unavailable or ambiguous');
   const directory = path.join(root, names[0]);
   const real = fs.realpathSync(directory);
@@ -146,9 +149,14 @@ function inflightGraphDir(options, worktree) {
   return fs.existsSync(directory) ? directory : null;
 }
 
-function git(worktree, args) {
+function scopeFreeEnv() {
   const env = { ...process.env };
   for (const key of GIT_SCOPE_KEYS) delete env[key];
+  return env;
+}
+
+function git(worktree, args) {
+  const env = scopeFreeEnv();
   try {
     return execFileSync('git', ['-C', worktree, ...args], {
       encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
@@ -239,37 +247,38 @@ function effectiveBaseRef(worktree, file, ticket, snapshot) {
     }
     if (parentState.status === 'merged') {
       if (typeof parentState.merged_into !== 'string' || !parentState.merged_into.trim()
-          || live.base !== parentState.merged_into) {
+          || live.base !== mergedParentBase(row, live, parentState)) {
         fail('BASE_MISMATCH', `ticket ${ticket} live base does not match its merged primary parent`);
       }
-      base = parentState.merged_into;
+      base = live.base;
     } else if (live.base !== row.pr_base) {
       fail('BASE_MISMATCH', `ticket ${ticket} live base is neither its open primary parent nor its merged destination`);
     }
-  } else if (live.base !== row.pr_base) {
+  } else if (live.base !== rootTicketBase(row, live)) {
     fail('BASE_MISMATCH', `ticket ${ticket} live base differs from its canonical plan base`);
+  } else {
+    base = live.base;
   }
   return resolveBaseRef(worktree, base);
 }
 
 function signerFingerprint(worktree) {
-  const key = git(worktree, ['config', '--get', 'user.signingkey']);
-  if (!key) fail('SIGNER_UNAVAILABLE', 'host signing key is not configured');
-  let output;
   try {
-    output = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys', key], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
-    });
+    return commitSigner.signerFingerprint(worktree, { env: scopeFreeEnv() });
   } catch (error) {
-    fail('SIGNER_UNAVAILABLE', 'host signing key is unavailable: ' + String(error.stderr || error.message).trim());
+    if (error instanceof commitSigner.SignerError) fail('SIGNER_UNAVAILABLE', error.message);
+    throw error;
   }
-  const lines = output.split(/\r?\n/);
-  const fingerprint = lines.find((line) => line.startsWith('fpr:'))?.split(':')[9];
-  if (lines.filter((line) => line.startsWith('sec:')).length !== 1
-      || !/^[0-9A-F]{40}$/i.test(fingerprint || '')) {
-    fail('SIGNER_UNAVAILABLE', 'host signing key has no unique full fingerprint');
+}
+
+function verifiedSignature(worktree, commit) {
+  try {
+    return commitSigner.verifyCommitSignature(worktree, commit, { env: scopeFreeEnv() });
+  } catch (error) {
+    if (!(error instanceof commitSigner.SignerError)) throw error;
+    if (error.code === 'SIGNATURE_INVALID') fail('COMMIT_PREFLIGHT_FAILED', `Git preflight failed: ${error.message}`);
+    fail('SIGNER_UNAVAILABLE', error.message);
   }
-  return fingerprint;
 }
 
 function sha256(value) {
@@ -652,8 +661,8 @@ function signedArtifact(worktree, candidate, committed) {
 }
 
 function verifySignedCommit(worktree, candidate, commit) {
-  git(worktree, ['verify-commit', commit]);
-  const [code, fingerprint, parents, tree] = git(worktree, ['show', '-s', '--format=%G?%x00%GF%x00%P%x00%T', commit]).split('\0');
+  const { code, signer: fingerprint } = verifiedSignature(worktree, commit);
+  const [parents, tree] = git(worktree, ['show', '-s', '--format=%P%x00%T', commit]).split('\0');
   if (!['G', 'U'].includes(code) || fingerprint !== candidate.signer) {
     fail('COMMIT_FINALIZATION_FAILED', 'host commit signature does not match the scoped signer');
   }
@@ -1499,8 +1508,7 @@ function repairFeedbackChanges(before, current, reply, relation, resolvedThread 
 }
 
 function repairRevisionSigner(root, commit, expectedSigner = null) {
-  git(root, ['verify-commit', commit]);
-  const [code, signer] = git(root, ['show', '-s', '--format=%G?%x00%GF', commit]).split('\0');
+  const { code, signer } = verifiedSignature(root, commit);
   if (!['G', 'U'].includes(code) || !signer || (expectedSigner && signer !== expectedSigner))
     throw new Error('revision lacks its authenticated signer');
   return signer;
@@ -2862,6 +2870,26 @@ function createFinalizationRecoveryHost(options = {}) {
   });
 }
 
+function executorSandboxExtensions(options, scope, hostPaths) {
+  if (options.sandboxExtensions !== undefined) return options.sandboxExtensions;
+  const explicit = options.graphDir || process.env.SHIPYARD_GRAPH_DIR;
+  const graphDir = explicit ? path.resolve(explicit) : require('./graph-dir.cjs').resolveGraphDir([], scope.worktree).dir;
+  if (!graphDir || !fs.existsSync(path.join(graphDir, 'tickets.json'))) return undefined;
+  const config = loadConfig(path.resolve(graphDir, '..', '..'));
+  const configured = config.config ? config.config.executor_sandbox : null;
+  let resolved;
+  try {
+    resolved = resolveExecutorSandbox(configured, { worktree: scope.worktree, protectedPaths: hostPaths.filter(Boolean) });
+  } catch (error) {
+    fail('INVALID_INPUT', error.message.replace(/^executor-sandbox: /, ''));
+  }
+  if (resolved.allowedDomains.length) {
+    process.stderr.write('codex-delivery-host: delivery_pipeline.executor_sandbox.allowed_domains applies to Claude '
+      + 'executors only; the Codex executor sandbox keeps network access disabled\n');
+  }
+  return { allowWrite: resolved.allowWrite, allowedDomains: [] };
+}
+
 function createCodexDeliveryHost(options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
   const scope = normalizeScope(options.scope || options.runScope || {});
@@ -2888,6 +2916,8 @@ function createCodexDeliveryHost(options = {}) {
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
     additionalProtectedPaths: [stateRoot, roleArtifact.archiveAuthorityDirectory(scope.worktree)],
+    sandboxExtensions: executorSandboxExtensions(options, scope, [storage, stateRoot,
+      roleArtifact.archiveAuthorityDirectory(scope.worktree)]),
   });
   const writerSession = options.writerSession;
   if (writerSession && (typeof writerSession.lease?.snapshotTree !== 'function'

@@ -21,6 +21,7 @@ const fs = require('fs');
 const path = require('path');
 const { resolveRuntime, readInheritedConfig } = require('./runtime-context.cjs');
 const modelPolicy = require('./model-policy.cjs');
+const executorSandbox = require('./executor-sandbox.cjs');
 const { resolveIntegrationBranch, architectureTarget } = require('./architecture-target.cjs');
 
 // A dispatch context is issued by loadConfig, not by a caller mutating the
@@ -334,6 +335,50 @@ function normalizeJiraTransitions(value, warnings) {
   return out;
 }
 
+const EPIC_JIRA_KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
+const EPIC_JIRA_PHASE_RE = /^\d+(?:\.\d+)*$/;
+const EPIC_JIRA_DIRECTORY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function epicJiraPhaseKey(value) {
+  const text = String(value == null ? '' : value).trim();
+  if (EPIC_JIRA_PHASE_RE.test(text)) return text.split('.').map((part) => String(Number(part))).join('.');
+  return EPIC_JIRA_DIRECTORY_RE.test(text) ? text : null;
+}
+
+function normalizeEpicJira(value, warnings) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    warnings.push('delivery_pipeline.epic_jira must be a map of phase number or phase directory to a Jira key — ignored');
+    return null;
+  }
+  const out = {};
+  for (const [rawPhase, rawKey] of Object.entries(value)) {
+    const phase = epicJiraPhaseKey(rawPhase);
+    if (phase === null) {
+      warnings.push(`delivery_pipeline.epic_jira."${rawPhase}" is not a phase number or phase directory name — skipped`);
+      continue;
+    }
+    const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+    if (!EPIC_JIRA_KEY_RE.test(key)) {
+      warnings.push(`delivery_pipeline.epic_jira."${rawPhase}" = ${JSON.stringify(rawKey)} is not a Jira key (expected e.g. MYD-123) — skipped`);
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(out, phase) && out[phase] !== key) {
+      warnings.push(`delivery_pipeline.epic_jira."${rawPhase}" names ${key} but another spelling of phase "${phase}" already names ${out[phase]} — skipped`);
+      continue;
+    }
+    out[phase] = key;
+  }
+  return out;
+}
+
+function epicJiraFor(map, phase, phaseDir) {
+  if (!map || typeof map !== 'object') return null;
+  const has = (k) => k !== null && Object.prototype.hasOwnProperty.call(map, k);
+  if (phaseDir && has(String(phaseDir))) return map[String(phaseDir)];
+  const key = epicJiraPhaseKey(phase);
+  return has(key) ? map[key] : null;
+}
+
 // One ordered set of tracker status NAMES from the comma-separated capability
 // spelling. Empty segments are silent so the declared empty default remains the
 // safe, disabled state; duplicate names collapse to their first occurrence.
@@ -629,6 +674,7 @@ const DEFAULTS = {
   reviewer_bots: null,
   repo_remedies: null,
   verification_commands: null,
+  executor_sandbox: null,
   jira: { enabled: true, project: null, issue_type: 'Task', epic_issue_type: 'Epic' },
   // Our ticket status → the tracker's TARGET STATUS NAME, for the projection
   // (ADR-008 D2). TOP-LEVEL and flat, deliberately NOT a member of `jira`:
@@ -638,6 +684,7 @@ const DEFAULTS = {
   // EMPTY IS OFF, and empty is the default — the same posture as `fable: off`:
   // silence is not consent to write into someone's tracker.
   jira_transitions: {},
+  epic_jira: {},
   // Tracker status NAME allowlist for the eligibility gate. EMPTY IS OFF.
   jira_todo_statuses: [],
 };
@@ -961,6 +1008,7 @@ function loadConfig(root, options = {}) {
     repos: {},
     codex_models: DEFAULT_CODEX_MODELS.map((e) => ({ ...e })),
     jira_transitions: {},
+    epic_jira: {},
     jira_todo_statuses: [],
     routed: options.routed === true,
     policy_version: modelPolicy.POLICY_VERSION,
@@ -1051,6 +1099,11 @@ function loadConfig(root, options = {}) {
       if (map !== null) cfg.jira_transitions = map;
       continue;
     }
+    if (key === 'epic_jira') {
+      const map = normalizeEpicJira(value, warnings);
+      if (map !== null) cfg.epic_jira = map;
+      continue;
+    }
     if (key === 'jira_todo_statuses') {
       const statuses = normalizeJiraTodoStatuses(value, warnings);
       // A malformed value keeps the empty list, which leaves eligibility off.
@@ -1085,6 +1138,12 @@ function loadConfig(root, options = {}) {
     if (key === 'verification_commands') {
       const commands = normalizeVerificationCommands(value, warnings);
       if (commands !== null) cfg.verification_commands = commands;
+      continue;
+    }
+    if (key === 'executor_sandbox') {
+      const sandbox = executorSandbox.normalizeConfig(value);
+      if (sandbox.ok) cfg.executor_sandbox = sandbox.value;
+      else warnings.push(`delivery_pipeline.executor_sandbox ${sandbox.error} — ignored`);
       continue;
     }
     if (key === 'effort') {
@@ -1830,7 +1889,7 @@ module.exports = {
   TASK_LEVELS, TASK_LEVEL_RANK, LADDER_MODES, taskLevelRoute,
   DEFAULT_CODEX_MODELS, NUMERIC_KNOBS,
   defaultRepositoryRoot, repositoryRootValue, validateRepositoryDestination,
-  normalizeJiraTodoStatuses,
+  normalizeJiraTodoStatuses, normalizeEpicJira, epicJiraFor, EPIC_JIRA_KEY_RE,
 };
 
 if (require.main === module) {
