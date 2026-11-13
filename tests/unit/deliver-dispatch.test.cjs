@@ -463,6 +463,29 @@ test('graph-less planning build resolves the owning repository from a linked wor
   }
 }));
 
+test('a planning build in a linked project worktree uses its own .planning, graph-less or with its own graph', () => withoutGraphEnv(() => {
+  const fixture = graphlessFixture('INV-004-project');
+  const linked = path.join(os.tmpdir(), `deliver-project-linked-${process.pid}`);
+  try {
+    writeJson(path.join(fixture.root, '.planning', 'graph', 'tickets.json'), { tickets: { 'T-01-01': ticketRow() } });
+    git(fixture.root, 'worktree', 'add', '-q', '-b', 'project/next', linked);
+    for (const dir of ['investigations', 'architecture']) {
+      fs.cpSync(path.join(fixture.root, '.planning', dir), path.join(linked, '.planning', dir), { recursive: true });
+    }
+    const realLinked = fs.realpathSync(linked);
+    process.chdir(linked);
+    const graphless = deliverDispatch.build(['research', fixture.invId, '--runtime', 'claude'], { cwd: linked });
+    assert.equal(graphless.scope.worktree, realLinked);
+    writeJson(path.join(linked, '.planning', 'graph', 'tickets.json'), {
+      tickets: { 'T-02-01': ticketRow({ branch: 'ticket/T-02-01-new', phase: 2 }) },
+    });
+    const owned = deliverDispatch.build(['research', fixture.invId, '--runtime', 'claude'], { cwd: linked });
+    assert.equal(owned.scope.worktree, realLinked);
+  } finally {
+    cleanup(linked, fixture.root);
+  }
+}));
+
 test('graph-less fallback does not relax a graph that was named or that exists but is wrong', () => withoutGraphEnv(() => {
   const fixture = graphlessFixture('INV-003-strict');
   try {
@@ -811,6 +834,83 @@ test('D-43: a --graph-dir copy inside a linked worktree refuses GRAPH_NOT_CANONI
     );
   } finally {
     cleanup(fixture.projectRoot, fixture.ticketWorktree, linked);
+  }
+});
+
+function projectWorktreeFixture() {
+  const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-pw-')));
+  initRepo(projectRoot);
+  fs.mkdirSync(path.join(projectRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, 'src', 'thing.js'), 'module.exports = 1;\n');
+  fs.writeFileSync(path.join(projectRoot, 'src', 'helper.js'), 'module.exports = 2;\n');
+  commitAll(projectRoot, 'demo: seed project');
+  writeJson(path.join(projectRoot, '.planning', 'graph', 'tickets.json'), { tickets: { 'T-01-01': ticketRow() } });
+  const linked = `${projectRoot}-project`;
+  git(projectRoot, 'worktree', 'add', '-q', '-b', 'project/next', linked);
+  const id = 'T-05-01';
+  const branch = 'ticket/T-05-01-demo';
+  const plan = '.planning/phases/05-demo/05-01-PLAN.md';
+  fs.mkdirSync(path.join(linked, '.planning', 'phases', '05-demo'), { recursive: true });
+  fs.writeFileSync(path.join(linked, plan), PLAN_TEXT);
+  const graphDir = path.join(linked, '.planning', 'graph');
+  writeJson(path.join(graphDir, 'tickets.json'), { tickets: { [id]: ticketRow({ branch, plan, phase: 5 }) } });
+  writeJson(path.join(graphDir, 'delivery-state.json'), { [id]: { ready: true } });
+  const ticketWorktree = `${projectRoot}-ticket`;
+  git(projectRoot, 'worktree', 'add', '-q', '-b', branch, ticketWorktree);
+  return { projectRoot, linked, ticketWorktree, id, plan, graphDir };
+}
+
+test('a ticket worktree of a linked project worktree graph resolves main by default and launches on --graph-dir', async () => {
+  const fixture = projectWorktreeFixture();
+  const saved = process.env.SHIPYARD_GRAPH_DIR;
+  delete process.env.SHIPYARD_GRAPH_DIR;
+  try {
+    await assert.rejects(
+      () => deliverDispatch.launch(['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'], {
+        cwd: fixture.ticketWorktree,
+        stateDir: sharedStateDir,
+      }),
+      (error) => error.code === 'UNKNOWN_TICKET' && /linked project worktree/.test(error.message),
+    );
+    let env;
+    let captured;
+    await deliverDispatch.launch([
+      '--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor', '--graph-dir', fixture.graphDir,
+    ], {
+      cwd: fixture.ticketWorktree,
+      stateDir: sharedStateDir,
+      spawn(command, spawnArgs, spawnOptions) {
+        env = spawnOptions.env;
+        captured = JSON.parse(fs.readFileSync(spawnArgs[spawnArgs.indexOf('--request-file') + 1], 'utf8'));
+        return { pid: 999999, unref() {}, on() {} };
+      },
+    });
+    assert.equal(env.SHIPYARD_GRAPH_DIR, fs.realpathSync(fixture.graphDir));
+    assert.equal(captured.args.tickets[0].planPath, path.join(fs.realpathSync(fixture.linked), fixture.plan));
+  } finally {
+    if (saved !== undefined) process.env.SHIPYARD_GRAPH_DIR = saved;
+    cleanup(fixture.projectRoot, fixture.linked, fixture.ticketWorktree);
+  }
+});
+
+test('a launch standing in the linked project worktree auto-resolves its own untracked graph', async () => {
+  const fixture = projectWorktreeFixture();
+  const saved = process.env.SHIPYARD_GRAPH_DIR;
+  delete process.env.SHIPYARD_GRAPH_DIR;
+  try {
+    let env;
+    await deliverDispatch.launch(['--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor'], {
+      cwd: fixture.linked,
+      stateDir: sharedStateDir,
+      spawn(command, spawnArgs, spawnOptions) {
+        env = spawnOptions.env;
+        return { pid: 999999, unref() {}, on() {} };
+      },
+    });
+    assert.equal(env.SHIPYARD_GRAPH_DIR, fs.realpathSync(fixture.graphDir));
+  } finally {
+    if (saved !== undefined) process.env.SHIPYARD_GRAPH_DIR = saved;
+    cleanup(fixture.projectRoot, fixture.linked, fixture.ticketWorktree);
   }
 });
 

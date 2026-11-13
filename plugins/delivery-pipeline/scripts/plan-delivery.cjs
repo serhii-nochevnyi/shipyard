@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { TextDecoder } = require('node:util');
 const { MAX_REFERENCE_BYTES } = require('./claude-reference-content.cjs');
+const { parseWorktreeRows, containingRow, projectWorktree } = require('./graph-dir.cjs');
 
 const MAX_TOTAL_BYTES = 256 * 1024;
 const BARE_PHASE_NAMES = ['RESEARCH', 'CONTEXT'];
@@ -30,41 +31,13 @@ function tryGit(cwd, args) {
   }
 }
 
-function parseWorktreeRows(output) {
-  const rows = [];
-  let row = null;
-  for (const line of output.split('\n')) {
-    if (!line) { if (row) rows.push(row); row = null; continue; }
-    if (!row) row = {};
-    const at = line.indexOf(' ');
-    if (at === -1) row[line] = true;
-    else row[line.slice(0, at)] = line.slice(at + 1);
-  }
-  if (row) rows.push(row);
-  return rows;
-}
-
-function containingRow(rows, dir) {
-  let best = null;
-  for (const row of rows) {
-    if (typeof row.worktree !== 'string') continue;
-    let wt;
-    try { wt = fs.realpathSync(row.worktree); } catch { continue; }
-    const rel = path.relative(wt, dir);
-    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
-      if (!best || wt.length > best.wt.length) best = { ...row, wt };
-    }
-  }
-  return best;
-}
-
 function sourceLabel(source) {
   return source === 'flag' ? 'the --graph flag'
     : source === 'env' ? 'SHIPYARD_GRAPH_DIR'
       : 'the default .planning/graph location';
 }
 
-// @contract: the three canonical cases are exhaustive; anything else refuses GRAPH_NOT_CANONICAL.
+// @contract: the four canonical cases are exhaustive; anything else refuses GRAPH_NOT_CANONICAL.
 function assertCanonicalGraph({ graphDir, worktree, source } = {}) {
   if (typeof graphDir !== 'string' || !graphDir.trim()) {
     reject('GRAPH_NOT_CANONICAL', 'a canonical graph directory is required');
@@ -85,9 +58,12 @@ function assertCanonicalGraph({ graphDir, worktree, source } = {}) {
   const relative = path.relative(containing.wt, dir).split(path.sep).join('/');
   const ticketsRef = `HEAD:${relative ? `${relative}/tickets.json` : 'tickets.json'}`;
   if (tryGit(containing.wt, ['cat-file', '-e', ticketsRef]).ok) return;
+  if (projectWorktree(dir, { graphDir: dir, requester: worktree || null })) return;
   reject('GRAPH_NOT_CANONICAL',
     `${dir} (from ${sourceLabel(source)}) is an untracked graph copy inside a non-main worktree `
-    + `(${containing.wt})${worktree ? ` requested for worktree ${worktree}` : ''}`);
+    + `(${containing.wt})${worktree ? ` requested for worktree ${worktree}` : ''}; use the main checkout's graph, `
+    + 'or keep the project graph in a linked worktree on its own non-ticket, non-epic branch with tickets the '
+    + 'main checkout does not hold and name it with SHIPYARD_GRAPH_DIR or --graph-dir <that worktree>/.planning/graph');
 }
 
 // @security: O_NOFOLLOW open plus a post-read dev/ino recheck defeats a symlink swap mid-read.

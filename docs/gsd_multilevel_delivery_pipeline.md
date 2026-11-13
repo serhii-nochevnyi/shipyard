@@ -143,6 +143,21 @@ Does not conflict with the native GSD layout (`STATE.md`, `ROADMAP.md`,
 Every script reads the `.json` files; the `.yaml` mirrors exist for reading and are
 regenerated on each run. All four are generated — never hand-edited.
 
+**Where the graph is found.** An explicit `--graph`/`--graph-dir` or
+`SHIPYARD_GRAPH_DIR` wins. Otherwise a script uses the graph of the main checkout
+of the repository that owns its worktree. The one exception is a linked *project
+worktree*. It is checked out on its own named branch, not a `ticket/*` or
+`epic/*` branch, not detached, and not a branch the graph names. It holds its
+own untracked `.planning/` with tickets the main checkout's graph does not hold.
+Standing in such a worktree, scripts use its own `.planning/graph`. A graph-less
+planning build there also uses its own `.planning/`. A ticket worktree of that
+graph still defaults to the main checkout's graph. Name the project worktree's
+graph with `--graph-dir <project worktree>/.planning/graph` or
+`SHIPYARD_GRAPH_DIR`. `deliver-dispatch launch` forwards the graph it resolved to
+the host as `SHIPYARD_GRAPH_DIR`. An untracked graph copy inside a ticket, epic
+or detached worktree is still refused with `GRAPH_NOT_CANONICAL`. A copy whose
+tickets the main checkout already holds is refused too.
+
 ---
 
 ## 4. Loop 1 — Deep Investigation

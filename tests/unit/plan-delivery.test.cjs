@@ -131,6 +131,83 @@ test('an index-only tickets.json (staged, not committed) in a second worktree do
   }
 });
 
+function projectGraphRepo(root) {
+  const repo = twoWorktreeRepo(root);
+  const mainGraph = path.join(repo, '.planning', 'graph');
+  fs.mkdirSync(mainGraph, { recursive: true });
+  fs.writeFileSync(path.join(mainGraph, 'tickets.json'), JSON.stringify({ tickets: {
+    'T-01-01': { branch: 'ticket/T-01-01-old', epic: 'epic/01-old' },
+  } }));
+  const linkedGraph = (name, flags, tickets = { 'T-02-01': { branch: 'ticket/T-02-01-new', epic: 'epic/02-new' } }) => {
+    const linked = path.join(root, name);
+    git(repo, 'worktree', 'add', '-q', ...flags, linked);
+    const graphDir = path.join(linked, '.planning', 'graph');
+    fs.mkdirSync(graphDir, { recursive: true });
+    fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets }));
+    return { linked, graphDir };
+  };
+  return { repo, linkedGraph };
+}
+
+test('an untracked graph in a linked project worktree is canonical, for itself and for a same-repo ticket worktree', () => {
+  const root = tempDir('shipyard-plan-delivery-project-');
+  try {
+    const { repo, linkedGraph } = projectGraphRepo(root);
+    const { linked, graphDir } = linkedGraph('project', ['-b', 'project/next']);
+    assertCanonicalGraph({ graphDir, source: 'env' });
+    assertCanonicalGraph({ graphDir, worktree: linked, source: 'flag' });
+    const ticket = path.join(root, 'ticket');
+    git(repo, 'worktree', 'add', '-q', '-b', 'ticket/T-02-01-new', ticket);
+    assertCanonicalGraph({ graphDir, worktree: ticket, source: 'env' });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an untracked copy in an epic-branch or detached worktree still refuses GRAPH_NOT_CANONICAL', () => {
+  const root = tempDir('shipyard-plan-delivery-epic-copy-');
+  try {
+    const { linkedGraph } = projectGraphRepo(root);
+    const epic = linkedGraph('epic', ['-b', 'epic/02-new']);
+    assert.equal(code(() => assertCanonicalGraph({ graphDir: epic.graphDir, worktree: epic.linked })), 'GRAPH_NOT_CANONICAL');
+    const detached = linkedGraph('detached', ['--detach']);
+    assert.equal(code(() => assertCanonicalGraph({ graphDir: detached.graphDir })), 'GRAPH_NOT_CANONICAL');
+    const named = linkedGraph('named', ['-b', 'feat/new-ticket'], { 'T-02-01': { branch: 'feat/new-ticket' } });
+    assert.equal(code(() => assertCanonicalGraph({ graphDir: named.graphDir })), 'GRAPH_NOT_CANONICAL');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a linked-worktree graph whose tickets the main checkout holds is a copy and refuses, naming the remedy', () => {
+  const root = tempDir('shipyard-plan-delivery-subset-');
+  try {
+    const { linkedGraph } = projectGraphRepo(root);
+    const { linked, graphDir } = linkedGraph('copy', ['-b', 'project/copy'], { 'T-01-01': { branch: 'ticket/T-01-01-old' } });
+    let thrown;
+    try { assertCanonicalGraph({ graphDir, worktree: linked, source: 'flag' }); } catch (error) { thrown = error; }
+    assert.equal(thrown && thrown.code, 'GRAPH_NOT_CANONICAL');
+    assert.match(thrown.message, /an untracked graph copy inside a non-main worktree/);
+    assert.match(thrown.message, /SHIPYARD_GRAPH_DIR or --graph-dir <that worktree>\/\.planning\/graph/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a project-worktree graph requested for a worktree of another repository refuses', () => {
+  const root = tempDir('shipyard-plan-delivery-cross-');
+  try {
+    const { linkedGraph } = projectGraphRepo(root);
+    const { graphDir } = linkedGraph('project', ['-b', 'project/next']);
+    const other = path.join(root, 'other');
+    fs.mkdirSync(other);
+    git(other, 'init', '-q', '-b', 'main');
+    assert.equal(code(() => assertCanonicalGraph({ graphDir, worktree: other })), 'GRAPH_NOT_CANONICAL');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 suite('plan-delivery — deliverPlan');
 
 function projectFixture(root) {

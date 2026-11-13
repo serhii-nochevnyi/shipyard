@@ -71,6 +71,9 @@ function isInsidePath(root, candidate) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+const graphRemedy = (flag) => `pass ${flag} <project>/.planning/graph or set SHIPYARD_GRAPH_DIR; for a graph kept in a `
+  + 'linked project worktree, name <that worktree>/.planning/graph';
+
 function canonicalizeGraphDir(dir, worktree, source) {
   let resolved;
   try { resolved = fs.realpathSync(dir); }
@@ -89,7 +92,7 @@ function resolveLaunchGraphDir({ worktree, explicitGraphDir }) {
   }
   const resolved = resolveGraphDir([], worktree);
   if (resolved.how === 'none' || !fs.existsSync(path.join(resolved.dir, 'tickets.json'))) {
-    fail('GRAPH_UNRESOLVED', `no canonical ticket graph found (looked in ${resolved.dir}); pass --graph-dir <project>/.planning/graph`);
+    fail('GRAPH_UNRESOLVED', `no canonical ticket graph found (looked in ${resolved.dir}); ${graphRemedy('--graph-dir')}`);
   }
   return canonicalizeGraphDir(resolved.dir, worktree, resolved.how);
 }
@@ -308,7 +311,8 @@ function loadTicket(graphDir, ticket) {
   const graph = readJsonBounded(path.join(graphDir, 'tickets.json'));
   const row = graph && object(graph.tickets) ? graph.tickets[ticket] : undefined;
   if (!object(row)) fail('UNKNOWN_TICKET', `ticket ${ticket} has no canonical graph entry in ${graphDir}; `
-    + 'for a ticket that belongs to another repository, pass --graph-dir <project>/.planning/graph of the project that owns it');
+    + 'for a ticket that belongs to another repository or to a graph kept in a linked project worktree, '
+    + 'pass --graph-dir <project>/.planning/graph of the project that owns it');
   const rawState = readJsonBounded(path.join(graphDir, 'delivery-state.json')) || {};
   return { graph, row, state: object(rawState) && object(rawState.tickets) ? rawState.tickets : rawState };
 }
@@ -656,7 +660,7 @@ function resolveBuildGraphDir(worktree, options, { optional = false } = {}) {
   // missing, or one that exists but is invalid, still refuses.
   if (optional && resolved.how === 'none') return null;
   if (resolved.how === 'none' || !fs.existsSync(path.join(resolved.dir, 'tickets.json'))) {
-    buildFail('graph', `no canonical ticket graph found (looked in ${resolved.dir}); set SHIPYARD_GRAPH_DIR`);
+    buildFail('graph', `no canonical ticket graph found (looked in ${resolved.dir}); ${graphRemedy('--graph')}`);
   }
   try { return canonicalizeGraphDir(resolved.dir, worktree, resolved.how); }
   catch (error) { buildFail('graph', error.message.replace(/^deliver-dispatch: /, '')); }

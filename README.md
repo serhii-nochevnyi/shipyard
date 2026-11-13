@@ -568,6 +568,15 @@ unproven or dirty worktrees.
 project, correct the plan dependency or ownership evidence, and rerun the
 command. Do not edit generated graph files by hand.
 
+**A linked worktree holds the project's graph.** Keep the untracked `.planning/`
+in a linked worktree on its own named branch, not `ticket/*` or `epic/*`. Its
+tickets must not already be in the main checkout's graph. Scripts run from that
+worktree use its graph, and graph-less planning builds there use its `.planning/`.
+Ticket worktrees still default to the main checkout's graph. Run their dispatches
+with `--graph-dir <project worktree>/.planning/graph` or set `SHIPYARD_GRAPH_DIR`.
+`GRAPH_NOT_CANONICAL` means the named graph is a copy in a ticket, epic or detached
+worktree, or a copy of tickets the main checkout already holds.
+
 **Migrating an existing project.** Runtime state under `.planning/graph/`
 (everything except `tickets.json` and `tickets.yaml`) is no longer tracked, and
 pulling the change deletes those files from a checkout that still tracks them.
