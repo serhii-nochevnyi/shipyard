@@ -17,6 +17,13 @@ function fail(message) {
   process.exit(1);
 }
 
+function configuredEpicJira(root) {
+  const { loadConfig, epicJiraFor } = require(path.join(__dirname, 'pipeline-config.cjs'));
+  const loaded = loadConfig(root);
+  const map = loaded.valid === false ? {} : loaded.config.epic_jira;
+  return (phase, phaseDir) => epicJiraFor(map, phase, phaseDir);
+}
+
 function hasGraph(dir) {
   try { return fs.statSync(path.join(dir, 'tickets.json')).isFile(); } catch { return false; }
 }
@@ -106,7 +113,11 @@ function buildLookup(project, primaryLabel, repoSlug, sourcePath, pointer, fallb
     kind: 'primary',
     label: primaryLabel,
     jql: jqlFor(primaryLabel),
+    requires_source_of_truth: `${repoSlug}:${sourcePath}`,
+    accepts_unprefixed: sourcePath,
     on_match: { action: 'update' },
+    on_foreign: 'refuse',
+    on_absent: 'update',
   }];
   fallbacks.forEach((fb, i) => {
     lookup.push({
@@ -134,7 +145,35 @@ function classifySourceOfTruth(description, repo, planPath) {
   return 'foreign';
 }
 
-// @contract: recorded keys never create; unknown keys refuse; unlabelled issues only transition and comment.
+const GENERATED_PROJECTION_SUFFIX_RE = /\s*\(this issue is a generated projection\)\s*$/;
+
+function readSourceOfTruth(description) {
+  const line = String(description == null ? '' : description).split(/\r\n|\r|\n/).find((l) => l.startsWith('Source of truth:'));
+  if (!line) return null;
+  const value = line.slice('Source of truth:'.length).replace(GENERATED_PROJECTION_SUFFIX_RE, '').trim();
+  const prefixed = SOURCE_OF_TRUTH_PREFIX_RE.exec(value);
+  if (!prefixed) return { repo: null, path: value, text: value };
+  return { repo: prefixed[0].slice(0, -1), path: value.slice(prefixed[0].length), text: value };
+}
+
+function primaryOwnership(step, entry, hit) {
+  if (!entry.requires_source_of_truth || !entry.accepts_unprefixed) return { owned: true };
+  const found = readSourceOfTruth(hit.description);
+  if (!found) return { owned: true, warning: `${hit.key} has no Source of truth line; updated on the label alone` };
+  const expectedPath = entry.accepts_unprefixed;
+  const expectedRepo = entry.requires_source_of_truth.slice(0, -(expectedPath.length + 1));
+  const sameRepo = found.repo === null || found.repo.toLowerCase() === expectedRepo.toLowerCase();
+  if (sameRepo && found.path === expectedPath) return { owned: true };
+  const remedy = step.step === 'epic'
+    ? 'set delivery_pipeline.epic_jira for this phase in .planning/config.json to the intended key, or export the other graph separately'
+    : 'record the intended key in this plan\'s delivery.jira field (jira-export.cjs record), or export the other graph separately';
+  return {
+    owned: false,
+    reason: `${hit.key} carries label ${entry.label} but its Source of truth is ${found.text}, not ${entry.requires_source_of_truth}; ${remedy}`,
+  };
+}
+
+// @contract: recorded keys never create; unknown keys refuse; a primary hit updates only on an exact source path.
 function resolveLookup(step, hits) {
   for (const entry of step.lookup) {
     let result = hits && hits[entry.order];
@@ -168,7 +207,9 @@ function resolveLookup(step, hits) {
     if (list.length !== 1) continue;
     const hit = list[0];
     if (entry.kind === 'primary') {
-      return { action: 'update', key: hit.key };
+      const ownership = primaryOwnership(step, entry, hit);
+      if (!ownership.owned) return { action: 'refuse', key: hit.key, reason: ownership.reason };
+      return ownership.warning ? { action: 'update', key: hit.key, warning: ownership.warning } : { action: 'update', key: hit.key };
     }
     const repo = entry.requires_source_of_truth.slice(0, -(entry.accepts_unprefixed.length + 1));
     const cls = classifySourceOfTruth(hit.description, repo, entry.accepts_unprefixed);
@@ -265,11 +306,13 @@ function planExport(graphDir, opts = {}) {
       if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
       return a < b ? -1 : a > b ? 1 : 0;
     });
+    const epicKeyFor = configuredEpicJira(root);
     for (const phase of phaseIds) {
       const info = phases.get(phase);
       const title = titleFromSlug(info.phaseDir);
       const labels = epicLabels(owner, repo, phase);
       const sourcePath = `.planning/phases/${info.phaseDir}`;
+      const epicKey = epicKeyFor(phase, info.phaseDir);
       const pointer = `Source of truth: ${owner}/${repo}:${sourcePath} (this issue is a generated projection)`;
       steps.push({
         step: 'epic',
@@ -278,10 +321,16 @@ function planExport(graphDir, opts = {}) {
         summary: `[${phase}] ${title}`,
         description: `Epic for phase ${phase}: ${title}.\nBranch: ${info.branch}\n${pointer}`,
         labels: [labels.primary],
-        lookup: buildLookup(project, labels.primary, `${owner}/${repo}`, sourcePath, pointer, [
-          { kind: 'legacy', label: labels.legacy },
-        ]),
-        on_no_match: 'create',
+        lookup: epicKey ? [{ kind: 'key', key: epicKey }] : buildLookup(
+          project, labels.primary, `${owner}/${repo}`, sourcePath, pointer, [
+            { kind: 'legacy', label: labels.legacy },
+          ],
+        ),
+        on_no_match: epicKey ? 'refuse' : 'create',
+        ...(epicKey ? {
+          labelled_only_fields: ['summary', 'description'],
+          unlabelled: 'transition-and-comment-only',
+        } : {}),
       });
     }
   }
@@ -492,7 +541,7 @@ function cli() {
 module.exports = {
   planExport, recordKey, upsertJiraKey, topoOrder, sanitizeSlug, titleFromSlug,
   bodyAfterFrontmatter, sectionsOf, issueLabels, epicLabels,
-  classifySourceOfTruth, resolveLookup,
+  classifySourceOfTruth, readSourceOfTruth, resolveLookup,
   TICKET_ID_RE, JIRA_KEY_RE, REPO_RE, PROJECT_RE, hasGraph,
 };
 

@@ -312,7 +312,7 @@ test('resolveLookup updates a namespaced hit', () => {
   const primary = issue.lookup.find((e) => e.kind === 'primary');
   const legacy = issue.lookup.find((e) => e.kind === 'legacy');
   const hits = {
-    [primary.order]: [{ key: 'MYD-3', description: 'anything' }],
+    [primary.order]: [{ key: 'MYD-3', description: `Source of truth: ${primary.requires_source_of_truth} (this issue is a generated projection)` }],
     [legacy.order]: [{ key: 'MYD-4', description: `Source of truth: ${legacy.accepts_unprefixed} (this issue is a generated projection)` }],
   };
   assert.deepEqual(mod.resolveLookup(issue, hits), { action: 'update', key: 'MYD-3' });
@@ -504,6 +504,110 @@ test('long Jira scope preserves complete short acceptance criteria', () => {
     assert.ok(issue.description.includes('MUST_RETAIN_ACCEPTANCE: all regressions pass.'));
     assert.ok(Buffer.byteLength(issue.description) <= 12000);
   } finally { fs.rmSync(p.dir, { recursive: true, force: true }); }
+});
+
+suite('primary-label hits are checked against the Source of truth path');
+
+function primaryFixture() {
+  const issue = issueStepFor('T-01-01');
+  const primary = issue.lookup.find((e) => e.kind === 'primary');
+  return { issue, primary, expected: primary.requires_source_of_truth };
+}
+
+test('the primary lookup entry carries the exact source it will accept', () => {
+  const { primary, expected } = primaryFixture();
+  assert.equal(primary.requires_source_of_truth, expected);
+  assert.match(expected, /^acme\/demo:\.planning\/phases\/1-a-phase-title\/01-01-PLAN\.md$/);
+  assert.equal(primary.accepts_unprefixed, expected.slice('acme/demo:'.length));
+  assert.equal(primary.on_foreign, 'refuse');
+  assert.equal(primary.on_absent, 'update');
+});
+
+test('a primary hit whose Source of truth is this exact path updates', () => {
+  const { issue, primary, expected } = primaryFixture();
+  const description = `Goal:\nx\n\nSource of truth: ${expected} (this issue is a generated projection)`;
+  assert.deepEqual(mod.resolveLookup(issue, { [primary.order]: [{ key: 'MYD-3', description }] }), { action: 'update', key: 'MYD-3' });
+});
+
+test('a primary hit pointing at another path in this repo is refused naming both paths and the remedy', () => {
+  const { issue, primary, expected } = primaryFixture();
+  const other = 'acme/demo:.planning/phases/1-another-epic/01-01-PLAN.md';
+  const result = mod.resolveLookup(issue, { [primary.order]: [{ key: 'MYD-3', description: `Source of truth: ${other} (this issue is a generated projection)` }] });
+  assert.equal(result.action, 'refuse');
+  assert.equal(result.key, 'MYD-3');
+  assert.ok(result.reason.includes(other), result.reason);
+  assert.ok(result.reason.includes(expected), result.reason);
+  assert.match(result.reason, /delivery\.jira/);
+  assert.match(result.reason, /export the other graph separately/);
+});
+
+test('a primary hit pointing at a foreign repository is refused', () => {
+  const { issue, primary, expected } = primaryFixture();
+  const foreign = `other/repo:${expected.slice('acme/demo:'.length)}`;
+  const result = mod.resolveLookup(issue, { [primary.order]: [{ key: 'MYD-3', description: `Source of truth: ${foreign} (this issue is a generated projection)` }] });
+  assert.equal(result.action, 'refuse');
+  assert.ok(result.reason.includes(foreign), result.reason);
+});
+
+test('a path that only starts with this step path is not a match', () => {
+  const { issue, primary, expected } = primaryFixture();
+  const result = mod.resolveLookup(issue, { [primary.order]: [{ key: 'MYD-3', description: `Source of truth: ${expected}.bak (this issue is a generated projection)` }] });
+  assert.equal(result.action, 'refuse');
+});
+
+test('a primary hit with no Source of truth line still updates and carries a warning', () => {
+  const { issue, primary } = primaryFixture();
+  const result = mod.resolveLookup(issue, { [primary.order]: [{ key: 'MYD-3', description: 'edited by a human' }] });
+  assert.equal(result.action, 'update');
+  assert.equal(result.key, 'MYD-3');
+  assert.match(result.warning, /no Source of truth line/);
+});
+
+test('an epic primary hit for another phase directory is refused with the epic_jira remedy', () => {
+  const p = project({ 'T-01-01': { phase: 1, title: 'Root' } });
+  const epic = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' }).steps.find((s) => s.step === 'epic');
+  const primary = epic.lookup[0];
+  assert.equal(primary.requires_source_of_truth, 'acme/demo:.planning/phases/1-a-phase-title');
+  const same = `Source of truth: ${primary.requires_source_of_truth} (this issue is a generated projection)`;
+  assert.equal(mod.resolveLookup(epic, { 1: [{ key: 'MYD-1', description: same }] }).action, 'update');
+  const other = mod.resolveLookup(epic, { 1: [{ key: 'MYD-1', description: 'Source of truth: acme/demo:.planning/phases/1-other (this issue is a generated projection)' }] });
+  assert.equal(other.action, 'refuse');
+  assert.match(other.reason, /delivery_pipeline\.epic_jira/);
+});
+
+suite('delivery_pipeline.epic_jira routes the epic step through a key lookup');
+
+test('a configured epic key becomes an authoritative key lookup and never creates', () => {
+  const p = project({ 'T-01-01': { phase: 1, title: 'Root', jira: 'MYD-42' }, 'T-02-01': { phase: 2, title: 'Other' } });
+  fs.writeFileSync(path.join(p.dir, '.planning', 'config.json'), JSON.stringify({ delivery_pipeline: { epic_jira: { '01': 'MYD-100' } } }));
+  const epics = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' }).steps.filter((s) => s.step === 'epic');
+  const first = epics.find((s) => s.phase === '1');
+  assert.deepEqual(first.lookup, [{ kind: 'key', key: 'MYD-100' }]);
+  assert.equal(first.on_no_match, 'refuse');
+  assert.deepEqual(first.labelled_only_fields, ['summary', 'description']);
+  assert.equal(first.unlabelled, 'transition-and-comment-only');
+  assert.deepEqual(mod.resolveLookup(first, []), { action: 'refuse', reason: 'unknown key MYD-100' });
+  const second = epics.find((s) => s.phase === '2');
+  assert.deepEqual(second.lookup.map((e) => e.kind), ['primary', 'legacy']);
+  assert.equal(second.on_no_match, 'create');
+});
+
+test('the epic key can be configured by phase directory name', () => {
+  const p = project({ 'T-01-01': { phase: 1, title: 'Root' } });
+  fs.writeFileSync(path.join(p.dir, '.planning', 'config.json'), JSON.stringify({ delivery_pipeline: { epic_jira: { '1-a-phase-title': 'MYD-7' } } }));
+  const epic = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' }).steps.find((s) => s.step === 'epic');
+  assert.deepEqual(epic.lookup, [{ kind: 'key', key: 'MYD-7' }]);
+});
+
+test('without epic_jira the epic lookup is unchanged', () => {
+  const p = project({ 'T-01-01': { phase: 1, title: 'Root' } });
+  const epic = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' }).steps.find((s) => s.step === 'epic');
+  assert.deepEqual(epic.lookup.map((e) => e.kind), ['primary', 'legacy']);
+  assert.equal(epic.on_no_match, 'create');
+});
+
+test('the Jira key pattern matches the one pipeline-config validates epic_jira with', () => {
+  assert.equal(mod.JIRA_KEY_RE.source, require(path.join(path.dirname(SCRIPT), 'pipeline-config.cjs')).EPIC_JIRA_KEY_RE.source);
 });
 
 done();

@@ -35,7 +35,7 @@ const { parseFrontmatter } = require(path.join(__dirname, 'frontmatter.cjs'));
 const { parse: parseDecl, mayIntersect, literalPrefix, GRAMMAR } = require(path.join(__dirname, 'path-owner.cjs'));
 const { applies, conventionalType, CONVENTIONAL_TYPES } = require(path.join(__dirname, 'pr-hygiene.cjs'));
 const { inspectPlan } = require(path.join(__dirname, 'host-verification.cjs'));
-const { loadConfig, repoValue } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { loadConfig, repoValue, epicJiraFor } = require(path.join(__dirname, 'pipeline-config.cjs'));
 
 const ROOT = process.cwd();
 const PHASES_DIR = path.join(ROOT, '.planning', 'phases');
@@ -659,6 +659,19 @@ for (const id of order) {
   // One epic branch NAME per phase, but it has to exist in every repo the phase
   // touches — each repo integrates its own slice through its own epic PR.
   if (!epics[t.phase].repos.includes(t.repo || null)) epics[t.phase].repos.push(t.repo || null);
+}
+{
+  const epicConfig = loadConfig(ROOT);
+  const configured = epicConfig.valid === false ? {} : epicConfig.config.epic_jira;
+  for (const w of epicConfig.warnings) if (w.includes('epic_jira')) warnings.push(w);
+  for (const [phase, e] of Object.entries(epics)) {
+    const key = epicJiraFor(configured, phase, e.phaseDir);
+    if (key) e.jira = key;
+  }
+  for (const name of Object.keys(configured)) {
+    const matched = Object.entries(epics).some(([phase, e]) => epicJiraFor({ [name]: 1 }, phase, e.phaseDir) === 1);
+    if (!matched) warnings.push(`delivery_pipeline.epic_jira."${name}" matches no phase in the graph (phases: ${Object.entries(epics).map(([phase, e]) => `${phase} / ${e.phaseDir}`).join(', ')})`);
+  }
 }
 for (const e of Object.values(epics)) {
   e.base = null;

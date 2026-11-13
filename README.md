@@ -727,6 +727,29 @@ plan prints a configuration hint when the map is empty. For example:
 }
 ```
 
+An epic can have its own Jira issue instead of borrowing its first ticket's key.
+Map the phase number (`1` and `01` are the same phase) or the phase directory name
+to a key under `delivery_pipeline.epic_jira`:
+
+```json
+{
+  "delivery_pipeline": {
+    "epic_jira": { "1": "APP-100", "02-billing": "APP-200" }
+  }
+}
+```
+
+A configured key becomes the epic's `jira` in `tickets.json`, its
+`feat/<KEY>-<slug>` branch name and the epic PR title, and `jira-export.cjs plan`
+looks the epic up by that key and never creates it. An invalid key or a phase
+absent from the graph is reported and skipped. Phases without an entry keep the
+key derived from their first ticket.
+
+Export lookups also check the issue's `Source of truth` line: an issue found by
+its shipyard label is updated only when that line names this step's exact plan
+path, and is otherwise refused as another graph's issue. An issue with no such
+line is still updated.
+
 Use names available in the project's Jira workflow and review
 `jira-project.cjs plan --json` before applying a projection. No tracker update is
 performed by planning or exporting.
