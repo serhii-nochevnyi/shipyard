@@ -276,8 +276,8 @@ delivery:
 
 Each ticket must contain: **Goal, Context (list of files to read),
 Scope, Out of scope, Acceptance criteria, Test strategy, Verification commands.**
-This already almost matches the GSD plan format; we use `plan-review-convergence`
-as the mechanism to bring tickets up to this standard.
+This already almost matches the GSD plan format; the read-only plan checker plus the
+planner revision loop bring tickets up to this standard.
 
 Verification commands are **scoped to `files_modified`** — the test files/filters
 covering the change plus typecheck and lint over the touched paths, runnable in a
@@ -1000,7 +1000,7 @@ Gate 5: Release ready               — rollout/rollback described, evidence in 
 ```
 
 Compared to v1, gates 4–8 are collapsed: plan quality is ensured by
-`plan-review-convergence`, mechanical verification lives in the CI babysit cycle,
+the checker/planner revision loop, mechanical verification lives in the CI babysit cycle,
 and "a quality PR body" is a Gate 3 requirement (PR body template: Problem, Scope, Ticket,
 Dependency slice, Test evidence, Rollout/Rollback).
 

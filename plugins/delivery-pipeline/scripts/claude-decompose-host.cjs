@@ -20,8 +20,7 @@ const { resolveClaudeHome, preflight, emitPreflight } = require('./runtime-conte
 const { repositoryIdentity } = require('./architecture-target.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest, pidAlive,
-  phaseDirectory: sharedPhaseDirectory, writeDurableFile, parsePhaseDirectoryName, resolvePhaseArtifact,
-  liveLaunchChild } = require('./planning-writer-lease.cjs');
+  phaseDirectory: sharedPhaseDirectory, writeDurableFile, parsePhaseDirectoryName, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
 
 const { decompositionAdr } = require('./planning-result-sealer.cjs');
 
@@ -315,7 +314,7 @@ async function runDecomposition(request, dependencies = {}) {
     leaseHandle = writerLease.acquire({
       owner: JSON.stringify({ run_id: runId, owner_id: controller.owner_id }),
       base_revision: git(scope.worktree, 'rev-parse', 'HEAD'),
-      holder_child: (held) => liveLaunchChild(path.join(store, 'launches'), held.epoch, (launch) => launch.child_pid),
+      launch_dir: path.join(store, 'launches'),
     });
     const preLaunchSnapshot = writerLease.snapshotTree();
     const resolution = (dependencies.resolveDispatch || pipelineConfig.resolveDispatch)({

@@ -13,7 +13,7 @@ const { ensureDependencies } = require('./worktree-deps.cjs');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const claudeHost = require('./claude-delivery-host.cjs');
 const claudeDecomposeHost = require('./claude-decompose-host.cjs');
-const { parsePhaseDirectoryName, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
+const { phaseDirectoryNames, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
 const codexHost = require('./codex-delivery-host.cjs');
 const claudeRoleHost = require('./claude-role-host.cjs');
 const sentinelPreflight = require('./sentinel-preflight.cjs');
@@ -828,7 +828,7 @@ function phasePlanningInputs(projectRoot, phase) {
   let names;
   try { names = fs.readdirSync(phaseRoot); }
   catch { return { requiredRefs: [], optionalRefs: [] }; }
-  const matches = names.filter((name) => parsePhaseDirectoryName(name)?.number === phase);
+  const matches = phaseDirectoryNames(projectRoot, names, phase);
   if (matches.length > 1) buildFail('--phase', `phase ${phase} has more than one planning directory`);
   if (!matches.length) return { requiredRefs: [], optionalRefs: [] };
   const directory = path.join(phaseRoot, matches[0]);

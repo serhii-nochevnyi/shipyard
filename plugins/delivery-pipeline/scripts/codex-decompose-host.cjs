@@ -24,8 +24,7 @@ const { hintForError } = require('./refusal-hints.cjs');
 const { sealDecomposition, assertContained, captureContainmentBaseline,
   persistContainmentBaseline, restoreContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest, pidAlive,
-  phaseDirectory: sharedPhaseDirectory, writeDurableFile, resolvePhaseArtifact,
-  liveLaunchChild } = require('./planning-writer-lease.cjs');
+  phaseDirectory: sharedPhaseDirectory, writeDurableFile, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const LAUNCH_SCHEMA = 'shipyard.codex-decompose-launch.v1';
@@ -1262,8 +1261,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   const leaseHandle = writerLease.acquire({
     owner: JSON.stringify({ run_id: scope.run_id, owner_id: controller.owner_id }),
     base_revision: sourceRevision(scope.worktree),
-    holder_child: (held) => liveLaunchChild(options.launchDir || path.join(hostStateDir, 'launches'), held.epoch,
-      (launch) => launch.process_spawned?.pid),
+    launch_dir: options.launchDir || path.join(hostStateDir, 'launches'),
   });
   let result;
   let resolution;
