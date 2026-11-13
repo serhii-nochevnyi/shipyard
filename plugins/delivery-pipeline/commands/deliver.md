@@ -701,7 +701,13 @@ execute the ticket.
 For a Codex-host result the trusted consumer seals the bounded response only after
 the authenticated receipt exists (the runtime host seals through its own
 consumer); on either path validate and read before `drift-record.cjs mark`, reuse
-forwarding or logging:
+forwarding or logging. The Codex host exits non-zero unless the judge's original
+final answer is one JSON object that seal accepts (`id` equal to the scoped
+ticket, a `fresh`/`drifted` verdict, `moved` with unique ids, `reuse_candidates`
+and `evidence` arrays) and the producer evidence file exists. On success its
+output carries that answer, unchanged, as `drift_result`; write exactly that
+object to `<trusted-result.json>`. Never add or edit a field yourself: a refused
+answer is a failed drift gate, not a result to repair by hand.
 
 ```text
 node ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/role-artifact.cjs prepare \

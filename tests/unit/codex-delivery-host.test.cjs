@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const roleArtifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
@@ -236,7 +237,25 @@ function hostRunner(spy = []) {
   };
 }
 
+let driftAnswer = (context) => ({
+  id: context.ticket, verdict: 'fresh', summary: 'The plan still matches the integration base.',
+  integration_base: { ref: 'main' }, moved: [], reuse_candidates: ['src/owned.txt:1 — existing owned file'],
+  evidence: ['git ls-tree -r --name-only main -- src — src/owned.txt; exit 0'], evidence_file: '.shipyard-drift-evidence.md',
+});
+
+function withDriftAnswer(answer, action) {
+  const previous = driftAnswer;
+  driftAnswer = answer;
+  return Promise.resolve().then(action).finally(() => { driftAnswer = previous; });
+}
+
 function application(selection, context) {
+  if (context.prompt?.includes('<DRIFT-RESULT-CONTRACT>')) {
+    fs.writeFileSync(path.join(context.worktreePath, '.shipyard-drift-evidence.md'), '# drift evidence\n\ngit ls-tree -r main -- src; exit 0\n');
+    const answer = driftAnswer(context);
+    context.onCompleted({ launch_id: 'codex-delivery-test',
+      last_agent_message: typeof answer === 'string' ? answer : JSON.stringify(answer, null, 2) });
+  }
   if (context.prompt?.includes('<EXECUTOR-RESULT-CONTRACT>')) {
     const root = context.worktreePath;
     const target = require('../../plugins/delivery-pipeline/scripts/pr-hygiene.cjs').applies({ root });
@@ -1871,7 +1890,9 @@ test('a Shipyard-shaped worktree (graph tracked at HEAD, no flag or env) leaves 
         scope: f.scope, host: f.host, capabilities, agentDir: f.agentDir, agentManifest: f.agentManifest,
         storageRoot: fs.mkdtempSync(path.join(temporary, 'storage-')), env: {},
       }).run({ role: 'drift-check', context: { prompt: 'Judge this ticket.' } });
-      assert.equal(f.calls[0].context.prompt, 'Judge this ticket.');
+      const prompt = f.calls[0].context.prompt;
+      assert.ok(prompt.startsWith('Judge this ticket.\n\n<DRIFT-RESULT-CONTRACT>'));
+      assert.ok(!prompt.includes('<TICKET-CONTRACT'));
     } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
   }));
 
@@ -1939,10 +1960,10 @@ test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main workt
     }
   }));
 
-function driftCliOptions(f) {
+function driftCliOptions(f, scope = f.host.scope) {
   return {
     storageRoot: fs.mkdtempSync(path.join(temporary, 'storage-')),
-    host: { ...f.host, scope: { ...f.host.scope, worktree: fs.realpathSync(f.scope.worktree) } },
+    host: { ...f.host, scope: { ...scope, worktree: fs.realpathSync(f.scope.worktree) } },
     capabilities, agentDir: f.agentDir, agentManifest: f.agentManifest, env: {},
   };
 }
@@ -1963,7 +1984,7 @@ test('CLI launches drift-check on its builder graph_dir and refuses relative, co
       const graphDir = path.join(fs.realpathSync(f.root), '.planning', 'graph');
       await runCli(['--args-file', driftRequestFile(f, graphDir)], { write() {} }, driftCliOptions(f));
       assert.equal(f.calls.length, 1);
-      assert.equal(f.calls[0].context.prompt, 'Judge this ticket.');
+      assert.ok(f.calls[0].context.prompt.startsWith('Judge this ticket.\n\n<DRIFT-RESULT-CONTRACT>'));
 
       assert.throws(() => readRequestFile(driftRequestFile(f, '.planning/graph')),
         (error) => error.code === 'INVALID_INPUT' && /absolute canonical graph/.test(error.message));
@@ -2031,6 +2052,75 @@ test('CLI launches drift-check from a ticket worktree on a linked project worktr
     } finally {
       for (const dir of [ticket, project, root]) fs.rmSync(dir, { recursive: true, force: true });
     }
+  }));
+
+function builtDriftRequest(f) {
+  const file = path.join(fs.mkdtempSync(path.join(temporary, 'drift-built-')), 'request.json');
+  const request = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs')
+    .build(['drift-check', f.scope.ticket, '--runtime', 'codex'], { cwd: f.root });
+  fs.writeFileSync(file, JSON.stringify(request));
+  return { file, request };
+}
+
+function driftBuilderFixture() {
+  const f = ticketWorktreeFixture('drift-check');
+  fs.writeFileSync(path.join(f.root, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {
+    'T-38-04': { branch: 'main', pr_base: 'main', plan: f.planRel, files: ['src/owned.txt'], phase: 38, type: 'implementation', risk: 'low' },
+  } }));
+  fs.writeFileSync(path.join(f.root, '.planning', 'graph', 'delivery-state.json'), JSON.stringify({ 'T-38-04': { ready: true, base: 'main' } }));
+  git(f.root, 'add', '.');
+  git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'drift builder graph');
+  return f;
+}
+
+test('builder drift-check request, CLI host, original answer, seal and validate agree on the authenticated ticket id', () =>
+  withoutShipyardGraphDirEnv(async () => {
+    const f = driftBuilderFixture();
+    try {
+      const { file, request } = builtDriftRequest(f);
+      const options = driftCliOptions(f, request.scope);
+      const printed = [];
+      const result = await runCli(['--args-file', file], { write(line) { printed.push(line); } }, options);
+      assert.ok(f.calls[0].context.prompt.includes('exactly "T-38-04"'));
+      const answer = JSON.parse(JSON.stringify(JSON.parse(printed.join('')).drift_result));
+      assert.equal(answer.id, request.scope.ticket);
+      assert.deepEqual(answer.integration_base, { ref: 'main' });
+      const input = { worktreePath: f.root, role: 'drift-check', ticket: request.scope.ticket, base: 'main',
+        recorder: options.host.recorder, dispatchId: result.receipt.dispatch_id };
+      const sealed = roleArtifact.seal({ ...input, result: answer });
+      roleArtifact.validate({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+      const read = roleArtifact.read({ ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest });
+      assert.equal(read.envelope.verdict, 'fresh');
+      assert.deepEqual(read.findings.reuse_candidates, answer.reuse_candidates);
+      assert.throws(() => roleArtifact.seal({ ...input, result: { ...answer, id: undefined } }),
+        (error) => error.code === 'ARTIFACT_IDENTITY_MISMATCH');
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  }));
+
+test('the CLI host refuses a drift answer without the scoped id, with another id, or missing arrays and seals nothing', () =>
+  withoutShipyardGraphDirEnv(async () => {
+    const f = driftBuilderFixture();
+    const valid = (context) => ({ id: context.ticket, verdict: 'fresh', moved: [], reuse_candidates: [], evidence: ['git status --short; exit 0'] });
+    const cases = [
+      [(context) => { const { id: _id, ...rest } = valid(context); return { ...rest, integration_base: { ref: 'main' } }; }, 'ARTIFACT_IDENTITY_MISMATCH'],
+      [(context) => ({ ...valid(context), id: 'T-38-05' }), 'ARTIFACT_IDENTITY_MISMATCH'],
+      [(context) => { const { evidence: _e, ...rest } = valid(context); return rest; }, 'INVALID_RESULT'],
+      [(context) => { const { reuse_candidates: _r, ...rest } = valid(context); return rest; }, 'INVALID_RESULT'],
+      [(context) => ({ ...valid(context), verdict: 'drifted', moved: [{ path: 'src/owned.txt' }] }), 'MISSING_DRIFT_ID'],
+      [(context) => 'Verdict: fresh for ' + context.ticket, 'INVALID_RESULT'],
+      [(context) => { fs.writeFileSync(path.join(context.worktreePath, '.shipyard-drift-evidence.md'), ''); return valid(context); }, 'MISSING_ARTIFACT'],
+    ];
+    try {
+      for (const [answer, code] of cases) {
+        const { file, request } = builtDriftRequest(f);
+        await withDriftAnswer(answer, () => assert.rejects(() => runCli(['--args-file', file], { write() {} },
+          driftCliOptions(f, request.scope)), (error) => error.code === code));
+      }
+      assert.equal(f.calls.length, cases.length);
+      assert.equal(fs.existsSync(path.join(f.root, roleArtifact.ARTIFACT_ARCHIVE_DIR)), false);
+      assert.equal(fs.existsSync(path.join(f.root, '.planning', 'graph', 'drift.json')), false);
+      assert.equal(git(f.root, 'status', '--porcelain', '--', '.planning/graph/tickets.json', '.planning/graph/delivery-state.json'), '');
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
   }));
 
 test('architecture review cannot bypass host-owned preparation with a caller prompt', async () => {

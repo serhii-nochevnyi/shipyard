@@ -2690,6 +2690,11 @@ function driftResultData(result, metadata) {
   };
 }
 
+// @contract: the Codex host admits a drift result only when this same check would let seal accept it.
+function validateDriftResult(result, ticket, receipt) {
+  return driftResultData(result, { ticket, trusted: { receipt, dispatchId: receipt && receipt.dispatch_id } });
+}
+
 function sanitizedRoleResult(result, trusted) {
   assertAgentReceiptIsNotForged(result, trusted);
   const safe = { ...result };
@@ -5133,6 +5138,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   sealJudgment,
   validateJudgmentManifest,
   validateRole,
+  validateDriftResult,
   seal,
   validate,
   read,

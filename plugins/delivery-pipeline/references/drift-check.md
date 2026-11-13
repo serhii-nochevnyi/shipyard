@@ -70,17 +70,24 @@ PLAN, never a line of the repository under test. It remains bound to the plan's
 content hash, so it lifts by itself when the ticket is re-planned.
 
 ## Output (final message, structured)
+The final message is one JSON object with no prose and no Markdown fence. The
+trusted host parses it as is and refuses it when a required field is missing.
+- `id`: the ticket you judged, exactly as the request names it (for example
+  `"T-13-07"`). It is required: the trusted consumer seals the result only when
+  `id` equals the authenticated ticket, and nobody adds it after the judge returns.
 - `verdict: fresh | drifted`
 - `evidence: ["exact command — relevant path — observed output or exit status"]` for every checkable claim; an assumption or unknown must name the next command instead
 - The judge does not report whether `drift-record.cjs` ran. The trusted
   consumer validates the artifact first, then the orchestrator records the
   verdict and verifies that it landed.
-- for `drifted`: an itemized list of what moved (missing file, changed
-  signature, pre-implemented scope), enough for a targeted re-plan of THIS
+- `moved`: always present. Empty for `fresh`. For `drifted`, an itemized list of
+  what moved (missing file, changed signature, pre-implemented scope), each item
+  an object with its own unique `id`, enough for a targeted re-plan of THIS
   ticket only
 - `reuse_candidates`: for EACH hit from step 4 — `file:line — what it already
   does`, and one clause on which part of this ticket it covers. Empty list
   when there is none; do not pad it with vaguely-related code.
+- `summary`: optional, one short judgment.
 
 Return the complete `moved`, `reuse_candidates`, and `evidence` arrays to the
 trusted boundary so no finding is capped or lost. The Workflow/direct consumer

@@ -40,6 +40,7 @@ const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
+const MAX_DRIFT_RESULT_BYTES = 4 * 1024 * 1024;
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 const TICKET_DELIVERY_ROLES = new Set(['drift-check', 'ci-fix', 'review-fix']);
 // @contract: these are exactly the Codex roles whose deliver-dispatch builder emits graph_dir.
@@ -384,7 +385,7 @@ function readSealed(file, key) {
 }
 
 function authenticatedReceipt(recorder, dispatchId, expectedRole = 'executor') {
-  if (!['executor', 'review-fix', 'ci-fix'].includes(expectedRole)) fail('MISSING_RECEIPT', 'unsupported candidate role');
+  if (!['executor', 'review-fix', 'ci-fix', 'drift-check'].includes(expectedRole)) fail('MISSING_RECEIPT', 'unsupported candidate role');
   if (!recorder || typeof recorder.getVerifiedRecord !== 'function') {
     fail('MISSING_RECEIPT', 'host recorder cannot authenticate the original dispatch receipt');
   }
@@ -2598,6 +2599,50 @@ function executorCompletion(completed, result, prepared, recorder) {
   return Object.freeze({ ...output, status: output.status === 'blocked' ? 'blocked' : 'committed' });
 }
 
+function driftResultPrompt(ticket) {
+  return '\n\n<DRIFT-RESULT-CONTRACT>\n'
+    + 'Before returning, write the complete command-backed findings to ' + roleArtifact.DRIFT_EVIDENCE_NAME + ' in the worktree. '
+    + 'Your final answer must be a single JSON object, without Markdown or prose, with exactly these required fields: '
+    + JSON.stringify({ id: ticket, verdict: 'fresh', moved: [], reuse_candidates: [], evidence: ['exact command — path — observed output or exit status'],
+      summary: 'One short judgment.' })
+    + '. id is the ticket you judged, exactly ' + JSON.stringify(ticket) + '. verdict is fresh or drifted. '
+    + 'moved is empty for fresh; for drifted each moved finding is an object with its own unique id. '
+    + 'reuse_candidates and evidence are arrays of strings, empty when there is nothing to report. '
+    + 'The trusted host refuses a final answer that omits or changes any required field.\n</DRIFT-RESULT-CONTRACT>';
+}
+
+// @invariant: only an authenticated native drift answer that seal accepts is returned.
+function driftCompletion(completed, result, scope, recorder) {
+  const original = authenticatedReceipt(recorder, result.receipt?.dispatch_id, 'drift-check');
+  const native = original.receipt.runtime_evidence;
+  if (canonical(original.receipt) !== canonical(result.receipt) || !completed
+      || completed.launch_id !== original.receipt.launch_id
+      || canonical(completed.runtime_evidence) !== canonical(native)
+      || (native && completed.session_id !== native.session_id)
+      || typeof completed.last_agent_message !== 'string' || Buffer.byteLength(completed.last_agent_message) > MAX_DRIFT_RESULT_BYTES)
+    fail('INVALID_RESULT', 'drift-check lacks one matching authenticated native completion');
+  if (native) {
+    const transcript = native.transcript;
+    if (!transcript) fail('INVALID_RESULT', 'drift-check has no authenticated final transcript');
+    const raw = fs.readFileSync(transcript.path, 'utf8');
+    const stream = parseCodexStream(raw);
+    if (Buffer.byteLength(raw) !== transcript.bytes || sha256(raw) !== transcript.sha256
+        || stream.session_id !== completed.session_id
+        || repairStreamFinal(stream, 'INVALID_RESULT', true) !== completed.last_agent_message)
+      fail('INVALID_RESULT', 'drift-check result differs from its authenticated native transcript');
+  }
+  let output;
+  try { output = JSON.parse(completed.last_agent_message); }
+  catch { fail('INVALID_RESULT', 'drift-check final answer must be one complete JSON object'); }
+  roleArtifact.validateDriftResult(output, scope.ticket, original.receipt);
+  let evidence;
+  try { evidence = fs.lstatSync(path.join(scope.worktree, roleArtifact.DRIFT_EVIDENCE_NAME)); }
+  catch { evidence = null; }
+  if (!evidence || !evidence.isFile() || evidence.isSymbolicLink() || evidence.size === 0)
+    fail('MISSING_ARTIFACT', 'drift-check returned without its producer evidence ' + roleArtifact.DRIFT_EVIDENCE_NAME);
+  return Object.freeze(output);
+}
+
 function sealExecutorPublication(candidate, artifact, recorder) {
   if (!candidate.executor_output) return {};
   const input = { role: 'executor', runtime: 'codex', ticket: candidate.ticket,
@@ -3025,6 +3070,7 @@ function createCodexDeliveryHost(options = {}) {
         request.signals = preparedRepairSignals(repairPrepared);
       }
       let repairCompleted;
+      let driftCompleted;
       if (request.role === 'arch-review') {
         const prepared = options.archReviewContext;
         if (!archReviewContext.isPreparedContext(prepared)
@@ -3096,9 +3142,10 @@ function createCodexDeliveryHost(options = {}) {
           request.role === 'drift-check');
         const block = planDeliveryBlock(delivery, undefined);
         if (block) context.prompt = originalPrompt + block;
+        if (request.role === 'drift-check') context.prompt = (block ? context.prompt : originalPrompt) + driftResultPrompt(scope.ticket);
       }
       const reviewHost = committing || repairPrepared || request.role === 'arch-review' || request.role === 'code-review' || request.role === 'integrator'
-        ? { ...runtimeHost } : runtimeHost;
+        || request.role === 'drift-check' ? { ...runtimeHost } : runtimeHost;
       if (reviewHost !== runtimeHost) {
         for (const method of ['launch', 'launchStatic']) {
           if (typeof runtimeHost[method] !== 'function') continue;
@@ -3140,6 +3187,13 @@ function createCodexDeliveryHost(options = {}) {
               return runtimeHost[method](selection, { ...launchContext, onCompleted(completed) {
                 if (completedExecutors.has(launchContext.dispatch_id)) fail('EXECUTOR_RESULT_INVALID', 'executor completed more than once');
                 completedExecutors.set(launchContext.dispatch_id, completed);
+              } });
+            }
+            if (request.role === 'drift-check') {
+              const [selection, launchContext] = args;
+              return runtimeHost[method](selection, { ...launchContext, onCompleted(completed) {
+                if (driftCompleted) fail('INVALID_RESULT', 'drift-check completed more than once');
+                driftCompleted = completed;
               } });
             }
             if (request.role === 'code-review' || request.role === 'integrator') codeReviewContext.recheckInstalledLaunch(options.codeReviewContext);
@@ -3269,6 +3323,8 @@ function createCodexDeliveryHost(options = {}) {
           { ...options, recorder: runtimeHost.recorder }, prepared.stateRoot, prepared.key);
         return Object.freeze({ ...artifact, repair_result: output, publication });
       }
+      if (request.role === 'drift-check')
+        return Object.freeze({ ...result, drift_result: driftCompletion(driftCompleted, result, scope, runtimeHost.recorder) });
       if (!committing) return result;
       let artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder,
         executorCompleted: completedExecutors.get(result.receipt?.dispatch_id) });
