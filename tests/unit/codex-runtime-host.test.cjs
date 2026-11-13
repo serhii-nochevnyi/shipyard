@@ -222,6 +222,20 @@ test('signer protection covers the configured user.signingkey file, absolute or 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('signer protection covers the private key beside a public ssh signing key and the .pub beside a private one', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-signer-ssh-')));
+  try {
+    const git = (...args) => require('node:child_process').execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
+    git('init', '-q');
+    const privateKey = path.join(root, 'elsewhere', 'id_ed25519');
+    git('config', 'user.signingkey', `${privateKey}.pub`);
+    assert.ok(signerProtectionPaths({}, root).includes(privateKey));
+    assert.ok(signerProtectionPaths({}, root).includes(`${privateKey}.pub`));
+    git('config', 'user.signingkey', privateKey);
+    assert.ok(signerProtectionPaths({}, root).includes(`${privateKey}.pub`));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('a second thread identity in the stream is refused', () => {
   const started = stream().split('\n').find((line) => line.includes('"thread.started"'));
   const foreign = started.replace('11111111-1111-4111-8111-111111111111', 'foreign');

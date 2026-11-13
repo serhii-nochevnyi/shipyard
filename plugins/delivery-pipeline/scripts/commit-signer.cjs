@@ -148,7 +148,7 @@ function verifyCommitSignature(worktree, commit, options = {}) {
       directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-allowed-signers-'));
       const file = path.join(directory, 'allowed_signers');
       fs.writeFileSync(file, `${PRINCIPAL} namespaces="git" ${publicKey}\n`, { mode: 0o600 });
-      config = ['-c', `gpg.ssh.allowedSignersFile=${file}`];
+      config = ['-c', `gpg.ssh.allowedSignersFile=${file}`, '-c', 'gpg.ssh.program=ssh-keygen'];
     }
     const base = ['-C', worktree, ...config];
     try {

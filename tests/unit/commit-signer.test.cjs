@@ -104,6 +104,16 @@ test('ssh: verification ignores the operator allowed-signers file and works with
   assert.equal(git(repo, 'config', '--get', 'gpg.ssh.allowedSignersFile'), other);
 });
 
+test('ssh: verification works when gpg.ssh.program is a signing-only wrapper', { skip: skipSsh }, () => {
+  const wrapper = path.join(temporary, 'sign-only.sh');
+  fs.writeFileSync(wrapper, '#!/bin/sh\ncase " $* " in *" -Y sign "*) exec ssh-keygen "$@";; esac\nexit 1\n', { mode: 0o755 });
+  const repo = sshRepo(keyA);
+  git(repo, 'config', 'gpg.ssh.program', wrapper);
+  const commit = signedCommit(repo);
+  assert.deepEqual(signer.verifyCommitSignature(repo, commit), { code: 'G', signer: keyA.fingerprint });
+  assert.equal(git(repo, 'config', '--get', 'gpg.ssh.program'), wrapper);
+});
+
 test('ssh: a private key path uses the sibling .pub and refuses a private key without one', { skip: skipSsh }, () => {
   const repo = sshRepo(keyA, keyA.file);
   assert.equal(signer.signerFingerprint(repo), keyA.fingerprint);

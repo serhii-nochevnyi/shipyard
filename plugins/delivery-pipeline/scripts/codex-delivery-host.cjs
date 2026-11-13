@@ -271,8 +271,9 @@ function verifiedSignature(worktree, commit) {
   try {
     return commitSigner.verifyCommitSignature(worktree, commit, { env: scopeFreeEnv() });
   } catch (error) {
-    if (error instanceof commitSigner.SignerError) fail('COMMIT_FINALIZATION_FAILED', error.message);
-    throw error;
+    if (!(error instanceof commitSigner.SignerError)) throw error;
+    if (error.code === 'SIGNATURE_INVALID') fail('COMMIT_PREFLIGHT_FAILED', `Git preflight failed: ${error.message}`);
+    fail('SIGNER_UNAVAILABLE', error.message);
   }
 }
 
@@ -1503,13 +1504,7 @@ function repairFeedbackChanges(before, current, reply, relation, resolvedThread 
 }
 
 function repairRevisionSigner(root, commit, expectedSigner = null) {
-  let code, signer;
-  try {
-    ({ code, signer } = commitSigner.verifyCommitSignature(root, commit, { env: scopeFreeEnv() }));
-  } catch (error) {
-    if (error instanceof commitSigner.SignerError) throw new Error(error.message);
-    throw error;
-  }
+  const { code, signer } = verifiedSignature(root, commit);
   if (!['G', 'U'].includes(code) || !signer || (expectedSigner && signer !== expectedSigner))
     throw new Error('revision lacks its authenticated signer');
   return signer;

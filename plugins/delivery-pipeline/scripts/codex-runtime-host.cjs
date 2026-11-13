@@ -1067,7 +1067,7 @@ function signerProtectionPaths(env, worktree) {
   catch (_) { key = ''; }
   if (key && (path.isAbsolute(key) || key.startsWith('~/'))) {
     const file = path.resolve(key.startsWith('~/') ? path.join(os.homedir(), key.slice(2)) : key);
-    paths.push(file);
+    paths.push(file, file.endsWith('.pub') ? file.slice(0, -4) : `${file}.pub`);
   }
   return normalizeProtectedPaths(paths);
 }
