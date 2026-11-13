@@ -219,6 +219,56 @@ test('fails closed when signer configuration or signer verification is missing',
   assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
 });
 
+const hasSshKeygen = !require('node:child_process').spawnSync('ssh-keygen', ['-?'], { stdio: 'ignore' }).error;
+
+function sshSigner() {
+  const key = path.join(temporary, `ssh-key-${++sequence}`);
+  command('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key]);
+  const fingerprint = command('ssh-keygen', ['-E', 'sha256', '-lf', `${key}.pub`]).split(/\s+/)[1];
+  return { key, fingerprint };
+}
+
+test('finalizes a verified commit under gpg.format=ssh without any allowed-signers configuration', { skip: !hasSshKeygen }, () => {
+  const { repo, options } = makeRepo();
+  const ssh = sshSigner();
+  git(repo, 'config', 'gpg.format', 'ssh');
+  git(repo, 'config', 'user.signingkey', `${ssh.key}.pub`);
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+
+  const result = finalizeDeliveryCommit({ ...options, expectedSigner: ssh.fingerprint });
+
+  assert.equal(result.signer, ssh.fingerprint);
+  assert.equal(result.commit, git(repo, 'rev-parse', 'HEAD'));
+  assert.equal(git(repo, 'status', '--porcelain'), '');
+});
+
+test('finalizes under gpg.format=ssh with a private-key signingkey and its sibling .pub', { skip: !hasSshKeygen }, () => {
+  const { repo, options } = makeRepo();
+  const ssh = sshSigner();
+  git(repo, 'config', 'gpg.format', 'ssh');
+  git(repo, 'config', 'user.signingkey', ssh.key);
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  assert.equal(finalizeDeliveryCommit({ ...options, expectedSigner: ssh.fingerprint }).signer, ssh.fingerprint);
+});
+
+test('refuses an ssh signer that differs from expectedSigner and leaves HEAD unchanged', { skip: !hasSshKeygen }, () => {
+  const { repo, head, options } = makeRepo();
+  const ssh = sshSigner();
+  git(repo, 'config', 'gpg.format', 'ssh');
+  git(repo, 'config', 'user.signingkey', `${ssh.key}.pub`);
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  assert.throws(() => finalizeDeliveryCommit(options), /does not match expectedSigner/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+});
+
+test('refuses gpg.format=x509 before signing anything', () => {
+  const { repo, head, options } = makeRepo();
+  git(repo, 'config', 'gpg.format', 'x509');
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  assert.throws(() => finalizeDeliveryCommit(options), /gpg\.format=x509 is not supported/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+});
+
 test('rejects a configured key that cannot sign', () => {
   const { repo, head, options } = makeRepo();
   fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');

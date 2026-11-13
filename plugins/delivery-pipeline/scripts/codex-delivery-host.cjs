@@ -32,6 +32,7 @@ const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 const { isScratch } = require('./conveyor-scratch.cjs');
+const commitSigner = require('./commit-signer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
@@ -146,9 +147,14 @@ function inflightGraphDir(options, worktree) {
   return fs.existsSync(directory) ? directory : null;
 }
 
-function git(worktree, args) {
+function scopeFreeEnv() {
   const env = { ...process.env };
   for (const key of GIT_SCOPE_KEYS) delete env[key];
+  return env;
+}
+
+function git(worktree, args) {
+  const env = scopeFreeEnv();
   try {
     return execFileSync('git', ['-C', worktree, ...args], {
       encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
@@ -253,23 +259,22 @@ function effectiveBaseRef(worktree, file, ticket, snapshot) {
 }
 
 function signerFingerprint(worktree) {
-  const key = git(worktree, ['config', '--get', 'user.signingkey']);
-  if (!key) fail('SIGNER_UNAVAILABLE', 'host signing key is not configured');
-  let output;
   try {
-    output = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys', key], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
-    });
+    return commitSigner.signerFingerprint(worktree, { env: scopeFreeEnv() });
   } catch (error) {
-    fail('SIGNER_UNAVAILABLE', 'host signing key is unavailable: ' + String(error.stderr || error.message).trim());
+    if (error instanceof commitSigner.SignerError) fail('SIGNER_UNAVAILABLE', error.message);
+    throw error;
   }
-  const lines = output.split(/\r?\n/);
-  const fingerprint = lines.find((line) => line.startsWith('fpr:'))?.split(':')[9];
-  if (lines.filter((line) => line.startsWith('sec:')).length !== 1
-      || !/^[0-9A-F]{40}$/i.test(fingerprint || '')) {
-    fail('SIGNER_UNAVAILABLE', 'host signing key has no unique full fingerprint');
+}
+
+function verifiedSignature(worktree, commit) {
+  try {
+    return commitSigner.verifyCommitSignature(worktree, commit, { env: scopeFreeEnv() });
+  } catch (error) {
+    if (!(error instanceof commitSigner.SignerError)) throw error;
+    if (error.code === 'SIGNATURE_INVALID') fail('COMMIT_PREFLIGHT_FAILED', `Git preflight failed: ${error.message}`);
+    fail('SIGNER_UNAVAILABLE', error.message);
   }
-  return fingerprint;
 }
 
 function sha256(value) {
@@ -652,8 +657,8 @@ function signedArtifact(worktree, candidate, committed) {
 }
 
 function verifySignedCommit(worktree, candidate, commit) {
-  git(worktree, ['verify-commit', commit]);
-  const [code, fingerprint, parents, tree] = git(worktree, ['show', '-s', '--format=%G?%x00%GF%x00%P%x00%T', commit]).split('\0');
+  const { code, signer: fingerprint } = verifiedSignature(worktree, commit);
+  const [parents, tree] = git(worktree, ['show', '-s', '--format=%P%x00%T', commit]).split('\0');
   if (!['G', 'U'].includes(code) || fingerprint !== candidate.signer) {
     fail('COMMIT_FINALIZATION_FAILED', 'host commit signature does not match the scoped signer');
   }
@@ -1499,8 +1504,7 @@ function repairFeedbackChanges(before, current, reply, relation, resolvedThread 
 }
 
 function repairRevisionSigner(root, commit, expectedSigner = null) {
-  git(root, ['verify-commit', commit]);
-  const [code, signer] = git(root, ['show', '-s', '--format=%G?%x00%GF', commit]).split('\0');
+  const { code, signer } = verifiedSignature(root, commit);
   if (!['G', 'U'].includes(code) || !signer || (expectedSigner && signer !== expectedSigner))
     throw new Error('revision lacks its authenticated signer');
   return signer;

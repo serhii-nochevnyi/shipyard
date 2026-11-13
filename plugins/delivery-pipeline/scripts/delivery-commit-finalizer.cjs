@@ -8,6 +8,7 @@ const { parse, owns } = require('./path-owner.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { scopeBase } = require('./diamond-parents.cjs');
+const commitSigner = require('./commit-signer.cjs');
 const { SCRATCH_FILES, isScratch } = require('./conveyor-scratch.cjs');
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 
@@ -65,6 +66,15 @@ function git(worktree, args, env, options = {}) {
   } catch (error) {
     const detail = String(error.stderr || error.message).trim();
     fail(`git ${args[0]} failed${detail ? `: ${detail}` : ''}`);
+  }
+}
+
+function verifiedSignature(root, commit, env) {
+  try {
+    return commitSigner.verifyCommitSignature(root, commit, { env });
+  } catch (error) {
+    if (error instanceof commitSigner.SignerError) fail(error.message);
+    throw error;
   }
 }
 
@@ -265,6 +275,12 @@ function finalizeDeliveryCommit(options) {
 
   const signingKey = git(root, ['config', '--get', 'user.signingkey'], env).trim();
   if (!signingKey) fail('host Git signer is not configured');
+  try {
+    commitSigner.signingFormat(root, env);
+  } catch (error) {
+    if (error instanceof commitSigner.SignerError) fail(error.message, error.code);
+    throw error;
+  }
 
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-commit-index-'));
   const privateEnv = { ...env, GIT_INDEX_FILE: path.join(temporary, 'index') };
@@ -303,9 +319,8 @@ function finalizeDeliveryCommit(options) {
     const commit = git(root, ['commit-tree', '-S', tree, '-p', head], privateEnv, {
       input: `${subject}${verificationTrailer}\n`,
     }).trim();
-    git(root, ['verify-commit', commit], env);
-    const signature = git(root, ['show', '-s', '--format=%G?%x00%GF', commit], env).trim().split('\0');
-    if (!['G', 'U'].includes(signature[0]) || signature[1] !== expectedSigner.trim()) {
+    const signature = verifiedSignature(root, commit, env);
+    if (!['G', 'U'].includes(signature.code) || signature.signer !== expectedSigner.trim()) {
       fail('commit signature does not match expectedSigner');
     }
     const recordedEvidenceDigest = verificationEvidenceDigestFromMessage(
@@ -345,7 +360,7 @@ function finalizeDeliveryCommit(options) {
       if (lockFd !== undefined) fs.closeSync(lockFd);
       if (ownsLock) fs.rmSync(lockPath, { force: true });
     }
-    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: resume ? committed : staged,
+    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature.signer, changed: resume ? committed : staged,
       verificationEvidenceDigest });
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });

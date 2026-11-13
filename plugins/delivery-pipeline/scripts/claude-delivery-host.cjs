@@ -9,6 +9,7 @@ const { createClaudeRuntimeHost, probeClaudeRuntime } = require('./claude-runtim
 const { registerClaudeWorkflowHost } = require('./claude-workflow-host.cjs');
 const { loadClaudeReferenceContent } = require('./claude-reference-content.cjs');
 const { finalizeDeliveryCommit } = require('./delivery-commit-finalizer.cjs');
+const commitSigner = require('./commit-signer.cjs');
 const { verifyPlan, retryableFailure, failureContext, scheduleRetry: scheduleVerificationRetry,
   failureReason: verificationFailureReason } = require('./host-verification.cjs');
 const { loadConfig, repoValue, resolveDispatch } = require('./pipeline-config.cjs');
@@ -217,23 +218,21 @@ function readGraphFile(options, name, worktree) {
 }
 
 function signingFingerprint(worktree) {
-  const key = git(worktree, ['config', '--get', 'user.signingkey']);
-  if (!key) reject('host Git signer is unavailable');
-  let output;
   try {
-    output = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys', key], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
-    });
+    return commitSigner.signerFingerprint(worktree);
   } catch (error) {
-    reject(`host signing key cannot be resolved: ${String(error.stderr || error.message).trim()}`);
+    if (error instanceof commitSigner.SignerError) reject(error.message);
+    throw error;
   }
-  const lines = output.split(/\r?\n/);
-  const secretKeys = lines.filter((line) => line.startsWith('sec:'));
-  const fingerprint = lines.find((line) => line.startsWith('fpr:'))?.split(':')[9];
-  if (secretKeys.length !== 1 || !/^[0-9A-F]{40}$/i.test(fingerprint || '')) {
-    reject('host signing key has no unique full fingerprint');
+}
+
+function verifiedSignature(worktree, commit) {
+  try {
+    return commitSigner.verifyCommitSignature(worktree, commit);
+  } catch (error) {
+    if (error instanceof commitSigner.SignerError) reject(`Git preflight failed: ${error.message}`);
+    throw error;
   }
-  return fingerprint;
 }
 
 function graphTicket(options, ticket, worktree) {
@@ -327,9 +326,8 @@ function reconcileRepairBase(options, entry, repair) {
     reject('trusted base reconciliation did not incorporate the canonical base');
   }
   if (refreshed.expectedHead !== repair.expectedHead) {
-    git(refreshed.worktree, ['verify-commit', refreshed.expectedHead]);
-    const signature = git(refreshed.worktree, ['show', '-s', '--format=%G?%x00%GF', refreshed.expectedHead]).split('\0');
-    if (!['G', 'U'].includes(signature[0]) || signature[1] !== signingFingerprint(refreshed.worktree)) {
+    const signature = verifiedSignature(refreshed.worktree, refreshed.expectedHead);
+    if (!['G', 'U'].includes(signature.code) || signature.signer !== signingFingerprint(refreshed.worktree)) {
       reject('base reconciliation commit is not signed by the trusted host');
     }
   }
@@ -361,12 +359,7 @@ function reconcileBaseWithScript(options, repair) {
       '--no-fetch', '--json'], {
       cwd: repair.worktree, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 120000, maxBuffer: 65536,
-      env: {
-        ...process.env,
-        GIT_CONFIG_COUNT: '2',
-        GIT_CONFIG_KEY_0: 'commit.gpgsign', GIT_CONFIG_VALUE_0: 'true',
-        GIT_CONFIG_KEY_1: 'merge.gpgSign', GIT_CONFIG_VALUE_1: 'true',
-      },
+      env: { ...process.env, ...commitSigner.forcedSigningConfig(process.env) },
     });
   } catch (error) {
     reject(`trusted base reconciliation failed: ${String(error.stdout || error.stderr || error.message).trim().slice(0, 1000)}`);

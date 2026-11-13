@@ -16,6 +16,10 @@ Install these on the host before using Shipyard:
 
 - Node.js 24 or newer
 - Git and GitHub CLI (`gh`), authenticated for repositories you deliver
+- A Git commit signing key: OpenPGP (`gpg`, the default) or SSH
+  (`gpg.format=ssh` with `user.signingkey` set to a public key file, a private
+  key with a sibling `.pub`, or a `key::` literal; `ssh-keygen` must be on
+  `PATH`). `gpg.format=x509` is not supported
 - Claude Code with an Anthropic Pro or Max account, or OpenAI Codex CLI through
   ChatGPT
 - GSD Core for the selected runtime; the Shipyard installers refresh it unless
