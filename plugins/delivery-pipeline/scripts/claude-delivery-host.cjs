@@ -12,6 +12,7 @@ const { finalizeDeliveryCommit } = require('./delivery-commit-finalizer.cjs');
 const { verifyPlan, retryableFailure, failureContext, scheduleRetry: scheduleVerificationRetry,
   failureReason: verificationFailureReason } = require('./host-verification.cjs');
 const { loadConfig, repoValue, resolveDispatch } = require('./pipeline-config.cjs');
+const { resolveExecutorSandbox } = require('./executor-sandbox.cjs');
 const { isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
@@ -157,13 +158,34 @@ function runtimeOptions(options) {
   const scrub = signingFreeEnvironment();
   const env = { ...(options.env || {}), ...scrub };
   const probe = options.probe || probeClaudeRuntime({ env: { ...process.env, ...env } });
+  const recorderDir = boundaryStoreFor(options.scope, options);
   return {
     ...options,
     env,
     probe,
-    recorderDir: boundaryStoreFor(options.scope, options),
+    recorderDir,
     transcriptDir: options.transcriptDir || path.join(storage, 'transcripts'),
+    sandboxExtensions: options.sandboxExtensions !== undefined ? options.sandboxExtensions
+      : executorSandboxExtensions(options, [storage, recorderDir]),
   };
+}
+
+function executorSandboxExtensions(options, hostPaths) {
+  const worktree = options.scope && options.scope.worktree;
+  if (!worktree) return undefined;
+  let project;
+  try { project = path.resolve(graphDirectory(options, worktree), '..', '..'); }
+  catch { return undefined; }
+  const config = loadConfig(project);
+  try {
+    return resolveExecutorSandbox(config.config ? config.config.executor_sandbox : config.executor_sandbox, {
+      worktree, protectedPaths: [...hostPaths.filter(Boolean),
+        require('./role-artifact.cjs').archiveAuthorityNamespace(true),
+        require('./phase-code-review.cjs').publicationsRoot()],
+    });
+  } catch (error) {
+    reject(error.message.replace(/^executor-sandbox: /, ''));
+  }
 }
 
 function git(worktree, args) {

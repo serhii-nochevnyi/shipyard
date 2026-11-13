@@ -697,6 +697,22 @@ function streamText(parsed) {
   return candidates.at(-1) || '';
 }
 
+function sandboxExtensions(value) {
+  if (value === undefined || value === null) return { allowWrite: [], allowedDomains: [] };
+  const list = (field) => {
+    const items = object(value) ? value[field] : undefined;
+    if (items === undefined) return [];
+    if (!Array.isArray(items) || items.some((item) => typeof item !== 'string' || !item)) {
+      fail('INVALID_INPUT', `sandboxExtensions.${field} must be an array of strings`);
+    }
+    return items.slice();
+  };
+  if (!object(value)) fail('INVALID_INPUT', 'sandboxExtensions must be an object');
+  const allowWrite = list('allowWrite');
+  if (allowWrite.some((item) => !path.isAbsolute(item))) fail('INVALID_INPUT', 'sandboxExtensions.allowWrite must hold absolute paths');
+  return { allowWrite, allowedDomains: list('allowedDomains') };
+}
+
 function createClaudeCliLauncher(options = {}) {
   const scope = normalizeScope(options.scope || {});
   const executable = typeof options.executable === 'string' && options.executable.trim()
@@ -709,6 +725,7 @@ function createClaudeCliLauncher(options = {}) {
   const uuid = typeof options.uuid === 'function' ? options.uuid : crypto.randomUUID;
   const archiveAuthority = require('./role-artifact.cjs').archiveAuthorityNamespace(true);
   const publications = require('./phase-code-review.cjs').publicationsRoot();
+  const extensions = sandboxExtensions(options.sandboxExtensions);
 
   return async function launch(prompt, launchOptions = {}) {
     if (typeof prompt !== 'string' || prompt.trim() === '') fail('INVALID_INPUT', 'Claude prompt must be non-empty text');
@@ -762,7 +779,10 @@ function createClaudeCliLauncher(options = {}) {
           failIfUnavailable: true,
           allowUnsandboxedCommands: false,
           autoAllowBashIfSandboxed: true,
-          filesystem: { allowWrite: [path.resolve(scope.worktree)], denyRead: [archiveAuthority], denyWrite: [archiveAuthority, publications] },
+          filesystem: { allowWrite: [path.resolve(scope.worktree), ...(launchOptions.readOnly === true ? [] : extensions.allowWrite)],
+            denyRead: [archiveAuthority], denyWrite: [archiveAuthority, publications] },
+          ...(launchOptions.readOnly !== true && extensions.allowedDomains.length
+            ? { network: { allowedDomains: extensions.allowedDomains } } : {}),
           credentials: { envVars: SENSITIVE_SUBPROCESS_ENV.map((name) => ({ name, mode: 'deny' })) },
         },
         permissions: {
@@ -967,6 +987,7 @@ function createClaudeRuntimeHost(options = {}) {
     onCompleted: options.onCompleted,
     sessionTranscriptRoot: options.sessionTranscriptRoot,
     gsdAgentRoot: options.gsdAgentRoot,
+    sandboxExtensions: options.sandboxExtensions,
     transcriptTimeoutMs: options.transcriptTimeoutMs,
     transcriptPollMs: options.transcriptPollMs,
     now: options.now,

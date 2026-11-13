@@ -693,6 +693,36 @@ installation keeps its existing stable `$CODEX_HOME/shipyard/scripts` bundle.
 Native Git hooks retain their own immutable payload under the repository's common
 Git directory and survive removal of the original plugin cache.
 
+### Executor sandbox extensions
+
+Executors and repairs run in the runtime's OS sandbox. They can write only to the
+ticket worktree, and network access is off. The host installs locked dependencies
+before launch, so `pnpm install` / `npm ci` are not needed inside the sandbox. When
+a toolchain still needs to write a cache or reach a registry (corepack, fnm
+multishells, a test runner cache), declare it in the project root's
+`.planning/config.json`:
+
+```json
+{
+  "delivery_pipeline": {
+    "executor_sandbox": {
+      "allow_write": ["~/.cache/node/corepack", "~/.local/state/fnm_multishells"],
+      "allowed_domains": ["registry.npmjs.org"]
+    }
+  }
+}
+```
+
+`allow_write` takes absolute or `~/` paths, without globs. The host resolves them
+before launch and refuses `/`, the home directory, any ancestor of the ticket
+worktree, the repository and its Git directory, and paths that overlap host-owned
+state such as `~/.ssh`, `~/.gnupg`, `~/.claude`, `~/.codex`, `~/.config/gh` and
+`~/.local/state/shipyard`. `allowed_domains` takes host names or `*.domain`
+patterns. Claude applies it as `sandbox.network.allowedDomains`. Codex applies
+only `allow_write`, keeps executor network access off, and prints a notice.
+Read-only review roles never receive these extensions. The configuration is
+always read from the project root, never from the ticket worktree.
+
 ### Session scope and Jira configuration
 
 Use `front.cjs --run-id RUN --store-dir STORE --graph GRAPH --json` and

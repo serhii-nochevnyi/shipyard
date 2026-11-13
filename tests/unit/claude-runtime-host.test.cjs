@@ -216,6 +216,42 @@ test('does not accept an older Opus ID from an assistant record', () => {
   );
 });
 
+test('executor sandbox extensions widen writes and network only for writable launches', async () => {
+  for (const readOnly of [false, true]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-runtime-'));
+    const projects = path.join(root, 'claude', 'projects');
+    const transcript = writeSession(projects, fixtureRecords());
+    const calls = [];
+    try {
+      const launch = createClaudeCliLauncher({
+        scope: { ...SCOPE, worktree: root },
+        transcriptDir: path.join(root, 'stream-transcripts'),
+        transcriptPollMs: 5,
+        uuid: () => SESSION,
+        env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude'), ANTHROPIC_API_KEY: 'test-key' },
+        sandboxExtensions: { allowWrite: ['/opt/shipyard-cache'], allowedDomains: ['registry.npmjs.org'] },
+        spawn: (executable, args, options) => {
+          calls.push({ executable, args, options });
+          captureConfiguredSessionStart(args, transcript);
+          return childFor();
+        },
+        runtime_version: '2.1.280',
+      });
+      await launch('run the scoped task', { model: 'claude-opus-5-5', effort: 'low', ...(readOnly ? { readOnly } : {}) });
+      const args = calls[0].args;
+      const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+      assert.deepEqual(settings.sandbox.filesystem.allowWrite, readOnly ? [root] : [root, '/opt/shipyard-cache']);
+      if (readOnly) assert.equal(settings.sandbox.network, undefined);
+      else assert.deepEqual(settings.sandbox.network, { allowedDomains: ['registry.npmjs.org'] });
+      assert.ok(settings.sandbox.filesystem.denyWrite.length >= 2);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+  assert.throws(() => createClaudeCliLauncher({ scope: SCOPE, sandboxExtensions: { allowWrite: ['relative/path'] } }),
+    (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => createClaudeCliLauncher({ scope: SCOPE, sandboxExtensions: { allowedDomains: [7] } }),
+    (error) => error.code === 'INVALID_INPUT');
+});
+
 test('native launcher ignores conflicting stdout model and effort and records transcript proof', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-runtime-'));
   const projects = path.join(root, 'claude', 'projects');
