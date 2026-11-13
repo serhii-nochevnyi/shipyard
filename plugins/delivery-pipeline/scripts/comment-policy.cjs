@@ -393,7 +393,7 @@ function docblockRules({ projectRoot, repo }) {
 }
 
 function resolveBase(worktree, requested) {
-  const candidates = requested.startsWith('refs/')
+  const candidates = requested.startsWith('refs/') || /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(requested)
     ? [requested]
     : requested.startsWith('origin/')
       ? [requested, `refs/remotes/${requested}`]

@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const gate = require('../../plugins/delivery-pipeline/scripts/publish-gate.cjs');
@@ -74,6 +76,107 @@ for (const explicitGraph of [true, false]) test('remote update preserves graph-d
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const report = JSON.parse(result.stdout);
   assert.equal(report.ticket, 'T-11-37');
-  assert.equal(report.base_source, 'remote-oid');
+  assert.equal(report.base_source, 'recorded');
+  assert.equal(report.push_base, f.base);
   assert.equal(report.totals.protected_comment_lines, 1);
+});
+
+function mergedMain(f) {
+  f.git('checkout', '-qb', 'feature');
+  f.write('docs/notes.md', '# Notes\n');
+  const remoteHead = f.commit('feature docs');
+  f.git('checkout', '-q', 'main');
+  f.write('lib.js', 'const lib = 1;\n// inherited main commentary\n');
+  const main = f.commit('main commentary');
+  f.git('update-ref', 'refs/remotes/origin/main', main);
+  f.git('checkout', '-q', 'feature');
+  f.git('merge', '-q', '--no-edit', 'main');
+  return { remoteHead, main, head: f.git('rev-parse', 'HEAD') };
+}
+
+const openPr = (baseRefName, headRefName = 'feature') => () => ({ number: 7, baseRefName, headRefName });
+
+test('a fast-forward push with an open PR reviews the PR diff and keeps the remote commit', (t) => {
+  const f = fixture(t);
+  const { remoteHead, main, head } = mergedMain(f);
+  const context = gate.baseFor(f.root, null, { managed: true, branch: 'feature', pushBase: remoteHead, head,
+    lookupPr: openPr('main') });
+  assert.equal(context.base, 'origin/main');
+  assert.equal(context.base_source, 'pull-request');
+  assert.equal(context.base_commit, main);
+  assert.equal(context.push_base, remoteHead);
+});
+
+test('a recorded board base is trusted for a push without an open PR', (t) => {
+  const f = fixture(t);
+  const { remoteHead, main, head } = mergedMain(f);
+  const graph = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-graph-'));
+  t.after(() => fs.rmSync(graph, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-1': { branch: 'feature', pr_base: 'main' } } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({ 'T-1': { branch: 'feature', base: 'main' } }));
+  const context = gate.baseFor(f.root, null, { managed: true, branch: 'feature', pushBase: remoteHead, head,
+    graphDir: graph, lookupPr: () => null });
+  assert.equal(context.base_source, 'recorded');
+  assert.equal(context.base_commit, main);
+});
+
+for (const [name, options] of [
+  ['an explicit flag base', { requestedBase: 'main', lookupPr: () => null }],
+  ['a configured fallback base', { configuredBase: 'main', lookupPr: () => null }],
+  ['a PR for another head', { lookupPr: openPr('main', 'other') }],
+  ['a PR base without an origin branch', { lookupPr: openPr('missing') }],
+  ['a PR that targets the source branch', { lookupPr: openPr('feature') }],
+  ['a missing pinned head', { lookupPr: openPr('main'), head: null }],
+]) test('a push keeps the remote range for ' + name, (t) => {
+  const f = fixture(t);
+  const { remoteHead, head } = mergedMain(f);
+  f.git('update-ref', 'refs/remotes/origin/feature', remoteHead);
+  const context = gate.baseFor(f.root, null, { managed: true, branch: 'feature', pushBase: remoteHead, head, ...options });
+  assert.equal(context.base, remoteHead);
+  assert.equal(context.base_source, 'remote-oid');
+  assert.equal(context.base_commit, undefined);
+});
+
+test('a push keeps the remote range when the trusted base already contains the head', (t) => {
+  const f = fixture(t);
+  const { remoteHead, head } = mergedMain(f);
+  f.git('update-ref', 'refs/remotes/origin/main', head);
+  const context = gate.baseFor(f.root, null, { managed: true, branch: 'feature', pushBase: remoteHead, head,
+    lookupPr: openPr('main') });
+  assert.equal(context.base_source, 'remote-oid');
+});
+
+test('a push keeps the remote range for an unrelated trusted base', (t) => {
+  const f = fixture(t);
+  const { remoteHead, head } = mergedMain(f);
+  f.git('checkout', '-q', '--orphan', 'orphan');
+  f.git('update-ref', 'refs/remotes/origin/orphan', f.commit('orphan'));
+  f.git('checkout', '-q', 'feature');
+  const context = gate.baseFor(f.root, null, { managed: true, branch: 'feature', pushBase: remoteHead, head,
+    lookupPr: openPr('orphan') });
+  assert.equal(context.base_source, 'remote-oid');
+});
+
+test('a push keeps the remote range when the remote commit is not an ancestor of the head', (t) => {
+  const f = fixture(t);
+  const { head } = mergedMain(f);
+  f.git('checkout', '-qb', 'rewritten', f.base);
+  f.write('app.js', 'const value = 9;\n');
+  const other = f.commit('rewritten remote');
+  f.git('checkout', '-q', 'feature');
+  const context = gate.baseFor(f.root, null, { managed: true, branch: 'feature', pushBase: other, head,
+    lookupPr: openPr('main') });
+  assert.equal(context.base, other);
+  assert.equal(context.base_source, 'remote-oid');
+});
+
+test('push-mode identity checks before base resolution still refuse', (t) => {
+  const f = fixture(t);
+  const { remoteHead, head } = mergedMain(f);
+  const graph = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-graph-'));
+  t.after(() => fs.rmSync(graph, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-1': { branch: 'feature', pr_base: 'main' } } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({ 'T-1': { branch: 'other', base: 'main' } }));
+  assert.throws(() => gate.baseFor(f.root, null, { managed: true, branch: 'feature', pushBase: remoteHead, head,
+    graphDir: graph, lookupPr: openPr('main') }), /board branch differs/);
 });
