@@ -436,6 +436,43 @@ test('a live Claude decomposition blocks both genuine Codex typed CLIs before a 
   }
 });
 
+test('a killed Codex host whose native process is still running keeps the lease and names that pid', async () => {
+  const f = preparedPhaseFixture();
+  const { spawn, spawnSync } = require('node:child_process');
+  const sharedRoot = path.join(f.root, 'shared-writer');
+  const codexScope = { run_id: 'run-killed-codex', ticket: 'T-38-DECOMPOSE', phase: 38,
+    worktree: f.worktree, runtime: 'codex', provider: 'openai' };
+  const privateRoot = path.join(f.root, 'codex-private');
+  const request = path.join(f.root, 'codex-decompose-request.json');
+  fs.writeFileSync(request, JSON.stringify({ scope: codexScope, gsd_role: 'gsd-plan-checker', prompt: 'Check.' }));
+  const base = execFileSync('git', ['-C', f.worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const script = ['const mod = require(process.argv[1]);',
+    'const lease = mod.createPlanningWriterLease({ stateRoot: process.argv[2], worktree: process.argv[3], phaseDir: process.argv[4] });',
+    'process.stdout.write(JSON.stringify(lease.acquire({ owner: "killed-codex-host", base_revision: process.argv[5] })));'].join('\n');
+  const held = JSON.parse(spawnSync(process.execPath, ['-e', script,
+    path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs'),
+    sharedRoot, f.worktree, f.phaseDir, base], { encoding: 'utf8' }).stdout);
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  const launches = path.join(path.dirname(defaultRunStoreDir(codexScope, privateRoot)), 'launches');
+  fs.mkdirSync(launches, { recursive: true });
+  fs.writeFileSync(path.join(launches, 'killed.launch.json'),
+    JSON.stringify({ lease_epoch: held.epoch, process_spawned: { pid: child.pid } }));
+  const capabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
+    supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+  let childCalls = 0;
+  try {
+    await assert.rejects(runCodexDecomposeCli(['--args-file', request], { write() {} }, {
+      testStateRoot: privateRoot, testWriterStateRoot: sharedRoot, capabilities,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn: () => { childCalls++; throw new Error('paid child'); },
+    }), (error) => error.code === 'WRITER_LEASED' && error.message.includes(`child pid ${child.pid}`));
+    assert.equal(childCalls, 0);
+  } finally {
+    child.kill('SIGKILL');
+    f.clean();
+  }
+});
+
 test('different phases in the same worktree do not contend for the planning writer lease', async () => {
   const f = preparedPhaseFixture();
   try {
@@ -471,6 +508,76 @@ test('a lease takeover before sealing refuses with WRITER_FENCED and seals nothi
       (error) => error.code === 'WRITER_FENCED');
     assert.equal(fs.existsSync(path.join(store, 'decomposition-index')), false);
   } finally { f.clean(); }
+});
+
+test('a planner revision then a fresh checker bind the checked PLAN digests to the latest planner seal', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    const plan = path.join(f.phaseDir, '38-01-PLAN.md');
+    const sha = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    const planDigests = (envelope) => Object.fromEntries(JSON.parse(fs.readFileSync(envelope.artifact_index.path, 'utf8'))
+      .entries.map((entry) => [path.basename(entry.path), entry.sha256]));
+    const revise = async (name, body) => runDecomposition(request(f.worktree, 'gsd-planner'),
+      successDependencies(f, { store: path.join(f.root, name), onLaunch: () => { fs.writeFileSync(plan, body); } }).deps);
+    const first = await revise('store-planner-one', '# Plan, first revision\n');
+    const firstDigest = sha(plan);
+    assert.equal(planDigests(first.envelope)['38-01-PLAN.md'], firstDigest);
+    const second = await revise('store-planner-two', '# Plan, revised after checker findings\n');
+    const secondDigest = sha(plan);
+    assert.notEqual(secondDigest, firstDigest);
+    assert.equal(planDigests(second.envelope)['38-01-PLAN.md'], secondDigest);
+    assert.equal(planDigests(second.envelope)['CONTEXT.md'], planDigests(first.envelope)['CONTEXT.md']);
+    assert.notEqual(second.envelope.artifact_index.sha256, first.envelope.artifact_index.sha256);
+    const checked = await runDecomposition(request(f.worktree, 'gsd-plan-checker'),
+      successDependencies(f, { store: path.join(f.root, 'store-checker-fresh') }).deps);
+    const report = JSON.parse(fs.readFileSync(checked.artifact_index.path, 'utf8'));
+    assert.deepEqual(report.plans.map((entry) => [path.basename(entry.path), entry.sha256]), [['38-01-PLAN.md', secondDigest]]);
+  } finally { f.clean(); }
+});
+
+test('a planner run over a phase whose CONTEXT carries the GSD padded name seals that file', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    fs.renameSync(path.join(f.phaseDir, 'CONTEXT.md'), path.join(f.phaseDir, '38-CONTEXT.md'));
+    const output = await runDecomposition(request(f.worktree, 'gsd-planner'),
+      successDependencies(f, { store: path.join(f.root, 'store-padded-context') }).deps);
+    const names = JSON.parse(fs.readFileSync(output.envelope.artifact_index.path, 'utf8')).entries
+      .map((entry) => path.basename(entry.path)).sort();
+    assert.deepEqual(names, ['38-01-PLAN.md', '38-CONTEXT.md']);
+  } finally { f.clean(); }
+});
+
+test('a killed Claude host whose child is still running keeps the lease; once the child is gone the next run takes over', async () => {
+  const f = preparedPhaseFixture();
+  const { spawn, spawnSync } = require('node:child_process');
+  const sharedRoot = path.join(path.dirname(f.worktree), 'shared-writer');
+  const store = path.join(f.root, 'store-killed-host');
+  const lease = createPlanningWriterLease({ stateRoot: sharedRoot, worktree: f.worktree, phaseDir: f.phaseDir });
+  const script = ['const mod = require(process.argv[1]);',
+    'const lease = mod.createPlanningWriterLease({ stateRoot: process.argv[2], worktree: process.argv[3], phaseDir: process.argv[4] });',
+    'process.stdout.write(JSON.stringify(lease.acquire({ owner: "killed-host", base_revision: process.argv[5] })));'].join('\n');
+  const base = execFileSync('git', ['-C', f.worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const held = JSON.parse(spawnSync(process.execPath, ['-e', script,
+    path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs'),
+    sharedRoot, f.worktree, f.phaseDir, base], { encoding: 'utf8' }).stdout);
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  try {
+    fs.mkdirSync(path.join(store, 'launches'), { recursive: true });
+    fs.writeFileSync(path.join(store, 'launches', 'killed.launch.json'),
+      JSON.stringify({ lease_epoch: held.epoch, child_pid: child.pid }));
+    const { deps, calls } = successDependencies(f, { store });
+    await assert.rejects(runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps),
+      (error) => error.code === 'WRITER_LEASED' && error.message.includes(`child pid ${child.pid}`));
+    assert.equal(calls.length, 0);
+    child.kill('SIGKILL');
+    await new Promise((resolve) => child.once('exit', resolve));
+    const output = await runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps);
+    assert.equal(output.receipt.compliance, 'verified');
+    assert.equal(JSON.parse(fs.readFileSync(lease.file, 'utf8')).recovered_from_epoch, held.epoch);
+  } finally {
+    child.kill('SIGKILL');
+    f.clean();
+  }
 });
 
 test('a foreign edit to the phase directory mid-run refuses with FOREIGN_EDIT, naming the path', async () => {

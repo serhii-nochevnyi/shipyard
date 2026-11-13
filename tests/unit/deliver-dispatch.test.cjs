@@ -1173,6 +1173,28 @@ test('decomposition build carries repositoryIdentity for a path with a space and
   }
 });
 
+test('decomposition build carries the zero-padded phase CONTEXT and RESEARCH for a single-digit phase', () => {
+  const fixture = planningBuilderFixture('INV-50-21', 'deliver-dispatch-padded-');
+  try {
+    const phaseDir = path.join(fixture.root, '.planning', 'phases', '01-demo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-CONTEXT.md'), '# Context\n');
+    fs.writeFileSync(path.join(phaseDir, '01-RESEARCH.md'), '# Research\n');
+    for (const runtime of ['claude', 'codex']) {
+      const request = deliverDispatch.build(['decomposition', fixture.invId, '--phase', '1', '--runtime', runtime],
+        { cwd: fixture.root, graphDir: fixture.graphDir });
+      const serialized = JSON.stringify(request);
+      assert.ok(serialized.includes('.planning/phases/01-demo/01-RESEARCH.md'), `${runtime} keeps the padded research ref`);
+      assert.ok(serialized.includes('.planning/phases/01-demo/01-CONTEXT.md'), `${runtime} keeps the padded context ref`);
+    }
+    fs.writeFileSync(path.join(phaseDir, '1-RESEARCH.md'), '# Research again\n');
+    assert.throws(() => deliverDispatch.build(['decomposition', fixture.invId, '--phase', '1', '--runtime', 'claude'],
+      { cwd: fixture.root, graphDir: fixture.graphDir }), (error) => error.code === 'BUILD_REFUSED' && /ambiguous/.test(error.message));
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
 test('preflight reads the launch graph directory project, not the worktree project', async () => {
   const fixture = shipyardFixture('T-50-64');
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliver-dispatch-graph-'));

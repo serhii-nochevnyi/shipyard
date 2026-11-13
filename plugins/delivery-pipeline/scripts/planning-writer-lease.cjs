@@ -48,27 +48,74 @@ function pidAlive(pid) {
   catch (error) { return !error || error.code !== 'ESRCH'; }
 }
 
+const PHASE_DIRECTORY_NAME = /^((?:[A-Za-z][A-Za-z0-9_.-]*?-)?(\d+))-/;
+
+function parsePhaseDirectoryName(name) {
+  const match = PHASE_DIRECTORY_NAME.exec(typeof name === 'string' ? name : '');
+  return match ? { token: match[1], number: Number(match[2]) } : null;
+}
+
 function phaseDirectory(worktree, phase, refuse) {
   const phasesRoot = path.join(worktree, '.planning', 'phases');
+  const padded = String(Number(phase)).padStart(2, '0');
+  const remedy = `expected .planning/phases/${padded}-<slug>/ (or <project_code>-${padded}-<slug>/) under ${phasesRoot}; `
+    + `make sure phase ${Number(phase)} is in ROADMAP.md, then run the decompose GSD chain `
+    + `(/gsd-plan-phase ${Number(phase)} --ingest ...) so GSD creates the phase directory and CONTEXT before the researcher launch`;
   let names;
   try {
     names = fs.readdirSync(phasesRoot);
   } catch (error) {
-    refuse('PHASE_DIRECTORY_MISSING', `phase directory root is unavailable: ${error.message}`);
+    refuse('PHASE_DIRECTORY_MISSING', `phase directory root is unavailable (${error.message}); ${remedy}`);
   }
   if (fs.realpathSync(phasesRoot) !== phasesRoot) {
     refuse('PHASE_DIRECTORY_MISSING', 'phase directory root is not canonical');
   }
-  const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === Number(phase)
+  const matches = names.filter((name) => parsePhaseDirectoryName(name)?.number === Number(phase)
     && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
   if (matches.length !== 1) {
-    refuse('PHASE_DIRECTORY_MISSING', `expected exactly one phase directory for phase ${phase}, found ${matches.length}`);
+    refuse('PHASE_DIRECTORY_MISSING', `expected exactly one phase directory for phase ${phase}, found ${matches.length}; ${remedy}`);
   }
   const directory = path.join(phasesRoot, matches[0]);
   if (fs.realpathSync(directory) !== directory) {
     refuse('PHASE_DIRECTORY_MISSING', 'phase directory is not canonical');
   }
   return directory;
+}
+
+function phaseArtifactNames(phaseDir, kind) {
+  const parsed = parsePhaseDirectoryName(path.basename(phaseDir));
+  if (!parsed || !/^[A-Z]+$/.test(kind)) fail('INVALID_INPUT', 'invalid canonical phase directory');
+  const stems = new Set([String(parsed.number), String(parsed.number).padStart(2, '0'), parsed.token]);
+  return [...(kind === 'CONTEXT' ? [`${kind}.md`] : []), ...[...stems].map((stem) => `${stem}-${kind}.md`)];
+}
+
+// @contract: a phase artifact has one padded, unpadded, directory-token or bare name; more than one is refused.
+function resolvePhaseArtifact(phaseDir, kind) {
+  const accepted = phaseArtifactNames(phaseDir, kind);
+  const present = accepted.filter((name) => {
+    try { return !fs.lstatSync(path.join(phaseDir, name)).isDirectory(); }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  });
+  if (present.length > 1) {
+    fail('AMBIGUOUS_ARTIFACT', `phase ${kind} is ambiguous: ${present.join(', ')} all exist in ${phaseDir}; keep exactly one`,
+      { kind, present });
+  }
+  return present.length ? present[0] : null;
+}
+
+function liveLaunchChild(launchDir, epoch, pidOf) {
+  let names;
+  try { names = fs.readdirSync(launchDir); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  for (const name of names.filter((entry) => entry.endsWith('.launch.json')).sort()) {
+    let launch;
+    try { launch = JSON.parse(fs.readFileSync(path.join(launchDir, name), 'utf8')); }
+    catch { continue; }
+    if (!object(launch) || launch.lease_epoch !== epoch) continue;
+    const pid = pidOf(launch);
+    if (Number.isSafeInteger(pid) && pid > 0 && pidAlive(pid)) return pid;
+  }
+  return null;
 }
 
 function writeDurableFile(file, raw) {
@@ -122,22 +169,31 @@ function sharedPlanningWriterRoot(testWriterStateRoot) {
 }
 
 function sealOutputPaths(role, phaseDir) {
-  const phase = Number(path.basename(phaseDir).split('-')[0]);
+  const parsed = parsePhaseDirectoryName(path.basename(phaseDir));
+  const phase = parsed ? parsed.number : NaN;
   if (!Number.isSafeInteger(phase) || phase <= 0) fail('INVALID_INPUT', 'invalid canonical phase directory');
   if (role === 'gsd-plan-checker') return [];
-  if (role === 'gsd-phase-researcher') return [`${phase}-RESEARCH.md`];
+  if (role === 'gsd-phase-researcher') {
+    const research = resolvePhaseArtifact(phaseDir, 'RESEARCH');
+    if (!research) {
+      fail('MISSING_ARTIFACT', `sealed output is missing: the researcher produced none of ${phaseArtifactNames(phaseDir, 'RESEARCH').join(', ')}`);
+    }
+    return [research];
+  }
   if (role !== 'gsd-planner') fail('INVALID_INPUT', 'invalid typed GSD role');
   const plans = fs.readdirSync(phaseDir).filter((name) => new RegExp(`^0*${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!plans.length) fail('MISSING_ARTIFACT', 'planner has no phase PLAN.md output');
-  return [...(fs.existsSync(path.join(phaseDir, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...plans].sort();
+  const context = resolvePhaseArtifact(phaseDir, 'CONTEXT');
+  return [...(context ? [context] : []), ...plans].sort();
 }
 
 function captureSealManifest({ role, phaseDir, snapshot, changed }) {
   const paths = sealOutputPaths(role, phaseDir);
   const sortedChanged = [...changed].sort();
-  // @invariant: the planner may not change an existing CONTEXT.md (locked decisions); creating one is allowed.
-  if (role === 'gsd-planner' && Object.hasOwn(snapshot.digests, 'CONTEXT.md') && sortedChanged.includes('CONTEXT.md')) {
-    fail('FOREIGN_EDIT', 'phase delta modifies the frozen planner CONTEXT.md input');
+  // @invariant: the planner may not change an existing CONTEXT file (locked decisions); creating one is allowed.
+  const context = role === 'gsd-planner' ? paths.find((rel) => /(^|-)CONTEXT\.md$/.test(rel)) : undefined;
+  if (context && Object.hasOwn(snapshot.digests, context) && sortedChanged.includes(context)) {
+    fail('FOREIGN_EDIT', `phase delta modifies the frozen planner ${context} input`);
   }
   const outputs = {};
   for (const rel of paths) {
@@ -155,14 +211,25 @@ function captureSealManifest({ role, phaseDir, snapshot, changed }) {
     }
     outputs[rel] = { sha256, origin: changedOutput ? 'child-change' : 'unchanged-baseline' };
   }
-  if (sortedChanged.some((rel) => !Object.hasOwn(outputs, rel))) {
-    fail('FOREIGN_EDIT', 'phase change is outside the role seal outputs');
+  const outside = sortedChanged.filter((rel) => !Object.hasOwn(outputs, rel));
+  if (outside.length) {
+    fail('FOREIGN_EDIT', role === 'gsd-plan-checker'
+      ? `the plan checker is read-only but changed phase file(s): ${outside.join(', ')}; PLAN revisions go through a planner re-dispatch followed by a fresh checker`
+      : `phase change is outside the role seal outputs: ${outside.join(', ')}`, { outside });
   }
   return outputs;
 }
 
 function assertSealManifest({ role, phaseDir, snapshot, changed, outputs, lease }) {
-  if (!object(outputs) || JSON.stringify(Object.keys(outputs).sort()) !== JSON.stringify(sealOutputPaths(role, phaseDir))) {
+  let expected;
+  try { expected = sealOutputPaths(role, phaseDir); }
+  catch (error) {
+    if (error.code === 'MISSING_ARTIFACT' || error.code === 'AMBIGUOUS_ARTIFACT') {
+      fail('RECOVERY_ARTIFACT_ALTERED', 'current seal outputs differ from original completion');
+    }
+    throw error;
+  }
+  if (!object(outputs) || JSON.stringify(Object.keys(outputs).sort()) !== JSON.stringify(expected)) {
     fail('RECOVERY_EVIDENCE_INCOMPLETE', 'original full seal-output manifest is missing or incomplete');
   }
   const current = lease.changedSince(snapshot).changed;
@@ -235,28 +302,40 @@ function createPlanningWriterLease(options = {}) {
     }
   }
 
+  // @invariant: a dead holder is fenced only when the caller proves none of its launched children is still alive.
   function acquire(input = {}) {
     if (!object(input)) fail('INVALID_INPUT', 'acquire input must be an object');
     const owner = safeString(input.owner, 'owner');
     const baseRevision = safeString(input.base_revision, 'base_revision');
+    const holderChild = typeof input.holder_child === 'function' ? input.holder_child : null;
     ensureDir();
     let result;
     withLock(lockDir, 'writer', () => {
       const now = nowValue(clock);
       const record = readRecord();
+      let takeover = null;
       if (liveActiveOwner(record, now) && record.owner !== owner) {
-        fail('WRITER_LEASED', `the planning writer lease is held by ${record.owner} until ${new Date(record.expires_at).toISOString()}`,
-          { owner: record.owner, expires_at: record.expires_at });
+        if (!holderChild || pidAlive(record.pid)) {
+          fail('WRITER_LEASED', `the planning writer lease is held by ${record.owner} until ${new Date(record.expires_at).toISOString()}`,
+            { owner: record.owner, expires_at: record.expires_at });
+        }
+        const childPid = holderChild(record);
+        if (childPid) {
+          fail('WRITER_LEASED', `the planning writer lease holder (pid ${record.pid}) is dead but its launched child pid ${childPid} is still alive; `
+            + 'wait for that process to exit or stop it, then retry',
+          { owner: record.owner, pid: record.pid, child_pid: childPid, expires_at: record.expires_at });
+        }
+        takeover = { recovered_reason: `holder pid ${record.pid} is dead`, recovered_from_epoch: record.epoch };
       }
       const epoch = record ? record.epoch + 1 : 0;
       const next = {
         schema: SCHEMA, version: 1, owner, pid: process.pid,
         token: crypto.randomBytes(TOKEN_BYTES).toString('hex'), epoch,
         base_revision: baseRevision, acquired_at: now, heartbeat_at: now,
-        expires_at: now + ttlMs, status: 'active',
+        expires_at: now + ttlMs, status: 'active', ...(takeover || {}),
       };
       writeRecord(next);
-      result = { token: next.token, epoch: next.epoch, expires_at: next.expires_at };
+      result = { token: next.token, epoch: next.epoch, expires_at: next.expires_at, ...(takeover ? { recovered: true } : {}) };
     }, { label: 'planning-writer-lease' });
     return result;
   }
@@ -363,6 +442,7 @@ function createPlanningWriterLease(options = {}) {
 }
 
 module.exports = Object.freeze({ SCHEMA, DEFAULT_TTL_MS, createPlanningWriterLease, pidAlive, phaseDirectory,
+  parsePhaseDirectoryName, resolvePhaseArtifact, liveLaunchChild,
   writeDurableFile,
   sharedPlanningWriterRoot,
   sealOutputPaths, captureSealManifest, assertSealManifest });
