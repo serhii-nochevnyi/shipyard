@@ -2017,4 +2017,56 @@ test('code_review defaults to hold, accepts report and warns on unknown values',
   assert.ok(/hold/.test(key.description) && /project root/.test(key.description));
 });
 
+suite('epic_jira - an epic\'s own Jira key');
+
+const { normalizeEpicJira, epicJiraFor } = require(mod);
+
+test('epic_jira defaults to empty and is a known key', () => {
+  const { config, warnings } = withConfig(undefined);
+  assert.deepStrictEqual(config.epic_jira, {});
+  assert.deepStrictEqual(warnings, []);
+  assert.deepStrictEqual(DEFAULTS.epic_jira, {});
+});
+
+test('epic_jira under delivery_pipeline or pipeline loads without an unknown-key warning', () => {
+  for (const namespace of ['delivery_pipeline', 'pipeline']) {
+    const { config, warnings } = withRaw({ [namespace]: { epic_jira: { '1': 'APP-1', '02-billing': 'APP-2' } } });
+    assert.deepStrictEqual(config.epic_jira, { '1': 'APP-1', '02-billing': 'APP-2' });
+    assert.deepStrictEqual(warnings, [], namespace);
+  }
+});
+
+test('epic_jira normalizes zero-padded and decimal phase numbers', () => {
+  const warnings = [];
+  assert.deepStrictEqual(normalizeEpicJira({ '01': 'APP-1', '02.10': 'APP-2' }, warnings), { '1': 'APP-1', '2.10': 'APP-2' });
+  assert.deepStrictEqual(warnings, []);
+  assert.strictEqual(epicJiraFor({ '1': 'APP-1' }, '01', '01-x'), 'APP-1');
+  assert.strictEqual(epicJiraFor({ '1': 'APP-1', '01-x': 'APP-9' }, '1', '01-x'), 'APP-9');
+  assert.strictEqual(epicJiraFor({ '1': 'APP-1' }, '2', '02-y'), null);
+});
+
+test('epic_jira skips an invalid key or phase with a warning and keeps the valid entries', () => {
+  const warnings = [];
+  const map = normalizeEpicJira({ '1': 'app-1', '2': 'APP-2', '3': 7, '__proto__x/': 'APP-3', '4': 'APP-4' }, warnings);
+  assert.deepStrictEqual(map, { '2': 'APP-2', '4': 'APP-4' });
+  assert.strictEqual(warnings.length, 3);
+  assert.ok(warnings.some((w) => /"1".*not a Jira key/.test(w)));
+  assert.ok(warnings.some((w) => /"3".*not a Jira key/.test(w)));
+  assert.ok(warnings.some((w) => /"__proto__x\/".*not a phase number/.test(w)));
+});
+
+test('epic_jira names two keys for one phase: the first wins and the conflict is reported', () => {
+  const warnings = [];
+  assert.deepStrictEqual(normalizeEpicJira({ '1': 'APP-1', '01': 'APP-2' }, warnings), { '1': 'APP-1' });
+  assert.strictEqual(warnings.length, 1);
+});
+
+test('epic_jira that is not a map keeps the empty default with a warning', () => {
+  for (const bad of ['APP-1', ['APP-1'], 5]) {
+    const { config, warnings } = withConfig({ epic_jira: bad });
+    assert.deepStrictEqual(config.epic_jira, {});
+    assert.ok(warnings.some((w) => /epic_jira must be a map/.test(w)), JSON.stringify(bad));
+  }
+});
+
 done();

@@ -702,6 +702,15 @@ The `pipeline.jira` block, once persisted, looks like:
 }
 ```
 
+**Epic key (optional).** By default an epic's Jira key is the first ticket's key
+(`delivery.jira`) and an epic branch carries it as `feat/<KEY>-<slug>`. To give an
+epic its own Jira issue, map the phase in `.planning/config.json`:
+`"delivery_pipeline": { "epic_jira": { "1": "MYD-100", "02-billing": "MYD-200" } }`
+(keys are a phase number, `1` and `01` alike, or the phase directory name; invalid
+entries warn and are skipped). A configured key sets the epic's `jira` in
+`tickets.json`, its branch name and the epic PR title, and the export looks the
+epic up by that key and never creates it. Unset phases keep the default.
+
 **Tooling.** Use whatever Jira/Atlassian MCP is connected at runtime (e.g.
 Atlassian Rovo: `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`,
 `searchJiraIssuesUsingJql`, `createJiraIssue`, `editJiraIssue`, `createIssueLink`,
@@ -741,8 +750,19 @@ per run:
      `labelled_only_fields` (`summary` and `description`).
    - If the issue is unlabelled, only transition and comment; leave its summary
      and description unchanged.
+   An epic step whose lookup has `kind: key` follows the same rules; its key comes
+   from `delivery_pipeline.epic_jira` (below), never from a ticket.
    For steps without a recorded key, run each `lookup` entry's `jql` in order.
-   Apply an entry's `on_match` only when the hit's `Source of truth` line names
+   On a `primary` hit, update only when its `Source of truth` line equals
+   `requires_source_of_truth` exactly (same repository, same path;
+   `accepts_unprefixed` is the bare-path spelling). When it names a different path
+   or repository (`on_foreign: refuse`), the issue belongs to another graph: refuse
+   that step — never update it and never create a duplicate — and report both
+   pointers with the remedy (record the intended key with `jira-export.cjs record`,
+   or set `delivery_pipeline.epic_jira` for an epic, or export the other graph
+   separately). A hit with no `Source of truth` line at all is updated
+   (`on_absent: update`), and the report notes it. On a fallback entry, apply
+   `on_match` only when the hit's `Source of truth` line names
    this repository (matching `requires_source_of_truth`) or carries no prefix
    (matching `accepts_unprefixed`). On a `migrate` match, add `add_label`, replace
    the pointer line with `pointer`, and post the comment `label migrated`. Never
@@ -750,7 +770,7 @@ per run:
    none — skip it and move to the next entry. Create an issue only when the step
    says `on_no_match: create`. Stop and report to the user when one entry's
    `jql` returns more than one issue.
-3. For each issue the plan created or found, run `node
+3. For each issue the plan created or found (not a refused step), run `node
    ${SHIPYARD_SCRIPTS:-${CLAUDE_PLUGIN_ROOT}/scripts}/jira-export.cjs record <T-NN-MM> <KEY>` —
    this writes `delivery.jira: <KEY>` back into that ticket's plan
    frontmatter.
