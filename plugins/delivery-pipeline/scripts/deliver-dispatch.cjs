@@ -9,6 +9,7 @@ const { spawn, execFileSync } = require('node:child_process');
 
 const { computeFront } = require('./front.cjs');
 const { resolveGraphDir, resolveBaseRef } = require('./graph-dir.cjs');
+const { mergedParentBase, rootTicketBase } = require('./ticket-base.cjs');
 const { ensureDependencies } = require('./worktree-deps.cjs');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const claudeHost = require('./claude-delivery-host.cjs');
@@ -1141,22 +1142,23 @@ function buildPlanningRequest(args, options) {
   return request;
 }
 
-function driftBase(input) {
+function driftBase(input, ticket) {
   const { row, state } = input;
+  const board = object(state) ? state[ticket] : null;
   const parent = row.primary_parent && object(state) ? state[row.primary_parent] : null;
   if (row.primary_parent && object(parent) && parent.branch === row.pr_base && parent.status === 'merged') {
     if (typeof parent.merged_into !== 'string' || !parent.merged_into.trim()) {
       buildFail('base', `primary parent ${row.primary_parent} is merged without a destination`);
     }
-    return parent.merged_into;
+    return mergedParentBase(row, board, parent);
   }
   if (typeof row.pr_base !== 'string' || !row.pr_base.trim()) buildFail('base', 'drift-check needs a canonical graph pr_base');
-  return row.pr_base;
+  return row.primary_parent ? row.pr_base : rootTicketBase(row, board);
 }
 
 function buildDriftCheckRequest(args, input, signals) {
   if (args.pr !== undefined) buildFail('--pr', '--pr is not valid for drift-check');
-  const expectedBase = driftBase(input);
+  const expectedBase = driftBase(input, args.ticket);
   const base = resolveBaseRef(input.worktree, expectedBase);
   const scope = { run_id: `deliver-drift-${crypto.randomUUID()}`, ticket: args.ticket,
     phase: phaseNumber(input.row.phase), worktree: input.worktree };

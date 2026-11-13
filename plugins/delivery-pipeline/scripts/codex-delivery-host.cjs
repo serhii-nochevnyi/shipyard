@@ -8,6 +8,7 @@ const { execFileSync } = require('node:child_process');
 const { createCodexRuntimeHost, normalizeScope, parseCodexStream, probeCodexRuntime } = require('./codex-runtime-host.cjs');
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
+const { mergedParentBase, rootTicketBase } = require('./ticket-base.cjs');
 const policy = require('./model-policy.cjs');
 const archReviewContext = require('./codex-arch-review-context.cjs');
 const codeReviewContext = require('./codex-code-review-context.cjs');
@@ -246,15 +247,17 @@ function effectiveBaseRef(worktree, file, ticket, snapshot) {
     }
     if (parentState.status === 'merged') {
       if (typeof parentState.merged_into !== 'string' || !parentState.merged_into.trim()
-          || live.base !== parentState.merged_into) {
+          || live.base !== mergedParentBase(row, live, parentState)) {
         fail('BASE_MISMATCH', `ticket ${ticket} live base does not match its merged primary parent`);
       }
-      base = parentState.merged_into;
+      base = live.base;
     } else if (live.base !== row.pr_base) {
       fail('BASE_MISMATCH', `ticket ${ticket} live base is neither its open primary parent nor its merged destination`);
     }
-  } else if (live.base !== row.pr_base) {
+  } else if (live.base !== rootTicketBase(row, live)) {
     fail('BASE_MISMATCH', `ticket ${ticket} live base differs from its canonical plan base`);
+  } else {
+    base = live.base;
   }
   return resolveBaseRef(worktree, base);
 }
