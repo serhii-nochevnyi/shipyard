@@ -970,6 +970,42 @@ test('build drift-check measures a dependent ticket against its merged parent de
   }
 });
 
+const RETIRED_EPIC = { number: 257, branch: 'epic/12-demo', state: 'MERGED', base: 'main', merge_sha: 'f'.repeat(40) };
+
+function retiredChildFixture(board) {
+  const fixture = builderFixture('T-12-13');
+  writeJson(path.join(fixture.graphDir, 'tickets.json'), { tickets: {
+    [fixture.id]: ticketRow({ primary_parent: 'T-12-12', pr_base: 'ticket/T-12-12-parent', epic: 'epic/12-demo' }) } });
+  writeJson(path.join(fixture.graphDir, 'delivery-state.json'), {
+    'T-12-12': { status: 'merged', branch: 'ticket/T-12-12-parent', merged_into: 'main' },
+    [fixture.id]: { status: 'pending', pr: null, branch: ticketRow().branch, base: 'main', epic: 'epic/12-demo',
+      integration_branch: 'main', epic_retired: RETIRED_EPIC, ...board },
+  });
+  return fixture;
+}
+
+test('build drift-check measures a pending child of a parent merged into main against main once the epic is retired', () => {
+  const fixture = retiredChildFixture({});
+  try {
+    const request = deliverDispatch.build(['drift-check', fixture.id, '--runtime', 'claude'], { cwd: fixture.root });
+    assert.equal(request.args.tickets[0].baseRef, 'main');
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('build drift-check refuses a parent merged into main without a retired-epic proof', () => {
+  for (const board of [{ epic_retired: undefined }, { epic_retired: { ...RETIRED_EPIC, merge_sha: undefined } }, { base: 'epic/12-demo', epic_retired: undefined }]) {
+    const fixture = retiredChildFixture(board);
+    try {
+      assert.throws(() => deliverDispatch.build(['drift-check', fixture.id, '--runtime', 'claude'], { cwd: fixture.root }),
+        (error) => error.code === 'BUILD_REFUSED' && error.field === 'base' && /outside a proven retired epic/.test(error.message));
+    } finally {
+      cleanup(fixture.root);
+    }
+  }
+});
+
 test('an unknown ticket names the --graph-dir remedy for a foreign repository', async () => {
   const fixture = shipyardFixture('T-05-06');
   try {
@@ -1539,6 +1575,17 @@ test('publish stops at the first refusal, names it, and runs nothing after it', 
     assert.throws(() => unresolved.publish(), (error) => error.code === 'BASE_UNRESOLVED');
     assert.deepEqual(unresolved.keys(), []);
   } finally { cleanup(unresolved.f.root); }
+});
+
+test('publish opens a retired-epic child PR against the integration branch without merging the epic in', () => {
+  const p = publishFixture({ row: { primary_parent: 'T-00-00', epic: 'epic/demo' }, board: { base: 'main', status: 'pending',
+    integration_branch: 'main', epic_retired: { number: 9, branch: 'epic/demo', state: 'MERGED', base: 'main', merge_sha: 'f'.repeat(40) } } });
+  try {
+    assert.equal(p.publish().base, 'main');
+    assert.equal(p.arg('gh pr', '--base'), 'main');
+    assert.equal(p.arg('publish-gate --worktree', '--base'), 'main');
+    assert.equal(p.keys().includes('base-merge T-01-01'), false);
+  } finally { cleanup(p.f.root); }
 });
 
 test('publish merges the base in only for a primary parent on the epic, and renders and checks a target-project title with the repo', () => {

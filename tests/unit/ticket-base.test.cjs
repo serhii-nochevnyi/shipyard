@@ -104,7 +104,8 @@ test('an unverified epic retirement stays fail closed', () => {
     'epic merged elsewhere': (v) => { v.state['T-43-17'].epic_retired.base = 'release'; },
     'proof for another epic': (v) => { v.state['T-43-17'].epic_retired.branch = 'epic/44'; },
     'ticket PR still on the epic': (v) => { v.state['T-43-17'].pr_base = 'epic/43'; },
-    'ticket PR not open': (v) => { v.state['T-43-17'].status = 'branched'; },
+    'ticket already delivered': (v) => { v.state['T-43-17'].status = 'merged'; },
+    'board lacks the integration branch': (v) => { delete v.state['T-43-17'].integration_branch; },
     'parent epic proof disagrees': (v) => { v.state['T-43-06'].epic_pr.number = 300; },
     'parent epic proof missing': (v) => { delete v.state['T-43-06'].epic_pr; },
     'parent epic proof other merge': (v) => { v.state['T-43-06'].epic_pr.merge_sha = 'e'.repeat(40); },
@@ -135,4 +136,37 @@ test('every consumer helper agrees on the retired-epic base', () => {
   assert.equal(rootTicketBase(root, board), 'main');
   assert.equal(rootTicketBase(root, { ...board, pr_base: 'epic/43' }), 'epic/43');
   assert.equal(rootTicketBase({ ...root, pr_base: 'ticket/foreign' }, board), 'ticket/foreign');
+});
+
+function undeliveredFixture(status, parentMergedInto) {
+  const value = retiredFixture();
+  const child = value.state['T-43-17'];
+  child.status = status;
+  delete child.pr;
+  delete child.pr_base;
+  if (parentMergedInto === 'main') {
+    value.state['T-43-06'].merged_into = 'main';
+    delete value.state['T-43-06'].epic_pr;
+  }
+  return value;
+}
+
+test('a ticket without a PR leaves a verified merged epic for the integration branch', () => {
+  for (const status of ['pending', 'branched']) {
+    for (const mergedInto of ['epic/43', 'main']) {
+      const value = undeliveredFixture(status, mergedInto);
+      assert.equal(resolve(value, value.parentBranch), 'main', `${status}/${mergedInto}`);
+    }
+  }
+});
+
+test('a parent merged into the integration branch without a retired-epic proof fails closed', () => {
+  for (const boardBase of ['main', 'epic/43']) {
+    const value = undeliveredFixture('pending', 'main');
+    delete value.state['T-43-17'].epic_retired;
+    value.state['T-43-17'].base = boardBase;
+    assert.throws(() => resolve(value, value.parentBranch), { code: 'BOARD_MISMATCH' }, boardBase);
+    const child = value.graph.tickets['T-43-17'];
+    assert.equal(mergedParentBase(child, value.state['T-43-17'], value.state['T-43-06']), null);
+  }
 });
