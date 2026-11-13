@@ -947,10 +947,32 @@ test('build drift-check derives the whole drift request from the ticket row for 
     assert.equal(codex.role, 'drift-check');
     assert.equal(codex.scope.phase, 1);
     assert.equal(codex.context.plan_sha256, crypto.createHash('sha256').update(PLAN_TEXT).digest('hex'));
+    assert.equal(codex.graph_dir, fs.realpathSync(fixture.graphDir));
+    const requestFile = path.join(fixture.root, 'drift-request.json');
+    writeJson(requestFile, codex);
+    const parsed = codexDeliveryHost.readRequestFile(requestFile);
+    assert.equal(parsed.graphDir, codex.graph_dir);
+    assert.equal(parsed.launch.role, 'drift-check');
     assert.throws(() => deliverDispatch.build(['drift-check', fixture.id, '--pr', '5'], { cwd: fixture.root }),
       (error) => error.code === 'BUILD_REFUSED' && error.field === '--pr');
   } finally {
     cleanup(fixture.root);
+  }
+});
+
+test('build drift-check for Codex binds a linked project worktree graph the host request reader accepts', () => {
+  const fixture = projectWorktreeFixture();
+  try {
+    const request = deliverDispatch.build(['drift-check', fixture.id, '--runtime', 'codex', '--graph', fixture.graphDir],
+      { cwd: fixture.ticketWorktree });
+    assert.equal(request.graph_dir, fs.realpathSync(fixture.graphDir));
+    assert.equal(request.scope.worktree, fs.realpathSync(fixture.ticketWorktree));
+    const requestFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-drift-request-')), 'request.json');
+    writeJson(requestFile, request);
+    assert.equal(codexDeliveryHost.readRequestFile(requestFile).graphDir, request.graph_dir);
+    fs.rmSync(path.dirname(requestFile), { recursive: true, force: true });
+  } finally {
+    cleanup(fixture.projectRoot, fixture.linked, fixture.ticketWorktree);
   }
 });
 

@@ -42,6 +42,8 @@ const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 const TICKET_DELIVERY_ROLES = new Set(['drift-check', 'ci-fix', 'review-fix']);
+// @contract: these are exactly the Codex roles whose deliver-dispatch builder emits graph_dir.
+const GRAPH_SELECTOR_ROLES = new Set(['drift-check', 'arch-review', 'code-review', 'integrator', 'review-fix', 'ci-fix']);
 const CANDIDATE_SCHEMA = 'shipyard.finalization-candidate.v1';
 const VERIFICATION_SCHEMA = 'shipyard.verification-record.v1';
 const FINALIZATION_SCHEMA = 'shipyard.finalization-record.v1';
@@ -1040,9 +1042,19 @@ function planDeliveryBlock(delivery, planPath) {
   return parts.join('\n');
 }
 
-function ticketDelivery(options, worktree, ticket, expectedPlanSha256) {
+function ticketDelivery(options, worktree, ticket, expectedPlanSha256, bindBranch = false) {
   const file = graphFile(options, worktree);
   const row = graphSnapshot(file, ticket).row;
+  if (bindBranch) {
+    let branch = null;
+    try {
+      branch = execFileSync('git', ['-C', worktree, 'symbolic-ref', '--quiet', '--short', 'HEAD'], {
+        encoding: 'utf8', env: scopeFreeEnv(), stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 }).trim();
+    } catch { branch = null; }
+    if (branch !== row.branch) {
+      fail('SCOPE_MISMATCH', `ticket ${ticket} worktree branch ${branch || '(detached)'} differs from canonical graph branch ${row.branch}`);
+    }
+  }
   return deliverPlan({ graphDir: path.dirname(file), row, worktree, expectedSha256: expectedPlanSha256 });
 }
 
@@ -3080,7 +3092,8 @@ function createCodexDeliveryHost(options = {}) {
           + (request.role === 'executor' ? executorResultPrompt(prepared) : '');
         if (prepared.verificationAssignment) context.verification_assignment = prepared.verificationAssignment;
       } else if (!repairPrepared && TICKET_DELIVERY_ROLES.has(request.role)) {
-        const delivery = ticketDelivery(options, fs.realpathSync(scope.worktree), scope.ticket, context.plan_sha256);
+        const delivery = ticketDelivery(options, fs.realpathSync(scope.worktree), scope.ticket, context.plan_sha256,
+          request.role === 'drift-check');
         const block = planDeliveryBlock(delivery, undefined);
         if (block) context.prompt = originalPrompt + block;
       }
@@ -3316,9 +3329,10 @@ function readRequestFile(file) {
   }
   const { scope, graph_dir: graphDir, ...rawLaunch } = request;
   const launch = requestValue(rawLaunch);
-  if (graphDir !== undefined && (!['arch-review', 'code-review', 'integrator', 'review-fix', 'ci-fix'].includes(launch.role)
-      || typeof graphDir !== 'string' || !path.isAbsolute(graphDir)))
-    fail('INVALID_INPUT', 'graph_dir requires an absolute architecture graph selector');
+  if (graphDir !== undefined && !GRAPH_SELECTOR_ROLES.has(launch.role))
+    fail('INVALID_INPUT', 'graph_dir is not accepted for role ' + launch.role);
+  if (graphDir !== undefined && (typeof graphDir !== 'string' || !path.isAbsolute(graphDir)))
+    fail('INVALID_INPUT', 'graph_dir requires an absolute canonical graph selector');
   return { scope, launch, ...(graphDir ? { graphDir } : {}) };
 }
 

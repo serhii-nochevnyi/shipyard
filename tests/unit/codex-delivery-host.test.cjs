@@ -1939,6 +1939,100 @@ test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main workt
     }
   }));
 
+function driftCliOptions(f) {
+  return {
+    storageRoot: fs.mkdtempSync(path.join(temporary, 'storage-')),
+    host: { ...f.host, scope: { ...f.host.scope, worktree: fs.realpathSync(f.scope.worktree) } },
+    capabilities, agentDir: f.agentDir, agentManifest: f.agentManifest, env: {},
+  };
+}
+
+function driftRequestFile(f, graphDir, role = 'drift-check') {
+  const file = path.join(fs.mkdtempSync(path.join(temporary, 'drift-request-')), 'request.json');
+  fs.writeFileSync(file, JSON.stringify({ scope: f.scope, graph_dir: graphDir, role, signals: {},
+    context: { prompt: 'Judge this ticket.' } }));
+  return file;
+}
+
+test('CLI launches drift-check on its builder graph_dir and refuses relative, copied or mismatched graphs', () =>
+  withoutShipyardGraphDirEnv(async () => {
+    const f = ticketWorktreeFixture('drift-check');
+    const otherRepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-drift-foreign-')));
+    const linked = otherRepo + '-linked';
+    try {
+      const graphDir = path.join(fs.realpathSync(f.root), '.planning', 'graph');
+      await runCli(['--args-file', driftRequestFile(f, graphDir)], { write() {} }, driftCliOptions(f));
+      assert.equal(f.calls.length, 1);
+      assert.equal(f.calls[0].context.prompt, 'Judge this ticket.');
+
+      assert.throws(() => readRequestFile(driftRequestFile(f, '.planning/graph')),
+        (error) => error.code === 'INVALID_INPUT' && /absolute canonical graph/.test(error.message));
+      assert.throws(() => readRequestFile(driftRequestFile(f, graphDir, 'executor')),
+        (error) => error.code === 'INVALID_INPUT' && /not accepted for role executor/.test(error.message));
+
+      git(otherRepo, 'init', '-q', '-b', 'main');
+      git(otherRepo, 'config', 'user.name', 'Delivery Test');
+      git(otherRepo, 'config', 'user.email', 'delivery@example.test');
+      fs.writeFileSync(path.join(otherRepo, 'README.md'), 'x\n');
+      git(otherRepo, 'add', '.');
+      git(otherRepo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+      git(otherRepo, 'worktree', 'add', '-q', '-b', 'other', linked);
+      const writeGraph = (dir, branch) => {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'tickets.json'), JSON.stringify({ tickets: {
+          'T-38-04': { branch, pr_base: 'main', plan: f.planRel, files: ['src/owned.txt'] },
+        } }));
+        return dir;
+      };
+      const copy = writeGraph(path.join(linked, '.planning', 'graph'), 'main');
+      const mismatched = writeGraph(path.join(otherRepo, '.planning', 'graph'), 'ticket/T-38-04-elsewhere');
+      for (const [refused, code] of [[copy, 'GRAPH_NOT_CANONICAL'], [mismatched, 'SCOPE_MISMATCH'],
+        [path.join(fs.realpathSync(f.root), 'src'), 'GRAPH_UNAVAILABLE']]) {
+        await assert.rejects(() => runCli(['--args-file', driftRequestFile(f, refused)], { write() {} }, driftCliOptions(f)),
+          (error) => error.code === code, refused);
+      }
+      assert.equal(f.calls.length, 1);
+    } finally {
+      fs.rmSync(f.root, { recursive: true, force: true });
+      fs.rmSync(linked, { recursive: true, force: true });
+      fs.rmSync(otherRepo, { recursive: true, force: true });
+    }
+  }));
+
+test('CLI launches drift-check from a ticket worktree on a linked project worktree graph_dir', () =>
+  withoutShipyardGraphDirEnv(async () => {
+    const f = ticketWorktreeFixture('drift-check');
+    const root = fs.realpathSync(f.root);
+    const project = root + '-project';
+    const ticket = root + '-ticket';
+    try {
+      fs.writeFileSync(path.join(root, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {
+        'T-01-01': { branch: 'main', pr_base: 'main', plan: f.planRel, files: ['src/owned.txt'] },
+      } }));
+      git(root, 'add', '.');
+      git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'main graph');
+      git(root, 'worktree', 'add', '-q', '-b', 'project/next', project);
+      git(root, 'worktree', 'add', '-q', '-b', 'ticket/T-38-04-drift', ticket);
+      git(project, 'rm', '-q', '--cached', '-r', '.planning/graph');
+      git(project, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'untrack project graph');
+      const projectGraph = path.join(project, '.planning', 'graph');
+      fs.writeFileSync(path.join(projectGraph, 'tickets.json'), JSON.stringify({ tickets: {
+        'T-38-04': { branch: 'ticket/T-38-04-drift', pr_base: 'main', plan: f.planRel, files: ['src/owned.txt'] },
+      } }));
+      const scoped = { ...f, scope: { ...f.scope, worktree: ticket }, host: { ...f.host, scope: { ...f.scope, worktree: ticket } } };
+      await runCli(['--args-file', driftRequestFile(scoped, projectGraph)], { write() {} }, driftCliOptions(scoped));
+      assert.equal(f.calls.length, 1);
+      await assert.rejects(() => runCli(['--args-file', driftRequestFile(scoped, path.join(ticket, '.planning', 'graph'))],
+        { write() {} }, driftCliOptions(scoped)), (error) => error.code === 'GRAPH_UNAVAILABLE');
+      git(ticket, 'checkout', '-q', '-b', 'ticket/T-38-04-other');
+      await assert.rejects(() => runCli(['--args-file', driftRequestFile(scoped, projectGraph)], { write() {} },
+        driftCliOptions(scoped)), (error) => error.code === 'SCOPE_MISMATCH');
+      assert.equal(f.calls.length, 1);
+    } finally {
+      for (const dir of [ticket, project, root]) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }));
+
 test('architecture review cannot bypass host-owned preparation with a caller prompt', async () => {
   const f = fixture();
   try {
