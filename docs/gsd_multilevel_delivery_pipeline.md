@@ -250,7 +250,7 @@ The interface is the `/decompose` skill (no parameters). It itself:
 2. clarifies the mode: --tdd? --mvp? (with a recommendation based on the type of work)
 3. runs a chain of GSD commands under the hood:
    /gsd-plan-phase N --ingest <adr> [--tdd|--mvp]
-   /gsd-plan-review-convergence N --all --max-cycles 3
+   planner revision loop: read-only checker -> on issues, planner re-dispatch -> fresh checker (<= 3 cycles)
    scripts/validate-graph          # Gate 2 + generation of tickets.yaml
 4. shows a summary: tickets, DAG, waves, high-risk → you approve
    or say "break down T-03" — and the chain repeats pointwise
@@ -1026,7 +1026,7 @@ Dependency slice, Test evidence, Rollout/Rollback).
 # 2. Decomposition (loop 2)
 /decompose
 #    finds undecomposed ADRs itself, clarifies the mode, under the hood:
-#    plan-phase --ingest + plan-review-convergence + validate-graph
+#    plan-phase --ingest + checker/planner revision loop + validate-graph
 #    → graph/tickets.yaml, you approve the set of tickets              [Gate 2: auto]
 
 # --- a gap is possible here ---
