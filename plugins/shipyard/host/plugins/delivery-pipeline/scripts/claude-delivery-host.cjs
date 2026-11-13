@@ -302,7 +302,9 @@ function canonicalTicketBase(options, ticket, row, worktree) {
   if (typeof parent.merged_into !== 'string' || !parent.merged_into.trim()) {
     reject(`primary parent ${row.primary_parent} is merged without a destination`);
   }
-  return mergedParentBase(row, state[ticket], parent);
+  const base = mergedParentBase(row, state[ticket], parent);
+  if (!base) reject(`primary parent ${row.primary_parent} merged into ${parent.merged_into} outside a proven retired epic`);
+  return base;
 }
 
 function boardTicket(options, entry, row, worktree) {

@@ -21,6 +21,7 @@ function repoOf(row) {
 }
 
 const MERGE_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
+const UNDELIVERED = new Set(['pending', 'branched']);
 
 function nonEmpty(value) {
   return typeof value === 'string' && value.trim() !== '';
@@ -33,12 +34,12 @@ function retiredEpicProof(proof, epic) {
     && typeof proof.merge_sha === 'string' && MERGE_SHA.test(proof.merge_sha);
 }
 
-// @contract: leave the epic only for a proven retired epic and a PR already on its integration branch.
+// @contract: leave the epic only for a proven retired epic; an open PR must already target its integration branch.
 function retiredEpicBase(row, board, parentState = null) {
   if (!object(row) || !object(board)) return null;
   const proof = board.epic_retired;
-  if (!retiredEpicProof(proof, row.epic)) return null;
-  if (board.status !== 'pr-open' || board.pr_base !== proof.base || board.integration_branch !== proof.base) return null;
+  if (!retiredEpicProof(proof, row.epic) || board.integration_branch !== proof.base) return null;
+  if (board.status === 'pr-open' ? board.pr_base !== proof.base : !UNDELIVERED.has(board.status)) return null;
   if (parentState === null) return row.pr_base === row.epic ? proof.base : null;
   if (!object(parentState) || parentState.status !== 'merged') return null;
   if (parentState.merged_into === proof.base) return proof.base;
@@ -50,8 +51,11 @@ function retiredEpicBase(row, board, parentState = null) {
   return proof.base;
 }
 
+// @contract: a parent merged outside its epic is a valid base only once the board proves that epic retired.
 function mergedParentBase(row, board, parentState) {
-  return retiredEpicBase(row, board, parentState) || parentState.merged_into;
+  const retired = retiredEpicBase(row, board, parentState);
+  if (retired) return retired;
+  return !nonEmpty(row.epic) || parentState.merged_into === row.epic ? parentState.merged_into : null;
 }
 
 function rootTicketBase(row, board) {
