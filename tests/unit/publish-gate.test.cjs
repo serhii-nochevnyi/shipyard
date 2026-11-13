@@ -227,4 +227,77 @@ test('SHIPYARD_PROJECT_ROOT wins over the main-worktree discovery', () => {
   assert.strictEqual(r.json.base_source, 'recorded');
 });
 
+suite('publish-gate — a supplied remote commit cannot hide newly introduced code');
+
+function pushedFeature() {
+  const { dir, env } = root();
+  const bare = makeOrigin(dir, env, { defaultBranch: 'main' });
+  const worktree = cloneWorktree(dir, bare, env);
+  for (const [key, val] of [['user.email', 'pg@example.com'], ['user.name', 'pg test'], ['commit.gpgsign', 'false']]) {
+    git(worktree, ['config', key, val], env);
+  }
+  git(worktree, ['checkout', '-q', '-b', 'feature'], env);
+  fs.writeFileSync(path.join(worktree, 'app.js'), 'const value = 1;\n// forged-range commentary\n');
+  git(worktree, ['add', 'app.js'], env);
+  git(worktree, ['commit', '-q', '-m', 'comment'], env);
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  const rows = JSON.stringify([{ number: 7, baseRefName: 'main', headRefName: 'feature' }]);
+  fs.writeFileSync(path.join(bin, 'gh'), "#!/bin/sh\nprintf '%s\\n' '" + rows + "'\n", { mode: 0o755 });
+  const prEnv = { ...env, PATH: bin + path.delimiter + env.PATH };
+  delete prEnv.SHIPYARD_GRAPH_DIR;
+  return { dir, env: prEnv, worktree, head: git(worktree, ['rev-parse', 'HEAD'], env) };
+}
+
+function pushCheck(f, pushBase) {
+  const argv = [SCRIPT, '--managed', '--worktree', f.worktree, '--branch', 'feature', '--head', f.head,
+    '--push-base', pushBase, '--json'];
+  const r = spawnSync(process.execPath, argv, { cwd: f.worktree, encoding: 'utf8', env: f.env });
+  let json = null;
+  try { json = JSON.parse(r.stdout); } catch {}
+  return { status: r.status, stderr: r.stderr || '', json };
+}
+
+test('a push base equal to the pushed head still reviews the open PR diff', () => {
+  const f = pushedFeature();
+  const r = pushCheck(f, f.head);
+  assert.strictEqual(r.status, 1, r.stderr);
+  assert.strictEqual(r.json.base, 'origin/main');
+  assert.strictEqual(r.json.base_source, 'pull-request');
+  assert.strictEqual(r.json.push_base, f.head);
+  assert.deepStrictEqual(r.json.violations, ['app.js']);
+});
+
+test('an unrelated push base with an identical tree is refused', () => {
+  const f = pushedFeature();
+  git(f.worktree, ['checkout', '-q', '--orphan', 'orphan'], f.env);
+  git(f.worktree, ['commit', '-q', '-m', 'orphan copy'], f.env);
+  const orphan = git(f.worktree, ['rev-parse', 'HEAD'], f.env);
+  git(f.worktree, ['checkout', '-q', '-f', 'feature'], f.env);
+  const r = pushCheck(f, orphan);
+  assert.strictEqual(r.status, 2, r.stderr);
+  assert.match(r.stderr, /shares no history/);
+});
+
+test('a rewritten push base keeps the direct remote range and blocks', () => {
+  const f = pushedFeature();
+  git(f.worktree, ['checkout', '-q', '-b', 'rewritten', 'origin/main'], f.env);
+  fs.writeFileSync(path.join(f.worktree, 'other.js'), 'const other = 1;\n');
+  git(f.worktree, ['add', 'other.js'], f.env);
+  git(f.worktree, ['commit', '-q', '-m', 'rewritten remote'], f.env);
+  const rewritten = git(f.worktree, ['rev-parse', 'HEAD'], f.env);
+  git(f.worktree, ['checkout', '-q', 'feature'], f.env);
+  const r = pushCheck(f, rewritten);
+  assert.strictEqual(r.status, 1, r.stderr);
+  assert.strictEqual(r.json.base, rewritten);
+  assert.strictEqual(r.json.base_source, 'remote-oid');
+});
+
+test('a zero push base is refused', () => {
+  const f = pushedFeature();
+  const r = pushCheck(f, '0'.repeat(40));
+  assert.strictEqual(r.status, 2);
+  assert.match(r.stderr, /nonzero Git commit OID/);
+});
+
 done();

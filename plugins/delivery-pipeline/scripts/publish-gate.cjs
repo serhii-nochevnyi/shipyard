@@ -102,15 +102,17 @@ function main(argv = process.argv.slice(2)) {
     }
     try { git(worktree, ['rev-parse', '--verify', pushBase + '^{commit}']); }
     catch { throw new Error('remote push base ' + pushBase + ' is not available locally; fetch the destination branch before retrying'); }
+    try { git(worktree, ['merge-base', pushBase, value(argv, 'head') + '^{commit}']); }
+    catch { throw new Error('remote push base ' + pushBase + ' shares no history with the pushed commit'); }
   }
-  const context = baseFor(worktree, value(argv, 'base'), { ticket, projectRoot, pushBase,
+  const context = baseFor(worktree, value(argv, 'base'), { ticket, projectRoot, pushBase, head: value(argv, 'head'),
     branch: value(argv, 'branch'), graphDir: value(argv, 'graph'), managed: argv.includes('--managed'),
     configuredBase: value(argv, 'fallback-base') });
   const { base, base_source } = context;
   const repo = commentPolicy.repositorySlug(worktree);
-  const result = commentPolicy.analyze(worktree, base, {
+  const result = commentPolicy.analyze(worktree, context.base_commit || base, {
     workingTree: argv.includes('--working-tree'),
-    directRange: Boolean(pushBase),
+    directRange: Boolean(pushBase) && !context.base_commit,
     head: value(argv, 'head'),
     projectRoot: context.projectRoot || projectRoot,
     repo,
@@ -120,6 +122,7 @@ function main(argv = process.argv.slice(2)) {
     ticket: context.ticket || ticket || null,
     base,
     base_source,
+    push_base: pushBase || null,
     worktree,
     working_tree: result.working_tree,
     ok: result.ok,
@@ -130,7 +133,8 @@ function main(argv = process.argv.slice(2)) {
   if (argv.includes('--json')) console.log(JSON.stringify(output, null, 2));
   else if (result.ok) console.log(`publish-gate: OK — ${result.totals.comment_lines} non-allowed comment line(s)`);
   else {
-    console.error(`publish-gate: BLOCKED — base=${base} base_source=${base_source}`);
+    console.error(`publish-gate: BLOCKED — base=${base} base_source=${base_source}`
+      + (pushBase && base !== pushBase ? ` push_base=${pushBase}` : ''));
     for (const file of result.files.filter(entry => entry.violation)) {
       for (const finding of file.findings.filter(entry => entry.kind !== 'edited_comment')) {
         console.error(`${file.path}:${finding.line}: non-allowed added comment (${finding.kind})`);

@@ -641,10 +641,17 @@ configuration or altered managed files cause a refusal.
 The hook checks the actual commit IDs supplied by Git, including non-HEAD and
 multiple branch updates. Deletions have no content to check. Tags and other
 non-branch refs are reported as unmanaged. Working-tree edits do not affect a
-push check. For an existing destination branch, the check compares the remote
-commit supplied by Git directly with the pushed commit (`remoteOid..localOid`),
-including force pushes; already published comments are not checked again. If the
-remote commit is unavailable locally, fetch the destination branch and retry.
+push check. For a fast-forward of an existing destination branch whose open PR
+base or recorded graph/board base resolves to an `origin/` branch, the check
+reviews the PR diff (`merge-base(origin/base, localOid)..localOid`), so comments
+inherited from the base by a base merge are not blamed on the ticket while
+ticket-owned and conflict-resolution comments are still checked. Explicit,
+environment and configured bases never narrow this range, and neither does a base
+that is unrelated to or already contains the pushed commit. Otherwise, including
+force pushes, the check compares the remote commit supplied by Git directly with
+the pushed commit (`remoteOid..localOid`); a remote commit with no shared history
+is refused. If the remote commit is unavailable locally, fetch the destination
+branch and retry.
 For a new destination branch, the review base comes from its open PR, then an explicit
 base, a repository-qualified graph/board branch match, or project `git.base_branch`.
 A conflicting recorded or explicit base is refused with a diagnostic. A source
