@@ -628,6 +628,35 @@ test('drift preflight takes the merge destination as the base once the primary p
   }
 });
 
+function retireEpicForChild(fixture, childBoard) {
+  const graphFile = path.join(fixture.graphDir, 'tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+  graph.tickets['T-38-03'].epic = 'epic/38-demo';
+  graph.tickets['T-38-02'].epic = 'epic/38-demo';
+  fs.writeFileSync(graphFile, JSON.stringify(graph));
+  const boardFile = path.join(fixture.graphDir, 'delivery-state.json');
+  const board = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+  Object.assign(board['T-38-03'], { epic: 'epic/38-demo', integration_branch: 'main', pr_base: 'main',
+    epic_retired: { number: 257, branch: 'epic/38-demo', state: 'MERGED', base: 'main', merge_sha: 'f'.repeat(40) }, ...childBoard });
+  fs.writeFileSync(boardFile, JSON.stringify(board));
+}
+
+test('drift preflight accepts a parent merged into main only once the board proves the epic retired', async () => {
+  const fixture = repairFixture();
+  const parentBranch = stackTicketOnParent(fixture, { status: 'merged', merged_into: 'main' });
+  retireEpicForChild(fixture, {});
+  const { host } = driftCapableHost(fixture);
+  try {
+    await host.run('drift-gate', driftArgs(fixture, 'main'));
+    fs.rmSync(path.join(fixture.worktree, '.shipyard-drift-evidence.md'), { force: true });
+    assert.throws(() => host.run('drift-gate', driftArgs(fixture, parentBranch)), /base differs from the canonical graph/);
+    retireEpicForChild(fixture, { epic_retired: null });
+    assert.throws(() => host.run('drift-gate', driftArgs(fixture, 'main')), /outside a proven retired epic/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('drift preflight keeps the parent branch as the base while the primary parent is open', async () => {
   const fixture = repairFixture();
   const parentBranch = stackTicketOnParent(fixture, { status: 'open' });

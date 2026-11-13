@@ -1150,7 +1150,9 @@ function driftBase(input, ticket) {
     if (typeof parent.merged_into !== 'string' || !parent.merged_into.trim()) {
       buildFail('base', `primary parent ${row.primary_parent} is merged without a destination`);
     }
-    return mergedParentBase(row, board, parent);
+    const base = mergedParentBase(row, board, parent);
+    if (!base) buildFail('base', `primary parent ${row.primary_parent} merged into ${parent.merged_into} outside a proven retired epic`);
+    return base;
   }
   if (typeof row.pr_base !== 'string' || !row.pr_base.trim()) buildFail('base', 'drift-check needs a canonical graph pr_base');
   return row.primary_parent ? row.pr_base : rootTicketBase(row, board);

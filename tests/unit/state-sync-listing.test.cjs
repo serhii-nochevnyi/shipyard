@@ -902,4 +902,95 @@ test('architecture evidence bound to the retired epic base is not accepted for t
 });
 
 
+const GRAND = 'T-43-03';
+const GRAND_BRANCH = `ticket/${GRAND}-grandchild`;
+
+function chainTickets() {
+  return {
+    ...stackedTickets(),
+    [GRAND]: ticket({ branch: GRAND_BRANCH, title: 'grandchild', depends_on: [CHILD], primary_parent: CHILD, pr_base: CHILD_BRANCH }),
+  };
+}
+
+function pendingChildFixture({ epic, childMergedInto, openEpic = false }) {
+  const merged = { ...pr(402, 'MERGED', CHILD_BRANCH, childMergedInto), title: `${CHILD}: child`, mergeCommit: { oid: 'c'.repeat(40) } };
+  const open = openEpic ? [epic] : [];
+  return fixture({
+    tickets: chainTickets(),
+    ledger: 301,
+    previousState: { [TICKET]: priorMergedRow(301, 'MERGED', true) },
+    responses: {
+      open, review: open,
+      view: { 301: pr(301, 'MERGED'), 399: epic },
+      head: { [CHILD_BRANCH]: [merged] },
+      branches: ['main', EPIC, BRANCH],
+      comparisons: { [`main...${EPIC}`]: openEpic ? 2 : 0 },
+    },
+  });
+}
+
+function grandBase(f) {
+  const { resolveTicketBase } = require('../../plugins/delivery-pipeline/scripts/ticket-base.cjs');
+  const graph = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'tickets.json'), 'utf8'));
+  return resolveTicketBase({ ticket: GRAND, requestedBase: CHILD_BRANCH, graph, state: state(f) });
+}
+
+test('a pending child of a parent merged into main after the epic PR merged targets main (T-13-07 shape)', () => {
+  const f = pendingChildFixture({ epic: epicPr('MERGED'), childMergedInto: 'main' });
+  try {
+    for (let round = 0; round < 3; round++) {
+      fs.writeFileSync(f.callsFile, '');
+      const result = run(f);
+      assert.equal(result.status, 0, result.stderr);
+      const board = state(f);
+      assert.equal(board[TICKET].merged_into, EPIC);
+      assert.equal(board[TICKET].epic_pr.merge_sha, undefined);
+      assert.equal(board[CHILD].status, 'merged');
+      assert.equal(board[CHILD].merged_into, 'main');
+      const grand = board[GRAND];
+      assert.equal(grand.status, 'pending');
+      assert.equal(grand.pr, null);
+      assert.equal(grand.base, 'main', `round ${round}`);
+      assert.equal(grand.integration_branch, 'main');
+      assert.deepEqual(grand.epic_retired, { number: 399, branch: EPIC, state: 'MERGED', base: 'main', merge_sha: EPIC_MERGE_SHA });
+      assert.match(grand.base_reason, new RegExp(`${GRAND} has no open PR yet — the base is main; ${CHILD} stays merged into main`));
+      assert.equal(grand.ready, true);
+      assert.equal(grandBase(f), 'main');
+      const viewed = calls(f).some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '399');
+      assert.equal(viewed, round === 0, `round ${round} epic lookup`);
+    }
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('a pending child of a parent merged into a still-open epic stays on the epic', () => {
+  const f = pendingChildFixture({ epic: epicPr('OPEN'), childMergedInto: EPIC, openEpic: true });
+  try {
+    const result = run(f);
+    assert.equal(result.status, 0, result.stderr);
+    const grand = state(f)[GRAND];
+    assert.equal(grand.base, EPIC);
+    assert.equal(grand.epic_retired, undefined);
+    assert.equal(grandBase(f), EPIC);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('a parent merged into main while the epic is not verified merged stays fail closed', () => {
+  const cases = {
+    'open epic': { epic: epicPr('OPEN'), openEpic: true },
+    'closed-unmerged epic': { epic: epicPr('CLOSED') },
+    'merged epic without a merge commit': { epic: epicPr('MERGED', 'main', null) },
+  };
+  for (const [name, options] of Object.entries(cases)) {
+    const f = pendingChildFixture({ ...options, childMergedInto: 'main' });
+    try {
+      const result = run(f);
+      assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+      const grand = state(f)[GRAND];
+      assert.equal(grand.base, EPIC, name);
+      assert.equal(grand.epic_retired, undefined, name);
+      assert.throws(() => grandBase(f), { code: 'BOARD_MISMATCH' }, name);
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  }
+});
+
 done();

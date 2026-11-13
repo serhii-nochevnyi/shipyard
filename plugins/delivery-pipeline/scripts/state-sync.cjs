@@ -961,6 +961,7 @@ for (const [id, t] of Object.entries(tickets)) {
 // integration PR) in every repository the phase touches. `epicKey` comes from
 const epicInfo = {};
 const retiredEpics = new Map();
+const UNDELIVERED = new Set(['pending', 'branched']);
 if (mode === 'epic-stacked') {
   for (const [phase, e] of Object.entries(epics)) {
     const phaseRepos = Array.isArray(e.repos) && e.repos.length
@@ -1023,11 +1024,14 @@ if (mode === 'epic-stacked') {
             }))[0] || null;
         }
       }
-      const retargetedToBase = Object.entries(tickets).some(([id, ticket]) => String(ticket.phase) === String(phase)
-        && repoOf(ticket) === repo && ticket.epic === e.branch
-        && state[id] && state[id].status === 'pr-open' && state[id].pr_base === base);
+      const retirementWanted = Object.entries(tickets).some(([id, ticket]) => {
+        if (String(ticket.phase) !== String(phase) || repoOf(ticket) !== repo || ticket.epic !== e.branch || !state[id]) return false;
+        const parent = ticket.primary_parent && repoOf(tickets[ticket.primary_parent]) === repo ? ticket.primary_parent : null;
+        if (parent && (!state[parent] || state[parent].status !== 'merged')) return false;
+        return UNDELIVERED.has(state[id].status) || (state[id].status === 'pr-open' && state[id].pr_base === base);
+      });
       if (!observedPr && proof && proof.state === 'MERGED' && proof.base === base
-          && (validMergeSha(proof.merge_sha) || !retargetedToBase || !rd.available)) {
+          && (validMergeSha(proof.merge_sha) || !retirementWanted || !rd.available)) {
         previousPr = { number: proof.number, state: 'MERGED', headRefName: e.branch, baseRefName: base,
           ...(validMergeSha(proof.merge_sha) ? { mergeCommit: { oid: proof.merge_sha } } : {}) };
       } else if (!observedPr && proof && rd.available && !FULL_SYNC) {
@@ -1097,7 +1101,6 @@ const phaseLanded = (phase, repo) => {
 // `ready` is computed for every not-yet-delivered status, `branched` included:
 // a branch pushed without a PR is unfinished work, and leaving it out of the
 // actionable front made a run declare "fixpoint" while a ticket sat idle.
-const UNDELIVERED = new Set(['pending', 'branched']);
 for (const [id, t] of Object.entries(tickets)) {
   if (skippedLanded.has(id)) continue;
   const s = state[id];
@@ -1250,10 +1253,11 @@ for (const [id, t] of Object.entries(tickets)) {
       const retiredBase = retiredEpicBase(t, candidate, pp ? ppState : null);
       if (retiredBase) {
         s.base = retiredBase;
+        s.integration_branch = integ;
         s.epic_retired = retirement;
         s.base_reason = `${t.epic} landed on ${retiredBase} via PR #${retirement.number} (merge ${retirement.merge_sha})`
-          + ` and PR #${s.pr} already targets ${retiredBase} — the base is ${retiredBase}`
-          + (pp ? `; ${pp} stays merged into ${ppState.merged_into}` : '');
+          + (s.status === 'pr-open' ? ` and PR #${s.pr} already targets ${retiredBase}` : ` and ${id} has no open PR yet`)
+          + ` — the base is ${retiredBase}` + (pp ? `; ${pp} stays merged into ${ppState.merged_into}` : '');
       }
     }
     if (diamond.length && blockers.length === 0) {
