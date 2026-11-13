@@ -209,6 +209,19 @@ test('signer permission profile denies host signing paths and preserves the sele
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('codex permission profile adds executor write extensions only to workspace-write', () => {
+  const denied = [path.resolve(path.join(os.homedir(), '.ssh'))];
+  const writable = signerPermissionProfileArgs(denied, 'workspace-write', null, ['/opt/shipyard-cache']);
+  assert.ok(writable.includes('permissions.shipyard-runtime.filesystem={'
+    + JSON.stringify(denied[0]) + '="deny",' + JSON.stringify('/opt/shipyard-cache') + '="write"}'));
+  const readonly = signerPermissionProfileArgs(denied, 'read-only', null, ['/opt/shipyard-cache']);
+  assert.ok(!readonly.some((arg) => arg.includes('/opt/shipyard-cache')));
+  assert.throws(() => signerPermissionProfileArgs(denied, 'workspace-write', null, ['relative']),
+    (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => signerPermissionProfileArgs(denied, 'workspace-write', null, [path.dirname(denied[0])]),
+    (error) => error.code === 'INVALID_INPUT');
+});
+
 test('signer protection covers the configured user.signingkey file, absolute or home-relative', () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-signer-key-')));
   try {

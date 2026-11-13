@@ -23,6 +23,7 @@ const hostVerification = require('./host-verification.cjs');
 const { retryableFailure: retryableVerificationFailure, failureContext, scheduleRetry: scheduleVerificationRetry,
   failureReason: verificationFailureReason } = hostVerification;
 const { loadConfig, repoValue } = require('./pipeline-config.cjs');
+const { resolveExecutorSandbox } = require('./executor-sandbox.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { hintForError, stripControl } = require('./refusal-hints.cjs');
@@ -2866,6 +2867,26 @@ function createFinalizationRecoveryHost(options = {}) {
   });
 }
 
+function executorSandboxExtensions(options, scope, hostPaths) {
+  if (options.sandboxExtensions !== undefined) return options.sandboxExtensions;
+  const explicit = options.graphDir || process.env.SHIPYARD_GRAPH_DIR;
+  const graphDir = explicit ? path.resolve(explicit) : require('./graph-dir.cjs').resolveGraphDir([], scope.worktree).dir;
+  if (!graphDir || !fs.existsSync(path.join(graphDir, 'tickets.json'))) return undefined;
+  const config = loadConfig(path.resolve(graphDir, '..', '..'));
+  const configured = config.config ? config.config.executor_sandbox : null;
+  let resolved;
+  try {
+    resolved = resolveExecutorSandbox(configured, { worktree: scope.worktree, protectedPaths: hostPaths.filter(Boolean) });
+  } catch (error) {
+    fail('INVALID_INPUT', error.message.replace(/^executor-sandbox: /, ''));
+  }
+  if (resolved.allowedDomains.length) {
+    process.stderr.write('codex-delivery-host: delivery_pipeline.executor_sandbox.allowed_domains applies to Claude '
+      + 'executors only; the Codex executor sandbox keeps network access disabled\n');
+  }
+  return { allowWrite: resolved.allowWrite, allowedDomains: [] };
+}
+
 function createCodexDeliveryHost(options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
   const scope = normalizeScope(options.scope || options.runScope || {});
@@ -2892,6 +2913,8 @@ function createCodexDeliveryHost(options = {}) {
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
     additionalProtectedPaths: [stateRoot, roleArtifact.archiveAuthorityDirectory(scope.worktree)],
+    sandboxExtensions: executorSandboxExtensions(options, scope, [storage, stateRoot,
+      roleArtifact.archiveAuthorityDirectory(scope.worktree)]),
   });
   const writerSession = options.writerSession;
   if (writerSession && (typeof writerSession.lease?.snapshotTree !== 'function'

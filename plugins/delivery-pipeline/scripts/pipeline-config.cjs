@@ -21,6 +21,7 @@ const fs = require('fs');
 const path = require('path');
 const { resolveRuntime, readInheritedConfig } = require('./runtime-context.cjs');
 const modelPolicy = require('./model-policy.cjs');
+const executorSandbox = require('./executor-sandbox.cjs');
 const { resolveIntegrationBranch, architectureTarget } = require('./architecture-target.cjs');
 
 // A dispatch context is issued by loadConfig, not by a caller mutating the
@@ -673,6 +674,7 @@ const DEFAULTS = {
   reviewer_bots: null,
   repo_remedies: null,
   verification_commands: null,
+  executor_sandbox: null,
   jira: { enabled: true, project: null, issue_type: 'Task', epic_issue_type: 'Epic' },
   // Our ticket status → the tracker's TARGET STATUS NAME, for the projection
   // (ADR-008 D2). TOP-LEVEL and flat, deliberately NOT a member of `jira`:
@@ -1136,6 +1138,12 @@ function loadConfig(root, options = {}) {
     if (key === 'verification_commands') {
       const commands = normalizeVerificationCommands(value, warnings);
       if (commands !== null) cfg.verification_commands = commands;
+      continue;
+    }
+    if (key === 'executor_sandbox') {
+      const sandbox = executorSandbox.normalizeConfig(value);
+      if (sandbox.ok) cfg.executor_sandbox = sandbox.value;
+      else warnings.push(`delivery_pipeline.executor_sandbox ${sandbox.error} — ignored`);
       continue;
     }
     if (key === 'effort') {
