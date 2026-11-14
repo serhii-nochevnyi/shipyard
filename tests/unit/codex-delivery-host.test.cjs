@@ -31,6 +31,7 @@ const {
   readRequestFile,
   requestValue,
   completeRepairFeedback,
+  repairCommentEvolution,
   shareRepairTransitions,
   repairCoverageTransition,
   recheckHistoricalRepair,
@@ -1046,7 +1047,7 @@ test('spawning with bad argv exits 1, keeps the first stderr line, and appends a
   assert.equal(result.status, 1);
   assert.equal(result.stdout, '');
   const lines = result.stderr.split('\n');
-  assert.equal(lines[0], 'codex-delivery-host: codex-delivery-host: usage: codex-delivery-host.cjs --args-file <json>');
+  assert.equal(lines[0], 'codex-delivery-host: usage: codex-delivery-host.cjs --args-file <json>');
   assert.match(lines[1], /^hint\[INVALID_INPUT\]: /);
 });
 
@@ -2348,6 +2349,57 @@ test('serialized full paged feedback selects global Node IDs across Actor varian
   assert.equal(result.digest, crypto.createHash('sha256').update(canonicalInventory).digest('hex'));
 });
 
+test('a review comment body evolves only through a complete edit history authored by its own author', () => {
+  const digest = text => crypto.createHash('sha256').update(text).digest('hex');
+  const bot = { login: 'coderabbitai', id: 'BOT_kgDOCCSy2w' };
+  const before = { kind: 'thread-comment', id: 'PRRC_1', thread_id: 'PRRT_1', body: 'Finding\n\n<!-- auto -->',
+    body_sha256: digest('Finding\n\n<!-- auto -->'), author: bot.login, author_id: bot.id };
+  const marked = 'Finding\n\n\u2705 Addressed in commits 5375617 to 013eb77\n\n<!-- auto -->';
+  const after = { ...before, body: marked, body_sha256: digest(marked) };
+  let node, queries = 0;
+  const options = { execFileSync(program, args) {
+    assert.equal(program, 'gh'); queries++;
+    assert.ok(args.includes('id=PRRC_1'));
+    assert.match(args.find(arg => arg.startsWith('query=')), /userContentEdits\(first:100\)\{totalCount nodes\{editor/);
+    if (node instanceof Error) throw node;
+    return JSON.stringify({ data: { node } });
+  } };
+  const history = editors => ({ id: 'PRRC_1', author: bot, userContentEdits: { totalCount: editors.length, nodes: editors.map(editor => ({ editor })) } });
+  const verdict = (changed = after) => repairCommentEvolution(options, '/unused', before, changed);
+  assert.deepEqual(verdict(before), { evolution: null });
+  assert.equal(queries, 0, 'an unchanged comment needs no edit history');
+  node = history([bot, bot, bot, bot]);
+  assert.deepEqual(verdict().evolution, { id: 'PRRC_1', author: 'coderabbitai', from_sha256: before.body_sha256,
+    to_sha256: after.body_sha256, edits: 4 });
+  node = history([bot, { login: 'maintainer', id: 'U_1' }]);
+  assert.match(verdict().refused, /edited by maintainer, not only by its author coderabbitai/);
+  node = history([bot, { login: 'coderabbitai', id: 'BOT_other' }]);
+  assert.match(verdict().refused, /edited by coderabbitai, not only/, 'the same login under another identity is foreign');
+  node = history([bot, null]);
+  assert.match(verdict().refused, /an unknown actor/);
+  node = { ...history([bot, bot]), userContentEdits: { totalCount: 101, nodes: [] } };
+  assert.match(verdict().refused, /complete bounded edit history/);
+  node = { ...history([bot, bot]), userContentEdits: { totalCount: 3, nodes: [{ editor: bot }, { editor: bot }] } };
+  assert.match(verdict().refused, /complete bounded edit history/);
+  node = history([]);
+  assert.match(verdict().refused, /complete bounded edit history/);
+  node = { ...history([bot, bot]), author: { login: 'maintainer', id: 'U_1' } };
+  assert.match(verdict().refused, /live author differs/);
+  node = { ...history([bot, bot]), id: 'PRRC_other' };
+  assert.match(verdict().refused, /live author differs/);
+  node = new Error('rate limited');
+  assert.match(verdict().refused, /edit history is unavailable/);
+  node = history([bot, bot]);
+  assert.match(verdict({ ...after, thread_id: 'PRRT_other' }).refused, /changed thread_id/);
+  assert.match(verdict({ ...after, author: 'other' }).refused, /changed author/);
+  assert.match(verdict({ ...after, body_sha256: before.body_sha256.replace(/^./, '0') }).refused, /digest is inconsistent/);
+  assert.match(repairCommentEvolution(options, '/unused', before, undefined).refused, /was removed/);
+  assert.match(repairCommentEvolution(options, '/unused', { ...before, author: null, author_id: null },
+    { ...after, author: null, author_id: null }).refused, /author identity is unknown/);
+  assert.match(repairCommentEvolution(options, '/unused', { ...before, kind: 'comment' }, { ...after, kind: 'comment' }).refused,
+    /not a review thread comment/);
+});
+
 async function originalFixerFixture(outcome, mutation, evolution = null, historicalRecovery = null) {
   const f = fixture({ physicalPaths: true });
   const ci = mutation?.startsWith('ci-');
@@ -2395,6 +2447,16 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   const feedback = [{ id: threadId, isResolved: false,
     ...((locationMutation || mutation?.startsWith('issue-')) ? { path: 'src/owned.txt', originalLine: 1616, line: 1653 } : {}) }];
   const originalThreadComment = { id: commentId, body: mutation?.startsWith('issue-') ? '[rule-a] Full original thread comment' : 'Full original thread comment' };
+  const reviewBot = { __typename: 'Bot', id: 'BOT_kgDOCCSy2w', login: 'coderabbitai' };
+  const maintainer = { __typename: 'User', id: 'U_maintainer', login: 'maintainer' };
+  const evolvedComment = mutation?.includes('evolved-');
+  if (evolvedComment) Object.assign(originalThreadComment, { author: reviewBot,
+    body: 'Full original thread comment\n\n<!-- This is an auto-generated comment by CodeRabbit -->', editors: [] });
+  const markAddressed = editor => {
+    originalThreadComment.body = originalThreadComment.body.replace('\n\n<!-- This is an auto-generated comment',
+      '\n\n\u2705 Confirmed as addressed by @delivery-host\n\n<!-- This is an auto-generated comment');
+    originalThreadComment.editors.push(editor);
+  };
   const output = { schema: 'shipyard.repair-result.v1', id: f.scope.ticket, pr: 501,
     status: outcome === 'source' ? 'fixed' : outcome, pushed: false, notes: 'Complete repair reasoning.',
     hypothesis: 'The source condition explains the original finding.', review_dispositions: [
@@ -2456,7 +2518,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
     const query = args.find(arg => arg.startsWith('query='));
     if (args[0] === 'pr') return JSON.stringify({ id: 'pr-body-501' });
     const value = key => args.find(arg => arg.startsWith(key + '='))?.slice(key.length + 1);
-    const project = comment => ({ ...comment, author: repairAuthorFromQuery(query, comment.author) });
+    const project = ({ editors: _editors, ...comment }) => ({ ...comment, author: repairAuthorFromQuery(query, comment.author) });
     if (query.includes('viewer{id login}')) return JSON.stringify({ data: { viewer: actor } });
     if (query.includes('addPullRequestReviewThreadReply')) {
       const forgedAuthor = {
@@ -2474,6 +2536,8 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       const comment = { id: legacyActions && !replies.length ? 'PRRC_kwDOTmU9jc7865lw' : 'reply-' + (replies.length + 1), body: value('body'),
         author: replies.length === 0 && Object.hasOwn(forgedAuthor, mutation) ? forgedAuthor[mutation] : actor }; replies.push(comment);
       if (mutation === 'drift-edited') originalThreadComment.body += ' edited during reply';
+      if (mutation === 'evolved-during-reply' && replies.length === 1) markAddressed(reviewBot);
+      if (mutation === 'evolved-foreign-during-reply') markAddressed(maintainer);
       if (mutation === 'drift-removed') originalComments.length = 0;
       if (!reviews.length) reviews.push({ id: legacyActions ? 'PRR_kwDOTmU9jc8AAAABRu8U6g' : 'companion-review-1',
         body: '', state: 'COMMENTED', author: actor });
@@ -2495,6 +2559,13 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       return JSON.stringify({ data: { resolveReviewThread: { thread: feedback[0] } } }); }
     if (query.includes('{id body title}')) return JSON.stringify({ data: { repository: { pullRequest: { id: 'pr-body-501', body: 'Original complete PR body', title: 'Original PR title' } } } });
     const connection = nodes => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
+    if (query.includes('userContentEdits(')) {
+      const edited = [originalThreadComment, ...external, ...replies].find(item => item.id === value('id'));
+      const who = person => person ? { login: person.login, id: person.id } : null;
+      const history = edited?.editors?.length ? [edited.author, ...edited.editors] : [];
+      return JSON.stringify({ data: { node: edited ? { id: edited.id, author: who(edited.author),
+        userContentEdits: { totalCount: history.length, nodes: history.map(editor => ({ editor: who(editor) })) } } : null } });
+    }
     if (query.includes('... on PullRequestReviewComment{')) {
       relationReads++;
       if ((['companion-cli-pending-id', 'companion-cli-legacy-id'].includes(mutation)
@@ -2954,7 +3025,27 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       assert.equal(launches, 1);
       return;
     }
-    if (['companion-extra-review', 'companion-reuse-extra-review', 'drift-edited', 'drift-resolve', 'drift-removed'].includes(mutation)) {
+    if (mutation === 'evolved-during-reply') {
+      const result = await run();
+      assert.equal(result.actions.status, 'confirmed', 'an author-only edit of an answered comment needs no reassessment');
+      assert.equal(result.actions.confirmed.length, 3);
+      assert.deepEqual(result.actions.feedback_evolved.map(item => [item.id, item.author, item.edits]), [[commentId, 'coderabbitai', 2]]);
+      assert.equal(launches, 1); assert.equal(replies.length, 2); assert.equal(prReplies.length, 1);
+      const file = fs.readdirSync(path.join(stateRoot(f), 'repair-actions'))[0];
+      const saved = JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-actions', file))).payload;
+      const host = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: transport, verificationAllowList });
+      assert.deepEqual(host.resumeRepairActions(saved.dispatch_id, f.scope).actions, result.actions);
+      markAddressed(reviewBot);
+      assert.deepEqual(host.resumeRepairActions(saved.dispatch_id, f.scope).actions.status, 'confirmed',
+        'a later author-only edit of the answered comment still recovers without reassessment');
+      markAddressed(maintainer);
+      const foreign = host.resumeRepairActions(saved.dispatch_id, f.scope).actions;
+      assert.equal(foreign.status, 'feedback_changed', 'an edit by anyone else reaches the changed-feedback reassessment');
+      assert.deepEqual(foreign.feedback_changes.changed.map(item => item.id), [commentId]);
+      assert.equal(replies.length + prReplies.length, 3); assert.equal(launches, 1);
+      return;
+    }
+    if (['companion-extra-review', 'companion-reuse-extra-review', 'drift-edited', 'drift-resolve', 'drift-removed', 'evolved-foreign-during-reply'].includes(mutation)) {
       const result = await run();
       assert.equal(result.actions.status, 'feedback_changed');
       assert.equal(result.actions.requires_reassessment, true);
@@ -3343,6 +3434,14 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         if (mutation.endsWith('-body')) originalThreadComment.body += ' changed original feedback';
         if (mutation.endsWith('-author')) originalThreadComment.author = { ...actor, id: 'foreign-user' };
       }
+      if (mutation === 'normalized-evolved-body') { markAddressed(reviewBot); markAddressed(reviewBot); }
+      if (mutation === 'normalized-evolved-foreign-editor') { markAddressed(reviewBot); markAddressed(maintainer); }
+      if (mutation === 'normalized-evolved-foreign-editor') {
+        await assert.rejects(run, { code: 'REPAIR_PREDECESSOR_INVALID',
+          message: /original comment comment-1 body was edited by maintainer, not only by its author coderabbitai/ });
+        assert.equal(launches, 1); assert.equal(replies.length + prReplies.length, 3);
+        return;
+      }
       const refusal = {
         'normalized-location-shift': 'REPAIR_PREDECESSOR_INVALID', 'normalized-location-null': 'REPAIR_PREDECESSOR_INVALID',
         'normalized-uncovered-source-location-shift': 'REPAIR_SUBJECT_CHANGED',
@@ -3565,7 +3664,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
           return;
         }
       } else second = await run();
-      const unknown = !!evolution || coveredSource || ['normalized-external', 'normalized-missing-actions'].includes(mutation);
+      const unknown = !!evolution || coveredSource || ['normalized-external', 'normalized-missing-actions', 'normalized-evolved-body'].includes(mutation);
       assert.equal(second.resolution.signals.signatureState, unknown ? 'first' : 'repeat');
       assert.equal(second.receipt.applied_effort, unknown ? 'low' : 'high');
       assert.equal(second.receipt.agent_file_digest, crypto.createHash('sha256').update(unknown ? originalAgent : repeatAgent).digest('hex'));
@@ -3581,6 +3680,15 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       const originalSecond = attempts.find(item => item.dispatch_id === second.dispatch_id);
       assert.equal(originalSecond.subject.feedback.inventory.length, mutation === 'normalized-external' ? 8 : 7);
       assert.equal(originalSecond.subject.actionable_feedback.coverage.length, mutation === 'normalized-missing-actions' ? 0 : 3);
+      if (mutation === 'normalized-evolved-body') {
+        const evolvedRows = originalSecond.subject.actionable_feedback.coverage.filter(item => item.feedback_evolved);
+        assert.deepEqual(evolvedRows.map(item => item.feedback_id), [commentId]);
+        assert.equal(evolvedRows[0].feedback_evolved.author, 'coderabbitai');
+        assert.equal(evolvedRows[0].feedback_evolved.edits, 3);
+        const current = originalSecond.subject.actionable_feedback.inventory.find(item => item.id === commentId);
+        assert.match(current.body, /Confirmed as addressed/);
+        assert.equal(evolvedRows[0].feedback_evolved.to_sha256, current.body_sha256);
+      }
       if (coveredSource || evolution) {
         const historicalCoverage = originalSecond.subject.actionable_feedback.coverage.map(item =>
           repairCoverageTransition(item, originalSecond.subject.actionable_feedback));
@@ -3843,6 +3951,10 @@ for (const evolution of ['plan', 'owners', 'allowlist', 'base', 'all', 'stale-pl
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', 'normalized-covered-source', evolution)));
 test('historical scope alone starts a fresh current round without prior semantic approval',
   () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', 'normalized-repeat', 'plan')));
+
+for (const mutation of ['normalized-evolved-body', 'normalized-evolved-foreign-editor', 'evolved-during-reply', 'evolved-foreign-during-reply'])
+  test('a review comment edited only by its own author stays the same feedback; any other editor is named ' + mutation,
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 
 for (const mutation of ['companion-extra-review', 'companion-reuse-extra-review', 'drift-edited', 'drift-resolve', 'drift-removed', 'post-confirm-drift'])
   test('confirmed action separates concurrent feedback changes ' + mutation,

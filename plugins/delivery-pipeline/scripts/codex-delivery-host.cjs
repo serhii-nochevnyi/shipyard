@@ -1445,6 +1445,67 @@ function matchingRepairReply(reply, original, disposition, actor) {
       : reply.kind === 'comment' && !reply.thread_id);
 }
 
+const MAX_REPAIR_COMMENT_EDITS = 100;
+const REPAIR_COMMENT_EDITS_QUERY = 'query($id:ID!){node(id:$id){... on PullRequestReviewComment{id author{login ... on Node{id}} '
+  + 'userContentEdits(first:' + MAX_REPAIR_COMMENT_EDITS + '){totalCount nodes{editor{login ... on Node{id}}}}}}}';
+
+// @security: a review comment body may change only when its own author made every recorded edit.
+function repairCommentEvolution(options, worktree, before, after) {
+  if (!object(before) || before.kind !== 'thread-comment') return { refused: 'is not a review thread comment' };
+  if (!object(after)) return { refused: 'was removed' };
+  const fields = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter(field => canonical(before[field]) !== canonical(after[field]));
+  if (!fields.length) return { evolution: null };
+  const identity = fields.filter(field => !['body', 'body_sha256'].includes(field));
+  if (identity.length) return { refused: 'changed ' + identity.join(', ') };
+  if (typeof after.body !== 'string' || sha256(after.body) !== after.body_sha256)
+    return { refused: 'body digest is inconsistent' };
+  if (typeof before.author !== 'string' || !before.author || typeof before.author_id !== 'string' || !before.author_id)
+    return { refused: 'body changed but its author identity is unknown' };
+  let node;
+  try {
+    node = repairCommand(options, worktree, ['api', 'graphql', '-f', 'query=' + REPAIR_COMMENT_EDITS_QUERY,
+      '-f', 'id=' + before.id]).data?.node;
+  } catch (error) { return { refused: 'body changed and its edit history is unavailable: ' + error.message }; }
+  const author = actor => object(actor) && actor.login === before.author && actor.id === before.author_id;
+  if (!object(node) || node.id !== before.id || !author(node.author)) return { refused: 'body changed and its live author differs' };
+  const edits = node.userContentEdits;
+  if (!object(edits) || !Array.isArray(edits.nodes) || !Number.isSafeInteger(edits.totalCount) || edits.totalCount < 1
+      || edits.totalCount > MAX_REPAIR_COMMENT_EDITS || edits.nodes.length !== edits.totalCount)
+    return { refused: 'body changed without a complete bounded edit history' };
+  const foreign = [...new Set(edits.nodes.filter(edit => !author(edit?.editor))
+    .map(edit => edit?.editor?.login || 'an unknown actor'))];
+  if (foreign.length) return { refused: 'body was edited by ' + foreign.join(', ') + ', not only by its author ' + before.author };
+  return { evolution: { id: before.id, author: before.author, from_sha256: before.body_sha256,
+    to_sha256: after.body_sha256, edits: edits.totalCount } };
+}
+
+// @contract: author-only edits keep their earlier body, so only other feedback movement counts as change.
+function repairEvolvedFeedback(options, worktree, before, current, eligible = () => true) {
+  const prior = new Map(before.inventory.map(item => [item.id, item]));
+  const evolved = [], refused = [];
+  const inventory = current.inventory.map(item => {
+    const old = prior.get(item.id);
+    if (!old || old.kind !== 'thread-comment' || item.kind !== 'thread-comment'
+        || old.body_sha256 === item.body_sha256 || !eligible(item)) return item;
+    const verdict = repairCommentEvolution(options, worktree, old, item);
+    if (!verdict.evolution) { refused.push(item.id + ' ' + verdict.refused); return item; }
+    evolved.push(verdict.evolution);
+    return { ...item, body: old.body, body_sha256: old.body_sha256 };
+  });
+  return { inventory, evolved, refused };
+}
+
+function describeFeedbackChanges(changes, refused = []) {
+  const parts = [];
+  if (changes?.added?.length) parts.push('added ' + changes.added.join(', '));
+  if (changes?.removed?.length) parts.push('removed ' + changes.removed.join(', '));
+  if (changes?.changed?.length) parts.push('changed ' + changes.changed.map(item => item.id + ' (' + item.fields.join(', ') + ')').join(', '));
+  if (refused.length) parts.push('not author-only edits: ' + refused.join('; '));
+  const text = parts.join('; ') || 'repository or digest differs';
+  return text.length > 1200 ? text.slice(0, 1200) + '…' : text;
+}
+
 function repairReplyReview(options, prepared, feedback, reply, original, actor, saved = null,
   code = 'REPAIR_ACTION_PENDING') {
   const query = 'query($id:ID!,$target:ID!){node(id:$id){... on PullRequestReviewComment{id body author{login ... on Node{id}} '
@@ -1460,9 +1521,15 @@ function repairReplyReview(options, prepared, feedback, reply, original, actor, 
   const target = prepared.repair.feedback.inventory.find(item => item.id === node?.replyTo?.id);
   const samePr = value => object(value) && value.id === pr?.id && value.number === prepared.repair.pr
     && value.repository?.nameWithOwner === feedback.repo;
+  const evolvedTarget = original.kind !== 'thread' && object(targetNode) && typeof targetNode.body === 'string'
+    && targetNode.body !== original.body ? repairCommentEvolution(options, prepared.commit.worktree, original,
+      { ...original, body: targetNode.body, body_sha256: sha256(targetNode.body) }) : null;
+  if (evolvedTarget && !evolvedTarget.evolution)
+    fail(code, 'reply target comment ' + original.id + ' ' + evolvedTarget.refused);
   const sameTarget = original.kind === 'thread' ? original.id === target?.thread_id
-    : object(targetNode) && targetNode.id === original.id && targetNode.body === original.body
-      && sha256(targetNode.body) === original.body_sha256 && samePr(targetNode.pullRequest)
+    : object(targetNode) && targetNode.id === original.id
+      && (evolvedTarget?.evolution || (targetNode.body === original.body && sha256(targetNode.body) === original.body_sha256))
+      && samePr(targetNode.pullRequest)
       && (targetNode.author?.login || null) === original.author && (targetNode.author?.id || null) === original.author_id
       && targetNode.truncated !== true && targetNode.body_truncated !== true
       && node?.replyTo?.id === (targetNode.replyTo?.id || targetNode.id);
@@ -1483,8 +1550,16 @@ function repairReplyReview(options, prepared, feedback, reply, original, actor, 
       fail(code, 'protected reply review lacks its original bounded response and digest');
     let value;
     try { value = JSON.parse(saved.response); } catch { fail(code, 'protected reply review response is invalid'); }
-    if (sha256(saved.response) !== saved.sha256 || canonical(value) !== canonical(snapshot.value)
-        || canonical(saved.review) !== canonical(review) || typeof saved.created !== 'boolean'
+    // @security: the target body is masked only after sameTarget authenticated it as unchanged or author-edited.
+    const withoutTargetBody = response => {
+      if (!object(response?.data?.target)) return response;
+      const { body: _body, ...target } = response.data.target;
+      return { ...response, data: { ...response.data, target } };
+    };
+    if (sha256(saved.response) !== saved.sha256) fail(code, 'protected reply review response digest changed');
+    if (canonical(withoutTargetBody(value)) !== canonical(withoutTargetBody(snapshot.value)))
+      fail(code, 'protected reply review ' + reply.id + ' identity or relation changed');
+    if (canonical(saved.review) !== canonical(review) || typeof saved.created !== 'boolean'
         || (saved.created && (review.body !== '' || review.state !== 'COMMENTED'
           || prepared.repair.feedback.inventory.some(item => item.id === review.id))))
       fail(code, 'protected reply review bytes, identity or relation changed');
@@ -1788,9 +1863,13 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
           || !matchingRepairReply(reply, original, disposition, actions.actor)
           || canonical(current) !== canonical(reply))
         fail('REPAIR_PREDECESSOR_INVALID', 'confirmed reply identity, author, target or complete live bytes changed');
-      if (original.kind === 'thread-comment'
-          && canonical(feedback.inventory.find(item => item.id === original.id)) !== canonical(original))
-        fail('REPAIR_PREDECESSOR_INVALID', 'confirmed reply original comment context changed');
+      let evolved = null;
+      if (original.kind === 'thread-comment') {
+        const verdict = repairCommentEvolution(options, prepared.commit.worktree, original,
+          feedback.inventory.find(item => item.id === original.id));
+        if (verdict.refused) fail('REPAIR_PREDECESSOR_INVALID', 'confirmed reply original comment ' + original.id + ' ' + verdict.refused);
+        evolved = verdict.evolution;
+      }
       seen.add(action.feedback_id); excluded.set(action.reply_id, reply);
       if (action.reply_review) {
         repairReplyReview(options, { ...prepared, repair: subject }, feedback, reply, original, actions.actor,
@@ -1819,6 +1898,7 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
         artifact_ref: attempt.artifact_ref, artifact_digest: attempt.artifact_digest,
         actions_sha256: actionsSha256, feedback_id: action.feedback_id,
         reply: current, disposition_sha256: sha256(canonical(disposition)), resolved: action.resolved,
+        ...(evolved ? { feedback_evolved: evolved } : {}),
         ...(historical ? { historical: true, semantic_credit: false,
           ...(sourceTransition ? { source_transition: sourceTransition } : {}),
           ...(scopeChanged ? { scope_transition: { from: priorScope, to: currentScope,
@@ -1915,6 +1995,7 @@ function prepareRepair(options, scope, context) {
     + 'The complete final JSON must fit within 128 KiB without truncation. '
     + 'Historical action transition_sha256 references the complete entry in actionable_feedback.historical_transitions; '
     + 'these historical transitions grant no semantic credit. '
+    + 'A coverage entry with feedback_evolved marks a comment its own author edited after that reply; judge its current body. '
     + 'Every actionable feedback ID requires one disposition; full inventory and authenticated prior host dispositions remain bound. Each disposition is {id, action (reply/reply-and-resolve/escalate), reply, evidence:{command,result}}. '
     + 'Each reply, evidence.command and evidence.result must be a nonempty string of at most 4096 bytes; no additional disposition or evidence fields are allowed. '
     + 'Only unresolved thread IDs can be resolved. If status="escalate", every disposition must use reply or escalate; '
@@ -2098,7 +2179,7 @@ function confirmedPublicationId(prepared) {
   } catch { return null; }
 }
 
-function recheckRepair(prepared, options, { clean = false, feedback = prepared.repair.feedback, signedHead } = {}) {
+function recheckRepair(prepared, options, { clean = false, feedback = prepared.repair.feedback, signedHead, answeredIds = [] } = {}) {
   const root = prepared.commit.worktree;
   const historicalEndpoint = repairHistoricalEndpoint(prepared);
   if (signerFingerprint(root) !== prepared.commit.expectedSigner)
@@ -2145,9 +2226,16 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
         prior.reply_review, 'REPAIR_PREDECESSOR_INVALID');
     }
   }
-  if (current.repo !== feedback.repo || (current.digest !== feedback.digest
-      && !repairFeedbackMovedByPublication(prepared, current, feedback, options)))
-    fail('REPAIR_SUBJECT_CHANGED', 'full live feedback changed');
+  const answered = new Set([...(prepared.repair.actionable_feedback?.coverage || []).map(item => item.feedback_id), ...answeredIds]);
+  const evolution = current.repo === feedback.repo && current.digest !== feedback.digest
+    ? repairEvolvedFeedback(options, root, feedback, current, item => answered.has(item.id) || answered.has(item.thread_id))
+    : { inventory: current.inventory, evolved: [], refused: [] };
+  const comparable = evolution.evolved.length
+    ? { ...current, inventory: evolution.inventory, digest: sha256(canonical(evolution.inventory)) } : current;
+  if (current.repo !== feedback.repo || (comparable.digest !== feedback.digest
+      && !repairFeedbackMovedByPublication(prepared, comparable, feedback, options)))
+    fail('REPAIR_SUBJECT_CHANGED', 'full live feedback changed: ' + (current.repo !== feedback.repo ? 'repository differs'
+      : describeFeedbackChanges(repairFeedbackChanges(feedback, comparable), evolution.refused)));
   const dirty = git(root, ['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean)
     .filter(entry => !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
   if (clean && dirty.length) fail('WORKTREE_NOT_READY', 'repair launch requires a clean baseline');
@@ -2376,7 +2464,22 @@ function performRepairActions(prepared, output, options, dispatchId) {
   let feedback = state.feedback || prepared.repair.feedback;
   const result = () => Object.freeze({ status: state.feedback_changes ? 'feedback_changed'
     : output.status === 'escalate' ? 'escalated' : 'confirmed', confirmed: state.confirmed,
-    ...(state.feedback_changes ? { requires_reassessment: true, feedback_changes: state.feedback_changes } : {}) });
+    ...(state.feedback_changes ? { requires_reassessment: true, feedback_changes: state.feedback_changes } : {}),
+    ...(state.feedback_evolved?.length ? { feedback_evolved: state.feedback_evolved } : {}) });
+  // @invariant: only a comment this host already answered may evolve without reassessment, so author edits cannot loop.
+  const changesOf = (before, current, { reply = null, relation = null, resolvedThread = null, answering = null } = {}) => {
+    const answered = new Set([...state.confirmed.map(item => item.feedback_id),
+      ...(prepared.repair.actionable_feedback?.coverage || []).map(item => item.feedback_id),
+      ...(answering ? [answering] : [])]);
+    const evolution = repairEvolvedFeedback(options, prepared.commit.worktree, before, current,
+      item => answered.has(item.id) || answered.has(item.thread_id));
+    if (evolution.evolved.length) {
+      const known = new Set((state.feedback_evolved || []).map(item => canonical(item)));
+      state = { ...state, feedback_evolved: [...(state.feedback_evolved || []),
+        ...evolution.evolved.filter(item => !known.has(canonical(item)))] };
+    }
+    return repairFeedbackChanges(before, { inventory: evolution.inventory }, reply, relation, resolvedThread);
+  };
   const confirm = (current, disposition, reply, relation, resolved = false) => {
     for (const prior of state.confirmed) {
       const retained = state.feedback.inventory.find(item => item.id === prior.reply_id);
@@ -2387,7 +2490,8 @@ function performRepairActions(prepared, output, options, dispatchId) {
     }
     const original = prepared.repair.feedback.inventory.find(item => item.id === disposition.id);
     const threadId = original.kind === 'thread' ? original.id : original.thread_id;
-    const changes = repairFeedbackChanges(feedback, current, reply, relation, resolved ? threadId : null);
+    const changes = changesOf(feedback, current, { reply, relation, resolvedThread: resolved ? threadId : null,
+      answering: disposition.id });
     feedback = current;
     state = { ...state, feedback, pending: null,
       ...(changes ? { feedback_changes: changes } : {}),
@@ -2417,11 +2521,11 @@ function performRepairActions(prepared, output, options, dispatchId) {
   }
   if (stored && !state.pending) {
     const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
-    const changes = repairFeedbackChanges(feedback, current);
+    const changes = changesOf(feedback, current);
     if (changes && !state.feedback_changes) state = { ...state, feedback_changes: changes };
     feedback = current;
   }
-  recheckRepair(prepared, options, { clean: true, feedback });
+  recheckRepair(prepared, options, { clean: true, feedback, answeredIds: state.confirmed.map(item => item.feedback_id) });
   for (const action of state.confirmed) {
     const disposition = output.review_dispositions.find(item => item.id === action.feedback_id);
     const reply = feedback.inventory.find(item => item.id === action.reply_id);
@@ -2440,7 +2544,7 @@ function performRepairActions(prepared, output, options, dispatchId) {
     const confirmed = state.confirmed.find(action => action.feedback_id === disposition.id);
     if (confirmed && (disposition.action !== 'reply-and-resolve' || confirmed.resolved)) continue;
     if (state.pending) fail('REPAIR_ACTION_PENDING', 'an uncertain original action requires independent recovery');
-    feedback = recheckRepair(prepared, options, { clean: true, feedback });
+    feedback = recheckRepair(prepared, options, { clean: true, feedback, answeredIds: state.confirmed.map(item => item.feedback_id) });
     const entry = feedback.inventory.find(item => item.id === disposition.id);
     const threadId = entry.kind === 'thread' ? entry.id : entry.thread_id;
     let posted = confirmed ? { id: confirmed.reply_id, body: disposition.reply } : null;
@@ -2468,7 +2572,7 @@ function performRepairActions(prepared, output, options, dispatchId) {
       if (state.feedback_changes) return result();
     }
     if (disposition.action === 'reply-and-resolve') {
-      recheckRepair(prepared, options, { clean: true, feedback });
+      recheckRepair(prepared, options, { clean: true, feedback, answeredIds: state.confirmed.map(item => item.feedback_id) });
       state = { ...state, feedback, pending: { feedback_id: entry.id, action: 'resolve', reply_id: posted.id,
         body_sha256: sha256(posted.body), ...(relation ? { reply_review: relation } : {}) } };
       atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
@@ -3807,6 +3911,7 @@ module.exports = Object.freeze({
   repairCoverageTransition,
   recheckHistoricalRepair,
   completeRepairFeedback,
+  repairCommentEvolution,
   recheckRepair,
   validateArgs,
   collectVerificationEvidence,
@@ -3829,7 +3934,8 @@ if (require.main === module) {
     if (result?.status === 'blocked' || result?.status === 'verification_failed') process.exitCode = 1;
     if (result?.schema === 'shipyard.host-preflight.v1' && !result.ok) process.exitCode = 1;
   }).catch((error) => {
-    process.stderr.write('codex-delivery-host: ' + (error && error.message ? error.message : error) + '\n');
+    const message = String(error && error.message ? error.message : error);
+    process.stderr.write((message.startsWith('codex-delivery-host: ') ? '' : 'codex-delivery-host: ') + message + '\n');
     if (!error?.hintPrinted) process.stderr.write(hintForError(error) + '\n');
     if (error?.diagnostics) process.stderr.write(JSON.stringify({ diagnostics: error.diagnostics }) + '\n');
     process.exitCode = 1;
