@@ -1766,7 +1766,7 @@ function authenticateSelectedReferences(trusted, findings, worktree, evidence) {
       fail('REVIEW_NATIVE_INVALID', 'selected reference inventory is required');
     return;
   }
-  let root, originalPacket;
+  let root, originalPacket, codexAuthority;
   if (trusted.receipt.runtime === 'claude') {
     const packet = originalInlinePacket(trusted).packet;
     originalPacket = packet;
@@ -1776,11 +1776,14 @@ function authenticateSelectedReferences(trusted, findings, worktree, evidence) {
     const orderedReferences = entries => entries.map(entry => stable(entry)).sort();
     if (stable(orderedReferences(refs)) !== stable(orderedReferences(packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })))))
       fail('REVIEW_NATIVE_INVALID', 'selected references differ from original native input');
-  } else if (trusted.receipt.runtime === 'codex' && findings.review_contract === context.FOCUSED_CONTRACT
-      && findings.host_context.planning_reference !== undefined) {
+  } else if (trusted.receipt.runtime === 'codex' && findings.review_contract === context.FOCUSED_CONTRACT) {
     context.validateHistoricalContext({ result: findings, receipt: trusted.receipt,
       dispatchId: trusted.dispatchId, evidence, worktree });
-    root = require('./context-packet.cjs').authenticatedPlanningRoot(worktree, findings.host_context.planning_reference);
+    root = findings.host_context.planning_reference !== undefined
+      ? require('./context-packet.cjs').authenticatedPlanningRoot(worktree, findings.host_context.planning_reference)
+      : fs.realpathSync(worktree);
+    // @invariant: Codex completeness is the launch-authenticated full source_authority, never the focused selection.
+    codexAuthority = findings.host_context.source_authority;
   } else {
     root = fs.realpathSync(worktree);
   }
@@ -1794,7 +1797,13 @@ function authenticateSelectedReferences(trusted, findings, worktree, evidence) {
     if (/^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(source.path))
       architectureRefs.push({ ...source, content });
   }
-  const authority = originalPacket?.role_context?.source_authority;
+  if (codexAuthority) {
+    const pins = new Map(codexAuthority.pins.map(pin => [pin.path, stable({ path: pin.path, bytes: pin.bytes, sha256: pin.sha256 })]));
+    for (const source of architectureRefs)
+      if (pins.get(source.path) !== stable({ path: source.path, bytes: source.bytes, sha256: source.sha256 }))
+        fail('SOURCE_AUTHORITY_INVALID', 'selected architecture source is outside the complete source authority: ' + source.path);
+  }
+  const authority = codexAuthority || originalPacket?.role_context?.source_authority;
   if (authority) {
     if (authority.source?.root !== root
         || stable(authenticateArchitectureSources(worktree, root, authority.pins)) !== stable(authority))
@@ -1991,9 +2000,15 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
       records = selected.filter(row => row.worktree === worktree).map(row => row.record);
     }
     else {
-      const pins = authenticatedArchivePins(worktree);
-      if (!pins.length) continue;
-      records = Object.values(authorityState(worktree).payload.records);
+      // @invariant: an unauthenticated archive yields no verdict; it never hides another worktree's verdict.
+      try {
+        if (!authenticatedArchivePins(worktree).length) continue;
+        records = Object.values(authorityState(worktree).payload.records);
+      } catch (error) {
+        if (typeof onCandidateRefusal === 'function') onCandidateRefusal({ worktree,
+          code: error.code || 'ARCHIVE_AUTHORITY_INVALID', message: error.message });
+        continue;
+      }
     }
     for (const record of records) {
       if (record.receipt?.role !== 'arch-review') continue;

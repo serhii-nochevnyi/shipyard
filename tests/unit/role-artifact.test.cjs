@@ -2338,6 +2338,114 @@ test('original native architecture authority reads coordinator-only planning on 
   }
 });
 
+test('Codex focused subset of the complete source authority passes seal, read, current verdict and the merge gate', async () => {
+  const f = codexJudgmentFixtures.fixture();
+  const reviewed = f.root + '-focused';
+  const unselected = ['.planning/architecture/ADR-021-unrelated-storage.md', '.planning/architecture/ADR-023-unrelated-tags.md'];
+  try {
+    codexJudgmentFixtures.git(f.root, ['switch', 'main']);
+    codexJudgmentFixtures.write(f.root, unselected[0], '# ADR-021: Unrelated storage\nGoverns docs/storage only.\n');
+    codexJudgmentFixtures.write(f.root, unselected[1], '# ADR-023: Unrelated tags\nGoverns docs/tags only.\n');
+    codexJudgmentFixtures.git(f.root, ['add', '.planning/architecture']);
+    codexJudgmentFixtures.git(f.root, ['commit', '-qm', 'fixture: unrelated canonical decisions']);
+    codexJudgmentFixtures.git(f.root, ['worktree', 'add', reviewed, codexJudgmentFixtures.BRANCH]);
+    f.reviewRoot = fs.realpathSync(reviewed);
+    const { validationInput, result } = await codexJudgmentFixtures.unitJudgment(f);
+    const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
+    const findings = JSON.parse(fs.readFileSync(path.join(reviewed, manifest.files.findings.path)));
+    const context = findings.host_context;
+    assert.notEqual(context.planning_reference, undefined);
+    assert.deepEqual(context.source_authority.pins.map(pin => pin.path).filter(name => unselected.includes(name)), unselected);
+    assert.equal(context.selected_refs.some(ref => unselected.includes(ref.path)), false);
+    assert(context.selected_refs.some(ref => ref.path === '.planning/architecture/ADR-014-host-bound-review.md'));
+    assert.equal(roleArtifact.validateJudgmentManifest(validationInput).envelope.verdict, 'conform');
+    assert.equal(roleArtifact.read(validationInput).envelope.verdict, 'conform');
+    const refusals = [];
+    const lookup = { worktreePath: f.root, pr: f.pr.number, head: f.head, baseName: 'main', baseCommit: f.base,
+      headBranch: f.pr.headRefName, graphDir: path.join(f.root, '.planning/graph'), onCandidateRefusal: refusal => refusals.push(refusal) };
+    assert.equal(roleArtifact.currentArchitectureVerdict(lookup)?.dispatch_id, validationInput.dispatchId, JSON.stringify(refusals));
+    assert.equal(roleArtifact.currentArchitectureVerdict({ ...lookup, worktreePath: reviewed })?.dispatch_id, validationInput.dispatchId);
+    const gate = require('../../plugins/delivery-pipeline/scripts/gate-trailer.cjs')
+      .verifyArchitectureTarget({ pr: f.pr.number, worktreePath: f.root, getPullRequest: () => f.pr });
+    assert.equal(gate.required, true);
+    assert.equal(gate.ready, true);
+    assert.equal(gate.verdict?.verdict, 'conform');
+    const foreign = f.root + '-a-foreign';
+    codexJudgmentFixtures.git(f.root, ['worktree', 'add', '-q', '-b', 'ticket/T-38-99-foreign', foreign, 'main']);
+    codexJudgmentFixtures.write(foreign, path.join(roleArtifact.ARTIFACT_ARCHIVE_DIR, 'coordinator-followup/review-evidence.md'), 'operator note\n');
+    refusals.length = 0;
+    assert.equal(roleArtifact.currentArchitectureVerdict(lookup)?.dispatch_id, validationInput.dispatchId, JSON.stringify(refusals));
+    assert(refusals.some(refusal => refusal.worktree === fs.realpathSync(foreign) && /ARCHIVE_AUTHORITY/.test(refusal.code)), JSON.stringify(refusals));
+    assert.equal(require('../../plugins/delivery-pipeline/scripts/gate-trailer.cjs')
+      .verifyArchitectureTarget({ pr: f.pr.number, worktreePath: f.root, getPullRequest: () => f.pr }).ready, true);
+
+    const refusedBy = (mutate, restore, pattern) => {
+      refusals.length = 0;
+      mutate();
+      try {
+        assert.equal(roleArtifact.currentArchitectureVerdict(lookup), null);
+        assert(refusals.some(refusal => pattern.test(refusal.code + ' ' + refusal.message)), JSON.stringify(refusals));
+      } finally { restore(); }
+      refusals.length = 0;
+      assert.equal(roleArtifact.currentArchitectureVerdict(lookup)?.dispatch_id, validationInput.dispatchId, JSON.stringify(refusals));
+    };
+    const added = path.join(f.root, '.planning/architecture/ADR-099-added.md');
+    refusedBy(() => fs.writeFileSync(added, '# ADR-099\n'), () => fs.rmSync(added), /membership changed/);
+    const omitted = path.join(f.root, unselected[0]), omittedBytes = fs.readFileSync(omitted);
+    refusedBy(() => fs.rmSync(omitted), () => fs.writeFileSync(omitted, omittedBytes), /ENOENT|SOURCE_AUTHORITY|ARCHIVE_AUTHORITY|missing/);
+    refusedBy(() => fs.appendFileSync(omitted, 'Tampered.\n'), () => fs.writeFileSync(omitted, omittedBytes), /SOURCE_AUTHORITY|differs|changed/);
+    const selectedAdr = path.join(f.root, '.planning/architecture/ADR-014-host-bound-review.md'), selectedBytes = fs.readFileSync(selectedAdr);
+    refusedBy(() => fs.appendFileSync(selectedAdr, 'Tampered.\n'), () => fs.writeFileSync(selectedAdr, selectedBytes), /SOURCE_AUTHORITY|differs|changed/);
+    assert.equal(roleArtifact.currentArchitectureVerdict({ ...lookup, head: 'f'.repeat(40) }), null);
+    assert.equal(roleArtifact.currentArchitectureVerdict({ ...lookup, baseCommit: 'f'.repeat(40) }), null);
+
+    const findingsPath = path.join(reviewed, manifest.files.findings.path), findingsBytes = fs.readFileSync(findingsPath);
+    const findingsMode = fs.statSync(findingsPath).mode & 0o777;
+    const forged = { ...findings, host_context: { ...context, source_authority: { ...context.source_authority,
+      pins: context.source_authority.pins.filter(pin => !unselected.includes(pin.path)) } } };
+    fs.chmodSync(findingsPath, 0o600);
+    try {
+      fs.writeFileSync(findingsPath, JSON.stringify(forged));
+      refusals.length = 0;
+      assert.equal(roleArtifact.currentArchitectureVerdict(lookup), null);
+      assert(refusals.some(refusal => refusal.worktree === f.reviewRoot && /pin|size|changed/.test(refusal.message)), JSON.stringify(refusals));
+    } finally { fs.writeFileSync(findingsPath, findingsBytes); fs.chmodSync(findingsPath, findingsMode); }
+    refusals.length = 0;
+    assert.equal(roleArtifact.currentArchitectureVerdict(lookup)?.dispatch_id, validationInput.dispatchId, 'after findings restore ' + JSON.stringify(refusals));
+  } finally {
+    if (fs.existsSync(reviewed)) {
+      fs.rmSync(roleArtifact.archiveAuthorityDirectory(reviewed), { recursive: true, force: true });
+      try { codexJudgmentFixtures.git(f.root, ['worktree', 'remove', '--force', reviewed]); } catch {}
+    }
+    try { codexJudgmentFixtures.git(f.root, ['worktree', 'remove', '--force', f.root + '-a-foreign']); } catch {}
+    fs.rmSync(f.root + '-a-foreign', { recursive: true, force: true });
+    codexJudgmentFixtures.cleanupJudgment(f);
+  }
+});
+
+test('Codex focused source authority refuses a forged selection outside the complete authority', async () => {
+  const f = codexJudgmentFixtures.fixture();
+  try {
+    const { validationInput } = await codexJudgmentFixtures.unitJudgment(f);
+    const { authenticateSelectedReferences } = roleArtifactInternals(['authenticateSelectedReferences']);
+    assert.equal(typeof authenticateSelectedReferences, 'function');
+    const trusted = { receipt: validationInput.recorder.getVerifiedRecord(validationInput.dispatchId).receipt,
+      dispatchId: validationInput.dispatchId };
+    const manifest = JSON.parse(fs.readFileSync(validationInput.artifactPath));
+    const findings = JSON.parse(fs.readFileSync(path.join(f.root, manifest.files.findings.path)));
+    const evidence = fs.readFileSync(path.join(f.root, manifest.files.evidence.path));
+    assert.doesNotThrow(() => authenticateSelectedReferences(trusted, findings, f.root, evidence));
+    assert.equal(findings.host_context.planning_reference, undefined);
+    const extra = '.planning/investigations/INV-001-outside/DECISIONS.md';
+    codexJudgmentFixtures.write(f.root, extra, '# Decisions outside the reviewed authority\n');
+    const bytes = fs.readFileSync(path.join(f.root, extra));
+    const pin = { path: extra, bytes: bytes.length, sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex') };
+    assert.equal(findings.host_context.source_authority.pins.some(entry => entry.path === extra), false);
+    const forged = { ...findings, host_context: { ...findings.host_context, selected_refs: [...findings.host_context.selected_refs, pin] } };
+    assert.throws(() => authenticateSelectedReferences(trusted, forged, f.root, evidence), /outside the complete source authority/);
+  } finally { codexJudgmentFixtures.cleanupJudgment(f); }
+});
+
 function foreignCodeReviewArchive() {
   const { fixture } = require('../fixtures/code-review/artifact-fixture.cjs');
   const target = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
