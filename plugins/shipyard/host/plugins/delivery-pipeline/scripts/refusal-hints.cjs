@@ -178,6 +178,18 @@ const HINTS = Object.freeze({
     hint: 'The extension was not recorded.',
     remedy: `Read the printed reason and fix what it names: run extend with the operator's word, not from a role-hosted child; the review must be at its limit with fewer than five rounds spent (a head that already has a counted review is not at the limit: push the fixes first, or no extension is needed if it passed); the PR must match the phase; a delta from the last counted review must be possible; the reason must be plain text of at most 200 bytes with no internal identifiers, and the git user.name (or the OS user name when it is empty) at most 128 bytes. Then re-run.`,
   }),
+  REPAIR_PREDECESSOR_INVALID: Object.freeze({
+    hint: 'A prior authenticated repair action, reply or the comment it answered no longer matches its live GitHub state; the message names the item and the condition.',
+    remedy: 'Inspect the named item on the PR. A comment edited by someone other than its author, or a changed reply, needs a human decision before another repair round.',
+  }),
+  REPAIR_ACTION_PENDING: Object.freeze({
+    hint: 'A reply or resolve action of this repair could not be independently confirmed against its original ID, author, body, target or companion review.',
+    remedy: 'Re-run with --resume-repair-actions for the same dispatch once GitHub shows the action; if the message names a changed item, check that item on the PR first.',
+  }),
+  REPAIR_SUBJECT_CHANGED: Object.freeze({
+    hint: 'The PR, its feedback, source, plan or verification policy changed after the repair was prepared; the message names what moved.',
+    remedy: 'Start a fresh review-fix round so the host prepares the current PR and its complete feedback.',
+  }),
   USAGE: Object.freeze({
     hint: 'The command line or its inputs were refused before any work started.',
     remedy: 'Fix the argument or input named in the message (or the usage line when one is printed) and re-run.',
