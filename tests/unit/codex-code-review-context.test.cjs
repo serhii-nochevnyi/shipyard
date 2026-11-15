@@ -32,7 +32,7 @@ const admissions = new WeakMap();
 const pinNames = ['codex-code-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs',
   'codex-arch-review-context.cjs', 'claude-role-host.cjs', 'code-review-core.cjs', 'role-artifact.cjs',
   'conveyor-scratch.cjs', 'dispatch-record.cjs', 'architecture-target.cjs', 'development-artifacts.cjs',
-  'context-packet.cjs', 'lock.cjs', 'model-policy.cjs', 'model-policy-internal.cjs'];
+  'context-packet.cjs', 'lock.cjs', 'model-policy.cjs', 'model-policy-internal.cjs', 'frontmatter.cjs'];
 
 function fixture(label = 'plain', sameRoot = false) {
   const f = archFixture();

@@ -628,7 +628,7 @@ function strictRoundSnapshot(cwd) {
 
 function roundMembersForSnapshot(tickets, state, phase, phaseNumber, ticketSet, options = {}) {
   const phaseRows = Object.entries(tickets).filter(([, row]) => roundObject(row)
-    && String(row.phase) === String(phaseNumber)
+    && Number(/^0*(\d+)(?:-|$)/.exec(String(row.phase))?.[1]) === phaseNumber
     && typeof row.plan === 'string'
     && path.basename(path.dirname(row.plan)) === phase);
   if (!phaseRows.length) throw new Error(`round phase ${phase} has no canonical tickets`);

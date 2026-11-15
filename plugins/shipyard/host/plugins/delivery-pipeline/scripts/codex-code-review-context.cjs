@@ -22,7 +22,8 @@ const installedLaunches = new WeakMap();
 const sourceFiles = Object.freeze(['codex-code-review-context.cjs', 'codex-delivery-host.cjs',
   'codex-runtime-host.cjs', 'codex-arch-review-context.cjs', 'claude-role-host.cjs', 'code-review-core.cjs',
   'role-artifact.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'architecture-target.cjs',
-  'development-artifacts.cjs', 'context-packet.cjs', 'lock.cjs', 'model-policy.cjs', 'model-policy-internal.cjs']);
+  'development-artifacts.cjs', 'context-packet.cjs', 'lock.cjs', 'model-policy.cjs', 'model-policy-internal.cjs',
+  'frontmatter.cjs']);
 
 function fail(message, code = 'INVALID_CODE_REVIEW_CONTEXT') {
   throw Object.assign(new Error('codex-code-review-context: ' + message), { code });

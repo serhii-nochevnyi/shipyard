@@ -88,7 +88,7 @@ const ROUND_PHASE = '38-round-test';
 const ROUND_IDS = ['T-38-01', 'T-38-02'];
 const ROUND_BASE = 'b'.repeat(40);
 
-function roundProject() {
+function roundProject(rowPhase = '38') {
   const state = Object.fromEntries(ROUND_IDS.map((id, index) => [id, {
     status: 'pr-open',
     pr: 801 + index,
@@ -99,7 +99,7 @@ function roundProject() {
   }]));
   const fixture = scratch(state);
   const tickets = Object.fromEntries(ROUND_IDS.map((id) => [id, {
-    phase: '38',
+    phase: rowPhase,
     plan: `.planning/phases/${ROUND_PHASE}/${id.slice(-2)}-PLAN.md`,
     branch: state[id].branch,
     risk: 'high',
@@ -688,6 +688,24 @@ test('a round reservation projects one in-flight guard and expires changed membe
   } finally {
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
+});
+
+test('a round reservation finds tickets whose graph phase is the full phase name', () => {
+  for (const rowPhase of [ROUND_PHASE, '038']) {
+    const fixture = roundProject(rowPhase);
+    try {
+      const result = reserveRound(fixture.project, { dispatchId: `round-named-${crypto.randomUUID()}`, phase: ROUND_PHASE,
+        phaseNumber: 38, ticketSet: fixture.ticketSet, ticketSetDigest: fixture.ticketSetDigest, agentId: 'claude-role-owner-1' });
+      assert.equal(result.reserved, true, rowPhase);
+      assert.deepStrictEqual(Object.keys(activeDispatches(fixture.project)).sort(), ROUND_IDS);
+    } finally { fs.rmSync(fixture.dir, { recursive: true, force: true }); }
+  }
+  const neighbour = roundProject('380-round-test');
+  try {
+    assert.throws(() => reserveRound(neighbour.project, { dispatchId: `round-neighbour-${crypto.randomUUID()}`, phase: ROUND_PHASE,
+      phaseNumber: 38, ticketSet: neighbour.ticketSet, ticketSetDigest: neighbour.ticketSetDigest, agentId: 'claude-role-owner-1' }),
+    /round phase 38-round-test has no canonical tickets/);
+  } finally { fs.rmSync(neighbour.dir, { recursive: true, force: true }); }
 });
 
 test('round mutations refuse malformed round stores without overwriting them', () => {
