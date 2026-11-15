@@ -301,16 +301,8 @@ function fileText(worktree, relative, maxBytes = 192 * 1024) {
 }
 
 function parsePlan(plan) {
-  const section = (name) => {
-    const lines = plan.split(/\r?\n/);
-    const start = lines.findIndex((line) => new RegExp(`^#{2,3}\\s+${name}\\s*$`, 'i').test(line.trim()));
-    if (start < 0) return [];
-    const end = lines.findIndex((line, index) => index > start && /^#{2,3}\s+/.test(line));
-    return lines.slice(start + 1, end < 0 ? lines.length : end)
-      .map((line) => line.trim())
-      .filter((line) => /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line));
-  };
-  return { acceptance: section('Acceptance criteria'), verification: section('Verification commands') };
+  const { planSection, planAcceptanceCriteria } = require('./frontmatter.cjs');
+  return { acceptance: planAcceptanceCriteria(plan), verification: planSection(plan, 'Verification commands') };
 }
 
 function architectureFileId(name) {
@@ -448,12 +440,18 @@ function phaseNumberOf(value) {
   return match ? Number(match[1]) : NaN;
 }
 
+// @contract: a phase selector is a number (12, "012") or an exact name ("12-esign-workflow"); output is canonical.
 function phaseSelection(graph, requested) {
+  requested = typeof requested === 'number' ? String(requested) : requested;
+  if (typeof requested !== 'string' || !requested) reject('phase selector must be a phase number or name');
+  const numeric = /^\d+$/.test(requested) ? phaseNumberOf(requested) : null;
   const rows = Object.entries(graph.tickets).filter(([, row]) => object(row) && row.phase !== undefined
-    && (String(row.phase) === requested || path.basename(path.dirname(row.plan || '')) === requested));
+    && (numeric === null
+      ? String(row.phase) === requested || path.basename(path.dirname(row.plan || '')) === requested
+      : phaseNumberOf(row.phase) === numeric));
   if (!rows.length) reject(`phase ${requested} is absent from the canonical graph`);
   const dirs = new Set(rows.map(([, row]) => path.basename(path.dirname(row.plan || ''))));
-  if (dirs.size !== 1) reject('phase tickets resolve to multiple plan directories');
+  if (dirs.size !== 1) reject(`phase ${requested} is ambiguous: its tickets resolve to plan directories ${[...dirs].sort().join(', ')}`);
   const phaseDir = [...dirs][0];
   const phaseNumber = phaseNumberOf(rows[0][1].phase);
   if (!Number.isSafeInteger(phaseNumber) || phaseNumber < 1) reject('phase number is invalid');
@@ -1833,6 +1831,7 @@ module.exports = Object.freeze({
   firstResponseUsage,
   prepareInlineReview: makePrompt,
   prepareIntegratorContext,
+  phaseSelection,
   revalidateIntegrator,
   validateResult,
   writeEvidence,

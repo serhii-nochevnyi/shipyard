@@ -308,4 +308,23 @@ function parseFrontmatter(text) {
   return { data: data && typeof data === 'object' && !Array.isArray(data) ? data : {}, errors: ctx.errors };
 }
 
-module.exports = { parseFrontmatter, stripComment, splitFlow, scalar };
+const PLAN_LIST_ITEM = /^(?:[-*]|\d+\.)\s+/;
+
+function planSection(plan, name) {
+  const lines = String(plan).split(/\r?\n/);
+  const start = lines.findIndex((line) => new RegExp(`^#{2,3}\\s+${name}\\s*$`, 'i').test(line.trim()));
+  if (start < 0) return [];
+  const end = lines.findIndex((line, index) => index > start && /^#{2,3}\s+/.test(line));
+  return lines.slice(start + 1, end < 0 ? lines.length : end).map((line) => line.trim()).filter((line) => PLAN_LIST_ITEM.test(line));
+}
+
+// @contract: criteria are list items under "## Acceptance criteria" and in every GSD <success_criteria> block.
+function planAcceptanceCriteria(plan) {
+  const criteria = planSection(plan, 'Acceptance criteria');
+  for (const match of String(plan).matchAll(/^[ \t]*<success_criteria>([\s\S]*?)<\/success_criteria>/gim))
+    for (const line of match[1].split(/\r?\n/).map((text) => text.trim()))
+      if (PLAN_LIST_ITEM.test(line) && !criteria.includes(line)) criteria.push(line);
+  return criteria;
+}
+
+module.exports = { parseFrontmatter, stripComment, splitFlow, scalar, planSection, planAcceptanceCriteria };

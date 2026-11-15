@@ -487,6 +487,47 @@ for (const field of ['review_contract', 'repository', 'id', 'pr', 'head', 'base_
   finally { f.cleanup(); }
 });
 
+const IDENTITY_FIELDS = ['review_contract', 'repository', 'id', 'pr', 'head', 'base_commit', 'merge_base', 'base_tree',
+  'context_digest', 'launch_digest'];
+function promptIdentities(prompt) {
+  const marker = 'Repeat these exact host identities: ';
+  const line = prompt.split('\n').find(text => text.includes(marker));
+  return JSON.parse(line.slice(line.indexOf(marker) + marker.length));
+}
+
+test('a reviewer that copies only the admitted prompt identities passes, launch_digest included', () => {
+  const f = fixture();
+  try {
+    const id = crypto.randomUUID(), value = f.prepare({ inflightDispatchId: id }, { dispatch_id: id }); admit(f, value);
+    const prompt = context.admittedPrompt(value), echo = promptIdentities(prompt);
+    const d = dispatchFixture(f, value, raw => { for (const key of IDENTITY_FIELDS) delete raw[key]; Object.assign(raw, echo); });
+    const result = context.finish(value, d.dispatch, d.recorder);
+    assert.equal(result.role, 'code-review');
+    assert.equal(result.result.launch_digest, context.launchDigest(value));
+    assert.deepEqual(Object.keys(echo).sort(), IDENTITY_FIELDS.slice().sort());
+    assert.ok(prompt.includes('launch_digest=' + echo.launch_digest));
+    assert.equal(prompt.slice(0, prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>')).includes('0'.repeat(64)), false);
+    assert.equal(prompt.slice(prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>')),
+      value.launch.context.prompt.slice(value.launch.context.prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>')));
+  } finally { f.cleanup(); }
+});
+
+for (const [name, change, code, message] of [
+  ['missing', () => raw => { delete raw.launch_digest; }, 'ARTIFACT_IDENTITY_MISSING', /result omits pinned launch_digest/],
+  ['null', () => raw => { raw.launch_digest = null; }, 'ARTIFACT_IDENTITY_MISSING', /result omits pinned launch_digest/],
+  ['substituted', () => raw => { raw.launch_digest = hash('forged launch'); }, 'ARTIFACT_IDENTITY_MISMATCH', /result differs from pinned launch_digest/],
+  ['unadmitted placeholder', () => raw => { raw.launch_digest = '0'.repeat(64); }, 'ARTIFACT_IDENTITY_MISMATCH', /result differs from pinned launch_digest/],
+  ['stale admission', f => {
+    const id = crypto.randomUUID(), earlier = f.prepare({ inflightDispatchId: id }, { dispatch_id: id }); admit(f, earlier);
+    const stale = context.launchDigest(earlier);
+    return raw => { assert.notEqual(stale, raw.launch_digest); raw.launch_digest = stale; };
+  }, 'ARTIFACT_IDENTITY_MISMATCH', /result differs from pinned launch_digest/],
+]) test('finish names a ' + name + ' launch_digest', () => {
+  const f = fixture();
+  try { assert.throws(() => review(f, change(f)), error => error.code === code && message.test(error.message)); }
+  finally { f.cleanup(); }
+});
+
 for (const field of ['ticket', 'phase', 'worktree', 'dispatch_id', 'prompt']) test('launch authentication binds ' + field, () => {
   const f = fixture();
   try {

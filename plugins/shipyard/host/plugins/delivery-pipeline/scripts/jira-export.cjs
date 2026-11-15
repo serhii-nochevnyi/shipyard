@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
-const { parseFrontmatter } = require(path.join(__dirname, 'frontmatter.cjs'));
+const { parseFrontmatter, planAcceptanceCriteria } = require(path.join(__dirname, 'frontmatter.cjs'));
 const { resolveGraphDir } = require(path.join(__dirname, 'graph-dir.cjs'));
 
 const TICKET_ID_RE = /^T-\d{2}-\d{2}$/;
@@ -339,6 +339,7 @@ function planExport(graphDir, opts = {}) {
     const t = tickets[id];
     const body = bodyAfterFrontmatter(fs.readFileSync(path.join(root, t.plan), 'utf8'));
     const secs = sectionsOf(body);
+    if (!secs['Acceptance criteria']) secs['Acceptance criteria'] = planAcceptanceCriteria(body).join('\n');
     const labels = issueLabels(owner, repo, id);
     const pointer = `Source of truth: ${owner}/${repo}:${t.plan} (this issue is a generated projection)`;
     const description = compactDescription(secs, pointer);

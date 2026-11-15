@@ -39,11 +39,13 @@ function write(root, relative, value) {
   fs.writeFileSync(file, value);
 }
 
-function planText(extra = []) {
+function planText(extra = [], phase = '38', format = 'shipyard') {
   return [
-    '---', 'phase: 38', 'plan: 01', `title: ${JSON.stringify('Test role host')}`, '---', '',
+    '---', `phase: ${phase}`, 'plan: 01', `title: ${JSON.stringify('Test role host')}`, '---', '',
     '## Context', '- Follows ADR-014.', ...extra, '',
-    '## Acceptance criteria', '- host authenticates each role result', '',
+    ...(format === 'gsd'
+      ? ['<success_criteria>', '- host authenticates each role result', '</success_criteria>', '']
+      : ['## Acceptance criteria', '- host authenticates each role result', '']),
     '## Verification commands', '- node --test tests/unit/claude-role-host.test.cjs', '',
   ].join('\n');
 }
@@ -65,14 +67,14 @@ function setupRepository(kind, options = {}) {
   const branch = kind === 'arch-review' ? `ticket/${TICKET}` : `epic/${PHASE}`;
   const ticketBranch = `ticket/${TICKET}`;
   const row = {
-    title: 'Test role host', plan: planPath, phase: '38', repo: null, wave: 1,
+    title: 'Test role host', plan: planPath, phase: options.rowPhase || '38', repo: null, wave: 1,
     depends_on: [], cross_phase_deps: [], cross_repo_deps: [], files: ['src/role.txt'],
     risk: 'high', type: 'implementation', human_checkpoint: true, branch,
     pr_base: kind === 'integrator' ? branch : 'main', epic: kind === 'integrator' ? branch : null,
   };
   if (kind === 'integrator') row.branch = ticketBranch;
   write(root, '.planning/architecture/ADR-014-test.md', POLICY_MD);
-  write(root, planPath, planText(options.planExtra));
+  write(root, planPath, planText(options.planExtra, options.rowPhase, options.planFormat));
   write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' } }));
   write(root, '.planning/graph/tickets.json', JSON.stringify({ tickets: { [TICKET]: row } }));
   write(root, '.planning/graph/delivery-state.json', JSON.stringify({
@@ -396,7 +398,7 @@ function request(fixture) {
 }
 
 function integratorFixture(options = {}) {
-  const fixture = setupRepository('integrator');
+  const fixture = setupRepository('integrator', { rowPhase: options.rowPhase, planFormat: options.planFormat });
   if (options.files) {
     for (const file of options.files) write(fixture.root, file, 'changed ' + file + '\n');
     git(fixture.root, ['add', 'src']);

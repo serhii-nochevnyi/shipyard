@@ -6,7 +6,7 @@
 
 const path = require('path');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
-const { parseFrontmatter, stripComment } =
+const { parseFrontmatter, stripComment, planSection, planAcceptanceCriteria } =
   require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'frontmatter.cjs'));
 
 const fm = (body) => parseFrontmatter(`---\n${body}\n---\n\n# Body\n`);
@@ -177,6 +177,34 @@ test('empty frontmatter yields an empty map', () => {
   const { data, errors } = parseFrontmatter('---\n\n---\nbody\n');
   assert.deepStrictEqual(data, {});
   assert.deepStrictEqual(errors, []);
+});
+
+suite('plan acceptance criteria — Shipyard headings and GSD <success_criteria>');
+
+test('a "## Acceptance criteria" section yields its list items up to the next heading', () => {
+  const plan = '## Acceptance criteria\n- one\nprose\n2. two\n### Verification commands\n- npm test\n';
+  assert.deepStrictEqual(planAcceptanceCriteria(plan), ['- one', '2. two']);
+  assert.deepStrictEqual(planSection(plan, 'Verification commands'), ['- npm test']);
+});
+
+test('a GSD <success_criteria> block yields its list items without any heading', () => {
+  const plan = '<objective>\n- not a criterion\n</objective>\r\n  <success_criteria>\r\n- [ ] signs the envelope\r\n* keeps the audit\r\n3. returns 201\r\nprose only\r\n  </success_criteria>\r\n<output>\n- not either\n</output>\n';
+  assert.deepStrictEqual(planAcceptanceCriteria(plan), ['- [ ] signs the envelope', '* keeps the audit', '3. returns 201']);
+});
+
+test('a prose-only or missing criteria block yields no criteria', () => {
+  assert.deepStrictEqual(planAcceptanceCriteria('<success_criteria>\nAll measurable.\n</success_criteria>\n'), []);
+  assert.deepStrictEqual(planAcceptanceCriteria('## Goal\n- ship\n'), []);
+  assert.deepStrictEqual(planAcceptanceCriteria('Inline <success_criteria> mention\n- not a block\n'), []);
+});
+
+test('a heading above the GSD block keeps the heading result unchanged and adds nothing twice', () => {
+  const gsd = '<success_criteria>\n- one\n- two\n</success_criteria>\n';
+  const patched = '## Acceptance criteria\n' + gsd;
+  assert.deepStrictEqual(planAcceptanceCriteria(patched), planSection(patched, 'Acceptance criteria'));
+  assert.deepStrictEqual(planAcceptanceCriteria(patched), planAcceptanceCriteria(gsd));
+  assert.deepStrictEqual(planAcceptanceCriteria('## Acceptance criteria\n- one\n\n## Notes\n' + '<success_criteria>\n- one\n- extra\n</success_criteria>\n'),
+    ['- one', '- extra']);
 });
 
 done();

@@ -3560,3 +3560,28 @@ test('D35T36 claude a valid original archive outside current source ancestry gra
     assert.equal(r.cold().current, null); r.assertOriginals();
   } finally { r.f.cleanup(); }
 });
+
+test('the shared phase resolver accepts a phase number or its exact name and returns the canonical phase', () => {
+  const { phaseSelection } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  const row = (phase, dir) => ({ phase, plan: `.planning/phases/${dir}/PLAN.md` });
+  const graph = { tickets: {
+    'T-12-02': row('12-esign-workflow', '12-esign-workflow'), 'T-12-01': row('12-esign-workflow', '12-esign-workflow'),
+    'T-120-01': row('120-later', '120-later'), 'T-12.1-01': row('12.1-hotfix', '12.1-hotfix'), 'T-7-01': row(7, '07-legacy'),
+  } };
+  for (const selector of ['12', '012', 12, '12-esign-workflow']) {
+    const selected = phaseSelection(graph, selector);
+    assert.equal(selected.phase, '12-esign-workflow', String(selector));
+    assert.equal(selected.phaseNumber, 12);
+    assert.deepEqual(selected.rows.map(item => item.id), ['T-12-01', 'T-12-02']);
+  }
+  assert.equal(phaseSelection(graph, '7').phase, '07-legacy');
+  assert.equal(phaseSelection(graph, '07-legacy').phaseNumber, 7);
+  assert.equal(phaseSelection(graph, '120').phase, '120-later');
+  assert.throws(() => phaseSelection(graph, '12-other'), /phase 12-other is absent from the canonical graph/);
+  assert.throws(() => phaseSelection(graph, '13'), /phase 13 is absent from the canonical graph/);
+  assert.throws(() => phaseSelection(graph, ''), /phase selector must be a phase number or name/);
+  const ambiguous = { tickets: { ...graph.tickets, 'T-12-09': row('12-esign-sequel', '12-esign-sequel') } };
+  assert.throws(() => phaseSelection(ambiguous, '12'),
+    /phase 12 is ambiguous: its tickets resolve to plan directories 12-esign-sequel, 12-esign-workflow/);
+  assert.equal(phaseSelection(ambiguous, '12-esign-sequel').phase, '12-esign-sequel');
+});

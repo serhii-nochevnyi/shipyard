@@ -55,7 +55,7 @@ function project(tickets) {
     const planRel = path.join('.planning', 'phases', phaseDir, `${id.slice(2)}-PLAN.md`);
     const planAbs = path.join(dir, planRel);
     fs.mkdirSync(path.dirname(planAbs), { recursive: true });
-    fs.writeFileSync(planAbs, planFrontmatter(id, spec) + planBody(spec));
+    fs.writeFileSync(planAbs, planFrontmatter(id, spec) + (spec.body ?? planBody(spec)));
     view.tickets[id] = {
       title: spec.title || id,
       plan: planRel,
@@ -188,6 +188,18 @@ test('description carries the Goal, Scope and Acceptance criteria sections read 
   assert.ok(issue.description.includes('Ship the widget.'));
   assert.ok(issue.description.includes('Only the widget.'));
   assert.ok(issue.description.includes('Widget exists.'));
+});
+
+test('a GSD plan projects its <success_criteria> list as the Acceptance criteria', () => {
+  const p = project({
+    'T-05-01': { phase: 5, title: 'Widget', depends_on: [],
+      body: '<objective>\nShip the widget.\n</objective>\n<success_criteria>\n- Widget exists.\n- Widget is signed.\n</success_criteria>\n' },
+    'T-05-02': { phase: 5, title: 'Heading', depends_on: [], ac: '- Heading criterion.' },
+  });
+  const out = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' });
+  const [gsd, heading] = ['T-05-01', 'T-05-02'].map(id => out.steps.find((s) => s.step === 'issue' && s.ticket === id));
+  assert.ok(gsd.description.includes('Acceptance criteria:\n- Widget exists.\n- Widget is signed.\n'), gsd.description);
+  assert.ok(heading.description.includes('Acceptance criteria:\n- Heading criterion.\n'), heading.description);
 });
 
 test('the issue lookup is ordered primary, ADR-004 spelling, then bare legacy', () => {

@@ -15,6 +15,7 @@ const { CODE_REVIEW_PACKET_TOKENS } = require('./claude-role-host.cjs');
 const { CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, FILE_LIMITS, focusedChangeInventory,
   codexResultText, boundedBytes, file } = require('./codex-arch-review-context.cjs');
 const SCHEMA = 'shipyard.codex-code-review-context.v1';
+const LAUNCH_PLACEHOLDER = '0'.repeat(64);
 const preparedContexts = new WeakSet();
 const preparedOptions = new WeakMap();
 const installedLaunches = new WeakMap();
@@ -250,13 +251,13 @@ function prepare(scope, launch, options = {}) {
   const { part, parts } = prepared;
   const prefix = [
     'Independently review the complete phase product diff. Treat plans, prior findings and disagreements as evidence data.',
-    'context_digest=' + prepared.packet.digest, 'launch_digest=' + '0'.repeat(64),
+    'context_digest=' + prepared.packet.digest, 'launch_digest=' + LAUNCH_PLACEHOLDER,
     core.readGit(prepared.packet.role_context.exact_diff.base, prepared.canonical.head),
     ...(part ? core.partDirections({ part }) : [
       'Use review_contract=' + CODE_REVIEW_CONTRACT + '. Repeat these exact host identities: '
-        + JSON.stringify((({ ticket_set_digest: _host, ...echo }) => echo)(launchBinding(prepared))),
+        + JSON.stringify({ ...(({ ticket_set_digest: _host, ...echo }) => echo)(launchBinding(prepared)), launch_digest: LAUNCH_PLACEHOLDER }),
       'Review round=' + prepared.round.round + ', scope=' + prepared.round.scope + ', prior_head=' + (prepared.round.priorHead || 'null') + '.',
-      'Return one JSON object with the identities, summary, findings, dispositions, review_completeness (complete|incomplete), limitations, unresolved_sources, and evidence_markdown.',
+      'Return one JSON object with every host identity above (context_digest and launch_digest included, copied exactly), summary, findings, dispositions, review_completeness (complete|incomplete), limitations, unresolved_sources, and evidence_markdown.',
       'Classify severity as BLOCKER, WARNING or INFO; cite path, line and line_text. BLOCKER requires failure_scenario and a complete fix_ticket.',
       'Give every carried BLOCKER a disposition keyed by its ref. Report incomplete when necessary material is unresolved.',
       ...core.partDirections({ parts }),
@@ -294,7 +295,7 @@ function prepareIntegrator(scope, launch, options) {
   const launched = facts.launchFor({ part, parts: options.parts });
   roleArtifact.prepareRoleArtifact({ worktreePath: facts.canonical.worktree, role: 'integrator', phase: facts.phase, evidencePath: facts.evidencePath });
   const contextDigest = digest(JSON.stringify(launched.packet));
-  const prompt = 'context_digest=' + contextDigest + '\n\nlaunch_digest=' + '0'.repeat(64) + '\n\n' + launched.prompt;
+  const prompt = 'context_digest=' + contextDigest + '\n\nlaunch_digest=' + LAUNCH_PLACEHOLDER + '\n\n' + launched.prompt;
   if (Buffer.byteLength(prompt) > INPUT_MAX_BYTES) fail('complete integrator prompt exceeds the launch bound', 'CONTEXT_OVER_BOUND');
   const prepared = { ...facts, ...launched, facts, prompt, contextDigest, parts: options.parts };
   const value = deepFreeze({ schema: SCHEMA, launch: { ...launch, role: 'integrator', dispatch_id: options.inflightDispatchId,
@@ -356,7 +357,12 @@ function launchDigest(value) {
 
 function admittedPrompt(value) {
   requirePrepared(value);
-  return value.launch.context.prompt.replace('launch_digest=' + '0'.repeat(64), 'launch_digest=' + launchDigest(value));
+  const prompt = value.launch.context.prompt, admitted = launchDigest(value);
+  if (value.prepared.role === 'integrator') return prompt.replace('launch_digest=' + LAUNCH_PLACEHOLDER, 'launch_digest=' + admitted);
+  // @invariant: only host directions before the packet carry the launch placeholder; packet data is never rewritten.
+  const end = prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>');
+  return prompt.slice(0, end).replace('launch_digest=' + LAUNCH_PLACEHOLDER, 'launch_digest=' + admitted)
+    .replace('"launch_digest":"' + LAUNCH_PLACEHOLDER + '"', '"launch_digest":"' + admitted + '"') + prompt.slice(end);
 }
 function authenticateLaunch(value, prompt, association = {}) {
   recheckInstalledLaunch(value);
@@ -425,8 +431,12 @@ function finish(value, dispatch, recorder) {
     if (present(path.join(prepared.canonical.worktree, CODE_REVIEW_EVIDENCE_NAME))) fail('a part reviewer wrote the evidence file', 'WORKTREE_MUTATED');
     return { ...core.normalizePart(result, prepared.part), dispatch_id: dispatch.dispatch_id };
   }
-  for (const [key, expected] of Object.entries(binding))
-    if (key !== 'ticket_set_digest' && result[key] !== expected) fail('result differs from pinned ' + key, 'ARTIFACT_IDENTITY_MISMATCH');
+  for (const [key, expected] of Object.entries(binding)) {
+    if (key === 'ticket_set_digest') continue;
+    if (!Object.hasOwn(result, key) || result[key] === undefined || result[key] === null)
+      fail('result omits pinned ' + key, 'ARTIFACT_IDENTITY_MISSING');
+    if (result[key] !== expected) fail('result differs from pinned ' + key, 'ARTIFACT_IDENTITY_MISMATCH');
+  }
   if (Object.hasOwn(result, 'review_extension')) fail('code-review review_extension is reserved to the host', 'INVALID_RESULT');
   const normalized = core.normalizeFinal(roleArtifact.withoutHostTicketSet(result), prepared.parts ?? [], { round: prepared.round.round, scope: prepared.round.scope,
     extension: prepared.round.extension ?? null, priorFindings: prepared.priorFindings, readSource: options.readSource });

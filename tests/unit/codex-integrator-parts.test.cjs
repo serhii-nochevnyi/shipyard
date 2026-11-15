@@ -51,7 +51,7 @@ async function withHost(f, config, action) {
   const agentManifest = path.join(agentDir, '.shipyard-manifest.json'); fs.writeFileSync(agentManifest, JSON.stringify(manifest));
   const options = { storageRoot: storage, refreshGit: false, defaultBranch: 'main', agentDir, agentManifest, env: {},
     ...withPrs({}, config.subjectPrs || config.prs || [livePr(f)]), ...(config.partBudget ? { partBudget: config.partBudget } : {}) };
-  const subject = prepareIntegratorContext(options, { worktree: f.root, phase: PHASE });
+  const subject = prepareIntegratorContext(options, { worktree: f.root, phase: config.selector ?? PHASE });
   Object.assign(options, withPrs({}, config.prs || [livePr(f)]));
   const scope = { run_id: 'codex-integrator-' + crypto.randomUUID(), runtime: 'codex', provider: 'openai', phase: subject.phaseNumber,
     worktree: f.root, repository: subject.canonical.commonPath, ticket: subject.ticket };
@@ -126,6 +126,34 @@ test('the Codex integrator reads the diff through git in one read-only session a
       assert.equal(result.artifact.outcome, 'passed');
       assert.equal(result.receipt.runtime_evidence.integrator_review.launch_digest.length, 64);
       assert.equal(fs.readFileSync(evidenceFile(f), 'utf8'), `Integration check at ${f.head}.\n`);
+    });
+  } finally { cleanupFixture(f); }
+});
+
+for (const selector of ['38', PHASE]) test('the documented in-process Codex integrator launch resolves a named graph phase from ' + selector, async () => {
+  const f = integratorFixture({ rowPhase: PHASE });
+  try {
+    await withHost(f, { selector }, async ({ calls, scope, run }) => {
+      assert.equal(scope.phase, 38);
+      const result = await run();
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].packet.role_context.phase, PHASE);
+      assert.equal(result.artifact.outcome, 'passed');
+      assert.equal(result.phase, PHASE);
+      assert.equal(fs.readFileSync(evidenceFile(f), 'utf8'), `Integration check at ${f.head}.\n`);
+    });
+  } finally { cleanupFixture(f); }
+});
+
+test('the Codex integrator accepts a GSD plan whose criteria are in <success_criteria>', async () => {
+  const f = integratorFixture({ rowPhase: PHASE, planFormat: 'gsd' });
+  try {
+    assert.doesNotMatch(fs.readFileSync(path.join(f.root, f.planPath), 'utf8'), /## Acceptance criteria/);
+    await withHost(f, { selector: '38' }, async ({ calls, run }) => {
+      const result = await run();
+      assert.deepEqual(calls[0].packet.role_context.phase_contracts.map(item => item.acceptance),
+        [['- host authenticates each role result']]);
+      assert.equal(result.artifact.outcome, 'passed');
     });
   } finally { cleanupFixture(f); }
 });

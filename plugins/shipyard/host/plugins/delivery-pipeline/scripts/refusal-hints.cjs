@@ -58,6 +58,10 @@ const HINTS = Object.freeze({
     hint: 'The role result names a repository, PR, commit or tree that differs from the authenticated snapshot; the refusal names the field.',
     remedy: 'Re-run the role against the current PR head and base; if the same field differs again, the PR changed while the role ran, so wait for it to settle first.',
   }),
+  ARTIFACT_IDENTITY_MISSING: Object.freeze({
+    hint: 'The role result omits an identity field the host pinned at launch, such as launch_digest; the refusal names the field. The value was not compared because it is absent.',
+    remedy: 'Re-run the role: its prompt lists every identity, including launch_digest, to copy exactly. If the same field is omitted again, keep the run output and report it as a Shipyard prompt-contract defect.',
+  }),
   INVALID_RESULT: Object.freeze({
     hint: 'The dispatch result does not match the shape the boundary requires.',
     remedy: 'Fix the result fields to match the documented schema and re-run.',
