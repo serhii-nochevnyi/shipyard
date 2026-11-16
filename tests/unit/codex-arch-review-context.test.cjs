@@ -109,6 +109,7 @@ test('Codex arch-review builds and binds a complete graph- and PR-authenticated 
     assert.ok(result.launch.context.prompt.includes('git diff ' + result.prepared.packet.diff.merge_base + '...' + f.head + ' -- <path>'),
       'the prompt tells the reviewer to read git');
     assert.match(result.launch.context.prompt, /The judge must review the exact live PR diff and this decision/);
+    assert.match(result.launch.context.prompt.split('<AUTHENTICATED_CONTEXT_PACKET>')[0], /Boundaries of this read-only role are not limitations: say in summary that the review was static/);
     assert.ok(result.launch.context.prompt.split('<AUTHENTICATED_CONTEXT_PACKET>')[0].includes('Return the whole JSON object within 131072 UTF-8 bytes (128 KiB); evidence_markdown is at most 98304 UTF-8 bytes (96 KiB) of it.'));
     assert.equal(result.prepared.packet.review_contract, contextBuilder.FOCUSED_CONTRACT);
     assert(!result.evidence.selected_refs.some((ref) => ref.path === planPath()));

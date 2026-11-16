@@ -999,7 +999,7 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false, ref
     ...(!part && (role === 'arch-review' || codeReview) && packet.role_context?.focused ? [
       'Echo these focused subject fields: ' + JSON.stringify({ ...focusedEcho(packet), context_digest: sha(canonicalJson(packet)),
         launch_digest: sha(canonicalJson({ packet_digest: sha(canonicalJson(packet)), reference_digest: packet.role_context.reference_digest })) }),
-      'Include review_completeness complete or incomplete, limitations and unresolved_sources as bounded string lists. Complete requires both lists empty. No consumption or range echoes are required.'
+      'Include review_completeness complete or incomplete, limitations and unresolved_sources as bounded string lists. ' + core.COMPLETENESS_RULE + ' No consumption or range echoes are required.'
     ] : []),
     ...(role === 'integrator' && range && !part ? ['Echo these identity fields exactly: ' + JSON.stringify({ phase: packet.role_context.phase,
       head: combined.head, head_tree: combined.head_tree, base: packet.role_context.integration_base.ref,

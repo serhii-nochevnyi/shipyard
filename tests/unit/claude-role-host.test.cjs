@@ -682,6 +682,7 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
     assert.match(launched.prompt, /active coordinator-owned delivery loop/);
     assert.match(launched.prompt, /coordinator owns setup and dispatch/);
     assert.match(launched.prompt, /Do not restart shipyard-route, bootstrap, marketplace installation/);
+    assert.match(launched.prompt, /Boundaries of this read-only role are not limitations: say in summary that the review was static/);
     assert.ok(launched.prompt.includes('Return the whole JSON object within 131072 UTF-8 bytes (128 KiB); evidence_markdown is at most 98304 UTF-8 bytes (96 KiB) of it.'));
     const packet = packetFromPrompt(launched.prompt);
     assert.equal(launched.selection.model, 'claude-opus-5-5');

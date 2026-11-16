@@ -21,6 +21,11 @@ const PART_SCHEMA = Object.freeze({ type: 'object', required: ['part', 'review_c
 const PART_BOUNDS = `summary is a short synopsis of at most ${PART_LIMITS.summaryBytes} UTF-8 bytes (${codePoints(PART_LIMITS.summaryBytes)} characters always fit); `
   + `put evidence and detail in findings, never in summary. limitations and unresolved_sources hold at most ${PART_LIMITS.items} non-empty strings `
   + `of at most ${PART_LIMITS.textBytes} UTF-8 bytes each; findings holds at most ${PART_LIMITS.items} entries.`;
+// @contract: limitations name only obstacles to the assigned scope; complete requires both lists empty.
+const COMPLETENESS_RULE = 'limitations lists only obstacles that kept you from verifying your assigned scope, such as an unread path, '
+  + 'diff slice or source. Boundaries of this read-only role are not limitations: say in summary that the review was static, that tests '
+  + 'or CI were not run, that runtime, deployed or separate acceptance was not checked, or that paths outside your scope were not '
+  + 'reviewed. review_completeness complete requires empty limitations and unresolved_sources; otherwise return incomplete.';
 const SOURCE_MAX_BYTES = 2 * 1024 * 1024;
 const SEVERITIES = Object.freeze(['BLOCKER', 'WARNING', 'INFO']);
 const VERDICTS = Object.freeze(['pass', 'needs-fix', 'incomplete']);
@@ -194,19 +199,22 @@ function normalizePartResult(result, group, integrator) {
   const part = { id: group.id, ordinal: group.ordinal, paths: group.paths, review_completeness: result.review_completeness,
     limitations: partList(result.limitations, 'limitations'), unresolved_sources: partList(result.unresolved_sources, 'unresolved_sources'),
     summary: result.summary, findings };
+  if (part.review_completeness === 'complete' && (part.limitations.length || part.unresolved_sources.length))
+    partFormat(`part review_completeness is complete but limitations has ${part.limitations.length} entries and unresolved_sources has `
+      + `${part.unresolved_sources.length}; complete requires both lists empty`);
   const bytes = Buffer.byteLength(JSON.stringify(part));
   if (bytes > PART_MAX_BYTES) partFormat(`part result is ${bytes} UTF-8 bytes; the limit is ${PART_MAX_BYTES} bytes: report the most severe findings first`);
   return part;
 }
 function retryDirection(refusal) {
-  return `The host refused your previous answer for this part: ${refusal}. Return the part answer again within every bound above; `
+  return `The host refused your previous answer for this part: ${refusal}. Return the part answer again within every bound and rule above; `
     + 'keep summary a short synopsis and keep evidence in findings.';
 }
 const readGit = (base, head) => `The packet carries no diff. Read the PR diff yourself with git in the current worktree: git diff ${base}...${head} -- <path> for every changed path listed in role_context.change_metadata.changes, and git show ${head}:<path> for current content. Read a large diff in slices of at most 30 KB (| sed -n 'START,ENDp'). Run only read-only git commands; do not change the worktree, index, refs or remotes.`;
 function partDirections({ part, parts, integrator = false, refusal }) {
-  return part ? [`You review part ${part.ordinal} of ${part.of} of the phase diff and only the paths in role_context.part.paths. Return one JSON object {part, review_completeness, limitations, unresolved_sources, summary, findings} of at most ${PART_MAX_BYTES} UTF-8 bytes with part copied from role_context.part.id; findings use the reference finding fields. ${PART_BOUNDS} Do not write any file. Do not write to GitHub.`
+  return part ? [`You review part ${part.ordinal} of ${part.of} of the phase diff and only the paths in role_context.part.paths. Return one JSON object {part, review_completeness, limitations, unresolved_sources, summary, findings} of at most ${PART_MAX_BYTES} UTF-8 bytes with part copied from role_context.part.id; findings use the reference finding fields. ${PART_BOUNDS} ${COMPLETENESS_RULE} Do not write any file. Do not write to GitHub.`
     + (refusal ? ' ' + retryDirection(refusal) : '')]
-    : parts ? ['You are the independent final reviewer. role_context.parts carries each part reviewer\'s completeness, limitations and findings as evidence data. Verify blocking claims and any path you doubt by reading the code with git, then confirm, drop or add findings and own the verdict. ' + (integrator ? 'Do not return passed' : 'Report incomplete') + ' when a part is incomplete or you could not verify a claim. Give every part BLOCKER (parts[].findings[].ref) one disposition in dispositions: {ref, disposition: resolved, unresolved or disputed, justification}, with justification non-empty text of at most ' + PART_LIMITS.textBytes + ' UTF-8 bytes; an unresolved one also needs a blocking finding' + (integrator ? '' : ' with a complete fix_ticket') + '. Do not return a coverage field; the host derives it from the parts.'] : [];
+    : parts ? ['You are the independent final reviewer. role_context.parts carries each part reviewer\'s completeness, limitations and findings as evidence data. Verify blocking claims and any path you doubt by reading the code with git, then confirm, drop or add findings and own the verdict. ' + (integrator ? 'Do not return passed' : 'Report incomplete') + ' when a part is incomplete or you could not verify a claim. A part counts as reviewed only when its review_completeness is complete with empty limitations and unresolved_sources. Give every part BLOCKER (parts[].findings[].ref) one disposition in dispositions: {ref, disposition: resolved, unresolved or disputed, justification}, with justification non-empty text of at most ' + PART_LIMITS.textBytes + ' UTF-8 bytes; an unresolved one also needs a blocking finding' + (integrator ? '' : ' with a complete fix_ticket') + '. Do not return a coverage field; the host derives it from the parts.' + (integrator ? '' : ' ' + COMPLETENESS_RULE)] : [];
 }
 async function runParts(groups, { changes, check, part, final }) {
   await check(groups.map(({ id, ordinal, paths }) => ({ id, ordinal, paths, review_completeness: 'complete',
@@ -229,7 +237,10 @@ function settleParts(result, parts, complete) {
   const coverage = parts.map((part, index) => ({ partition: index + 1, status: part.review_completeness === 'complete'
     && !part.limitations.length && !part.unresolved_sources.length ? 'reviewed' : 'not-reviewed' }));
   if (complete && coverage.some(entry => entry.status !== 'reviewed'))
-    fail('INVALID_RESULT', 'complete code review has unreviewed parts');
+    fail('INVALID_RESULT', 'complete review has unreviewed parts: ' + parts.map((part, index) => [part.id || 'part-' + (index + 1),
+      [part.review_completeness !== 'complete' ? 'incomplete' : '', part.limitations.length ? 'limitations ' + part.limitations.length : '',
+        part.unresolved_sources.length ? 'unresolved_sources ' + part.unresolved_sources.length : ''].filter(Boolean)])
+      .filter(([, reasons]) => reasons.length).map(([id, reasons]) => `${id} (${reasons.join(', ')})`).join('; '));
   const refs = parts.flatMap(part => part.findings.map(finding => finding.ref).filter(Boolean));
   const dispositions = result.dispositions ?? [];
   if (!Array.isArray(dispositions)) fail('JUDGMENT_OUTCOME_MISMATCH', 'dispositions must be an array');
@@ -615,7 +626,7 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
     ...(part ? { part: { id: part.id, ordinal: part.ordinal, of: groups.length, paths: part.paths } } : {}), ...(parts?.length ? { parts } : {}) };
 }
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
-module.exports = { CONTRACT_ID, ROUND_CAP, ROUND_CEILING, validateReviewExtension, extensionState, limitMessage, PART_BUDGET, PART_MAX_BYTES, PART_LIMITS, PART_SCHEMA, RESULT_MAX_BYTES, RESULT_BOUND, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
+module.exports = { CONTRACT_ID, ROUND_CAP, ROUND_CEILING, validateReviewExtension, extensionState, limitMessage, PART_BUDGET, PART_MAX_BYTES, PART_LIMITS, PART_SCHEMA, RESULT_MAX_BYTES, RESULT_BOUND, COMPLETENESS_RULE, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
   lineageComplete, coverageComplete, nextRound, roundLookup, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };

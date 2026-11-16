@@ -680,6 +680,7 @@ test('parts and final: each part is its own launch, the final owns the verdict a
     assert.deepEqual(parts.map(part => part.findings.length), [0, 1]);
     const v = launch({ parts });
     assert.match(v.launch.context.prompt, /independent final reviewer/);
+    assert.match(v.launch.context.prompt.split('<AUTHENTICATED_CONTEXT_PACKET>')[0], /Boundaries of this read-only role are not limitations: say in summary that the review was static/);
     assert.ok(v.launch.context.prompt.includes('Return the whole JSON object within 131072 UTF-8 bytes (128 KiB); evidence_markdown is at most 98304 UTF-8 bytes (96 KiB) of it.'));
     const d = dispatchFixture(f, v, r => { r.findings = [blocker()]; r.dispositions = [{ ref: parts[1].findings[0].ref, disposition: 'unresolved', justification: 'Confirmed with git.' }]; });
     const sealed = context.finish(v, d.dispatch, d.recorder);
@@ -709,6 +710,17 @@ test('a Codex code-review part prompt states the summary bound; an oversized sum
     assert.equal(retry.prepared.packet.digest, v.prepared.packet.digest);
     const r2 = dispatchFixture(f, retry, r => { r.summary = 'ж'.repeat(1024); });
     assert.equal(Buffer.byteLength(context.finish(retry, r2.dispatch, r2.recorder).summary), 2048);
+  } finally { f.cleanup(); }
+});
+
+test('a Codex code-review part that is complete with a role-boundary limitation is a counted part-format refusal', () => {
+  const f = twoPartFixture();
+  try {
+    const id = crypto.randomUUID(), v = f.prepare({ inflightDispatchId: id, partBudget: 3, part: 1 }, { dispatch_id: id }); admit(f, v);
+    assert.match(v.launch.context.prompt.split('<AUTHENTICATED_CONTEXT_PACKET>')[0], /Boundaries of this read-only role are not limitations: say in summary that the review was static/);
+    const d = dispatchFixture(f, v, r => { r.limitations = ['Static review only; tests were not run.']; });
+    assert.throws(() => context.finish(v, d.dispatch, d.recorder), { code: 'INVALID_RESULT', partFormat: true,
+      message: 'part review_completeness is complete but limitations has 1 entries and unresolved_sources has 0; complete requires both lists empty' });
   } finally { f.cleanup(); }
 });
 

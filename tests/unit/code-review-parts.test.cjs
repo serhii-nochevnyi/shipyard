@@ -174,7 +174,8 @@ test('the part schema admits only what the byte validator accepts, whatever the 
   for (const char of ['x', 'ж', '€', '😀']) {
     const atSchemaLimit = char.repeat(summary.maxLength), item = char.repeat(limitations.items.maxLength);
     assert.equal([...atSchemaLimit].length, summary.maxLength);
-    assert.doesNotThrow(() => core.normalizePart({ ...partResult(atSchemaLimit), limitations: [item], unresolved_sources: [item] }, PART_GROUP));
+    assert.doesNotThrow(() => core.normalizePart({ ...partResult(atSchemaLimit), review_completeness: 'incomplete',
+      limitations: [item], unresolved_sources: [item] }, PART_GROUP));
   }
 });
 
@@ -242,4 +243,43 @@ test('the final reviewer is told the justification and whole-result bounds the h
   assert.throws(() => settle('ж'.repeat(513)),
     { code: 'JUDGMENT_OUTCOME_MISMATCH', message: 'disposition PB-1-1 justification is 1026 UTF-8 bytes; the limit is 1024 bytes' });
   assert.throws(() => settle(''), { code: 'JUDGMENT_OUTCOME_MISMATCH', message: /needs one justified disposition/ });
+});
+
+const ROLE_BOUNDARY = 'Static review only; runtime tests were not executed and separate native acceptance was not checked.';
+
+test('limitations mean obstacles to the assigned scope: a complete part with any list entry is a counted part-format refusal', () => {
+  const statedScope = { ...partResult('Reviewed every assigned path. ' + ROLE_BOUNDARY) };
+  assert.equal(core.normalizePart(statedScope, PART_GROUP).review_completeness, 'complete', 'role boundaries belong in summary');
+  for (const [lists, counts] of [[{ limitations: [ROLE_BOUNDARY] }, [1, 0]], [{ unresolved_sources: ['src/a.js', 'src/b.js'] }, [0, 2]],
+    [{ limitations: ['x', 'y'], unresolved_sources: ['z'] }, [2, 1]]]) {
+    const error = (() => { try { core.normalizePart({ ...statedScope, ...lists }, PART_GROUP); } catch (caught) { return caught; } })();
+    assert.equal(error?.partFormat, true);
+    assert.equal(error.message, `part review_completeness is complete but limitations has ${counts[0]} entries and unresolved_sources `
+      + `has ${counts[1]}; complete requires both lists empty`);
+    assert.doesNotMatch(error.message, /Static review|src[/]/, 'the refusal carries counts, never the model text');
+  }
+  const unread = core.normalizePart({ ...statedScope, review_completeness: 'incomplete', limitations: ['src/c.js was not read'],
+    unresolved_sources: ['src/c.js'] }, PART_GROUP);
+  assert.equal(unread.review_completeness, 'incomplete', 'a real gap stays an incomplete part');
+});
+
+test('a complete verdict over a part that is not reviewed names each part and its reasons', () => {
+  const settled = [{ ...part('complete'), id: 'part-1' }, { ...part('incomplete', ['src/b.js was not read']), id: 'part-2' },
+    { ...part('incomplete'), id: 'part-3', unresolved_sources: ['src/c.js'] }];
+  assert.throws(() => core.settleParts({}, settled, true), { code: 'INVALID_RESULT',
+    message: 'complete review has unreviewed parts: part-2 (incomplete, limitations 1); part-3 (incomplete, unresolved_sources 1)' });
+  assert.deepEqual(core.settleParts({}, settled, false).coverage.map(entry => entry.status), ['reviewed', 'not-reviewed', 'not-reviewed']);
+  assert.throws(() => core.normalizeFinal(final(), settled, OPTIONS), { message: /^complete review has unreviewed parts: part-2/ });
+});
+
+test('every review prompt that asks for completeness carries the one shared definition of limitations', () => {
+  const rule = core.COMPLETENESS_RULE;
+  assert.match(rule, /limitations lists only obstacles that kept you from verifying your assigned scope/);
+  assert.match(rule, /tests or CI were not run, that runtime, deployed or separate acceptance was not checked/);
+  assert.equal(require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs').COMPLETENESS_RULE, rule);
+  assert.ok(core.partDirections({ part: { ordinal: 1, of: 2 } })[0].includes(rule));
+  assert.ok(core.partDirections({ parts: [] })[0].includes(rule), 'the code-review final owns its own completeness');
+  for (const integrator of [true, false])
+    assert.match(core.partDirections({ parts: [], integrator })[0], /A part counts as reviewed only when its review_completeness is complete with empty limitations and unresolved_sources/);
+  assert.match(core.partDirections({ part: { ordinal: 1, of: 2 }, refusal: 'x' })[0], /within every bound and rule above/);
 });

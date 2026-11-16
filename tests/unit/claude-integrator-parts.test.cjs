@@ -76,6 +76,26 @@ test('a Claude integrator part states the summary bound, is relaunched once afte
   } finally { cleanupFixture(fixture); }
 });
 
+test('a Claude integrator part that files a role boundary as a limitation is relaunched once and the final seals passed', async () => {
+  const fixture = integratorFixture({ files: FILES });
+  const launches = [], seen = new Map();
+  const boundary = 'Static review only; runtime tests were not executed.';
+  try {
+    const result = await runIntegrator(fixture, { onLaunch(prompt) { launches.push({ prompt, context: packetFromPrompt(prompt).role_context }); },
+      mutateResult(output, packet) {
+        const ordinal = packet.role_context.part?.ordinal;
+        if (!ordinal) return;
+        const attempt = (seen.get(ordinal) || 0) + 1; seen.set(ordinal, attempt);
+        if (attempt === 1) output.limitations = [boundary]; else output.summary = 'Reviewed. ' + boundary;
+      } }, 5);
+    assert.deepEqual(launches.map(launch => launch.context.part?.ordinal ?? 'final'), [1, 1, 2, 2, 'final']);
+    assert.ok(launches[1].prompt.includes('part review_completeness is complete but limitations has 1 entries and unresolved_sources has 0'));
+    assert.ok(launches[0].prompt.includes('Boundaries of this read-only role are not limitations'));
+    assert.ok(launches[4].context.parts.every(part => !part.limitations.length && part.summary.endsWith(boundary)));
+    assert.equal(result.artifact.outcome, 'passed');
+  } finally { cleanupFixture(fixture); }
+});
+
 test('integrator cannot pass over an incomplete part', async () => {
   const fixture = integratorFixture({ files: FILES });
   try {

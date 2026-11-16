@@ -248,8 +248,61 @@ test('the Codex integrator cannot pass over an incomplete part', async () => {
     await withHost(f, { partBudget: 5, mutate(raw, packet) {
       if (packet.role_context.part?.ordinal === 2) Object.assign(raw, { review_completeness: 'incomplete', limitations: ['src/c/three.txt was unreadable'] });
     } }, async ({ calls, run }) => {
-      await assert.rejects(run(), { code: 'INVALID_RESULT' });
+      await assert.rejects(run(), { code: 'INVALID_RESULT', message: 'complete review has unreviewed parts: part-2 (incomplete, limitations 1)' });
       assert.equal(calls.length, 3, 'the final ran and its pass was refused');
+    });
+  } finally { cleanupFixture(f); }
+});
+
+const ROLE_BOUNDARY = 'Static review only; runtime tests were not executed and separate native/Redis/PDF acceptance was not checked.';
+
+test('the rc.5.14 pdffiller parts: a role boundary filed as a limitation is relaunched once, moved to summary, and the final seals passed', async () => {
+  const f = integratorFixture({ files: FILES });
+  try {
+    await withHost(f, { partBudget: 5, mutate(raw, packet, { value }) {
+      const role = packet.role_context, retried = /refused your previous answer/.test(value.launch.context.prompt);
+      if (role.part && !retried) raw.limitations = [ROLE_BOUNDARY];
+      if (role.part && retried) raw.summary = 'Reviewed ' + role.part.id + '. ' + ROLE_BOUNDARY;
+      if (!role.part) raw.summary = 'Static integration review passed; runtime tests, CI and separate acceptance remain unverified.';
+    } }, async ({ calls, run }) => {
+      const result = await run().catch(error => error);
+      assert.ok(!(result instanceof Error), result.message);
+      assert.deepEqual(calls.map(call => call.packet.role_context.part?.ordinal ?? 'final'), [1, 1, 2, 2, 'final']);
+      const refusal = 'part review_completeness is complete but limitations has 1 entries and unresolved_sources has 0; complete requires both lists empty';
+      for (const index of [1, 3]) assert.ok(calls[index].context.prompt.includes('The host refused your previous answer for this part: ' + refusal + '.'));
+      for (const index of [0, 2]) assert.match(calls[index].context.prompt, /Boundaries of this read-only role are not limitations/);
+      const parts = calls[4].packet.role_context.parts;
+      assert.ok(parts.every(entry => entry.review_completeness === 'complete' && !entry.limitations.length && entry.summary.endsWith(ROLE_BOUNDARY)));
+      assert.match(calls[4].context.prompt, /A part counts as reviewed only when its review_completeness is complete with empty limitations/);
+      assert.equal(result.artifact.outcome, 'passed');
+      assert.equal(result.result.summary, 'Static integration review passed; runtime tests, CI and separate acceptance remain unverified.');
+      assert.doesNotMatch(JSON.stringify(result.result), /runtime (tests|acceptance) (passed|succeeded)/);
+    });
+  } finally { cleanupFixture(f); }
+});
+
+test('a Codex part that keeps a role boundary in limitations after its retry is refused with the counts, and no final runs', async () => {
+  const f = integratorFixture({ files: FILES });
+  try {
+    await withHost(f, { partBudget: 5, mutate(raw, packet) { if (packet.role_context.part?.ordinal === 1) raw.limitations = [ROLE_BOUNDARY]; } },
+      async ({ calls, run }) => {
+        await assert.rejects(run(), { code: 'INVALID_RESULT', message: 'part review_completeness is complete but limitations has 1 entries '
+          + 'and unresolved_sources has 0; complete requires both lists empty (after one format retry)' });
+        assert.deepEqual(calls.map(call => call.packet.role_context.part?.ordinal ?? 'final'), [1, 1]);
+        assert.equal(fs.existsSync(evidenceFile(f)), false);
+      });
+  } finally { cleanupFixture(f); }
+});
+
+test('an unresolved source in an incomplete part still blocks a passed integration, named by part', async () => {
+  const f = integratorFixture({ files: FILES });
+  try {
+    await withHost(f, { partBudget: 5, mutate(raw, packet) {
+      if (packet.role_context.part?.ordinal === 1) Object.assign(raw, { review_completeness: 'incomplete', unresolved_sources: ['src/a/one.txt'] });
+    } }, async ({ calls, run }) => {
+      await assert.rejects(run(), { code: 'INVALID_RESULT', message: 'complete review has unreviewed parts: part-1 (incomplete, unresolved_sources 1)' });
+      assert.equal(calls.length, 3);
+      assert.equal(fs.existsSync(evidenceFile(f)), false);
     });
   } finally { cleanupFixture(f); }
 });
