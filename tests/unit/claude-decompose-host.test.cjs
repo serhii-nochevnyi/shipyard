@@ -170,6 +170,72 @@ test('inlines only bounded trusted GSD references and refuses missing or symlink
   } finally { f.clean(); }
 });
 
+function gsdTree(files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-fence-'));
+  for (const [relative, content] of Object.entries(files)) {
+    fs.mkdirSync(path.join(root, path.dirname(relative)), { recursive: true });
+    fs.writeFileSync(path.join(root, relative), content);
+  }
+  return { root, clean: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+const included = output => [...output.matchAll(/<gsd-reference source="([^"]+)">/g)].map(match => match[1]);
+
+test('a GSD reference inside a fenced block stays literal while one outside it is inlined', () => {
+  const tree = gsdTree({ 'references/a.md': 'Body A.\n', 'references/b.md': 'Body B.\n', 'workflows/executor.md': 'EXECUTOR BODY\n' });
+  try {
+    const source = ['Read @gsd-core/references/a.md first.', '```markdown', '<execution_context>',
+      '@~/.claude/gsd-core/workflows/executor.md', '</execution_context>', '```', '~~~', '@gsd-core/workflows/executor.md', '~~~',
+      '   ````', '```', '@gsd-core/workflows/executor.md', '````', 'Then @gsd-core/references/b.md.', ''].join('\n');
+    const output = inlineReferences(source, tree.root);
+    assert.deepEqual(included(output), ['references/a.md', 'references/b.md']);
+    assert.doesNotMatch(output, /EXECUTOR BODY/);
+    for (const literal of ['```markdown\n<execution_context>\n@~/.claude/gsd-core/workflows/executor.md\n</execution_context>\n```\n',
+      '~~~\n@gsd-core/workflows/executor.md\n~~~\n', '   ````\n```\n@gsd-core/workflows/executor.md\n````\n'])
+      assert.ok(output.includes(literal), 'the fenced block is copied byte for byte');
+  } finally { tree.clean(); }
+});
+
+test('an inline triple backtick, a mismatched closer and an unclosed fence protect nothing', () => {
+  const tree = gsdTree({ 'references/a.md': 'Body A.\n', 'references/b.md': 'Body B.\n', 'references/c.md': 'Body C.\n' });
+  try {
+    const inline = 'Use ```code``` then @gsd-core/references/a.md\n';
+    assert.deepEqual(included(inlineReferences(inline, tree.root)), ['references/a.md']);
+    const mismatched = '```\n@gsd-core/references/a.md\n~~~\n@gsd-core/references/b.md\n';
+    assert.deepEqual(included(inlineReferences(mismatched, tree.root)), ['references/a.md', 'references/b.md']);
+    const unclosed = 'Intro.\n```bash\necho start\n@gsd-core/references/a.md\nmiddle @gsd-core/references/b.md\n``\n@gsd-core/references/c.md\n';
+    const output = inlineReferences(unclosed, tree.root);
+    assert.deepEqual(included(output), ['references/a.md', 'references/b.md', 'references/c.md']);
+    for (const text of ['Intro.\n```bash\necho start\n', 'middle ', 'Body A.', 'Body B.', 'Body C.'])
+      assert.ok(output.includes(text), 'no text after an unclosed fence is lost: ' + text);
+  } finally { tree.clean(); }
+});
+
+test('the GSD 1.21 planner chain keeps the executor documents its PLAN template quotes out of the 256 KiB planner prompt', () => {
+  const kib = (label, size) => `${label}\n${'x'.repeat(size * 1024)}\n`;
+  const template = ['# Phase prompt template', '```markdown', '<execution_context>', '@~/.claude/gsd-core/workflows/execute-plan.md',
+    '@~/.claude/gsd-core/templates/summary.md', '@~/.claude/gsd-core/references/checkpoints.md', '</execution_context>', '```',
+    kib('template body', 18), '```markdown', '@~/.claude/gsd-core/workflows/execute-plan.md', '@~/.claude/gsd-core/templates/summary.md',
+    '@~/.claude/gsd-core/references/checkpoints.md', '```', ''].join('\n');
+  const tree = gsdTree({
+    'references/planner-guidance.md': kib('guidance', 60) + 'Schema: @~/.claude/gsd-core/templates/phase-prompt.md\n',
+    'templates/phase-prompt.md': template,
+    'references/planner-antipatterns.md': kib('antipatterns', 70),
+    'workflows/execute-plan.md': kib('EXECUTE PLAN', 40) + '@~/.claude/gsd-core/references/git-integration.md\n',
+    'references/checkpoints.md': kib('CHECKPOINTS', 36), 'templates/summary.md': kib('SUMMARY TEMPLATE', 12),
+    'references/git-integration.md': kib('GIT INTEGRATION', 10) });
+  try {
+    const planner = kib('planner agent', 20) + 'See @~/.claude/gsd-core/references/planner-guidance.md and @~/.claude/gsd-core/references/planner-antipatterns.md.\n';
+    const output = inlineReferences(planner, tree.root);
+    assert.ok(Buffer.byteLength(output) <= 256 * 1024, 'the planner fits its bound');
+    assert.deepEqual(included(output), ['references/planner-guidance.md', 'templates/phase-prompt.md', 'references/planner-antipatterns.md']);
+    for (const executorDocument of ['EXECUTE PLAN', 'CHECKPOINTS', 'SUMMARY TEMPLATE', 'GIT INTEGRATION']) assert.doesNotMatch(output, new RegExp(executorDocument));
+    assert.equal(output.split('@~/.claude/gsd-core/workflows/execute-plan.md').length - 1, 2, 'the template keeps both literal execution_context lines');
+    fs.writeFileSync(path.join(tree.root, 'templates/phase-prompt.md'), template.replace(/```markdown/g, 'markdown:').replace(/^```$/gm, ''));
+    assert.throws(() => inlineReferences(planner, tree.root), { code: 'REFERENCE_UNAVAILABLE', message: /exceeds the 256 KiB limit/ },
+      'expanding the quoted executor documents would overflow the bound');
+  } finally { tree.clean(); }
+});
+
 test('removes inert source model and effort fields before building the explicit typed agent', () => {
   const f = fixture();
   try {

@@ -63,9 +63,37 @@ function realFile(file, directory, max = MAX_SOURCE) {
   return fs.readFileSync(target, 'utf8');
 }
 
+// @contract: a closed fenced block (``` or ~~~ line, closed by a same-char line at least as long) is literal text.
+function fencedSegments(text) {
+  const lines = text.split(/(?<=\n)/), segments = [];
+  let start = 0, offset = 0;
+  for (let index = 0; index < lines.length; index++) {
+    const open = /^ {0,3}(`{3,}|~{3,})/.exec(lines[index]);
+    if (open && !(open[1][0] === '`' && lines[index].slice(open[0].length).includes('`'))) {
+      let end = offset + lines[index].length, close = -1;
+      for (let next = index + 1; next < lines.length; next++) {
+        const fence = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?\n?$/.exec(lines[next]);
+        if (fence && fence[1][0] === open[1][0] && fence[1].length >= open[1].length) { close = next; break; }
+      }
+      if (close !== -1) {
+        for (let line = index + 1; line <= close; line++) end += lines[line].length;
+        segments.push({ text: text.slice(start, offset), literal: false }, { text: text.slice(offset, end), literal: true });
+        start = end;
+        for (; index < close; index++) offset += lines[index].length;
+      }
+    }
+    offset += lines[index].length;
+  }
+  segments.push({ text: text.slice(start), literal: false });
+  return segments;
+}
+
 function inlineReferences(source, root) {
   const included = new Set();
   function expand(text, stack) {
+    return fencedSegments(text).map(segment => segment.literal ? segment.text : expandReferences(segment.text, stack)).join('');
+  }
+  function expandReferences(text, stack) {
     return text.replace(REFERENCE, (reference, relative) => {
       if (!/^(references|templates|workflows)\/[A-Za-z0-9_./-]+\.md$/.test(relative)
           || relative.split('/').includes('..') || relative.split('/').includes('.')) {
