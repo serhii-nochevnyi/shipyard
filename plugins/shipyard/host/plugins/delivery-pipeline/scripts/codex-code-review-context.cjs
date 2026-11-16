@@ -260,7 +260,7 @@ function prepare(scope, launch, options = {}) {
       'Review round=' + prepared.round.round + ', scope=' + prepared.round.scope + ', prior_head=' + (prepared.round.priorHead || 'null') + '.',
       'Return one JSON object with every host identity above (context_digest and launch_digest included, copied exactly), summary, findings, dispositions, review_completeness (complete|incomplete), limitations, unresolved_sources, and evidence_markdown.',
       'Classify severity as BLOCKER, WARNING or INFO; cite path, line and line_text. BLOCKER requires failure_scenario and a complete fix_ticket.',
-      'Give every carried BLOCKER a disposition keyed by its ref. Report incomplete when necessary material is unresolved.',
+      'Give every carried BLOCKER a disposition keyed by its ref. Report incomplete when necessary material is unresolved. ' + core.COMPLETENESS_RULE,
       ...core.partDirections({ parts }),
       'Write no file: the host writes the evidence from evidence_markdown. ' + REVIEW_RESULT_BOUND]),
     'Do not call GitHub, dispatch roles, change source or merge. The trusted host owns live I/O and finalization.',

@@ -73,7 +73,10 @@ cannot also appear in returned findings at the same host identity.
    positive line is demoted by the location evidence rule. An unreadable
    source file or mismatched quote alone never demotes it.
 5. Report completeness honestly. An unread diff, source, partition or other
-   limitation requires `review_completeness: incomplete`. A pass requires a
+   limitation requires `review_completeness: incomplete`. `limitations` lists only
+   obstacles to verifying the assigned scope; boundaries of the read-only role (a
+   static review, tests or CI not run, runtime or separate acceptance not checked,
+   paths outside the assigned scope) belong in `summary`, never in `limitations`. A pass requires a
    complete review, empty `limitations` and `unresolved_sources`, no blocking
    findings and a complete full-scope lineage. The host rejects false passes.
 6. Every checkable claim names the command and relevant output or exit status.
@@ -174,6 +177,8 @@ A part reviewer reads only its `part.paths` and returns
 `{part, review_completeness, limitations, unresolved_sources, summary, findings}` of at most
 32 KiB. Its `summary` is a short synopsis of at most 2048 UTF-8 bytes, with evidence in findings;
 `limitations` and `unresolved_sources` hold at most 128 entries of at most 1024 UTF-8 bytes each.
+A part answer with `review_completeness: complete` and a non-empty list is refused, and the host
+relaunches the part once; a part counts as reviewed only when it is complete with both lists empty.
 The host relaunches a part once when its parsed answer breaks one of these bounds or fields. The final reviewer is a separate session: it reads the parts' results as evidence,
 verifies blocking claims with git and owns the verdict; each part BLOCKER needs a justified
 disposition keyed by its `ref`. A reviewer returns no `coverage`; the host derives it, one

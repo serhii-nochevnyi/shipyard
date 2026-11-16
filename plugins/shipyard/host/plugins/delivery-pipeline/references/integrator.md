@@ -14,8 +14,15 @@ each reviewed in its own session. With `role_context.part`, return only `{part,
 review_completeness, limitations, unresolved_sources, summary, findings}` for those
 paths, at most 32 KiB; every part finding carries a boolean `blocking`. A part `summary` is
 a short synopsis of at most 2048 UTF-8 bytes, with evidence in findings; `limitations` and
-`unresolved_sources` hold at most 128 entries of at most 1024 UTF-8 bytes each. The host
-relaunches a part once when its parsed answer breaks one of these bounds or fields. With `role_context.parts` you
+`unresolved_sources` hold at most 128 entries of at most 1024 UTF-8 bytes each.
+`limitations` lists only obstacles that kept the reviewer from verifying its assigned
+scope, such as an unread path, diff slice or source. Boundaries of the read-only role
+are not limitations: say in `summary` that the review was static, that tests or CI were
+not run, that runtime, deployed or separate acceptance was not checked, or that paths
+outside the assigned scope were not reviewed.
+A part with `review_completeness: complete` requires both lists empty and counts as reviewed
+only then. The host relaunches a part once when its parsed answer breaks one of these bounds,
+fields or rules. With `role_context.parts` you
 are the independent final: verify part claims with git, give every part blocking
 finding one `dispositions` entry `{ref, disposition: "resolved" | "unresolved" |
 "disputed", justification}` with a justification of at most 1024 UTF-8 bytes, and never

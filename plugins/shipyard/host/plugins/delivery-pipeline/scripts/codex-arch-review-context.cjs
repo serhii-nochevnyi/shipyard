@@ -15,6 +15,10 @@ const CODE_REVIEW_CONTRACT = 'shipyard.phase-code-review.v1';
 const SCHEMA = 'shipyard.codex-arch-review-context.v1';
 const RESULT_MAX_BYTES = 128 * 1024;
 const EVIDENCE_MAX_BYTES = 96 * 1024;
+const COMPLETENESS_RULE = 'limitations lists only obstacles that kept you from verifying your assigned scope, such as an unread path, '
+  + 'diff slice or source. Boundaries of this read-only role are not limitations: say in summary that the review was static, that tests '
+  + 'or CI were not run, that runtime, deployed or separate acceptance was not checked, or that paths outside your scope were not '
+  + 'reviewed. review_completeness complete requires empty limitations and unresolved_sources; otherwise return incomplete.';
 const REVIEW_RESULT_BOUND = `Return the whole JSON object within ${RESULT_MAX_BYTES} UTF-8 bytes (128 KiB); `
   + `evidence_markdown is at most ${EVIDENCE_MAX_BYTES} UTF-8 bytes (96 KiB) of it.`;
 const TRANSCRIPT_MAX_BYTES = 128 * 1024 * 1024;
@@ -579,7 +583,8 @@ function validateFocusedResult(result, binding) {
       fail('focused result has malformed bounded ' + key, 'INVALID_RESULT');
   }
   if (result.review_completeness === 'complete' && (result.limitations.length || result.unresolved_sources.length))
-    fail('complete focused review has unresolved material or coverage limitations', 'INVALID_RESULT');
+    fail(`complete focused review has limitations (${result.limitations.length}) or unresolved_sources `
+      + `(${result.unresolved_sources.length}); complete requires both lists empty`, 'INVALID_RESULT');
   for (const key of ['repository', 'id', 'pr', 'head', 'base_commit', 'merge_base', 'base_tree', 'context_digest'])
     if (result[key] !== binding[key]) fail('focused result differs from its pinned ' + key, 'ARTIFACT_IDENTITY_MISMATCH');
   if (!/^[a-f0-9]{64}$/.test(result.launch_digest || '')) fail('focused launch digest is missing', 'INVALID_RESULT');
@@ -746,7 +751,7 @@ function prepare(scope, launch, options = {}) {
     'The packet carries no diff. Read it yourself with git in the supplied worktree: git diff ' + prepared.packet.diff.merge_base + '...' + prepared.packet.pr.head
       + ' -- <path> for every changed path in change_metadata.changes, and git show ' + prepared.packet.pr.head + ':<path> for current content. Read a large diff in slices (| sed -n \'START,ENDp\'). Run only read-only git commands; never change the worktree, index, refs or remotes.',
     'Each $semantic_content alias in the packet resolves to the dictionary entry with that sha256. Report incomplete if necessary material remains unresolved.',
-    'Use review_contract=' + FOCUSED_CONTRACT + '. Include review_completeness (complete|incomplete), limitations (bounded string list), unresolved_sources (bounded path/partition list). Complete requires both lists empty. No consumption or range echoes are required.',
+    'Use review_contract=' + FOCUSED_CONTRACT + '. Include review_completeness (complete|incomplete), limitations (bounded string list), unresolved_sources (bounded path/partition list). ' + COMPLETENESS_RULE + ' No consumption or range echoes are required.',
     'Repeat these focused subject fields: ' + JSON.stringify((({ ticket_set_digest: _host, ...echo }) => echo)(focusedBinding(prepared))),
     'Do not call GitHub, dispatch other roles, change source or merge. Trusted host owns live I/O and finalization.',
     'Return one JSON object with id, pr, head, base_tree, verdict (conform|violation|adr-outdated),',
@@ -952,7 +957,7 @@ function validateSealedContext(input, options = {}) {
 }
 
 module.exports = Object.freeze({
-  FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, RESULT_MAX_BYTES, REVIEW_RESULT_BOUND, codexResultText, boundedBytes, file,
+  FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, RESULT_MAX_BYTES, REVIEW_RESULT_BOUND, COMPLETENESS_RULE, codexResultText, boundedBytes, file,
   focusedProducerFiles, focusedChangeInventory, selectFocusedArchitecture, validateFocusedResult, authenticateFocusedLaunch,
   SCHEMA, FILE_LIMITS, preflightReviewMaterial, recheckInstalledLaunch, assertAggregateGraph,
   prepare, finish, isPreparedContext, admitInstalledLaunch, admitBookkeeping, admittedPrompt,

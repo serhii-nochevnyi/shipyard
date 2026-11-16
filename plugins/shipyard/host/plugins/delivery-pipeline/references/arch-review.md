@@ -117,7 +117,12 @@ Return the exact host-supplied subject fields plus the original independent resu
 
 `ticket_set` and its digest are host-owned and are not returned. `limitations` and
 `unresolved_sources` contain at most 128 nonempty strings of at most 1024 UTF-8
-bytes each. A complete judgment requires both lists empty. If relevant material
+bytes each. A complete judgment requires both lists empty. `limitations` lists only
+obstacles that kept the reviewer from verifying its assigned scope, such as an unread
+path, diff slice or source. Boundaries of the read-only role are not limitations: say in
+`summary` that the review was static, that tests or CI were not run, that runtime,
+deployed or separate acceptance was not checked, or that paths outside the assigned
+scope were not reviewed. If relevant material
 remains unresolved, return `review_completeness: incomplete` and preserve all useful
 findings and limitations. An incomplete judgment cannot grant current conformance.
 Use the existing `conform`, `violation`, or `adr-outdated` verdict and consistent
