@@ -105,7 +105,7 @@ sealing; do not invent host citation identities, classifications or suppression.
 | `summary` | Synopsis; the sealed envelope caps it at 500 characters |
 | `findings` | At most 128 entries described below |
 | `dispositions` | At most 128 entries `{ref, disposition, justification?, source?}`; `source`, if returned, is `reviewer` |
-| `evidence_markdown` | Full evidence; the host writes it to the evidence file and seals it |
+| `evidence_markdown` | Full evidence, at most 96 KiB; the host writes it to the evidence file and seals it. The whole object is at most 128 KiB |
 
 A returned finding requires `id`, `severity` and `summary`. `id` is a non-empty
 string of at most 128 UTF-8 bytes. When a returned label collides with a carried
