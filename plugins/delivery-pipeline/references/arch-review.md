@@ -123,7 +123,8 @@ findings and limitations. An incomplete judgment cannot grant current conformanc
 Use the existing `conform`, `violation`, or `adr-outdated` verdict and consistent
 `blocking_count`; completeness is a separate declaration. Write the complete
 `evidence_markdown` in the final message and write no file; the host writes it verbatim
-to `.shipyard-arch-review-evidence.md` when it seals.
+to `.shipyard-arch-review-evidence.md` when it seals. The whole returned JSON object is at
+most 128 KiB, and `evidence_markdown` at most 96 KiB of it.
 Neither the declarations nor an empty finding list prove source consumption.
 
 ## Procedure

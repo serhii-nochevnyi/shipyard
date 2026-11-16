@@ -15,6 +15,8 @@ const CODE_REVIEW_CONTRACT = 'shipyard.phase-code-review.v1';
 const SCHEMA = 'shipyard.codex-arch-review-context.v1';
 const RESULT_MAX_BYTES = 128 * 1024;
 const EVIDENCE_MAX_BYTES = 96 * 1024;
+const REVIEW_RESULT_BOUND = `Return the whole JSON object within ${RESULT_MAX_BYTES} UTF-8 bytes (128 KiB); `
+  + `evidence_markdown is at most ${EVIDENCE_MAX_BYTES} UTF-8 bytes (96 KiB) of it.`;
 const TRANSCRIPT_MAX_BYTES = 128 * 1024 * 1024;
 const preparedContexts = new WeakSet();
 
@@ -447,8 +449,9 @@ function verifyLivePullRequest(prepared, options) {
 }
 
 function writeEvidence(prepared, value) {
-  if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value, 'utf8') > EVIDENCE_MAX_BYTES) {
-    fail('Codex architecture response must include bounded complete evidence_markdown', 'INVALID_RESULT');
+  if (typeof value !== 'string' || !value.trim()) fail('Codex architecture response must include complete evidence_markdown', 'INVALID_RESULT');
+  if (Buffer.byteLength(value, 'utf8') > EVIDENCE_MAX_BYTES) {
+    fail(`evidence_markdown is ${Buffer.byteLength(value, 'utf8')} UTF-8 bytes; the limit is ${EVIDENCE_MAX_BYTES} bytes`, 'INVALID_RESULT');
   }
   const file = path.join(prepared.canonical.worktree, prepared.evidencePath);
   try { fs.writeFileSync(file, value, { flag: 'wx' }); }
@@ -754,7 +757,7 @@ function prepare(scope, launch, options = {}) {
     'Use packet body ticket, pr.number, pr.head and diff.merge_base_tree for the exact identity fields.',
     ...(prepared.binding ? ['This is the phase integration review, bound to the aggregate PR, not a ticket verdict.'] : []),
     'Keep development artifacts as context; judge product behavior. Retain uncertainty in the evidence.',
-    'Write no file: the host writes the evidence from evidence_markdown.',
+    'Write no file: the host writes the evidence from evidence_markdown. ' + REVIEW_RESULT_BOUND,
     '<AUTHENTICATED_CONTEXT_PACKET>', packet, '</AUTHENTICATED_CONTEXT_PACKET>',
   ].join('\n\n');
   if (Buffer.byteLength(prompt, 'utf8') > INPUT_MAX_BYTES)
@@ -949,7 +952,7 @@ function validateSealedContext(input, options = {}) {
 }
 
 module.exports = Object.freeze({
-  FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, RESULT_MAX_BYTES, codexResultText, boundedBytes, file,
+  FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, RESULT_MAX_BYTES, REVIEW_RESULT_BOUND, codexResultText, boundedBytes, file,
   focusedProducerFiles, focusedChangeInventory, selectFocusedArchitecture, validateFocusedResult, authenticateFocusedLaunch,
   SCHEMA, FILE_LIMITS, preflightReviewMaterial, recheckInstalledLaunch, assertAggregateGraph,
   prepare, finish, isPreparedContext, admitInstalledLaunch, admitBookkeeping, admittedPrompt,

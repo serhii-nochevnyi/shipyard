@@ -980,11 +980,11 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false, ref
   const range = exact || (role === 'integrator' && combined?.content === undefined
     ? { base: combined.merge_base, head: combined.head } : null);
   const instruction = role === 'arch-review'
-    ? 'Return one JSON object matching the arch-review reference schema. Review only the authenticated PR and use the exact reviewed head and merge-base tree. Write no file: return the complete review in evidence_markdown.'
+    ? 'Return one JSON object matching the arch-review reference schema. Review only the authenticated PR and use the exact reviewed head and merge-base tree. Write no file: return the complete review in evidence_markdown. ' + require('./codex-arch-review-context.cjs').REVIEW_RESULT_BOUND
     : part
       ? core.partDirections({ part, refusal })[0]
     : codeReview
-      ? 'Return one JSON object matching the code-review reference schema. Review the complete authenticated product diff and its callers. Write no file: return the complete review in evidence_markdown. Do not write to GitHub. ' + core.RESULT_BOUND
+      ? 'Return one JSON object matching the code-review reference schema. Review the complete authenticated product diff and its callers. Write no file: return the complete review in evidence_markdown. Do not write to GitHub. ' + require('./codex-arch-review-context.cjs').REVIEW_RESULT_BOUND
     : role === 'integrator'
       ? 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and its combined diff. Write no file: return the complete integration evidence in evidence_markdown. ' + core.RESULT_BOUND
     : readOnlySmoke
