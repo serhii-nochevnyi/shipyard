@@ -28,6 +28,7 @@ test('integrator reads the diff through git in one session and the host writes t
     assert.equal(context.combined_diff.content, undefined);
     assert.deepEqual(context.change_metadata.changes.map(change => change.paths).flat(), ['src/role.txt']);
     assert.match(launches[0].prompt, /git diff [0-9a-f]{40}\.\.\.[0-9a-f]{40} -- <path>/);
+    assert.ok(launches[0].prompt.includes('Return the whole JSON object, evidence_markdown included, within 131072 UTF-8 bytes (128 KiB).'));
     assert.equal(result.artifact.outcome, 'passed');
     assert.equal(result.parts, undefined);
     assert.equal(fs.readFileSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`), 'utf8'), `Integration check at ${fixture.head}.\n`);

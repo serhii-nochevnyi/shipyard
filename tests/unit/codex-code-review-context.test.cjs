@@ -679,6 +679,7 @@ test('parts and final: each part is its own launch, the final owns the verdict a
     assert.deepEqual(parts.map(part => part.findings.length), [0, 1]);
     const v = launch({ parts });
     assert.match(v.launch.context.prompt, /independent final reviewer/);
+    assert.ok(v.launch.context.prompt.includes('within 131072 UTF-8 bytes (128 KiB)'));
     const d = dispatchFixture(f, v, r => { r.findings = [blocker()]; r.dispositions = [{ ref: parts[1].findings[0].ref, disposition: 'unresolved', justification: 'Confirmed with git.' }]; });
     const sealed = context.finish(v, d.dispatch, d.recorder);
     assert.equal(sealed.artifact.outcome, 'needs-fix');

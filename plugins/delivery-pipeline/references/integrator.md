@@ -15,10 +15,12 @@ review_completeness, limitations, unresolved_sources, summary, findings}` for th
 paths, at most 32 KiB; every part finding carries a boolean `blocking`. A part `summary` is
 a short synopsis of at most 2048 UTF-8 bytes, with evidence in findings; `limitations` and
 `unresolved_sources` hold at most 128 entries of at most 1024 UTF-8 bytes each. The host
-relaunches a part once when it refuses only the answer's format. With `role_context.parts` you
+relaunches a part once when its parsed answer breaks one of these bounds or fields. With `role_context.parts` you
 are the independent final: verify part claims with git, give every part blocking
 finding one `dispositions` entry `{ref, disposition: "resolved" | "unresolved" |
-"disputed", justification}`, and never return `passed` over an incomplete part.
+"disputed", justification}` with a justification of at most 1024 UTF-8 bytes, and never
+return `passed` over an incomplete part. The whole returned JSON object, `evidence_markdown`
+included, is at most 128 KiB.
 Return the integration judgment below with `evidence_markdown`, the complete integration
 evidence. The host writes `INTEGRATION.md` from it, so write no file.
 

@@ -122,6 +122,7 @@ test('the Codex integrator reads the diff through git in one read-only session a
       assert.equal(calls[0].selection.sandbox_mode, 'read-only');
       assert.equal(calls[0].packet.role_context.combined_diff.content, undefined);
       assert.match(calls[0].context.prompt, /git diff [0-9a-f]{40}\.\.\.[0-9a-f]{40} -- <path>/);
+      assert.ok(calls[0].context.prompt.includes('Return the whole JSON object, evidence_markdown included, within 131072 UTF-8 bytes (128 KiB).'));
       assert.equal(result.role, 'integrator');
       assert.equal(result.artifact.outcome, 'passed');
       assert.equal(result.receipt.runtime_evidence.integrator_review.launch_digest.length, 64);
@@ -219,6 +220,8 @@ test('an oversized Codex part summary is relaunched once with the refusal and th
       assert.equal(new Set(ids).size, 4, 'the retry is its own receipted dispatch');
       assert.equal(new Set(calls.map(call => call.binding.launch_digest)).size, 4);
       assert.deepEqual(calls[3].packet.role_context.parts.map(part => part.dispatch_id), [ids[0], ids[2]]);
+      assert.ok(calls[3].context.prompt.includes('within 131072 UTF-8 bytes (128 KiB)'), 'the final states the whole-result bound');
+      assert.match(calls[3].context.prompt, /justification non-empty text of at most 1024 UTF-8 bytes/);
       assert.equal(result.artifact.outcome, 'passed');
       assert.equal(fs.readFileSync(evidenceFile(f), 'utf8'), `Integration check at ${f.head}.\n`);
     });

@@ -92,7 +92,8 @@ function codexResultText(dispatch) {
       fail('Codex transcript contains more than one complete judgment', 'INVALID_RESULT');
   }
   const text = messages[messages.length - 1].item.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  if (Buffer.byteLength(text, 'utf8') > RESULT_MAX_BYTES) fail('Codex architecture result exceeds its byte bound', 'INVALID_RESULT');
+  if (Buffer.byteLength(text, 'utf8') > RESULT_MAX_BYTES)
+    fail(`Codex review result is ${Buffer.byteLength(text, 'utf8')} UTF-8 bytes; the limit is ${RESULT_MAX_BYTES} bytes`, 'INVALID_RESULT');
   let result;
   try { result = JSON.parse(text); }
   catch { fail('Codex architecture response is not one complete JSON object', 'INVALID_RESULT'); }
@@ -948,7 +949,7 @@ function validateSealedContext(input, options = {}) {
 }
 
 module.exports = Object.freeze({
-  FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, codexResultText, boundedBytes, file,
+  FOCUSED_CONTRACT, CODE_REVIEW_CONTRACT, INPUT_MAX_BYTES, EVIDENCE_MAX_BYTES, RESULT_MAX_BYTES, codexResultText, boundedBytes, file,
   focusedProducerFiles, focusedChangeInventory, selectFocusedArchitecture, validateFocusedResult, authenticateFocusedLaunch,
   SCHEMA, FILE_LIMITS, preflightReviewMaterial, recheckInstalledLaunch, assertAggregateGraph,
   prepare, finish, isPreparedContext, admitInstalledLaunch, admitBookkeeping, admittedPrompt,

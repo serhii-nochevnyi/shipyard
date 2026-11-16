@@ -167,9 +167,9 @@ test('a part summary is bounded in UTF-8 bytes and a refusal names the field, it
 
 test('the part schema admits only what the byte validator accepts, whatever the script', () => {
   const { summary, limitations, unresolved_sources: unresolved, findings } = core.PART_SCHEMA.properties;
-  assert.deepEqual(summary, { type: 'string', minLength: 1, maxLength: core.PART_LIMITS.summaryBytes / 4 });
+  assert.deepEqual(summary, { type: 'string', maxLength: core.PART_LIMITS.summaryBytes / 4 });
   for (const list of [limitations, unresolved])
-    assert.deepEqual(list, { type: 'array', maxItems: 128, items: { type: 'string', minLength: 1, maxLength: core.PART_LIMITS.textBytes / 4 } });
+    assert.deepEqual(list, { type: 'array', maxItems: 128, items: { type: 'string', maxLength: core.PART_LIMITS.textBytes / 4 } });
   assert.equal(findings.maxItems, 128);
   for (const char of ['x', 'ж', '€', '😀']) {
     const atSchemaLimit = char.repeat(summary.maxLength), item = char.repeat(limitations.items.maxLength);
@@ -227,4 +227,19 @@ test('a part-format refusal relaunches that part once with the refusal; other re
   await assert.rejects(core.runParts(groups, { changes, check() {}, part: async group => ({ id: group.id, paths: group.paths }),
     final: async () => { finalLog.push('final'); throw formatError(); } }), refusal(/part summary is 6000/));
   assert.deepEqual(finalLog, ['final']);
+});
+
+test('the final reviewer is told the justification and whole-result bounds the hosts enforce, and an oversized justification names its size', () => {
+  const scripts = '../../plugins/delivery-pipeline/scripts/';
+  assert.equal(require(scripts + 'claude-role-host.cjs').RESULT_MAX_BYTES, core.RESULT_MAX_BYTES);
+  assert.equal(require(scripts + 'codex-arch-review-context.cjs').RESULT_MAX_BYTES, core.RESULT_MAX_BYTES);
+  assert.equal(core.RESULT_BOUND, 'Return the whole JSON object, evidence_markdown included, within 131072 UTF-8 bytes (128 KiB).');
+  for (const integrator of [true, false])
+    assert.match(core.partDirections({ parts: [], integrator })[0], /justification\}, with justification non-empty text of at most 1024 UTF-8 bytes/);
+  const parts = [{ ...part('complete'), findings: [{ id: 'F-1', severity: 'BLOCKER', ref: 'PB-1-1' }] }];
+  const settle = justification => core.settleParts({ dispositions: [{ ref: 'PB-1-1', disposition: 'disputed', justification }] }, parts, false);
+  assert.equal(settle('ж'.repeat(512)).own.length, 1);
+  assert.throws(() => settle('ж'.repeat(513)),
+    { code: 'JUDGMENT_OUTCOME_MISMATCH', message: 'disposition PB-1-1 justification is 1026 UTF-8 bytes; the limit is 1024 bytes' });
+  assert.throws(() => settle(''), { code: 'JUDGMENT_OUTCOME_MISMATCH', message: /needs one justified disposition/ });
 });

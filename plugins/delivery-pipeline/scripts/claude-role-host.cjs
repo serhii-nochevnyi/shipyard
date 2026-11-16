@@ -984,9 +984,9 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false, ref
     : part
       ? core.partDirections({ part, refusal })[0]
     : codeReview
-      ? 'Return one JSON object matching the code-review reference schema. Review the complete authenticated product diff and its callers. Write no file: return the complete review in evidence_markdown. Do not write to GitHub.'
+      ? 'Return one JSON object matching the code-review reference schema. Review the complete authenticated product diff and its callers. Write no file: return the complete review in evidence_markdown. Do not write to GitHub. ' + core.RESULT_BOUND
     : role === 'integrator'
-      ? 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and its combined diff. Write no file: return the complete integration evidence in evidence_markdown.'
+      ? 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and its combined diff. Write no file: return the complete integration evidence in evidence_markdown. ' + core.RESULT_BOUND
     : readOnlySmoke
       ? 'Return one JSON object matching the pr-sentinel reference schema. This is a read-only runtime smoke: do not perform any PR duty or attempt a mutation; return awaiting-human, an empty performed list, one refused read-only-smoke duty for every guarded ticket, blocking_count equal to the number of refused entries, and head and head_tree copied from the context packet.'
       : 'Return one JSON object matching the pr-sentinel reference schema. Perform the documented duties for every authenticated open PR. Set blocking_count to the number of refused entries, and copy head and head_tree from the context packet.';
@@ -1061,7 +1061,7 @@ function resultFrom(output) {
   if (!object(result)) reject('Claude role output must be a JSON object', 'INVALID_RESULT');
   let bytes;
   try { bytes = Buffer.byteLength(JSON.stringify(result), 'utf8'); } catch { reject('Claude role output is not serializable', 'INVALID_RESULT'); }
-  if (bytes > RESULT_MAX_BYTES) reject('Claude role output exceeds the result bound', 'INVALID_RESULT');
+  if (bytes > RESULT_MAX_BYTES) reject(`Claude role output is ${bytes} UTF-8 bytes; the limit is ${RESULT_MAX_BYTES} bytes`, 'INVALID_RESULT');
   return result;
 }
 
@@ -1821,6 +1821,7 @@ function runClaudeRoleCli(argv = process.argv.slice(2), output = process.stdout,
 
 module.exports = Object.freeze({
   DIFF_MAX_BYTES,
+  RESULT_MAX_BYTES,
   ARCH_REVIEW_PACKET_TOKENS,
   CODE_REVIEW_PACKET_TOKENS,
   packetBound,
