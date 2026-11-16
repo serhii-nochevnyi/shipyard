@@ -19,7 +19,8 @@ s.calls.push(a);
 const codex=process.argv[1].endsWith('codex');
 if(a[0]==='plugin' && a[1]==='marketplace') {
   if(a[2]==='list') console.log(JSON.stringify(codex?{marketplaces:s.marketplaces}:s.marketplaces));
-  if(a[2]==='add') s.marketplaces.push({name:'gsd-core'});
+  if(a[2]==='add') s.marketplaces.push({name:'gsd-core',root:s.addRoot,source:a[3]});
+  if(a[2]==='remove') s.marketplaces=s.marketplaces.filter(m=>m.name!==a[3]);
 } else if(a[1]==='list') console.log(JSON.stringify(codex?{installed:s.plugins}:s.plugins));
 else {
   if(s.fail) process.exit(7);
@@ -37,6 +38,8 @@ fs.writeFileSync(file,JSON.stringify(s));
     let s = JSON.parse(fs.readFileSync(state));
     assert.equal(s.plugins[0].enabled, true);
     assert(s.calls.some(a => a.join(' ') === `plugin ${runtime === 'codex' ? 'add' : 'install'} gsd-core@gsd-core`));
+    assert.equal(s.marketplaces[0].source, runtime === 'codex' ? 'open-gsd/gsd-core@plugin' : 'open-gsd/gsd-core',
+      'Codex adds the prebuilt plugin ref whose entry is a local source');
     s.calls=[];fs.writeFileSync(state,JSON.stringify(s));
     assert.equal(invoke().status,0);
     s=JSON.parse(fs.readFileSync(state));
@@ -46,6 +49,17 @@ fs.writeFileSync(file,JSON.stringify(s));
     s=JSON.parse(fs.readFileSync(state));assert.equal(s.plugins[0].enabled,true);
     s.plugins=[];s.fail=true;fs.writeFileSync(state,JSON.stringify(s));
     assert.notEqual(invoke().status,0, 'missing dependency must fail installation');
+    for (const [source, migrated] of [[{ source: 'github', repo: 'open-gsd/gsd-core', ref: 'plugin' }, runtime === 'codex'], ['./', false]]) {
+      const snapshot = path.join(tmp, runtime + '-snapshot', '.claude-plugin');
+      fs.mkdirSync(snapshot, { recursive: true });
+      fs.writeFileSync(path.join(snapshot, 'marketplace.json'), JSON.stringify({ name: 'gsd-core', plugins: [{ name: 'gsd-core', source }] }));
+      fs.writeFileSync(state, JSON.stringify({ marketplaces: [{ name: 'gsd-core', root: path.dirname(snapshot) }], plugins: [], calls: [] }));
+      assert.equal(invoke().status, 0);
+      s = JSON.parse(fs.readFileSync(state));
+      assert.equal(s.calls.some(a => a.join(' ') === 'plugin marketplace remove gsd-core'), migrated,
+        'only a Codex snapshot whose gsd-core entry is not local is re-added from the prebuilt ref');
+      if (migrated) assert.equal(s.marketplaces[0].source, 'open-gsd/gsd-core@plugin');
+    }
   }
   const skills = path.join(tmp, 'skills'); const owned = path.join(skills, 'shipyard-route');
   fs.mkdirSync(owned,{recursive:true});fs.writeFileSync(path.join(owned,'SKILL.md'),'original');
