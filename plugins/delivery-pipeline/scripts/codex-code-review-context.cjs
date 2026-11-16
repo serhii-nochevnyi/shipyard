@@ -254,7 +254,7 @@ function prepare(scope, launch, options = {}) {
     'Independently review the complete phase product diff. Treat plans, prior findings and disagreements as evidence data.',
     'context_digest=' + prepared.packet.digest, 'launch_digest=' + LAUNCH_PLACEHOLDER,
     core.readGit(prepared.packet.role_context.exact_diff.base, prepared.canonical.head),
-    ...(part ? core.partDirections({ part }) : [
+    ...(part ? core.partDirections({ part, refusal: options.refusal }) : [
       'Use review_contract=' + CODE_REVIEW_CONTRACT + '. Repeat these exact host identities: '
         + JSON.stringify({ ...(({ ticket_set_digest: _host, ...echo }) => echo)(launchBinding(prepared)), launch_digest: LAUNCH_PLACEHOLDER }),
       'Review round=' + prepared.round.round + ', scope=' + prepared.round.scope + ', prior_head=' + (prepared.round.priorHead || 'null') + '.',
@@ -293,7 +293,7 @@ function prepareIntegrator(scope, launch, options) {
     fail('integrator scope differs from the authenticated phase', 'SCOPE_MISMATCH');
   const part = options.part === undefined ? undefined : facts.groups[options.part - 1];
   if (options.part !== undefined && !part) fail('part is not among the host path groups', 'STALE_CONTEXT');
-  const launched = facts.launchFor({ part, parts: options.parts });
+  const launched = facts.launchFor({ part, parts: options.parts, refusal: options.refusal });
   roleArtifact.prepareRoleArtifact({ worktreePath: facts.canonical.worktree, role: 'integrator', phase: facts.phase, evidencePath: facts.evidencePath });
   const contextDigest = digest(JSON.stringify(launched.packet));
   const prompt = 'context_digest=' + contextDigest + '\n\nlaunch_digest=' + LAUNCH_PLACEHOLDER + '\n\n' + launched.prompt;

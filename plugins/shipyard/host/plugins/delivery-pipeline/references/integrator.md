@@ -12,7 +12,10 @@ product path; read code with `git diff <merge_base>...<head> -- <path>` and
 no file or ref can be written. A diff above one budget is split into path-group parts,
 each reviewed in its own session. With `role_context.part`, return only `{part,
 review_completeness, limitations, unresolved_sources, summary, findings}` for those
-paths; every part finding carries a boolean `blocking`. With `role_context.parts` you
+paths, at most 32 KiB; every part finding carries a boolean `blocking`. A part `summary` is
+a short synopsis of at most 2048 UTF-8 bytes, with evidence in findings; `limitations` and
+`unresolved_sources` hold at most 128 entries of at most 1024 UTF-8 bytes each. The host
+relaunches a part once when it refuses only the answer's format. With `role_context.parts` you
 are the independent final: verify part claims with git, give every part blocking
 finding one `dispositions` entry `{ref, disposition: "resolved" | "unresolved" |
 "disputed", justification}`, and never return `passed` over an incomplete part.

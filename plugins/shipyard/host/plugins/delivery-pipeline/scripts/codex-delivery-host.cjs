@@ -3723,7 +3723,7 @@ async function runReview(parsed, scope, options, stdout) {
   };
   return core.runParts(groups, { changes: whole.prepared.packet.role_context.change_metadata.changes,
     check: parts => admitCodeReviewInput(reviewPreparation(parsed, scope, options, { inflightDispatchId: newDispatchId(), reuse: whole, parts }), options, capabilities),
-    part: group => launch({ part: group.ordinal }, group.ordinal), final: parts => launch({ parts }) });
+    part: (group, refusal) => launch({ part: group.ordinal, refusal }, group.ordinal), final: parts => launch({ parts }) });
 }
 
 async function launchRole(parsed, scope, options, stdout, codeReview = {}) {

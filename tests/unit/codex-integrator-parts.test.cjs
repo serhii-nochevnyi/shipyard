@@ -179,6 +179,66 @@ test('large diffs split into path-group parts, each its own launch and receipt, 
   } finally { cleanupFixture(f); }
 });
 
+const PART_BOUND = /summary is a short synopsis of at most 2048 UTF-8 bytes \(512 characters always fit\); put evidence and detail in findings/;
+const OVERSIZED = 'Огляд частини: '.repeat(300);
+const OVERSIZED_REFUSAL = `part summary is ${Buffer.byteLength(OVERSIZED)} UTF-8 bytes; the limit is 2048 bytes`;
+
+test('every Codex integrator part prompt states the summary bound; a multibyte summary at the byte limit seals', async () => {
+  const f = integratorFixture({ files: FILES });
+  try {
+    await withHost(f, { partBudget: 5, mutate(raw, packet) {
+      if (packet.role_context.part) raw.summary = 'ж'.repeat(1024);
+    } }, async ({ calls, run }) => {
+      const result = await run();
+      assert.equal(calls.length, 3);
+      assert.ok(calls.slice(0, 2).every(call => PART_BOUND.test(call.context.prompt)));
+      assert.ok(calls.every(call => !/refused your previous answer/.test(call.context.prompt)));
+      assert.ok(calls[2].packet.role_context.parts.every(part => Buffer.byteLength(part.summary) === 2048));
+      assert.equal(result.artifact.outcome, 'passed');
+      assert.equal(fs.readFileSync(evidenceFile(f), 'utf8'), `Integration check at ${f.head}.\n`);
+    });
+  } finally { cleanupFixture(f); }
+});
+
+test('an oversized Codex part summary is relaunched once with the refusal and the final seals over the retried part', async () => {
+  const f = integratorFixture({ files: FILES });
+  try {
+    let seen = 0;
+    await withHost(f, { partBudget: 5, mutate(raw, packet) {
+      if (packet.role_context.part?.ordinal === 2 && seen++ === 0) raw.summary = OVERSIZED;
+    } }, async ({ calls, run }) => {
+      const result = await run().catch(error => error);
+      assert.ok(!(result instanceof Error), result.message);
+      assert.equal(calls.length, 4, 'part 1, part 2, one retry of part 2, the final');
+      assert.deepEqual(calls.slice(0, 3).map(call => call.packet.role_context.part.ordinal), [1, 2, 2]);
+      assert.doesNotMatch(calls[1].context.prompt, /refused your previous answer/);
+      assert.ok(calls[2].context.prompt.includes('The host refused your previous answer for this part: ' + OVERSIZED_REFUSAL + '.'));
+      assert.match(calls[2].context.prompt, PART_BOUND);
+      assert.equal(calls[2].packet.digest, calls[1].packet.digest, 'the retry carries the same authenticated packet');
+      const ids = calls.map(call => call.context.dispatch_id);
+      assert.equal(new Set(ids).size, 4, 'the retry is its own receipted dispatch');
+      assert.equal(new Set(calls.map(call => call.binding.launch_digest)).size, 4);
+      assert.deepEqual(calls[3].packet.role_context.parts.map(part => part.dispatch_id), [ids[0], ids[2]]);
+      assert.equal(result.artifact.outcome, 'passed');
+      assert.equal(fs.readFileSync(evidenceFile(f), 'utf8'), `Integration check at ${f.head}.\n`);
+    });
+  } finally { cleanupFixture(f); }
+});
+
+test('a Codex part summary still oversized after its one retry is refused with its size, and no final or evidence follows', async () => {
+  const f = integratorFixture({ files: FILES });
+  try {
+    await withHost(f, { partBudget: 5, mutate(raw, packet) {
+      if (packet.role_context.part?.ordinal === 1) raw.summary = OVERSIZED;
+    } }, async ({ calls, run }) => {
+      await assert.rejects(run(), { code: 'INVALID_RESULT', message: OVERSIZED_REFUSAL + ' (after one format retry)' });
+      assert.equal(calls.length, 2);
+      assert.ok(calls.every(call => call.packet.role_context.part?.ordinal === 1));
+      assert.equal(fs.existsSync(evidenceFile(f)), false);
+    });
+  } finally { cleanupFixture(f); }
+});
+
 test('the Codex integrator cannot pass over an incomplete part', async () => {
   const f = integratorFixture({ files: FILES });
   try {

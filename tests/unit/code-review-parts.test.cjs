@@ -104,7 +104,8 @@ test('a part result over its byte share is refused so the final always fits', ()
   const group = { id: 'part-1', ordinal: 1, paths: ['a.js'] };
   const result = { part: 'part-1', review_completeness: 'complete', limitations: [], unresolved_sources: [], summary: 'ok',
     findings: Array.from({ length: 40 }, (_, index) => ({ id: 'F-' + index, severity: 'WARNING', path: 'a.js', line: 3, summary: 'x'.repeat(1000) })) };
-  assert.throws(() => core.normalizePart(result, group), { code: 'INVALID_RESULT', message: /32 KiB/ });
+  assert.throws(() => core.normalizePart(result, group), { code: 'INVALID_RESULT', partFormat: true,
+    message: /^part result is \d+ UTF-8 bytes; the limit is 32768 bytes/ });
   assert.doesNotThrow(() => core.normalizePart({ ...result, findings: result.findings.slice(0, 10) }, group));
 });
 
@@ -145,4 +146,85 @@ test('the runner refuses parts that do not cover every changed path once, before
   await assert.rejects(core.runParts(groups, { changes: [change('a.js'), change('b.js')], check() {},
     part: async group => ({ id: group.id, paths: group.paths }), final: () => launched.push('final') }), { code: 'INVALID_RESULT' });
   assert.deepEqual(launched, []);
+});
+
+const PART_GROUP = { id: 'part-1', ordinal: 1, paths: ['a.js'] };
+const partResult = summary => ({ part: 'part-1', review_completeness: 'complete', limitations: [], unresolved_sources: [], summary, findings: [] });
+const refusal = message => ({ code: 'INVALID_RESULT', partFormat: true, message });
+
+test('a part summary is bounded in UTF-8 bytes and a refusal names the field, its size and the limit', () => {
+  const limit = core.PART_LIMITS.summaryBytes;
+  assert.equal(limit, 2048);
+  for (const summary of [undefined, null, 7, '', '   \n'])
+    assert.throws(() => core.normalizePart(partResult(summary), PART_GROUP), refusal('part summary must be a non-empty string'));
+  for (const summary of ['No defects.', 'x'.repeat(limit), 'ж'.repeat(limit / 2), '😀'.repeat(limit / 4), 'ж'.repeat(limit / 2 - 1) + 'xx'])
+    assert.equal(core.normalizePart(partResult(summary), PART_GROUP).summary, summary);
+  for (const [summary, bytes] of [['x'.repeat(limit + 1), limit + 1], ['ж'.repeat(limit / 2) + 'x', limit + 1],
+    ['😀'.repeat(limit / 4) + 'x', limit + 1], ['ж'.repeat(3787) + 'x', 7575]])
+    assert.throws(() => core.normalizePart(partResult(summary), PART_GROUP),
+      refusal(`part summary is ${bytes} UTF-8 bytes; the limit is ${limit} bytes`));
+});
+
+test('the part schema admits only what the byte validator accepts, whatever the script', () => {
+  const { summary, limitations, unresolved_sources: unresolved, findings } = core.PART_SCHEMA.properties;
+  assert.deepEqual(summary, { type: 'string', minLength: 1, maxLength: core.PART_LIMITS.summaryBytes / 4 });
+  for (const list of [limitations, unresolved])
+    assert.deepEqual(list, { type: 'array', maxItems: 128, items: { type: 'string', minLength: 1, maxLength: core.PART_LIMITS.textBytes / 4 } });
+  assert.equal(findings.maxItems, 128);
+  for (const char of ['x', 'ж', '€', '😀']) {
+    const atSchemaLimit = char.repeat(summary.maxLength), item = char.repeat(limitations.items.maxLength);
+    assert.equal([...atSchemaLimit].length, summary.maxLength);
+    assert.doesNotThrow(() => core.normalizePart({ ...partResult(atSchemaLimit), limitations: [item], unresolved_sources: [item] }, PART_GROUP));
+  }
+});
+
+test('part lists refuse with the entry, its size and the limit', () => {
+  assert.throws(() => core.normalizePart({ ...partResult('ok'), limitations: ['fine', 'ж'.repeat(513)] }, PART_GROUP),
+    refusal('part limitations[1] is 1026 UTF-8 bytes; the limit is 1024 bytes'));
+  assert.throws(() => core.normalizePart({ ...partResult('ok'), unresolved_sources: [''] }, PART_GROUP),
+    refusal('part unresolved_sources[0] must be a non-empty string'));
+  assert.throws(() => core.normalizePart({ ...partResult('ok'), limitations: Array(129).fill('x') }, PART_GROUP),
+    refusal('part limitations has 129 entries; the limit is 128'));
+  assert.throws(() => core.normalizePart({ ...partResult('ok'), findings: Array(129).fill({}) }, PART_GROUP),
+    refusal('part findings has 129 entries; the limit is 128'));
+});
+
+test('every part prompt states the summary, list and size bounds from the shared limits', () => {
+  const [text] = core.partDirections({ part: { ordinal: 1, of: 2 } });
+  assert.match(text, /summary is a short synopsis of at most 2048 UTF-8 bytes \(512 characters always fit\)/);
+  assert.match(text, /put evidence and detail in findings, never in summary/);
+  assert.match(text, /at most 128 non-empty strings of at most 1024 UTF-8 bytes each; findings holds at most 128 entries/);
+  assert.match(text, /of at most 32768 UTF-8 bytes/);
+  assert.doesNotMatch(text, /refused your previous answer/);
+  const [retry] = core.partDirections({ part: { ordinal: 1, of: 2 }, refusal: 'part summary is 7573 UTF-8 bytes; the limit is 2048 bytes' });
+  assert.ok(retry.startsWith(text));
+  assert.match(retry, /The host refused your previous answer for this part: part summary is 7573 UTF-8 bytes; the limit is 2048 bytes\./);
+});
+
+test('a part-format refusal relaunches that part once with the refusal; other refusals and the final never retry', async () => {
+  const groups = [1, 2].map(ordinal => ({ id: 'part-' + ordinal, ordinal, paths: ['p' + ordinal] }));
+  const changes = groups.map(group => change(group.paths[0]));
+  const formatError = () => { try { core.normalizePart(partResult('ж'.repeat(3000)), PART_GROUP); } catch (error) { return error; } };
+  const run = async (behaviour) => {
+    const log = [];
+    const outcome = await core.runParts(groups, { changes, check() {},
+      part: async (group, hint) => { log.push([group.ordinal, hint ?? null]); return behaviour(group, hint, log); },
+      final: async parts => { log.push(['final', parts.map(entry => entry.id)]); return 'sealed'; } }).catch(error => error);
+    return { log, outcome };
+  };
+  const recovered = await run((group, hint) => { if (group.ordinal === 2 && !hint) throw formatError(); return { id: group.id, paths: group.paths }; });
+  assert.equal(recovered.outcome, 'sealed');
+  assert.deepEqual(recovered.log, [[1, null], [2, null], [2, 'part summary is 6000 UTF-8 bytes; the limit is 2048 bytes'], ['final', ['part-1', 'part-2']]]);
+  const twice = await run(() => { throw formatError(); });
+  assert.equal(twice.outcome.message, 'part summary is 6000 UTF-8 bytes; the limit is 2048 bytes (after one format retry)');
+  assert.equal(twice.log.length, 2, 'one retry, then the refusal stands and no final runs');
+  const custody = await run(() => { throw Object.assign(new Error('receipt missing'), { code: 'MISSING_RECEIPT' }); });
+  assert.equal(custody.outcome.code, 'MISSING_RECEIPT');
+  assert.deepEqual(custody.log, [[1, null]]);
+  const plainInvalid = await run(() => { throw Object.assign(new Error('not a part refusal'), { code: 'INVALID_RESULT' }); });
+  assert.deepEqual(plainInvalid.log, [[1, null]]);
+  const finalLog = [];
+  await assert.rejects(core.runParts(groups, { changes, check() {}, part: async group => ({ id: group.id, paths: group.paths }),
+    final: async () => { finalLog.push('final'); throw formatError(); } }), refusal(/part summary is 6000/));
+  assert.deepEqual(finalLog, ['final']);
 });

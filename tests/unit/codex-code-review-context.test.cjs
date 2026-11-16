@@ -687,6 +687,29 @@ test('parts and final: each part is its own launch, the final owns the verdict a
   } finally { f.cleanup(); }
 });
 
+test('a Codex code-review part prompt states the summary bound; an oversized summary is a precise part-format refusal and its retry keeps the packet', () => {
+  const f = twoPartFixture();
+  try {
+    const id = crypto.randomUUID(), v = f.prepare({ inflightDispatchId: id, partBudget: 3, part: 1 }, { dispatch_id: id }); admit(f, v);
+    const [directions] = v.launch.context.prompt.split('<AUTHENTICATED_CONTEXT_PACKET>');
+    assert.match(directions, /summary is a short synopsis of at most 2048 UTF-8 bytes \(512 characters always fit\)/);
+    assert.doesNotMatch(directions, /refused your previous answer/);
+    const oversized = 'Огляд: '.repeat(600), bytes = Buffer.byteLength(oversized);
+    const d = dispatchFixture(f, v, r => { r.summary = oversized; });
+    assert.throws(() => context.finish(v, d.dispatch, d.recorder),
+      { code: 'INVALID_RESULT', partFormat: true, message: `part summary is ${bytes} UTF-8 bytes; the limit is 2048 bytes` });
+    const retryId = crypto.randomUUID();
+    const retry = f.prepare({ inflightDispatchId: retryId, partBudget: 3, part: 1,
+      refusal: `part summary is ${bytes} UTF-8 bytes; the limit is 2048 bytes` }, { dispatch_id: retryId }); admit(f, retry);
+    const [retryDirections, retryPacket] = retry.launch.context.prompt.split('<AUTHENTICATED_CONTEXT_PACKET>');
+    assert.ok(retryDirections.includes(`The host refused your previous answer for this part: part summary is ${bytes} UTF-8 bytes; the limit is 2048 bytes.`));
+    assert.equal(retryPacket, v.launch.context.prompt.split('<AUTHENTICATED_CONTEXT_PACKET>')[1]);
+    assert.equal(retry.prepared.packet.digest, v.prepared.packet.digest);
+    const r2 = dispatchFixture(f, retry, r => { r.summary = 'ж'.repeat(1024); });
+    assert.equal(Buffer.byteLength(context.finish(retry, r2.dispatch, r2.recorder).summary), 2048);
+  } finally { f.cleanup(); }
+});
+
 test('a part is rechecked against the live PR after its launch like the final', () => {
   const f = twoPartFixture();
   try {

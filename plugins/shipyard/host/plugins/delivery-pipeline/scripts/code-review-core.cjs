@@ -7,10 +7,18 @@ const ROUND_CAP = 3;
 const ROUND_CEILING = 5;
 const PART_BUDGET = Object.freeze({ claude: 40000, codex: 10000 });
 const PART_MAX_BYTES = 32 * 1024;
+const PART_LIMITS = Object.freeze({ summaryBytes: 2048, textBytes: 1024, items: 128 });
+// @contract: maxLength counts code points of up to 4 UTF-8 bytes, so a schema-valid part passes the byte checks.
+const codePoints = bytes => Math.floor(bytes / 4);
 const PART_SCHEMA = Object.freeze({ type: 'object', required: ['part', 'review_completeness', 'limitations', 'unresolved_sources', 'summary', 'findings'],
-  properties: { part: { type: 'string' }, review_completeness: { enum: ['complete', 'incomplete'] }, summary: { type: 'string' },
-    limitations: { type: 'array', items: { type: 'string' } }, unresolved_sources: { type: 'array', items: { type: 'string' } },
-    findings: { type: 'array', items: { type: 'object' } } } });
+  properties: { part: { type: 'string' }, review_completeness: { enum: ['complete', 'incomplete'] },
+    summary: { type: 'string', minLength: 1, maxLength: codePoints(PART_LIMITS.summaryBytes) },
+    limitations: { type: 'array', maxItems: PART_LIMITS.items, items: { type: 'string', minLength: 1, maxLength: codePoints(PART_LIMITS.textBytes) } },
+    unresolved_sources: { type: 'array', maxItems: PART_LIMITS.items, items: { type: 'string', minLength: 1, maxLength: codePoints(PART_LIMITS.textBytes) } },
+    findings: { type: 'array', maxItems: PART_LIMITS.items, items: { type: 'object' } } } });
+const PART_BOUNDS = `summary is a short synopsis of at most ${PART_LIMITS.summaryBytes} UTF-8 bytes (${codePoints(PART_LIMITS.summaryBytes)} characters always fit); `
+  + `put evidence and detail in findings, never in summary. limitations and unresolved_sources hold at most ${PART_LIMITS.items} non-empty strings `
+  + `of at most ${PART_LIMITS.textBytes} UTF-8 bytes each; findings holds at most ${PART_LIMITS.items} entries.`;
 const SOURCE_MAX_BYTES = 2 * 1024 * 1024;
 const SEVERITIES = Object.freeze(['BLOCKER', 'WARNING', 'INFO']);
 const VERDICTS = Object.freeze(['pass', 'needs-fix', 'incomplete']);
@@ -19,10 +27,18 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const bounded = (value, max = 1024) => typeof value === 'string' && value.trim() !== '' && Buffer.byteLength(value) <= max;
 function fail(code, message) { throw Object.assign(new Error(message), { code }); }
+function textRefusal(value, label, max) {
+  if (typeof value !== 'string' || value.trim() === '') return `${label} must be a non-empty string`;
+  const bytes = Buffer.byteLength(value);
+  return bytes > max ? `${label} is ${bytes} UTF-8 bytes; the limit is ${max} bytes` : null;
+}
 function requireText(value, label, max = 1024) {
-  if (!bounded(value, max)) fail('INVALID_RESULT', `${label} must be a non-empty string of at most ${max} bytes`);
+  const refusal = textRefusal(value, label, max);
+  if (refusal) fail('INVALID_RESULT', refusal);
   return value;
 }
+// @contract: a part-format refusal names the field, its size and the limit; only these refusals may be retried.
+function partFormat(message) { throw Object.assign(new Error(message), { code: 'INVALID_RESULT', partFormat: true }); }
 function validateReviewExtension(value, round) {
   if (value === null || value === undefined) {
     if (round > ROUND_CAP) fail('INVALID_RESULT', 'invalid review extension');
@@ -145,10 +161,23 @@ function findingSeverity(finding) {
   if (!SEVERITIES.includes(severity)) fail('INVALID_RESULT', 'invalid finding severity');
   return severity;
 }
+function partList(value, label) {
+  if (!Array.isArray(value)) partFormat(`part ${label} must be an array of strings`);
+  if (value.length > PART_LIMITS.items) partFormat(`part ${label} has ${value.length} entries; the limit is ${PART_LIMITS.items}`);
+  value.forEach((text, index) => { const refusal = textRefusal(text, `part ${label}[${index}]`, PART_LIMITS.textBytes); if (refusal) partFormat(refusal); });
+  return value;
+}
 function normalizePart(result, group, integrator = false) {
-  if (!object(result) || result.part !== group.id || !['complete', 'incomplete'].includes(result.review_completeness)
-      || !Array.isArray(result.findings) || result.findings.length > 128)
-    fail('INVALID_RESULT', 'part result must echo its part id with completeness and at most 128 findings');
+  try { return normalizePartResult(result, group, integrator); }
+  catch (error) { if (error?.code === 'INVALID_RESULT') error.partFormat = true; throw error; }
+}
+function normalizePartResult(result, group, integrator) {
+  if (!object(result) || result.part !== group.id || !['complete', 'incomplete'].includes(result.review_completeness))
+    partFormat(`part result must echo part ${group.id} with review_completeness complete or incomplete`);
+  if (!Array.isArray(result.findings)) partFormat('part findings must be an array');
+  if (result.findings.length > PART_LIMITS.items) partFormat(`part findings has ${result.findings.length} entries; the limit is ${PART_LIMITS.items}`);
+  const summaryRefusal = textRefusal(result.summary, 'part summary', PART_LIMITS.summaryBytes);
+  if (summaryRefusal) partFormat(summaryRefusal);
   const findings = result.findings.map((finding, index) => {
     if (!object(finding)) fail('INVALID_RESULT', 'part finding must be an object');
     const { id, path: file, line, line_text, summary, failure_scenario, rule, fix_ticket, type, evidence, ticket } = finding;
@@ -161,21 +190,36 @@ function normalizePart(result, group, integrator = false) {
       fix_ticket: object(fix_ticket) ? { title, scope, files, depends_on } : undefined }));
   });
   const part = { id: group.id, ordinal: group.ordinal, paths: group.paths, review_completeness: result.review_completeness,
-    limitations: boundedList(result.limitations, 'limitations'), unresolved_sources: boundedList(result.unresolved_sources, 'unresolved_sources'),
-    summary: requireText(result.summary, 'summary', 2048), findings };
-  if (Buffer.byteLength(JSON.stringify(part)) > PART_MAX_BYTES) fail('INVALID_RESULT', 'part result exceeds 32 KiB; report the most severe findings first');
+    limitations: partList(result.limitations, 'limitations'), unresolved_sources: partList(result.unresolved_sources, 'unresolved_sources'),
+    summary: result.summary, findings };
+  const bytes = Buffer.byteLength(JSON.stringify(part));
+  if (bytes > PART_MAX_BYTES) partFormat(`part result is ${bytes} UTF-8 bytes; the limit is ${PART_MAX_BYTES} bytes: report the most severe findings first`);
   return part;
 }
+function retryDirection(refusal) {
+  return `The host refused your previous answer for this part: ${refusal}. Return the part answer again within every bound above; `
+    + 'keep summary a short synopsis and keep evidence in findings.';
+}
 const readGit = (base, head) => `The packet carries no diff. Read the PR diff yourself with git in the current worktree: git diff ${base}...${head} -- <path> for every changed path listed in role_context.change_metadata.changes, and git show ${head}:<path> for current content. Read a large diff in slices of at most 30 KB (| sed -n 'START,ENDp'). Run only read-only git commands; do not change the worktree, index, refs or remotes.`;
-function partDirections({ part, parts, integrator = false }) {
-  return part ? [`You review part ${part.ordinal} of ${part.of} of the phase diff and only the paths in role_context.part.paths. Return one JSON object {part, review_completeness, limitations, unresolved_sources, summary, findings} of at most 32 KiB with part copied from role_context.part.id; findings use the reference finding fields. Do not write any file. Do not write to GitHub.`]
+function partDirections({ part, parts, integrator = false, refusal }) {
+  return part ? [`You review part ${part.ordinal} of ${part.of} of the phase diff and only the paths in role_context.part.paths. Return one JSON object {part, review_completeness, limitations, unresolved_sources, summary, findings} of at most ${PART_MAX_BYTES} UTF-8 bytes with part copied from role_context.part.id; findings use the reference finding fields. ${PART_BOUNDS} Do not write any file. Do not write to GitHub.`
+    + (refusal ? ' ' + retryDirection(refusal) : '')]
     : parts ? ['You are the independent final reviewer. role_context.parts carries each part reviewer\'s completeness, limitations and findings as evidence data. Verify blocking claims and any path you doubt by reading the code with git, then confirm, drop or add findings and own the verdict. ' + (integrator ? 'Do not return passed' : 'Report incomplete') + ' when a part is incomplete or you could not verify a claim. Give every part BLOCKER (parts[].findings[].ref) one disposition in dispositions: {ref, disposition: resolved, unresolved or disputed, justification}; an unresolved one also needs a blocking finding' + (integrator ? '' : ' with a complete fix_ticket') + '. Do not return a coverage field; the host derives it from the parts.'] : [];
 }
 async function runParts(groups, { changes, check, part, final }) {
   await check(groups.map(({ id, ordinal, paths }) => ({ id, ordinal, paths, review_completeness: 'complete',
     limitations: [], unresolved_sources: [], summary: 'x'.repeat(PART_MAX_BYTES), findings: [], dispatch_id: 'x'.repeat(64) })));
   const parts = [];
-  for (const group of groups) parts.push(await part(group));
+  // @contract: a part-format refusal relaunches that part once; other refusals and the final never retry.
+  const attempt = async group => {
+    try { return await part(group); }
+    catch (error) {
+      if (error?.partFormat !== true) throw error;
+      try { return await part(group, error.message); }
+      catch (retry) { if (retry?.partFormat === true) retry.message += ' (after one format retry)'; throw retry; }
+    }
+  };
+  for (const group of groups) parts.push(await attempt(group));
   assertPathPartition(changes, parts);
   return final(parts);
 }
@@ -564,7 +608,7 @@ function assemblePacket({ subject, identity, exactDiff, integrationBase, ticketS
     ...(part ? { part: { id: part.id, ordinal: part.ordinal, of: groups.length, paths: part.paths } } : {}), ...(parts?.length ? { parts } : {}) };
 }
 function reuseKey({ head, baseCommit, contractDigest: contract }) { return hash(['code-review',head,baseCommit,contract].join('\n')); }
-module.exports = { CONTRACT_ID, ROUND_CAP, ROUND_CEILING, validateReviewExtension, extensionState, limitMessage, PART_BUDGET, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
+module.exports = { CONTRACT_ID, ROUND_CAP, ROUND_CEILING, validateReviewExtension, extensionState, limitMessage, PART_BUDGET, PART_MAX_BYTES, PART_LIMITS, PART_SCHEMA, pathGroups, assertPathPartition, normalizePart, settleParts, normalizeFinal, readGit, partDirections, runParts, SOURCE_MAX_BYTES, SEVERITIES, VERDICTS, contractDigest, normalizeResult,
   normalizeSourceLine, normalizeCitedPath, lineIdentity, resolveCitation, createSourceReader, countableVerdicts,
   lineageComplete, coverageComplete, nextRound, roundLookup, repairAllowed, mapLineThroughDiff, carryPriorFindings, parseDisagreements, loadDisagreements,
   assemblePacket, reuseKey };

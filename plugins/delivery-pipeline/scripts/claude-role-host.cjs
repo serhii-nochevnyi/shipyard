@@ -636,7 +636,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
     ['rev-parse', '--verify', `${deltaBase}^{tree}`]), head: canonical.head };
   const integrationBase = { ref: baseName, commit: live.baseRefOid,
     tree: git(options, canonical.worktree, ['rev-parse', '--verify', `${live.baseRefOid}^{tree}`]) };
-  const launchFor = ({ part, parts = [] } = {}) => {
+  const launchFor = ({ part, parts = [], refusal } = {}) => {
     const roleContext = core.assemblePacket({ subject: binding.subject, identity, exactDiff, integrationBase,
       ticketSet: binding.ticketSet, planAcceptance: plans.map(({ id, path, acceptance, verification }) => ({ id, path, acceptance, verification })),
       priorFindings, round, changeMetadata, referenceDigest: referenceDigest(reference).sha256, part, parts, groups });
@@ -645,7 +645,7 @@ function prepareCodeReview(options, request, canonical, graph, rows) {
     roleContext.ticket_set_digest = binding.membership;
     roleContext.phase_repo = binding.repo;
     const packet = buildPacket(canonical, 'code-review', binding.subject, sources, plans[0], roleContext);
-    return { packet, prompt: makePrompt('code-review', binding.subject, packet, reference), part };
+    return { packet, prompt: makePrompt('code-review', binding.subject, packet, reference, false, refusal), part };
   };
   const launch = launchFor();
   const signals = observedSignals(request, rows, [live], Math.ceil(Buffer.byteLength(launch.prompt) / 4));
@@ -754,7 +754,7 @@ function prepareIntegrator(options, request, canonical, graph) {
   const synthetic = { plans: sources.plans, requiredRefs: sources.requiredRefs, files: sources.files };
   const plan = { id: subject, path: sources.plans[0].path, content: sources.plans.map((item) => item.content).join('\n'),
     acceptance: [], verification: [] };
-  const launchFor = ({ part, parts = [] } = {}) => {
+  const launchFor = ({ part, parts = [], refusal } = {}) => {
     const roleContext = { phase, phase_number: phaseNumber, phase_contracts: phaseContracts,
       combined_diff: { base: defaultBase, base_commit: defaultOid, merge_base: mergeBase,
         merge_base_tree: mergeBaseTree, head: canonical.head, head_tree: canonical.headTree },
@@ -766,7 +766,7 @@ function prepareIntegrator(options, request, canonical, graph) {
       ...(part ? { part: { id: part.id, ordinal: part.ordinal, of: groups.length, paths: part.paths } } : {}),
       ...(parts.length ? { parts } : {}) };
     const packet = buildPacket(canonical, 'integrator', subject, synthetic, plan, roleContext);
-    return { packet, prompt: makePrompt('integrator', subject, packet, reference), part };
+    return { packet, prompt: makePrompt('integrator', subject, packet, reference, false, refusal), part };
   };
   const launch = launchFor();
   // @invariant: the diff is read through git but its size still drives the measured-window routing signal.
@@ -966,7 +966,7 @@ function focusedEcho(packet) {
   return echo;
 }
 
-function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
+function makePrompt(role, subject, packet, reference, readOnlySmoke = false, refusal = undefined) {
   if (typeof packet?.schema === 'string' && packet.schema.startsWith('shipyard.semantic-content.'))
     packet = decodeUniqueContent(packet);
   const codeReview = role === 'code-review';
@@ -982,7 +982,7 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
   const instruction = role === 'arch-review'
     ? 'Return one JSON object matching the arch-review reference schema. Review only the authenticated PR and use the exact reviewed head and merge-base tree. Write no file: return the complete review in evidence_markdown.'
     : part
-      ? core.partDirections({ part })[0]
+      ? core.partDirections({ part, refusal })[0]
     : codeReview
       ? 'Return one JSON object matching the code-review reference schema. Review the complete authenticated product diff and its callers. Write no file: return the complete review in evidence_markdown. Do not write to GitHub.'
     : role === 'integrator'
@@ -1725,7 +1725,7 @@ async function runParts(options, prepared) {
   const launch = extra => dispatchRole(options, Object.freeze({ ...prepared, ...prepared.launchFor(extra) }));
   const done = [];
   const final = await require('./code-review-core.cjs').runParts(prepared.groups, { changes: prepared.changes,
-    check: parts => prepared.launchFor({ parts }), part: async part => { done.push(await launch({ part })); return done.at(-1); },
+    check: parts => prepared.launchFor({ parts }), part: async (part, refusal) => { done.push(await launch({ part, refusal })); return done.at(-1); },
     final: parts => launch({ parts }) });
   return Object.freeze({ ...final, parts: done.map(({ id, dispatch_id, review_completeness }) => ({ id, dispatch_id, review_completeness })) });
 }

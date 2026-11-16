@@ -172,7 +172,9 @@ carrier, otherwise the SHA-256 of the exact file bytes.
 The host splits the product paths of a large diff into parts, each path in exactly one.
 A part reviewer reads only its `part.paths` and returns
 `{part, review_completeness, limitations, unresolved_sources, summary, findings}` of at most
-32 KiB. The final reviewer is a separate session: it reads the parts' results as evidence,
+32 KiB. Its `summary` is a short synopsis of at most 2048 UTF-8 bytes, with evidence in findings;
+`limitations` and `unresolved_sources` hold at most 128 entries of at most 1024 UTF-8 bytes each.
+The host relaunches a part once when it refuses only the answer's format. The final reviewer is a separate session: it reads the parts' results as evidence,
 verifies blocking claims with git and owns the verdict; each part BLOCKER needs a justified
 disposition keyed by its `ref`. A reviewer returns no `coverage`; the host derives it, one
 `{partition, status}` entry per part and none for a single session, and records

@@ -56,6 +56,25 @@ test('integrator splits a large diff into path-group parts and a fresh final own
   } finally { cleanupFixture(fixture); }
 });
 
+test('a Claude integrator part states the summary bound, is relaunched once after an oversized summary and the final seals', async () => {
+  const fixture = integratorFixture({ files: FILES });
+  const launches = [];
+  let seen = 0;
+  const oversized = 'Огляд частини: '.repeat(300);
+  try {
+    const result = await runIntegrator(fixture, { onLaunch(prompt, selection) { launches.push({ prompt, selection, context: packetFromPrompt(prompt).role_context }); },
+      mutateResult(output, packet) { if (packet.role_context.part?.ordinal === 1 && seen++ === 0) output.summary = oversized; } }, 5);
+    assert.deepEqual(launches.map(launch => launch.context.part?.ordinal ?? 'final'), [1, 1, 2, 'final']);
+    assert.ok(launches.slice(0, 3).every(launch => /summary is a short synopsis of at most 2048 UTF-8 bytes/.test(launch.prompt)));
+    assert.ok(launches[1].prompt.includes('The host refused your previous answer for this part: part summary is '
+      + Buffer.byteLength(oversized) + ' UTF-8 bytes; the limit is 2048 bytes.'));
+    assert.ok(![0, 2, 3].some(index => /refused your previous answer/.test(launches[index].prompt)));
+    assert.equal(result.parts.length, 2);
+    assert.equal(result.artifact.outcome, 'passed');
+    assert.equal(fs.readFileSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`), 'utf8'), `Integration check at ${fixture.head}.\n`);
+  } finally { cleanupFixture(fixture); }
+});
+
 test('integrator cannot pass over an incomplete part', async () => {
   const fixture = integratorFixture({ files: FILES });
   try {
