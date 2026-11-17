@@ -821,9 +821,9 @@ test('role-artifact holds no private subject grammar or home expression', () => 
   assert.ok(!/'\.codex'/.test(source) && !/'\.claude'/.test(source), 'no private home fallback');
   assert.equal((source.match(/phaseSubjectFields\(/g) || []).length, 8, 'definition plus the architecture and code-review phase-record sites and authenticated lineage readers');
   assert.equal((source.match(/parseSubject\('integrator'/g) || []).length >= 3, true);
-  assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 3);
-  assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 3,
-    'all three Codex session sites follow the executing bundle like every converted site');
+  assert.equal((source.match(/resolveCodexHome\(/g) || []).length, 4);
+  assert.equal((source.match(/resolveCodexHome\(\{ scriptDir: __dirname, env: process\.env \}\)/g) || []).length, 4,
+    'all four Codex session sites follow the executing bundle like every converted site');
   assert.equal((source.match(/resolveClaudeHome\(/g) || []).length, 1);
   assert.ok(!/^(?:const|let|var) [^\n]*require\(['"]\.\/runtime-context\.cjs['"]\)/m.test(source),
     'runtime-context is required lazily at each site');
