@@ -551,7 +551,14 @@ test('real isolated builder reproduces complete inventory and independently load
   const actual = inventory(candidate);
   assert.deepEqual(actual, before);
   const owned = new Set(['host/plugins/delivery-pipeline/scripts/check-state.cjs', '.codex-plugin/plugin.json', 'package-build.json']);
+  const priorSignaturePath = 'plugins/delivery-pipeline/scripts/failure-signature.cjs';
+  const priorSignatureRevision = '4f9da2383097a4c206a61741fbd24ac69646990c';
+  const priorSignature = require('node:child_process').execFileSync('git', ['-C', ROOT, 'show', `${priorSignatureRevision}:${priorSignaturePath}`]);
+  assert.equal(priorSignature.length, 36322);
+  assert.equal(hash(priorSignature), '1f8caa7d204595348f9cbcd494b652f8efb050769b12a801bbf7759e5504c963');
+  assert.match(require('node:child_process').execFileSync('git', ['-C', ROOT, 'ls-tree', priorSignatureRevision, '--', priorSignaturePath], { encoding: 'utf8' }), /^100644 blob /);
   const priorMirrors = {
+    'failure-signature.cjs': { mode: 420, digest: '1f8caa7d204595348f9cbcd494b652f8efb050769b12a801bbf7759e5504c963' },
     'codex-code-review-context.cjs': { mode: 420, digest: '25f5c74d60faeaed8a22fb7ae542661f904ed46c2189cc021d053707505b601c' },
     'conveyor-coverage.cjs': { mode: 420, digest: 'e4ef6439fa74c309e3f00f411ec7d3d3094778602755a3fe6bd742c6a447c789' },
     'lock.cjs': { mode: 420, digest: '9fa25b424f255df50a4cfd29b46cbb57d9e538e8404fa3dbc99081072de0ea7e' },
@@ -578,7 +585,7 @@ test('real isolated builder reproduces complete inventory and independently load
     assert.equal(row.mode, priorMirrors[name].mode);
     return { ...row, ...priorMirrors[name], directory: false };
   });
-  assert.equal(previous.filter(r => Object.values(priorMirrors).some(prior => prior.digest === r.digest)).length, 15);
+  assert.equal(previous.filter(r => Object.values(priorMirrors).some(prior => prior.digest === r.digest)).length, 16);
   assert.equal(hash(JSON.stringify(previous)), capture.parent.other_package_inventory_sha256);
   const mirror = path.join(candidate, 'host/plugins/delivery-pipeline/scripts/check-state.cjs');
   assert.deepEqual(fs.readFileSync(mirror), fs.readFileSync(path.join(SCRIPTS, 'check-state.cjs')));

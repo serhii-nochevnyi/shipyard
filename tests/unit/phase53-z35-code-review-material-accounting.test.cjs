@@ -1043,7 +1043,7 @@ if (isMainThread) {
     const first = source.indexOf('  const priorMirrors = {'), last = source.indexOf('\n  const previous = ', first);
     const prior = new Function(source.slice(first, last) + '\nreturn priorMirrors;')();
     const collector = 'codex-code-review-context.cjs';
-    assert.equal(Object.keys(prior).length, 15);
+    assert.equal(Object.keys(prior).length, 16);
     assert.deepEqual(prior[collector], { mode: 420, digest: '25f5c74d60faeaed8a22fb7ae542661f904ed46c2189cc021d053707505b601c' });
     const baseline = cp.execFileSync('git', ['-C', h.ROOT, 'show', '3d57c40a478f308c5a15b69381d8ab84009ae210:plugins/delivery-pipeline/scripts/' + collector]);
     assert.equal(baseline.length, 50463); assert.equal(h.hash(baseline), prior[collector].digest);
