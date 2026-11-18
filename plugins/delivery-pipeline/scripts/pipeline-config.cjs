@@ -177,8 +177,8 @@ function taskLevelRoute(role, signals = {}, cfg = {}) {
 // Codex palette. Routed Codex dispatch reads ADR-014 directly; this palette
 // remains a compatibility input for callers that do not request a routed decision.
 const DEFAULT_CODEX_MODELS = [
-  { model: 'gpt-6.2-sol', effort: 'high', min_cli: '0.169.0' },
-  { model: 'gpt-6.2-sol', effort: 'xhigh', min_cli: '0.169.0' },
+  { model: 'gpt-6.2-sol', effort: 'high', min_cli: '0.169.1' },
+  { model: 'gpt-6.2-sol', effort: 'xhigh', min_cli: '0.169.1' },
 ];
 const CODEX_MODEL_KEYS = new Set(['model', 'effort', 'min_cli']);
 

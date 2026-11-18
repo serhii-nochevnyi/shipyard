@@ -19,7 +19,7 @@ const fakeCodexSource = (logFile) => `#!/usr/bin/env node
 'use strict';
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-if (args[0] === '--version') { console.log('codex-cli 0.169.0'); process.exit(0); }
+if (args[0] === '--version') { console.log('codex-cli 0.169.1'); process.exit(0); }
 if (args[0] === 'exec' && args[1] === '--help') { console.log(${JSON.stringify(REQUIRED_HELP_MARKERS.join(' '))}); process.exit(0); }
 fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ argv: args, codexHome: process.env.CODEX_HOME || null }) + '\\n');
 process.stdin.resume();

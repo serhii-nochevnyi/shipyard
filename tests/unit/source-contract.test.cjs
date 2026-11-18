@@ -1787,7 +1787,7 @@ test('Codex live smoke refuses the source checkout before probing or launching a
 
 test('shipped Codex compatibility palette and README advertise the native Sol default', () => {
   const capability = JSON.parse(readRepo('capabilities/delivery-pipeline/capability.json'));
-  const expected = 'gpt-6.2-sol:high@0.169.0, gpt-6.2-sol:xhigh@0.169.0';
+  const expected = 'gpt-6.2-sol:high@0.169.1, gpt-6.2-sol:xhigh@0.169.1';
   assert.strictEqual(capability.config['delivery_pipeline.codex_models'].default, expected);
   assert.ok(readRepo('README.md').includes(`\"codex_models\": \"${expected}\"`));
 });
