@@ -14,7 +14,7 @@ const {
 const PARENT = 'phase47-controlled-parent';
 const CHILD = 'phase47-controlled-child';
 const ROLE = 'gsd-plan-checker';
-const MODEL = 'gpt-6.1-sol';
+const MODEL = 'gpt-6.2-sol';
 const EFFORT = 'low';
 const TASK_PATH = '/root/gsd_task';
 const AGENT = { file: 'controlled-checker.toml', sha256: 'a'.repeat(64),

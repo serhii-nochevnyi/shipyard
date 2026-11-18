@@ -482,7 +482,7 @@ suite('codex_models — the palette a static agent file is written from');
 test('no config → the shipped palette, floor first and ceiling last', () => {
   const { config, warnings } = withConfig(undefined);
   assert.deepStrictEqual(config.codex_models, DEFAULT_CODEX_MODELS);
-  assert.deepStrictEqual(config.codex_models.map(({ model }) => model), ['gpt-6.1-sol', 'gpt-6.1-sol']);
+  assert.deepStrictEqual(config.codex_models.map(({ model }) => model), ['gpt-6.2-sol', 'gpt-6.2-sol']);
   assert.deepStrictEqual(warnings, []);
   // The order IS the policy: first entry is the workhorse every role gets, last
   // is the ceiling only the integrator and the `-deep` agents reach.
@@ -1291,7 +1291,7 @@ test('the routed mode marker is frozen and outranks a mutable compatibility flag
   assert.ok(Object.isFrozen(routed.dispatch_context));
   assert.throws(() => { routed.dispatch_context.mode = 'compatibility'; }, TypeError);
   routed.routed = false;
-  assert.equal(resolveDispatch({ config: routed, role: 'executor' }).model, 'gpt-6.1-sol');
+  assert.equal(resolveDispatch({ config: routed, role: 'executor' }).model, 'gpt-6.2-sol');
 });
 
 test('routed readers reject a replacement context before compatibility fallback', () => {
@@ -1313,7 +1313,7 @@ for (const [name, copy] of [
     const original = routedConfig().config;
     const config = copy(original);
     assert.equal(config.routed, true);
-    assert.equal(resolveDispatch({ config: original, role: 'executor' }).model, 'gpt-6.1-sol');
+    assert.equal(resolveDispatch({ config: original, role: 'executor' }).model, 'gpt-6.2-sol');
     for (const read of [
       () => resolveDispatch({ config, role: 'executor' }),
       () => taskLevelRoute('executor', {}, config),
@@ -1362,12 +1362,12 @@ test('canonical model_policy runtime and role model sources are captured and val
   const raw = {
     model_policy: {
       runtime: 'codex',
-      models: { executor: 'gpt-6.1-sol' },
+      models: { executor: 'gpt-6.2-sol' },
     },
   };
   const { config } = routedConfig(raw);
   assert.deepStrictEqual(config.dispatch_context.configuration.model_policy, raw.model_policy);
-  assert.equal(resolveDispatch({ config, role: 'executor' }).model, 'gpt-6.1-sol');
+  assert.equal(resolveDispatch({ config, role: 'executor' }).model, 'gpt-6.2-sol');
 
   for (const [field, value, source] of [
     ['runtime', 'claude', 'config.model_policy.runtime'],
@@ -1380,7 +1380,7 @@ test('canonical model_policy runtime and role model sources are captured and val
 
 test('model_profile must match the normalized pipeline policy at the routed boundary', () => {
   const matching = routedConfig({ model_profile: 'balanced' });
-  assert.equal(resolveDispatch({ config: matching.config, role: 'executor' }).model, 'gpt-6.1-sol');
+  assert.equal(resolveDispatch({ config: matching.config, role: 'executor' }).model, 'gpt-6.2-sol');
 
   for (const profile of ['quality', 'budget', 'adaptive', 'inherit', 'golden', null]) {
     const { config } = routedConfig({ model_profile: profile });
@@ -1391,7 +1391,7 @@ test('model_profile must match the normalized pipeline policy at the routed boun
     model_profile: 'budget',
     pipeline: { model_policy: 'economy' },
   });
-  assert.equal(resolveDispatch({ config: economy.config, role: 'executor' }).model, 'gpt-6.1-sol');
+  assert.equal(resolveDispatch({ config: economy.config, role: 'executor' }).model, 'gpt-6.2-sol');
   const missing = routedConfig({ pipeline: { model_policy: 'premium' } });
   refusesSource(() => resolveDispatch({ config: missing.config, role: 'executor' }), 'config.model_profile');
 });
@@ -1447,7 +1447,7 @@ test('routed Codex CLI refuses malformed or conflicting GSD model policies witho
     } else {
       assert.equal(result.status, 0, result.stderr);
       const decision = JSON.parse(result.stdout);
-      assert.equal(decision.model, 'gpt-6.1-sol');
+      assert.equal(decision.model, 'gpt-6.2-sol');
       assert.equal(decision.effort, 'low');
     }
   }
@@ -1633,7 +1633,7 @@ test('inherited GSD tuning defaults retain the canonical selections on both runt
 test('validates GSD decomposition overrides and leaves unrelated role overrides alone', () => {
   const { config } = routedConfig({ model_overrides: { 'gsd-planner': 'opus' } });
   refusesSource(() => resolveDispatch({ role: 'decomposition', config }), 'config.model_overrides.gsd-planner');
-  assert.equal(resolveDispatch({ role: 'executor', config }).model, 'gpt-6.1-sol');
+  assert.equal(resolveDispatch({ role: 'executor', config }).model, 'gpt-6.2-sol');
 });
 
 test('matching configured selections are harmless and cannot pin a later rung', () => {
@@ -1769,7 +1769,7 @@ test('routed CLI returns full decisions and exits nonzero without stdout on inva
   const good = dispatch({ role: 'decomposition', runtime: 'codex', signals: { checkpoint: true }, dispatch_id: 'cli-launch' });
   assert.equal(good.status, 0, good.stderr);
   const decision = JSON.parse(good.stdout);
-  assert.equal(decision.model, 'gpt-6.1-sol');
+  assert.equal(decision.model, 'gpt-6.2-sol');
   assert.equal(decision.policy_hash, canonicalPolicy.POLICY_HASH);
   assert.equal(decision.dispatch_id, 'cli-launch');
   for (const input of [
@@ -1894,7 +1894,7 @@ test('JSON dispatch validates the complete invocation including empty and traili
   for (const args of [[], [request]]) {
     const result = cli(args);
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).model, 'gpt-6.1-sol');
+    assert.equal(JSON.parse(result.stdout).model, 'gpt-6.2-sol');
   }
 });
 
@@ -1921,7 +1921,7 @@ test('JSON dispatch rejects unknown top-level fields instead of losing escalatio
     assert.equal(result.status, 0, result.stderr);
     const decision = JSON.parse(result.stdout);
     assert.equal(decision.rung, 'critical');
-    assert.equal(decision.model, 'gpt-6.1-sol');
+    assert.equal(decision.model, 'gpt-6.2-sol');
     assert.equal(decision.dispatch_id, 'critical-json');
   }
 });
@@ -1944,13 +1944,13 @@ test('custom or malformed palettes cannot be sanitized or mutated into routed se
 
 test('Codex remaps validate the selected tier without rejecting unrelated tiers', () => {
   for (const namespace of ['model_policy', 'model_profile_overrides']) {
-    const tiers = { sol: 'gpt-6.1-sol', opus: 'gpt-6-astra', haiku: 'unrelated' };
+    const tiers = { sol: 'gpt-6.2-sol', opus: 'gpt-6-astra', haiku: 'unrelated' };
     const raw = namespace === 'model_policy'
       ? { model_policy: { runtime_tiers: { codex: tiers } } }
       : { model_profile_overrides: { codex: tiers } };
     const { config } = routedConfig(raw);
-    assert.equal(resolveDispatch({ config, role: 'executor' }).model, 'gpt-6.1-sol');
-    assert.equal(resolveDispatch({ config, role: 'executor', signals: { critical: true } }).model, 'gpt-6.1-sol');
+    assert.equal(resolveDispatch({ config, role: 'executor' }).model, 'gpt-6.2-sol');
+    assert.equal(resolveDispatch({ config, role: 'executor', signals: { critical: true } }).model, 'gpt-6.2-sol');
     assert.doesNotThrow(() => resolveDispatch({ config, role: 'research' }));
   }
 });
@@ -1993,7 +1993,7 @@ test('unconfigured projects inspect inherited GSD selection and reject conflicti
     fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify(raw));
     const { config } = loadConfig(dir, { routed: true, runtime: 'codex', env: { GSD_HOME: home } });
     if (raw.model_profile === 'balanced') {
-      assert.equal(resolveDispatch({ config, role: 'decomposition' }).model, 'gpt-6.1-sol');
+      assert.equal(resolveDispatch({ config, role: 'decomposition' }).model, 'gpt-6.2-sol');
     } else {
       refusesSource(() => resolveDispatch({ config, role: 'decomposition' }),
         raw.model_profile ? 'config.model_profile' : 'config.model_overrides.gsd-planner');

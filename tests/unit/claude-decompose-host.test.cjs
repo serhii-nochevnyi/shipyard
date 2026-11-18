@@ -464,7 +464,7 @@ test('a live Claude decomposition blocks both genuine Codex typed CLIs before a 
     role: 'decomposition', gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }));
   const owner = runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps);
   let childCalls = 0;
-  const codexCapabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
+  const codexCapabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.2-sol'],
     supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
   const probe = { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities: codexCapabilities };
   try {
@@ -550,7 +550,7 @@ test('after a killed Claude host a live child keeps the lease against a Codex ru
     worktree: f.worktree, runtime: 'codex', provider: 'openai' };
   const request = path.join(f.root, 'codex-decompose-request.json');
   fs.writeFileSync(request, JSON.stringify({ scope: codexScope, gsd_role: 'gsd-plan-checker', prompt: 'Check.' }));
-  const capabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
+  const capabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.2-sol'],
     supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
   let childCalls = 0;
   try {

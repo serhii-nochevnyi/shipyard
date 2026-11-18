@@ -56,7 +56,7 @@ async function withHost(f, config, action) {
   const scope = { run_id: 'codex-integrator-' + crypto.randomUUID(), runtime: 'codex', provider: 'openai', phase: subject.phaseNumber,
     worktree: f.root, repository: subject.canonical.commonPath, ticket: subject.ticket };
   const calls = [];
-  const host = { scope, capabilities: { supportedModels: ['gpt-6.1-sol'], supportedEfforts: ['high', 'xhigh'] },
+  const host = { scope, capabilities: { supportedModels: ['gpt-6.2-sol'], supportedEfforts: ['high', 'xhigh'] },
     recorder: createDurableRecorder(path.join(storage, 'receipts')),
     launch() { assert.fail('the integrator launches statically'); },
     launchStatic(selection, launchContext) {

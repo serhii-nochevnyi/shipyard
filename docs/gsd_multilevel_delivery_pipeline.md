@@ -810,7 +810,7 @@ and never translates Luna or Sol into a Claude model.
 | Logical key | Codex concrete model | Claude Code selection |
 |---|---|---|
 | Luna | `gpt-6-luna` | — |
-| Sol | `gpt-6.1-sol` | — |
+| Sol | `gpt-6.2-sol` | — |
 | Sonnet | — | `claude-sonnet-5-5` |
 | Opus | — | `claude-opus-5-5` |
 | Fable | — | `fable` |

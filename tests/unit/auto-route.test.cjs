@@ -34,7 +34,7 @@ test('codexBlock is marker-delimited and names the investigate route for phase 1
     assert.strictEqual(block.endsWith(AUTO_ROUTE_END), true);
     assert.match(block, /\$shipyard-investigate/);
     assert.match(block, /\$shipyard-route/);
-    assert.match(block, /gpt-6\.1-sol/);
+    assert.match(block, /gpt-6\.2-sol/);
     assert.match(block, /Sol\/low/);
     assert.match(block, /Luna\/medium/);
   }

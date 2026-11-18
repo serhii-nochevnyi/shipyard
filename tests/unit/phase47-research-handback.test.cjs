@@ -12,7 +12,7 @@ const hostFile = path.resolve(__dirname, '../../plugins/delivery-pipeline/script
 const runtimeFile = require.resolve('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
 const ids = ['system-state', 'alternatives', 'constraints', 'risks'];
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
-const capabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
+const capabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.2-sol'],
   supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
 
 if (process.env.SHIPYARD_RESEARCH_HANDBACK_FIXTURE) {

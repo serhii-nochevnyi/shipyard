@@ -28,8 +28,8 @@ const policy = load('model-policy');
 const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const ADR = '---\nstatus: accepted\n---\n# ADR-TEST\n\n## Decision\n\n- Use the supported planning hosts.\n';
 const capabilities = {
-  supportedModels: ['gpt-6.1-sol'], supportedEfforts: ['high', 'xhigh'],
-  supportedSelections: [{ model: 'gpt-6.1-sol', effort: 'high' }, { model: 'gpt-6.1-sol', effort: 'xhigh' }],
+  supportedModels: ['gpt-6.2-sol'], supportedEfforts: ['high', 'xhigh'],
+  supportedSelections: [{ model: 'gpt-6.2-sol', effort: 'high' }, { model: 'gpt-6.2-sol', effort: 'xhigh' }],
 };
 
 function fixture(t) {

@@ -41,16 +41,16 @@ function priorReceipt(role, model, effort, dispatchId) {
 }
 
 const CODEx_BASE = {
-  research: ['sol', 'gpt-6.1-sol', 'high'],
-  decomposition: ['sol', 'gpt-6.1-sol', 'high'],
-  executor: ['sol', 'gpt-6.1-sol', 'low'],
+  research: ['sol', 'gpt-6.2-sol', 'high'],
+  decomposition: ['sol', 'gpt-6.2-sol', 'high'],
+  executor: ['sol', 'gpt-6.2-sol', 'low'],
   'pr-sentinel': ['luna', 'gpt-6-luna', 'medium'],
-  integrator: ['sol', 'gpt-6.1-sol', 'high'],
-  'drift-check': ['sol', 'gpt-6.1-sol', 'low'],
-  'arch-review': ['sol', 'gpt-6.1-sol', 'high'],
-  'code-review': ['sol', 'gpt-6.1-sol', 'high'],
-  'ci-fix': ['sol', 'gpt-6.1-sol', 'low'],
-  'review-fix': ['sol', 'gpt-6.1-sol', 'low'],
+  integrator: ['sol', 'gpt-6.2-sol', 'high'],
+  'drift-check': ['sol', 'gpt-6.2-sol', 'low'],
+  'arch-review': ['sol', 'gpt-6.2-sol', 'high'],
+  'code-review': ['sol', 'gpt-6.2-sol', 'high'],
+  'ci-fix': ['sol', 'gpt-6.2-sol', 'low'],
+  'review-fix': ['sol', 'gpt-6.2-sol', 'low'],
 };
 
 suite('ADR-014 canonical policy');
@@ -60,7 +60,7 @@ test('exposes exactly the ten routed roles and the concrete Codex palette', () =
   assert.deepStrictEqual(policy.CODEX_MODEL_IDS, {
     luna: 'gpt-6-luna',
     astra: 'gpt-6-astra',
-    sol: 'gpt-6.1-sol',
+    sol: 'gpt-6.2-sol',
   });
   assert.deepStrictEqual(policy.CLAUDE_MODEL_ALIASES, {
     sonnet: 'claude-sonnet-5-5',
@@ -70,7 +70,7 @@ test('exposes exactly the ten routed roles and the concrete Codex palette', () =
   assert.equal(policy.POLICY.version, policy.POLICY_VERSION);
   assert.equal(policy.POLICY_HASH, policy.fingerprintPolicy(policy.POLICY));
   assert.match(policy.POLICY_HASH, /^[0-9a-f]{64}$/);
-  assert.equal(policy.POLICY_VERSION, 'adr-014.v8');
+  assert.equal(policy.POLICY_VERSION, 'adr-014.v9');
   assert.ok(policy.ROLE_CLASSES.judgement.includes('code-review'));
   assert.equal([...policy.ROLES].indexOf('code-review'), [...policy.ROLES].indexOf('arch-review') + 1);
 });
@@ -92,11 +92,12 @@ test('fingerprint covers escalation rules and repair prerequisites', () => {
   alteredClaudePredecessor.runtime_repair_prerequisites.claude['ci-fix'].repeat.model = 'wrong-predecessor';
   assert.notEqual(policy.fingerprintPolicy(alteredClaudePredecessor), policy.POLICY_HASH);
   assert.notEqual(policy.POLICY_HASH, '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968');
+  assert.notEqual(policy.POLICY_HASH, 'fc1706bc9272bd0f539fbd71fa966b736df15c2cadfc2a76a8b84924b33584b8');
 });
 
 test('ordinary executor requests resolve through the canonical resolver with fresh native identities', () => {
   for (const [runtime, resolve, model, effort] of [
-    ['codex', codex, 'gpt-6.1-sol', 'low'],
+    ['codex', codex, 'gpt-6.2-sol', 'low'],
     ['claude', claude, 'claude-sonnet-5-5', 'medium'],
   ]) {
     const result = resolve('executor');
@@ -104,7 +105,7 @@ test('ordinary executor requests resolve through the canonical resolver with fre
       [result.runtime, result.logical_rung, result.model, result.requested_model, result.effort, result.requested_effort],
       [runtime, 'base', model, model, effort, effort],
     );
-    assert.equal(result.policy_version, 'adr-014.v8');
+    assert.equal(result.policy_version, 'adr-014.v9');
     assert.equal(result.policy_hash, policy.fingerprintPolicy(policy.POLICY));
     assert.notEqual(result.policy_hash, '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968');
   }
@@ -199,9 +200,9 @@ test('repair prerequisites bind every repair rung to its immediately preceding n
   for (const [runtime, expected] of [
     ['codex', {
       rungs: [
-        ['base', 'sol', 'gpt-6.1-sol', 'low'],
-        ['repeat', 'sol', 'gpt-6.1-sol', 'high'],
-        ['repeat_exhausted', 'sol', 'gpt-6.1-sol', 'xhigh'],
+        ['base', 'sol', 'gpt-6.2-sol', 'low'],
+        ['repeat', 'sol', 'gpt-6.2-sol', 'high'],
+        ['repeat_exhausted', 'sol', 'gpt-6.2-sol', 'xhigh'],
       ],
     }],
     ['claude', {
@@ -248,7 +249,7 @@ test('Codex research promotes only explicit very-complex and retains inert alter
     complexity: 'very-complex',
   });
   assert.equal(result.logical_rung, 'very-complex');
-  assert.equal(result.model, 'gpt-6.1-sol');
+  assert.equal(result.model, 'gpt-6.2-sol');
   assert.deepStrictEqual(result.signals_fired, ['type', 'very-complex']);
   assert.deepStrictEqual(result.selected_signals.map((item) => item.signal), ['very-complex']);
   assert.equal(result.signal_reasons.length, 2);
@@ -277,12 +278,12 @@ test('judgement roles promote only on ADR-014 scoped signals and preserve all fi
     ]) {
       const result = codex(role, signals);
       assert.equal(result.logical_rung, 'critical', `${role}/${JSON.stringify(signals)}`);
-      assert.equal(result.model, 'gpt-6.1-sol');
+      assert.equal(result.model, 'gpt-6.2-sol');
       assert.equal(result.effort, 'xhigh');
     }
     const riskOnly = codex(role, { risk: 'high' });
     assert.equal(riskOnly.logical_rung, 'base', `${role}/risk`);
-    assert.equal(riskOnly.model, 'gpt-6.1-sol');
+    assert.equal(riskOnly.model, 'gpt-6.2-sol');
     assert.ok(riskOnly.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
     const combined = codex(role, {
       risk: 'high',
@@ -335,7 +336,7 @@ test('executor uses Sol/low by default and escalates to Sol/high on explicit cri
   const base = codex('executor', { risk: 'high', inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 });
   assert.equal(base.logical_rung, 'base');
   assert.equal(base.logical_model, 'sol');
-  assert.equal(base.model, 'gpt-6.1-sol');
+  assert.equal(base.model, 'gpt-6.2-sol');
   assert.equal(base.effort, 'low');
   assert.ok(base.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
   assert.ok(base.signal_reasons.some((item) => item.signal === 'window' && item.applies === false));
@@ -344,7 +345,7 @@ test('executor uses Sol/low by default and escalates to Sol/high on explicit cri
     const result = codex('executor', { [signal]: true });
     assert.equal(result.logical_rung, 'critical', signal);
     assert.equal(result.logical_model, 'sol', signal);
-    assert.equal(result.model, 'gpt-6.1-sol', signal);
+    assert.equal(result.model, 'gpt-6.2-sol', signal);
     assert.equal(result.effort, 'high', signal);
     assert.ok(result.signal_reasons.some((item) => item.signal === signal && item.applies === true));
   }
@@ -353,7 +354,7 @@ test('executor uses Sol/low by default and escalates to Sol/high on explicit cri
 test('fixed roles ignore global risk, critical, checkpoint, and window promotion', () => {
   const expected = {
     'pr-sentinel': ['luna', 'gpt-6-luna', 'medium'],
-    'drift-check': ['sol', 'gpt-6.1-sol', 'low'],
+    'drift-check': ['sol', 'gpt-6.2-sol', 'low'],
   };
   for (const [role, [logicalModel, concreteModel, effort]] of Object.entries(expected)) {
     const result = codex(role, {
@@ -377,7 +378,7 @@ test('fixed roles ignore global risk, critical, checkpoint, and window promotion
 test('direct policy repair resolution fails closed without boundary provenance', () => {
   assert.equal(codex('ci-fix', { signatureState: 'first' }).logical_rung, 'base');
   assert.equal(codex('review-fix', { signatureState: 'progress' }).logical_rung, 'base');
-  const prior = priorReceipt('ci-fix', 'gpt-6.1-sol', 'low', 'sol-low-1');
+  const prior = priorReceipt('ci-fix', 'gpt-6.2-sol', 'low', 'sol-low-1');
   assert.throws(
     () => codex('ci-fix', {
       signatureState: 'repeat',
@@ -404,7 +405,7 @@ test('direct policy repair resolution fails closed without boundary provenance',
   assert.throws(
     () => codex('ci-fix', {
       signatureState: 'repeat',
-      priorApplied: { model: 'gpt-6.1-sol', effort: 'low', dispatchId: 'forged' },
+      priorApplied: { model: 'gpt-6.2-sol', effort: 'low', dispatchId: 'forged' },
     }, { previous_dispatch_id: 'forged' }),
     (error) => error.code === 'MISSING_RECEIPT' || error.code === 'UNVERIFIED_RECEIPT',
   );
@@ -414,9 +415,9 @@ test('matching overrides are harmless but conflicting or unsupported selections 
   const matching = codex('executor', {
     risk: 'high',
   }, {
-    override: { model: 'gpt-6.1-sol', effort: 'low', runtime: 'codex' },
+    override: { model: 'gpt-6.2-sol', effort: 'low', runtime: 'codex' },
   });
-  assert.deepStrictEqual([matching.model, matching.effort], ['gpt-6.1-sol', 'low']);
+  assert.deepStrictEqual([matching.model, matching.effort], ['gpt-6.2-sol', 'low']);
   assert.throws(
     () => codex('executor', {}, { override: { model: 'gpt-5.6-luna' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
@@ -454,7 +455,7 @@ test('matching overrides are harmless but conflicting or unsupported selections 
     () => policy.resolveDispatch({
       runtime: 'codex',
       role: 'executor',
-      model: 'gpt-6.1-sol',
+      model: 'gpt-6.2-sol',
       requested_model: 'gpt-6-astra',
     }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
@@ -541,7 +542,7 @@ test('resolution validation covers rung index and every signal-reason field', ()
 });
 
 test('direct repair resolution does not accept caller-owned receipt evidence', () => {
-  const priorApplied = priorReceipt('ci-fix', 'gpt-6.1-sol', 'low', 'sol-low-owned-by-caller');
+  const priorApplied = priorReceipt('ci-fix', 'gpt-6.2-sol', 'low', 'sol-low-owned-by-caller');
   assert.equal(Object.isFrozen(priorApplied), false);
   assert.throws(
     () => codex('ci-fix', { signatureState: 'repeat', priorApplied }, { previous_dispatch_id: 'sol-low-owned-by-caller' }),
@@ -550,7 +551,7 @@ test('direct repair resolution does not accept caller-owned receipt evidence', (
 });
 
 test('internal resolver rejects a receipt-shaped copy without durable boundary identity', () => {
-  const priorApplied = priorReceipt('ci-fix', 'gpt-6.1-sol', 'low', 'forged-internal-receipt');
+  const priorApplied = priorReceipt('ci-fix', 'gpt-6.2-sol', 'low', 'forged-internal-receipt');
   assert.throws(
     () => canonicalInternalPolicy.resolveDispatch({
       runtime: 'codex',
@@ -564,7 +565,7 @@ test('internal resolver rejects a receipt-shaped copy without durable boundary i
 
 test('public resolver rejects caller-supplied receipt verifiers', () => {
   let verifierCalled = false;
-  const priorApplied = priorReceipt('ci-fix', 'gpt-6.1-sol', 'low', 'caller-forged');
+  const priorApplied = priorReceipt('ci-fix', 'gpt-6.2-sol', 'low', 'caller-forged');
   assert.throws(
     () => policy.resolveDispatch(
       {
@@ -613,7 +614,7 @@ test('canonical policy ignores caller mutation attempts against runtime adapter 
     // Frozen compatibility exports are the expected protection.
   }
   const result = codex('executor');
-  assert.equal(result.model, 'gpt-6.1-sol');
+  assert.equal(result.model, 'gpt-6.2-sol');
   assert.equal(runtimeAdapters.adapterForRuntime, originalAdapterForRuntime);
   assert.equal(runtimeAdapters.CODEX_MODEL_IDS.sol, originalCodexSol);
 });
@@ -621,16 +622,16 @@ test('canonical policy ignores caller mutation attempts against runtime adapter 
 test('exhaustive runtime matrix covers every native base tuple and scoped escalation rung', () => {
   const base = {
     codex: {
-      research: ['gpt-6.1-sol', 'high'],
-      decomposition: ['gpt-6.1-sol', 'high'],
-      executor: ['gpt-6.1-sol', 'low'],
+      research: ['gpt-6.2-sol', 'high'],
+      decomposition: ['gpt-6.2-sol', 'high'],
+      executor: ['gpt-6.2-sol', 'low'],
       'pr-sentinel': ['gpt-6-luna', 'medium'],
-      integrator: ['gpt-6.1-sol', 'high'],
-      'drift-check': ['gpt-6.1-sol', 'low'],
-      'arch-review': ['gpt-6.1-sol', 'high'],
-      'code-review': ['gpt-6.1-sol', 'high'],
-      'ci-fix': ['gpt-6.1-sol', 'low'],
-      'review-fix': ['gpt-6.1-sol', 'low'],
+      integrator: ['gpt-6.2-sol', 'high'],
+      'drift-check': ['gpt-6.2-sol', 'low'],
+      'arch-review': ['gpt-6.2-sol', 'high'],
+      'code-review': ['gpt-6.2-sol', 'high'],
+      'ci-fix': ['gpt-6.2-sol', 'low'],
+      'review-fix': ['gpt-6.2-sol', 'low'],
     },
     claude: {
       research: ['claude-sonnet-5-5', 'xhigh'],
@@ -646,22 +647,22 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
     },
   };
   const escalations = [
-    ['codex', 'research', { type: 'alternatives' }, 'base', 'gpt-6.1-sol', 'high'],
-    ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'executor', { critical: true }, 'critical', 'gpt-6.1-sol', 'high'],
-    ['codex', 'executor', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'high'],
-    ['codex', 'integrator', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'integrator', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'arch-review', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'arch-review', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'code-review', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-    ['codex', 'code-review', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'research', { type: 'alternatives' }, 'base', 'gpt-6.2-sol', 'high'],
+    ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'executor', { critical: true }, 'critical', 'gpt-6.2-sol', 'high'],
+    ['codex', 'executor', { checkpoint: true }, 'critical', 'gpt-6.2-sol', 'high'],
+    ['codex', 'integrator', { critical: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'integrator', { checkpoint: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'arch-review', { critical: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'arch-review', { checkpoint: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'code-review', { critical: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+    ['codex', 'code-review', { checkpoint: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
     ['claude', 'research', { type: 'alternatives' }, 'base', 'claude-sonnet-5-5', 'xhigh'],
     ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'claude-opus-5-5', 'high'],
     ['claude', 'decomposition', { critical: true }, 'critical', 'claude-opus-5-5', 'high'],
@@ -792,7 +793,7 @@ test('global promotion cannot move fixed native roles off their base tuple', () 
     inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
   };
   for (const [runtime, expected] of [
-    ['codex', { 'pr-sentinel': ['gpt-6-luna', 'medium'], 'drift-check': ['gpt-6.1-sol', 'low'] }],
+    ['codex', { 'pr-sentinel': ['gpt-6-luna', 'medium'], 'drift-check': ['gpt-6.2-sol', 'low'] }],
     ['claude', { 'pr-sentinel': ['claude-sonnet-5-5', 'low'], 'drift-check': ['claude-sonnet-5-5', 'medium'] }],
   ]) {
     for (const [role, [model, effort]] of Object.entries(expected)) {
@@ -807,7 +808,7 @@ test('global promotion cannot move fixed native roles off their base tuple', () 
 
 test('all override sources reject conflicting, unsupported, inline, and inherited selections', () => {
   for (const [runtime, expected] of [
-    ['codex', { model: 'gpt-6.1-sol', otherModel: 'gpt-6-astra', effort: 'low', otherEffort: 'high' }],
+    ['codex', { model: 'gpt-6.2-sol', otherModel: 'gpt-6-astra', effort: 'low', otherEffort: 'high' }],
     ['claude', { model: 'claude-sonnet-5-5', otherModel: 'claude-opus-5-5', effort: 'medium', otherEffort: 'xhigh' }],
   ]) {
     const base = { runtime, role: 'executor', signals: {} };
@@ -876,14 +877,14 @@ test('stale policy fingerprints and versions cannot validate an otherwise shaped
 
 test('code-review resolves Sol/high and Sonnet/xhigh at base and promotes only on critical or checkpoint', () => {
   const codexBase = codex('code-review');
-  assert.deepStrictEqual([codexBase.logical_rung, codexBase.model, codexBase.effort], ['base', 'gpt-6.1-sol', 'high']);
+  assert.deepStrictEqual([codexBase.logical_rung, codexBase.model, codexBase.effort], ['base', 'gpt-6.2-sol', 'high']);
   assert.equal(codexBase.agent_file, 'shipyard-code-review.toml');
   assert.equal(codexBase.backend, 'codex-agent');
   const claudeBase = claude('code-review');
   assert.deepStrictEqual([claudeBase.logical_rung, claudeBase.model, claudeBase.effort], ['base', 'claude-sonnet-5-5', 'xhigh']);
   for (const signals of [{ critical: true }, { checkpoint: true }, { critical: true, checkpoint: true }]) {
     const high = codex('code-review', signals);
-    assert.deepStrictEqual([high.logical_rung, high.model, high.effort], ['critical', 'gpt-6.1-sol', 'xhigh'], JSON.stringify(signals));
+    assert.deepStrictEqual([high.logical_rung, high.model, high.effort], ['critical', 'gpt-6.2-sol', 'xhigh'], JSON.stringify(signals));
     assert.equal(high.agent_file, 'shipyard-code-review-critical.toml');
     const opus = claude('code-review', signals);
     assert.deepStrictEqual([opus.logical_rung, opus.model, opus.effort], ['critical', 'claude-opus-5-5', 'high'], JSON.stringify(signals));
@@ -916,16 +917,16 @@ test('code-review resolves Sol/high and Sonnet/xhigh at base and promotes only o
   );
 });
 
-test('the recorded policy registry names only the active v8 identity', () => {
-  const v8 = runtimeAdapters.recordedPolicyFor('adr-014.v8', { policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH });
-  assert.equal(v8.policy_hash, policy.POLICY_HASH);
-  assert.equal(runtimeAdapters.recordedPolicyFor('adr-014.v8'), undefined);
-  for (const retired of ['adr-014.v7', 'adr-014.v6']) {
+test('the recorded policy registry names only the active v9 identity', () => {
+  const v9 = runtimeAdapters.recordedPolicyFor('adr-014.v9', { policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH });
+  assert.equal(v9.policy_hash, policy.POLICY_HASH);
+  assert.equal(runtimeAdapters.recordedPolicyFor('adr-014.v9'), undefined);
+  for (const retired of ['adr-014.v8', 'adr-014.v7', 'adr-014.v6']) {
     assert.equal(runtimeAdapters.recordedPolicyFor(retired, { policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH }), undefined);
     assert.equal(runtimeAdapters.recordedPalette(retired, 'codex'), undefined);
   }
-  assert.deepStrictEqual(runtimeAdapters.recordedPalette('adr-014.v8', 'codex'), policy.CODEX_MODEL_IDS);
-  assert.deepStrictEqual(runtimeAdapters.recordedPalette('adr-014.v8', 'claude'), policy.CLAUDE_MODEL_ALIASES);
+  assert.deepStrictEqual(runtimeAdapters.recordedPalette('adr-014.v9', 'codex'), policy.CODEX_MODEL_IDS);
+  assert.deepStrictEqual(runtimeAdapters.recordedPalette('adr-014.v9', 'claude'), policy.CLAUDE_MODEL_ALIASES);
 });
 
 done();

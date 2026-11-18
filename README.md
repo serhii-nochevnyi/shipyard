@@ -322,7 +322,7 @@ palette is:
 
 {
   "delivery_pipeline": {
-    "codex_models": "gpt-6.1-sol:high@0.155.1, gpt-6.1-sol:xhigh@0.155.1"
+    "codex_models": "gpt-6.2-sol:high@0.169.0, gpt-6.2-sol:xhigh@0.169.0"
   }
 }
 

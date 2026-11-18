@@ -71,7 +71,7 @@ function fixture(t) {
   const options = { scope, graphDir, storageRoot: path.join(temp, 'host'),
     env: { CODEX_HOME: path.join(temp, 'codex') },
     probe: { status: 'available', executable: 'controlled-codex', capabilities: {
-      supportedModels: ['gpt-6.1-sol'], supportedEfforts: ['low'],
+      supportedModels: ['gpt-6.2-sol'], supportedEfforts: ['low'],
     } },
     spawn(program, argv) {
       const call = { program, argv, prompt: '' };

@@ -137,9 +137,9 @@ for (const first of ['deliver-dispatch', 'codex-decompose-host']) {
 }
 
 const capabilities = {
-  supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
+  supportedModels: ['gpt-6-luna', 'gpt-6.2-sol'],
   supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-  supportedSelections: [{ model: 'gpt-6.1-sol', effort: 'high' }],
+  supportedSelections: [{ model: 'gpt-6.2-sol', effort: 'high' }],
 };
 
 function git(root, ...args) {
@@ -291,7 +291,7 @@ for (const [gsdRole, logicalRole, sandbox] of [
     try {
       const result = await f.create().run({ gsd_role: gsdRole, adr: ADR_PATH, prompt: 'Plan this phase.' });
       assert.equal(f.calls.length, 1);
-      assert.equal(f.calls[0].selection.model, 'gpt-6.1-sol');
+      assert.equal(f.calls[0].selection.model, 'gpt-6.2-sol');
       assert.equal(f.calls[0].selection.reasoning_effort, 'high');
       assert.equal(f.calls[0].selection.sandbox_mode || f.calls[0].context.sandbox_mode, sandbox);
       assert.equal(f.calls[0].context.gsd_role, gsdRole);
@@ -300,7 +300,7 @@ for (const [gsdRole, logicalRole, sandbox] of [
       assert.equal(result.receipt.gsd_role, gsdRole);
       assert.equal(result.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
       assert.equal(result.receipt.compliance, 'verified');
-      assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+      assert.equal(result.receipt.applied_model, 'gpt-6.2-sol');
       assert.equal(result.receipt.applied_effort, 'high');
       if (logicalRole === 'research') {
         assert.match(f.calls[0].context.prompt, /^Follow the generated research policy\./);
@@ -570,13 +570,13 @@ function buildNativeChildFixture(gsdRole, artifactPathsOrOptions = {}) {
         { type: 'input_text', text: 'TASK_SHA256=' + CAPTURED_SHA256 }];
     }
     if (record.type === 'turn_context') {
-      record.payload.model = 'gpt-6.1-sol';
+      record.payload.model = 'gpt-6.2-sol';
       record.payload.effort = 'high';
     }
     if (record.type === 'response_item' && record.payload.name === 'spawn_agent') {
       const args = JSON.parse(record.payload.arguments);
       args.agent_type = gsdRole;
-      args.model = 'gpt-6.1-sol';
+      args.model = 'gpt-6.2-sol';
       args.reasoning_effort = 'high';
       record.payload.arguments = JSON.stringify(args);
     }
@@ -669,7 +669,7 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
     assert.equal(status.owner.status, 'completed');
     assert.ok(status.owner.heartbeat_at > status.owner.acquired_at);
     assert.equal(status.scope.dispatch.dispatch_id, result.receipt.dispatch_id);
-    assert.equal(status.scope.dispatch.model, 'gpt-6.1-sol');
+    assert.equal(status.scope.dispatch.model, 'gpt-6.2-sol');
     assert.equal(status.scope.dispatch.effort, 'high');
     assert.equal(status.scope.runtime.runtime, 'codex');
     assert.equal(status.scope.runtime.provider, 'openai');
@@ -681,7 +681,7 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
     assert.equal(calls.length, 1);
     assert.ok(calls[0].args.includes('agents.' + gsdRole + '.config_file='
       + JSON.stringify(path.join(f.agentDir, gsdRole + '.toml'))));
-    assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+    assert.equal(result.receipt.applied_model, 'gpt-6.2-sol');
     assert.equal(result.receipt.applied_effort, 'high');
     assert.equal(result.receipt.runtime_evidence.native_child_evidence.session_id, childId);
     assert.equal(result.receipt.runtime_evidence.native_child_evidence.parent_thread_id, parent);
@@ -2041,13 +2041,13 @@ function measuredFixtureData(gsdRole) {
         { type: 'input_text', text: 'TASK_SHA256=' + CAPTURED_SHA256 }];
     }
     if (record.type === 'turn_context') {
-      record.payload.model = 'gpt-6.1-sol';
+      record.payload.model = 'gpt-6.2-sol';
       record.payload.effort = 'high';
     }
     if (record.type === 'response_item' && record.payload.name === 'spawn_agent') {
       const args = JSON.parse(record.payload.arguments);
       args.agent_type = gsdRole;
-      args.model = 'gpt-6.1-sol';
+      args.model = 'gpt-6.2-sol';
       args.reasoning_effort = 'high';
       record.payload.arguments = JSON.stringify(args);
     }
@@ -2147,9 +2147,9 @@ function measuredCreateFixture({ installPlanner = true, includeDispatchId = true
 
   const capabilityFile = path.join(codexHome, 'shipyard', 'codex-capabilities.json');
   fs.writeFileSync(capabilityFile, JSON.stringify({
-    supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
+    supportedModels: ['gpt-6-luna', 'gpt-6.2-sol'],
     supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    supportedSelections: [{ model: 'gpt-6.1-sol', effort: 'high' }],
+    supportedSelections: [{ model: 'gpt-6.2-sol', effort: 'high' }],
   }));
   if (installPlanner) {
     fs.writeFileSync(path.join(codexHome, 'agents', 'gsd-planner.toml'),

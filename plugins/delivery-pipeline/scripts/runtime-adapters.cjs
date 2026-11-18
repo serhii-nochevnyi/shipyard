@@ -8,7 +8,7 @@
 const CODEX_MODEL_IDS = Object.freeze({
   luna: 'gpt-6-luna',
   astra: 'gpt-6-astra',
-  sol: 'gpt-6.1-sol',
+  sol: 'gpt-6.2-sol',
 });
 
 const CLAUDE_MODEL_ALIASES = Object.freeze({
@@ -17,7 +17,7 @@ const CLAUDE_MODEL_ALIASES = Object.freeze({
   fable: 'fable',
 });
 
-const ACTIVE_POLICY_VERSION = 'adr-014.v8';
+const ACTIVE_POLICY_VERSION = 'adr-014.v9';
 const ACTIVE_PALETTES = Object.freeze({ codex: CODEX_MODEL_IDS, claude: CLAUDE_MODEL_ALIASES });
 
 function recordedPolicyFor(version, activePolicyIdentity) {

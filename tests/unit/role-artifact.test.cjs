@@ -1243,7 +1243,7 @@ function containmentAuthorityFixture(value = fixture(), leaseEpoch = 1) {
   const binding = { launch: { scope: { worktree: root, run_id: 'original-run', ticket: value.ticket, phase: 47, runtime: 'codex', provider: 'openai' },
     dispatch_id: 'original-dispatch', gsd_role: 'gsd-planner', role: 'decomposition',
     request_sha256: '1'.repeat(64), policy_hash: '2'.repeat(64), policy_version: 'original-policy',
-    model: 'gpt-6.1-sol', effort: 'low', rung: 'base',
+    model: 'gpt-6.2-sol', effort: 'low', rung: 'base',
     agent: { file: path.join(root, 'agent.toml'), sha256: '3'.repeat(64), instructions_sha256: '6'.repeat(64) } },
     launched_at: '2026-10-08T00:00:00.000Z', reservation: { dispatch_id: 'original-dispatch', reserved_at: 'original-reservation' },
     source_revision: git(root, ['rev-parse', 'HEAD']), writer_lease_file: path.join(root, 'lease.json'),

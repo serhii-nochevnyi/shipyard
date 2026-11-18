@@ -37,7 +37,7 @@ test('integrator accepts only the canonical phase subject as its run ticket', ()
   const run = makeScope({
     phase: 38,
     ticket: subject,
-    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6.1-sol', effort: 'high' },
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6.2-sol', effort: 'high' },
   });
   assert.equal(run.ticket.ticket, subject);
   assert.equal(contract.normalizeRunContract(run).ticket.ticket, subject);
@@ -48,12 +48,12 @@ test('integrator accepts only the canonical phase subject as its run ticket', ()
   assert.throws(() => makeScope({
     phase: 37,
     ticket: subject,
-    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6.1-sol', effort: 'high' },
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6.2-sol', effort: 'high' },
   }), (error) => error.code === 'INVALID_INPUT');
   assert.throws(() => makeScope({
     phase: 38,
     ticket: 'phase=38-runtime-model-ladder-recovery;repository=/tmp/shipyard/.git;tickets=bad',
-    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6.1-sol', effort: 'high' },
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6.2-sol', effort: 'high' },
   }), (error) => error.code === 'INVALID_INPUT');
 });
 
@@ -191,12 +191,12 @@ test('checkpoint transitions survive canonical revalidation with an absent diges
 });
 
 const retiredHash = '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968';
-const v8Hash = 'fc1706bc9272bd0f539fbd71fa966b736df15c2cadfc2a76a8b84924b33584b8';
+const v9Hash = 'b9367910886421dd43584516ce09f345afc87ba4d5c4c0830ae294ecdc62205a';
 test('the current Sol identity independently checks its concrete model and retired policy versions are refused', () => {
-  const input = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6.1-sol' };
+  const input = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6.2-sol' };
   assert.deepEqual(contract.normalizeDispatchIdentity(input), input);
   assert.throws(() => contract.normalizeDispatchIdentity({ ...input, model: 'gpt-6-luna' }), { code: 'RUNTIME_MODEL_MISMATCH' });
-  for (const policy_version of ['adr-014.v6', 'adr-014.v7']) {
+  for (const policy_version of ['adr-014.v6', 'adr-014.v7', 'adr-014.v8']) {
     assert.throws(() => contract.normalizeDispatchIdentity({ ...input, policy_version, policy_hash: retiredHash }), { code: 'UNSUPPORTED_POLICY_VERSION' });
   }
 });
@@ -204,9 +204,9 @@ test('the current Sol identity independently checks its concrete model and retir
 const currentPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
 const fixturePalettes = {
-  'adr-014.v8': { codex: { sol: 'gpt-6.1-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'fable' } },
+  'adr-014.v9': { codex: { sol: 'gpt-6.2-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'fable' } },
 };
-const hashOfVersion = { 'adr-014.v8': currentPolicy.POLICY_HASH };
+const hashOfVersion = { 'adr-014.v9': currentPolicy.POLICY_HASH };
 test('synthetic recorded palette matrix preserves current dispatches and receipts', () => {
   for (const [version, runtimes] of Object.entries(fixturePalettes)) {
     for (const [runtime, palette] of Object.entries(runtimes)) {
@@ -225,14 +225,14 @@ test('synthetic recorded palette matrix preserves current dispatches and receipt
       }
     }
   }
-  assert.equal(currentPolicy.POLICY_VERSION, 'adr-014.v8');
-  assert.equal(hashOfVersion['adr-014.v8'], v8Hash);
+  assert.equal(currentPolicy.POLICY_VERSION, 'adr-014.v9');
+  assert.equal(hashOfVersion['adr-014.v9'], v9Hash);
   assert.equal(runtimeAdapters.matchesModelObservation('claude', 'sonnet', 'claude-sonnet-5-5'), false);
   assert.equal(runtimeAdapters.matchesModelObservation('claude', 'claude-fable-1', 'fable'), true);
-  assert.equal(contract.normalizeDispatchIdentity({ dispatch_id: 'fresh', runtime: 'codex', role: 'executor', model: 'sol' }).model, 'gpt-6.1-sol');
+  assert.equal(contract.normalizeDispatchIdentity({ dispatch_id: 'fresh', runtime: 'codex', role: 'executor', model: 'sol' }).model, 'gpt-6.2-sol');
 });
 test('recorded metadata and independently supplied identities fail closed', () => {
-  const base = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6.1-sol' };
+  const base = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6.2-sol' };
   const cases = [
     [{ model: 'gpt-6-luna' }, 'RUNTIME_MODEL_MISMATCH'],
     [{ model: 'sonnet' }, 'RUNTIME_MODEL_MISMATCH'],
@@ -270,16 +270,16 @@ test('serialized concrete-only dispatch cannot silently turn a symbolic alias in
   delete input.model_key;
   assert.throws(() => contract.normalizeDispatchIdentity(input), { code: 'UNSUPPORTED_MODEL' });
   delete input.schema;
-  assert.equal(contract.normalizeDispatchIdentity(input).model, 'gpt-6.1-sol');
+  assert.equal(contract.normalizeDispatchIdentity(input).model, 'gpt-6.2-sol');
 });
 
  test('authoritative policy pairs reject arbitrary hashes across dispatch and receipts', () => {
-  const base = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6.1-sol' };
+  const base = { ...makeScope().dispatch, model_key: 'sol', model: 'gpt-6.2-sol' };
   for (const invalid of [retiredHash, 'a'.repeat(64)]) {
     assert.throws(() => contract.normalizeDispatchIdentity({ ...base, policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
-    assert.throws(() => contract.normalizeReceiptIdentity({ ...base, receipt_id: 'r', run_id: 'r', requested_model: 'gpt-6.1-sol', policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
+    assert.throws(() => contract.normalizeReceiptIdentity({ ...base, receipt_id: 'r', run_id: 'r', requested_model: 'gpt-6.2-sol', policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
   }
-  assert.equal(currentPolicy.POLICY_HASH, v8Hash);
+  assert.equal(currentPolicy.POLICY_HASH, v9Hash);
 });
 test('serialized requested models require recorded native values while fresh Sonnet aliases remain supported', () => {
   const serialized = {

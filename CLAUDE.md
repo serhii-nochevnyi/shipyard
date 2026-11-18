@@ -88,7 +88,7 @@ parsing, graph validation, ticket and PR matching, state synchronization,
 worktree lifecycle, dispatch records, model resolution, convergence and stop
 conditions. When adding a rule, add a focused unit or fixture test with it.
 
-**Active routed dispatch policy (ADR-014 v8, accepted):** ADR-014 supersedes ADR-005 and ADR-012 for model and effort selection. The one boundary contract has two independent native grids: Codex Sol is `gpt-6.1-sol`, Luna is `gpt-6-luna`; Claude Sonnet is `claude-sonnet-5-5`, Opus is `claude-opus-5-5`, and Fable is a measured-window-only ceiling. Do not alias either grid through the other, and do not use a compatibility palette, generic GSD tier default, or per-role override as launch authority.
+**Active routed dispatch policy (ADR-014 v9, accepted):** ADR-014 supersedes ADR-005 and ADR-012 for model and effort selection. The one boundary contract has two independent native grids: Codex Sol is `gpt-6.2-sol`, Luna is `gpt-6-luna`; Claude Sonnet is `claude-sonnet-5-5`, Opus is `claude-opus-5-5`, and Fable is a measured-window-only ceiling. Do not alias either grid through the other, and do not use a compatibility palette, generic GSD tier default, or per-role override as launch authority.
 
 **Codex grid:** research Sol/high → Sol/xhigh only for explicit very-complex; decomposition Sol/high → Sol/xhigh only for explicit critical/checkpoint; executor Sol/low → Sol/high only for explicit `critical`/`checkpoint`; pr-sentinel Luna/medium; integrator Sol/high → Sol/xhigh only for contested, explicit `critical`/`checkpoint`, or a measured window; drift-check Sol/low; arch-review Sol/high → Sol/xhigh only for contested, explicit `critical`/`checkpoint`, or a measured window; code-review Sol/high → Sol/xhigh only for explicit `critical`/`checkpoint` (contested and a measured window never promote); ci-fix and review-fix Sol/low → Sol/high for verified `repeat` → Sol/xhigh for verified `repeat_exhausted`.
 
@@ -102,7 +102,7 @@ routed policy; it has no tier or effort resolver of its own. Claude launches use
 `claude-sonnet-5-5` and `claude-opus-5-5`; Codex writes a concrete
 model and effort into generated agent files because its agents are static.
 Codex model ids are resolved from the runtime-native ADR-014 grid; the active
-policy is `adr-014.v8`; earlier policy versions are not recognized. A live gate refuses
+policy is `adr-014.v9`; earlier policy versions are not recognized. A live gate refuses
 a record that names one (rerun the work), the run store skips it and deletes it at its next write, and
 historical aggregates report it as stale; any other unknown version stays a refusal. Legacy palette input is compatibility-only and cannot authorize a routed dispatch.
 

@@ -46,11 +46,11 @@ const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conve
 const { codexCapabilities } = require('../smoke/installed-launch/lib.cjs');
 
 const capabilities = {
-  supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
+  supportedModels: ['gpt-6-luna', 'gpt-6.2-sol'],
   supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   supportedSelections: [
-    { model: 'gpt-6.1-sol', effort: 'low' },
-    { model: 'gpt-6.1-sol', effort: 'high' },
+    { model: 'gpt-6.2-sol', effort: 'low' },
+    { model: 'gpt-6.2-sol', effort: 'high' },
   ],
 };
 const finalizerFile = path.join(__dirname, '../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
@@ -422,7 +422,7 @@ test('dynamic executor resolves Sol/low through the boundary with worktree write
     });
     const call = f.calls[0];
     assert.equal(call.method, 'dynamic');
-    assert.equal(call.selection.model, 'gpt-6.1-sol');
+    assert.equal(call.selection.model, 'gpt-6.2-sol');
     assert.equal(call.selection.reasoning_effort, 'low');
     assert.equal(call.context.sandbox_mode, 'workspace-write');
     assert.equal(call.context.run_id, f.scope.run_id);
@@ -434,7 +434,7 @@ test('dynamic executor resolves Sol/low through the boundary with worktree write
       /Leave changes uncommitted\. The trusted host will stage, sign, and verify the commit\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN\.md"/);
     assert.match(call.context.prompt, /# approved plan/);
     assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+    assert.equal(result.receipt.applied_model, 'gpt-6.2-sol');
     assert.equal(result.receipt.applied_effort, 'low');
     assert.equal(result.artifact.status, 'committed');
     assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
@@ -486,7 +486,7 @@ test('production runtime host receives the scoped prompt and records native mode
   const transcript = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
     .split('\n').filter(Boolean).map((line) => {
       const record = JSON.parse(line);
-      if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6.1-sol', effort: 'low' });
+      if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6.2-sol', effort: 'low' });
       if (record.payload?.type === 'task_complete') record.payload.last_agent_message = final;
       if (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
         record.payload.content.forEach(block => { block.text = final; });
@@ -538,7 +538,7 @@ test('production runtime host receives the scoped prompt and records native mode
       },
     }).run({ role: 'executor', context: { prompt: 'Edit the scoped file.' } });
     assert.ok(received.join('').includes('Edit the scoped file.'));
-    assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+    assert.equal(result.receipt.applied_model, 'gpt-6.2-sol');
     assert.equal(result.receipt.applied_effort, 'low');
     assert.equal(result.receipt.runtime_evidence.native_session_evidence.session_id, session);
     assert.equal(result.artifact.status, 'committed');
@@ -560,7 +560,7 @@ test('generated static role uses its immutable file and declared read-only sandb
     const call = f.calls[0];
     assert.equal(call.method, 'static');
     assert.equal(call.selection.agent_file, f.file);
-    assert.equal(call.selection.model, 'gpt-6.1-sol');
+    assert.equal(call.selection.model, 'gpt-6.2-sol');
     assert.equal(call.selection.reasoning_effort, 'high');
     assert.equal(call.selection.sandbox_mode, 'read-only');
     assert.equal(result.receipt.agent_file_digest, f.fileDigest);
@@ -589,7 +589,7 @@ test('typed GSD delivery goes through the host-owned typed callback', async () =
       context: { prompt: 'Create the approved phase plan.' },
     });
     assert.equal(f.calls[0].method, 'typed');
-    assert.equal(f.calls[0].selection.model, 'gpt-6.1-sol');
+    assert.equal(f.calls[0].selection.model, 'gpt-6.2-sol');
     assert.equal(f.calls[0].selection.reasoning_effort, 'high');
     assert.equal(result.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
     assert.ok(f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id));
@@ -1228,7 +1228,7 @@ test('Codex retries one failed plan command with sealed diagnostics and binds th
     run_id: f.scope.run_id, repository_id: 'shipyard/test', phase: f.scope.phase,
     ticket: f.scope.ticket, worktree: f.root, runtime: 'codex', provider: 'openai',
     owner_id: controllerOwner,
-    dispatch: { dispatch_id: 'verification-retry-initial', role: 'executor', model: 'gpt-6.1-sol', effort: 'low' },
+    dispatch: { dispatch_id: 'verification-retry-initial', role: 'executor', model: 'gpt-6.2-sol', effort: 'low' },
   }));
   let checks = 0;
   try {
@@ -4059,7 +4059,7 @@ function operationalEscalationHistoryRegression(mutation) {
   const variants = {
     attempt: { event: 'attempt' }, 'fix-round': { event: 'fix_round' },
     'native-escalation': { role: 'review-fix', native_status: 'completed' },
-    'marker-extra-fields': { model: 'gpt-6.1-sol', status: 'passed', hypothesis: 'claimed completion',
+    'marker-extra-fields': { model: 'gpt-6.2-sol', status: 'passed', hypothesis: 'claimed completion',
       artifact_ref: 'claimed-artifact', dispatch_id: 'claimed-dispatch' },
     'foreign-pr': { pr: 471 }, 'foreign-identity': { repository: 'foreign/repository' },
   };
@@ -4453,7 +4453,7 @@ async function codeReviewEntryFixture(action, config = {}) {
   const agentManifest = path.join(agentDir, '.shipyard-manifest.json'); fs.writeFileSync(agentManifest, JSON.stringify(manifest));
   const recorder = createDurableRecorder(path.join(storage, 'receipts'));
   const calls = [];
-  const host = { scope, capabilities: { supportedModels: ['gpt-6.1-sol'], supportedEfforts: ['high', 'xhigh'] }, recorder,
+  const host = { scope, capabilities: { supportedModels: ['gpt-6.2-sol'], supportedEfforts: ['high', 'xhigh'] }, recorder,
     launch() { assert.fail('code review must launch statically'); },
     launchStatic(selection, context) {
       calls.push({ selection, context });

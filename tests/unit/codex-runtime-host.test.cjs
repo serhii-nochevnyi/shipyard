@@ -42,7 +42,7 @@ const SCOPE = {
 };
 
 const capabilities = {
-  supportedModels: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-astra'],
+  supportedModels: ['gpt-6-luna', 'gpt-6.2-sol', 'gpt-6-sol', 'gpt-6-astra'],
   supportedEfforts: EFFORTS,
   observedModel: true,
   observedEffort: true,
@@ -116,7 +116,7 @@ function probe() {
   };
 }
 
-function staticContent(resolution = { model: 'gpt-6.1-sol', effort: 'high' }) {
+function staticContent(resolution = { model: 'gpt-6.2-sol', effort: 'high' }) {
   return [
     '# shipyard-policy-id = "' + policy.POLICY.id + '"',
     '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
@@ -434,14 +434,14 @@ test('static launcher consumes the immutable generated instructions', async () =
       env: { CODEX_HOME: codeHome },
       spawn: (_executable, args, options) => {
         assert.ok(args.includes('--model'));
-        writeSession(options.env.CODEX_HOME, '33333333-3333-4333-8333-333333333333', 'gpt-6.1-sol', 'high');
+        writeSession(options.env.CODEX_HOME, '33333333-3333-4333-8333-333333333333', 'gpt-6.2-sol', 'high');
         return childFor(stream('33333333-3333-4333-8333-333333333333'), 0, 24039, input);
       },
     });
     const content = staticContent();
     const digest = crypto.createHash('sha256').update(content).digest('hex');
     await launch('ticket contract', {
-      model: 'gpt-6.1-sol',
+      model: 'gpt-6.2-sol',
       effort: 'high',
       sandbox_mode: 'read-only',
       agent_file: 'shipyard-inv-research.toml',
@@ -452,7 +452,7 @@ test('static launcher consumes the immutable generated instructions', async () =
     assert.ok(input.join('').startsWith('Follow the scoped research contract.'));
     await assert.rejects(
       () => launch('ticket contract', {
-        model: 'gpt-6.1-sol',
+        model: 'gpt-6.2-sol',
         effort: 'high',
         sandbox_mode: 'read-only',
         agent_file: 'shipyard-inv-research.toml',
@@ -486,7 +486,7 @@ for (const [name, fault] of Object.entries(SESSION_FAULTS)) test('a session call
     const launch = createCodexCliLauncher({
       scope: { ...SCOPE, worktree: root }, capabilities, transcriptDir: null, env: { CODEX_HOME: codeHome },
       spawn: () => {
-        writeSession(codeHome, '33333333-3333-4333-8333-333333333333', 'gpt-6.1-sol', 'high');
+        writeSession(codeHome, '33333333-3333-4333-8333-333333333333', 'gpt-6.2-sol', 'high');
         const child = new EventEmitter();
         child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = 24039;
         child.stdin = { write() {}, end() {} };
@@ -501,7 +501,7 @@ for (const [name, fault] of Object.entries(SESSION_FAULTS)) test('a session call
     });
     const content = staticContent();
     await assert.rejects(() => launch('ticket contract', {
-      model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only', agent_file: 'shipyard-inv-research.toml',
+      model: 'gpt-6.2-sol', effort: 'high', sandbox_mode: 'read-only', agent_file: 'shipyard-inv-research.toml',
       agent_file_digest: crypto.createHash('sha256').update(content).digest('hex'), agent_file_content: content,
       dispatch_id: 'dispatch-session-fault', onSessionStarted: fault.session || (() => {}),
     }), fault.check);
@@ -516,7 +516,7 @@ for (const key of ['input_transport', 'input_bundle', 'input_prepared']) test('t
       env: { CODEX_HOME: path.join(root, 'home') }, recorderDir: path.join(root, 'receipts'), transcriptDir: null,
       spawn() { spawned++; throw new Error('unexpected spawn'); } });
     const content = staticContent();
-    await assert.rejects(host.launchStatic({ model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only',
+    await assert.rejects(host.launchStatic({ model: 'gpt-6.2-sol', effort: 'high', sandbox_mode: 'read-only',
       agent_file: 'shipyard-inv-research.toml', agent_file_content: content,
       agent_file_digest: crypto.createHash('sha256').update(content).digest('hex') },
     { dispatch_id: 'dispatch-file-input', prompt: 'ticket contract', [key]: {} }),
@@ -539,7 +539,7 @@ test('drift-check alone holds an evidence write grant; the read-only review prof
       spawn: (_executable, args, options) => {
         calls.push(args);
         const session = ['44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555'][count++];
-        writeSession(options.env.CODEX_HOME, session, 'gpt-6.1-sol', 'high');
+        writeSession(options.env.CODEX_HOME, session, 'gpt-6.2-sol', 'high');
         return childFor(stream(session), 0, 24040 + count, []);
       },
     });
@@ -548,7 +548,7 @@ test('drift-check alone holds an evidence write grant; the read-only review prof
       ['shipyard-arch-review-critical.toml', null],
     ]) {
       const result = await launch('judge', {
-        model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only',
+        model: 'gpt-6.2-sol', effort: 'high', sandbox_mode: 'read-only',
         agent_file: agentFile, agent_file_digest: digest, agent_file_content: content,
         dispatch_id: 'dispatch-evidence-' + count,
       });
@@ -559,7 +559,7 @@ test('drift-check alone holds an evidence write grant; the read-only review prof
     }
     fs.symlinkSync(path.join(root, 'outside'), path.join(root, '.shipyard-drift-evidence.md'));
     await assert.rejects(() => launch('judge', {
-      model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only',
+      model: 'gpt-6.2-sol', effort: 'high', sandbox_mode: 'read-only',
       agent_file: 'shipyard-drift-check.toml', agent_file_digest: digest,
       agent_file_content: content, dispatch_id: 'dispatch-evidence-symlink',
     }), (error) => error.code === 'INVALID_INPUT');
@@ -675,7 +675,7 @@ test('--capability-only explains missing evidence on stderr, exits 0 and keeps s
     assert.match(missing.stderr, /hint\[RUNTIME_CAPABILITY_MISSING\]/);
     const dflt = path.join(root, '.codex', 'shipyard', 'codex-capabilities.json');
     fs.mkdirSync(path.dirname(dflt), { recursive: true });
-    for (const invalid of ['{}', '{"supportedEfforts":["low"]}', '{"supportedModels":["gpt-6.1-sol"]}']) {
+    for (const invalid of ['{}', '{"supportedEfforts":["low"]}', '{"supportedModels":["gpt-6.2-sol"]}']) {
       fs.writeFileSync(dflt, invalid);
       assert.equal(JSON.parse(runCapabilityOnly(HOST_SCRIPT, { PATH: process.env.PATH, HOME: root }, ['--executable', executable]).stdout).reason, 'capability_evidence_missing', invalid);
     }
@@ -766,7 +766,7 @@ test('launchAgent sends dynamic selection through the adapter boundary', () => {
       context: { prompt: 'execute the scoped ticket' },
     });
     assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+    assert.equal(result.receipt.applied_model, 'gpt-6.2-sol');
     assert.equal(result.receipt.applied_effort, 'low');
     assert.equal(result.receipt.launch_id, 'host-launch-1');
   } finally {
@@ -1227,7 +1227,7 @@ test('actual launcher refuses a nonexistent worktree without requiring Git for e
         scope: { ...SCOPE, worktree }, capabilities,
         executable: process.execPath, taskDir: path.join(root, 'tasks'),
       });
-      await launch('fixture', { model: 'gpt-6.1-sol', effort: 'low', sandbox_mode: 'workspace-write' });
+      await launch('fixture', { model: 'gpt-6.2-sol', effort: 'low', sandbox_mode: 'workspace-write' });
     }, (error) => ((error.code === 'ENOENT' || error.code === 'ENOTDIR') && error.path === worktree)
       || (error.code === 'RUNTIME_UNAVAILABLE'
         && ['ENOENT', 'ENOTDIR'].some((code) => error.message

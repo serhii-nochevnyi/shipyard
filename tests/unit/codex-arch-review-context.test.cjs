@@ -929,7 +929,7 @@ test('both native profiles deny the entire trusted archive namespace across work
     assert(artifacts.archiveAuthorityDirectory(second.root).startsWith(namespace + path.sep));
     const cases = [
       ['codex', require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').createCodexCliLauncher,
-        { model: 'gpt-6.1-sol', effort: 'low', sandbox_mode: 'read-only' }],
+        { model: 'gpt-6.2-sol', effort: 'low', sandbox_mode: 'read-only' }],
       ['claude', require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs').createClaudeCliLauncher,
         { model: 'claude-opus-5-5', effort: 'low' }],
     ];

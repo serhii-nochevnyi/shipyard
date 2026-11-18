@@ -1523,11 +1523,11 @@ test('Codex and Claude retain separate concrete model palettes in policy dimensi
   ]);
   assert.deepEqual(summary.by_runtime, { claude: 1, codex: 1 });
   assert.deepEqual(summary.by_rung, { 'very-complex': 1, critical: 1 });
-  assert.equal(summary.by_concrete_model['gpt-6.1-sol'], 1);
+  assert.equal(summary.by_concrete_model['gpt-6.2-sol'], 1);
   assert.equal(summary.by_concrete_model['claude-opus-5-5'], 1);
   assert.equal(summary.by_concrete_model.astra, undefined);
   assert.equal(claude.requested_model, 'claude-opus-5-5', 'Claude keeps its native Opus ID');
-  assert.equal(codex.requested_model, 'gpt-6.1-sol', 'Codex uses its concrete Sol id');
+  assert.equal(codex.requested_model, 'gpt-6.2-sol', 'Codex uses its concrete Sol id');
 });
 
 test('fixed v6 historical attribution stays stale without changing its source bytes', () => {

@@ -76,7 +76,7 @@ test('runs recorded under a retired policy are skipped on read while current-pol
   try {
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
     const store = createRunStore({ storeDir: root, now: () => 1000 });
-    const palettes = { codex: { sol: 'gpt-6.1-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'fable' } };
+    const palettes = { codex: { sol: 'gpt-6.2-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'fable' } };
     const runs = {};
     for (const [runtime, palette] of Object.entries(palettes)) for (const [key, model] of Object.entries(palette)) {
       const run = JSON.parse(JSON.stringify(makeRun('owner-a', `fixture-${runtime}-${key}`)));
@@ -86,7 +86,7 @@ test('runs recorded under a retired policy are skipped on read while current-pol
     }
     const current = Object.keys(runs);
     assert.equal(current.length, 6);
-    for (const version of ['adr-014.v6', 'adr-014.v7']) {
+    for (const version of ['adr-014.v6', 'adr-014.v7', 'adr-014.v8']) {
       const retired = JSON.parse(JSON.stringify(runs[current[0]]));
       retired.run.run_id = `retired-${version}`;
       retired.run.dispatch.policy_version = version;
@@ -114,7 +114,7 @@ test('runs recorded under a retired policy are skipped on read while current-pol
     }
     assert.throws(() => store.transaction(id, record => { record.run = { ...record.run, dispatch: { ...record.run.dispatch, model: 'gpt-6-luna' } }; }), { code: 'RUNTIME_MODEL_MISMATCH' });
     assert.equal(fs.readFileSync(store.storeFile, 'utf8'), valid);
-    const unknown = JSON.parse(valid); unknown.runs[id].run.dispatch.policy_version = 'adr-014.v9';
+    const unknown = JSON.parse(valid); unknown.runs[id].run.dispatch.policy_version = 'adr-014.v10';
     fs.writeFileSync(store.storeFile, JSON.stringify(unknown));
     assert.throws(() => store.read(), { code: 'UNSUPPORTED_POLICY_VERSION' });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

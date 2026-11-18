@@ -109,13 +109,13 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   const result = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-36-01' });
   assert.equal(calls.length, 1);
   assert.deepStrictEqual(calls[0].resolution.launch_arguments, {
-    model: 'gpt-6.1-sol',
+    model: 'gpt-6.2-sol',
     reasoning_effort: 'low',
   });
   assert.deepStrictEqual(calls[0].context, { ticket: 'T-36-01' });
-  assert.equal(result.requested_model, 'gpt-6.1-sol');
+  assert.equal(result.requested_model, 'gpt-6.2-sol');
   assert.equal(result.resolution.task_level, 'complex');
-  assert.equal(result.applied_model, 'gpt-6.1-sol');
+  assert.equal(result.applied_model, 'gpt-6.2-sol');
   assert.equal(result.observed_effort, 'low');
   assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
   assert.equal(result.trace.at(-1).status, 'passed');
@@ -697,10 +697,10 @@ test('executor critical dispatch uses the Sol/high escalation rung', () => {
     signals: { critical: true },
   });
   assert.deepStrictEqual(launched.launch_arguments, {
-    model: 'gpt-6.1-sol',
+    model: 'gpt-6.2-sol',
     reasoning_effort: 'high',
   });
-  assert.equal(result.applied_model, 'gpt-6.1-sol');
+  assert.equal(result.applied_model, 'gpt-6.2-sol');
   assert.equal(result.applied_effort, 'high');
 });
 
@@ -958,8 +958,8 @@ test('repair escalations require the boundary receipt chain and consume each pre
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
     previous_dispatch_id: base.dispatch_id,
   }, { ticket });
-  assert.equal(base.applied_model, 'gpt-6.1-sol');
-  assert.equal(repeat.applied_model, 'gpt-6.1-sol');
+  assert.equal(base.applied_model, 'gpt-6.2-sol');
+  assert.equal(repeat.applied_model, 'gpt-6.2-sol');
   assert.equal(repeat.applied_effort, 'high');
   assert.throws(
     () => boundary.dispatch({
@@ -976,7 +976,7 @@ test('repair escalations require the boundary receipt chain and consume each pre
     signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
     previous_dispatch_id: repeat.dispatch_id,
   }, { ticket });
-  assert.equal(exhausted.applied_model, 'gpt-6.1-sol');
+  assert.equal(exhausted.applied_model, 'gpt-6.2-sol');
   assert.equal(exhausted.applied_effort, 'xhigh');
 });
 
@@ -1000,7 +1000,7 @@ test('same-boundary function recorders can authorize their own in-memory repair 
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'function-recorder-repeat',
   }, { ticket });
-  assert.equal(repeat.applied_model, 'gpt-6.1-sol');
+  assert.equal(repeat.applied_model, 'gpt-6.2-sol');
   assert.equal(repeat.applied_effort, 'high');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
 });
@@ -1051,7 +1051,7 @@ test('the boundary keeps using the canonical policy if an exported method is rep
   }
   const result = boundary.dispatch({ runtime: 'codex', role: 'executor' });
   assert.equal(replacementCalled, false);
-  assert.equal(result.applied_model, 'gpt-6.1-sol');
+  assert.equal(result.applied_model, 'gpt-6.2-sol');
   assert.equal(policy.resolveDispatch, originalResolve);
   assert.equal(policy.validateResolution, originalValidate);
 });
@@ -1626,7 +1626,7 @@ test('durable receipt repair survives a fresh boundary instance and consumes onc
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'durable-repair-repeat',
   }, { ticket });
-  assert.equal(repeat.applied_model, 'gpt-6.1-sol');
+  assert.equal(repeat.applied_model, 'gpt-6.2-sol');
   assert.equal(repeat.applied_effort, 'high');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
   assert.throws(
@@ -1907,7 +1907,7 @@ test('top-level dispatch continues a repair chain with the same durable recorder
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'convenience-repeat',
   }, options);
-  assert.equal(repeat.applied_model, 'gpt-6.1-sol');
+  assert.equal(repeat.applied_model, 'gpt-6.2-sol');
   assert.equal(repeat.applied_effort, 'high');
   assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
 });
@@ -1952,7 +1952,7 @@ test('a failed repair launch releases its predecessor claim for a later attempt'
     previous_dispatch_id: base.dispatch_id,
     dispatch_id: 'retry-success',
   }, { ticket });
-  assert.equal(retry.applied_model, 'gpt-6.1-sol');
+  assert.equal(retry.applied_model, 'gpt-6.2-sol');
   assert.equal(retry.applied_effort, 'high');
 });
 
@@ -2234,16 +2234,16 @@ test('the boundary launches every native base and escalation tuple for both runt
   try {
     const base = {
       codex: {
-        research: ['gpt-6.1-sol', 'high'],
-        decomposition: ['gpt-6.1-sol', 'high'],
-        executor: ['gpt-6.1-sol', 'low'],
+        research: ['gpt-6.2-sol', 'high'],
+        decomposition: ['gpt-6.2-sol', 'high'],
+        executor: ['gpt-6.2-sol', 'low'],
         'pr-sentinel': ['gpt-6-luna', 'medium'],
-        integrator: ['gpt-6.1-sol', 'high'],
-        'drift-check': ['gpt-6.1-sol', 'low'],
-        'arch-review': ['gpt-6.1-sol', 'high'],
-        'code-review': ['gpt-6.1-sol', 'high'],
-        'ci-fix': ['gpt-6.1-sol', 'low'],
-        'review-fix': ['gpt-6.1-sol', 'low'],
+        integrator: ['gpt-6.2-sol', 'high'],
+        'drift-check': ['gpt-6.2-sol', 'low'],
+        'arch-review': ['gpt-6.2-sol', 'high'],
+        'code-review': ['gpt-6.2-sol', 'high'],
+        'ci-fix': ['gpt-6.2-sol', 'low'],
+        'review-fix': ['gpt-6.2-sol', 'low'],
       },
       claude: {
         research: ['claude-sonnet-5-5', 'xhigh'],
@@ -2259,15 +2259,15 @@ test('the boundary launches every native base and escalation tuple for both runt
       },
     };
     const escalations = [
-      ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6.1-sol', 'xhigh'],
-      ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-      ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-      ['codex', 'executor', { critical: true }, 'critical', 'gpt-6.1-sol', 'high'],
-      ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-      ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-      ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-      ['codex', 'code-review', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
-      ['codex', 'code-review', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+      ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6.2-sol', 'xhigh'],
+      ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+      ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+      ['codex', 'executor', { critical: true }, 'critical', 'gpt-6.2-sol', 'high'],
+      ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+      ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+      ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+      ['codex', 'code-review', { critical: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
+      ['codex', 'code-review', { checkpoint: true }, 'critical', 'gpt-6.2-sol', 'xhigh'],
       ['claude', 'research', { type: 'alternatives' }, 'base', 'claude-sonnet-5-5', 'xhigh'],
       ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'claude-opus-5-5', 'high'],
       ['claude', 'decomposition', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
@@ -2348,7 +2348,7 @@ test('the boundary launches every native base and escalation tuple for both runt
           runtime,
           role,
           { signatureState: 'repeat', priorApplied: baseResult.receipt },
-          ['repeat', runtime === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5', runtime === 'codex' ? 'high' : 'xhigh'],
+          ['repeat', runtime === 'codex' ? 'gpt-6.2-sol' : 'claude-sonnet-5-5', runtime === 'codex' ? 'high' : 'xhigh'],
           `matrix-${runtime}-${role}-repeat`,
           { previous_dispatch_id: baseResult.dispatch_id },
         );
@@ -2356,7 +2356,7 @@ test('the boundary launches every native base and escalation tuple for both runt
           runtime,
           role,
           { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
-          ['repeat_exhausted', runtime === 'codex' ? 'gpt-6.1-sol' : 'claude-opus-5-5', runtime === 'codex' ? 'xhigh' : 'high'],
+          ['repeat_exhausted', runtime === 'codex' ? 'gpt-6.2-sol' : 'claude-opus-5-5', runtime === 'codex' ? 'xhigh' : 'high'],
           `matrix-${runtime}-${role}-repeat-exhausted`,
           { previous_dispatch_id: repeat.dispatch_id },
         );
@@ -2376,7 +2376,7 @@ test('the boundary launches every native base and escalation tuple for both runt
       const id = `matrix-${runtime}-${role}-combined`;
       const result = dispatchAndAssert(runtime, role, signals, [
         rung,
-        runtime === 'codex' ? 'gpt-6.1-sol' : 'fable',
+        runtime === 'codex' ? 'gpt-6.2-sol' : 'fable',
         runtime === 'codex' ? 'xhigh' : 'medium',
       ], id);
       assert.equal(new Set(result.resolution.signals_fired).size, Object.keys(signals).length);
@@ -2649,8 +2649,8 @@ test('repair promotion requires the immediately preceding boundary receipt on th
       previous_dispatch_id: repeat.dispatch_id,
       dispatch_id: 'prior-valid-exhausted',
     }, { ticket: codexTicket });
-    assert.deepStrictEqual([repeat.applied_model, repeat.applied_effort], ['gpt-6.1-sol', 'high']);
-    assert.deepStrictEqual([exhausted.applied_model, exhausted.applied_effort], ['gpt-6.1-sol', 'xhigh']);
+    assert.deepStrictEqual([repeat.applied_model, repeat.applied_effort], ['gpt-6.2-sol', 'high']);
+    assert.deepStrictEqual([exhausted.applied_model, exhausted.applied_effort], ['gpt-6.2-sol', 'xhigh']);
 
     const claudeRepeat = boundary.dispatch({
       runtime: 'claude',

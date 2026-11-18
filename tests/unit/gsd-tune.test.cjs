@@ -540,7 +540,7 @@ test('a palette model below its declared min_cli is the mirror blocker, read fro
   assert.equal(b[0].have, '0.147.0');
   assert.equal(b[0].need, CEILING.min_cli);
   // At a release above the floor it is silent…
-  assert.deepEqual(blockersOf(dir, [], { ...env, PATH: stubCli({ codex: 'codex-cli 0.155.4' }) }), []);
+  assert.deepEqual(blockersOf(dir, [], { ...env, PATH: stubCli({ codex: 'codex-cli 0.169.4' }) }), []);
   // host floor; a low-version host cannot silently accept it.
   fs.writeFileSync(path.join(codexHome, 'config.toml'),
     `[agents.shipyard-executor]\nmodel = "${pc.DEFAULT_CODEX_MODELS[0].model}"\n`);
@@ -913,7 +913,7 @@ test('a model that lives ONLY in a registered agent file is measured', () => {
     `the file that configures it must be named, not the one that registers it: ${r.stdout}`);
   // Above the floor the same host is silent — the finding is the version, not the
   // registration.
-  assert.deepEqual(blockersOf(dir, [], { ...env, PATH: stubCli({ codex: 'codex-cli 0.155.4' }) }), []);
+  assert.deepEqual(blockersOf(dir, [], { ...env, PATH: stubCli({ codex: 'codex-cli 0.169.4' }) }), []);
 });
 
 test('a registration whose file cannot be read is REPORTED, never silently skipped', () => {
