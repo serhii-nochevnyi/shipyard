@@ -262,7 +262,7 @@ function normalizeRecord(input) {
   };
 }
 
-const RETIRED_POLICY_VERSIONS = new Set(['adr-014.v6', 'adr-014.v7']);
+const RETIRED_POLICY_VERSIONS = new Set(['adr-014.v6', 'adr-014.v7', 'adr-014.v8']);
 
 function normalizeStore(input, { dropRetiredPolicy = false } = {}) {
   if (!object(input) || input.schema !== SCHEMA || input.version !== VERSION || !object(input.runs)) {

@@ -23,7 +23,7 @@ const CANONICAL_MODEL_MAPPINGS = Object.freeze({
   claude: CLAUDE_MODEL_ALIASES,
 });
 
-const POLICY_VERSION = 'adr-014.v8';
+const POLICY_VERSION = 'adr-014.v9';
 const SUPPORTED_RUNTIMES = Object.freeze(['codex', 'claude']);
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const SIGNATURE_STATES = Object.freeze([

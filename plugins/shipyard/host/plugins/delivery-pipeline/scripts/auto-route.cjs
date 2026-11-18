@@ -48,7 +48,7 @@ function codexBlock(phase, marketplace = false) {
     '- Research first (proportionate) and apply GSD at full across stages',
     '  (research -> plan -> implement -> verify -> review), driving GSD/shipyard',
     '  yourself.',
-    '- Keep the native Codex ladder: Sol is gpt-6.1-sol; executor, fixer, and',
+    '- Keep the native Codex ladder: Sol is gpt-6.2-sol; executor, fixer, and',
     '  drift-check bases use Sol/low, while the sentinel stays Luna/medium. Use',
     '  only the policy signals for escalation. Never use Anthropic models here.',
     '- The user should not have to invoke GSD or shipyard manually.',

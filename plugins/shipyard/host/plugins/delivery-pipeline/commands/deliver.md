@@ -259,7 +259,7 @@ sharing an account set `SHIPYARD_CAPACITY_STORE`, `SHIPYARD_CAPACITY_PROVIDER` a
 ### Codex policy and generated files
 
 The grids are independent and authoritative in `model-policy.cjs` (see also
-CLAUDE.md): Codex Sol is `gpt-6.1-sol` and Luna `gpt-6-luna`; Claude Sonnet is
+CLAUDE.md): Codex Sol is `gpt-6.2-sol` and Luna `gpt-6-luna`; Claude Sonnet is
 `claude-sonnet-5-5` and Opus `claude-opus-5-5`. Never translate one grid into the
 other or restate it in a launch. The host (not the caller) runs the selector:
 
