@@ -172,6 +172,16 @@ execute them without waiting for a merge or a new command. A single
 (high-risk approval, adr-outdated, merge) are parking "on a human": mark
 "awaiting human", continue, and tally at the end.
 
+## Reviews: shipyard and GitHub, never pdf-review without consent
+
+Never run pdf-review (`/pdf-review:run`, `$pdf-review…` or any pdf-review skill)
+without the user's explicit permission in this session. Every PR `publish`
+opens into an `epic/*` or onto a `ticket/*` branch carries `pdf-review:skip`,
+which turns the pdf-review merge gate green without a review; a PR into the
+default branch gets no label. Review with shipyard's own roles (code-review,
+arch-review, integrator, review-fix) and your runtime's review tools, plus
+GitHub's reviewers through `reviewers.cjs reinit` (CodeRabbit, Copilot).
+
 ## The PR sentinel (вартовий) — leave a guard, take the next work
 
 Once a ticket has an open PR, two jobs run at different speeds: **cascading**
@@ -863,8 +873,10 @@ prints `0 agents` the project config does not parse: fix the file.
    `comment-policy.cjs check`, `role-artifact.cjs validate` then `read` (the
    authenticated boundary-store record decides; the runtime host's `artifact_ref` is
    only a reference), `base-merge.cjs` (base is the epic and the ticket HAS a primary
-   parent), PR hygiene, `publish-gate.cjs`, `git push`, `gh pr create --draft`,
-   the ledger entry and the first `reviewers.cjs reinit`. On a refusal:
+   parent), PR hygiene, the `pdf-review:skip` label (base is `epic/*` or
+   `ticket/*`: listed, created if missing, before the push), `publish-gate.cjs`,
+   `git push`, `gh pr create --draft` (with that label), the ledger entry and the
+   first `reviewers.cjs reinit`. On a refusal:
    - scope: a decision, never a retry — revert the stray edit and escalate, or
      re-plan with the path declared;
    - comment policy: `comment-policy.cjs clean <T> --worktree <worktree> --base

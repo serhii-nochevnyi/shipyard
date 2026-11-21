@@ -1542,14 +1542,16 @@ function publishFixture({ row = {}, board = {}, manifestName = 'shipyard' } = {}
       const key = `${name} ${arg}`;
       calls.push({ key, args });
       if (key in refusing) throw Object.assign(new Error('failed'), { stderr: refusing[key] });
+      if (key === 'gh label' && `gh label ${args[1]}` in refusing) throw Object.assign(new Error('failed'), { stderr: refusing[`gh label ${args[1]}`] });
       if (key === 'role-artifact read') fs.writeFileSync(args[args.indexOf('--pr-body-out') + 1], refusing.body || 'Ticket: T-01-01\nbody\n');
-      return { 'git symbolic-ref': refusing.head ?? `${ticketRow().branch}\n`, 'git log': refusing.empty ? '' : 'c0ffee\n', 'pr-hygiene format': 'feat: Demo ticket\n', 'gh pr': refusing.url ?? 'https://github.com/o/r/pull/77\n' }[key] || '';
+      return { 'git symbolic-ref': refusing.head ?? `${ticketRow().branch}\n`, 'git log': refusing.empty ? '' : 'c0ffee\n', 'pr-hygiene format': 'feat: Demo ticket\n', 'gh pr': refusing.url ?? 'https://github.com/o/r/pull/77\n',
+        'gh label': args[1] === 'list' ? refusing.labels ?? '[]' : '' }[key] || '';
     },
   });
   const keys = () => calls.map((c) => c.key);
   const args = (key) => calls.find((c) => c.key === key).args;
   const arg = (key, flag) => args(key)[args(key).indexOf(flag) + 1];
-  return { f, publish, keys, args, arg, ledger: () => require('../../plugins/delivery-pipeline/scripts/pr-ledger.cjs').readLedger(f.graphDir).entries };
+  return { f, publish, calls, keys, args, arg, ledger: () => require('../../plugins/delivery-pipeline/scripts/pr-ledger.cjs').readLedger(f.graphDir).entries };
 }
 
 const PUBLISH_HEAD = ['git symbolic-ref', 'git log', 'scope-gate T-01-01', 'comment-policy check', 'role-artifact validate', 'role-artifact read'];
@@ -1572,6 +1574,61 @@ test('publish runs gates, validation, push, PR, ledger and reinit in order and r
     assert.equal(p.args('reviewers reinit')[2], '77');
     assert.equal(p.ledger()[p.f.id].number, 77);
   } finally { cleanup(p.f.root); }
+});
+
+test('a PR into an epic or onto a ticket branch is created with pdf-review:skip, ensured before the push', () => {
+  assert.equal(deliverDispatch.PDF_REVIEW_SKIP, 'pdf-review:skip');
+  for (const base of ['epic/demo', 'ticket/T-01-00-parent']) {
+    const p = publishFixture({ board: { base } });
+    try {
+      assert.equal(p.publish().pr, 77);
+      const labelCalls = p.calls.filter((c) => c.key === 'gh label').map((c) => c.args.slice(0, 3));
+      assert.deepEqual(labelCalls, [['label', 'list', '--search'], ['label', 'create', 'pdf-review:skip']]);
+      assert.ok(p.keys().lastIndexOf('gh label') < p.keys().indexOf('git push'), 'the label exists before anything is pushed');
+      assert.equal(p.arg('gh pr', '--label'), 'pdf-review:skip');
+      assert.equal(p.arg('gh pr', '--base'), base);
+      assert.equal(p.ledger()[p.f.id].number, 77);
+    } finally { cleanup(p.f.root); }
+  }
+});
+
+test('an existing pdf-review:skip label is reused by exact name and a near match is not', () => {
+  const exact = publishFixture({ board: { base: 'epic/demo' } });
+  try {
+    exact.publish({ labels: JSON.stringify([{ name: 'pdf-review:skip-old' }, { name: 'pdf-review:skip' }]) });
+    assert.deepEqual(exact.calls.filter((c) => c.key === 'gh label').map((c) => c.args[1]), ['list']);
+    assert.equal(exact.arg('gh pr', '--label'), 'pdf-review:skip');
+  } finally { cleanup(exact.f.root); }
+  const near = publishFixture({ board: { base: 'epic/demo' } });
+  try {
+    near.publish({ labels: JSON.stringify([{ name: 'pdf-review:skip-old' }]) });
+    assert.deepEqual(near.calls.filter((c) => c.key === 'gh label').map((c) => c.args[1]), ['list', 'create']);
+  } finally { cleanup(near.f.root); }
+});
+
+test('a PR into the default branch carries no pdf-review label and asks for none', () => {
+  const p = publishFixture();
+  try {
+    p.publish();
+    assert.equal(p.keys().includes('gh label'), false);
+    assert.equal(p.args('gh pr').includes('--label'), false);
+  } finally { cleanup(p.f.root); }
+});
+
+test('a label that cannot be listed or created refuses before the push, with no PR and no ledger entry', () => {
+  for (const [refusing, message] of [
+    [{ 'gh label list': 'HTTP 403' }, /label pdf-review:skip refused: HTTP 403/],
+    [{ labels: 'not json' }, /label pdf-review:skip refused: gh label list returned no label list: not json/],
+    [{ 'gh label create': 'HTTP 422' }, /label pdf-review:skip refused: HTTP 422/],
+  ]) {
+    const p = publishFixture({ board: { base: 'epic/demo' } });
+    try {
+      assert.throws(() => p.publish(refusing), (error) => error.code === 'PUBLISH_REFUSED' && message.test(error.message));
+      assert.equal(p.keys().includes('git push'), false);
+      assert.equal(p.keys().includes('gh pr'), false);
+      assert.deepEqual(p.ledger(), {});
+    } finally { cleanup(p.f.root); }
+  }
 });
 
 test('publish stops at the first refusal, names it, and runs nothing after it', () => {

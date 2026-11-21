@@ -24,6 +24,8 @@
      reviewer comments;
    - after each push **re-initializes the reviewers**: CodeRabbit
      (`@coderabbitai full review`) and Copilot (re-request review via API).
+   - never runs pdf-review without the user's explicit permission; every PR
+     into an epic or onto a ticket branch is labeled `pdf-review:skip`.
 
 ---
 
@@ -438,7 +440,8 @@ for each ticket T from the selected scope in topological order:
      (claude -p with the ticket body + Context reads; TDD per the contract)
   4. local check: verification commands from the ticket
   5. commit → push → gh pr create --base <base> --draft (first line of the body:
-     machine-readable "Ticket: <T>")
+     machine-readable "Ticket: <T>"); a PR into epic/* or onto ticket/* carries
+     the pdf-review:skip label, and pdf-review runs only with the user's consent
   6. babysit loop (6.2) until green — owned by the PR sentinel (6.2a), which runs
      alongside the main loop rather than in front of it
   7. green → the sentinel merges it into ITS OWN base (epic/the parent's branch)

@@ -80,6 +80,14 @@ output, or exit status. If a claim cannot be checked by a command, label it as
 an assumption or unknown and state the next check. A claim without
 command-backed evidence is not verification.
 
+## Reviews and pdf-review
+
+Never run pdf-review (`/pdf-review:run` or any pdf-review skill or command)
+without the user's explicit permission. Shipyard labels every PR into an
+`epic/*` or onto a `ticket/*` branch `pdf-review:skip`; do not remove the label.
+Review with shipyard's own review roles and your runtime's review tools, plus
+GitHub's reviewers (CodeRabbit, Copilot).
+
 ## Code comments
 
 Keep new code comments rare and purposeful. The pre-push gate allows only

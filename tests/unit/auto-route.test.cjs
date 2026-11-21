@@ -49,6 +49,14 @@ test('codexBlock keeps the phase-aware large-work route', () => {
 
 suite('auto-route — shouldInject classification');
 
+test('both runtimes forbid pdf-review without permission and name the reviews to run instead', () => {
+  for (const text of [claudePolicy(), codexBlock(1), codexBlock(2), codexBlock(2, true)]) {
+    const flat = text.replace(/\s+/g, ' ');
+    assert.match(flat, /Never run pdf-review .* without the user's explicit permission\./);
+    assert.match(flat, /shipyard's own review roles and your own review tools, plus GitHub's reviewers \(CodeRabbit, Copilot\)/);
+  }
+});
+
 test('a plain prompt injects', () => {
   assert.strictEqual(shouldInject(JSON.stringify({ prompt: 'add a feature' })), true);
 });
