@@ -1785,6 +1785,7 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
     if (actions.subject_sha256 !== sha256(canonical(subject)))
       fail('REPAIR_PREDECESSOR_INVALID', 'confirmed host actions changed their original subject');
     let expectedHead = attempt.preparation.commit.expectedHead;
+    let publishedPaths = null;
     if (canonical(subject) !== canonical(attempt.subject)) {
       const transition = subject.signed_transition;
       const candidate = transition && readSealed(candidateFile(prepared.stateRoot, transition.candidate_id), prepared.key);
@@ -1799,6 +1800,7 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
         fail('REPAIR_PREDECESSOR_INVALID', 'confirmed action source transition lacks original signed publication custody');
       verifySignedCommit(prepared.commit.worktree, candidate, transition.to);
       expectedHead = transition.to;
+      publishedPaths = new Set(Array.isArray(candidate.changed) ? candidate.changed : []);
     }
     if (attempt.preparation.commit.expectedBranch !== prepared.commit.expectedBranch
         || attempt.preparation.commit.expectedSigner !== prepared.commit.expectedSigner
@@ -1888,8 +1890,13 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
         const currentIdentity = sourceTransition && currentThread
           && (currentThread.line === null || (Number.isSafeInteger(currentThread.line) && currentThread.line > 0))
           ? { ...currentThread, line: confirmed?.line } : currentThread;
+        // @contract: the attempt's own confirmed publication may move a thread's line in a file it changed, nothing else.
+        const movedByPublication = publishedPaths && thread && confirmed && publishedPaths.has(thread.path)
+          && (confirmed.line === null || (Number.isSafeInteger(confirmed.line) && confirmed.line > 0));
+        const expectedConfirmed = thread && movedByPublication ? { ...thread, resolved: true, line: confirmed.line }
+          : { ...thread, resolved: true };
         if (disposition.action !== 'reply-and-resolve' || !thread || thread.resolved
-            || canonical(confirmed) !== canonical({ ...thread, resolved: true })
+            || canonical(confirmed) !== canonical(expectedConfirmed)
             || canonical(currentIdentity) !== canonical(confirmed))
           fail('REPAIR_PREDECESSOR_INVALID', 'host resolution changed its original external thread');
         if (!historical && !resolutions.has(threadId)) resolutions.set(threadId, thread);

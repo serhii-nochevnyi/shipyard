@@ -2444,8 +2444,10 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   const threadId = legacyActions ? 'PRRT_kwDOTmU9jc6rQN4b' : 'thread-1';
   const commentId = legacyActions ? 'PRRC_kwDOTmU9jc784inG' : 'comment-1';
   const locationMutation = mutation?.includes('-location-') || mutation === 'stale-read-exhausted';
+  const publishedMove = mutation?.startsWith('normalized-source-repeat-moved');
   const feedback = [{ id: threadId, isResolved: false,
-    ...((locationMutation || mutation?.startsWith('issue-')) ? { path: 'src/owned.txt', originalLine: 1616, line: 1653 } : {}) }];
+    ...((locationMutation || mutation?.startsWith('issue-')) ? { path: 'src/owned.txt', originalLine: 1616, line: 1653 } : {}),
+    ...(publishedMove ? { path: mutation.endsWith('-foreign-path') ? 'src/other.txt' : 'src/owned.txt', originalLine: 944, line: 944 } : {}) }];
   const originalThreadComment = { id: commentId, body: mutation?.startsWith('issue-') ? '[rule-a] Full original thread comment' : 'Full original thread comment' };
   const reviewBot = { __typename: 'Bot', id: 'BOT_kgDOCCSy2w', login: 'coderabbitai' };
   const maintainer = { __typename: 'User', id: 'U_maintainer', login: 'maintainer' };
@@ -2466,7 +2468,7 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
     ] };
   if (outcome === 'escalate') output.review_dispositions[1].action = 'reply';
   if (mutation?.startsWith('issue-')) for (const item of output.review_dispositions) item.action = 'escalate';
-  if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) {
+  if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation) || publishedMove) {
     for (const disposition of output.review_dispositions) disposition.action = disposition.id === threadId ? 'reply-and-resolve' : 'reply';
   }
   const replies = [], prReplies = [], external = [], reviews = [];
@@ -2511,6 +2513,10 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
   const gh = (_program, args) => {
     if (_program === 'git' && args[0] === 'push') {
       pushes++; publishedHead = git(f.root, 'rev-parse', 'HEAD');
+      if (publishedMove && pushes === 1) {
+        feedback[0].line = 952;
+        if (mutation.endsWith('-original-line')) feedback[0].originalLine = 945;
+      }
       if (['publication-response-loss', 'ci-push-response-loss'].includes(mutation) || (historicalRecovery === 'pending' && launches > 1)) throw new Error('Original push response was lost after remote confirmation');
       return 'confirmed host push';
     }
@@ -3308,6 +3314,14 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
       return;
     }
     if (mutation?.startsWith('normalized-')) {
+      if (publishedMove && mutation !== 'normalized-source-repeat-moved') {
+        await assert.rejects(run, { code: 'REPAIR_SUBJECT_CHANGED', message: mutation.endsWith('-original-line')
+          ? /full live feedback changed: changed thread-1 \(line, original_line\)/ : /full live feedback changed: changed thread-1 \(line\)/ });
+        assert.equal(pushes, 1);
+        assert.equal(feedback[0].isResolved, false, 'nothing is resolved after a move the commit does not explain');
+        assert.equal(replies.length + prReplies.length, 0);
+        return;
+      }
       const first = await run();
       assert.equal(first.actions.confirmed.length, 3);
       assert.equal(first.resolution.signals.signatureState, 'first');
@@ -3399,7 +3413,13 @@ async function originalFixerFixture(outcome, mutation, evolution = null, histori
         git(f.root, ...(mutation.endsWith('-signed') ? ['commit', '-qS'] : ['-c', 'commit.gpgsign=false', 'commit', '-q']), '-m', 'uncovered external source');
         publishedHead = git(f.root, 'rev-parse', 'HEAD');
       }
-      if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) assert.equal(firstHead, first.artifact.commit);
+      if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation) || publishedMove) assert.equal(firstHead, first.artifact.commit);
+      if (publishedMove) {
+        const actions = JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-actions',
+          crypto.createHash('sha256').update(first.dispatch_id).digest('hex') + '.json'))).payload;
+        assert.equal(actions.confirmed.find(item => item.feedback_id === threadId)?.resolved, true, 'the first fix resolved its thread');
+        assert.deepEqual([feedback[0].isResolved, feedback[0].line], [true, 952]);
+      }
       const actionFile = path.join(stateRoot(f), 'repair-actions', crypto.createHash('sha256').update(first.dispatch_id).digest('hex') + '.json');
       if (mutation === 'normalized-forged-actions') {
         const state = JSON.parse(fs.readFileSync(actionFile)); state.payload.confirmed[0].reply_id = 'forged';
@@ -3931,6 +3951,9 @@ for (const mutation of ['normalized-repeat', 'normalized-cli-repeat', 'normalize
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 for (const mutation of ['normalized-source-repeat', 'normalized-cli-source-repeat'])
   test('authenticated confirmed replies retain repeat policy through the original signed fixer source transition ' + mutation,
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
+for (const mutation of ['normalized-source-repeat-moved', 'normalized-source-repeat-moved-foreign-path', 'normalized-source-repeat-moved-original-line'])
+  test('fix, push, resolve, next fix: the first fix\'s own push may move only its thread line in a file it changed ' + mutation,
     () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
 
 for (const mutation of ['normalized-covered-source', 'normalized-covered-source-forged', 'normalized-covered-source-plan',
