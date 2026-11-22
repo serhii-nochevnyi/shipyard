@@ -83,8 +83,9 @@ command-backed evidence is not verification.
 ## Reviews and pdf-review
 
 Never run pdf-review (`/pdf-review:run` or any pdf-review skill or command)
-without the user's explicit permission. Shipyard labels every PR into an
-`epic/*` or onto a `ticket/*` branch `pdf-review:skip`; do not remove the label.
+without the user's explicit permission. Shipyard labels every PR into an epic
+branch, or onto a parent ticket's branch in the same epic, `pdf-review:skip`;
+do not remove the label.
 Review with shipyard's own review roles and your runtime's review tools, plus
 GitHub's reviewers (CodeRabbit, Copilot).
 

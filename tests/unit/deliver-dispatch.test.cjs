@@ -1528,10 +1528,10 @@ test('fix builds refuse caller-supplied launch fields even when the required fil
         (error) => error.code === 'BUILD_REFUSED' && /unsupported build field/.test(error.message));
 });
 
-function publishFixture({ row = {}, board = {}, manifestName = 'shipyard' } = {}) {
+function publishFixture({ row = {}, board = {}, manifestName = 'shipyard', tickets = {} } = {}) {
   const f = shipyardFixture();
   writeJson(path.join(f.root, 'plugins', 'delivery-pipeline', '.claude-plugin', 'plugin.json'), { name: manifestName });
-  writeJson(path.join(f.graphDir, 'tickets.json'), { tickets: { [f.id]: ticketRow({ title: 'Demo ticket', epic: 'epic/demo', ...row }) } });
+  writeJson(path.join(f.graphDir, 'tickets.json'), { tickets: { [f.id]: ticketRow({ title: 'Demo ticket', epic: 'epic/demo', ...row }), ...tickets } });
   writeJson(path.join(f.graphDir, 'delivery-state.json'), { [f.id]: { base: 'main', ...(board.repo && !('repo_resolution' in board) ? { repo_resolution: { repository_root: `${f.root}-checkout` } } : {}), ...board } });
   const calls = [];
   const flags = ['--boundary-store', '/s', '--dispatch-id', 'd', '--artifact', 'a', '--artifact-digest', 'x'];
@@ -1576,14 +1576,15 @@ test('publish runs gates, validation, push, PR, ledger and reinit in order and r
   } finally { cleanup(p.f.root); }
 });
 
-test('a PR into an epic or onto a ticket branch is created with pdf-review:skip, ensured before the push', () => {
+test('a PR into its epic or onto a same-epic parent branch is created with pdf-review:skip, ensured before the push', () => {
   assert.equal(deliverDispatch.PDF_REVIEW_SKIP, 'pdf-review:skip');
-  for (const base of ['epic/demo', 'ticket/T-01-00-parent']) {
-    const p = publishFixture({ board: { base } });
+  const parent = { 'T-01-00': { id: 'T-01-00', branch: 'feat/parent-ticket', epic: 'epic/demo' } };
+  for (const [base, row, tickets] of [['epic/demo', {}, {}], ['feat/demo-epic', { epic: 'feat/demo-epic' }, {}], ['feat/parent-ticket', {}, parent]]) {
+    const p = publishFixture({ row, board: { base }, tickets });
     try {
       assert.equal(p.publish().pr, 77);
       const labelCalls = p.calls.filter((c) => c.key === 'gh label').map((c) => c.args.slice(0, 3));
-      assert.deepEqual(labelCalls, [['label', 'list', '--search'], ['label', 'create', 'pdf-review:skip']]);
+      assert.deepEqual(labelCalls, [['label', 'list', '--json'], ['label', 'create', 'pdf-review:skip']]);
       assert.ok(p.keys().lastIndexOf('gh label') < p.keys().indexOf('git push'), 'the label exists before anything is pushed');
       assert.equal(p.arg('gh pr', '--label'), 'pdf-review:skip');
       assert.equal(p.arg('gh pr', '--base'), base);
@@ -1606,13 +1607,16 @@ test('an existing pdf-review:skip label is reused by exact name and a near match
   } finally { cleanup(near.f.root); }
 });
 
-test('a PR into the default branch carries no pdf-review label and asks for none', () => {
-  const p = publishFixture();
-  try {
-    p.publish();
-    assert.equal(p.keys().includes('gh label'), false);
-    assert.equal(p.args('gh pr').includes('--label'), false);
-  } finally { cleanup(p.f.root); }
+test('a PR into the default branch or onto another epic\'s branch carries no pdf-review label and asks for none', () => {
+  const other = { 'T-02-00': { id: 'T-02-00', branch: 'feat/other-epic-ticket', epic: 'epic/other' } };
+  for (const [board, tickets] of [[{}, {}], [{ base: 'feat/other-epic-ticket' }, other], [{ base: 'ticket/T-09-09-unknown' }, {}]]) {
+    const p = publishFixture({ board, tickets });
+    try {
+      p.publish();
+      assert.equal(p.keys().includes('gh label'), false);
+      assert.equal(p.args('gh pr').includes('--label'), false);
+    } finally { cleanup(p.f.root); }
+  }
 });
 
 test('a label that cannot be listed or created refuses before the push, with no PR and no ledger entry', () => {

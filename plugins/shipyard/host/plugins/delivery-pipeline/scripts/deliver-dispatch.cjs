@@ -29,10 +29,11 @@ const { repositoryIdentity, buildSubject } = require('./architecture-target.cjs'
 const { preflight, emitPreflight, launchEnvironment, resolveHostEnvironment } = require('./runtime-context.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
 const DELIVERY_HOSTS = Object.freeze({ codex: 'codex-delivery-host.cjs', claude: 'claude-delivery-host.cjs' });
-// @contract: epic-flow PRs (base epic/* or a parent branch) carry pdf-review:skip, ensured before the push.
+// @contract: epic-flow PRs (base is the epic or a same-epic parent branch) carry pdf-review:skip, ensured pre-push.
 const PDF_REVIEW_SKIP = 'pdf-review:skip';
 const PDF_REVIEW_SKIP_DESCRIPTION = 'Shipyard epic-flow PR: pdf-review runs only with the operator\'s consent';
-const epicFlowBase = (base, epic) => base === epic || /^(epic|ticket)[/]/.test(base);
+const epicFlowBase = (base, row, graph) => typeof row.epic === 'string' && row.epic !== '' && (base === row.epic
+  || Object.values(object(graph) && object(graph.tickets) ? graph.tickets : {}).some((t) => object(t) && t.epic === row.epic && t.branch === base));
 
 const ROLE_BUCKETS = Object.freeze({
   executor: Object.freeze(['execute']),
@@ -498,7 +499,7 @@ function publish(argv, options = {}) {
   }
   const worktree = fs.realpathSync(options.cwd || process.cwd());
   const graphDir = resolveLaunchGraphDir({ worktree, explicitGraphDir: flagValue(argv, '--graph-dir') });
-  const { row, state } = loadTicket(graphDir, ticket);
+  const { graph, row, state } = loadTicket(graphDir, ticket);
   const board = object(state[ticket]) ? state[ticket] : {};
   const base = board.base;
   if (typeof base !== 'string' || !base) fail('BASE_UNRESOLVED', `ticket ${ticket} has no live base on the delivery board`);
@@ -543,7 +544,7 @@ function publish(argv, options = {}) {
   script('publish-gate', ['--worktree', worktree, '--head', 'HEAD', '--managed', '--branch', branch,
     '--ticket', ticket, '--base', base, '--project-root', projectRoot, '--graph', graphDir]);
   script('install-shipyard-git-hook', ['--worktree', worktree, '--project-root', projectRoot, '--graph', graphDir]);
-  const labels = epicFlowBase(base, row.epic) ? [PDF_REVIEW_SKIP] : [];
+  const labels = epicFlowBase(base, row, graph) ? [PDF_REVIEW_SKIP] : [];
   for (const label of labels) ensureLabel(step, label, PDF_REVIEW_SKIP_DESCRIPTION, repoArgs);
   step('push', 'git', ['push', '-u', 'origin', branch]);
   const url = step('gh pr create', 'gh', ['pr', 'create', '--base', base, '--head', branch, '--draft', '--title', title, '--body-file', bodyFile,
@@ -558,7 +559,7 @@ function publish(argv, options = {}) {
 }
 
 function ensureLabel(step, label, description, repoArgs) {
-  const listed = step(`label ${label}`, 'gh', ['label', 'list', '--search', label, '--json', 'name', '--limit', '1000', ...repoArgs]);
+  const listed = step(`label ${label}`, 'gh', ['label', 'list', '--json', 'name', '--limit', '1000', ...repoArgs]);
   let names;
   try { names = JSON.parse(listed).map((entry) => entry.name); } catch (error) {
     return fail('PUBLISH_REFUSED', `label ${label} refused: gh label list returned no label list: ${String(listed).trim() || error.message}`);
