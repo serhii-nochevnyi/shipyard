@@ -94,7 +94,10 @@ marketplace catalogs; both identify Shipyard as `shipyard@shipyard`.
 Codex has no documented declarative plugin dependency installer. Its Install
 button installs the package; a trusted `SessionStart` hook or the first Shipyard
 skill then runs the same idempotent host bootstrap, which installs/enables
-`gsd-core@gsd-core`. Review and trust bundled hooks in Codex to enable startup
+`gsd-core@gsd-core`. Codex installs only local marketplace entries, so the
+bootstrap copies GSD's prebuilt `plugin` ref from `open-gsd/gsd-core` into
+`$CODEX_HOME/shipyard-gsd-marketplace` and registers that directory as the
+`gsd-core` marketplace. Review and trust bundled hooks in Codex to enable startup
 setup. The one-command installer above completes setup immediately without
 requiring hook trust. It does not bypass that trust decision. Start a new session
 after setup so Codex loads newly registered native agents.

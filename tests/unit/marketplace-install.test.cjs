@@ -19,7 +19,7 @@ s.calls.push(a);
 const codex=process.argv[1].endsWith('codex');
 if(a[0]==='plugin' && a[1]==='marketplace') {
   if(a[2]==='list') console.log(JSON.stringify(codex?{marketplaces:s.marketplaces}:s.marketplaces));
-  if(a[2]==='add') s.marketplaces.push({name:'gsd-core',root:s.addRoot,source:a[3]});
+  if(a[2]==='add') s.marketplaces.push({name:'gsd-core',root:codex?a[3]:s.addRoot,source:a[3]});
   if(a[2]==='remove') s.marketplaces=s.marketplaces.filter(m=>m.name!==a[3]);
 } else if(a[1]==='list') console.log(JSON.stringify(codex?{installed:s.plugins}:s.plugins));
 else {
@@ -28,18 +28,40 @@ else {
 }
 fs.writeFileSync(file,JSON.stringify(s));
 `;
+  // @contract: the Codex wrapper is built from a git fixture of GSD's plugin ref, never from the network.
+  const upstream = path.join(tmp, 'gsd-upstream');
+  const git = (...args) => spawnSync('git', args, { cwd: upstream, encoding: 'utf8' });
+  fs.mkdirSync(path.join(upstream, '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(upstream, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'gsd-core', version: '1.22.0' }));
+  fs.writeFileSync(path.join(upstream, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: 'gsd-core', owner: { name: 'open-gsd' },
+    plugins: [{ name: 'gsd-core', version: '1.22.0', source: { source: 'github', repo: 'open-gsd/gsd-core', ref: 'plugin' } }] }));
+  for (const args of [['init', '-q', '-b', 'plugin'], ['add', '.'], ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'prebuilt']])
+    assert.equal(git(...args).status, 0);
+  const upstreamHead = git('rev-parse', 'HEAD').stdout.trim();
+  const codexHome = path.join(tmp, 'codex-home');
+  const wrapper = path.join(codexHome, 'shipyard-gsd-marketplace');
   for (const runtime of ['claude', 'codex']) {
     fs.writeFileSync(path.join(bin, runtime), fake, { mode: 0o755 });
     const state = path.join(tmp, runtime + '.json');
     const invoke = () => spawnSync(process.execPath, [path.join(root, 'scripts/ensure-gsd-plugin.cjs'), runtime],
-      { env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TEST_STATE: state }, encoding: 'utf8' });
+      { env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TEST_STATE: state,
+        CODEX_HOME: codexHome, SHIPYARD_GSD_PLUGIN_SOURCE: upstream }, encoding: 'utf8' });
     fs.writeFileSync(state, JSON.stringify({ marketplaces: [], plugins: [], calls: [] }));
     assert.equal(invoke().status, 0);
     let s = JSON.parse(fs.readFileSync(state));
     assert.equal(s.plugins[0].enabled, true);
     assert(s.calls.some(a => a.join(' ') === `plugin ${runtime === 'codex' ? 'add' : 'install'} gsd-core@gsd-core`));
-    assert.equal(s.marketplaces[0].source, runtime === 'codex' ? 'open-gsd/gsd-core@plugin' : 'open-gsd/gsd-core',
-      'Codex adds the prebuilt plugin ref whose entry is a local source');
+    assert.equal(s.marketplaces[0].source, runtime === 'codex' ? wrapper : 'open-gsd/gsd-core',
+      'Codex adds the Shipyard-owned local marketplace, Claude the GSD repository');
+    if (runtime === 'codex') {
+      const manifest = JSON.parse(fs.readFileSync(path.join(wrapper, '.claude-plugin', 'marketplace.json')));
+      assert.deepEqual(manifest.plugins.map(p => [p.name, p.version, p.source]), [['gsd-core', '1.22.0', './gsd-core']]);
+      assert.equal(manifest.owner.name, 'open-gsd');
+      assert(fs.existsSync(path.join(wrapper, 'gsd-core', '.claude-plugin', 'plugin.json')), 'the plugin ref tree is the local entry');
+      assert.equal(fs.existsSync(path.join(wrapper, 'gsd-core', '.git')), false);
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(wrapper, 'shipyard-source.json'))),
+        { repo: 'open-gsd/gsd-core', ref: 'plugin', commit: upstreamHead, version: '1.22.0' });
+    }
     s.calls=[];fs.writeFileSync(state,JSON.stringify(s));
     assert.equal(invoke().status,0);
     s=JSON.parse(fs.readFileSync(state));
@@ -57,8 +79,8 @@ fs.writeFileSync(file,JSON.stringify(s));
       assert.equal(invoke().status, 0);
       s = JSON.parse(fs.readFileSync(state));
       assert.equal(s.calls.some(a => a.join(' ') === 'plugin marketplace remove gsd-core'), migrated,
-        'only a Codex snapshot whose gsd-core entry is not local is re-added from the prebuilt ref');
-      if (migrated) assert.equal(s.marketplaces[0].source, 'open-gsd/gsd-core@plugin');
+        'only a Codex snapshot whose gsd-core entry is not local is replaced by the local marketplace');
+      if (migrated) assert.equal(s.marketplaces[0].source, wrapper);
     }
   }
   const skills = path.join(tmp, 'skills'); const owned = path.join(skills, 'shipyard-route');
