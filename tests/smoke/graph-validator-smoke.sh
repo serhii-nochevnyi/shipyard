@@ -556,6 +556,33 @@ plan crossphase '01-a/01-PLAN.md' T-01-01 '' 'src/shared/hot.ts' REQ-1
 plan crossphase '02-b/01-PLAN.md' T-02-01 '' 'src/shared/hot.ts' REQ-2
 rejects crossphase 'RE-SLICE' "a cross-phase contested path demands a re-slice"
 rejects crossphase 'cannot cascade' "and says why a dependency would not work"
+rejects crossphase 'cross_phase_contention to merge-on-land' "the block refusal names the merge-on-land mode"
+
+mkproj landorder
+plan landorder '02-b/01-PLAN.md' T-02-01 '' 'src/shared/hot.ts' REQ-2
+plan landorder '10-c/01-PLAN.md' T-10-01 '' 'src/shared/hot.ts' REQ-3
+echo '{"delivery_pipeline":{"cross_phase_contention":"merge-on-land"}}' > "$WORK/landorder/.planning/config.json"
+if out="$(run_validator landorder)"; then
+  grep -q 'merge-on-land: phase 2 lands first, and each later phase (10) adapts' <<<"$out" \
+    && ok "merge-on-land turns a cross-phase clash into a warning with a numeric landing order" \
+    || bad "merge-on-land warning names the landing order" "$out"
+  grep -q 'a conflict in that merge stops for a person' <<<"$out" \
+    && ok "the warning says a landing conflict still stops for a person" \
+    || bad "the warning says a landing conflict still stops for a person" "$out"
+else
+  bad "merge-on-land accepts a cross-phase clash" "$out"
+fi
+mkproj landsame
+plan landsame '01-a/01-PLAN.md' T-01-01 '' 'src/shared/hot.ts' REQ-1
+plan landsame '01-a/02-PLAN.md' T-01-02 '' 'src/shared/hot.ts' REQ-2
+plan landsame '02-b/01-PLAN.md' T-02-01 '' 'src/shared/hot.ts' REQ-3
+echo '{"delivery_pipeline":{"cross_phase_contention":"merge-on-land"}}' > "$WORK/landsame/.planning/config.json"
+rejects landsame 'contested path "src/shared/hot.ts"' "merge-on-land keeps an unordered same-phase pair an error"
+mkproj landtypo
+plan landtypo '01-a/01-PLAN.md' T-01-01 '' 'src/shared/hot.ts' REQ-1
+plan landtypo '02-b/01-PLAN.md' T-02-01 '' 'src/shared/hot.ts' REQ-2
+echo '{"delivery_pipeline":{"cross_phase_contention":"rebase-on-land"}}' > "$WORK/landtypo/.planning/config.json"
+rejects landtypo 'RE-SLICE' "an unknown contention mode falls back to block"
 
 # A DELIVERED phase must not own its files forever. Same clash as `crossphase`
 # above, except phase 01 is already merged: its diff has landed, so there is

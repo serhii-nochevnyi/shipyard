@@ -24,6 +24,11 @@
      reviewer comments;
    - after each push **re-initializes the reviewers**: CodeRabbit
      (`@coderabbitai full review`) and Copilot (re-request review via API).
+   - with `delivery_pipeline.cross_phase_contention: merge-on-land`, lets two
+     phases touch the same path: Gate 2 warns with a landing order, and when the
+     earlier epic lands, `epic-branch.sh refresh` merges it into the later epic,
+     whose PRs, CI and phase reviews then run on the merged head; a merge
+     conflict still stops for a person;
    - never runs pdf-review without the user's explicit permission; every PR
      into an epic or onto a ticket branch is labeled `pdf-review:skip`.
 

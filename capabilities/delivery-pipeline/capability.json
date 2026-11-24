@@ -53,6 +53,11 @@
       "default": "hold",
       "description": "Phase code review: report runs and seals the review while holding nothing; hold requires a current complete pass before integration and phase architecture review. The operator has two exits from the hold: at the round limit, one more round with the phase-code-review extend command (five rounds in total at most), or setting delivery_pipeline.code_review to report in the project root's .planning/config.json, which applies to the whole project until it is set back to hold."
     },
+    "delivery_pipeline.cross_phase_contention": {
+      "type": "string",
+      "default": "block",
+      "description": "Unordered tickets in different phases that touch the same path. block (default): Gate 2 refuses the graph and asks to re-slice the path into one phase. merge-on-land: Gate 2 reports it as a warning with a landing order - the lower phase lands first and the later phase adapts. When the earlier epic lands on the default branch, deliver merges it into the later epic with epic-branch.sh refresh, and the later epic's PRs, CI and phase reviews then run against the merged head. A conflict in that merge still stops for a person: the conveyor never resolves it, and nothing is rebased or force-pushed."
+    },
     "delivery_pipeline.sentinel": {
       "type": "string",
       "default": "auto",

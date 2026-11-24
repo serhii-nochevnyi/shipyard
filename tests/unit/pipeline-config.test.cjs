@@ -2001,6 +2001,18 @@ test('unconfigured projects inspect inherited GSD selection and reject conflicti
   }
 });
 
+test('cross_phase_contention defaults to block, accepts merge-on-land and warns on unknown values', () => {
+  assert.strictEqual(withConfig(undefined).config.cross_phase_contention, 'block');
+  for (const mode of ['block', 'merge-on-land']) {
+    const result = withRaw({ delivery_pipeline: { cross_phase_contention: mode } });
+    assert.strictEqual(result.config.cross_phase_contention, mode);
+    assert.deepStrictEqual(result.warnings.filter((w) => /cross_phase_contention/.test(w)), []);
+  }
+  const bad = withRaw({ delivery_pipeline: { cross_phase_contention: 'rebase-on-land' } });
+  assert.strictEqual(bad.config.cross_phase_contention, 'block');
+  assert.ok(bad.warnings.some((w) => /cross_phase_contention "rebase-on-land" is unknown — falling back to block \(values: block \| merge-on-land\)/.test(w)));
+});
+
 test('code_review defaults to hold, accepts report and warns on unknown values', () => {
   assert.strictEqual(withConfig(undefined).config.code_review, 'hold');
   for (const mode of ['report', 'hold']) {

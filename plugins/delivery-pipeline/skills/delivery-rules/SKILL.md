@@ -153,7 +153,11 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    "dependency-unordered tickets never collide" checkable, and it is the
    executor's scope). Dependency-unordered plans with overlapping paths also
    fail Gate 2; resolve with a dependency or a re-slice, never by widening
-   globs (a bare glob that matches everything is flagged).
+   globs (a bare glob that matches everything is flagged). Across phases a
+   project may instead set `delivery_pipeline.cross_phase_contention:
+   merge-on-land`: the clash becomes a warning, the lower phase lands first,
+   and the later epic adapts when it lands. An unordered pair inside one phase
+   still fails.
 5. **Name what already does this, before planning to write it.** Every plan's
    Context reads must either point at the existing implementation the ticket
    extends (`path:line` — the transformer, sorter, middleware, helper, endpoint

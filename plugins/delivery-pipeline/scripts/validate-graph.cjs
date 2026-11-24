@@ -576,9 +576,10 @@ if (acyclic) {
             // real graph produced 52 errors that were really a handful of files.
             // A gate whose output cannot be read is a gate that gets skimmed.
             const key = fa === fb ? fa : `${fa} ~ ${fb}`;
-            const entry = contested.get(key) || { ids: new Set(), phases: new Set() };
+            const entry = contested.get(key) || { ids: new Set(), phases: new Set(), samePhase: false };
             entry.ids.add(a.id); entry.ids.add(b.id);
             entry.phases.add(String(a.phase)); entry.phases.add(String(b.phase));
+            if (String(a.phase) === String(b.phase)) entry.samePhase = true;
             contested.set(key, entry);
           }
         }
@@ -586,14 +587,26 @@ if (acyclic) {
     }
   }
 
-  for (const [path_, { ids, phases }] of [...contested.entries()].sort()) {
+  // @contract: merge-on-land downgrades only cross-phase clashes; an unordered same-phase pair stays an error.
+  const contentionMode = loadConfig(ROOT).config.cross_phase_contention;
+  const phaseOrder = (x, y) => Number(x) - Number(y) || String(x).localeCompare(String(y));
+  for (const [path_, { ids, phases, samePhase }] of [...contested.entries()].sort()) {
     const who = [...ids].sort().join(', ');
+    if (contentionMode === 'merge-on-land' && phases.size > 1 && !samePhase) {
+      const order = [...phases].sort(phaseOrder);
+      warnings.push(`contested path "${path_}" — ${who} span phases ${order.join('/')}; merge-on-land: phase ${order[0]} lands first, `
+        + `and each later phase (${order.slice(1).join(', ')}) adapts when the earlier epic lands — deliver merges the default branch `
+        + 'into its epic (epic-branch.sh refresh) and its PRs, CI and phase reviews run against the merged head; '
+        + 'a conflict in that merge stops for a person');
+      continue;
+    }
     // The remedy depends on whether the clash crosses a phase boundary, and
     // getting this wrong sends the reader into a construct the conveyor warns
     // about: a cross-phase dependency cannot cascade (delivery-rules §7), so
     // "add a dependency" is advice that only works inside one phase.
     const remedy = phases.size > 1
       ? `these tickets span phases ${[...phases].sort().join('/')}, and a cross-phase dependency cannot cascade (there is no shared branch to stack on) — RE-SLICE so the path belongs to one phase, do not wire a dependency across them`
+        + (samePhase ? '' : ', or set delivery_pipeline.cross_phase_contention to merge-on-land so the later phase adapts when the earlier epic lands')
       : 'add a dependency between them, or re-slice';
     errors.push(`contested path "${path_}" — ${who} are dependency-unordered but all touch it; ${remedy}`);
   }
