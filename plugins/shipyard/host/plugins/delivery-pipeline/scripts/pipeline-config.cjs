@@ -599,6 +599,7 @@ const DEFAULTS = {
   //               integration-branch PR is NEVER auto-merged; that stays human.
   //               off — every merge is a human's, the pre-sentinel behaviour.
   code_review: 'hold',                // @contract: report | hold
+  cross_phase_contention: 'block',    // @contract: block | merge-on-land
   sentinel: 'auto',                   // auto | off
   auto_merge: 'epic',                 // epic | off
   // A PR with NO reported checks is not a green PR — nothing ran. Both the board
@@ -1193,6 +1194,10 @@ function loadConfig(root, options = {}) {
   if (!['epic', 'off'].includes(cfg.auto_merge)) {
     warnings.push(`pipeline.auto_merge "${cfg.auto_merge}" is unknown — falling back to off (values: epic | off)`);
     cfg.auto_merge = 'off';
+  }
+  if (!['block', 'merge-on-land'].includes(cfg.cross_phase_contention)) {
+    warnings.push(`delivery_pipeline.cross_phase_contention "${cfg.cross_phase_contention}" is unknown — falling back to ${DEFAULTS.cross_phase_contention} (values: block | merge-on-land)`);
+    cfg.cross_phase_contention = DEFAULTS.cross_phase_contention;
   }
   if (!['report', 'hold'].includes(cfg.code_review)) {
     warnings.push(`delivery_pipeline.code_review "${cfg.code_review}" is unknown — falling back to ${DEFAULTS.code_review} (values: report | hold)`);

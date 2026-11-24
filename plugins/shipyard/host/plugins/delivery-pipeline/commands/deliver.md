@@ -588,6 +588,13 @@ blocked` before prompt construction, spawning or recording.
      NOT `ensure` an epic because a refresh mentioned it.
    - A CONFLICT is a refusal, never a resolution: the paths are named, the epic is
      untouched; show it to the user and continue with other epics.
+   - Under `delivery_pipeline.cross_phase_contention: merge-on-land`, Gate 2
+     accepted cross-phase contested paths with a landing order, so this refresh is
+     where the later epic adapts after the earlier one lands. Nothing is rebased
+     or force-pushed. After a pushed refresh, the later epic's PRs, CI and phase
+     reviews run against the merged head, and judgments bound to its old head are
+     stale. A conflict on a contested path is the expected stop: name the earlier
+     phase and the paths to the user.
    - **If ANY refresh printed `"pushed":true`, run `state-sync.cjs` once more
      before showing the board** — the push moved the base under every open ticket
      PR stacked on that epic.
