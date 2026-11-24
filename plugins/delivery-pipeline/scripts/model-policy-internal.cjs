@@ -347,6 +347,8 @@ const SIGNAL_ORDER = Object.freeze([
 ]);
 
 const SIGNAL_KEYS = new Set(SIGNAL_ORDER);
+// @contract: every host validates complexity against this one list before the policy resolves it.
+const COMPLEXITY_SIGNALS = Object.freeze(['normal', 'very-complex']);
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -432,7 +434,7 @@ function normalizeSignals(raw) {
     out.type = signals.type;
   }
   if (hasOwn(signals, 'complexity')) {
-    if (!['normal', 'very-complex'].includes(signals.complexity)) {
+    if (!COMPLEXITY_SIGNALS.includes(signals.complexity)) {
       refuse(
         'UNSUPPORTED_SIGNAL',
         `signals.complexity ${JSON.stringify(signals.complexity)} is not normal or very-complex`,
@@ -1039,6 +1041,7 @@ function resolveDispatch(input) {
 
 module.exports = Object.freeze({
   POLICY,
+  COMPLEXITY_SIGNALS,
   POLICY_VERSION,
   POLICY_HASH,
   VERSION: POLICY_VERSION,

@@ -18,6 +18,7 @@ const pipelineConfig = require('./pipeline-config.cjs');
 const { hintForError } = require('./refusal-hints.cjs');
 const { resolveClaudeHome, preflight, emitPreflight } = require('./runtime-context.cjs');
 const { repositoryIdentity } = require('./architecture-target.cjs');
+const { COMPLEXITY_SIGNALS } = require('./model-policy.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest, pidAlive,
   phaseDirectory: sharedPhaseDirectory, writeDurableFile, parsePhaseDirectoryName, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
@@ -153,8 +154,9 @@ function canonicalRequest(input) {
   if (!object(signals) || Object.keys(signals).some((key) => !['complexity', 'critical', 'checkpoint'].includes(key))) {
     refuse('INVALID_SIGNAL', 'unsupported decomposition signal');
   }
-  if (signals.complexity !== undefined && !['simple', 'moderate', 'complex', 'very-complex'].includes(signals.complexity)) {
-    refuse('INVALID_SIGNAL', 'invalid complexity signal');
+  if (signals.complexity !== undefined && !COMPLEXITY_SIGNALS.includes(signals.complexity)) {
+    refuse('INVALID_SIGNAL', `invalid complexity signal ${JSON.stringify(signals.complexity)}; use ${COMPLEXITY_SIGNALS.join(' or ')}, `
+      + 'or omit it');
   }
   for (const key of ['critical', 'checkpoint']) {
     if (signals[key] !== undefined && typeof signals[key] !== 'boolean') refuse('INVALID_SIGNAL', `invalid ${key} signal`);

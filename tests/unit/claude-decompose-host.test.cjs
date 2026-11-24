@@ -151,6 +151,24 @@ test('accepts exactly three canonical typed roles and rejects injected request a
     assert.throws(() => canonicalRequest({ ...request(f.worktree, 'gsd-planner'), effort: 'low' }), { code: 'INVALID_INPUT' });
     assert.throws(() => canonicalRequest({ ...request(f.worktree, 'gsd-planner'), agentFile: '/tmp/evil' }), { code: 'INVALID_INPUT' });
     assert.throws(() => canonicalRequest({ ...request(f.worktree, 'gsd-planner'), signals: { critical: 'true' } }), { code: 'INVALID_SIGNAL' });
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    assert.deepEqual(policy.COMPLEXITY_SIGNALS, ['normal', 'very-complex']);
+    for (const complexity of [...policy.COMPLEXITY_SIGNALS, 'simple', 'moderate', 'complex', 'Normal', '']) {
+      const accepted = (() => {
+        try { canonicalRequest({ ...request(f.worktree, 'gsd-phase-researcher'), signals: { complexity } }); return true; }
+        catch (error) {
+          assert.equal(error.code, 'INVALID_SIGNAL');
+          assert.match(error.message, /use normal or very-complex, or omit it$/);
+          return false;
+        }
+      })();
+      const resolved = (() => {
+        try { policy.resolveDispatch({ runtime: 'claude', role: 'research', signals: { complexity } }); return true; }
+        catch (error) { assert.equal(error.code, 'UNSUPPORTED_SIGNAL'); return false; }
+      })();
+      assert.equal(accepted, resolved, `the host and the policy agree on complexity ${JSON.stringify(complexity)}`);
+    }
+    assert.equal(canonicalRequest({ ...request(f.worktree, 'gsd-phase-researcher'), signals: {} }).signals.complexity, undefined);
     assert.deepEqual(parseArguments(['--capability-only']), { capabilityOnly: true });
     assert.deepEqual(parseArguments(['recover', '--dispatch', 'decompose-test']), { recoverDispatch: 'decompose-test' });
     assert.throws(() => parseArguments(['--host-module', 'evil.js']), { code: 'INVALID_INPUT' });

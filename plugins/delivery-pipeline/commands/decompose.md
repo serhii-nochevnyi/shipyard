@@ -209,7 +209,9 @@ starts at sonnet/xhigh and escalates to opus/high under the declared critical or
 checkpoint signal. If both declared signals are present, let the canonical
 policy choose the highest applicable rung and retain the signal evidence.
 Pass signals as policy inputs; never compose a model, effort, alias, or literal
-fallback in this command.
+fallback in this command. `complexity` takes only `normal` or `very-complex`;
+omit it unless the phase is very complex. The decomposition host refuses any
+other value, such as `complex`, before launch.
 
 For the Anthropic alias ladder, `sonnet/xhigh` is the ADR-014 policy result for
 the base research and decomposition selections, and `opus/high` is the result
