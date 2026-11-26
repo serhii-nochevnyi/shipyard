@@ -1682,6 +1682,56 @@ function repairHistoricalEndpoint(prepared) {
   return candidate.expected_head;
 }
 
+const MERGE_COMMIT = /^[a-f0-9]{40}$/;
+
+function connectsToParentHead(root, base, head) {
+  if (base === head) return true;
+  try { git(root, ['merge-base', '--is-ancestor', base, head]); return true; } catch { return false; }
+}
+
+// @security: a base move without ancestry is admitted only as the primary parent's merged squash, proven live.
+function repairSquashedParentBase(options, prepared, feedback, priorScope, currentScope) {
+  const root = prepared.commit.worktree;
+  const branch = ref => String(ref || '').replace(/^origin[/]/, '');
+  const graph = JSON.parse(fs.readFileSync(prepared.graphFile, 'utf8'));
+  const board = JSON.parse(fs.readFileSync(path.join(path.dirname(prepared.graphFile), 'delivery-state.json'), 'utf8'));
+  const row = object(graph.tickets) ? graph.tickets[prepared.commit.ticket] : null;
+  const parentId = object(row) ? row.primary_parent : null;
+  const parent = typeof parentId === 'string' ? graph.tickets[parentId] : null;
+  const state = object(board) && typeof parentId === 'string' ? board[parentId] : null;
+  if (!object(parent) || !object(state) || state.status !== 'merged' || !Number.isSafeInteger(state.pr) || state.pr <= 0
+      || typeof state.merged_into !== 'string' || branch(priorScope.base_ref) !== parent.branch
+      || branch(currentScope.base_ref) !== state.merged_into)
+    throw new Error('the base move is not the primary parent landing on its merged destination');
+  const [owner, name] = String(feedback.repo || '').split('/');
+  const pr = repairCommand(options, root, ['api', 'graphql', '-f',
+    'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state headRefName headRefOid baseRefName mergeCommit{oid}}}}',
+    '-f', 'owner=' + owner, '-f', 'name=' + name, '-F', 'number=' + state.pr]).data?.repository?.pullRequest;
+  const mergeCommit = object(pr) && object(pr.mergeCommit) ? pr.mergeCommit.oid : null;
+  if (!object(pr) || pr.state !== 'MERGED' || pr.headRefName !== parent.branch || pr.baseRefName !== state.merged_into
+      || typeof mergeCommit !== 'string' || !MERGE_COMMIT.test(mergeCommit)
+      || (state.merge_sha !== undefined && state.merge_sha !== mergeCommit))
+    throw new Error('primary parent PR #' + state.pr + ' is not a merged landing on ' + state.merged_into);
+  if (typeof pr.headRefOid !== 'string' || !connectsToParentHead(root, priorScope.base, pr.headRefOid))
+    throw new Error('prior base is not the merged primary parent head or its ancestor');
+  git(root, ['merge-base', '--is-ancestor', mergeCommit, currentScope.base]);
+  return { parent: parentId, pr: state.pr, head: pr.headRefOid, merge_commit: mergeCommit, into: state.merged_into };
+}
+
+function repairBaseEvolution(options, prepared, feedback, priorScope, currentScope) {
+  try {
+    const root = prepared.commit.worktree;
+    let squash = null;
+    try { git(root, ['merge-base', '--is-ancestor', priorScope.base, currentScope.base]); }
+    catch { squash = repairSquashedParentBase(options, prepared, feedback, priorScope, currentScope); }
+    const commits = git(root, ['rev-list', '--reverse', '--max-count=501', priorScope.base + '..' + currentScope.base])
+      .split('\n').filter(Boolean);
+    if (!commits.length || commits.length > 500) throw new Error('base evolution exceeds its finite bound');
+    return { from: priorScope.base, to: currentScope.base, ...(squash ? { squash } : {}),
+      commits: commits.map(commit => ({ commit, signer: repairRevisionSigner(root, commit) })) };
+  } catch (error) { fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output lacks authenticated base evolution: ' + error.message); }
+}
+
 function recheckHistoricalRepair(prepared, prior, originalHead, endpoint = prepared.commit.expectedHead) {
   try {
     const root = prepared.commit.worktree, scope = prior.scope_transition, transition = prior.source_transition;
@@ -1694,7 +1744,12 @@ function recheckHistoricalRepair(prepared, prior, originalHead, endpoint = prepa
     if (scope && (scope.from.base !== scope.to.base) !== !!base) throw new Error('missing original base evolution');
     if (base) {
       if (base.from !== scope.from.base || base.to !== scope.to.base) throw new Error('base evolution changed its scope');
-      git(root, ['merge-base', '--is-ancestor', base.from, base.to]);
+      if (base.squash) {
+        if (!object(base.squash) || !MERGE_COMMIT.test(base.squash.merge_commit || '')
+            || typeof base.squash.head !== 'string' || !connectsToParentHead(root, base.from, base.squash.head))
+          throw new Error('historical squashed parent base changed');
+        git(root, ['merge-base', '--is-ancestor', base.squash.merge_commit, base.to]);
+      } else git(root, ['merge-base', '--is-ancestor', base.from, base.to]);
       const commits = git(root, ['rev-list', '--reverse', '--max-count=501', base.from + '..' + base.to]).split('\n').filter(Boolean);
       if (!commits.length || commits.length > 500 || canonical(commits.map(commit => ({
         commit, signer: repairRevisionSigner(root, commit) }))) !== canonical(base.commits))
@@ -1813,17 +1868,7 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
         && priorScope.plan.sha256 === currentScope.plan.sha256)
       fail('REPAIR_SUBJECT_CHANGED', 'changed owners lack a fresh canonical PLAN');
     let baseTransition;
-    if (priorScope.base !== currentScope.base) {
-      try {
-        const root = prepared.commit.worktree;
-        git(root, ['merge-base', '--is-ancestor', priorScope.base, currentScope.base]);
-        const commits = git(root, ['rev-list', '--reverse', '--max-count=501', priorScope.base + '..' + currentScope.base])
-          .split('\n').filter(Boolean);
-        if (!commits.length || commits.length > 500) throw new Error('base evolution exceeds its finite bound');
-        baseTransition = { from: priorScope.base, to: currentScope.base,
-          commits: commits.map(commit => ({ commit, signer: repairRevisionSigner(root, commit) })) };
-      } catch (error) { fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output lacks authenticated base evolution: ' + error.message); }
-    }
+    if (priorScope.base !== currentScope.base) baseTransition = repairBaseEvolution(options, prepared, feedback, priorScope, currentScope);
     let sourceTransition;
     if (expectedHead !== prepared.commit.expectedHead) {
       try {
@@ -3917,6 +3962,7 @@ module.exports = Object.freeze({
   shareRepairTransitions,
   repairCoverageTransition,
   recheckHistoricalRepair,
+  repairBaseEvolution,
   completeRepairFeedback,
   repairCommentEvolution,
   recheckRepair,
