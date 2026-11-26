@@ -35,6 +35,7 @@ const {
   shareRepairTransitions,
   repairCoverageTransition,
   recheckHistoricalRepair,
+  repairBaseEvolution,
   runCli,
   validateArgs,
   verificationFailureContext,
@@ -4070,6 +4071,81 @@ function sharedRepairTransitionRegression() {
     repeated_transition_bytes: bytes(coverage.map(item => ({ source_transition: item.source_transition, scope_transition: item.scope_transition }))),
     shared_transition_bytes: bytes(shared.historical_transitions) };
 }
+
+test('a squash-merged primary parent moves the repair base only with a live merged-PR proof', () => {
+  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+  const oid = n => String(n).padStart(40, '0');
+  const root = fs.mkdtempSync(path.join(temporary, 'squash-parent-'));
+  git(root, 'init', '-q', '-b', 'main');
+  for (const [key, value] of [['user.name', 'Delivery Test'], ['user.email', 'delivery@example.test'],
+    ['user.signingkey', signer], ['commit.gpgsign', 'true']]) git(root, 'config', key, value);
+  const commit = (file, body, message) => {
+    fs.writeFileSync(path.join(root, file), body); git(root, 'add', file); git(root, 'commit', '-q', '-S', '-m', message);
+    return git(root, 'rev-parse', 'HEAD');
+  };
+  commit('base.txt', 'epic base\n', 'epic base');
+  git(root, 'checkout', '-q', '-b', 'ticket/T-38-03');
+  const priorBase = commit('parent.txt', 'parent first\n', 'parent first');
+  const parentHead = commit('parent.txt', 'parent first\nparent review fix\n', 'parent review fix');
+  git(root, 'checkout', '-q', 'main');
+  const squash = commit('parent.txt', 'parent first\nparent review fix\n', 'T-38-03 squash (#871)');
+  const epicTip = commit('epic.txt', 'later epic work\n', 'later epic work');
+  git(root, 'checkout', '-q', '-b', 'unrelated', squash + '~1');
+  const unrelated = commit('other.txt', 'unrelated\n', 'unrelated');
+  git(root, 'checkout', '-q', 'main');
+  const graphDir = path.join(root, '.planning', 'graph'); fs.mkdirSync(graphDir, { recursive: true });
+  fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets: {
+    'T-38-03': { branch: 'ticket/T-38-03', pr_base: 'main', epic: 'main' },
+    'T-38-04': { branch: 'ticket/T-38-04', pr_base: 'ticket/T-38-03', primary_parent: 'T-38-03', epic: 'main' } } }));
+  const board = { 'T-38-03': { branch: 'ticket/T-38-03', status: 'merged', pr: 871, merged_into: 'main', merge_sha: squash } };
+  const writeBoard = value => fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify(value));
+  writeBoard(board);
+  const prepared = { commit: { worktree: root, ticket: 'T-38-04' }, graphFile: path.join(graphDir, 'tickets.json') };
+  const feedback = { repo: 'acme/app' };
+  const merged = { state: 'MERGED', headRefName: 'ticket/T-38-03', headRefOid: parentHead, baseRefName: 'main', mergeCommit: { oid: squash } };
+  const calls = [];
+  const optionsFor = pr => ({ execFileSync(program, argv) {
+    calls.push(argv); assert.equal(program, 'gh'); assert.ok(argv.includes('number=871'));
+    return JSON.stringify({ data: { repository: { pullRequest: pr } } });
+  } });
+  const prior = { base: priorBase, base_ref: 'origin/ticket/T-38-03' }, current = { base: epicTip, base_ref: 'origin/main' };
+  assert.throws(() => git(root, 'merge-base', '--is-ancestor', priorBase, epicTip), 'the squash keeps no ancestry');
+  const transition = repairBaseEvolution(optionsFor(merged), prepared, feedback, prior, current);
+  assert.deepEqual(transition.squash, { parent: 'T-38-03', pr: 871, head: parentHead, merge_commit: squash, into: 'main' });
+  assert.deepEqual(transition.commits.map(item => item.commit), [squash, epicTip]);
+  assert.ok(transition.commits.every(item => typeof item.signer === 'string' && item.signer));
+  assert.equal(calls.length, 1);
+
+  const allowList = [{ argv: ['node', 'check.cjs'], profile: 'host', timeout_s: 600 }];
+  const scope = (base, ref) => ({ base, base_ref: ref, plan: { path: 'PLAN.md', sha256: digest('plan') },
+    owners: ['src/owned.txt'], allow_list: allowList });
+  const recheckPrepared = { commit: { worktree: root, expectedBase: epicTip, expectedHead: oid(77), files_modified: ['src/owned.txt'] },
+    baseRef: 'origin/main', plan: { path: 'PLAN.md', sha256: digest('plan') }, verificationAllowList: allowList };
+  const historical = base_transition => ({ semantic_credit: false,
+    scope_transition: { from: scope(priorBase, 'origin/ticket/T-38-03'), to: scope(epicTip, 'origin/main'), base_transition } });
+  recheckHistoricalRepair(recheckPrepared, historical(transition), oid(77));
+  for (const altered of [{ ...transition, squash: { ...transition.squash, merge_commit: unrelated } },
+    { ...transition, squash: { ...transition.squash, head: unrelated } }, { ...transition, squash: undefined }])
+    assert.throws(() => recheckHistoricalRepair(recheckPrepared, historical(altered), oid(77)), { code: 'REPAIR_PREDECESSOR_INVALID' });
+
+  const ancestral = repairBaseEvolution({ execFileSync() { throw new Error('an ancestral base move needs no GitHub proof'); } },
+    prepared, feedback, { base: squash, base_ref: 'origin/main' }, current);
+  assert.equal(ancestral.squash, undefined);
+  assert.deepEqual(ancestral.commits.map(item => item.commit), [epicTip]);
+
+  const refuse = (options, priorScope, currentScope, message) => assert.throws(
+    () => repairBaseEvolution(options, prepared, feedback, priorScope, currentScope),
+    error => error.code === 'REPAIR_SUBJECT_CHANGED' && message.test(error.message));
+  refuse(optionsFor({ ...merged, state: 'OPEN' }), prior, current, /primary parent PR #871 is not a merged landing on main/);
+  refuse(optionsFor({ ...merged, baseRefName: 'release' }), prior, current, /is not a merged landing/);
+  refuse(optionsFor({ ...merged, headRefOid: unrelated }), prior, current, /prior base is not the merged primary parent head or its ancestor/);
+  refuse(optionsFor(merged), prior, { base: unrelated, base_ref: 'origin/main' }, /lacks authenticated base evolution/);
+  refuse(optionsFor(merged), { base: priorBase, base_ref: 'origin/ticket/T-38-99' }, current, /not the primary parent landing/);
+  writeBoard({ 'T-38-03': { ...board['T-38-03'], status: 'pr-open' } });
+  refuse(optionsFor(merged), prior, current, /not the primary parent landing/);
+  writeBoard({ 'T-38-03': { ...board['T-38-03'], merge_sha: unrelated } });
+  refuse(optionsFor(merged), prior, current, /is not a merged landing/);
+});
 
 test('49 complete historical actions share authenticated transition bytes within unchanged custody bounds',
   sharedRepairTransitionRegression);
