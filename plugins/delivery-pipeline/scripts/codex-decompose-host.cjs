@@ -24,7 +24,7 @@ const { hintForError } = require('./refusal-hints.cjs');
 const { sealDecomposition, assertContained, captureContainmentBaseline,
   persistContainmentBaseline, restoreContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest, pidAlive,
-  phaseDirectory: sharedPhaseDirectory, writeDurableFile, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
+  phaseDirectory: sharedPhaseDirectory, writeDurableFile, resolvePhaseArtifact, seedValidationStrategy } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const LAUNCH_SCHEMA = 'shipyard.codex-decompose-launch.v1';
@@ -1268,6 +1268,10 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   let dispatchId;
   let stopHeartbeat = () => {};
   try {
+  if (parsed.launch.gsd_role === 'gsd-planner') {
+    seedValidationStrategy({ worktree: scope.worktree, phaseDir, templateFile: options.validationTemplate
+      || path.join(resolveCodexHome({ scriptDir: __dirname, env: options.env }), 'gsd-core', 'templates', 'VALIDATION.md') });
+  }
   const containmentBaseline = captureContainmentBaseline({ worktree: scope.worktree });
   const leaseSnapshot = writerLease.snapshotTree();
   const request = parsed.launch;

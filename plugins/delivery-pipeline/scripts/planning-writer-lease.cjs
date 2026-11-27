@@ -148,6 +148,29 @@ function writeDurableFile(file, raw) {
   } finally { try { fs.unlinkSync(temporary); } catch {} }
 }
 
+// @contract: GSD plan-phase step 5.5 - seed the phase VALIDATION.md from the runtime's GSD template, never overwrite.
+function seedValidationStrategy({ worktree, phaseDir, templateFile, now = new Date() } = {}) {
+  let config = {};
+  try { config = JSON.parse(fs.readFileSync(path.join(worktree, '.planning', 'config.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') fail('INVALID_INPUT', `.planning/config.json is unreadable: ${error.message}`); }
+  const workflow = object(config) && object(config.workflow) ? config.workflow : {};
+  if (workflow.nyquist_validation === false || workflow.research === false) return null;
+  const research = resolvePhaseArtifact(phaseDir, 'RESEARCH');
+  if (!research || !/^## Validation Architecture\b/m.test(fs.readFileSync(path.join(phaseDir, research), 'utf8'))) return null;
+  if (resolvePhaseArtifact(phaseDir, 'VALIDATION')) return null;
+  let template;
+  try { template = fs.readFileSync(templateFile, 'utf8'); }
+  catch (error) { fail('MISSING_TEMPLATE', `GSD validation template is unavailable at ${templateFile}: ${error.code || error.message}`); }
+  const parsed = parsePhaseDirectoryName(path.basename(phaseDir));
+  const slug = path.basename(phaseDir).slice(parsed.token.length + 1);
+  const name = research.replace(/RESEARCH\.md$/, 'VALIDATION.md');
+  const content = template.replace(/\{N\}/g, String(parsed.number)).replace(/\{phase-slug\}/g, slug)
+    .replace(/\{date\}/g, now.toISOString().slice(0, 10));
+  try { fs.writeFileSync(path.join(phaseDir, name), content, { flag: 'wx' }); }
+  catch (error) { if (error.code === 'EEXIST') return null; throw error; }
+  return name;
+}
+
 function realpathClosest(target) {
   let root = path.resolve(target);
   const missing = [];
@@ -232,7 +255,7 @@ function captureSealManifest({ role, phaseDir, snapshot, changed }) {
   const outside = sortedChanged.filter((rel) => !Object.hasOwn(outputs, rel));
   if (outside.length) {
     fail('FOREIGN_EDIT', role === 'gsd-plan-checker'
-      ? `the plan checker is read-only but changed phase file(s): ${outside.join(', ')}; PLAN revisions go through a planner re-dispatch followed by a fresh checker`
+      ? `the plan checker is read-only but changed phase file(s): ${outside.join(', ')}; PLAN revisions go through a planner re-dispatch, RESEARCH revisions through a researcher re-dispatch, then a fresh checker`
       : `phase change is outside the role seal outputs: ${outside.join(', ')}`, { outside });
   }
   return outputs;
@@ -470,4 +493,4 @@ module.exports = Object.freeze({ SCHEMA, DEFAULT_TTL_MS, createPlanningWriterLea
   parsePhaseDirectoryName, phaseDirectoryNames, resolvePhaseArtifact, liveLaunchChild,
   writeDurableFile,
   sharedPlanningWriterRoot,
-  sealOutputPaths, captureSealManifest, assertSealManifest });
+  sealOutputPaths, captureSealManifest, assertSealManifest, seedValidationStrategy });

@@ -646,6 +646,74 @@ test('a planner revision then a fresh checker bind the checked PLAN digests to t
   } finally { f.clean(); }
 });
 
+test('the planner launch seeds NN-VALIDATION.md from the GSD template (plan-phase step 5.5) and never overwrites it', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    const template = path.join(f.root, 'VALIDATION.template.md');
+    fs.writeFileSync(template, '---\nphase: "{N}"\nslug: "{phase-slug}"\ncreated: "{date}"\n---\n\n# Phase {N} — Validation Strategy\n');
+    fs.writeFileSync(path.join(f.phaseDir, '38-RESEARCH.md'), '# Research\n\n## Validation Architecture\n\nRun the unit suite.\n');
+    const plan = path.join(f.phaseDir, '38-01-PLAN.md');
+    const run = (name) => runDecomposition(request(f.worktree, 'gsd-planner'), {
+      ...successDependencies(f, { store: path.join(f.root, name), onLaunch: () => { fs.writeFileSync(plan, `# Plan ${name}\n`); } }).deps,
+      validationTemplate: template });
+    const output = await run('store-seed');
+    const validation = path.join(f.phaseDir, '38-VALIDATION.md');
+    const body = fs.readFileSync(validation, 'utf8');
+    assert.match(body, /^---\nphase: "38"\nslug: "test-phase"\ncreated: "\d{4}-\d{2}-\d{2}"\n---/);
+    assert.match(body, /# Phase 38 — Validation Strategy/);
+    const names = JSON.parse(fs.readFileSync(output.envelope.artifact_index.path, 'utf8')).entries.map((entry) => path.basename(entry.path)).sort();
+    assert.deepEqual(names, ['38-01-PLAN.md', 'CONTEXT.md'], 'the seeded file is the planner baseline, not a planner output');
+    fs.writeFileSync(validation, '# Kept validation strategy\n');
+    await run('store-keep');
+    assert.equal(fs.readFileSync(validation, 'utf8'), '# Kept validation strategy\n');
+  } finally { f.clean(); }
+});
+
+test('VALIDATION.md is seeded only with Nyquist on and a Validation Architecture section, and a missing template refuses', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    const template = path.join(f.root, 'VALIDATION.template.md');
+    fs.writeFileSync(template, '# Phase {N}\n');
+    const research = path.join(f.phaseDir, '38-RESEARCH.md'), validation = path.join(f.phaseDir, '38-VALIDATION.md');
+    const config = path.join(f.worktree, '.planning', 'config.json');
+    const run = (name, templateFile = template) => runDecomposition(request(f.worktree, 'gsd-planner'), {
+      ...successDependencies(f, { store: path.join(f.root, name) }).deps, validationTemplate: templateFile });
+    fs.writeFileSync(research, '# Research\n\n## Validation Architecture\n');
+    fs.writeFileSync(config, JSON.stringify({ workflow: { nyquist_validation: false } }));
+    await run('store-nyquist-off');
+    assert.equal(fs.existsSync(validation), false, 'Nyquist off seeds nothing');
+    fs.rmSync(config);
+    fs.writeFileSync(research, '# Research\n\nNo validation section.\n');
+    await run('store-no-section');
+    assert.equal(fs.existsSync(validation), false, 'research without a Validation Architecture section seeds nothing');
+    fs.writeFileSync(research, '# Research\n\n## Validation Architecture\n');
+    await assert.rejects(run('store-no-template', path.join(f.root, 'missing-template.md')), /GSD validation template is unavailable/);
+    assert.equal(fs.existsSync(validation), false);
+  } finally { f.clean(); }
+});
+
+test('a researcher revision after a planner seal resolves Open Questions, and the next planner and checker run on it', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    const research = path.join(f.phaseDir, '38-RESEARCH.md'), plan = path.join(f.phaseDir, '38-01-PLAN.md');
+    fs.writeFileSync(research, '# Research\n\n## Open Questions\n\n1. Which store backs the cache?\n');
+    const run = (role, name, onLaunch) => runDecomposition(request(f.worktree, role),
+      successDependencies(f, { store: path.join(f.root, name), onLaunch }).deps);
+    await run('gsd-planner', 'store-plan-one', () => { fs.writeFileSync(plan, '# Plan: Redis backs the cache\n'); });
+    await assert.rejects(run('gsd-planner', 'store-plan-edits-research', () => {
+      fs.writeFileSync(research, '# Research\n\n## Open Questions (RESOLVED)\n');
+    }), (error) => error.code === 'FOREIGN_EDIT' || /FOREIGN_EDIT|foreign phase edit|outside the role seal outputs/.test(error.message));
+    fs.writeFileSync(research, '# Research\n\n## Open Questions\n\n1. Which store backs the cache?\n');
+    await run('gsd-phase-researcher', 'store-research-revision', () => {
+      fs.writeFileSync(research, '# Research\n\n## Open Questions (RESOLVED)\n\n1. Which store backs the cache? RESOLVED: Redis, decided in 38-01-PLAN.md\n');
+    });
+    assert.match(fs.readFileSync(research, 'utf8'), /## Open Questions \(RESOLVED\)/);
+    await run('gsd-planner', 'store-plan-two', () => { fs.writeFileSync(plan, '# Plan: Redis backs the cache (revised)\n'); });
+    const checked = await run('gsd-plan-checker', 'store-checker-after-research');
+    assert.ok(checked.artifact_index.path);
+  } finally { f.clean(); }
+});
+
 test('a planner run over a phase whose CONTEXT carries the GSD padded name seals that file', async () => {
   const f = preparedPhaseFixture();
   try {

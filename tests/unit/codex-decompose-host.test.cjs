@@ -1613,6 +1613,34 @@ test('planner accepts zero-padded and ordinary declared plans with a preexisting
   } finally { setup.f.clean(); }
 });
 
+test('the Codex planner launch seeds NN-VALIDATION.md from the runtime GSD template before the planner baseline', async () => {
+  const f = fixture();
+  const fixtureData = buildNativeChildFixture('gsd-planner');
+  try {
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    fs.writeFileSync(path.join(phaseDir, '38-RESEARCH.md'), '# Research\n\n## Validation Architecture\n\nRun the unit suite.\n');
+    const templates = path.join(f.codexHome, 'gsd-core', 'templates');
+    fs.mkdirSync(templates, { recursive: true });
+    fs.writeFileSync(path.join(templates, 'VALIDATION.md'), '---\nphase: "{N}"\nslug: "{phase-slug}"\n---\n\n# Phase {N} — Validation Strategy\n');
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'), gsdAgentToml('gsd-planner', fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'cli-request.json');
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', adr: ADR_PATH, prompt: 'Plan this phase.' }));
+    const { spawn } = attachFakeSpawn(f, 'gsd-planner', fixtureData);
+    const result = await runCli(['--args-file', file], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome }, agentDir: f.agentDir, agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities }, spawn,
+    });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(fs.readFileSync(path.join(phaseDir, '38-VALIDATION.md'), 'utf8'),
+      '---\nphase: "38"\nslug: "codex-decompose"\n---\n\n# Phase 38 — Validation Strategy\n');
+    const launchDir = path.join(path.dirname(defaultRunStoreDir(f.scope, f.stateRoot)), 'launches');
+    const launchRecord = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.equal(Object.keys(launchRecord.completed.artifact_digests).includes('38-VALIDATION.md'), false,
+      'the seeded strategy is the planner baseline, not a planner change');
+  } finally { f.clean(); }
+});
+
 test('planner accepts several plans the child never listed and refuses a write outside the role outputs', async () => {
   const plans = [
     '.planning/phases/38-codex-decompose/38-01-PLAN.md',
