@@ -1626,11 +1626,15 @@ function repairSourceCommits(prepared) {
   };
 }
 
-function repairBaseMerge(root, commit, sourceParent, currentBase) {
+function repairBaseMerge(root, commit, sourceParent, currentBase, squash = null) {
   const [parentText, tree] = git(root, ['show', '-s', '--format=%P%x00%T', commit]).split('\0');
   const parents = parentText.split(' ');
   if (parents.length !== 2 || parents[0] !== sourceParent) throw new Error('base import changed its source parent');
-  git(root, ['merge-base', '--is-ancestor', parents[1], currentBase]);
+  let inBase = true;
+  try { git(root, ['merge-base', '--is-ancestor', parents[1], currentBase]); } catch { inBase = false; }
+  // @security: without base ancestry, only the squash-proven parent head (or its ancestor) may be merged in.
+  if (!inBase && !(squash && connectsToParentHead(root, parents[1], squash.head)))
+    throw new Error('base import merges a commit that is neither in the current base nor the proven parent head');
   const expected = git(root, ['merge-tree', '--write-tree', parents[0], parents[1]]);
   if (!/^[a-f0-9]{40,64}$/.test(expected) || tree !== expected)
     throw new Error('base import differs from the exact conflict-free merge tree');
@@ -1718,6 +1722,37 @@ function repairSquashedParentBase(options, prepared, feedback, priorScope, curre
   return { parent: parentId, pr: state.pr, head: pr.headRefOid, merge_commit: mergeCommit, into: state.merged_into };
 }
 
+function squashedParentCommits(root, priorBase, parentHead) {
+  const commits = git(root, ['rev-list', '--reverse', '--max-count=501', priorBase + '..' + parentHead]).split('\n').filter(Boolean);
+  if (commits.length > 500) throw new Error('squashed parent history exceeds its finite bound');
+  return commits.map(commit => ({ commit, signer: repairRevisionSigner(root, commit) }));
+}
+
+function repairImportedCommits(baseTransition) {
+  return new Map([...(baseTransition?.commits || []), ...(baseTransition?.squash?.parent_commits || [])]
+    .map(record => [record.commit, record]));
+}
+
+function repairSourceWalk(root, from, to, baseTransition, currentBase, sourceCommit, expectedSigner) {
+  git(root, ['merge-base', '--is-ancestor', from, to]);
+  const commits = git(root, ['rev-list', '--reverse', '--max-count=501', from + '..' + to]).split('\n').filter(Boolean);
+  if (!commits.length || commits.length > 500) throw new Error('source transition exceeds its finite bound');
+  const imported = repairImportedCommits(baseTransition);
+  let sourceParent = from;
+  const records = commits.map(commit => {
+    const source = sourceCommit(commit, sourceParent);
+    if (source) { sourceParent = commit; return source; }
+    if (imported.has(commit)) return { ...imported.get(commit), base_import: true, semantic_credit: false };
+    if (!baseTransition) throw new Error('source transition belongs to another producer or ticket');
+    const merge = repairBaseMerge(root, commit, sourceParent, currentBase, baseTransition.squash || null);
+    const signer = repairRevisionSigner(root, commit, expectedSigner);
+    sourceParent = commit;
+    return { commit, signer, base_merge: merge, semantic_credit: false };
+  });
+  if (sourceParent !== to) throw new Error('source transition lacks a current authenticated tip');
+  return records;
+}
+
 function repairBaseEvolution(options, prepared, feedback, priorScope, currentScope) {
   try {
     const root = prepared.commit.worktree;
@@ -1727,6 +1762,7 @@ function repairBaseEvolution(options, prepared, feedback, priorScope, currentSco
     const commits = git(root, ['rev-list', '--reverse', '--max-count=501', priorScope.base + '..' + currentScope.base])
       .split('\n').filter(Boolean);
     if (!commits.length || commits.length > 500) throw new Error('base evolution exceeds its finite bound');
+    if (squash) squash.parent_commits = squashedParentCommits(root, priorScope.base, squash.head);
     return { from: priorScope.base, to: currentScope.base, ...(squash ? { squash } : {}),
       commits: commits.map(commit => ({ commit, signer: repairRevisionSigner(root, commit) })) };
   } catch (error) { fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output lacks authenticated base evolution: ' + error.message); }
@@ -1746,7 +1782,8 @@ function recheckHistoricalRepair(prepared, prior, originalHead, endpoint = prepa
       if (base.from !== scope.from.base || base.to !== scope.to.base) throw new Error('base evolution changed its scope');
       if (base.squash) {
         if (!object(base.squash) || !MERGE_COMMIT.test(base.squash.merge_commit || '')
-            || typeof base.squash.head !== 'string' || !connectsToParentHead(root, base.from, base.squash.head))
+            || typeof base.squash.head !== 'string' || !connectsToParentHead(root, base.from, base.squash.head)
+            || canonical(squashedParentCommits(root, base.from, base.squash.head)) !== canonical(base.squash.parent_commits || []))
           throw new Error('historical squashed parent base changed');
         git(root, ['merge-base', '--is-ancestor', base.squash.merge_commit, base.to]);
       } else git(root, ['merge-base', '--is-ancestor', base.from, base.to]);
@@ -1765,7 +1802,7 @@ function recheckHistoricalRepair(prepared, prior, originalHead, endpoint = prepa
     git(root, ['merge-base', '--is-ancestor', transition.from, transition.to]);
     const commits = git(root, ['rev-list', '--reverse', '--max-count=501', transition.from + '..' + transition.to]).split('\n').filter(Boolean);
     if (canonical(commits) !== canonical(transition.records.map(pin => pin.commit))) throw new Error('historical source ancestry changed');
-    const imported = new Map((base?.commits || []).map(pin => [pin.commit, pin])), sourceCommit = repairSourceCommits(prepared);
+    const imported = repairImportedCommits(base), sourceCommit = repairSourceCommits(prepared);
     let sourceParent = transition.from;
     for (const pin of transition.records) {
       if (pin.base_import) {
@@ -1774,7 +1811,7 @@ function recheckHistoricalRepair(prepared, prior, originalHead, endpoint = prepa
       } else if (pin.base_merge) {
         if (!base || pin.semantic_credit !== false
             || pin.signer !== repairRevisionSigner(root, pin.commit, prepared.commit.expectedSigner)
-            || canonical(pin.base_merge) !== canonical(repairBaseMerge(root, pin.commit, sourceParent, base.to)))
+            || canonical(pin.base_merge) !== canonical(repairBaseMerge(root, pin.commit, sourceParent, base.to, base.squash || null)))
           throw new Error('historical base merge changed');
         sourceParent = pin.commit;
       } else {
@@ -1872,25 +1909,8 @@ function normalizedRepairFeedback(prepared, feedback, history, options) {
     let sourceTransition;
     if (expectedHead !== prepared.commit.expectedHead) {
       try {
-        const root = prepared.commit.worktree;
-        git(root, ['merge-base', '--is-ancestor', expectedHead, prepared.commit.expectedHead]);
-        const commits = git(root, ['rev-list', '--reverse', '--max-count=501', expectedHead + '..' + prepared.commit.expectedHead])
-          .split('\n').filter(Boolean);
-        if (!commits.length || commits.length > 500) throw new Error('source transition exceeds its finite bound');
-        const imported = new Map((baseTransition?.commits || []).map(record => [record.commit, record]));
-        const sourceCommit = repairSourceCommits(prepared);
-        let sourceParent = expectedHead;
-        const records = commits.map(commit => {
-          const source = sourceCommit(commit, sourceParent);
-          if (source) { sourceParent = commit; return source; }
-          if (imported.has(commit)) return { ...imported.get(commit), base_import: true, semantic_credit: false };
-          if (!baseTransition) throw new Error('source transition belongs to another producer or ticket');
-          const merge = repairBaseMerge(root, commit, sourceParent, currentScope.base);
-          const signer = repairRevisionSigner(root, commit, prepared.commit.expectedSigner);
-          sourceParent = commit;
-          return { commit, signer, base_merge: merge, semantic_credit: false };
-        });
-        if (sourceParent !== prepared.commit.expectedHead) throw new Error('source transition lacks a current authenticated tip');
+        const records = repairSourceWalk(prepared.commit.worktree, expectedHead, prepared.commit.expectedHead, baseTransition,
+          currentScope.base, repairSourceCommits(prepared), prepared.commit.expectedSigner);
         sourceTransition = { from: expectedHead, to: prepared.commit.expectedHead, records };
       } catch (error) {
         fail('REPAIR_SUBJECT_CHANGED', 'confirmed host output lacks an authenticated covered source transition: ' + error.message);
@@ -3963,6 +3983,7 @@ module.exports = Object.freeze({
   repairCoverageTransition,
   recheckHistoricalRepair,
   repairBaseEvolution,
+  repairSourceWalk,
   completeRepairFeedback,
   repairCommentEvolution,
   recheckRepair,
