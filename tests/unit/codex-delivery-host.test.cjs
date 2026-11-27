@@ -36,6 +36,7 @@ const {
   repairCoverageTransition,
   recheckHistoricalRepair,
   repairBaseEvolution,
+  repairSourceWalk,
   runCli,
   validateArgs,
   verificationFailureContext,
@@ -4111,7 +4112,9 @@ test('a squash-merged primary parent moves the repair base only with a live merg
   const prior = { base: priorBase, base_ref: 'origin/ticket/T-38-03' }, current = { base: epicTip, base_ref: 'origin/main' };
   assert.throws(() => git(root, 'merge-base', '--is-ancestor', priorBase, epicTip), 'the squash keeps no ancestry');
   const transition = repairBaseEvolution(optionsFor(merged), prepared, feedback, prior, current);
-  assert.deepEqual(transition.squash, { parent: 'T-38-03', pr: 871, head: parentHead, merge_commit: squash, into: 'main' });
+  const { parent_commits: parentCommits, ...proof } = transition.squash;
+  assert.deepEqual(proof, { parent: 'T-38-03', pr: 871, head: parentHead, merge_commit: squash, into: 'main' });
+  assert.deepEqual(parentCommits.map(item => item.commit), [parentHead]);
   assert.deepEqual(transition.commits.map(item => item.commit), [squash, epicTip]);
   assert.ok(transition.commits.every(item => typeof item.signer === 'string' && item.signer));
   assert.equal(calls.length, 1);
@@ -4145,6 +4148,94 @@ test('a squash-merged primary parent moves the repair base only with a live merg
   refuse(optionsFor(merged), prior, current, /not the primary parent landing/);
   writeBoard({ 'T-38-03': { ...board['T-38-03'], merge_sha: unrelated } });
   refuse(optionsFor(merged), prior, current, /is not a merged landing/);
+});
+
+test('child merges the updated parent, the parent is squash-merged, the child imports the epic, then a native fix: the walk is authenticated', () => {
+  const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+  const root = fs.mkdtempSync(path.join(temporary, 'squash-lineage-'));
+  git(root, 'init', '-q', '-b', 'main');
+  for (const [key, value] of [['user.name', 'Delivery Test'], ['user.email', 'delivery@example.test'],
+    ['user.signingkey', signer], ['commit.gpgsign', 'true'], ['merge.ff', 'false']]) git(root, 'config', key, value);
+  const commit = (file, body, message) => {
+    fs.writeFileSync(path.join(root, file), body); git(root, 'add', file); git(root, 'commit', '-q', '-S', '-m', message);
+    return git(root, 'rev-parse', 'HEAD');
+  };
+  const head = () => git(root, 'rev-parse', 'HEAD');
+  commit('base.txt', 'epic base\n', 'epic base');
+  git(root, 'checkout', '-q', '-b', 'ticket/T-38-03');
+  const priorBase = commit('parent.txt', 'parent first\n', 'parent first');
+  git(root, 'checkout', '-q', '-b', 'ticket/T-38-04');
+  const childHead = commit('child.txt', 'child work\n', 'child work');
+  git(root, 'checkout', '-q', 'ticket/T-38-03');
+  const parentHead = commit('parent.txt', 'parent first\nparent update\n', 'parent update (075f81af)');
+  git(root, 'checkout', '-q', 'ticket/T-38-04');
+  git(root, 'merge', '-q', '-S', '-m', 'merge updated parent (1c0e3c73)', parentHead);
+  const parentMerge = head();
+  git(root, 'checkout', '-q', 'main');
+  const epicWork = commit('epic.txt', 'other epic work\n', 'other epic work (e1b9a7dc)');
+  const squash = commit('parent.txt', 'parent first\nparent update\n', 'T-38-03 squash (#871, 0ea914b4)');
+  git(root, 'checkout', '-q', 'ticket/T-38-04');
+  git(root, 'merge', '-q', '-S', '-m', 'import epic (95af7c2e)', 'main');
+  const epicMerge = head();
+  const nativeFix = commit('child.txt', 'child work\nnative ci fix\n', 'native CI fix (f2bda159)');
+  const graphDir = path.join(root, '.planning', 'graph'); fs.mkdirSync(graphDir, { recursive: true });
+  fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets: {
+    'T-38-03': { branch: 'ticket/T-38-03', pr_base: 'main', epic: 'main' },
+    'T-38-04': { branch: 'ticket/T-38-04', pr_base: 'ticket/T-38-03', primary_parent: 'T-38-03', epic: 'main' } } }));
+  fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify({ 'T-38-03': {
+    branch: 'ticket/T-38-03', status: 'merged', pr: 871, merged_into: 'main', merge_sha: squash } }));
+  const stateRoot = fs.mkdtempSync(path.join(temporary, 'squash-lineage-state-'));
+  const prepared = { commit: { worktree: root, ticket: 'T-38-04', expectedSigner: signer }, graphFile: path.join(graphDir, 'tickets.json'),
+    stateRoot, key: crypto.randomBytes(32) };
+  const options = { execFileSync: () => JSON.stringify({ data: { repository: { pullRequest: { state: 'MERGED',
+    headRefName: 'ticket/T-38-03', headRefOid: parentHead, baseRefName: 'main', mergeCommit: { oid: squash } } } } }) };
+  const priorScope = { base: priorBase, base_ref: 'origin/ticket/T-38-03' }, currentScope = { base: squash, base_ref: 'origin/main' };
+  const base = repairBaseEvolution(options, prepared, { repo: 'acme/app' }, priorScope, currentScope);
+  assert.deepEqual(base.squash.parent_commits.map(item => item.commit), [parentHead]);
+  assert.deepEqual(base.commits.map(item => item.commit), [epicWork, squash]);
+  const nativeSource = (sha, parent) => sha === nativeFix && parent === epicMerge ? { commit: sha, candidate_id: 'native-ci-fix' } : null;
+  const records = repairSourceWalk(root, childHead, nativeFix, base, currentScope.base, nativeSource, signer);
+  const kinds = Object.fromEntries(records.map(item => [item.commit,
+    item.candidate_id ? 'source' : item.base_merge ? 'base_merge' : item.base_import ? 'base_import' : 'other']));
+  assert.deepEqual(kinds, { [parentHead]: 'base_import', [parentMerge]: 'base_merge', [epicWork]: 'base_import',
+    [squash]: 'base_import', [epicMerge]: 'base_merge', [nativeFix]: 'source' });
+  assert.ok(records.every(item => item.candidate_id || item.semantic_credit === false), 'no imported or merged commit earns credit');
+  assert.throws(() => repairSourceWalk(root, childHead, nativeFix, { ...base, squash: undefined }, currentScope.base, nativeSource, signer),
+    /base import changed its source parent/, 'without the squash proof the walk refuses exactly as rc.5.21 did on #873');
+
+  const scope = (sha, ref) => ({ base: sha, base_ref: ref, plan: { path: 'PLAN.md', sha256: digest('plan') }, owners: ['child.txt'], allow_list: [] });
+  const recheckPrepared = { ...prepared, commit: { ...prepared.commit, expectedBase: squash, expectedHead: epicMerge, files_modified: ['child.txt'] },
+    baseRef: 'origin/main', plan: { path: 'PLAN.md', sha256: digest('plan') }, verificationAllowList: [] };
+  const importedOnly = repairSourceWalk(root, childHead, epicMerge, base, currentScope.base, () => null, signer);
+  const historical = (baseTransition, records) => ({ semantic_credit: false,
+    scope_transition: { from: scope(priorBase, 'origin/ticket/T-38-03'), to: scope(squash, 'origin/main'), base_transition: baseTransition },
+    source_transition: { from: childHead, to: epicMerge, records } });
+  recheckHistoricalRepair(recheckPrepared, historical(base, importedOnly), childHead, epicMerge);
+  assert.throws(() => recheckHistoricalRepair(recheckPrepared,
+    historical({ ...base, squash: { ...base.squash, parent_commits: [] } }, importedOnly), childHead, epicMerge),
+  { code: 'REPAIR_PREDECESSOR_INVALID' });
+
+  const branchFrom = (start, name) => git(root, 'checkout', '-q', '-B', name, start);
+  branchFrom(priorBase, 'foreign');
+  const foreign = commit('foreign.txt', 'foreign\n', 'foreign parent');
+  branchFrom(childHead, 'child-foreign');
+  git(root, 'merge', '-q', '-S', '-m', 'merge a foreign parent', foreign);
+  assert.throws(() => repairSourceWalk(root, childHead, head(), base, currentScope.base, () => null, signer),
+    /base import changed its source parent/, 'a foreign parent commit is neither imported nor a base merge');
+  branchFrom(parentMerge, 'child-tree');
+  fs.writeFileSync(path.join(root, 'smuggled.txt'), 'smuggled\n'); git(root, 'add', 'smuggled.txt');
+  git(root, 'commit', '-q', '-S', '--amend', '--no-edit');
+  assert.throws(() => repairSourceWalk(root, childHead, head(), base, currentScope.base, () => null, signer),
+    /differs from the exact conflict-free merge tree/);
+  branchFrom(childHead, 'child-unsigned');
+  git(root, '-c', 'commit.gpgsign=false', 'merge', '-q', '--no-gpg-sign', '-m', 'unsigned parent merge', parentHead);
+  assert.throws(() => repairSourceWalk(root, childHead, head(), base, currentScope.base, () => null, signer));
+  branchFrom(parentHead, 'parent-unsigned');
+  fs.writeFileSync(path.join(root, 'parent.txt'), 'parent first\nparent update\nunsigned\n'); git(root, 'add', 'parent.txt');
+  git(root, '-c', 'commit.gpgsign=false', 'commit', '-q', '--no-gpg-sign', '-m', 'unsigned parent commit');
+  assert.throws(() => repairBaseEvolution({ execFileSync: () => JSON.stringify({ data: { repository: { pullRequest: { state: 'MERGED',
+    headRefName: 'ticket/T-38-03', headRefOid: head(), baseRefName: 'main', mergeCommit: { oid: squash } } } } }) },
+  prepared, { repo: 'acme/app' }, priorScope, currentScope), { code: 'REPAIR_SUBJECT_CHANGED' });
 });
 
 test('49 complete historical actions share authenticated transition bytes within unchanged custody bounds',
