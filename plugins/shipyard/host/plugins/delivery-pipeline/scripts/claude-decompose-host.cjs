@@ -21,7 +21,7 @@ const { repositoryIdentity } = require('./architecture-target.cjs');
 const { COMPLEXITY_SIGNALS } = require('./model-policy.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, captureSealManifest, assertSealManifest, pidAlive,
-  phaseDirectory: sharedPhaseDirectory, writeDurableFile, parsePhaseDirectoryName, resolvePhaseArtifact } = require('./planning-writer-lease.cjs');
+  phaseDirectory: sharedPhaseDirectory, writeDurableFile, parsePhaseDirectoryName, resolvePhaseArtifact, seedValidationStrategy } = require('./planning-writer-lease.cjs');
 
 const { decompositionAdr } = require('./planning-result-sealer.cjs');
 
@@ -346,6 +346,10 @@ async function runDecomposition(request, dependencies = {}) {
       base_revision: git(scope.worktree, 'rev-parse', 'HEAD'),
       launch_dir: path.join(store, 'launches'),
     });
+    if (scope.role === 'gsd-planner') {
+      seedValidationStrategy({ worktree: scope.worktree, phaseDir, templateFile: dependencies.validationTemplate
+        || path.join(dependencies.configRoot || resolveClaudeHome(), 'gsd-core', 'templates', 'VALIDATION.md') });
+    }
     const preLaunchSnapshot = writerLease.snapshotTree();
     const resolution = (dependencies.resolveDispatch || pipelineConfig.resolveDispatch)({
       root: scope.worktree, runtime: 'claude', role: ROLES[scope.role],

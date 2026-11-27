@@ -506,6 +506,18 @@ context first, then one callback set, then materialization verification.
    the planner re-seals `CONTEXT.md` and every `PLAN.md`, then dispatch a fresh
    `gsd-plan-checker` against the revised files. Item 5's digest verification
    and Gate 2 bind to the latest planner seal and the latest checker result.
+   The planner may write only `CONTEXT.md` and its `PLAN.md` files, so findings
+   about `RESEARCH.md`, such as an unresolved `## Open Questions` section, go
+   to the researcher first. Re-dispatch `gsd-phase-researcher` through the host
+   as a revision, with the checker findings and the current `CONTEXT.md` and
+   plans in its prompt. It may mark a question `RESOLVED` only where `CONTEXT.md`
+   or a plan actually decides it, naming that decision; a question nothing
+   decides stays open and leads to a BLOCK for a human. Then rebuild the
+   context packet, re-dispatch the planner and run a fresh checker. These three
+   dispatches count as one revision cycle. `NN-VALIDATION.md` needs no revision:
+   when Nyquist validation is on and the research has a `## Validation
+   Architecture` section, the host seeds it from the runtime's GSD template
+   before the planner launches (GSD plan-phase step 5.5) and never overwrites it.
    Run at most 3 revision cycles; if the checker still returns `issues_found`,
    or returns `blocked` at any point, stop with a BLOCK for a human. Never run
    `/gsd-plan-review-convergence` inside the checker callback, never open an
