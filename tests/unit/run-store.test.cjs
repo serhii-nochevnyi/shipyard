@@ -71,6 +71,31 @@ test('store transactions fence stale state revisions atomically', () => {
   }
 });
 
+test('a store holding a historical INV planning-research run reads unchanged and accepts the next planner run', () => {
+  const root = tempDir();
+  try {
+    const store = createRunStore({ storeDir: root, now: () => 1000 });
+    const planningRun = (runId, role, input) => scope.createRunScope({ run_id: runId, repository_id: 'shipyard/test', phase: 29,
+      ticket: `phase=29;input=${input};repository=shipyard/test`, worktree: '/tmp/shipyard-run-store', runtime: 'codex', owner_id: 'owner-a',
+      dispatch: { dispatch_id: `dispatch-${runId}`, role, model: 'sol', effort: 'high' } });
+    const record = run => ({ schema: 'shipyard.run-record.v1', version: 1, run,
+      owner: { owner_id: 'owner-a', lease_id: run.lease.lease_id, epoch: 0, acquired_at: 1000, heartbeat_at: 1000, expires_at: 2000, status: 'active' },
+      retry: {}, checkpoint: null, successor: null, idempotency: {}, history: [] });
+    const historical = planningRun('historical-research', 'research', 'INV-028-editor-action-contracts');
+    fs.writeFileSync(store.storeFile, JSON.stringify({ schema: 'shipyard.run-store.v1', version: 1, generation: 0, updated_at: null,
+      runs: { [historical.run_id]: record(historical) } }));
+    const bytes = fs.readFileSync(store.storeFile, 'utf8');
+    assert.deepEqual(Object.keys(store.read().runs), ['historical-research']);
+    assert.equal(fs.readFileSync(store.storeFile, 'utf8'), bytes, 'reading never rewrites the historical record');
+    const planner = planningRun('next-planner', 'decomposition', 'INV-030-editor-eval-semantics');
+    assert.equal(store.create(record(planner)).created, true);
+    const next = planningRun('next-research', 'research', 'INV-030-editor-eval-semantics');
+    assert.equal(store.create(record(next)).created, true);
+    assert.deepEqual(Object.keys(store.read().runs).sort(), ['historical-research', 'next-planner', 'next-research']);
+    assert.deepEqual(store.get('historical-research').run, JSON.parse(bytes).runs['historical-research'].run);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('runs recorded under a retired policy are skipped on read while current-policy siblings survive', () => {
   const root = tempDir();
   try {

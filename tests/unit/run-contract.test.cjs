@@ -82,7 +82,7 @@ test('planning identities are scoped to their parsed role and decomposition phas
     assert.throws(() => contract.normalizeRunContract({ ...run, phase: { phase: 48 } }), { code: 'INVALID_INPUT' });
     assert.throws(() => contract.normalizeRunContract({ ...run,
       repository: { ...run.repository, repository_id: 'foreign/repository' } }), { code: 'SCOPE_MISMATCH' });
-    for (const role of ['executor', 'integrator', 'research']) {
+    for (const role of ['executor', 'integrator', ...(ticket === adr ? ['research'] : [])]) {
       assert.throws(() => makeScope({ phase: 47, ticket,
         dispatch: { dispatch_id: 'wrong-role', role, model: 'sol', effort: 'high' } }), { code: 'INVALID_INPUT' });
     }
@@ -354,6 +354,24 @@ for (const repository of ['/plain/.git', '/work/my repo/.git', '/work/дім/.gi
     });
   }
 }
+
+test('the typed GSD researcher, planner and checker share one INV planning subject with exact phase and repository', () => {
+  const inv = 'phase=29;input=INV-030-editor-eval-semantics;repository=shipyard/test';
+  for (const role of ['research', 'decomposition', 'decomposition']) {
+    const run = makeScope({ phase: 29, ticket: inv, dispatch: { dispatch_id: 'typed-' + role, role, model: 'sol', effort: 'high' } });
+    assert.equal(contract.normalizeRunContract(run).ticket.ticket, inv);
+    assert.equal(contract.normalizeTicketIdentity(inv, { role, phase: 29 }).ticket, inv);
+  }
+  const research = makeScope({ phase: 29, ticket: inv, dispatch: { dispatch_id: 'typed-research', role: 'research', model: 'sol', effort: 'high' } });
+  assert.throws(() => contract.normalizeRunContract({ ...research, phase: { phase: 30 } }), { code: 'INVALID_INPUT' });
+  assert.throws(() => contract.normalizeRunContract({ ...research,
+    repository: { ...research.repository, repository_id: 'foreign/repository' } }), { code: 'SCOPE_MISMATCH' });
+  assert.throws(() => contract.normalizeTicketIdentity('phase=29;input=ADR-035-editor-eval;repository=shipyard/test',
+    { role: 'research', phase: 29 }), { code: 'INVALID_INPUT' }, 'direct-ADR research stays refused');
+  for (const role of ['executor', 'integrator', 'drift-check', 'ci-fix', 'review-fix'])
+    assert.throws(() => contract.normalizeTicketIdentity(inv, { role, phase: 29 }), { code: 'INVALID_INPUT' });
+  assert.throws(() => contract.normalizeTicketIdentity(inv, { role: 'research', phase: 28 }), { code: 'INVALID_INPUT' });
+});
 
 test('code-review ticket identities refuse ticket form and other subject families', () => {
   for (const ticket of ['T-52-04', 'INV-014-runtime',
