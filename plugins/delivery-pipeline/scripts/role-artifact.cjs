@@ -234,8 +234,10 @@ function gitIdentity(input, worktree) {
   const head = git(input, worktree, ['rev-parse', '--verify', 'HEAD^{commit}'], 'committed HEAD');
   const headTree = git(input, worktree, ['rev-parse', '--verify', 'HEAD^{tree}'], 'committed HEAD tree');
   const base = liveBaseRef(input, worktree);
-  const baseCommit = git(input, worktree, ['rev-parse', '--verify', `${base}^{commit}`], 'base revision');
-  const baseTree = git(input, worktree, ['rev-parse', '--verify', `${baseCommit}^{tree}`], 'base tree');
+  // @contract: only historical reads tolerate a deleted base ref; they bind the sealed base identity instead.
+  const unresolved = input.historical === true && !gitCommitIfPresent(input, worktree, base);
+  const baseCommit = unresolved ? null : git(input, worktree, ['rev-parse', '--verify', `${base}^{commit}`], 'base revision');
+  const baseTree = unresolved ? null : git(input, worktree, ['rev-parse', '--verify', `${baseCommit}^{tree}`], 'base tree');
   const worktreeRealpath = safeRealpath(ioFor(input).fs, worktree, 'worktree');
   const identity = {
     repository: { root, identity: common },
@@ -245,8 +247,9 @@ function gitIdentity(input, worktree) {
     base,
     base_commit: baseCommit,
     base_tree: baseTree,
+    ...(unresolved ? { base_unresolved: true } : {}),
   };
-  if (JUDGMENT_ROLES.has(input.role)) {
+  if (JUDGMENT_ROLES.has(input.role) && !unresolved) {
     const mergeBase = git(input, worktree, ['merge-base', base, 'HEAD'], 'reviewed merge base');
     const mergeBaseTree = git(input, worktree, ['rev-parse', '--verify', `${mergeBase}^{tree}`], 'reviewed merge-base tree');
     identity.merge_base = sha(mergeBase, 'reviewed merge base');
@@ -4712,6 +4715,11 @@ function validateRoleManifest(value, options) {
     manifest = JSON.parse(manifestBytes.toString('utf8'));
   } catch (error) {
     fail('INVALID_ARTIFACT', `artifact manifest is not valid JSON: ${error.message}`);
+  }
+  if (identity.base_unresolved) {
+    if (manifest.base === `origin/${identity.base}`) identity.base = manifest.base;
+    identity.base_commit = sha(manifest.base_commit, 'artifact base commit');
+    identity.base_tree = sha(manifest.base_tree, 'artifact base tree');
   }
   const metadata = trustedMetadata({ ...input, role }, trusted, identity);
   metadata.trusted = trusted;

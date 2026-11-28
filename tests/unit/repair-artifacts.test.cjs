@@ -846,6 +846,59 @@ test('historical repair evidence survives a legitimate head advance but is not a
   }
 });
 
+test('historical repair evidence survives a deleted or moved base ref but never a changed base identity', async () => {
+  const fixture = repairFixture();
+  try {
+    git(fixture.root, ['branch', 'parent-base']);
+    const [bounded] = await fixture.host.run('fix-round', {
+      args: {
+        prs: [{
+          id: TICKET, pr: 303, branch: `ticket/${TICKET}`, worktreePath: fixture.root,
+          planPath: path.join(fixture.root, 'PLAN.md'), base: 'parent-base',
+          needsCiFix: true, needsReviewFix: false, model: 'claude-sonnet-5-5', effort: 'high',
+        }],
+        ciFixRefPath: '/plugin/references/ci-fix.md',
+        reviewFixRefPath: '/plugin/references/review-fix.md',
+        reinitScript: '/plugin/scripts/reviewers.cjs',
+      },
+    });
+    const call = (overrides = {}) => ({ worktreePath: fixture.root, role: 'ci-fix', ticket: TICKET, pr: 303,
+      base: 'parent-base', recorder: fixture.recorder, dispatchId: bounded.receipt.dispatch_id,
+      artifactPath: bounded.artifact_ref, artifactDigest: bounded.artifact_digest, ...overrides });
+    const recordedBase = roleArtifact.read(call({ historical: true })).manifest.base_commit;
+    git(fixture.root, ['branch', '-D', 'parent-base']);
+    const afterDelete = roleArtifact.read(call({ historical: true }));
+    assert.equal(afterDelete.historical, true);
+    assert.equal(afterDelete.manifest.base_commit, recordedBase, 'the sealed base commit, not the vanished ref, is bound');
+    assert.throws(() => roleArtifact.validate(call()), (error) => error.code === 'GIT_IDENTITY',
+      'a live check still needs its current base ref');
+    fs.writeFileSync(path.join(fixture.root, 'moved-base.txt'), 'moved\n');
+    git(fixture.root, ['add', 'moved-base.txt']);
+    git(fixture.root, ['commit', '--quiet', '-m', 'unrelated base movement']);
+    git(fixture.root, ['branch', 'parent-base']);
+    assert.equal(roleArtifact.read(call({ historical: true })).manifest.base_commit, recordedBase);
+    assert.throws(() => roleArtifact.validate(call()), (error) => error.code === 'STALE_ARTIFACT',
+      'a live check on the moved ref is still stale');
+    git(fixture.root, ['branch', '-D', 'parent-base']);
+    const manifestFile = bounded.artifact_ref;
+    const original = fs.readFileSync(manifestFile);
+    const manifest = JSON.parse(original);
+    fs.chmodSync(manifestFile, 0o644);
+    try {
+      for (const field of ['base_commit', 'base_tree']) {
+        fs.writeFileSync(manifestFile, JSON.stringify({ ...manifest, [field]: 'f'.repeat(40) }));
+        assert.throws(() => roleArtifact.read(call({ historical: true })), 'a changed sealed ' + field + ' is refused');
+      }
+      fs.writeFileSync(manifestFile, JSON.stringify({ ...manifest, base: 'origin/foreign-base' }));
+      assert.throws(() => roleArtifact.read(call({ historical: true })), 'a foreign base name is refused');
+    } finally { fs.writeFileSync(manifestFile, original); }
+    assert.throws(() => roleArtifact.read(call({ historical: true, dispatchId: 'foreign-dispatch' })));
+    assert.equal(roleArtifact.read(call({ historical: true })).manifest.base_commit, recordedBase);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('wrong PR, receipt, and escaped artifact references fail closed', async () => {
   const fixture = repairFixture();
   try {
