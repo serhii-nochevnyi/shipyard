@@ -232,8 +232,9 @@ function normalizeTicketIdentity(input, { role, phase } = {}) {
     || (aggregate && Number(aggregate[1].split('-')[0]) === Number(phase));
   const investigation = /^INV-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(value);
   const planningInput = target && target.parseSubject('planning-input', value);
-  const planningSubject = role === 'decomposition' && planningInput
-    && Number(planningInput.phase) === Number(phase);
+  // @contract: the typed GSD researcher shares the planning subject only for an INV input; ADR inputs stay planner-only.
+  const planningSubject = planningInput && Number(planningInput.phase) === Number(phase)
+    && (role === 'decomposition' || (role === 'research' && planningInput.input.startsWith('INV-')));
   const investigationSubject = investigation && ['research', 'decomposition'].includes(role);
   if (!ticketId && !phaseSubject && !investigationSubject && !planningSubject) {
     refuse('INVALID_INPUT', `ticket ${value} must use the T-... identifier form`, { ticket: value });
@@ -428,7 +429,7 @@ function normalizeRunContract(input, { requireRunId = true } = {}) {
   if (Object.hasOwn(nested, 'provider')) normalizeProvider(runtime.runtime, nested.provider);
   const dispatch = normalizeDispatchIdentity({ ...nested, runtime: runtime.runtime, provider: runtime.provider }, { recorded: input.schema !== undefined });
   const ticket = normalizeTicketIdentity(input.ticket, { role: dispatch.role, phase: phase.phase });
-  if (dispatch.role === 'decomposition' && ticket.ticket.startsWith('phase=')) {
+  if (['decomposition', 'research'].includes(dispatch.role) && ticket.ticket.startsWith('phase=')) {
     const subjectRepository = ticket.ticket.slice(ticket.ticket.indexOf(';repository=') + ';repository='.length);
     if (subjectRepository !== repository.repository_id) {
       refuse('SCOPE_MISMATCH', 'planning subject and repository identities disagree');
