@@ -578,7 +578,7 @@ test('planning in-flight admission agrees with the role-scoped run contract', ()
   for (const ticket of subjects) {
     for (const role of ['research', 'decomposition', 'executor', 'arch-review', 'integrator', 'pr-sentinel']) {
       const admitted = ticket === 'INV-014' ? ['research', 'decomposition'].includes(role)
-        : role === 'decomposition';
+        : role === 'decomposition' || (role === 'research' && ticket.includes(';input=INV-'));
       const dispatchId = 'planning-' + role + '-' + subjects.indexOf(ticket);
       const input = { graphDir: graph, ticket, role, dispatch_id: dispatchId,
         pid: process.pid, host: 'codex', refreshBoard: false };
